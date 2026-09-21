@@ -96,30 +96,44 @@ export function EmailCodeStep({
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4">
-      <h2>{heading}</h2>
-      <p className="helper-copy">
-        Enter the six-digit code sent to {email}. You have three attempts.
-      </p>
-      <label htmlFor="email-login-code">Verification code</label>
-      <Input
-        id="email-login-code"
-        value={code}
-        onChange={(event) => setCode(event.target.value)}
-        inputMode="numeric"
-        autoComplete="one-time-code"
-        pattern="[0-9]{6}"
-        maxLength={6}
-        required
-        autoFocus
-      />
-      {expired && <p role="status">This code expired. Request a new code below.</p>}
+    <form onSubmit={submit} className="auth-owned-form" noValidate>
+      <div className="auth-owned-heading">
+        <h2 className="auth-owned-title">{heading}</h2>
+        <p className="auth-owned-subtitle">
+          Enter the six-digit code sent to {email}. You have three attempts.
+        </p>
+      </div>
+      <label className="auth-owned-field">
+        <span>Verification code</span>
+        <Input
+          id="email-login-code"
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          pattern="[0-9]{6}"
+          placeholder="000000"
+          maxLength={6}
+          required
+          autoFocus
+        />
+      </label>
+      {expired && (
+        <p role="status" className="auth-owned-subtitle">
+          This code expired. Request a new code below.
+        </p>
+      )}
       {error && (
-        <p role="alert" className="status-inline status-inline-danger">
+        <p role="alert" className="auth-owned-error">
           {error}
         </p>
       )}
-      <Button type="submit" disabled={busy || expired}>
+      <Button
+        variant="primary"
+        type="submit"
+        className="primary-button auth-portal-session-button"
+        disabled={busy || expired}
+      >
         {busy ? "Please wait…" : "Verify and continue"}
       </Button>
       <Button
@@ -132,7 +146,8 @@ export function EmailCodeStep({
       </Button>
       <Button
         type="button"
-        variant="quiet"
+        variant="link"
+        className="auth-text-button"
         disabled={busy}
         onClick={onChangeEmail}
       >

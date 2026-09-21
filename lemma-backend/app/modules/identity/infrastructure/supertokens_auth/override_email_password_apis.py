@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from typing import Any, Dict, List, Union
 
 from supertokens_python.recipe.emailpassword.interfaces import (
@@ -15,6 +16,10 @@ from supertokens_python.recipe.emailpassword.interfaces import (
 from supertokens_python.types.response import GeneralErrorResponse
 from supertokens_python.recipe.emailpassword.types import FormField
 from supertokens_python.recipe.session.interfaces import SessionContainer
+
+# Aliased: `User` in this module is the local ORM row, and the lookup below
+# returns SuperTokens' own user, which is a different thing entirely.
+from supertokens_python.types import User as AuthUser
 
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.infrastructure.identity_lease import (
@@ -38,7 +43,19 @@ from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import func, select
 
 
-def override_emailpassword_apis(original_implementation: APIInterface) -> APIInterface:
+#: How this override finds out which login methods an address already has.
+#: A named collaborator with a production default rather than a module global,
+#: so a test can stand something in *front* of it. Reaching into this module to
+#: patch the name would certify the half the test did not write, and would
+#: survive a rename that ought to have failed.
+UserLookup = Callable[..., Awaitable[List[AuthUser]]]
+
+
+def override_emailpassword_apis(
+    original_implementation: APIInterface,
+    *,
+    find_users: UserLookup = list_users_by_email,
+) -> APIInterface:
     original_sign_in_post = original_implementation.sign_in_post
     original_sign_up_post = original_implementation.sign_up_post
     original_generate_password_reset_token_post = (
@@ -76,7 +93,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             return SignInPostNotAllowedResponse(
                 "Unable to sign in with these credentials"
             )
-        users = await list_users_by_email(
+        users = await find_users(
             tenant_id=tenant_id,
             email=email,
             user_context=user_context,
@@ -146,7 +163,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             if field.id == "email":
                 field.value = email
                 break
-        users = await list_users_by_email(
+        users = await find_users(
             tenant_id=tenant_id,
             email=email,
             user_context=user_context,
@@ -209,7 +226,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             return await original_generate_password_reset_token_post(
                 form_fields, tenant_id, api_options, user_context
             )
-        users = await list_users_by_email(
+        users = await find_users(
             tenant_id=tenant_id,
             email=email,
             user_context=user_context,

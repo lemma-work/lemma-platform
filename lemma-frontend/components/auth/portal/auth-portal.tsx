@@ -223,8 +223,6 @@ function AuthLanding() {
     location.search || urlSnapshot.search || liveUrlSnapshot.search;
   const effectivePathname =
     location.pathname || urlSnapshot.pathname || liveUrlSnapshot.pathname;
-  const effectiveHash =
-    location.hash || urlSnapshot.hash || liveUrlSnapshot.hash;
   const rawRedirectUri = readRawRedirectUriFromSearch(effectiveSearch);
   const queryDesktopRequestId = readDesktopRequestIdFromSearch(effectiveSearch);
   const desktopRequestId =

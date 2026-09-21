@@ -4,13 +4,14 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import EmailPassword from "supertokens-auth-react/recipe/emailpassword";
 import ThirdParty from "supertokens-auth-react/recipe/thirdparty";
 
-import { authConfig } from "@/components/auth/portal/auth/config";
 import {
   continueWithEmail,
   emailCodeErrorMessage,
   mintNonce,
 } from "@/components/auth/portal/auth/email-code-client";
 import { EmailCodeStep } from "@/components/auth/portal/auth/email-code-step";
+import { ProviderMark } from "@/components/auth/portal/auth/provider-mark";
+import { SignInPasswordStep } from "@/components/auth/portal/auth/sign-in-password-step";
 import {
   applyContinueResult,
   applyPasswordRejection,
@@ -32,12 +33,6 @@ import type {
 } from "@/components/auth/portal/auth/supertokens";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-function resetPasswordUrl(): string {
-  const base =
-    authConfig.websiteBasePath === "/" ? "" : authConfig.websiteBasePath;
-  return new URL(`${base}/reset-password`, authConfig.websiteUrl).toString();
-}
 
 /**
  * One email box, and whatever that address actually needs.
@@ -152,7 +147,7 @@ export function SignInScreen({
   }
 
   const alert = state.error ? (
-    <p role="alert" className="status-inline status-inline-danger">
+    <p role="alert" className="auth-owned-error">
       {state.error}
     </p>
   ) : null;
@@ -172,107 +167,90 @@ export function SignInScreen({
 
   if (state.step === "handoff" && state.provider) {
     return (
-      <div className="flex flex-col gap-4">
-        <h2>Taking you to {state.provider.name}…</h2>
-        <p className="helper-copy">
-          This email signs in with {state.provider.name}.
-        </p>
+      <div className="auth-owned-form">
+        <div className="auth-owned-heading">
+          <h2 className="auth-owned-title">
+            Taking you to {state.provider.name}…
+          </h2>
+          <p className="auth-owned-subtitle">
+            This email signs in with {state.provider.name}.
+          </p>
+        </div>
       </div>
     );
   }
 
   if (state.step === "password" || state.step === "authenticating") {
     return (
-      <form onSubmit={submitPassword} className="flex flex-col gap-4">
-        <h2>Enter your password</h2>
-        {/*
-          Visible and inside this form on purpose. A password manager fills a
-          password by finding the username beside it, and a split identifier
-          step hands it a form with no username at all -- hidden inputs are
-          widely ignored, so the field has to be real and readable.
-        */}
-        <label htmlFor="sign-in-identity">Email address</label>
-        <Input
-          id="sign-in-identity"
-          type="email"
-          autoComplete="username"
-          value={state.email}
-          readOnly
-        />
-        <label htmlFor="sign-in-password">Password</label>
-        <Input
-          id="sign-in-password"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          required
-          autoFocus
-        />
-        {alert}
-        <Button type="submit" disabled={busy}>
-          {busy ? "Please wait…" : "Sign in"}
-        </Button>
-        {state.passwordFallback && (
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={busy}
-            onClick={() => void resolve()}
-          >
-            Email me a code instead
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="link"
-          disabled={busy}
-          onClick={() => window.location.assign(resetPasswordUrl())}
-        >
-          Forgot password?
-        </Button>
-        <Button type="button" variant="quiet" disabled={busy} onClick={back}>
-          Change email
-        </Button>
-      </form>
+      <SignInPasswordStep
+        email={state.email}
+        password={password}
+        onPasswordChange={setPassword}
+        busy={busy}
+        alert={alert}
+        fallback={state.passwordFallback}
+        onSubmit={submitPassword}
+        onBack={back}
+        onUseCode={() => void resolve()}
+      />
     );
   }
 
   return (
-    <form onSubmit={resolve} className="flex flex-col gap-4">
-      <h2>Sign in to Lemma</h2>
+    <form onSubmit={resolve} className="auth-owned-form" noValidate>
+      <div className="auth-owned-heading">
+        <h2 className="auth-owned-title">Sign in to Lemma</h2>
+        <p className="auth-owned-subtitle">
+          New to Lemma?{" "}
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            disabled={busy}
+            onClick={onSignUp}
+          >
+            Create an account
+          </Button>
+        </p>
+      </div>
       {providers.map((provider) => (
         <Button
           key={provider.id}
           type="button"
           variant="secondary"
+          className="auth-provider-button"
           disabled={busy}
           onClick={() => void redirectToProvider(provider.id)}
         >
+          <ProviderMark id={provider.id} />
           Continue with {provider.name}
         </Button>
       ))}
       {telegram}
-      <label htmlFor="sign-in-email">Email address</label>
-      <Input
-        id="sign-in-email"
-        type="email"
-        autoComplete="username"
-        value={typed}
-        onChange={(event) => setTyped(event.target.value)}
-        required
-        autoFocus
-      />
-      <p className="helper-copy">
-        We’ll ask for a password, or send you a code — whichever this account
-        uses.
-      </p>
+      {providers.length > 0 ? (
+        <div className="auth-owned-divider">or</div>
+      ) : null}
+      <label className="auth-owned-field">
+        <span>Email</span>
+        <Input
+          id="sign-in-email"
+          type="email"
+          autoComplete="username"
+          placeholder="you@company.com"
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          required
+          autoFocus
+        />
+      </label>
       {alert}
-      <Button type="submit" disabled={busy}>
+      <Button
+        variant="primary"
+        type="submit"
+        className="primary-button auth-portal-session-button"
+        disabled={busy}
+      >
         {busy ? "Please wait…" : "Continue"}
-      </Button>
-      <Button type="button" variant="quiet" disabled={busy} onClick={onSignUp}>
-        New to Lemma? Create an account
       </Button>
     </form>
   );

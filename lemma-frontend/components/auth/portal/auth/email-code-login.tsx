@@ -44,7 +44,13 @@ export function EmailCodeLogin({
   }
 
   const otherOptions = (
-    <Button type="button" variant="quiet" disabled={busy} onClick={onBack}>
+    <Button
+      type="button"
+      variant="link"
+      className="auth-text-button"
+      disabled={busy}
+      onClick={onBack}
+    >
       Other sign-in options
     </Button>
   );
@@ -67,27 +73,37 @@ export function EmailCodeLogin({
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4">
-      <h2>Continue with email code</h2>
-      <p className="helper-copy">
-        Sign in or create your account with a code sent to your email.
-      </p>
-      <label htmlFor="email-login-address">Email address</label>
-      <Input
-        id="email-login-address"
-        type="email"
-        autoComplete="email"
-        value={email}
-        onChange={(event) => setEmail(event.target.value)}
-        required
-        autoFocus
-      />
+    <form onSubmit={submit} className="auth-owned-form" noValidate>
+      <div className="auth-owned-heading">
+        <h2 className="auth-owned-title">Continue with email code</h2>
+        <p className="auth-owned-subtitle">
+          Sign in or create your account with a code sent to your email.
+        </p>
+      </div>
+      <label className="auth-owned-field">
+        <span>Email</span>
+        <Input
+          id="email-login-address"
+          type="email"
+          autoComplete="email"
+          placeholder="you@company.com"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          required
+          autoFocus
+        />
+      </label>
       {error && (
-        <p role="alert" className="status-inline status-inline-danger">
+        <p role="alert" className="auth-owned-error">
           {error}
         </p>
       )}
-      <Button type="submit" disabled={busy}>
+      <Button
+        variant="primary"
+        type="submit"
+        className="primary-button auth-portal-session-button"
+        disabled={busy}
+      >
         {busy ? "Please wait…" : "Send code"}
       </Button>
       {otherOptions}
