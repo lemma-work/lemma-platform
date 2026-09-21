@@ -210,6 +210,13 @@ class IdentitySteps:
 
     # --- organizations ---------------------------------------------------
 
+    async def prepares_first_workspace(self, *, with_pod: bool = True) -> JSON:
+        return await self.api.post(
+            "/users/me/first-workspace",
+            what=f"{self.label} preparing a first workspace",
+            json={"with_pod": with_pod},
+        )
+
     async def creates_an_organization(
         self, *, named: str | None = None, standing: bool = False
     ) -> JSON:

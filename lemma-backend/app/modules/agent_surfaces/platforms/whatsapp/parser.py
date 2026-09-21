@@ -178,14 +178,28 @@ class WhatsAppMessageParser:
                 return None
 
             sender_wa_id = payload_text(msg, "from")
+            # The number the tap arrived on, carried the same way `parse` carries
+            # it. Without it an acknowledgement has only the configured number to
+            # send from, so a button tapped in a chat with a pooled number is
+            # answered by a different number entirely -- from the person's side,
+            # a stranger replying to something they pressed.
+            phone_number_id = payload_section(envelope.value, "metadata").get(
+                "phone_number_id"
+            )
+            reply_target = {
+                key: value
+                for key, value in (
+                    ("phone_number_id", phone_number_id),
+                    ("sender_wa_id", sender_wa_id),
+                )
+                if value
+            }
             common: dict[str, Any] = {
                 "platform": "WHATSAPP",
                 "external_user_id": sender_wa_id or None,
                 "external_thread_id": sender_wa_id or None,
                 "callback_id": callback_id,
-                "reply_target": (
-                    {"sender_wa_id": sender_wa_id} if sender_wa_id else {}
-                ),
+                "reply_target": reply_target,
                 "dedup_id": payload_text(msg, "id") or None,
                 "raw_payload": payload,
             }

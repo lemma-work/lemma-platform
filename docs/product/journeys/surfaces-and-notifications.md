@@ -3,9 +3,28 @@
 **Journey:** A person reaches their pod from wherever they already work, and the
 pod reaches them back.
 
-A surface connects a pod's agent to an outside platform — Slack, Microsoft
-Teams, Telegram, WhatsApp, or email. A person messages the agent there and gets
-an answer there, in the same thread, without opening Lemma.
+A surface belongs to an agent. It connects that agent to an outside platform —
+Slack, Microsoft Teams, Telegram, WhatsApp, or email — and a person messages the
+agent there and gets an answer there, in the same thread, without opening Lemma.
+
+The agent is the owner, not the pod. Surfaces have their own APIs and their own
+screen, which can make them look like a pod-level resource; they are not. Every
+surface names exactly one agent, that agent answers on it, and a pod reaches
+someone only through the agents inside it. Where this document says a pod is
+reachable somewhere, that is shorthand for one of its agents being reachable
+there.
+
+An agent reaches a platform in exactly one place: one Slack app, one WhatsApp
+number, one Telegram bot. Two doors onto one platform for one agent is an
+ambiguity rather than a feature, because the person on the other side has no
+way to tell which one they are talking to. Several agents in a pod each get
+their own, which is how a pod is reachable in more than one place at once.
+
+The pod's own assistant is an agent like any other here. It holds surfaces on
+the same terms and under the same limit — it simply starts with a mailbox
+nobody had to connect. What is special about it is only how permission to
+change its surfaces is checked, pod-scoped rather than agent-scoped, because
+its row's id is the pod's own.
 
 Two rules run through everything here. **A surface is a door, not a hole**: who
 someone is on Slack has to resolve to who they are in Lemma before they get
@@ -19,9 +38,9 @@ it is asked, not skipped.
 
 ---
 
-## Capability: Connect a pod to a platform
+## Capability: Connect an agent to a platform
 
-### PS-SURF-001 — A person connects a pod's agent to a further platform
+### PS-SURF-001 — A person connects an agent to a further platform
 **Status:** covered
 
 > "A person connects a surface" describes the second and subsequent ones, not
@@ -76,9 +95,81 @@ it is asked, not skipped.
   under the name that answered them at the time.
 - When a person deletes a surface, the system shall stop accepting messages on
   it.
-- When a pod is deleted, the system shall stop every surface belonging to it.
+- When a pod is deleted, the system shall stop every surface belonging to the
+  agents inside it.
 
 **Contracts:** `agent.surface.update`, `agent.surface.delete`, `pod.delete`
+
+---
+
+## Capability: Start privately through chat
+
+### PS-SURF-004 — A stranger on a shared bot proves who they are before getting a workspace
+**Status:** manual
+
+- Where a person messages a shared Lemma WhatsApp or Telegram bot and resolves
+  to no Lemma user, the system shall verify their identity privately and then
+  give them a personal assistant to talk to.
+- The system shall take WhatsApp's signed sender phone as proof of that number.
+- On Telegram the system shall require a contact shared by the sender
+  themselves, and shall treat neither a username nor a typed number as proof.
+- Where the sender is still unknown after that, the system shall verify their
+  mailbox with an email code before provisioning anything.
+- A bot connected with a customer's own credentials shall keep its existing pod
+  access boundaries, and inbound email shall not create an account.
+
+> **Verified by:** module e2e, not the scenario suite. Signup here is a
+> conversation with a platform, and the suite has no shared WhatsApp number or
+> Telegram bot to hold one with — the Telegram scenarios drive a local server
+> standing in for a *connected* bot, which is the case this promise excludes.
+> `app/modules/agent_surfaces/tests/e2e/test_central_chat_onboarding_e2e.py`
+> runs the WhatsApp provision-and-replay path, the Telegram contact
+> requirement, and phone-binding revocation against real Postgres and Redis.
+
+**Contracts:** `surface.webhook.handle_platform`, `users.ensure_first_workspace`
+
+### PS-SURF-005 — Signup inside a company installation stays inside that company
+**Status:** manual
+
+- Where signup begins from a Slack or Teams installation, the system shall
+  conduct it in a private conversation belonging to that installation.
+- The system shall select only that installation's organization, and shall let
+  that organization's existing membership policy decide whether the verified
+  person may join.
+- If membership is refused, then the system shall tell the person their account
+  is ready and to ask their team administrator for access.
+- When the person returns after access is granted, the system shall resume setup
+  without asking for another email code, while their verified identity holds.
+- The installation's credentials and its existing channel routes shall stay in
+  the organization that owns them.
+
+> **Verified by:** module e2e, not the scenario suite, for the reason under
+> PS-SURF-004 — and here the private conversation is one the platform opens on
+> request, which the suite has no installation to ask.
+> `test_slack_onboarding_e2e.py` covers the refused-then-granted resume, and
+> `test_teams_onboarding_e2e.py` the private-card path.
+
+**Contracts:** `surface.webhook.handle_platform`, `users.ensure_first_workspace`
+
+### PS-SURF-006 — Nothing about signup appears in a channel
+**Status:** manual
+
+- A channel mention may begin private setup, but no email address, code,
+  account status or onboarding reply shall appear in the channel.
+- After setup, the system shall replay only the message that began it and that
+  message's attachments, and shall copy neither channel history nor the channel
+  pod's private resources.
+- If a request expires before setup finishes, then the system shall discard it
+  and ask the person for a new one.
+- If the private handoff fails, then the system shall not fall back to answering
+  in the channel.
+
+> **Verified by:** module e2e, not the scenario suite, for the reason under
+> PS-SURF-004. `test_slack_onboarding_e2e.py` asserts what the channel does and
+> does not receive, and `test_central_chat_onboarding_e2e.py` asserts what the
+> replayed request carries.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.conversation.get`
 
 ---
 

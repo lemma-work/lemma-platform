@@ -121,7 +121,7 @@ async def remember_a_prompt_that_arrived_as_words(
     not email, whose single reply always carries the prompt as words and had no
     such branch to record from.
 
-    Lives here rather than in ``surface_egress`` because it is the same subject
+    Lives here rather than in ``egress_service`` because it is the same subject
     as the rest of this module, and because that file is at the size ratchet's
     ceiling.
     """

@@ -15255,9 +15255,10 @@ var LemmaClient = (() => {
     }
     /**
      * Create Surface
-     * Create a surface. ``name`` defaults to the lowercased platform — pass an
-     * explicit name to create a second surface of the same platform (e.g. a
-     * second bot routed to a different agent).
+     * Create a surface. ``name`` defaults to the lowercased platform and is the
+     * pod-unique handle the API addresses it by. A second surface of the same
+     * platform has to belong to a different agent: one agent reaches a platform in
+     * one place — one Slack app, one WhatsApp number, one Telegram bot.
      * @param podId
      * @param requestBody
      * @returns AgentSurfaceResponse Successful Response
@@ -16824,6 +16825,24 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Ensure The Current User Has A Workspace
+     * Select an eligible organization and idempotently ensure the current user has a private pod and assistant.
+     * @param requestBody
+     * @returns FirstWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static usersEnsureFirstWorkspace(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/users/me/first-workspace",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get User Profile
      * Get the current user's profile
      * @returns UserResponse Successful Response
@@ -16862,6 +16881,9 @@ var LemmaClient = (() => {
     }
     current() {
       return this.client.request(() => UsersService.userCurrentGet());
+    }
+    ensureFirstWorkspace(payload = {}) {
+      return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));
     }
     getProfile() {
       return this.client.request(() => UsersService.userProfileGet());

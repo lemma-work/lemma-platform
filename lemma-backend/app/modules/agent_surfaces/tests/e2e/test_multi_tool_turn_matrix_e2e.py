@@ -1,37 +1,43 @@
-"""Multi-tool-turn coverage: two sequential real tool calls (``display_resource``
-then ``say``, or two ``display_resource`` calls) followed by one final answer,
-across all 7 platforms — proves ordering (both tool side effects land, in
-sequence) and that exactly one final content message closes the turn (no
-duplicate delivery from the run observer's fallback path).
+"""Two real tool calls, then one final answer, on every chat platform.
+
+Two things are being proved, and only the first is about tools: that both tool
+side effects land in sequence, and that **exactly one** content message closes
+the turn. The second is the regression that matters — the run observer has a
+fallback delivery path, and a turn that ends through both of them answers the
+person twice.
+
+"Exactly one final answer" is the same sentence on every platform, so it is
+asserted once. How a side effect shows up is not: a widget is a posted card on
+Slack, an attachment-bearing activity on Teams, a link card on WhatsApp; speech
+is a file upload on Slack and a voice note on Telegram. Those readers sit
+together below so the differences are visible rather than averaged away.
+
+Email is not a chat platform and is not in the matrix: `display_resource` is
+refused there, and the turn still has to reply. That case keeps its own test at
+the bottom, unchanged.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from typing import Any
 from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
-    REAL_TEAMS_CHANNEL_ID,
-    REAL_TEAMS_TENANT_ID,
     _create_agent_surface,
     _ensure_connector_account,
-    _load_slack_dm_fixture,
-    _load_teams_channel_mention_fixture,
     _messages_for_conversation,
     _resend_payload,
-    _seed_external_user,
-    _set_user_mobile_number,
-    _telegram_payload,
-    _whatsapp_payload,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_messages,
@@ -43,282 +49,169 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_say,
     script_text,
 )
+from app.modules.agent_surfaces.tests.e2e.surface_journey import (
+    CHAT_PLATFORMS,
+    stage_surface,
+)
 from app.modules.connectors.domain.connector import AuthProvider
+
 
 pytestmark = pytest.mark.e2e
 
-
-_WIDGET_ARGS = {
+FINAL = "All done."
+WIDGET_ARGS = {
     "type": "WIDGET",
     "content": "<div class='status'><span>Ready</span></div>",
 }
 
-
-class _FakeScheduleManager:
-    async def create_schedule(self, *, account, app_trigger, config) -> str:
-        return f"e2e-{app_trigger.id}"
-
-    async def delete_schedule(self, account, provider_id: str) -> None:
-        return None
-
-    async def get_schedule(self, account, provider_id: str):
-        return None
+#: The second tool of the turn. Speech where the platform has a voice to use,
+#: a second widget where it does not -- either way two side effects precede the
+#: answer, which is what the turn is about.
+SPEAKS = frozenset({SurfacePlatform.SLACK, SurfacePlatform.TELEGRAM})
 
 
-async def test_multi_tool_turn_slack_widget_then_say_then_one_final_answer(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    fake_speech_provider,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="slack",
-        credentials={
-            "access_token": "xoxb-multi-tool",
-            "scope": "chat:write",
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "bot_user_id": "U0AGSSTQZLH",
-                "team_id": "T0123456",
-                "api_base_url": fake_slack.base_url,
-            },
-        },
+def turn_script(platform: SurfacePlatform) -> list:
+    second = (
+        script_say("Here's what I found.", tool_call_id="tool-say-1")
+        if platform in SPEAKS
+        else script_display_resource(**WIDGET_ARGS, tool_call_id="tool-display-2")
     )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "SLACK", "account_id": str(account.id)},
-        toolsets=["USER_INTERACTION", "SPEECH"],
-    )
-
-    dm_payload = _load_slack_dm_fixture(
-        text="show me and tell me", ts="1700005100.600600"
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
-        script=[
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
-            script_say("Here's what I found.", tool_call_id="tool-say-1"),
-            script_text("All done."),
-        ],
-    )
-
-    # Widget landed before the voice note, which landed before the final
-    # answer. The widget is posted and the answer is streamed, so "in that
-    # order" spans two Slack APIs — hence arrival order, not one bucket's index.
-    delivered = await wait_for_slack_text(message_store, "All done.")
-    uploads = await wait_for_messages(
-        message_store, "SLACK_FILE_UPLOAD_URL", min_count=1
-    )
-    assert uploads
-    finals = [i for i, text in enumerate(delivered) if "All done." in text]
-    assert len(finals) == 1, (
-        f"final answer must be delivered exactly once, got {len(finals)} in {delivered}"
-    )
-    # Matched on the card's heading rather than its body copy, and gathered the
-    # same way as `finals` above: a bare `next()` over a generator answers a
-    # card that no longer says what this line expected with a naked
-    # StopIteration, which names neither the string nor the reason.
-    widgets = [i for i, text in enumerate(delivered) if "Widget ready" in text]
-    assert widgets, f"the widget card was never delivered: {delivered}"
-    assert finals[0] > widgets[0]
-
-
-async def test_multi_tool_turn_teams_two_widgets_then_one_final_answer(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_teams,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-    from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-
-    async def _fake_bot_token(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return "teams-bot-token"
-
-    async def _disable_graph(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return None
-
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_bot_token", _fake_bot_token)
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_graph_token", _disable_graph)
-    monkeypatch.setattr(
-        surface_settings,
-        "microsoft_bot_openid_config_url",
-        fake_teams.openid_config_url,
-    )
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="microsoft_teams",
-        credentials={
-            "access_token": "teams-token",
-            "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
-        },
-    )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={
-            "type": "TEAMS",
-            "account_id": str(account.id),
-            "allowed_channel_ids": [REAL_TEAMS_CHANNEL_ID],
-        },
-        toolsets=["USER_INTERACTION"],
-    )
-
-    payload = _load_teams_channel_mention_fixture(fake_teams)
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="teams", payload=payload, headers={}),
-        script=[
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
-            script_text("All done."),
-        ],
-    )
-
-    teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    bodies = [
-        m["body"] for m in teams_messages if m.get("body", {}).get("type") == "message"
+    return [
+        script_display_resource(**WIDGET_ARGS, tool_call_id="tool-display-1"),
+        second,
+        script_text(FINAL),
     ]
-    widget_bodies = [b for b in bodies if b.get("attachments")]
-    assert len(widget_bodies) == 2, "both widget calls must render their own message"
-    final_bodies = [b for b in bodies if b.get("text") == "All done."]
-    assert len(final_bodies) == 1, "final answer must be delivered exactly once"
-    assert bodies.index(final_bodies[0]) > bodies.index(widget_bodies[-1])
 
 
-async def test_multi_tool_turn_telegram_widget_then_say_then_one_final_answer(
+def toolsets_for(platform: SurfacePlatform) -> list[str]:
+    return (
+        ["USER_INTERACTION", "SPEECH"] if platform in SPEAKS else ["USER_INTERACTION"]
+    )
+
+
+# ── what one platform's side effects look like in the store ───────────────
+
+
+async def _slack_side_effects(store: Any) -> None:
+    """A posted widget card, and a file upload for the spoken part."""
+    delivered = await wait_for_slack_text(store, FINAL)
+    widgets = [index for index, text in enumerate(delivered) if "Widget ready" in text]
+    assert widgets, f"the widget card was never delivered: {delivered}"
+    uploads = await wait_for_messages(store, "SLACK_FILE_UPLOAD_URL", min_count=1)
+    assert uploads, "the spoken part never uploaded"
+    finals = [index for index, text in enumerate(delivered) if FINAL in text]
+    # Ordering spans two Slack APIs -- the widget is posted, the answer is
+    # streamed -- so this is arrival order, not one bucket's index.
+    assert finals[0] > widgets[0], "the answer arrived before the widget"
+
+
+async def _teams_side_effects(store: Any) -> None:
+    """Two attachment-bearing activities, both before the answer."""
+    messages = await wait_for_messages(store, "TEAMS", min_count=1)
+    bodies = [
+        message["body"]
+        for message in messages
+        if message.get("body", {}).get("type") == "message"
+    ]
+    widgets = [body for body in bodies if body.get("attachments")]
+    assert len(widgets) == 2, "both widget calls must render their own message"
+    finals = [body for body in bodies if body.get("text") == FINAL]
+    assert bodies.index(finals[0]) > bodies.index(widgets[-1])
+
+
+async def _telegram_side_effects(store: Any) -> None:
+    """A voice note for the spoken part."""
+    assert await wait_for_messages(store, "TELEGRAM_VOICE", min_count=1)
+
+
+async def _whatsapp_side_effects(store: Any) -> None:
+    """Two link cards: a WIDGET has no path to upload as native media.
+
+    That is FILE-type only, see `send_display_resource_for_conversation` -- so
+    both calls render as an "open widget" interactive, distinct from the text.
+    """
+    messages = await wait_for_messages(store, "WHATSAPP", min_count=3)
+    widgets = [m for m in messages if m.get("type") == "interactive"]
+    assert len(widgets) == 2, "both widget calls must render their own message"
+
+
+SIDE_EFFECTS: dict[SurfacePlatform, Callable[[Any], Any]] = {
+    SurfacePlatform.SLACK: _slack_side_effects,
+    SurfacePlatform.TEAMS: _teams_side_effects,
+    SurfacePlatform.TELEGRAM: _telegram_side_effects,
+    SurfacePlatform.WHATSAPP: _whatsapp_side_effects,
+}
+
+
+def _final_answer_count(platform: SurfacePlatform, store: Any) -> int:
+    """How many times the closing message reached the person."""
+    if platform is SurfacePlatform.SLACK:
+        from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+            slack_delivered,
+        )
+
+        return sum(1 for text in slack_delivered(store) if FINAL in text)
+    if platform is SurfacePlatform.TEAMS:
+        return sum(
+            1
+            for message in store.get_all("TEAMS")
+            if message.get("body", {}).get("text") == FINAL
+        )
+    if platform is SurfacePlatform.TELEGRAM:
+        return sum(
+            1
+            for message in store.get_all("TELEGRAM")
+            if FINAL[:-1] in (message.get("text") or "")
+        )
+    return sum(
+        1
+        for message in store.get_all("WHATSAPP")
+        if (message.get("text") or {}).get("body") == FINAL
+    )
+
+
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value)
+async def test_both_tools_land_and_exactly_one_answer_closes_the_turn(
+    platform: SurfacePlatform,
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
-    fake_telegram,
+    fixed_test_org,
+    message_store,
+    monkeypatch,
+    platform_fake,
     fake_speech_provider,
-    message_store,
-    monkeypatch,
-):
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
-    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
-        f"{fake_telegram.api_base}/bot",
-    )
-    pod_id = test_pod["id"]
-    sender_id = 555081012
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "TELEGRAM"},
-        toolsets=["USER_INTERACTION", "SPEECH"],
-    )
-    await _seed_external_user(
-        db_session,
-        platform="TELEGRAM",
-        external_user_id=str(sender_id),
-        resolved_user_id=UUID(fixed_test_user["id"]),
+) -> None:
+    # `fake_speech_provider` is only used by the platforms that speak, and is
+    # requested unconditionally because a fixture is cheaper than a branch.
+    del fake_speech_provider
+    stage = await stage_surface(
+        platform,
+        fake=platform_fake[platform],
+        toolsets=toolsets_for(platform),
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
     )
 
-    payload = _telegram_payload(
-        text="show me and tell me", message_id=951, sender_id=sender_id
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        script=[
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
-            script_say("Here's what I found.", tool_call_id="tool-say-1"),
-            script_text("All done."),
-        ],
+    await stage.say("show me and tell me", script=turn_script(platform))
+
+    assert await stage.saw(FINAL[:-1]), "the turn never reached the person"
+    await SIDE_EFFECTS[platform](message_store)
+
+    delivered = _final_answer_count(platform, message_store)
+    assert delivered == 1, (
+        f"{platform.value}: the final answer must close the turn exactly once, "
+        f"got {delivered} -- the run observer's fallback path is delivering twice"
     )
 
-    voice = await wait_for_messages(message_store, "TELEGRAM_VOICE", min_count=1)
-    assert voice
-    telegram_messages = message_store.get_all("TELEGRAM")
-    final_texts = [m for m in telegram_messages if "All done" in m.get("text", "")]
-    assert len(final_texts) == 1, "final answer must be delivered exactly once"
 
-
-async def test_multi_tool_turn_whatsapp_two_widgets_then_one_final_answer(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_whatsapp,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
-        f"{fake_whatsapp.api_base}/v21.0",
-    )
-    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
-    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
-    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-001")
-    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "wa-secret")
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    pod_id = test_pod["id"]
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "WHATSAPP"},
-        toolsets=["USER_INTERACTION"],
-    )
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="15550101010",
-    )
-
-    payload = _whatsapp_payload(
-        text="show me twice",
-        message_id="wamid-e2e-multi-001",
-        phone_number_id="1234567890",
-        waba_id="waba-001",
-        sender_phone="15550101010",
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="whatsapp", payload=payload, headers={}),
-        script=[
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
-            script_text("All done."),
-        ],
-    )
-
-    # WIDGET resources have no path to upload as native media (that's FILE-type
-    # only — see send_display_resource_for_conversation) — both calls render as
-    # an "open widget" link card, distinct from the final text.
-    whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=3)
-    widget_messages = [m for m in whatsapp_messages if m.get("type") == "interactive"]
-    assert len(widget_messages) == 2, "both widget calls must render their own message"
-    text_messages = [m for m in whatsapp_messages if m.get("type") == "text"]
-    final_texts = [m for m in text_messages if m["text"]["body"] == "All done."]
-    assert len(final_texts) == 1, "final answer must be delivered exactly once"
+# ── Email: the tools are refused, and the turn still answers ──────────────
 
 
 async def test_two_widgets_on_email_are_refused_and_the_turn_still_replies(
@@ -373,8 +266,8 @@ async def test_two_widgets_on_email_are_refused_and_the_turn_still_replies(
             headers={},
         ),
         script=[
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
-            script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
+            script_display_resource(**WIDGET_ARGS, tool_call_id="tool-display-1"),
+            script_display_resource(**WIDGET_ARGS, tool_call_id="tool-display-2"),
             script_text("Here is my answer."),
         ],
     )

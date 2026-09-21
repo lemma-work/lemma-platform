@@ -8,7 +8,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfaceChannelRoute,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 
@@ -20,7 +19,6 @@ def _telegram_surface() -> AgentSurfaceEntity:
         name="telegram",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.TELEGRAM,
-        mode=SurfaceMode.DM,
         account_id=None,
         config=SurfaceConfig(channels=[SurfaceChannelRoute(channel_id="G1")]),
         is_active=True,
@@ -78,7 +76,6 @@ def _slack_surface(*, bot_user_id: str | None) -> AgentSurfaceEntity:
         name="slack",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.SLACK,
-        mode=SurfaceMode.DM,
         account_id=None,
         config=SurfaceConfig(channels=[SurfaceChannelRoute(channel_id="C1")]),
         is_active=True,

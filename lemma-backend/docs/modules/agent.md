@@ -30,11 +30,13 @@ cancellation.
 | --- | --- |
 | `agents` | Named prompt, schemas, toolsets, runtime selection, visibility |
 | `agent_runtime_profiles` | Organization/user/system model provider configuration and encrypted credentials |
+| `agent_host_pairings` | Single-use pairing codes a user authorizes; consuming one deletes the row, so presence is the whole validity check and a replayed code looks like one that never existed |
 | `agent_hosts`, `agent_host_harnesses` | Paired Agent Host installations and their harness snapshots |
 | `agent_host_commands`, `agent_host_run_leases` | Durable command handout and the single dispatch fence per run |
 | `agent_conversations` | Pod thread, the agent it belongs to (the pod's assistant is a row like any other), parent/subagent and workspace metadata |
 | `agent_messages` | User/assistant/tool messages and structured parts |
 | `agent_runs` | One execution attempt, status, usage, errors, stop state, harness metadata |
+| `agent_conversation_waits` | What a paused turn is waiting on — wait type, external reference, wake deadline, and the fire lease a timer tick takes; a partial unique index allows one `ACTIVE` row per conversation, mirroring `workflow_run_waits` |
 | `agent_approval_decisions`, `agent_feedback` | Durable interaction/audit records |
 
 ## API groups

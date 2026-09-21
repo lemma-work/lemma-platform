@@ -15,6 +15,35 @@ from app.modules.agent_surfaces.infrastructure.models import (
 
 
 class ExternalSurfaceUserRepository:
+    """The cache of who a platform sender is, one row per sender per platform.
+
+    Two methods here depend on
+    ``ix_agent_surface_external_user_platform_tenant_external`` being unique
+    *and* being declared ``NULLS NOT DISTINCT``, and neither of them says so at
+    the call site, so the argument lives here.
+
+    ``get_by_identity`` reads with ``scalar_one_or_none``, and ``_upsert``
+    inserts inside a savepoint and retries on ``IntegrityError`` -- a pattern
+    that only resolves a concurrent insert if the database refuses the second
+    one. The index is unique over ``(platform, tenant_id, external_user_id)``.
+
+    **The NULLs are the whole problem.** Telegram writes ``tenant_id`` NULL --
+    see ``platforms/telegram/parser.py``, where WhatsApp passes its ``waba_id``
+    and Telegram has nothing to pass -- and Postgres treats NULLs as distinct by
+    default. So for every Telegram sender the uniqueness never applied. Two
+    inbound messages from one person racing, which is exactly the case the
+    savepoint was written for, leave two cache rows. Every later message from
+    that person then raises ``MultipleResultsFound``, which is not a
+    ``DomainError`` and so arrives as a 500 -- permanently, until somebody
+    deletes a row by hand. The two rows can also disagree about
+    ``resolved_user_id``, which makes identity resolution answer differently
+    depending on which one is read.
+
+    ``NULLS NOT DISTINCT`` rather than backfilling ``tenant_id`` to ``''``: it
+    changes no data, and it says the thing that was meant -- one cache row per
+    sender per platform, whether or not that platform has a tenant.
+    """
+
     def __init__(self, uow: IUnitOfWork):
         self.uow = uow
         self.session = uow.session

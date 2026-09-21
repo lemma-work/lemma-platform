@@ -53,7 +53,6 @@ export function ImportGithubClient({
     const { isAuthenticated, isLoading: isAuthLoading, redirectToAuth } = useLemmaAuth();
     const { data, isLoading: isLoadingPods } = useAccessiblePods({ enabled: isAuthenticated });
     const profileQuery = useProfile();
-    const profile = profileQuery.data;
     const suggestedOrganizations = useSuggestedOrganizations({ enabled: isAuthenticated });
     const ensureOrganization = useEnsureOrganization();
     const organizations = data.organizations;
@@ -104,9 +103,7 @@ export function ImportGithubClient({
         setWorkspaceError('');
         try {
             const ensured = await ensureOrganization({
-                email: profile?.email,
                 organizationIds: organizations.map((organization) => organization.id),
-                suggestedOrganizationId: suggestedOrganizations.data?.items?.[0]?.id ?? null,
             });
             if (ensured) {
                 setOrgId(ensured.organizationId);
@@ -130,9 +127,7 @@ export function ImportGithubClient({
         ensureOrganization,
         isAuthenticated,
         organizations,
-        profile?.email,
         redirectToAuth,
-        suggestedOrganizations.data,
     ]);
 
     // The return leg of that detour. Wait for auth and the pod list to settle —

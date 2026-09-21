@@ -16,6 +16,7 @@ from app.modules.identity.domain.events import (
     OrganizationInvitationAcceptedEvent,
     OrganizationInvitationCreatedEvent,
     UserSignedUpEvent,
+    UserPhoneReplacedEvent,
     WhatsAppMobileVerificationReceivedEvent,
 )
 from app.modules.identity.domain.organization_entities import OrganizationRole
@@ -61,6 +62,14 @@ async def _dispatch_identity_event(
     email_port: IdentityEmailPort,
 ) -> None:
     event_type = event.get("event_type")
+
+    if event_type == UserPhoneReplacedEvent.get_event_type():
+        parsed_phone = UserPhoneReplacedEvent.model_validate(event)
+        if not await email_port.send_phone_changed_email(
+            to_email=parsed_phone.email, mobile_number=parsed_phone.mobile_number
+        ):
+            raise RuntimeError("Phone change notice could not be delivered")
+        return
 
     if event_type == OrganizationInvitationCreatedEvent.get_event_type():
         parsed = OrganizationInvitationCreatedEvent.model_validate(event)

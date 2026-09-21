@@ -50,6 +50,48 @@ export class AgentSurfacesIngressService {
         });
     }
     /**
+     * Verify a pooled WhatsApp number's own callback URL
+     * Webhook verification endpoint for one pooled WhatsApp number.
+     * @param phoneNumberId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static surfaceWebhookVerifyWhatsappNumber(
+        phoneNumberId: string,
+    ): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/surfaces/webhooks/whatsapp/numbers/{phone_number_id}',
+            path: {
+                'phone_number_id': phoneNumberId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Handle a webhook delivered to one pooled WhatsApp number
+     * Handle a delivery to one pooled WhatsApp number's own callback URL.
+     * @param phoneNumberId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static surfaceWebhookHandleWhatsappNumber(
+        phoneNumberId: string,
+    ): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surfaces/webhooks/whatsapp/numbers/{phone_number_id}',
+            path: {
+                'phone_number_id': phoneNumberId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Verify surface webhook using the platform callback URL
      * Webhook verification endpoint for platforms that require it.
      * @param platform

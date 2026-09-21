@@ -510,7 +510,7 @@ async def test_platform_webhook_verification_endpoints_and_signature_rejection(
     assert missing_signature.status_code == 401
 
 
-async def test_surface_credentials_are_unique_within_org_until_deleted(
+async def test_a_system_credential_is_claimed_once_per_organization(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -518,15 +518,33 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
     fake_slack,
     monkeypatch,
 ):
+    """Both halves of "one credential, one owner", through HTTP.
+
+    This asserted the opposite for the shared bot until the WhatsApp/Telegram
+    exemption came out. The exemption covered the two platforms whose system
+    credential was most plainly an identity -- one number, one bot -- so two
+    organizations could each hold the same one and an inbound message had no
+    predictable answer to whose it was. It also put the catalog and the writer
+    into disagreement: `_system_claim` never had the exemption, so it reported
+    the option as taken while the write went through anyway.
+
+    Telegram carries this now. WhatsApp left the rule when its numbers became a
+    pool: the credential is the number's rather than the deployment's, so an
+    organization holding two is the feature, and exclusivity moved to one
+    *number* per organization under `uq_agent_org_whatsapp_number`. There is
+    still exactly one shared Telegram bot, and holding it is holding it.
+
+    Onboarding still gives each personal pod its own shared surface; it writes
+    through the repository and does not come through this path.
+    """
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    # SYSTEM mode - the Lemma-managed number - is only offered when this
-    # deployment actually has WhatsApp native credentials, so the catalog can
-    # only publish a claim on it when they are configured. Without these the
+    # SYSTEM mode - the Lemma-managed bot - is only offered when this
+    # deployment actually has Telegram native credentials, so the catalog can
+    # only publish a claim on it when they are configured. Without this the
     # test asserted a claim on an option the catalog was correctly not offering.
-    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
-    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "system-phone")
+    monkeypatch.setattr(surface_settings, "telegram_bot_token", "system-telegram")
     primary_pod_id = test_pod["id"]
     sibling = await authenticated_client.post(
         "/pods",
@@ -540,51 +558,44 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
 
     system_created = await authenticated_client.post(
         f"/pods/{primary_pod_id}/surfaces",
-        json={"platform": "WHATSAPP"},
+        json={"platform": "TELEGRAM"},
     )
     assert system_created.status_code == 200, system_created.text
 
     duplicate_system = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
-        json={"platform": "WHATSAPP"},
+        json={"platform": "TELEGRAM"},
     )
     assert duplicate_system.status_code == 409, duplicate_system.text
-    assert "System WHATSAPP credentials are already used" in duplicate_system.text
-    # The setup UI names the pod holding the claim and links to it, so the
-    # conflict has to be structured — not just a message.
-    conflict_body = duplicate_system.json()
-    assert conflict_body["code"] == "AGENT_SURFACE_CREDENTIAL_CONFLICT"
-    assert conflict_body["details"]["kind"] == "SYSTEM"
-    assert conflict_body["details"]["conflicting_surface"] == {
-        "pod_id": primary_pod_id,
-        "name": "whatsapp",
-    }
+    assert duplicate_system.json()["details"]["kind"] == "SYSTEM"
 
-    # And the catalog publishes the same claim up front, so the option can be
-    # disabled before the user commits.
+    # And the catalog says the same thing before anybody tries, which is the
+    # agreement the exemption broke.
     catalog = await authenticated_client.get(
         f"/pods/{sibling_pod_id}/available-surfaces"
     )
     assert catalog.status_code == 200, catalog.text
-    whatsapp_row = next(
-        row for row in catalog.json()["surfaces"] if row["platform"] == "WHATSAPP"
+    telegram_row = next(
+        row for row in catalog.json()["surfaces"] if row["platform"] == "TELEGRAM"
     )
-    assert whatsapp_row["system_claim"] == {
+    assert telegram_row["system_claim"] == {
         "available": False,
         "claimed_by_pod_id": primary_pod_id,
-        "claimed_by_surface_name": "whatsapp",
+        "claimed_by_surface_name": "telegram",
     }
 
     deleted_system = await authenticated_client.delete(
-        f"/pods/{primary_pod_id}/surfaces/whatsapp"
+        f"/pods/{primary_pod_id}/surfaces/telegram"
     )
     assert deleted_system.status_code == 204, deleted_system.text
 
+    # Released, not spent: the next pod to ask gets it.
     reused_system = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
-        json={"platform": "WHATSAPP"},
+        json={"platform": "TELEGRAM"},
     )
     assert reused_system.status_code == 200, reused_system.text
+    assert reused_system.json()["pod_id"] == sibling_pod_id
 
     account = await _ensure_connector_account(
         db_session,
@@ -611,8 +622,7 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "SLACK", "account_id": str(account.id)},
     )
-    # Same AgentSurfaceCredentialConflict as the SYSTEM case above, so the same
-    # 409 - a conflict, not an unprocessable body.
+    # Customer-owned installations still have one credential owner.
     assert duplicate_account.status_code == 409, duplicate_account.text
     assert "connected account is already used" in duplicate_account.text
 
@@ -1036,13 +1046,16 @@ async def test_a_retired_platform_row_does_not_take_the_whole_list_with_it(
     await db_session.execute(
         sql_text(
             "INSERT INTO agent_surfaces "
-            "(id, pod_id, agent_id, name, surface_type, mode, event_mode,"
-            " credential_mode, config, status, created_at, updated_at) "
+            "(id, pod_id, organization_id, agent_id, name, surface_type,"
+            " event_mode, credential_mode, config, status, created_at,"
+            " updated_at) "
             # `agent_id` is the pod's own, which is the assistant's row id --
-            # every surface has an owner.
-            "VALUES (gen_random_uuid(), :pod_id, :pod_id, 'legacy-gmail',"
-            " 'GMAIL', 'DM', 'WEBHOOK', 'SYSTEM', '{}'::jsonb, 'ACTIVE',"
-            " now(), now())"
+            # every surface has an owner. The organisation is read back off the
+            # pod rather than passed: a composite foreign key ties the pair, so
+            # a literal here would only ever be right by coincidence.
+            "SELECT gen_random_uuid(), pods.id, pods.organization_id, pods.id,"
+            " 'legacy-gmail', 'GMAIL', 'WEBHOOK', 'SYSTEM', '{}'::jsonb,"
+            " 'ACTIVE', now(), now() FROM pods WHERE pods.id = :pod_id"
         ),
         {"pod_id": pod_id},
     )

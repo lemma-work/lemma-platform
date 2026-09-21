@@ -1,9 +1,11 @@
-"""Surfaces and notifications → threads, and things sent along with a message.
+"""Surfaces and notifications → threads, who is in them, and what arrives with them.
 
-Two ways a surface is more than a message pipe. A platform's threads have to
+Three ways a surface is more than a message pipe. A platform's threads have to
 line up with the pod's conversations, or a person's second message arrives with
-no memory of their first. And a file sent to the bot has to reach the agent, or
-"send me that spreadsheet" is a conversation the product cannot have.
+no memory of their first. Those messages have to keep arriving as the same
+Lemma person, or the thread is continuous while the identity acting inside it
+is not. And a file sent to the bot has to reach the agent, or "send me that
+spreadsheet" is a conversation the product cannot have.
 """
 
 from __future__ import annotations
@@ -15,6 +17,22 @@ pytestmark = [
     journey("Surfaces and notifications"),
     capability("Receive a message from outside"),
 ]
+
+
+def _whose(conversation) -> str:
+    """The Lemma person a conversation belongs to, or a loud failure.
+
+    Read rather than assumed. A conversation with no `user_id` would make the
+    identity assertions below compare two empty strings and pass, which is the
+    shape of test this suite has been bitten by before — so its absence is the
+    finding rather than something to read around.
+    """
+    who = str(conversation.get("user_id") or "")
+    assert who, (
+        f"this conversation records nobody as the person it belongs to, so there "
+        f"is nothing an access check could be made against: {conversation}"
+    )
+    return who
 
 
 @scenario("Two messages in one chat continue one conversation")
@@ -43,6 +61,54 @@ async def test_a_chat_is_one_conversation(reachable, run):
     # `waits_for_a_conversation_holding` asserts the "one" itself: more than one
     # conversation carrying these messages is the failure this scenario is for.
     await reachable.waits_for_a_conversation_holding(first, second)
+
+
+@scenario("A person's second message arrives as the same person as their first")
+@proves("PS-SURF-012")
+@covers("surface.webhook.handle_platform", "agent.conversation.list")
+async def test_a_sender_is_the_same_person_on_every_message(reachable, run):
+    """Resolution happens, and then it holds.
+
+    The scenario above asks the neighbouring question — where two messages in
+    one chat end up — and answers it without ever saying whose messages they
+    were. It would pass on a product that resolved the sender to nobody in
+    particular, or to a fresh anonymous identity each time, as long as it kept
+    putting them in one thread. This asks the other half: the conversation those
+    messages land in belongs to the Lemma person whose Telegram account sent
+    them, and still does on the second message.
+
+    The second message is the one that matters. Access is decided per message,
+    so a resolution that drifts is somebody entitled to an answer at breakfast
+    and a stranger by lunchtime — or, in the direction worth worrying about,
+    the reverse.
+    """
+    # Named through `run` for the reason the scenario above gives: a person has
+    # one chat with a bot and it stands between runs, so a literal would be
+    # found in last night's conversation before this run had said anything.
+    first = run.name("first word")
+    second = run.name("second word")
+
+    await reachable.says(first)
+
+    opened = await reachable.waits_for_a_conversation_holding(first)
+    assert _whose(opened) == str(reachable.alice.user_id), (
+        f"a message from {reachable.alice.label}'s Telegram account opened a "
+        f"conversation belonging to {_whose(opened)} rather than to them "
+        f"({reachable.alice.user_id}); whatever the agent does next, it does as "
+        f"the wrong person"
+    )
+
+    await reachable.says(second)
+
+    again = await reachable.waits_for_a_conversation_holding(first, second)
+    assert str(again["id"]) == str(opened["id"]), (
+        f"the second message resolved somewhere else: it reached conversation "
+        f"{again['id']} while the first opened {opened['id']}"
+    )
+    assert _whose(again) == str(reachable.alice.user_id), (
+        f"one account resolved to {_whose(opened)} and then to {_whose(again)}; "
+        f"a resolution that moves is one nothing can be granted against"
+    )
 
 
 @scenario("A different chat is a different conversation")

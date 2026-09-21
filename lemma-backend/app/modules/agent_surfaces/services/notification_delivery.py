@@ -32,7 +32,7 @@ quietly rerouted. See :func:`surfaces_on_channel` and
 
 The recipient's own ``UserPreferences.default_surfaces`` deliberately plays no
 part here. It remains authoritative for *inbound* routing
-(``ingress_service._select_surface``), where the question is genuinely "which of
+(``SurfaceRouter.select_surface``), where the question is genuinely "which of
 our surfaces did this person mean to talk to".
 
 First success wins. Fan-out across three apps is how a genuinely useful feature
@@ -87,9 +87,10 @@ def surfaces_on_channel(
 ) -> list[AgentSurfaceEntity]:
     """The subset of an agent's surfaces that sit on one channel.
 
-    More than one is normal and is the reason this returns a list: an agent can
-    hold two Slack workspaces or two bots on the same platform, and "send it on
-    Slack" means any of them that can actually reach the person.
+    At most one on a chat channel, because an agent reaches a platform in one
+    place. Still a list because every mail platform collapses to ``email``: an
+    agent holding both a connected Gmail account and a Resend mailbox has two
+    there, and "send it by email" means whichever of them reaches the person.
     """
     return [
         surface
@@ -179,11 +180,6 @@ class UndeliverableReason:
     SEND_FAILED = (
         "The surface could not deliver the message. It is worth trying again; "
         "if it keeps failing, check the surface's connection."
-    )
-    #: A wiring fault in this process rather than anything the caller did, so it
-    #: says what the caller can act on and the detail goes to the log.
-    SEND_NOT_AVAILABLE = (
-        "Sending on this surface is unavailable right now. Try again shortly."
     )
 
     @staticmethod

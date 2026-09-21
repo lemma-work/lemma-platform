@@ -8,6 +8,7 @@ import pytest
 import pytest_asyncio
 from fastapi import status
 
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     fake_composio_email,
     fake_resend,
@@ -27,6 +28,28 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
 )
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.worker_process import production_worker_process
+
+
+@pytest.fixture
+def platform_fake(fake_slack, fake_teams, fake_telegram, fake_whatsapp):
+    """The fake server standing in for each chat platform.
+
+    One mapping, here, rather than one per matrix module. Six copies of it had
+    accumulated across the five matrices and the streaming suite, and they had
+    already drifted: the streaming copy listed three platforms because its own
+    tests do not parametrize over WhatsApp. That is the test's parametrization
+    leaking into the fixture -- what belongs here is which fake answers for a
+    platform, and which platforms a test runs on belongs to the test.
+
+    Adding a chat platform is now one edit rather than six.
+    """
+    return {
+        SurfacePlatform.SLACK: fake_slack,
+        SurfacePlatform.TEAMS: fake_teams,
+        SurfacePlatform.TELEGRAM: fake_telegram,
+        SurfacePlatform.WHATSAPP: fake_whatsapp,
+    }
+
 
 # Re-export shared E2E fixtures so this module can run with --confcutdir.
 sandbox_reachable_backend = e2e_fixtures.sandbox_reachable_backend
@@ -287,6 +310,7 @@ __all__ = [
     "supertokens_container",
     "test_app",
     "test_database_url",
+    "platform_fake",
     "test_pod",
     "test_redis_url",
     "sandbox_reachable_backend",

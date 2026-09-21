@@ -8,7 +8,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
@@ -56,7 +55,6 @@ def test_pod_access_url_is_shared_across_every_surface_platform(
         name=f"{platform.value.lower()}-access-link",
         agent_id=uuid4(),
         surface_type=platform,
-        mode=SurfaceMode.EMAIL if platform.is_email else SurfaceMode.DM,
         account_id=uuid4(),
         config=SurfaceConfig(),
         is_active=True,

@@ -9,7 +9,6 @@ from app.modules.agent_surfaces.api.schemas import SurfaceConnectionStatus
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ports import (
@@ -30,7 +29,6 @@ def _surface(**overrides) -> AgentSurfaceEntity:
         "name": "telegram",
         "agent_id": uuid4(),
         "surface_type": SurfacePlatform.TELEGRAM,
-        "mode": SurfaceMode.DM,
         "account_id": uuid4(),
         "config": SurfaceConfig(),
     }

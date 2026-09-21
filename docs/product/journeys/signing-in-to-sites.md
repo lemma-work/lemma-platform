@@ -64,9 +64,9 @@ and that decision was where it went wrong.
 ### PS-BROWSER-011 — A person can tell what they are signing in to
 **Status:** manual
 
-Verified by driving the live view against a real sandbox browser, which is where
-the host and the padlock come from. A scenario cannot read what is painted on a
-canvas.
+> **Verified by:** driving the live view against a real sandbox browser, which
+> is where the host and the padlock come from. A scenario cannot read what is
+> painted on a canvas.
 
 - Before a person types anything, the system shall show which site the browser
   is actually on and whether the connection is protected.
@@ -110,9 +110,10 @@ canvas.
 ### PS-BROWSER-021 — A login that has stopped working says so
 **Status:** manual
 
-Needs a site whose session can be expired on demand. Verified against a real
-sandbox: opening the site lands on its login form, the agent is told the
-browser is not signed in, and the person is asked again.
+> **Verified by:** a real sandbox against a site whose session can be expired on
+> demand: opening it lands on the login form, the agent is told the browser is
+> not signed in, and the person is asked again. Nothing in the scenario lane can
+> expire somebody else's session.
 
 - When a site no longer accepts the browser's session, the system shall ask
   the person again rather than failing the task the same way twice.

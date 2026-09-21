@@ -7,6 +7,8 @@ a voice note to transcribe, recent channel history for a group mention.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 
 from app.core.authorization.delegation import agent_display_name
 from app.core.infrastructure.db.session_uow import commit_now
@@ -16,6 +18,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.services.inbound_enrichment import enrich_or_drop
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.entities import (
+    platform_value_for_source,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
@@ -33,9 +36,14 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.models import (
     SurfaceMessageMetadata,
 )
+from app.modules.agent_surfaces.domain.adapter_port import (
+    SurfacePlatformAdapterPort,
+)
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
-    SurfacePlatformAdapterPort,
+)
+from app.modules.agent_surfaces.services.credential_resolver import (
+    native_credentials,
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     identity_confirmation_context,
@@ -44,11 +52,11 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
     surface_setup_context,
     unresolved_sender_context,
 )
+from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
+from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 
-from app.modules.agent_surfaces.services.surface_inbound_message import (
-    SurfaceInboundMessageMixin,
-)
 
 logger = get_logger(__name__)
 
@@ -128,19 +136,24 @@ def _needs_mention_verification(
     )
 
 
-class SurfaceInboundMixin(SurfaceInboundMessageMixin):
+class SurfaceInboundMixin:
     #: Supplied by `AgentSurfaceIngressService`, which composes these mixins.
-    #: `None` in the worker's factory mode, which is why every reader here goes
-    #: through `getattr(..., "session", None)` -- the idiom `surface_egress`
-    #: already uses. Declared so these reads type-check instead of reading as
-    #: "this class has no `uow`", the shape of most of this file's baselined
-    #: type errors.
-    uow: SqlAlchemyUnitOfWork | None
+    #: Not optional any more: the worker's factory mode went to
+    #: `SurfaceTurnStarter`, so there is one kind of ingress service and it
+    #: always has a session.
+    uow: SqlAlchemyUnitOfWork
+    #: The two objects this used to reach *into*, as nine cross-mixin calls on a
+    #: flattened namespace. Declared, so the type checker can follow them --
+    #: `self._resolve_sender_identity` resolved to nothing, which is why its
+    #: non-optional return type was invisible here and every use of the result
+    #: read as possibly-None. Most of this file's baselined errors are that.
+    router: SurfaceRouter
+    binder: ConversationBinder
 
     async def _prepare_platform_webhook_ingress(
         self, request: SurfacePlatformWebhookIngress
     ) -> AgentSurfaceContext | None:
-        platform = self._resolve_platform(request.source)
+        platform = platform_value_for_source(request.source)
         if not platform:
             return None
 
@@ -149,7 +162,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             return None
 
         # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
+        async with connection_released(self.uow.session):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
             logger.debug(
@@ -171,21 +184,26 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         # per-sender below, and narrowed to shared credentials where the
         # platform has a shared bot at all.
         receiver_surface_ids = request.receiver_surface_ids
-        surfaces = await self.surface_repository.list_active_for_routing(
-            platform,
-            surface_ids=receiver_surface_ids,
-            system_credentials_only=(
-                receiver_surface_ids is None and _has_shared_system_bot(platform)
-            ),
-        )
+        fan_in = receiver_surface_ids is None and _has_shared_system_bot(platform)
+        surfaces: list[AgentSurfaceEntity] = []
+        resolved_user: ResolvedSurfaceUser | None = None
+        user_pod_ids: set[UUID] | None = None
+        if fan_in and parsed.is_dm:
+            surfaces, resolved_user, user_pod_ids = await self._fan_in_candidates(
+                platform=platform, parsed=parsed, adapter=adapter
+            )
+        if not surfaces:
+            surfaces = await self.surface_repository.list_active_for_routing(
+                platform,
+                surface_ids=receiver_surface_ids,
+                system_credentials_only=fan_in,
+            )
         if receiver_surface_ids is not None and not surfaces:
             return None
 
         if _needs_mention_verification(platform, parsed, surfaces):
-            async with connection_released(
-                getattr(self.uow, "session", None)
-            ):  # Telegram API
-                parsed = await self._telegram_text_mention_enrich(parsed, surfaces[0])
+            async with connection_released(self.uow.session):  # Telegram API
+                parsed = await self.router.enrich_telegram_mention(parsed, surfaces[0])
 
         candidates = [
             surface for surface in surfaces if surface.allows_inbound_event(parsed)
@@ -193,7 +211,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         if not candidates:
             return await self._prepare_unrouted_platform_context(
                 platform=platform,
-                surface=self._scoped_fallback_surface(request, surfaces),
+                surface=self.router.scoped_fallback_surface(request, surfaces),
                 parsed=parsed,
                 adapter=adapter,
             )
@@ -202,6 +220,77 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             adapter=adapter,
             parsed=parsed,
             candidates=candidates,
+            resolved_user=resolved_user,
+            user_pod_ids=user_pod_ids,
+        )
+
+    async def _fan_in_candidates(
+        self,
+        *,
+        platform: str,
+        parsed: ParsedInboundSurfaceEvent,
+        adapter: SurfacePlatformAdapterPort,
+    ) -> tuple[list[AgentSurfaceEntity], ResolvedSurfaceUser, set[UUID] | None]:
+        """The shared bot's fan-in, narrowed to the pods the sender is in.
+
+        The fan-in is every system-credential surface of the platform in the
+        deployment -- one per provisioned person -- read and hydrated on the way
+        to picking the handful this sender can use. Narrowing it looks circular,
+        because selection needs the sender and the sender was resolved from
+        `candidates[0]`'s credentials. It is not, and the reason changed when
+        WhatsApp numbers became a pool.
+
+        It *used* to be that every candidate is a system-credential surface and
+        `native_credentials` answers those from settings -- the same values
+        whichever row asks. That is no longer true: a pooled number carries its
+        own access token, so which row asks now decides what comes back. The
+        ordering survives because sender resolution needs no credentials at all.
+        `WhatsAppPlatformService.fetch_sender_profile` reads `sender_phone` and
+        `sender_display_name` straight off the parsed webhook and makes no API
+        call, so there is nothing for a token to authorise. The installation id
+        is not needed either -- `resolve` consults it only for Slack and Teams,
+        and neither has a shared bot.
+
+        The arriving number then narrows beside the sender's pods rather than
+        instead of them. It has to be beside: a pooled number may be held by
+        several organisations, so on its own it names a number and not a
+        customer.
+
+        An unknown sender, or one who belongs to none of these pods, gets no
+        candidates from here and the caller reads the fan-in unnarrowed. That is
+        what keeps the answer identical rather than merely cheaper: selection
+        falls back to the thread's existing surface for a non-member, and that
+        surface is how ordinary ingestion tells them they have no access to the
+        pod their conversation is in.
+        """
+        resolved_user = await self.router.resolve_sender(
+            adapter=adapter,
+            parsed=parsed,
+            credentials=native_credentials(platform),
+            installation_id=None,
+        )
+        if resolved_user.internal_user_id is None:
+            return [], resolved_user, None
+        # Through the router. Membership is the router's question -- it is what
+        # `select_surface` and `matches_user` ask -- and holding a second copy
+        # here meant the same question could be answered two ways in one
+        # message, which is the class of bug this whole pass is removing.
+        pod_ids = set(
+            await self.router.pod_membership_port.get_user_pod_ids(
+                resolved_user.internal_user_id
+            )
+        )
+        if not pod_ids:
+            return [], resolved_user, None
+        return (
+            await self.surface_repository.list_active_for_routing(
+                platform,
+                pod_ids=pod_ids,
+                system_credentials_only=True,
+                surface_identity_id=parsed.reply_target.get("phone_number_id"),
+            ),
+            resolved_user,
+            pod_ids,
         )
 
     async def _route_to_surface(
@@ -211,6 +300,8 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         adapter: SurfacePlatformAdapterPort,
         parsed: ParsedInboundSurfaceEvent,
         candidates: list[AgentSurfaceEntity],
+        resolved_user: ResolvedSurfaceUser | None = None,
+        user_pod_ids: set[UUID] | None = None,
     ) -> AgentSurfaceContext | None:
         """Pick the surface this event belongs to, and build its context.
 
@@ -218,18 +309,30 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         then continuity -> pod membership -> user default -> deterministic
         tiebreak picks the surface. An unknown sender only proceeds when the
         target is unambiguous, which is what gets it the signup/link flow.
+
+        `resolved_user` arrives already answered when the shared bot's fan-in
+        was narrowed by it -- resolving a second time would repeat a profile
+        fetch and an upsert to reach the same answer.
         """
         identity_surface = candidates[0]
-        resolved_user = await self._resolve_sender_identity(
-            adapter=adapter,
-            parsed=parsed,
-            credentials=await self._resolve_credentials(identity_surface),
+        sender = (
+            resolved_user
+            if resolved_user is not None
+            else await self.router.resolve_sender(
+                adapter=adapter,
+                parsed=parsed,
+                credentials=await self.credential_resolver.for_surface(
+                    identity_surface
+                ),
+                installation_id=identity_surface.account_id or identity_surface.id,
+            )
         )
-        matched_surface = await self._select_surface(
+        matched_surface = await self.router.select_surface(
             candidates=candidates,
-            resolved_user=resolved_user,
+            resolved_user=sender,
             parsed=parsed,
             platform=platform,
+            user_pod_ids=user_pod_ids,
         )
         if matched_surface is None and len(candidates) == 1 and parsed.is_dm:
             # Single unambiguous DM surface: route to it so the onboarding flow
@@ -243,14 +346,14 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 surface=identity_surface,
                 parsed=parsed,
                 adapter=adapter,
-                resolved_user=resolved_user,
+                resolved_user=sender,
             )
 
         return await self._prepare_surface_context(
             surface=matched_surface,
             parsed=parsed,
             adapter=adapter,
-            resolved_user=resolved_user,
+            resolved_user=sender,
         )
 
     async def _prepare_surface_webhook_ingress(
@@ -268,7 +371,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         if adapter is None:
             return None
 
-        async with connection_released(getattr(self.uow, "session", None)):
+        async with connection_released(self.uow.session):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
             return None
@@ -291,29 +394,30 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         if not parsed.is_dm:
             return None
         if surface is not None:
-            if self._is_self_email_event(surface=surface, parsed=parsed):
+            if self.router.is_self_addressed(surface=surface, parsed=parsed):
                 return None
             if surface.should_ignore_sender(parsed.sender_external_user_id):
                 return None
         if resolved_user is None:
             credentials = (
-                await self._resolve_credentials(surface)
+                await self.credential_resolver.for_surface(surface)
                 if surface is not None
                 # No surface on this path by definition: the event matched none.
                 else await self.credential_resolver.for_platform(
                     platform, None, surface=None
                 )
             )
-            resolved_user = await self._resolve_sender_identity(
+            resolved_user = await self.router.resolve_sender(
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
+                installation_id=(surface.account_id or surface.id) if surface else None,
             )
         display_name = agent_display_name(
-            (await self.agent_name_for_surface(surface)) if surface else None
+            (await agent_name_for_surface(self.uow, surface)) if surface else None
         )
         # `prepare_unrouted_context` opens with a Redis dedup claim, and
-        # `_resolve_sender_identity` above has flushed an external-user upsert --
+        # `resolve_sender` above has flushed an external-user upsert --
         # so `connection_released` would decline and hand nothing back. Commit
         # instead: what has been written by here is a durable fact about the
         # sender, not something the decision to reply should be able to undo,
@@ -337,19 +441,20 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         parsed: ParsedInboundSurfaceEvent,
         adapter: SurfacePlatformAdapterPort,
         resolved_user: ResolvedSurfaceUser | None = None,
+        claim_delivery: bool = True,
     ) -> AgentSurfaceContext | None:
-        if self._is_self_email_event(surface=surface, parsed=parsed):
+        if self.router.is_self_addressed(surface=surface, parsed=parsed):
             return None
 
         if surface.should_ignore_sender(parsed.sender_external_user_id):
             return None
 
-        credentials = await self._resolve_credentials(surface)
-        fallback_agent_name = await self.agent_name_for_surface(surface)
+        credentials = await self.credential_resolver.for_surface(surface)
+        fallback_agent_name = await agent_name_for_surface(self.uow, surface)
         fallback_agent_display_name = agent_display_name(fallback_agent_name)
 
         # `enrich_or_drop` is module-level: no session of its own to release.
-        async with connection_released(getattr(self.uow, "session", None)):
+        async with connection_released(self.uow.session):
             enriched = await enrich_or_drop(
                 adapter=adapter, surface=surface, parsed=parsed, credentials=credentials
             )
@@ -361,24 +466,29 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         # minimal payload with no sender, so the pre-enrich self-check above
         # cannot see it. Without this the surface would process its own
         # outgoing replies and loop, re-sending the signup/agent reply forever.
-        if self._is_self_email_event(surface=surface, parsed=parsed):
+        if self.router.is_self_addressed(surface=surface, parsed=parsed):
             return None
 
         # Claimed only with the message in hand: claiming earlier burns it on an
         # attempt that had no body, so the retry is discarded as a duplicate.
         # Enrichment also changes the ids this keys on.
-        # The connection goes back for the claim itself: it is a Redis round
-        # trip, and only reads have happened by here -- the identity upsert and
-        # the conversation link are below, so this release is real rather than a
-        # `safe_to_release` no-op.
-        async with connection_released(getattr(self.uow, "session", None)):
-            claimed = await self.event_dedup_store.claim_message(
-                surface_installation_id=surface.id,
-                platform=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_message_id=parsed.external_message_id,
-            )
+        # Replay re-runs a message the claim already burned, so it asks for the
+        # claim to be skipped; every live delivery still takes it.
+        if claim_delivery:
+            # The connection goes back for the claim itself: it is a Redis round
+            # trip, and only reads have happened by here -- the identity upsert
+            # and the conversation link are below, so this release is real
+            # rather than a `safe_to_release` no-op.
+            async with connection_released(self.uow.session):
+                claimed = await self.event_dedup_store.claim_message(
+                    surface_installation_id=surface.id,
+                    platform=surface.surface_type,
+                    external_channel_id=parsed.external_channel_id,
+                    external_thread_id=parsed.external_thread_id,
+                    external_message_id=parsed.external_message_id,
+                )
+        else:
+            claimed = True
         if not claimed:
             logger.debug(
                 "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed",
@@ -395,10 +505,11 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         )
 
         if resolved_user is None:
-            resolved_user = await self._resolve_sender_identity(
+            resolved_user = await self.router.resolve_sender(
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
+                installation_id=surface.account_id or surface.id,
             )
         if resolved_user.internal_user_id is None:
             return unresolved_sender_context(
@@ -416,7 +527,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 confirmation=confirmation,
             )
         if (
-            await self._match_surface_for_user(
+            await self.router.matches_user(
                 surfaces=[surface],
                 resolved_user=resolved_user,
             )
@@ -440,7 +551,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 agent_display_name=fallback_agent_display_name,
             )
 
-        route = await self._resolve_route(surface=surface, parsed=parsed)
+        route = await self.router.resolve_route(surface=surface, parsed=parsed)
         if route is None:
             return surface_setup_context(
                 surface=surface,
@@ -448,7 +559,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 agent_display_name=fallback_agent_display_name,
             )
 
-        link, created_conversation_title = await self._get_or_create_conversation_link(
+        link, created_conversation_title = await self.binder.bind_conversation(
             surface=surface,
             parsed=parsed,
             resolved_user=resolved_user,

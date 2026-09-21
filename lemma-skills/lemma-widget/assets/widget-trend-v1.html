@@ -1,0 +1,307 @@
+<!-- Lemma trend widget v1. One measure over time, drawn as SVG — no chart
+     library, no CDN, no 200KB download inside an iframe that has to paint now.
+     Replace every uppercase placeholder except __LEMMA_CONFIG__. -->
+<style>
+/* Lemma widget tokens v1 — take this whole block verbatim, like the SDK loader.
+ *
+ * Every name is `var(--lemma-widget-*, <fallback>)`. The fallback is not
+ * decoration: the host delivers the palette by postMessage, so it arrives
+ * AFTER first paint, and it never arrives at all when the widget is opened
+ * standalone — promoted to an app, or followed from a share link. A bare
+ * `var(--lemma-widget-surface)` renders colourless there.
+ *
+ * The fallbacks are Lemma's own stock. The ground is paper, not screen: none
+ * of these neutrals is #ffffff, because a warm white on cream is a different
+ * material and needs no border to be found, where white on grey has to be
+ * outlined to exist. Dark is the same stock under less light.
+ */
+:root {
+  color-scheme: var(--lemma-widget-color-scheme, light);
+
+  /* Ground and surface */
+  --w-canvas:    var(--lemma-widget-bg, #f4f3ed);
+  --w-paper:     var(--lemma-widget-surface, #fffefa);
+  --w-chrome:    var(--lemma-widget-subtle, #ecebe1);
+  --w-raised:    var(--lemma-widget-raised, #f8f6fe);
+
+  /* Ink — three weights of it, and never a fourth */
+  --w-ink:       var(--lemma-widget-text, #20211f);
+  --w-ink-2:     var(--lemma-widget-muted, #55564e);
+  --w-ink-3:     var(--lemma-widget-faint, #6a6b62);
+
+  /* Rules. Translucent, so they modulate whatever they are laid over. */
+  --w-line:      var(--lemma-widget-border, rgb(32 33 31 / 0.05));
+  --w-line-2:    var(--lemma-widget-border-strong, rgb(32 33 31 / 0.10));
+
+  /* The accent means "you can act here". It should appear about four times
+     in a view, not forty. Every fill of it is written in `--w-on-accent`,
+     never in white: on a light accent in dark mode, white measures 1.2:1. */
+  --w-accent:      var(--lemma-widget-accent, #6b4fe0);
+  --w-on-accent:   var(--lemma-widget-on-accent, #fffefa);
+  --w-accent-soft: var(--lemma-widget-accent-soft, rgb(107 79 224 / 0.09));
+  --w-accent-line: var(--lemma-widget-accent-line, rgb(107 79 224 / 0.26));
+
+  /* State does not move with the accent. "Danger" is not a matter of taste,
+     and a status that borrows the accent has said nothing about itself. */
+  --w-ok:        var(--lemma-widget-success, #2f7d57);
+  --w-on-ok:     var(--lemma-widget-on-success, #fffefa);
+  --w-warn:      var(--lemma-widget-warning, #8a5f0f);
+  --w-bad:       var(--lemma-widget-danger, #b3261e);
+  --w-on-bad:    var(--lemma-widget-on-danger, #ffffff);
+  --w-bad-soft:  var(--lemma-widget-danger-soft, #fef2f2);
+  --w-info:      var(--lemma-widget-info, #2563a8);
+
+  /* A categorical ramp — hues on a perceptual grid, not the app's status
+     colours lined up in a row. Status is reserved: reusing `--ok` as "series
+     3" both steals a meaning and fails on separation. These five are measured,
+     not chosen: adjacent pairs clear ΔE 8 under deuteranopia and ΔE 15 under
+     normal vision, every step holds 3:1 on paper, and the dark row is stepped
+     against the dark surface rather than flipped. Re-run the check before
+     touching any of them. */
+  --w-chart-1:   var(--lemma-widget-chart-1, #795bce);
+  --w-chart-2:   var(--lemma-widget-chart-2, #008f9b);
+  --w-chart-3:   var(--lemma-widget-chart-3, #b95400);
+  --w-chart-4:   var(--lemma-widget-chart-4, #b94082);
+  --w-chart-5:   var(--lemma-widget-chart-5, #308b15);
+
+  --w-r-sm:      var(--lemma-widget-radius-sm, 7px);
+  --w-r-md:      var(--lemma-widget-radius-md, 10px);
+  --w-r-lg:      var(--lemma-widget-radius, 14px);
+
+  /* Shadow carries the weight, so a card is an object resting on the page
+     rather than a rectangle someone drew a line around. */
+  --w-depth: var(--lemma-widget-shadow-rest,
+    0 1px 2px rgb(25 23 18 / 0.03), 0 4px 14px rgb(25 23 18 / 0.05), 0 10px 28px rgb(25 23 18 / 0.04));
+  --w-lit: inset 0 1px 0 rgb(255 255 255 / 0.30);
+
+  /* Two faces. Figures take the mono one so columns of them line up and can
+     actually be compared; everything else takes the UI face. */
+  --w-ui:   var(--lemma-widget-font, "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif);
+  --w-mono: var(--lemma-widget-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: var(--lemma-widget-color-scheme, dark);
+    --w-canvas:    var(--lemma-widget-bg, #141310);
+    --w-paper:     var(--lemma-widget-surface, #1e1c17);
+    --w-chrome:    var(--lemma-widget-subtle, #272520);
+    --w-raised:    var(--lemma-widget-raised, #17161f);
+    --w-ink:       var(--lemma-widget-text, #f6f4ec);
+    --w-ink-2:     var(--lemma-widget-muted, #aaa79a);
+    --w-ink-3:     var(--lemma-widget-faint, #8b8878);
+    --w-line:      var(--lemma-widget-border, rgb(246 244 236 / 0.07));
+    --w-line-2:    var(--lemma-widget-border-strong, rgb(246 244 236 / 0.12));
+    --w-accent:      var(--lemma-widget-accent, #a08cff);
+    --w-on-accent:   var(--lemma-widget-on-accent, #1b1a18);
+    --w-accent-soft: var(--lemma-widget-accent-soft, rgb(160 140 255 / 0.14));
+    --w-accent-line: var(--lemma-widget-accent-line, rgb(160 140 255 / 0.32));
+    --w-ok:        var(--lemma-widget-success, #6ecf9c);
+    --w-on-ok:     var(--lemma-widget-on-success, #1b1a18);
+    --w-warn:      var(--lemma-widget-warning, #dcb06a);
+    --w-bad:       var(--lemma-widget-danger, #f08a7e);
+    --w-on-bad:    var(--lemma-widget-on-danger, #2a1512);
+    --w-bad-soft:  var(--lemma-widget-danger-soft, #331919);
+    --w-info:      var(--lemma-widget-info, #7fb4e8);
+    --w-chart-1:   var(--lemma-widget-chart-1, #8f78df);
+    --w-chart-2:   var(--lemma-widget-chart-2, #00a5b0);
+    --w-chart-3:   var(--lemma-widget-chart-3, #cc7200);
+    --w-chart-4:   var(--lemma-widget-chart-4, #cd6199);
+    --w-chart-5:   var(--lemma-widget-chart-5, #55a144);
+    --w-depth: var(--lemma-widget-shadow-rest,
+      0 1px 2px rgb(0 0 0 / 0.22), 0 4px 14px rgb(0 0 0 / 0.26), 0 10px 28px rgb(0 0 0 / 0.22));
+    --w-lit: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  }
+}
+
+/* Shared by every view: the card, the rules, the figures. */
+.w { font: 400 15px/1.5 var(--w-ui); color: var(--w-ink); display: block; }
+.w *, .w *::before, .w *::after { box-sizing: border-box; }
+.w [hidden] { display: none !important; }
+.w-card { background: var(--w-paper); border-radius: var(--w-r-lg); box-shadow: var(--w-depth), var(--w-lit); padding: 20px 22px; }
+/* Weight never exceeds 500. Hierarchy comes from size and the space above. */
+.w h2, .w h3 { margin: 0; font-weight: 500; letter-spacing: -0.025em; }
+.w-kicker { margin: 0 0 10px; font: 400 11px/1 var(--w-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--w-ink-3); }
+.w-num { font-family: var(--w-mono); font-variant-numeric: tabular-nums; }
+.w-state { padding: 18px; border-radius: var(--w-r-md); background: var(--w-chrome); color: var(--w-ink-2); text-align: center; font-size: 14px; }
+.w-state[data-kind="error"] { background: var(--w-bad-soft); color: var(--w-bad); }
+/* Nothing is offered that cannot be acted on, and the fill takes its own ink. */
+.w-ask { padding: 8px 15px; border: 0; border-radius: 999px; background: var(--w-accent); color: var(--w-on-accent); font: 400 13.5px/1 var(--w-ui); cursor: pointer; }
+.w-ask:hover { filter: brightness(1.07); }
+/* Every chart carries its numbers as a table too, so the answer is never
+   gated behind seeing colour or hovering a mark. */
+.w-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+/* The hover layer. A chart in a browser is interactive; a static picture of
+   one is a screenshot. */
+.w-tip { position: absolute; z-index: 2; padding: 6px 9px; border-radius: var(--w-r-sm); background: var(--w-ink); color: var(--w-paper);
+         font: 400 12px/1.35 var(--w-ui); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .12s; }
+.w-tip[data-show] { opacity: 1; }
+.w-tip b { font: 500 12px/1.35 var(--w-mono); font-variant-numeric: tabular-nums; }
+
+  /* ── this view ─────────────────────────────────────────────── */
+  .wg { position: relative; }
+  .wg__head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 4px; }
+  .wg__head h2 { font-size: 19px; }
+  /* The headline is the change, not the last value: a number with no direction
+     is trivia, and the direction is the reason anyone asked for a trend. */
+  .wg__delta { font: 500 14px/1 var(--w-mono); font-variant-numeric: tabular-nums; }
+  /* Whether a rise is good is a fact about the measure, not about the chart:
+     revenue up is green, open tickets up is not. The agent says which. */
+  .wg__delta[data-way="good"] { color: var(--w-ok); }
+  .wg__delta[data-way="bad"] { color: var(--w-bad); }
+  .wg__sub { margin: 0 0 14px; font-size: 13.5px; color: var(--w-ink-2); }
+  /* Scaled uniformly. `preserveAspectRatio="none"` stretches the 2px line
+     to 1.2px and the end dot into an ellipse the moment the card is narrower
+     than the viewBox, which is most of the time. */
+  .wg__plot { display: block; width: 100%; height: auto; overflow: visible; }
+  /* Recessive: hairline, solid, one step off the surface. A dashed grid is
+     more ink pretending to be less. */
+  .wg__grid { stroke: var(--w-line-2); stroke-width: 1; }
+  .wg__axis { font: 400 10.5px/1 var(--w-mono); fill: var(--w-ink-3); }
+  .wg__area { fill: var(--w-chart-1); opacity: .10; }
+  .wg__line { fill: none; stroke: var(--w-chart-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  /* The end marker carries a surface ring so it stays legible where it crosses
+     the line, and so it is big enough to actually hit with a pointer. */
+  .wg__dot { fill: var(--w-chart-1); stroke: var(--w-paper); stroke-width: 2; }
+  .wg__hit { fill: transparent; }
+  .wg__rule { stroke: var(--w-ink-3); stroke-width: 1; opacity: 0; }
+  .wg__rule[data-show] { opacity: .45; }
+  .wg__label { font: 500 12px/1 var(--w-mono); fill: var(--w-ink); font-variant-numeric: tabular-nums; }
+</style>
+
+<section class="w wg" data-lemma-widget-version="1">
+  <div id="wg-state" class="w-state">Loading…</div>
+  <div id="wg-card" class="w-card" hidden>
+    <div class="wg__head">
+      <h2>__WIDGET_TITLE__</h2>
+      <span id="wg-delta" class="wg__delta"></span>
+    </div>
+    <p id="wg-sub" class="wg__sub"></p>
+    <svg id="wg-plot" class="wg__plot" viewBox="0 0 640 180" role="img" aria-labelledby="wg-alt"></svg>
+    <span id="wg-alt" class="w-sr"></span>
+    <div id="wg-table" class="w-sr"></div>
+  </div>
+  <div id="wg-tip" class="w-tip"></div>
+</section>
+
+<script>
+  (function () {
+    var W = 640, H = 180, PAD_L = 38, PAD_R = 10, PAD_T = 10, PAD_B = 22;
+    var stateEl = document.getElementById("wg-state");
+    var cardEl = document.getElementById("wg-card");
+    var plot = document.getElementById("wg-plot");
+    var tip = document.getElementById("wg-tip");
+
+    function fail(m) { stateEl.hidden = false; stateEl.dataset.kind = "error"; stateEl.textContent = m || "Unable to load this chart."; cardEl.hidden = true; }
+    function notice(m) { stateEl.hidden = false; delete stateEl.dataset.kind; stateEl.textContent = m; cardEl.hidden = true; }
+    function num(v) { return new Intl.NumberFormat().format(Number(v) || 0); }
+    function esc(v) { var n = document.createElement("span"); n.textContent = v == null ? "" : v; return n.innerHTML; }
+    function day(value) {
+      var d = new Date(value);
+      return isNaN(d.getTime()) ? String(value) : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+    // Ticks land on round numbers, because they carry every value that is not
+    // directly labelled and "1,732.4" is not a number anyone reads off an axis.
+    function ceilNice(v) {
+      if (v <= 5) return 5;
+      var pow = Math.pow(10, Math.floor(Math.log10(v)));
+      return Math.ceil(v / (pow / 2)) * (pow / 2);
+    }
+
+    function render(points) {
+      if (points.length < 2) { notice("Not enough history yet to draw a trend."); return; }
+
+      var values = points.map(function (p) { return Number(p.bucket_count) || 0; });
+      var top = ceilNice(Math.max.apply(null, values));
+      var x = function (i) { return PAD_L + (i / (points.length - 1)) * (W - PAD_L - PAD_R); };
+      var y = function (v) { return PAD_T + (1 - v / top) * (H - PAD_T - PAD_B); };
+
+      var line = values.map(function (v, i) { return (i ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1); }).join(" ");
+      var area = line + " L" + x(values.length - 1).toFixed(1) + " " + y(0) + " L" + x(0).toFixed(1) + " " + y(0) + " Z";
+
+      var ticks = [0, top / 2, top];
+      var svg = ticks.map(function (t) {
+        return '<line class="wg__grid" x1="' + PAD_L + '" y1="' + y(t).toFixed(1) + '" x2="' + (W - PAD_R) + '" y2="' + y(t).toFixed(1) + '"/>' +
+          '<text class="wg__axis" x="' + (PAD_L - 7) + '" y="' + (y(t) + 3.5).toFixed(1) + '" text-anchor="end">' + num(t) + "</text>";
+      }).join("");
+
+      svg += '<path class="wg__area" d="' + area + '"/><path class="wg__line" d="' + line + '"/>';
+      svg += '<line id="wg-rule" class="wg__rule" y1="' + PAD_T + '" y2="' + (H - PAD_B) + '"/>';
+
+      // First and last only. A label under every point is the axis again, in
+      // a worse typeface.
+      svg += '<text class="wg__axis" x="' + PAD_L + '" y="' + (H - 6) + '">' + esc(day(points[0].bucket)) + "</text>";
+      svg += '<text class="wg__axis" x="' + (W - PAD_R) + '" y="' + (H - 6) + '" text-anchor="end">' + esc(day(points[points.length - 1].bucket)) + "</text>";
+
+      var lastX = x(values.length - 1), lastY = y(values[values.length - 1]);
+      svg += '<circle class="wg__dot" cx="' + lastX.toFixed(1) + '" cy="' + lastY.toFixed(1) + '" r="4.5"/>';
+      svg += '<text class="wg__label" x="' + (lastX - 8).toFixed(1) + '" y="' + (lastY - 10).toFixed(1) + '" text-anchor="end">' + num(values[values.length - 1]) + "</text>";
+
+      // Hit targets are the full column height, not the 2px line: a chart you
+      // have to hit precisely is a chart nobody hovers twice.
+      svg += points.map(function (p, i) {
+        var half = (W - PAD_L - PAD_R) / (points.length - 1) / 2;
+        return '<rect class="wg__hit" data-i="' + i + '" x="' + (x(i) - half).toFixed(1) + '" y="' + PAD_T +
+          '" width="' + (half * 2).toFixed(1) + '" height="' + (H - PAD_T - PAD_B) + '"/>';
+      }).join("");
+
+      plot.innerHTML = svg;
+
+      var first = values[0], last = values[values.length - 1];
+      var change = first === 0 ? null : Math.round(((last - first) / first) * 100);
+      var deltaEl = document.getElementById("wg-delta");
+      if (change !== null) {
+        deltaEl.textContent = (change > 0 ? "+" : "") + change + "%";
+        deltaEl.dataset.way = change === 0 ? "flat" : change > 0 ? "__RISE_READS__" : "__FALL_READS__";
+      }
+      document.getElementById("wg-sub").textContent =
+        num(values.reduce(function (a, b) { return a + b; }, 0)) + " __EMPTY_LABEL__ across " +
+        points.length + " __BUCKET_NOUN__, " + day(points[0].bucket) + " to " + day(points[points.length - 1].bucket);
+
+      document.getElementById("wg-alt").textContent =
+        "__WIDGET_TITLE__: " + num(first) + " on " + day(points[0].bucket) + " to " + num(last) + " on " + day(points[points.length - 1].bucket) + ".";
+      document.getElementById("wg-table").innerHTML = "<table><caption>__WIDGET_TITLE__</caption><tbody>" +
+        points.map(function (p) { return "<tr><th scope='row'>" + esc(day(p.bucket)) + "</th><td>" + num(p.bucket_count) + "</td></tr>"; }).join("") +
+        "</tbody></table>";
+
+      var rule = document.getElementById("wg-rule");
+      plot.addEventListener("mousemove", function (event) {
+        var target = event.target.closest("[data-i]"); if (!target) return;
+        var i = Number(target.dataset.i), box = plot.getBoundingClientRect();
+        var px = box.left + (x(i) / W) * box.width;
+        rule.setAttribute("x1", x(i).toFixed(1)); rule.setAttribute("x2", x(i).toFixed(1));
+        rule.setAttribute("data-show", "");
+        tip.innerHTML = esc(day(points[i].bucket)) + " · <b>" + num(values[i]) + "</b>";
+        tip.setAttribute("data-show", "");
+        tip.style.left = Math.round(px - plot.getBoundingClientRect().left + 8) + "px";
+        tip.style.top = Math.round((y(values[i]) / H) * box.height - 6) + "px";
+      });
+      plot.addEventListener("mouseleave", function () { rule.removeAttribute("data-show"); tip.removeAttribute("data-show"); });
+
+      cardEl.hidden = false; stateEl.hidden = true;
+    }
+
+    async function boot() {
+      try {
+        var client = new window.LemmaClient.LemmaClient();
+        var auth = await client.initialize();
+        if (!auth || auth.status !== "authenticated") { notice("This view can't load pod data in this browser."); return; }
+        // Bucketed in SQL. Counting rows in JS would count one capped page and
+        // draw a trend of the page rather than of the table.
+        var response = await client.datastore.query(
+          "select date_trunc('__BUCKET__', __DATE_FIELD__) as bucket, count(*) as bucket_count" +
+          " from __TABLE_NAME__ group by bucket order by bucket asc"
+        );
+        render((response && response.items) || []);
+      } catch (error) { fail(error && error.message); }
+    }
+
+    var cfg = window.__LEMMA_CONFIG__ || {};
+    if (!cfg.apiUrl) { fail("Lemma runtime configuration is unavailable."); return; }
+    var sdk = document.createElement("script");
+    sdk.src = cfg.apiUrl.replace(/\/$/, "") + "/public/sdk/lemma-client.js";
+    sdk.onload = boot;
+    sdk.onerror = function () { fail("Could not load the Lemma browser SDK."); };
+    document.head.appendChild(sdk);
+  })();
+</script>

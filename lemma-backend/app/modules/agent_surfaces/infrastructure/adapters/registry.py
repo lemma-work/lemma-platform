@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.modules.agent_surfaces.domain.ports import SurfacePlatformAdapterPort
+from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.platforms.resend.adapter import ResendSurfaceAdapter
 from app.modules.agent_surfaces.platforms.slack.adapter import SlackSurfaceAdapter
 from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter

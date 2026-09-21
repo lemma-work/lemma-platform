@@ -420,14 +420,45 @@ export function BrowserPane({
     // memory silently does nothing, and macOS also tends to swallow the keyup
     // of a ⌘-combination, leaving the modifier stuck down on the far side.
     //
-    // ⌘V is deliberately not here: the paste event below already carries the
-    // text and writes it to the remote clipboard first, which is what makes
-    // pasting race-free. Handling the keystroke too would paste twice.
+    // Paste is the one that has to get *out* of this handler intact, and the
+    // reason is in noVNC. Its keyboard binds `keydown` on the canvas and ends
+    // every single one with `stopEvent`, which is `preventDefault` plus
+    // `stopPropagation`. A preventDefaulted keydown is exactly the thing a
+    // browser will not follow with a `paste` event -- so the handler below,
+    // which is what writes the text to the remote clipboard, never ran, and
+    // pasting a password into the pane silently did nothing.
+    //
+    // This runs in the *capture* phase on the container, which is an
+    // ancestor of that canvas, so it sees the keystroke first. Stopping
+    // propagation here means noVNC's listener never fires, never
+    // preventDefaults, and the browser goes on to emit the native `paste`
+    // that `onPaste` is waiting for. Deliberately **no** `preventDefault` on
+    // this branch: that would suppress the very event we are trying to
+    // provoke.
+    //
+    // Both modifiers, because ⌘V is the gesture on macOS and Ctrl+V
+    // everywhere else -- and the Ctrl+V case was broken differently: it fell
+    // past the `metaKey` guard into noVNC, which dutifully sent Ctrl+V to the
+    // far side, where it pasted whatever the *remote* clipboard happened to
+    // hold. Nothing had ever written to it.
     const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
         const rfb = rfbRef.current;
-        if (!rfb || !event.metaKey || event.ctrlKey || event.altKey) return;
+        if (!rfb || event.altKey) return;
         const key = event.key.toLowerCase();
-        if (!'cxa'.includes(key) || key.length !== 1) return;
+        if (key.length !== 1) return;
+
+        if (key === 'v' && (event.metaKey || event.ctrlKey)) {
+            event.stopPropagation();
+            return;
+        }
+
+        // The keystroke that works over there is Ctrl+<key>, so the native
+        // gesture is translated rather than passed through -- otherwise the
+        // person's muscle memory silently does nothing, and macOS also tends
+        // to swallow the keyup of a ⌘-combination, leaving the modifier stuck
+        // down on the far side.
+        if (!event.metaKey || event.ctrlKey) return;
+        if (!'cxa'.includes(key)) return;
         event.preventDefault();
         event.stopPropagation();
         rfb.sendKey(XK_CONTROL_L, 'ControlLeft', true);

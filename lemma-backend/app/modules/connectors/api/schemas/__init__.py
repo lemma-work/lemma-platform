@@ -10,13 +10,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationSummary,
 )
+from app.core.api.schemas import BaseSchema
 from app.modules.connectors.domain.connector import AuthScheme, ConnectorKind
-
-
-class BaseSchema(BaseModel):
-    """Base schema with common configuration."""
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class OAuth2DefaultsResponseSchema(BaseModel):

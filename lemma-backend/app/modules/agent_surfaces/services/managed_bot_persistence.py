@@ -102,13 +102,27 @@ async def persist_managed_bot(
             )
             account.display_name = f"@{bot_username}" if bot_username else str(bot_id)
             account = await accounts.update(account)
-        from app.modules.agent_surfaces.api.dependencies import get_surface_service
+        from app.modules.agent_surfaces.composition import build_surface_service
 
-        surface_service = get_surface_service(uow)
+        surface_service = build_surface_service(uow)
         surface = await surface_service.surface_repository.get_by_pod_and_name(
             pod_id=setup.pod_id,
             name=setup.surface_name,
         )
+        if surface is None:
+            # An agent reaches Telegram in one place, so the setup target is
+            # really "this agent's Telegram surface" and the name is only how a
+            # caller asks for it. Keyed on the name alone, a rerun under a
+            # different name found nothing, and the create below then hit
+            # `uq_agent_surface_agent_type` -- an IntegrityError where the branch
+            # underneath already had the right thing to say.
+            same_agent, _ = await surface_service.surface_repository.list_by_pod(
+                setup.pod_id,
+                platform=SurfacePlatform.TELEGRAM.value,
+                agent_id=setup.agent_id,
+                match_agent=True,
+            )
+            surface = same_agent[0] if same_agent else None
         if surface is None:
             surface = await surface_service.create_surface(
                 pod_id=setup.pod_id,

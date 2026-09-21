@@ -99,7 +99,7 @@ class ProgressWaitingMixin:
         tool call try again instead of being deduped away.
         """
         async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
+            service = self.egress_factory(uow)
             try:
                 if kind == "ask_user":
                     delivered = await service.send_questions_for_conversation(
