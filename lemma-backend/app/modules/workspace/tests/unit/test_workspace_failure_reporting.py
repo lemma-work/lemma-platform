@@ -85,6 +85,19 @@ if op in ("sandbox.ensure", "sandbox.status"):
 print(json.dumps({"ok": True, "result": {}}))
 """
 
+_COUNTING_BRIDGE = """
+import json, os, sys
+request = json.loads(sys.stdin.read())
+op = request["operation"]
+with open(os.environ["CALL_LOG"], "a") as log:
+    log.write(op + "\\n")
+runtime_url = os.environ["RUNTIME_URL"]
+apps = {"runtime": {"port": 8080, "private_url": runtime_url}}
+status = {"state": "running", "runtime_url": runtime_url, "apps": apps}
+print(json.dumps({"ok": True, "result": {
+    "status": status, "provider_id": request["parameters"].get("sandbox_id")}}))
+"""
+
 _HANGING_BRIDGE = """
 import time
 time.sleep(30)
@@ -174,3 +187,43 @@ async def test_an_unauthorized_status_is_recognised_for_every_endpoint() -> None
         error = WorkspaceRuntimeClient._status_error(code, None)
         assert isinstance(error, WorkspaceRuntimeUnauthorized), code
         assert error.status_code == code
+
+
+async def test_a_second_operation_does_not_ask_the_guest_where_the_runtime_is_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The address of a container does not change between two file writes.
+
+    Every workspace operation entered `_ops`, and `_ops` asked the guest for a
+    status snapshot before doing anything: a `hostctl` fork on the host, a vsock
+    round-trip, and a `nerdctl inspect` fork inside the VM. `_ops` has seventeen
+    call sites, so a multi-step file operation paid all of that once per step.
+
+    Driven against a runtime that actually answers, because a failing operation
+    drops the remembered address on purpose -- an endpoint that stopped working
+    is exactly the one not to keep.
+    """
+    runtime = _FixedStatusRuntime(204)
+    calls = tmp_path / "calls.log"
+    try:
+        monkeypatch.setenv("CALL_LOG", str(calls))
+        monkeypatch.setenv("RUNTIME_URL", runtime.url)
+        provider = LemmaLocalSandboxProvider(
+            LemmaLocalProviderConfig(
+                executable=str(_bridge(tmp_path, _COUNTING_BRIDGE))
+            ),
+            RuntimeCredentialSigner(key=b"k" * 32),
+        )
+        instance = _instance(uuid4())
+
+        for _ in range(3):
+            await provider.create_directory(
+                instance, path="/workspace/x", deadline_at=_deadline()
+            )
+    finally:
+        runtime.close()
+
+    recorded = calls.read_text().split()
+    assert recorded.count("sandbox.status") == 1, (
+        "each operation asked the guest where the runtime is: " + " ".join(recorded)
+    )
