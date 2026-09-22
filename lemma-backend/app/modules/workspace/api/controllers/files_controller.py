@@ -47,6 +47,7 @@ from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
 from app.modules.workspace.services.workspace_sandbox_service import (
+    INTERACTIVE_READY_SECONDS,
     WorkspaceSandboxService,
 )
 from app.modules.workspace.session_support import sandbox_failure_types
@@ -313,7 +314,11 @@ async def list_workspace_files(
         if not wake and not await _is_awake(service, user.id):
             return WorkspaceFileListResponse(path=target, sleeping=True)
         session = await service.get_session(
-            user.id, pod_id=None, initial_cwd=_ROOT, close_on_exit=False
+            user.id,
+            pod_id=None,
+            initial_cwd=_ROOT,
+            close_on_exit=False,
+            ready_timeout_seconds=INTERACTIVE_READY_SECONDS,
         )
         async with session:
             _inside_workspace(await session.stat_file(target))
@@ -363,7 +368,11 @@ async def stat_workspace_file(
     target = _workspace_path(path)
     try:
         session = await service.get_session(
-            user.id, pod_id=None, initial_cwd=_ROOT, close_on_exit=False
+            user.id,
+            pod_id=None,
+            initial_cwd=_ROOT,
+            close_on_exit=False,
+            ready_timeout_seconds=INTERACTIVE_READY_SECONDS,
         )
         async with session:
             stat = await session.stat_file(target)
@@ -400,7 +409,11 @@ async def read_workspace_file(
     session = None
     try:
         session = await service.get_session(
-            user.id, pod_id=None, initial_cwd=_ROOT, close_on_exit=False
+            user.id,
+            pod_id=None,
+            initial_cwd=_ROOT,
+            close_on_exit=False,
+            ready_timeout_seconds=INTERACTIVE_READY_SECONDS,
         )
         await session.__aenter__()
         # Statted before it is read. The extra round trip is what makes the
@@ -581,6 +594,16 @@ def _as_http_error(exc: BaseException, path: str) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="File is larger than this endpoint will serve; read a range.",
+        )
+    if "Unavailable" in name:
+        # Distinguished from "not reachable" because it is the common case and
+        # the two want different things from the reader: a workspace that is
+        # still coming up is worth waiting for, and one that is unreachable is
+        # not. The reason itself goes to the log, never into the response.
+        logger.warning("workspace.files.not_ready.degraded", exc_info=exc)
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Workspace is still starting. Try again in a moment.",
         )
     logger.warning("workspace.files.read_failed.degraded", exc_info=exc)
     return HTTPException(

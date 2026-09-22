@@ -16,6 +16,7 @@ from opentelemetry import trace
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.config import settings
+from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.protocol import (
     PortAccessGrant,
@@ -40,6 +41,8 @@ from app.modules.workspace.services.workspace_storage_generation_store import (
 )
 from app.modules.workspace.config import workspace_settings
 
+logger = get_logger(__name__)
+
 _storage_generation_store: WorkspaceStorageGenerationStore | None = None
 _process_store: WorkspaceProcessStore | None = None
 _SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
@@ -47,6 +50,12 @@ _SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
 # enough that a run's tool calls stop paying for it, short enough that an agent
 # which deleted its own working directory recovers on its own.
 _DIRECTORY_READY_SECONDS = 60.0
+# How long a person waits. The 300s ceiling above is the sandbox manager's, and
+# it is right for a first boot that is genuinely pulling an image -- but it was
+# also what a file listing waited, so a browser pane spun for five minutes and
+# then showed a 500. Interactive callers pass this instead; the work itself is
+# shielded and keeps running for whoever asks next.
+INTERACTIVE_READY_SECONDS = 15.0
 
 # Own tracer rather than the agent module's run_phase helper: a workspace
 # session is acquired again for every single shell tool call, and the split
@@ -372,12 +381,14 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
         organization_id: UUID | None = None,
         scope: list[str] | None = None,
         env_vars: dict[str, str] | None = None,
+        ready_timeout_seconds: float | None = None,
     ) -> IWorkspaceSession:
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
         with _tracer.start_as_current_span("lemma.workspace.ensure_dir"):
             sandbox_info = await self._ensure_workspace_directory(
                 user_id,
                 resolved_cwd,
+                ready_timeout_seconds=ready_timeout_seconds,
             )
         with _tracer.start_as_current_span("lemma.workspace.runtime_bundle"):
             await self._ensure_runtime_bundle(user_id, sandbox_info)
@@ -435,6 +446,8 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
         self,
         user_id: UUID,
         path: str,
+        *,
+        ready_timeout_seconds: float | None = None,
     ) -> SandboxInfo:
         deadline_at = datetime.now(timezone.utc) + timedelta(
             seconds=_SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS
@@ -442,12 +455,16 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
         sandbox_info = await self.get_or_create_sandbox(user_id)
         cache_key = self._directory_cache_key(user_id, path, sandbox_info)
         if cache_key is None:
-            return await self._create_workspace_directory_until_ready(
-                user_id,
-                path,
-                sandbox_info=sandbox_info,
-                deadline_at=deadline_at,
+            uncached = create_inherited_task(
+                self._create_workspace_directory_until_ready(
+                    user_id,
+                    path,
+                    sandbox_info=sandbox_info,
+                    deadline_at=deadline_at,
+                ),
+                name=f"workspace-directory-ensure:{user_id}:{path}",
             )
+            return await self._await_directory(uncached, ready_timeout_seconds)
 
         ready_at = self._ready_directories.get(cache_key)
         if ready_at is not None:
@@ -483,9 +500,36 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
 
             task.add_done_callback(clear)
 
-        info = await asyncio.shield(task)
+        info = await self._await_directory(task, ready_timeout_seconds)
         self._ready_directories[cache_key] = asyncio.get_running_loop().time()
         return info
+
+    @staticmethod
+    async def _await_directory(
+        task: "asyncio.Task[SandboxInfo]",
+        ready_timeout_seconds: float | None,
+    ) -> SandboxInfo:
+        """Wait for the ensure, but only as long as this caller can afford.
+
+        `shield` rather than cancellation: a caller giving up must not abort a
+        first boot that a slower caller is still legitimately waiting on. The
+        work keeps running and the next request finds it in `_inflight`.
+        """
+        if ready_timeout_seconds is None:
+            return await asyncio.shield(task)
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task), timeout=ready_timeout_seconds
+            )
+        except asyncio.TimeoutError as exc:
+            # The task outlives this request by design, so nobody is left to
+            # read its outcome. Retrieve it on completion or asyncio reports an
+            # unretrieved exception against a task that failed as expected.
+            task.add_done_callback(lambda done: done.cancelled() or done.exception())
+            raise SandboxUnavailable(
+                "workspace is still starting; it was not ready within "
+                f"{ready_timeout_seconds:.0f}s"
+            ) from exc
 
     async def _create_workspace_directory_until_ready(
         self,
@@ -496,6 +540,8 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
         deadline_at: datetime,
     ) -> SandboxInfo:
         force_reconcile = False
+        attempts = 0
+        last_error: SandboxUnavailable | None = None
         while datetime.now(timezone.utc) < deadline_at:
             if force_reconcile:
                 sandbox_info = await self.get_or_create_sandbox(
@@ -509,6 +555,8 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
                     deadline_at=deadline_at,
                 )
             except SandboxUnavailable as exc:
+                attempts += 1
+                last_error = exc
                 remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
                 if remaining <= 0:
                     break
@@ -517,7 +565,23 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
                 force_reconcile = True
                 continue
             return sandbox_info
-        raise TimeoutError(f"workspace sandbox {user_id} did not become usable")
+        # Every attempt raised, and until this was written each one's reason was
+        # bound and dropped. What reached the caller was a bare `TimeoutError`
+        # after the full deadline -- rendered as `500 INTERNAL_ERROR` with a null
+        # message -- so the one sentence saying why a workspace never came up
+        # existed on every iteration and survived none of them.
+        reason = str(last_error) if last_error else "no attempt completed"
+        logger.warning(
+            "workspace.sandbox_service.directory_ensure_exhausted.degraded",
+            user_id=str(user_id),
+            path=path,
+            attempts=attempts,
+            reason=reason,
+        )
+        raise TimeoutError(
+            f"workspace sandbox {user_id} did not become usable "
+            f"after {attempts} attempts: {reason}"
+        )
 
     def _directory_cache_key(
         self,

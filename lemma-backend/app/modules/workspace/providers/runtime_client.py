@@ -78,6 +78,23 @@ class WorkspaceRuntimeFileRejected(WorkspaceRuntimeError):
         self.status_code = status_code
 
 
+class WorkspaceRuntimeUnauthorized(WorkspaceRuntimeError):
+    """The runtime refused this caller's credential.
+
+    Its own type, and recognised for every endpoint rather than per-call,
+    because a rejected credential is the one runtime answer that waiting cannot
+    fix. Without it a 401 fell through to the bare `WorkspaceRuntimeError` that
+    `_status_error` returns for anything unmapped, which both `_ops` scopes turn
+    into `SandboxUnavailable` -- the retryable word. Every caller then retried a
+    refusal until its deadline and reported a timeout, which says nothing about
+    a credential.
+    """
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 _FILESYSTEM_STATUS_ERRORS: Mapping[int, type[WorkspaceRuntimeError]] = {
     404: WorkspaceRuntimeFileNotFound,
     409: WorkspaceRuntimeFileConflict,
@@ -545,8 +562,10 @@ class WorkspaceRuntimeClient:
         status_code: int,
         status_errors: Mapping[int, type[WorkspaceRuntimeError]] | None,
     ) -> WorkspaceRuntimeError:
-        error_type = (status_errors or {}).get(status_code, WorkspaceRuntimeError)
         message = f"workspace runtime returned HTTP {status_code}"
+        if status_code in (401, 403):
+            return WorkspaceRuntimeUnauthorized(message, status_code=status_code)
+        error_type = (status_errors or {}).get(status_code, WorkspaceRuntimeError)
         if error_type is WorkspaceRuntimeFileRejected:
             return WorkspaceRuntimeFileRejected(message, status_code=status_code)
         return error_type(message)

@@ -53,6 +53,7 @@ from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeFileConflict,
     WorkspaceRuntimeFileNotFound,
     WorkspaceRuntimeFileRejected,
+    WorkspaceRuntimeUnauthorized,
 )
 
 # The runtime reads this path once on start and unlinks it, so delivering a
@@ -278,8 +279,15 @@ class DockerOpsMixin:
             raise SandboxPathConflict(str(exc)) from exc
         except WorkspaceRuntimeFileRejected as exc:
             raise SandboxRejected(str(exc)) from exc
+        except WorkspaceRuntimeUnauthorized as exc:
+            # Definitive: this credential will not become valid by waiting.
+            raise SandboxRejected(str(exc)) from exc
         except ProviderGone:
             raise
+        except asyncio.TimeoutError as exc:
+            raise SandboxUnavailable(
+                "workspace runtime did not answer before the deadline"
+            ) from exc
         except (WorkspaceRuntimeError, DockerEngineError) as exc:
             raise SandboxUnavailable(str(exc)) from exc
         finally:

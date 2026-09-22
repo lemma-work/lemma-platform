@@ -403,6 +403,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             WorkspaceRuntimeFileConflict,
             WorkspaceRuntimeFileNotFound,
             WorkspaceRuntimeFileRejected,
+            WorkspaceRuntimeUnauthorized,
         )
 
         @asynccontextmanager
@@ -427,8 +428,20 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                 # loop on the machine's single vsock control channel instead of
                 # one sentence saying what was wrong.
                 raise SandboxRejected(str(exc)) from exc
+            except WorkspaceRuntimeUnauthorized as exc:
+                # Definitive: this credential will not become valid by waiting.
+                raise SandboxRejected(str(exc)) from exc
             except ProviderGone:
                 raise
+            except asyncio.TimeoutError as exc:
+                # The bridge stopped answering within the deadline. Retryable,
+                # but it has to arrive as a sandbox error with a sentence in it:
+                # uncaught, it left this scope as a bare `TimeoutError` and
+                # every caller rendered it as `500 INTERNAL_ERROR` with a null
+                # message, which is what a five-minute file listing looked like.
+                raise SandboxUnavailable(
+                    "managed runtime did not answer before the deadline"
+                ) from exc
             except (WorkspaceRuntimeError, LocalBridgeError) as exc:
                 raise SandboxUnavailable(str(exc)) from exc
             finally:
