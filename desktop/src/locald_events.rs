@@ -155,7 +155,7 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
                 // had to install anything to get there. The first of those is
                 // the number the whole runtime install exists to keep small,
                 // and nothing was measuring it outside a developer's console.
-                telemetry::note(telemetry::InstallEvent::RuntimeReady {
+                outcome.became_ready = Some(ReadyReached {
                     cached: !ui.installed_this_launch,
                     duration_ms: u64::try_from(
                         LAUNCH_START.get_or_init(Instant::now).elapsed().as_millis(),
@@ -176,28 +176,16 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
                 if trusted_workspace_urls(url, api_url) {
                     ui.url = url.to_string();
                     ui.api_url = api_url.to_string();
-                    // Record what is serving, and under which generation,
-                    // so the next launch can skip straight to it.
-                    //
-                    // On a worker, because this writes the config with two
-                    // fsyncs and we are holding `shell.ui` -- a lock the main
-                    // thread takes in `navigation_context` (on every
-                    // navigation, subframes included), `get_state`,
-                    // `current_mode`, `refresh_tray_status` and
-                    // `quit_impact`. Holding it across a disk sync stalled
-                    // WebKit's navigation delegate, worst exactly when the
-                    // disk is busy unpacking a runtime. The resume target is
-                    // advisory, so late is fine and lost is survivable.
-                    let (url, api_url, generation) = (
-                        url.to_string(),
-                        api_url.to_string(),
-                        event["runtime_generation"]
+                    // Record what is serving, and under which generation, so
+                    // the next launch can skip straight to it. Returned rather
+                    // than written: see `perform_event_side_effects`.
+                    outcome.resume_write = Some(ResumeWrite {
+                        url: url.to_string(),
+                        api_url: api_url.to_string(),
+                        generation: event["runtime_generation"]
                             .as_str()
                             .unwrap_or_default()
                             .to_string(),
-                    );
-                    std::thread::spawn(move || {
-                        write_resume_target(&url, &api_url, &generation);
                     });
                 }
             }
@@ -310,6 +298,39 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
     outcome
 }
 
+/// The disk work an event asked for, done after `shell.ui` is released.
+///
+/// Both of these used to run inside `apply_locald_event`, under the lock. The
+/// resume write had already been moved to a worker for that reason -- the main
+/// thread takes `shell.ui` on every navigation, and holding it across two
+/// fsyncs stalled WebKit's navigation delegate -- but `telemetry::note`, a
+/// read-modify-write of its own state file, still ran synchronously right
+/// beside it. Taking both out also makes `apply_locald_event` the pure fold its
+/// documentation says it is, which is what lets the `ready` arm be tested
+/// without writing into the real configuration.
+fn perform_event_side_effects(outcome: &mut EventOutcome) {
+    if let Some(ReadyReached {
+        cached,
+        duration_ms,
+    }) = outcome.became_ready.take()
+    {
+        telemetry::note(telemetry::InstallEvent::RuntimeReady {
+            cached,
+            duration_ms,
+        });
+    }
+    if let Some(ResumeWrite {
+        url,
+        api_url,
+        generation,
+    }) = outcome.resume_write.take()
+    {
+        // A worker, because it syncs twice; the target is advisory, so late
+        // is fine and lost is survivable.
+        std::thread::spawn(move || write_resume_target(&url, &api_url, &generation));
+    }
+}
+
 /// What to do with an event that names the operation it belongs to.
 ///
 /// The whole of a decision that decides what somebody watching the splash
@@ -395,11 +416,12 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
         emit_log(app, event["line"].as_str().unwrap_or_default());
         return;
     }
-    let (snapshot, outcome) = {
+    let (snapshot, mut outcome) = {
         let mut ui = shell.ui.lock().unwrap();
         let outcome = apply_locald_event(&mut ui, kind, event);
         (ui.clone(), outcome)
     };
+    perform_event_side_effects(&mut outcome);
     let schedule_terminal_recovery = outcome.schedule_terminal_recovery;
     let start_after_prepare = outcome.start_after_prepare;
 

@@ -192,12 +192,34 @@ pub(crate) struct ResumeTarget {
 }
 
 /// What the caller must do once the state has been folded.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct EventOutcome {
     /// A terminal error just appeared, and recovery options should be fetched.
     pub(crate) schedule_terminal_recovery: bool,
     /// The runtime finished preparing, so the stack should be started.
     pub(crate) start_after_prepare: bool,
+    /// This launch just became usable, so its time-to-ready is recorded.
+    pub(crate) became_ready: Option<ReadyReached>,
+    /// What is serving now, for the next launch to resume straight into.
+    pub(crate) resume_write: Option<ResumeWrite>,
+}
+
+/// How long a launch took to become usable, and whether it installed anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReadyReached {
+    pub(crate) cached: bool,
+    pub(crate) duration_ms: u64,
+}
+
+/// A resume target to record: what is serving now, and under which generation.
+///
+/// Not [`ResumeTarget`], which is the stored shape and carries the release and
+/// route that `write_resume_target` fills in itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResumeWrite {
+    pub(crate) url: String,
+    pub(crate) api_url: String,
+    pub(crate) generation: String,
 }
 
 /// What the app knows about a newer version, if anything.
