@@ -70,6 +70,8 @@ vi.stubGlobal('ResizeObserver', FakeResizeObserver);
  * something rather than merely holding it.
  */
 const resized: string[] = [];
+//: Every time the pane asked the backend where the browser is.
+const pageUrlCalls: number[] = [];
 const rfbInstances = vi.hoisted(() => [] as FakeRfb[]);
 
 class FakeRfb {
@@ -141,7 +143,10 @@ vi.mock('@/lib/sdk/lemma-client', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/lib/sdk/lemma-client')>()),
     getLemmaClient: () => ({
         workspace: {
-            browserCurrentPageUrl: async () => ({ url: page.url }),
+            browserCurrentPageUrl: async () => {
+                pageUrlCalls.push(Date.now());
+                return { url: page.url };
+            },
             // Exercised by the pane's ResizeObserver; the display fitting is
             // not what these tests are about.
             browserResizeDisplay: async (width: number, height: number) => {
@@ -156,6 +161,7 @@ afterEach(() => {
     rfbInstances.length = 0;
     observers.length = 0;
     resized.length = 0;
+    pageUrlCalls.length = 0;
     page.url = 'about:blank';
     cleanup();
 });
@@ -590,5 +596,47 @@ describe('keeping the display the shape of the pane', () => {
         await new Promise((resolve) => setTimeout(resolve, 300));
 
         expect(resized).toEqual(['900x700']);
+    });
+});
+
+describe('asking where the browser is', () => {
+    const setHidden = (hidden: boolean) => {
+        Object.defineProperty(document, 'hidden', {
+            configurable: true,
+            get: () => hidden,
+        });
+    };
+
+    afterEach(() => setHidden(false));
+
+    it('stops asking while nothing is on screen to read the answer', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            render(<BrowserPane origin="https://example.com" />);
+            await connect();
+            await waitFor(() => expect(pageUrlCalls.length).toBeGreaterThan(0));
+
+            // A window sent to the tray. The interval keeps firing -- it is
+            // the request that must not, because on Desktop each one takes the
+            // guest's single control channel and every other sandbox operation
+            // on the machine queues behind it.
+            setHidden(true);
+            const asked = pageUrlCalls.length;
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(6000);
+            });
+            expect(pageUrlCalls.length).toBe(asked);
+
+            // And coming back does not wait out an interval: the sign-in
+            // page's anti-phishing host display is what reads this, and a
+            // stale answer there is worse than none.
+            setHidden(false);
+            await act(async () => {
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+            await waitFor(() => expect(pageUrlCalls.length).toBe(asked + 1));
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

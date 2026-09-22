@@ -25,6 +25,7 @@ from app.core.log.log import get_logger
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayClient,
+    BrowserRelayNotServed,
     BrowserRelayUnavailable,
     ProfileCookies,
 )
@@ -105,12 +106,26 @@ class BrowserViewService:
             )
             await service.touch(sandbox.id)
 
-    async def _relay(self, user_id: UUID, *, start: bool) -> BrowserRelayClient:
+    async def _relay(
+        self, user_id: UUID, *, start: bool, deliver: bool = True
+    ) -> BrowserRelayClient:
         """The relay for this person's sandbox, with its token delivered.
 
         `start` is the difference between a pane rendering and a person
         arriving: rendering a status must not wake a paused sandbox, and
         somebody who clicked a link has asked for exactly that.
+
+        `deliver` is the difference between arriving and asking a question.
+        The two writes below are cheap next to an attach and are not cheap next
+        to a poll: the sign-in pane asks `current_page_url` every 1.5 seconds
+        for as long as it is open, and each delivery is a file written into the
+        sandbox behind its own round trip. On Desktop those round trips are
+        serialized through the guest's single vsock control channel and each
+        one spawns an `inspect` in the guest, so a pane nobody was looking at
+        held the channel every other second -- against the same channel every
+        other sandbox operation on the machine has to wait for. A caller that
+        is only reading passes `deliver=False`; its degradation when the token
+        is genuinely missing is the one it already documents.
         """
         from app.modules.workspace.services.sandbox_composition import (
             get_sandbox_service,
@@ -144,10 +159,11 @@ class BrowserViewService:
         # the round trip is the cost: measured against a local Docker
         # fabric, one exec is ~50ms against ~22ms for the whole warm
         # display check the attach is actually here to run.
-        await asyncio.gather(
-            relay.deliver_token(),
-            relay.deliver_browser_proxy(sandbox.id, sandbox.kind),
-        )
+        if deliver:
+            await asyncio.gather(
+                relay.deliver_token(),
+                relay.deliver_browser_proxy(sandbox.id, sandbox.kind),
+            )
         return relay
 
     async def status(self, user_id: UUID) -> BrowserStatus:
@@ -176,6 +192,15 @@ class BrowserViewService:
 
         try:
             chrome = await relay.health(start=True)
+        except BrowserRelayNotServed:
+            # Before its parent, and the same state with a different sentence
+            # in the log: this sandbox does not publish the relay's port at
+            # all, which is the fabric's answer rather than the relay's
+            # silence, and the two are diagnosed in completely different
+            # places. Reaching here untyped was a 500 on a route whose whole
+            # job is to render a state.
+            logger.warning("workspace.browser_view.relay_not_served.degraded")
+            return {"state": "unavailable"}
         except BrowserRelayUnavailable:
             # The relay is not answering. On a sandbox that predates it that is
             # permanent until the image is replaced, which is a different
@@ -257,7 +282,7 @@ class BrowserViewService:
         that page showing the origin it was told about rather than breaking.
         """
         try:
-            relay = await self._relay(user_id, start=False)
+            relay = await self._relay(user_id, start=False, deliver=False)
             found = await relay.targets(domain=host_of(origin))
         except SandboxCapabilityUnsupported:
             return None
@@ -293,7 +318,7 @@ class BrowserViewService:
         sandbox can arrive through different API workers, and a count local
         to one of them says zero while the other is still watching.
         """
-        relay = await self._relay(user_id, start=False)
+        relay = await self._relay(user_id, start=False, deliver=False)
         return await relay.viewers()
 
     async def reset_display(self, user_id: UUID) -> str:
