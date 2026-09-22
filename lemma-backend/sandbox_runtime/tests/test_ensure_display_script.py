@@ -411,3 +411,66 @@ class TestTheProxyIsTheServersDecision:
 
         mode = Path(environment["AGENT_BROWSER_CONFIG"]).stat().st_mode & 0o777
         assert mode == 0o600, f"config.json is {oct(mode)}, and it holds a password"
+
+
+class TestLoopbackFallsThroughToTheHost:
+    """`localhost` in the sandbox, and the machine the person is sitting at.
+
+    On Desktop their own code runs on their computer -- a coding agent is given
+    a folder there -- so `npm run dev` listens on *their* machine while this
+    browser is in a container. Verified end to end on the real image with a
+    real Chromium: with a server on the host and nothing on that port in the
+    sandbox, `localhost:<port>` reached the host; with the sandbox serving the
+    same port, both spellings stayed in the sandbox.
+    """
+
+    def _config(self, environment: dict[str, str]) -> dict:
+        import json
+
+        return json.loads(Path(environment["AGENT_BROWSER_CONFIG"]).read_text())
+
+    def _with_host(self, tmp_path: Path, vnc_port: int, *, alias_resolves: bool):
+        environment, _ = _workspace(tmp_path, browser_live=True, vnc_port=vnc_port)
+        binaries = tmp_path / "bin"
+        # `getent hosts` is how the script asks whether there is a host to fall
+        # through to at all. Every fabric except Desktop has none.
+        _stub(binaries, "getent", "exit 0" if alias_resolves else "exit 2")
+        # The fall-through itself is its own module with its own tests; what is
+        # under test here is whether this script starts one and tells Chrome.
+        _stub(binaries, "python3", "sleep 300")
+        return environment
+
+    def test_a_fabric_with_no_host_is_left_alone(self, tmp_path, vnc_port) -> None:
+        """Docker and E2B have no host to fall through to.
+
+        The flag is not harmless there: it would point Chrome at a proxy that
+        never starts, and Chrome fails a navigation outright when its proxy
+        refuses.
+        """
+        environment = self._with_host(tmp_path, vnc_port, alias_resolves=False)
+        _run(environment)
+        arguments = self._config(environment)["args"]
+        assert "--proxy-server" not in arguments
+        assert "loopback" not in arguments
+
+    def test_a_server_assigned_proxy_wins_and_the_fall_through_stands_down(
+        self, tmp_path, vnc_port
+    ) -> None:
+        """Chrome takes one `--proxy-server`, so the two cannot both be on.
+
+        A sandbox being proxied for sign-in reasons is not one somebody is
+        pointing at their own dev server, so the residential proxy keeps the
+        flag and the fall-through does not run.
+        """
+        environment = self._with_host(tmp_path, vnc_port, alias_resolves=True)
+        Path(environment["LEMMA_BROWSER_PROXY_FILE"]).parent.mkdir(
+            parents=True, exist_ok=True
+        )
+        Path(environment["LEMMA_BROWSER_PROXY_FILE"]).write_text(
+            "http://residential.invalid:9091"
+        )
+        _run(environment)
+        config = self._config(environment)
+        assert config["proxy"] == "http://residential.invalid:9091"
+        assert "127.0.0.1:4851" not in config["args"]
+        assert "loopback" not in config["args"]

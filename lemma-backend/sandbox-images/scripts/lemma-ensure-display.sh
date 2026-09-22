@@ -136,6 +136,55 @@ if [ -n "$BROWSER_PROXY" ]; then
   # proxy, which defeats the point of having one.
   CHROME_ARGS="${CHROME_ARGS},--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
 fi
+# Loopback in this sandbox, falling through to the machine Lemma runs on.
+#
+# On Desktop the person's own code runs on their computer -- a coding agent is
+# given a folder there, so `npm run dev` listens on *their* machine -- while
+# this browser is in a container in the guest, where `localhost` is the
+# container. The two are presented as one machine and were not one: a browser
+# asked for `http://localhost:3000` got a refusal for a server that was running
+# the whole time.
+#
+# `sandbox_runtime.host_fallback` answers per request rather than per port: a
+# loopback port this sandbox is serving stays the sandbox's, and one nothing
+# here is serving is tried again against `LEMMA_HOST_ALIAS`. That is what keeps
+# an agent able to preview a site it built here, which the browser skill tells
+# it to reach at `127.0.0.1` and the apps reference at `localhost` -- neither
+# spelling can be quietly reassigned.
+#
+# `--proxy-bypass-list=<-loopback>` is load-bearing and was measured on this
+# image: with `--proxy-server` alone Chrome answers loopback itself and the
+# proxy never sees the request, so the fall-through is inert. Measured the
+# other way too -- a PAC file is ignored for loopback even with the bypass
+# override, which is why this is a proxy and not a PAC.
+#
+# Skipped entirely when the server has assigned a residential proxy. The two
+# would have to be chained, Chrome takes one `--proxy-server`, and a sandbox
+# that is being proxied for sign-in reasons is not one somebody is pointing at
+# their own dev server. Also skipped when there is no host to fall through to,
+# which is every fabric except Desktop.
+FALLBACK_PORT="${LEMMA_HOST_FALLBACK_PORT:-4851}"
+HOST_ALIAS="${LEMMA_HOST_ALIAS:-host.lemma.internal}"
+if [ -z "$BROWSER_PROXY" ] && getent hosts "$HOST_ALIAS" >/dev/null 2>&1; then
+  if ! (exec 3<>"/dev/tcp/127.0.0.1/$FALLBACK_PORT") 2>/dev/null; then
+    setsid nohup python3 -m sandbox_runtime.host_fallback "$FALLBACK_PORT" \
+      >/tmp/lemma-host-fallback.log 2>&1 </dev/null &
+    # Waited for rather than assumed: Chrome pointed at a proxy that is not
+    # listening yet fails the first navigation outright, and the first
+    # navigation is the one somebody is watching.
+    waited=0
+    while [ "$waited" -lt 40 ] && ! (exec 3<>"/dev/tcp/127.0.0.1/$FALLBACK_PORT") 2>/dev/null; do
+      sleep 0.05
+      waited=$((waited + 1))
+    done
+  fi
+  if (exec 3<>"/dev/tcp/127.0.0.1/$FALLBACK_PORT") 2>/dev/null; then
+    CHROME_ARGS="${CHROME_ARGS},--proxy-server=http://127.0.0.1:${FALLBACK_PORT},--proxy-bypass-list=<-loopback>"
+  else
+    echo "lemma-ensure-display: the loopback fall-through did not start; localhost stays this sandbox's" >&2
+    tail -n 5 /tmp/lemma-host-fallback.log >&2 2>/dev/null || true
+  fi
+fi
 # The per-sandbox extension point this file's comment has always promised and
 # never implemented: `AGENT_BROWSER_ARGS` was named here as the way to add a
 # Chrome flag without editing the image, and nothing read it. Appended last so

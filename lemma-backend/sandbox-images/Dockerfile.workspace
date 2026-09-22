@@ -132,6 +132,11 @@ ENV PYTHONUNBUFFERED=1 \
     # that ever dials either -- see the comment on the apt-get line above.
     LEMMA_BROWSER_VNC_PORT=5900 \
     LEMMA_BROWSER_VNC_WS_PORT=5901 \
+    # Where the loopback fall-through listens. Loopback-only and never
+    # published: Chrome is pointed at it by `lemma-ensure-display`, and nothing
+    # outside this container has any business reaching a proxy that can dial
+    # the host.
+    LEMMA_HOST_FALLBACK_PORT=4851 \
     LEMMA_RUNTIME_TOKEN_FILE=/run/lemma-bootstrap/token \
     LEMMA_SANDBOX_PROCESS_NAMESPACE=isolated \
     GH_CONFIG_DIR=/tmp/lemma-gh \
@@ -309,6 +314,11 @@ COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_
 # and every sandbox operation then waits for a runtime that is never coming.
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/paths.py /app/sandbox_runtime/paths.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/sandbox_memory.py /app/sandbox_runtime/sandbox_memory.py
+# Loopback in this sandbox, falling through to the machine Lemma runs on.
+# Listed here for the reason the whole list exists: a module the image does
+# not copy is not a smaller image, it is an `ImportError` the first time
+# somebody opens their own dev server.
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/host_fallback.py /app/sandbox_runtime/host_fallback.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/protocol.py /app/sandbox_runtime/protocol.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/contracts.py /app/sandbox_runtime/contracts.py
