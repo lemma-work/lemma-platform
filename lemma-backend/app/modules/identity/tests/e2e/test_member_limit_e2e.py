@@ -147,6 +147,55 @@ async def test_with_no_plan_declared_nobody_is_turned_away(async_client: AsyncCl
         assert sent.status_code == status.HTTP_201_CREATED, sent.text
 
 
+def _first_workspace_service(uow: SqlAlchemyUnitOfWork) -> OrganizationService:
+    message_bus = get_message_bus()
+    return OrganizationService(
+        organization_repository=OrganizationRepository(uow, message_bus=message_bus),
+        user_repository=UserRepository(uow, message_bus=message_bus),
+        invitation_accept_base_url="https://app.example.test",
+        pod_membership_port=SqlAlchemyPodMembershipAdapter(uow),
+    )
+
+
+async def test_a_colleague_arriving_at_a_full_company_starts_their_own(
+    signup_user, db_session, plan: SetPlan
+):
+    """Signing up never dead-ends on a full organization. The colleague lands in
+    one of their own, which claims nothing: the company still holds the domain,
+    so the next colleague still finds the company once it has room."""
+    domain = f"full-{uuid4().hex[:8]}.com"
+    uow = SqlAlchemyUnitOfWork(db_session)
+    first = await signup_user(email=f"ada@{domain}")
+    company = await ensure_first_workspace(
+        uow,
+        organization_service=_first_workspace_service(uow),
+        user_id=UUID(first["id"]),
+        email=first["email"],
+        full_name="Ada Lovelace",
+    )
+    await uow.commit()
+    plan.members = 1
+
+    second = await signup_user(email=f"grace@{domain}")
+    arrived = await ensure_first_workspace(
+        uow,
+        organization_service=_first_workspace_service(uow),
+        user_id=UUID(second["id"]),
+        email=second["email"],
+        full_name="Grace Hopper",
+    )
+    await uow.commit()
+
+    assert arrived.entry == "new_org"
+    assert arrived.organization_id != company.organization_id
+    own = await OrganizationRepository(uow).get(arrived.organization_id)
+    assert own is not None
+    assert own.email_domain is None
+    still_the_company = await OrganizationRepository(uow).get(company.organization_id)
+    assert still_the_company is not None
+    assert still_the_company.email_domain == domain
+
+
 async def test_joining_with_no_room_for_a_pod_still_joins(
     signup_user, db_session, plan: SetPlan
 ):
@@ -155,18 +204,10 @@ async def test_joining_with_no_room_for_a_pod_still_joins(
     signed_up = await signup_user(email=f"ada-{uuid4().hex[:8]}@gmail.com")
     plan.pods = PodAllowance(limit=0)
     uow = SqlAlchemyUnitOfWork(db_session)
-    message_bus = get_message_bus()
 
     workspace = await ensure_first_workspace(
         uow,
-        organization_service=OrganizationService(
-            organization_repository=OrganizationRepository(
-                uow, message_bus=message_bus
-            ),
-            user_repository=UserRepository(uow, message_bus=message_bus),
-            invitation_accept_base_url="https://app.example.test",
-            pod_membership_port=SqlAlchemyPodMembershipAdapter(uow),
-        ),
+        organization_service=_first_workspace_service(uow),
         user_id=UUID(signed_up["id"]),
         email=signed_up["email"],
         full_name="Ada Lovelace",

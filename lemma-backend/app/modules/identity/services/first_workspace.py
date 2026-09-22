@@ -10,7 +10,10 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.domain.email_domains import work_domain_from_email
-from app.modules.identity.domain.errors import IdentityAccessDeniedError
+from app.modules.identity.domain.errors import (
+    IdentityAccessDeniedError,
+    OrganizationMemberLimitError,
+)
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationJoinPolicy,
@@ -65,7 +68,8 @@ async def ensure_first_workspace(
             await organization_service.join_auto_join_organization(
                 organization_id, user_id
             )
-        except IdentityAccessDeniedError:
+        except IdentityAccessDeniedError, OrganizationMemberLimitError:
+            # Full is answered like closed: an admin has to act either way.
             return ProvisionedWorkspace(
                 organization_id,
                 None,
@@ -89,12 +93,22 @@ async def ensure_first_workspace(
                 suggested, _ = await organization_service.list_suggested_organizations(
                     user_id, limit=1
                 )
+            organization = None
             if suggested:
-                organization = await organization_service.join_auto_join_organization(
-                    suggested[0].id, user_id
-                )
-                entry = "domain_join"
-            else:
+                try:
+                    organization = (
+                        await organization_service.join_auto_join_organization(
+                            suggested[0].id, user_id
+                        )
+                    )
+                    entry = "domain_join"
+                except OrganizationMemberLimitError:
+                    # Their company's organization is as full as its plan
+                    # allows. Signing up must not dead-end on that, so they
+                    # start one of their own -- claiming nothing, since the
+                    # company already holds the domain.
+                    work_domain = None
+            if organization is None:
                 organization = await organization_service.create_organization(
                     OrganizationEntity(
                         name=organization_name_candidate(
