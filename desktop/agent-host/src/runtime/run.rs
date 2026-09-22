@@ -136,6 +136,11 @@ impl TargetWorker {
                 &spec.mcp,
                 crate::acp::run_environment(&spec.mcp),
             );
+            // Held for the rest of this task. The explicit removal below is
+            // the ordinary path; this is the one that survives `handle.abort()`,
+            // which drops the task at an await point and would otherwise leave
+            // a delegated credential on disk.
+            let _credential = crate::runtime::credentials::RunCredential::new(&paths.root, run_id);
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
@@ -151,8 +156,6 @@ impl TargetWorker {
             };
             let outcome =
                 tokio::time::timeout(remaining, driver.run(request, callbacks.clone())).await;
-            // However the run ended, its credential stops being needed here.
-            crate::runtime::credentials::remove_run_token(&paths.root, run_id);
             if matches!(outcome, Ok(Ok(_)))
                 && let Err(error) = publish_generated_images(&scratch, callbacks.as_ref())
             {

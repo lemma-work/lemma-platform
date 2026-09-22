@@ -27,6 +27,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 /// serving here", which a refusal answers as well as an acceptance. A refused
 /// connection, a timeout, or a reply that is not HTTP answers it too.
 pub(crate) fn app_is_answering(host: &str, port: u16, health_path: &str) -> bool {
+    // `host` is an IPv4 literal by construction: `valid_ip` rejects V6 and
+    // `discover_guest_ip` asks `ip -4`, so the unbracketed form is the right
+    // one. Still fallible rather than asserted -- a probe is not the place to
+    // panic about an address.
     let Ok(address) = format!("{host}:{port}").parse::<SocketAddr>() else {
         return false;
     };

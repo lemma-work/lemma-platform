@@ -421,13 +421,15 @@ class E2BOpsMixin(E2BReachMixin):
         """
         wanted = expected_sha256.removeprefix("sha256:")
         try:
-            with sdk_errors():
+            # `sdk_errors(path)`, not the bare form: on a filesystem call "not
+            # found" is a missing file, and the bare form classifies it as a
+            # missing *sandbox*. `ProviderGone` is deliberately not caught
+            # below -- a sandbox that is gone is not a content conflict, and
+            # answering one with the other would tell a caller to give up
+            # instead of re-ensuring.
+            with sdk_errors(path):
                 current = await sandbox.files.read(path, format="bytes")
         except SandboxPathNotFound as exc:
-            raise SandboxPathConflict(
-                f"{path} does not exist, so its content cannot match"
-            ) from exc
-        except ProviderGone as exc:
             raise SandboxPathConflict(
                 f"{path} does not exist, so its content cannot match"
             ) from exc

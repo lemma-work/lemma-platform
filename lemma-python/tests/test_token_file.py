@@ -81,3 +81,20 @@ def test_no_credential_at_all_is_still_no_credential(
 
     assert _token_from_env() is None
     assert should_use_env_server() is False
+
+
+def test_a_token_file_that_is_not_text_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`UnicodeDecodeError` is not an `OSError`.
+
+    A token file that is not UTF-8 raised straight out of the resolver rather
+    than falling back to the variable, which is the one case the fallback is
+    there for.
+    """
+    token_file = tmp_path / "run.token"
+    token_file.write_bytes(b"\xff\xfe not utf-8 \x00")
+    monkeypatch.setenv("LEMMA_TOKEN", "still-usable")
+    monkeypatch.setenv("LEMMA_TOKEN_FILE", str(token_file))
+
+    assert _token_from_env() == "still-usable"

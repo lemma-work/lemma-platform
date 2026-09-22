@@ -476,7 +476,14 @@ def create_app(
         # both runtime-backed fabrics hard-coded `True` and told every caller
         # something had been deleted -- including when nothing had. E2B has
         # reported it truthfully since it existed.
-        removed = await filesystem.delete(path, recursive=recursive)
+        try:
+            removed = await filesystem.delete(path, recursive=recursive)
+        except FileNotFoundError:
+            # A missing *parent* raises, where a missing leaf under a parent
+            # that exists returns False. Both are "nothing was there", and
+            # answering one 404 and the other 204 made the same question have
+            # two answers depending on how deep the absence went.
+            removed = False
         return Response(status_code=200 if removed else 204)
 
     return app

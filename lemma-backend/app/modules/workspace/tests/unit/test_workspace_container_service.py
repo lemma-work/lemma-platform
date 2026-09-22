@@ -524,3 +524,71 @@ async def test_an_exhausted_ensure_stops_believing_what_it_knew(
     assert sandbox_health.sandbox_capability()["status"] == "unavailable"
 
     sandbox_health._capability.update({"status": "ready", "detail": "provisioned"})
+
+
+@pytest.mark.asyncio
+async def test_the_interactive_ceiling_covers_acquiring_the_sandbox_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two waits, one budget.
+
+    Acquiring the sandbox and creating the directory are separate awaits, and
+    the caller's ceiling used to apply only to the second. A slow provider
+    could therefore spend the sandbox manager's full 300s before an
+    interactive caller's own 15s limit was consulted at all.
+    """
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    user_id = uuid4()
+    service = _service(_FakeSandbox())
+
+    async def never_acquires(*_args: Any, **_kwargs: Any):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(service, "get_or_create_sandbox", never_acquires)
+
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(SandboxUnavailable):
+        await service.get_session(
+            user_id=user_id, pod_id=None, ready_timeout_seconds=0.2
+        )
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 5, f"the ceiling did not cover acquisition; waited {elapsed:.1f}s"
+
+
+@pytest.mark.asyncio
+async def test_a_directory_task_without_a_cache_key_is_still_cancellable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`stop_sandbox` cancels by prefix, so an unregistered task outlives it.
+
+    When there is no epoch or storage generation to key on, readiness cannot
+    be remembered -- but the in-flight task still has to be reachable, or it
+    survives the stop and re-provisions the sandbox it was told to abandon.
+    """
+    user_id = uuid4()
+    service = _service(_FakeSandbox())
+    started = asyncio.Event()
+
+    class _Slow:
+        async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
+            started.set()
+            await asyncio.sleep(30)
+
+    monkeypatch.setattr(service, "_get_manager_client", lambda: _Slow())
+    # No cache key: the branch this test is about.
+    monkeypatch.setattr(service, "_directory_cache_key", lambda *_a, **_k: None)
+
+    waiting = asyncio.ensure_future(service.get_session(user_id=user_id, pod_id=None))
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    loop_key = (id(asyncio.get_running_loop()), user_id)
+    tracked = [
+        key for key in service._inflight_directories if key[: len(loop_key)] == loop_key
+    ]
+    assert tracked, "the task is invisible to stop_sandbox"
+
+    await service.stop_sandbox(user_id)
+    waiting.cancel()
+    with pytest.raises((asyncio.CancelledError, Exception)):
+        await waiting

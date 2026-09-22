@@ -25,6 +25,14 @@ describe("agent-produced image paths", () => {
     expect(isPodFilePath(undefined)).toBe(false);
   });
 
+  it("leaves this app's own routes alone", () => {
+    // "starts with a slash" caught these too, so a link to a real page became
+    // a file-browser link to a pod file named after the route.
+    expect(isPodFilePath("/pod/pod-1/files")).toBe(false);
+    expect(isPodFilePath("/settings")).toBe(false);
+    expect(isPodFilePath("/logo.png")).toBe(false);
+  });
+
   it("points an image at the authenticated download route", () => {
     // The frontend origin serves no `/me` route, which is why a bare src 404'd.
     const href = podFileDownloadHref("pod-1", "/me/c/d/agent-output/a b.png");

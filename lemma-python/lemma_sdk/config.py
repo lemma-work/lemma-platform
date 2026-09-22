@@ -62,7 +62,11 @@ def _token_from_env() -> str | None:
     if path:
         try:
             token = Path(path).read_text(encoding="utf-8").strip()
-        except OSError:
+        # `UnicodeError` as well as `OSError`: a file that is not UTF-8 raises
+        # `UnicodeDecodeError`, which is not an `OSError`, so an unreadable
+        # token file raised out of here instead of falling back to the
+        # variable -- which is exactly the case the fallback exists for.
+        except OSError, UnicodeError:
             token = ""
         if token:
             return token

@@ -68,7 +68,27 @@ async def call_bridge(
         process = await run_blocking(invoke, limiter="local_bridge")
     except subprocess.TimeoutExpired as exc:
         raise asyncio.TimeoutError from exc
+    except OSError as exc:
+        # The bridge could not be started at all: it is not where the
+        # installation says it is, or it is not executable. Definitive, and it
+        # has to arrive in this module's vocabulary -- raw, it escaped the
+        # provider entirely and every caller rendered it as an unhandled 500
+        # rather than as a sandbox that cannot be reached.
+        raise LocalBridgeNotFound(
+            f"managed runtime bridge could not be started: {exc.strerror or exc}",
+            retryable=False,
+        ) from exc
 
+    return _result_of(process)
+
+
+def _result_of(process: "subprocess.CompletedProcess[str]") -> BridgeResult:
+    """The `result` object, or the failure the guest described instead.
+
+    Separate from the call above because the two halves fail for unrelated
+    reasons: one is about whether the bridge ran, and this one is about whether
+    what it said can be believed.
+    """
     if len(process.stdout.encode()) > MAX_RESPONSE_BYTES:
         raise LocalBridgeError("managed runtime response exceeds 4 MiB")
     try:
@@ -83,17 +103,22 @@ async def call_bridge(
         raise LocalBridgeError("managed runtime response was not an object")
 
     if process.returncode != 0 or response.get("ok") is not True:
-        error = response.get("error")
-        details = error if isinstance(error, dict) else {}
-        code = str(details.get("code") or "local_runtime_failed")
-        failure = LocalBridgeNotFound if code == "not_found" else LocalBridgeError
-        raise failure(
-            str(details.get("message") or "managed runtime request failed"),
-            code=code,
-            retryable=bool(details.get("retryable", True)),
-        )
+        raise _described_failure(response)
 
     result = response.get("result")
     if not isinstance(result, dict):
         raise LocalBridgeError("managed runtime response omitted its result")
     return result
+
+
+def _described_failure(response: dict[str, Any]) -> LocalBridgeError:
+    """The guest's own error envelope, in this module's vocabulary."""
+    error = response.get("error")
+    details = error if isinstance(error, dict) else {}
+    code = str(details.get("code") or "local_runtime_failed")
+    failure = LocalBridgeNotFound if code == "not_found" else LocalBridgeError
+    return failure(
+        str(details.get("message") or "managed runtime request failed"),
+        code=code,
+        retryable=bool(details.get("retryable", True)),
+    )

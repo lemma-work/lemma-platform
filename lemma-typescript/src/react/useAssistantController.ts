@@ -2452,6 +2452,7 @@ export function useAssistantController({
     error,
     errorCode,
     errorReason,
+    notice,
     conversationsCursor,
     isActiveConversationRunning,
     isLoading,

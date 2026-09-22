@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import base64
 import binascii
 import json
@@ -60,6 +62,21 @@ _HOST_AGENT_ENVIRONMENT = frozenset(
         "LEMMA_ORG_ID",
     }
 )
+
+
+def host_agent_environment(workspace_env: Mapping[str, str]) -> dict[str, str]:
+    """The identity a host agent is given, out of a sandbox's environment.
+
+    The same delegated session the sandbox gets, for an agent that runs on the
+    user's own machine instead. `LEMMA_WORKSPACE_URL` is deliberately not among
+    them: it addresses the cloud sandbox, and a host agent that believed it
+    would be pointed at a filesystem that is not the folder it was bound to.
+    """
+    return {
+        name: value
+        for name, value in workspace_env.items()
+        if name in _HOST_AGENT_ENVIRONMENT
+    }
 
 
 def run_start_payload(
@@ -138,15 +155,7 @@ async def mcp_payload[DepsT: AgentContext](
             session_id=str(agent_run_id),
         )
         token = workspace_env["LEMMA_TOKEN"]
-        # The same identity the sandbox gets, for an agent that runs on the
-        # user's own machine instead. `LEMMA_WORKSPACE_URL` is deliberately not
-        # among them: it addresses the cloud sandbox, and a host agent that
-        # believed it would be pointed at the wrong filesystem.
-        agent_environment = {
-            name: value
-            for name, value in workspace_env.items()
-            if name in _HOST_AGENT_ENVIRONMENT
-        }
+        agent_environment = host_agent_environment(workspace_env)
     finally:
         await workspace_service.close()
     return {

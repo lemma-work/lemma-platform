@@ -20,12 +20,22 @@ import { cn } from "@/lib/utils";
  * same content the pod file browser serves. Anything already absolute (an
  * http(s) or data URI) is left exactly as the author wrote it.
  */
+/**
+ * The pod-filesystem namespace an agent's own output lands in.
+ *
+ * `/me`, from `pod_cwd_from_workspace_cwd`. Narrow on purpose: "starts with a
+ * slash" also matches this app's own routes, so `/pod/<id>/files` — a real
+ * page — was being rewritten into a file-browser link to a pod file called
+ * "/pod/<id>/files", and any root-relative static image would have been too.
+ */
+const POD_FILE_PREFIX = "/me/";
+
 export function isPodFilePath(src: string | undefined): src is string {
   if (!src) return false;
   // Protocol-relative and absolute URLs are somebody else's to resolve.
   if (src.startsWith("//")) return false;
   if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return false;
-  return src.startsWith("/");
+  return src.startsWith(POD_FILE_PREFIX);
 }
 
 export function podFileDownloadHref(podId: string, path: string): string {

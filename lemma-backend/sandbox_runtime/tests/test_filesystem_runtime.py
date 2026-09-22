@@ -341,3 +341,30 @@ async def test_deleting_nothing_is_distinguishable_from_deleting_something(
     assert nothing.status_code == 204, (
         "a file that was not there reports as not removed"
     )
+
+
+async def test_absence_reads_the_same_however_deep_it_goes(tmp_path: Path) -> None:
+    """A missing parent and a missing leaf are both "nothing was there".
+
+    `_existing_path` resolves the parent strictly, so a missing directory
+    raised `FileNotFoundError` and became a 404 while a missing file under a
+    real directory returned 204. Same question, two answers, and E2B gave a
+    third by returning False for both.
+    """
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        missing_leaf = await client.delete(
+            "/files", headers=HEADERS, params={"path": str(tmp_path / "absent.txt")}
+        )
+        missing_parent = await client.delete(
+            "/files",
+            headers=HEADERS,
+            params={"path": str(tmp_path / "no-such-dir" / "absent.txt")},
+        )
+
+    assert missing_leaf.status_code == 204
+    assert missing_parent.status_code == 204

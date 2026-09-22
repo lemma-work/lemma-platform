@@ -15,7 +15,9 @@ say less than it costs.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from uuid import UUID
 
 from sandbox_runtime.errors import SandboxUnavailable
@@ -41,6 +43,33 @@ DIRECTORY_READY_SECONDS = 60.0
 # then showed a 500. Interactive callers pass this instead; the work itself is
 # shielded and keeps running for whoever asks next.
 INTERACTIVE_READY_SECONDS = 15.0
+
+
+#: `(loop id, user, path, allocation epoch, storage generation)`. The last two
+#: are what let a recreated workspace stop looking ready; when they cannot be
+#: resolved the key still identifies the work, just not its freshness.
+_CacheKey = tuple[int, UUID, str, int, str]
+
+
+class _Budget:
+    """What is left of an interactive caller's patience.
+
+    `None` means no ceiling, which is what a background caller gets: the
+    sandbox manager's own deadline is the only limit that applies to it.
+    """
+
+    __slots__ = ("_deadline",)
+
+    def __init__(self, seconds: float | None) -> None:
+        self._deadline = None if seconds is None else monotonic() + seconds
+
+    def remaining(self) -> float | None:
+        if self._deadline is None:
+            return None
+        # Never zero or negative: `wait_for(0)` is an immediate timeout, and a
+        # caller that has just run out should get one attempt's worth of answer
+        # rather than a guaranteed failure.
+        return max(0.05, self._deadline - monotonic())
 
 
 class WorkspaceDirectoryEnsureMixin:
@@ -78,55 +107,118 @@ class WorkspaceDirectoryEnsureMixin:
         deadline_at = datetime.now(timezone.utc) + timedelta(
             seconds=SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS
         )
-        sandbox_info = await self.get_or_create_sandbox(user_id)
-        cache_key = self._directory_cache_key(user_id, path, sandbox_info)
-        if cache_key is None:
-            uncached = create_inherited_task(
-                self._create_workspace_directory_until_ready(
-                    user_id,
-                    path,
-                    sandbox_info=sandbox_info,
-                    deadline_at=deadline_at,
-                ),
-                name=f"workspace-directory-ensure:{user_id}:{path}",
-            )
-            return await self._await_directory(uncached, ready_timeout_seconds)
+        # One budget across both phases. Acquiring the sandbox and creating the
+        # directory are two waits, and the ceiling used to apply only to the
+        # second -- so an interactive caller that asked for fifteen seconds
+        # could spend the manager's full three hundred in `get_or_create_sandbox`
+        # before its own limit was even consulted.
+        budget = _Budget(ready_timeout_seconds)
+        sandbox_info = await self._await_shared(
+            self.get_or_create_sandbox(user_id), budget.remaining()
+        )
+        resolved = self._directory_cache_key(user_id, path, sandbox_info)
+        # Two separate questions, and conflating them was the bug here.
+        #
+        # Whether readiness may be *remembered* needs an epoch and a storage
+        # generation, so that a recreated workspace stops looking ready. When
+        # those are missing there is no safe key and readiness is not cached.
+        #
+        # Whether the in-flight task can be *cancelled* needs only the user, and
+        # `stop_sandbox` cancels by prefix. A task outside that map survives the
+        # stop and can re-provision the sandbox it was told to abandon, so this
+        # branch still registers one -- under a sentinel key nothing reads back.
+        cacheable = resolved is not None
+        cache_key = resolved or (id(asyncio.get_running_loop()), user_id, path, -1, "")
 
-        ready_at = self._ready_directories.get(cache_key)
-        if ready_at is not None:
-            if (asyncio.get_running_loop().time() - ready_at) < DIRECTORY_READY_SECONDS:
-                # The freshly resolved info, never the one cached alongside the
-                # readiness. Its storage generation is what tells a conversation
-                # its workspace was recreated, the generation is not in the key,
-                # and it is bumped in a different transaction from the epoch --
-                # so returning a remembered copy can swallow the one notice that
-                # stops an agent reading an empty workspace as "nothing was ever
-                # here".
-                return sandbox_info
-            self._ready_directories.pop(cache_key, None)
+        if cacheable and self._directory_is_still_ready(cache_key):
+            # The freshly resolved info, never the one cached alongside the
+            # readiness. Its storage generation is what tells a conversation
+            # its workspace was recreated, the generation is not in the key,
+            # and it is bumped in a different transaction from the epoch --
+            # so returning a remembered copy can swallow the one notice that
+            # stops an agent reading an empty workspace as "nothing was ever
+            # here".
+            return sandbox_info
 
-        task = self._inflight_directories.get(cache_key)
-        if task is None:
-            task = create_inherited_task(
-                self._create_workspace_directory_until_ready(
-                    user_id,
-                    path,
-                    sandbox_info=sandbox_info,
-                    deadline_at=deadline_at,
-                ),
-                name=f"workspace-directory-ensure:{user_id}:{path}",
-            )
-            self._inflight_directories[cache_key] = task
-
-            def clear(completed: asyncio.Task[SandboxInfo]) -> None:
-                if self._inflight_directories.get(cache_key) is completed:
-                    self._inflight_directories.pop(cache_key, None)
-
-            task.add_done_callback(clear)
-
-        info = await self._await_directory(task, ready_timeout_seconds)
-        self._ready_directories[cache_key] = asyncio.get_running_loop().time()
+        task = self._directory_task(
+            cache_key,
+            user_id,
+            path,
+            sandbox_info=sandbox_info,
+            deadline_at=deadline_at,
+        )
+        info = await self._await_directory(task, budget.remaining())
+        if cacheable:
+            self._ready_directories[cache_key] = asyncio.get_running_loop().time()
         return info
+
+    def _directory_is_still_ready(self, cache_key: _CacheKey) -> bool:
+        """Whether this directory was made recently enough to be believed."""
+        ready_at = self._ready_directories.get(cache_key)
+        if ready_at is None:
+            return False
+        if (asyncio.get_running_loop().time() - ready_at) < DIRECTORY_READY_SECONDS:
+            return True
+        self._ready_directories.pop(cache_key, None)
+        return False
+
+    def _directory_task(
+        self,
+        cache_key: _CacheKey,
+        user_id: UUID,
+        path: str,
+        *,
+        sandbox_info: SandboxInfo,
+        deadline_at: datetime,
+    ) -> "asyncio.Task[SandboxInfo]":
+        """The one ensure for this directory, joined rather than duplicated.
+
+        Registered under `cache_key` whether or not readiness may be cached:
+        `stop_sandbox` cancels by prefix, and a task outside this map survives
+        the stop and can re-provision the sandbox it was told to abandon.
+        """
+        existing = self._inflight_directories.get(cache_key)
+        if existing is not None:
+            return existing
+
+        task = create_inherited_task(
+            self._create_workspace_directory_until_ready(
+                user_id,
+                path,
+                sandbox_info=sandbox_info,
+                deadline_at=deadline_at,
+            ),
+            name=f"workspace-directory-ensure:{user_id}:{path}",
+        )
+        self._inflight_directories[cache_key] = task
+
+        def clear(completed: "asyncio.Task[SandboxInfo]") -> None:
+            if self._inflight_directories.get(cache_key) is completed:
+                self._inflight_directories.pop(cache_key, None)
+
+        task.add_done_callback(clear)
+        return task
+
+    @staticmethod
+    async def _await_shared(
+        coroutine: "Coroutine[object, object, SandboxInfo]",
+        ready_timeout_seconds: float | None,
+    ) -> SandboxInfo:
+        """Wait on work that is shared with other callers, but only so long.
+
+        `get_or_create_sandbox` already shields the singleflight task it awaits,
+        so giving up here abandons this caller's wait and leaves the ensure
+        running for whoever else is waiting on it.
+        """
+        if ready_timeout_seconds is None:
+            return await coroutine
+        try:
+            return await asyncio.wait_for(coroutine, timeout=ready_timeout_seconds)
+        except asyncio.TimeoutError as exc:
+            raise SandboxUnavailable(
+                "workspace is still starting; it was not ready within "
+                f"{ready_timeout_seconds:.0f}s"
+            ) from exc
 
     @staticmethod
     async def _await_directory(

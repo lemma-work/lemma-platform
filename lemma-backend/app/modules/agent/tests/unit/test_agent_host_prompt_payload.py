@@ -218,16 +218,42 @@ class TestCredentials:
         the skills instruct a host agent to run has no credential at all.
         """
         from app.modules.agent.infrastructure.harnesses.remote_payload import (
-            _HOST_AGENT_ENVIRONMENT,
+            host_agent_environment,
         )
 
-        assert "LEMMA_TOKEN" in _HOST_AGENT_ENVIRONMENT
-        assert {"LEMMA_POD_ID", "LEMMA_ORG_ID", "LEMMA_USER_ID"} <= (
-            _HOST_AGENT_ENVIRONMENT
+        # The real shape `get_env_vars` returns for a sandbox.
+        delivered = host_agent_environment(
+            {
+                "LEMMA_TOKEN": "a-delegated-session",
+                "LEMMA_BASE_URL": "http://app.127.0.0.1.sslip.io:53664",
+                "LEMMA_AUTH_URL": "http://app.127.0.0.1.sslip.io:53663/auth",
+                "LEMMA_HOST_ORIGIN": "http://app.127.0.0.1.sslip.io:53663",
+                "LEMMA_USER_ID": "user-1",
+                "LEMMA_POD_ID": "pod-1",
+                "LEMMA_ORG_ID": "org-1",
+                "LEMMA_WORKSPACE_URL": "http://sandbox.internal:8080",
+            }
         )
+
+        assert delivered["LEMMA_TOKEN"] == "a-delegated-session"
+        assert delivered["LEMMA_USER_ID"] == "user-1"
+        assert delivered["LEMMA_POD_ID"] == "pod-1"
+        assert delivered["LEMMA_ORG_ID"] == "org-1"
         # Addresses the cloud sandbox. A host agent that believed it would be
         # pointed at a filesystem that is not the folder it was bound to.
-        assert "LEMMA_WORKSPACE_URL" not in _HOST_AGENT_ENVIRONMENT
+        assert "LEMMA_WORKSPACE_URL" not in delivered
+
+    async def test_a_new_sandbox_variable_does_not_leave_the_sandbox(self):
+        """The allowlist is why this is a decision rather than an accident."""
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            host_agent_environment,
+        )
+
+        delivered = host_agent_environment(
+            {"LEMMA_TOKEN": "t", "LEMMA_SOMETHING_ADDED_LATER": "leaked"}
+        )
+
+        assert delivered == {"LEMMA_TOKEN": "t"}
 
 
 def _system_prompt(*, toolsets: list[AgentToolset] | None = None) -> str:

@@ -92,6 +92,56 @@ fn the_token_is_written_where_a_refresh_can_replace_it() {
 }
 
 #[test]
+fn a_dropped_run_takes_its_credential_with_it() {
+    use crate::runtime::credentials::{RunCredential, write_run_token};
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let run_id = uuid::Uuid::new_v4();
+    let path = write_run_token(root.path(), run_id, "delegated").expect("write");
+    assert!(path.exists());
+
+    // `handle.abort()` drops the run's task wherever it happens to be awaiting,
+    // so the removal at the end of the run body is never reached. Drop is.
+    {
+        let _credential = RunCredential::new(root.path(), run_id);
+    }
+
+    assert!(
+        !path.exists(),
+        "an aborted run left a delegated credential on disk"
+    );
+}
+
+#[test]
+fn a_refresh_never_leaves_a_half_written_token() {
+    use crate::runtime::credentials::write_run_token;
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let run_id = uuid::Uuid::new_v4();
+    let path = write_run_token(root.path(), run_id, "first-token").expect("write");
+
+    // A refresh rewrites the same path while an agent may be reading it. The
+    // rename means a reader sees one whole token or the other, never an empty
+    // file or a prefix.
+    for token in ["a-much-longer-second-token", "third"] {
+        write_run_token(root.path(), run_id, token).expect("rewrite");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), token);
+    }
+
+    // And nothing is left beside it.
+    let strays: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("tmp-"))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "staging files were left behind: {strays:?}"
+    );
+}
+
+#[test]
 fn a_run_with_no_token_publishes_no_file() {
     use crate::runtime::credentials::agent_environment;
 

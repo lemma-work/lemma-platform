@@ -25,15 +25,54 @@ fn token_path(root: &Path, run_id: Uuid) -> PathBuf {
 }
 
 /// Write the run's token, replacing any previous one, and return its path.
+///
+/// Through a temporary file and a rename, because a refresh rewrites this path
+/// while an agent may be reading it. `fs::write` truncates first, so a reader
+/// that arrives mid-refresh gets an empty or half-written token and fails to
+/// authenticate -- for a credential whose whole purpose is surviving a
+/// refresh, that is the one moment it must not do.
 pub(crate) fn write_run_token(root: &Path, run_id: Uuid, token: &str) -> std::io::Result<PathBuf> {
     let path = token_path(root, run_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
         restrict(parent, 0o700)?;
     }
-    std::fs::write(&path, token)?;
-    restrict(&path, 0o600)?;
+    let staged = path.with_extension(format!("tmp-{}", std::process::id()));
+    // Restricted before it holds anything: a file that is briefly readable by
+    // others is readable by others.
+    std::fs::write(&staged, token)?;
+    restrict(&staged, 0o600)?;
+    if let Err(error) = std::fs::rename(&staged, &path) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(error);
+    }
     Ok(path)
+}
+
+/// Removes a run's token when it goes out of scope, however it goes.
+///
+/// A run's own cleanup is not enough. `enforce_cancellations` calls
+/// `handle.abort()`, and tokio then drops the task at its current await point,
+/// so the line that removes the token is never reached and a delegated
+/// credential is left on disk. Drop runs on that path, and on an unwind.
+pub(crate) struct RunCredential {
+    root: PathBuf,
+    run_id: Uuid,
+}
+
+impl RunCredential {
+    pub(crate) fn new(root: &Path, run_id: Uuid) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            run_id,
+        }
+    }
+}
+
+impl Drop for RunCredential {
+    fn drop(&mut self) {
+        remove_run_token(&self.root, self.run_id);
+    }
 }
 
 /// Remove a finished run's token. Best effort: a token left behind is a
