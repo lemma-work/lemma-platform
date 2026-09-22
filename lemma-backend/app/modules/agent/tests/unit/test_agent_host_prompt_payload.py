@@ -13,6 +13,8 @@ where there is no history to send.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from uuid import uuid7
 
 import pytest
@@ -253,7 +255,86 @@ class TestCredentials:
             {"LEMMA_TOKEN": "t", "LEMMA_SOMETHING_ADDED_LATER": "leaked"}
         )
 
-        assert delivered == {"LEMMA_TOKEN": "t"}
+        assert delivered["LEMMA_TOKEN"] == "t"
+        assert "LEMMA_SOMETHING_ADDED_LATER" not in delivered
+
+    async def test_a_desktop_host_agent_is_given_addresses_this_machine_resolves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Against the URLs the Desktop host pack really emits.
+
+        A sandbox reaches the backend through `host.lemma.internal`, which only
+        guestd's containers resolve; the host agent runs on the Mac. The
+        earlier test above passes a sandbox environment that happens to work
+        from both, which is how the host agent came to be handed an address
+        its CLI could not resolve. This one reads the host pack's own output,
+        pinned by `desktop/contracts/host-pack-urls.json` and the Rust test
+        that keeps that file equal to the manifest.
+        """
+        from app.core.config import settings
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            host_agent_environment,
+        )
+        from app.modules.workspace.config import workspace_settings
+        from app.modules.workspace.services.workspace_sandbox_service import (
+            WorkspaceSandboxService,
+        )
+
+        emitted = {
+            name: template.replace("{base}", "lemma.localhost").replace(
+                "{port}", "52502"
+            )
+            for name, template in _host_pack_urls().items()
+        }
+        for name, value in emitted.items():
+            target = (
+                workspace_settings
+                if name.startswith("WORKSPACE_CALLBACK_")
+                else settings
+            )
+            monkeypatch.setattr(target, name.lower(), value)
+        monkeypatch.setattr(settings, "cli_api_url", None)
+        monkeypatch.setattr(settings, "cli_auth_frontend_url", None)
+
+        async def mint(**_: object) -> str:
+            return "a-delegated-session"
+
+        monkeypatch.setattr(
+            "app.modules.identity.contracts.delegated_tokens.mint_delegated_token",
+            mint,
+        )
+        service = WorkspaceSandboxService()
+        try:
+            sandbox_env = await service.get_env_vars(
+                user_id=uuid7(), pod_id=uuid7(), organization_id=uuid7()
+            )
+        finally:
+            await service.close()
+        # The premise: the sandbox is given the address only it can resolve.
+        assert "host.lemma.internal" in sandbox_env["LEMMA_BASE_URL"]
+
+        delivered = host_agent_environment(sandbox_env)
+
+        assert delivered["LEMMA_TOKEN"] == "a-delegated-session"
+        assert delivered["LEMMA_BASE_URL"] == emitted["API_URL"]
+        assert delivered["LEMMA_AUTH_URL"] == emitted["AUTH_FRONTEND_URL"]
+        assert delivered["LEMMA_HOST_ORIGIN"] == emitted["FRONTEND_URL"]
+        assert not [
+            name for name, value in delivered.items() if "host.lemma.internal" in value
+        ]
+
+
+def _host_pack_urls() -> dict[str, str]:
+    """The Desktop host pack's URL environment, from the contract Rust pins."""
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "desktop" / "contracts" / "host-pack-urls.json"
+        if candidate.exists():
+            return json.loads(candidate.read_text())["backend_env"]
+    raise AssertionError(
+        "desktop/contracts/host-pack-urls.json was not found; the backend and "
+        "the desktop app must be checked out together to test the host agent's "
+        "addresses against what the host pack emits"
+    )
 
 
 def _system_prompt(*, toolsets: list[AgentToolset] | None = None) -> str:

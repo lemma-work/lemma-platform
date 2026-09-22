@@ -323,3 +323,82 @@ fn no_sandbox_is_given_an_address_only_the_mac_can_resolve() {
         );
     }
 }
+
+/// The backend's addresses, as `desktop/contracts/host-pack-urls.json`
+/// records them for the Python side to be tested against.
+///
+/// Two network perspectives share one backend. A sandbox reaches it through
+/// `host.lemma.internal`, which only guestd's containers can resolve; an agent
+/// running on the Mac reaches it through the install's own domain. The backend
+/// used to hand the host agent the sandbox's address, and its tests passed
+/// because they were given a working URL instead of the one the host pack
+/// actually emits. Pinned here so the backend's test reads the real thing.
+#[test]
+fn the_backend_url_contract_matches_what_the_host_pack_emits() {
+    let root = tempdir().unwrap();
+    let pack = root.path().join("pack");
+    fixture(&pack);
+    let paths = LocalPaths::new(root.path().join("locald"));
+    paths.ensure().unwrap();
+    let output = prepare(
+        &paths,
+        &pack,
+        ManagedManifestMaterial {
+            postgres_password: "a".repeat(64),
+            redis_password: "b".repeat(64),
+            bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+        },
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+    let env = manifest["services"][0]["env"]
+        .as_object()
+        .expect("services carry an env map");
+
+    let contract: Value =
+        serde_json::from_str(include_str!("../../../../contracts/host-pack-urls.json")).unwrap();
+    let recorded = contract["backend_env"]
+        .as_object()
+        .expect("the contract records the backend's URL environment");
+    let base = LocalDomain::from_env().base().to_owned();
+    let emitted: serde_json::Map<String, Value> = env
+        .iter()
+        .filter(|(name, _)| recorded.contains_key(name.as_str()) || is_backend_url_variable(name))
+        .map(|(name, value)| {
+            let text = value.as_str().unwrap_or_default();
+            (name.clone(), Value::from(templated(text, &base)))
+        })
+        .collect();
+    assert_eq!(
+        &emitted, recorded,
+        "the host pack's URL environment changed; update \
+         desktop/contracts/host-pack-urls.json so the backend is tested against it"
+    );
+}
+
+/// The variables the backend reads its own addresses from.
+fn is_backend_url_variable(name: &str) -> bool {
+    matches!(
+        name,
+        "API_URL" | "FRONTEND_URL" | "AUTH_FRONTEND_URL" | "CLI_API_URL" | "CLI_AUTH_FRONTEND_URL"
+    ) || (name.starts_with("WORKSPACE_CALLBACK_") && name.ends_with("_URL"))
+}
+
+/// `value` with this install's base domain and every port made placeholders,
+/// so the contract does not depend on which ports this machine was given.
+fn templated(value: &str, base: &str) -> String {
+    let value = value.replace(base, "{base}");
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        out.push(ch);
+        if ch == ':' && chars.peek().is_some_and(char::is_ascii_digit) {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                chars.next();
+            }
+            out.push_str("{port}");
+        }
+    }
+    out
+}

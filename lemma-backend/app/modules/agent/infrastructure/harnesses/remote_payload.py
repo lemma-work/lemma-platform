@@ -71,12 +71,28 @@ def host_agent_environment(workspace_env: Mapping[str, str]) -> dict[str, str]:
     user's own machine instead. `LEMMA_WORKSPACE_URL` is deliberately not among
     them: it addresses the cloud sandbox, and a host agent that believed it
     would be pointed at a filesystem that is not the folder it was bound to.
+
+    The addresses are replaced, not copied. A sandbox's are chosen for the
+    sandbox's network -- on Desktop `host.lemma.internal`, which only the
+    guest's containers can resolve -- and a host agent needs the ones this
+    machine can reach, the same perspective the MCP URL is built from.
     """
-    return {
+    identity = {
         name: value
         for name, value in workspace_env.items()
         if name in _HOST_AGENT_ENVIRONMENT
     }
+    return identity | _host_addresses()
+
+
+def _host_addresses() -> dict[str, str]:
+    """Where the backend is reachable from the machine the host agent runs on."""
+    addresses = {
+        "LEMMA_BASE_URL": settings.cli_api_url or settings.api_url,
+        "LEMMA_AUTH_URL": settings.cli_auth_frontend_url or settings.auth_frontend_url,
+        "LEMMA_HOST_ORIGIN": settings.frontend_url,
+    }
+    return {name: value for name, value in addresses.items() if value}
 
 
 def run_start_payload(
