@@ -251,6 +251,15 @@ class BrowserRelayClient:
                 raise BrowserRelayUnavailable(
                     f"the browser relay answered {response.status_code}"
                 )
+        except BrowserRelayNotServed:
+            # Before its parent, because `start` cannot help here. Starting the
+            # relay means bringing up the whole display stack and waiting up to
+            # `_ENSURE_TIMEOUT_SECONDS` for a port to answer -- and a port the
+            # fabric does not publish will not answer however long anyone
+            # waits. Caught by the clause below, a sandbox that simply does not
+            # serve the relay spent five minutes proving it and then reported
+            # the wrong thing.
+            raise
         except BrowserRelayUnavailable:
             if not start:
                 raise

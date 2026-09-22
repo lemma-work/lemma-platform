@@ -135,7 +135,12 @@ vi.mock('@novnc/novnc', () => ({ default: FakeRfb }));
 
 // Where the fake browser says it is. `vi.hoisted` because `vi.mock` is
 // hoisted above the imports and would otherwise close over an undefined name.
-const page = vi.hoisted(() => ({ url: 'about:blank' }));
+const page = vi.hoisted(() => ({
+    url: 'about:blank',
+    //: Lets a test decide when each call answers, so two polls can be
+    //: made to land out of order on purpose.
+    answer: null as null | ((call: number) => Promise<{ url: string }>),
+}));
 vi.mock('@/lib/sdk/lemma-client', async (importOriginal) => ({
     // Spread the real module: `vncSocketUrl` reaches for `getLemmaApiBaseUrl`
     // from here, and a mock that answers only what this file names breaks
@@ -144,7 +149,9 @@ vi.mock('@/lib/sdk/lemma-client', async (importOriginal) => ({
     getLemmaClient: () => ({
         workspace: {
             browserCurrentPageUrl: async () => {
+                const call = pageUrlCalls.length;
                 pageUrlCalls.push(Date.now());
+                if (page.answer) return page.answer(call);
                 return { url: page.url };
             },
             // Exercised by the pane's ResizeObserver; the display fitting is
@@ -162,6 +169,7 @@ afterEach(() => {
     observers.length = 0;
     resized.length = 0;
     pageUrlCalls.length = 0;
+    page.answer = null;
     page.url = 'about:blank';
     cleanup();
 });
@@ -638,5 +646,44 @@ describe('asking where the browser is', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('ignores an answer that was overtaken while the window was away', async () => {
+        // Two polls can be in flight at once — the interval's and the one
+        // `visibilitychange` starts — and nothing made them land in order. The
+        // older answer passed the same `cancelled` check as the newer one, so
+        // it could overwrite it. On the sign-in page that value is the
+        // anti-phishing host label, which is the worst thing here to show
+        // stale.
+        let releaseFirst: (answer: { url: string }) => void = () => {};
+        const first = new Promise<{ url: string }>((resolve) => {
+            releaseFirst = resolve;
+        });
+        page.answer = (call) =>
+            call === 0 ? first : Promise.resolve({ url: 'https://new.example/after' });
+
+        const navigated: string[] = [];
+        render(
+            <BrowserPane
+                origin="https://example.com"
+                onNavigated={(url) => navigated.push(url)}
+            />,
+        );
+        await connect();
+        await waitFor(() => expect(pageUrlCalls.length).toBe(1));
+
+        // The second poll starts and finishes while the first is still out.
+        setHidden(false);
+        await act(async () => {
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+        await waitFor(() => expect(navigated).toEqual(['https://new.example/after']));
+
+        // Now the overtaken one comes back. It must change nothing.
+        await act(async () => {
+            releaseFirst({ url: 'https://old.example/before' });
+            await first;
+        });
+        expect(navigated).toEqual(['https://new.example/after']);
     });
 });

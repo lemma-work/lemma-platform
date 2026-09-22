@@ -192,14 +192,16 @@ class BrowserViewService:
 
         try:
             chrome = await relay.health(start=True)
-        except BrowserRelayNotServed:
+        except BrowserRelayNotServed as exc:
             # Before its parent, and the same state with a different sentence
             # in the log: this sandbox does not publish the relay's port at
             # all, which is the fabric's answer rather than the relay's
             # silence, and the two are diagnosed in completely different
             # places. Reaching here untyped was a 500 on a route whose whole
             # job is to render a state.
-            logger.warning("workspace.browser_view.relay_not_served.degraded")
+            logger.warning(
+                "workspace.browser_view.relay_not_served.degraded", reason=str(exc)
+            )
             return {"state": "unavailable"}
         except BrowserRelayUnavailable:
             # The relay is not answering. On a sandbox that predates it that is
