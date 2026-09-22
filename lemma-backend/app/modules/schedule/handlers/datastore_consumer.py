@@ -97,13 +97,33 @@ async def handle_datastore_event(
     pod_id = event.get("pod_id")
     if pod_id is None:
         return
+    try:
+        watched_pod = UUID(str(pod_id))
+    except ValueError:
+        # Rejected here, and rejected *quietly*, because of where this now sits.
+        # `DatastoreRecordEvent.model_validate` used to be the first thing to
+        # look at `pod_id`, and it raises `ValidationError` -- which the
+        # quarantine middleware classes as permanent and gives up on after one
+        # delivery. Parsing earlier moved that to a bare `ValueError`, which is
+        # classed as transient: letting it escape would buy twelve redeliveries
+        # and a dead letter, on the noisiest stream there is, for an event that
+        # is already known to be unroutable. Returning acknowledges it instead.
+        #
+        # The value is not logged. It is unvalidated producer input of unknown
+        # size and shape, and the correlation already on the record is what
+        # finds the event.
+        logger.warning(
+            "schedule.datastore_consumer.unroutable_pod_id.degraded",
+            event_type=event_type,
+        )
+        return
 
     # Before the inbox, deliberately. The inbox makes *side effects*
     # exactly-once; a pod nobody has pointed a DATASTORE schedule at has no
     # side effect to protect, so recording the delivery buys nothing and costs
     # a row that outlives the event. Doing nothing twice is still doing
     # nothing, which is what makes skipping it safe rather than merely cheap.
-    if not await pod_is_watched(UUID(str(pod_id))):
+    if not await pod_is_watched(watched_pod):
         return
 
     async def dispatch_schedules() -> None:

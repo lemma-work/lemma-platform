@@ -133,3 +133,26 @@ async def test_a_non_record_event_costs_nothing_either():
 
     assert asked == []
     assert inbox.claims == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unroutable_pod_id_is_rejected_once_not_retried_twelve_times():
+    """Parsing earlier changed which error the quarantine middleware sees.
+
+    `DatastoreRecordEvent.model_validate` used to be the first thing to look at
+    `pod_id`, and it raises `ValidationError` -- classed as permanent, so the
+    message was given up on after a single delivery. Reading `pod_id` before the
+    inbox makes a malformed one a bare `ValueError`, which is classed as
+    transient: left to escape it would be redelivered `MAX_DELIVERY_ATTEMPTS`
+    times before being dead-lettered, on the noisiest stream on the platform.
+
+    So the handler returns rather than raises -- which acknowledges -- and the
+    lookup is never reached.
+    """
+    asked: list[object] = []
+    inbox = _Inbox()
+
+    await _consume(_record_event("not-a-uuid"), watched=True, asked=asked, inbox=inbox)
+
+    assert asked == []
+    assert inbox.claims == 0
