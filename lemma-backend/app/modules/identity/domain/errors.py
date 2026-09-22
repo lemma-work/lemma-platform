@@ -75,3 +75,20 @@ class OrganizationConflictError(IdentityConflictError):
 
     def __init__(self, message: str, code: str = "ORGANIZATION_CONFLICT"):
         super().__init__(message, code=code)
+
+
+class OrganizationMemberLimitError(DomainError):
+    """The organization holds as many people as its plan allows.
+
+    Pending invitations count: an invitation is a promise of a seat, and one
+    that could not be honoured when accepted is worse than one never sent.
+    """
+
+    def __init__(self, *, limit: int, used: int):
+        super().__init__(
+            f"This organization's plan allows {limit} people, counting pending "
+            f"invitations, and it has {used}. Upgrade to add more.",
+            code="MEMBER_LIMIT_REACHED",
+            status_code=403,
+            details={"limit": limit, "used": used},
+        )

@@ -6,6 +6,7 @@ from fastapi import Depends
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import pod_from_path, require_action
 from app.core.infrastructure.events.message_bus import get_message_bus
+from app.core.plan_limits import build_plan_limits
 from app.modules.pod.services.pod_service import PodService
 from app.modules.pod.services.pod_member_service import PodMemberService
 from app.modules.pod.services.pod_join_request_service import PodJoinRequestService
@@ -13,6 +14,7 @@ from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.schedule.contracts.pod_teardown import (
     create_pod_schedule_teardown,
 )
+from app.modules.pod.infrastructure.owned_pods import OwnedPods
 from app.modules.pod.infrastructure.pod_repositories import (
     PodJoinRequestRepository,
     PodRepository,
@@ -31,6 +33,7 @@ def get_pod_service(
 ) -> PodService:
     """Provide PodService with UoW-backed repositories."""
     message_bus = get_message_bus()
+    plan_limits = build_plan_limits(uow)
     return PodService(
         pod_repository=PodRepository(uow, message_bus=message_bus),
         pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
@@ -40,6 +43,8 @@ def get_pod_service(
         icon_service=create_icon_service(),
         schedule_teardown=create_pod_schedule_teardown(uow),
         uow=uow,
+        plan_limits=plan_limits,
+        owned_pods=OwnedPods(uow) if plan_limits is not None else None,
     )
 
 

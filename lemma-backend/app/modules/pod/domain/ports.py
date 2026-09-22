@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
@@ -118,6 +119,17 @@ class PodJoinRequestRepositoryPort(Protocol):
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[PodJoinRequestEntity], Optional[str]]: ...
+
+
+class OwnedPodsPort(Protocol):
+    """How many pods a person owns, for the plan's pod allowance."""
+
+    async def lock_and_count(
+        self, *, user_id: UUID, excluding_organization_ids: Collection[UUID]
+    ) -> int:
+        """Count, holding the count until the transaction ends so that two
+        creations at once cannot both fit under the limit."""
+        ...
 
 
 class OrganizationMembershipPort(Protocol):

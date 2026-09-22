@@ -69,6 +69,7 @@ from app.modules.workspace.providers.e2b_common import (
 )
 from app.modules.workspace.providers.profiles import profile_for
 from app.modules.workspace.providers.e2b_config import (
+    template_for,
     CLOSED_TO_THE_INTERNET,
     E2BProviderConfig,
     lifecycle_for,
@@ -150,15 +151,11 @@ class E2BSandboxProvider(E2BOpsMixin):
             meta_sandbox_kind(namespace): spec.kind.value,
             meta_epoch(namespace): str(spec.epoch),
             meta_profile_digest(namespace): spec.profile_digest,
-            meta_template(namespace): self._template(spec.kind),
+            meta_template(namespace): self._template(spec),
         }
 
-    def _template(self, kind: SandboxKind) -> str:
-        return (
-            self._config.function_template
-            if kind is SandboxKind.FUNCTION
-            else self._config.workspace_template
-        )
+    def _template(self, spec: ProviderCreateSpec) -> str:
+        return template_for(self._config, spec)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -223,7 +220,7 @@ class E2BSandboxProvider(E2BOpsMixin):
                 sandbox_id=str(spec.sandbox_id),
                 drifted=",".join(drift),
                 recorded=existing.template or "<unstamped>",
-                configured=self._template(spec.kind),
+                configured=self._template(spec),
             )
         if existing is not None:
             # Nothing is re-stamped onto the adopted sandbox. The metadata E2B
@@ -246,7 +243,7 @@ class E2BSandboxProvider(E2BOpsMixin):
 
         with sdk_errors():
             sandbox = await self._sdk.create(
-                template=self._template(spec.kind),
+                template=self._template(spec),
                 timeout=self._config.sandbox_timeout_seconds,
                 lifecycle=lifecycle_for(spec.kind),
                 metadata=self._identity_metadata(spec),
@@ -282,7 +279,7 @@ class E2BSandboxProvider(E2BOpsMixin):
         fat-fingered env var is not worth keeping.
         """
         drifted = []
-        if existing.template != self._template(spec.kind):
+        if existing.template != self._template(spec):
             drifted.append("template")
         if existing.profile_digest != spec.profile_digest:
             drifted.append("profile_digest")

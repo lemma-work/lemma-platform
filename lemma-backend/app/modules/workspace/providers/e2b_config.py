@@ -12,9 +12,14 @@ as such next to the things that are.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
+from app.core.log.log import get_logger
 from app.modules.workspace.domain.sandbox import SandboxKind
+from app.modules.workspace.providers.base import ProviderCreateSpec
+
+logger = get_logger(__name__)
 
 
 #: How every sandbox is created, and not a setting.
@@ -59,6 +64,10 @@ class E2BProviderConfig:
     # backend dies, not the primary idle policy.
     sandbox_timeout_seconds: int = 60 * 30
     domain: str | None = None
+    # A workspace template per size a plan can buy, keyed `{cpu}x{memory_mb}`.
+    # E2B fixes CPU and memory when a template is built, so a size is a
+    # template. A size with no template here gets `workspace_template`.
+    workspace_size_templates: Mapping[str, str] = field(default_factory=dict)
 
 
 def lifecycle_for(kind: SandboxKind) -> dict[str, object]:
@@ -91,3 +100,25 @@ def lifecycle_for(kind: SandboxKind) -> dict[str, object]:
         "on_timeout": {"action": "pause", "keep_memory": keep_memory},
         **({"auto_resume": True} if keep_memory else {}),
     }
+
+
+def template_for(config: E2BProviderConfig, spec: ProviderCreateSpec) -> str:
+    """The template this sandbox is built from.
+
+    A workspace is built from the template for its plan's size. A size with no
+    template configured is a deployment mistake, and refusing to start the
+    person's workspace over it would punish them for it: it is logged, and the
+    workspace is served at the default size.
+    """
+    if spec.kind is SandboxKind.FUNCTION:
+        return config.function_template
+    if spec.size is not None:
+        sized = config.workspace_size_templates.get(spec.size.label)
+        if sized:
+            return sized
+        logger.warning(
+            "workspace.e2b.size_template_missing.degraded",
+            sandbox_id=str(spec.sandbox_id),
+            size=spec.size.label,
+        )
+    return config.workspace_template

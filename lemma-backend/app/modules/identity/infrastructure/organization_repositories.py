@@ -38,6 +38,7 @@ from app.modules.identity.infrastructure.models import (
     OrganizationMember,
     User,
 )
+from app.modules.identity.infrastructure.member_cap import refuse_if_organization_full
 
 
 class OrganizationRepository(OrganizationRepositoryPort):
@@ -194,6 +195,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def add_member(
         self, entity: OrganizationMemberEntity
     ) -> OrganizationMemberEntity:
+        await refuse_if_organization_full(self.uow, entity.organization_id)
         member = OrganizationMember(
             id=entity.id,
             user_id=entity.user_id,
@@ -368,6 +370,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def add_invitation(
         self, entity: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:
+        await refuse_if_organization_full(self.uow, entity.organization_id)
         invitation = OrganizationInvitation(
             **entity.model_dump(
                 exclude={"organization_name", "pod_name", "pod_description"}

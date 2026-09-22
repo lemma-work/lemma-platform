@@ -853,6 +853,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.browser_view.upstream.degraded': EventSpec('warning', frozenset({'error_type'})),
     'workspace.e2b.drift_tolerated': EventSpec('info', frozenset({'configured', 'drifted', 'recorded', 'sandbox_id'})),
     'workspace.e2b.path_not_resolved.degraded': EventSpec('warning', frozenset({'error_type', 'path'})),
+    'workspace.e2b.size_template_missing.degraded': EventSpec('warning', frozenset({'sandbox_id', 'size'})),
     'workspace.files.not_ready.degraded': EventSpec('warning', frozenset()),
     'workspace.files.read_failed.degraded': EventSpec('warning', frozenset()),
     'workspace.files.runtime_unauthorized.failed': EventSpec('warning', frozenset()),

@@ -131,11 +131,12 @@ async def ensure_first_workspace(
             owner_membership_id=membership_id,
             name=first_pod_name(full_name),
         )
-        pod_id, assistant_id, pod_created = (
-            personal.pod_id,
-            personal.assistant_id,
-            personal.created,
-        )
+        if personal is not None:
+            pod_id, assistant_id, pod_created = (
+                personal.pod_id,
+                personal.assistant_id,
+                personal.created,
+            )
     await uow.session.flush()
     return ProvisionedWorkspace(
         organization_id,

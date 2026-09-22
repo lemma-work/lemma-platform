@@ -41,3 +41,21 @@ class PodValidationError(PodDomainError):
 class PodJoinRequestNotFoundError(PodDomainError):
     def __init__(self, message: str = "Pod join request not found"):
         super().__init__(message, "POD_JOIN_REQUEST_NOT_FOUND", status_code=404)
+
+
+class PodLimitReachedError(DomainError):
+    """The person already owns as many pods as their plan allows.
+
+    403 with its own code rather than a validation error, so a client can tell
+    "you may not, on this plan" from "that request was malformed" and offer the
+    upgrade instead of an error.
+    """
+
+    def __init__(self, *, limit: int, used: int):
+        super().__init__(
+            f"Your plan allows {limit} pods, and you have {used}. "
+            "Delete one, or upgrade to make more.",
+            code="POD_LIMIT_REACHED",
+            status_code=403,
+            details={"limit": limit, "used": used},
+        )

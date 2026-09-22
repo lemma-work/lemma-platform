@@ -530,8 +530,8 @@ class OrganizationService:
             organization_name=organization.name,
         )
 
-        persisted_member = await self.organization_repository.add_member(member)
         await self.organization_repository.update_invitation(invitation)
+        persisted_member = await self.organization_repository.add_member(member)
 
         if pod_grant is not None:
             user_name_parts = [

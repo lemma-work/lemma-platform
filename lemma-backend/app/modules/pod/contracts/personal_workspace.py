@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts.provisioning import ensure_pod_default_agent
 from app.modules.pod.api.dependencies import get_pod_service
+from app.modules.pod.domain.errors import PodLimitReachedError
 from app.modules.pod.domain.pod_entities import PodEntity, PodJoinPolicy
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
 
@@ -26,7 +27,13 @@ async def ensure_personal_workspace(
     owner_user_id: UUID,
     owner_membership_id: UUID,
     name: str,
-) -> PersonalWorkspace:
+) -> PersonalWorkspace | None:
+    """The person's own pod in this organization, made if they have none.
+
+    ``None`` when they have none and their plan has no room for another. The
+    pod counts like any other, and joining an organization must not fail
+    because of it: the person arrives with no pod of their own there.
+    """
     member_count = (
         select(func.count(PodMember.id))
         .where(PodMember.pod_id == Pod.id)
@@ -76,10 +83,16 @@ async def ensure_personal_workspace(
     )
     if existing_name is not None:
         name = f"{name} {owner_user_id.hex[:8]}"
-    pod = await get_pod_service(uow).create_pod(
-        PodEntity(user_id=owner_user_id, organization_id=organization_id, name=name),
-        owner_user_id,
-    )
+    try:
+        pod = await get_pod_service(uow).create_pod(
+            PodEntity(
+                user_id=owner_user_id, organization_id=organization_id, name=name
+            ),
+            owner_user_id,
+        )
+    except PodLimitReachedError:
+        # Refused before anything was written, so the transaction is intact.
+        return None
     assistant_id = await ensure_pod_default_agent(
         uow, pod_id=pod.id, user_id=owner_user_id
     )
@@ -97,7 +110,9 @@ async def create_named_workspace(
 
     Unlike `ensure_personal_workspace`, this always creates: the caller asked
     for a *new* workspace by name, so silently handing back an existing one
-    would answer a different question than the one they were asked.
+    would answer a different question than the one they were asked. For the
+    same reason a plan with no room raises `PodLimitReachedError` rather than
+    answering with nothing.
     """
     existing_name = await uow.session.scalar(
         select(Pod.id).where(

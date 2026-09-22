@@ -247,6 +247,17 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("E2B_FUNCTION_TEMPLATE"),
         description="E2B template backing function runtime sandboxes",
     )
+    e2b_workspace_size_templates: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("E2B_WORKSPACE_SIZE_TEMPLATES"),
+        description=(
+            "Workspace templates by size, as JSON keyed `{cpu}x{memory_mb}`, "
+            'e.g. {"2x4096": "lemma-workspace-2x4096"}. E2B fixes CPU and '
+            "memory when a template is built, so a deployment whose plans sell "
+            "sizes builds one template per size and names them here. A size "
+            "with no entry is served from E2B_WORKSPACE_TEMPLATE."
+        ),
+    )
     e2b_domain: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("E2B_DOMAIN"),
