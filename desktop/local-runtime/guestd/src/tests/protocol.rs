@@ -235,8 +235,18 @@ fn status_for_runtime_answering(response: &'static [u8]) -> Value {
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { return };
-            let mut discard = [0_u8; 256];
-            let _ = stream.read(&mut discard);
+            // The whole request, not one read of it. Closing a socket with
+            // request bytes still unread makes Linux answer with a reset,
+            // which reaches the probe before the response does -- so a
+            // single `read` passed on macOS and failed in CI.
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 256];
+            while !request.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => request.extend_from_slice(&chunk[..count]),
+                }
+            }
             let _ = stream.write_all(response);
         }
     });
