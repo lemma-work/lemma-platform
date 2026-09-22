@@ -2,17 +2,32 @@
 
 use super::*;
 
+/// Every app answers. Readiness here is about how a snapshot is assembled, not
+/// about whether a socket can be opened -- that has its own test.
+fn answering(_host: &str, _port: u16, _path: &str) -> bool {
+    true
+}
+
+/// Nothing answers.
+fn refused(_host: &str, _port: u16, _path: &str) -> bool {
+    false
+}
+
 #[test]
 fn snapshot_uses_guest_ip_and_exact_container_generation() {
-    let app = serving_app();
-    let parsed: Value = serde_json::from_str(&inspect_serving(app.port)).unwrap();
-    let snapshot =
-        snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "127.0.0.1").unwrap();
+    let parsed: Value = serde_json::from_str(&inspect()).unwrap();
+    let snapshot = snapshot_from_inspect_with(
+        "box-1",
+        parsed[0].as_object().unwrap(),
+        "192.168.64.2",
+        &answering,
+    )
+    .unwrap();
 
     assert_eq!(snapshot["provider_id"], "sha256:exact-generation");
     assert_eq!(
         snapshot["status"]["runtime_url"],
-        format!("http://127.0.0.1:{}", app.port)
+        "http://192.168.64.2:49152"
     );
     assert_eq!(snapshot["status"]["ready"], true);
 }
@@ -27,8 +42,13 @@ fn snapshot_uses_guest_ip_and_exact_container_generation() {
 fn an_eager_app_nothing_is_serving_is_published_but_not_ready() {
     // A port that is mapped in the engine's view and bound by nobody.
     let parsed: Value = serde_json::from_str(&inspect()).unwrap();
-    let snapshot =
-        snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "127.0.0.1").unwrap();
+    let snapshot = snapshot_from_inspect_with(
+        "box-1",
+        parsed[0].as_object().unwrap(),
+        "192.168.64.2",
+        &refused,
+    )
+    .unwrap();
 
     let runtime = &snapshot["status"]["apps"]["runtime"];
     assert_eq!(runtime["published"], true, "the engine did map the port");
@@ -45,8 +65,13 @@ fn an_eager_app_nothing_is_serving_is_published_but_not_ready() {
 #[test]
 fn a_lazy_app_that_has_not_started_says_so() {
     let parsed: Value = serde_json::from_str(&inspect()).unwrap();
-    let snapshot =
-        snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "127.0.0.1").unwrap();
+    let snapshot = snapshot_from_inspect_with(
+        "box-1",
+        parsed[0].as_object().unwrap(),
+        "192.168.64.2",
+        &refused,
+    )
+    .unwrap();
 
     let browser = &snapshot["status"]["apps"]["browser"];
     assert_eq!(browser["published"], true, "the engine did map the port");
@@ -195,7 +220,6 @@ fn a_sandbox_reports_the_apps_it_was_created_with_including_the_relay() {
 /// back without the sandbox being recreated.
 #[test]
 fn a_sandbox_created_before_the_label_falls_back_to_the_compiled_list() {
-    let runtime = serving_app();
     let inspected = json!({
         "Id": "sha256:exact-generation",
         "State": {"Running": true, "Status": "running"},
@@ -205,17 +229,22 @@ fn a_sandbox_created_before_the_label_falls_back_to_the_compiled_list() {
             "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
         }},
         "NetworkSettings": {"Ports": {
-            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": runtime.port.to_string()}],
+            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}],
             "4850/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49154"}]
         }}
     });
 
-    let snapshot =
-        snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "127.0.0.1").unwrap();
+    let snapshot = snapshot_from_inspect_with(
+        "box-1",
+        inspected.as_object().unwrap(),
+        "192.168.64.2",
+        &answering,
+    )
+    .unwrap();
 
     assert_eq!(
         snapshot["status"]["apps"]["relay"]["private_url"],
-        "http://127.0.0.1:49154"
+        "http://192.168.64.2:49154"
     );
     // Lazy, so a relay nobody has reached for does not hold the sandbox back
     // from being ready -- but the eager runtime has to actually answer.

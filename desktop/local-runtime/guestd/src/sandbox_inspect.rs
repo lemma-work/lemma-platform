@@ -14,10 +14,32 @@ pub(crate) fn container_has_exited(state: &serde_json::Map<String, Value>) -> bo
             .is_some_and(|value| !value.trim().is_empty())
 }
 
+/// Whether an app answers on a host and port.
+///
+/// Taken as an argument rather than called directly so a unit test can decide
+/// the answer. The real probe opens a TCP connection, and fixtures here map
+/// ports like 49152-49154, which sit inside Linux's ephemeral range -- so a
+/// listener another test had just been assigned could answer a probe meant for
+/// nothing, and a probe meant for a listener could queue behind it. That made
+/// readiness assertions pass on macOS and fail on Linux for reasons that had
+/// nothing to do with the code under test.
+pub(crate) type AppProbe<'a> = &'a dyn Fn(&str, u16, &str) -> bool;
+
 pub(crate) fn snapshot_from_inspect(
     sandbox_id: &str,
     inspect: &serde_json::Map<String, Value>,
     endpoint_host: &str,
+) -> Result<Value, GuestError> {
+    snapshot_from_inspect_with(sandbox_id, inspect, endpoint_host, &|host, port, path| {
+        crate::app_health::app_is_answering(host, port, path)
+    })
+}
+
+pub(crate) fn snapshot_from_inspect_with(
+    sandbox_id: &str,
+    inspect: &serde_json::Map<String, Value>,
+    endpoint_host: &str,
+    probe: AppProbe<'_>,
 ) -> Result<Value, GuestError> {
     let provider_id = inspect
         .get("Id")
@@ -113,10 +135,8 @@ pub(crate) fn snapshot_from_inspect(
         // backend dialled an endpoint the guest had just promised was good.
         // Probing a lazy app that has not started costs a connection refused,
         // which on a container on this host is immediate.
-        let answering = published
-            && host_port.is_some_and(|port| {
-                crate::app_health::app_is_answering(endpoint_host, port, &app.health_path)
-            });
+        let answering =
+            published && host_port.is_some_and(|port| probe(endpoint_host, port, &app.health_path));
         statuses.insert(
             app.name.clone(),
             json!({
