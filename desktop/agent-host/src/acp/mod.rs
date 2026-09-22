@@ -35,6 +35,7 @@ mod options;
 mod outcome;
 mod permission;
 mod prompt;
+mod session_setup;
 mod supervision;
 
 pub use driver::*;
@@ -42,6 +43,7 @@ pub(crate) use options::*;
 pub use outcome::*;
 pub(crate) use permission::*;
 pub use prompt::*;
+pub(crate) use session_setup::*;
 pub(crate) use supervision::*;
 
 #[cfg(test)]

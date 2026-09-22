@@ -1,9 +1,42 @@
 //! Deciding whether a permission request is one Lemma published.
 
+use agent_client_protocol::schema::v1::PermissionOption;
+
 use super::{
-    AlwaysAllowOffer, AlwaysAllowScope, HashSet, JsonMap, Map, PermissionOptionKind,
-    RequestPermissionRequest, Value, find_string,
+    AlwaysAllowOffer, AlwaysAllowScope, HashSet, JsonMap, Map, PermissionDecision,
+    PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
+    SelectedPermissionOutcome, Value, find_string,
 };
+
+/// Select the option that allows this one call -- or cancel, when the agent
+/// offered no way to allow it once.
+pub(crate) fn allow_once(options: &[PermissionOption]) -> RequestPermissionOutcome {
+    options
+        .iter()
+        .find(|option| option.kind == PermissionOptionKind::AllowOnce)
+        .map_or(RequestPermissionOutcome::Cancelled, select)
+}
+
+/// The answer to send the agent for what Lemma decided.
+///
+/// An allow names the option the person picked. If the agent no longer
+/// offers it, allowing once is the narrowest reading of "yes".
+pub(crate) fn outcome_for_decision(
+    decision: PermissionDecision,
+    options: &[PermissionOption],
+) -> RequestPermissionOutcome {
+    match decision {
+        PermissionDecision::Allow { option_id } => options
+            .iter()
+            .find(|option| option.option_id.to_string() == option_id)
+            .map_or_else(|| allow_once(options), select),
+        PermissionDecision::Deny => RequestPermissionOutcome::Cancelled,
+    }
+}
+
+fn select(option: &PermissionOption) -> RequestPermissionOutcome {
+    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()))
+}
 
 pub(crate) fn permission_payload(request: &RequestPermissionRequest) -> JsonMap {
     let mut value = serde_json::to_value(request).unwrap_or_else(|_| Value::Object(Map::new()));
