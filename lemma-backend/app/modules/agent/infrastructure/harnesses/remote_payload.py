@@ -41,6 +41,11 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
 )
 
 
+from app.modules.agent.tools.skills.pydantic_adapter import (
+    LOCAL_WORKSPACE_SKILL_OVERRIDE,
+    LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
+)
+
 #: What a host agent is given of the user's Lemma identity. An allowlist rather
 #: than "whatever `get_env_vars` returned", so a sandbox-only variable added
 #: later does not silently start leaving the sandbox.
@@ -400,6 +405,28 @@ def _user_turn_text(message: Message) -> str:
     return body
 
 
+def _history_tool_result(result: object) -> str:
+    """One tool return, as it appears in a replayed transcript.
+
+    Everything `_render_history` produces ends up concatenated into a single
+    user turn -- the ACP layer merges system framing, history and the new
+    message into one text block -- so a tool result is not on a tool channel by
+    the time a model reads it. It reads as something the user typed.
+
+    That is tolerable for data. It is not tolerable for Lemma's own
+    instructions to the agent: `load_skill` appends a "Local Lemma Workspace
+    Override" paragraph addressed to the reader, and replaying it inside a user
+    turn on every non-resuming turn is why agents echoed it back into their
+    replies. The agent already acted on it when the tool returned; it does not
+    need it again, and it must not receive it as the user's words.
+    """
+    rendered = json.dumps(to_json_value(result), indent=2)
+    if LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER not in rendered:
+        return rendered
+    encoded = json.dumps(LOCAL_WORKSPACE_SKILL_OVERRIDE)[1:-1]
+    return rendered.replace(encoded, "")
+
+
 def _message_text(message: Message) -> str:
     if message.kind == MessageKind.TOOL_CALL:
         body = (
@@ -410,7 +437,7 @@ def _message_text(message: Message) -> str:
         body = (
             f"Tool result {message.tool_name or 'unknown_tool'}"
             f"({message.tool_call_id}):\n"
-            f"{json.dumps(to_json_value(message.tool_result), indent=2)}"
+            f"{_history_tool_result(message.tool_result)}"
         )
     elif message.role == MessageRole.USER:
         return _user_turn_text(message)

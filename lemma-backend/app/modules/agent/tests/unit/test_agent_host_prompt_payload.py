@@ -448,3 +448,52 @@ class TestExportedToolNames:
         # "lemma_ping_tool" is not repeated: it is already in the list from the
         # toolset itself.
         assert names == ["lemma_ping_tool", "lemma_final_answer"]
+
+
+class TestReplayedHistory:
+    """What a non-resuming turn re-sends, and what it must not."""
+
+    def test_lemmas_own_instructions_are_not_replayed_as_the_users_words(self):
+        """The override paragraph is why agents echoed it back at the user.
+
+        Everything `_render_history` builds is concatenated into one user turn
+        -- the ACP layer merges system framing, history and the new message
+        into a single text block -- so a replayed tool result is not on a tool
+        channel by the time the model reads it. A paragraph of Lemma
+        instructions addressed to the reader, arriving inside a user turn on
+        every non-resuming turn, reads as something the user typed.
+        """
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _history_tool_result,
+        )
+        from app.modules.agent.tools.skills.pydantic_adapter import (
+            LOCAL_WORKSPACE_SKILL_OVERRIDE,
+            LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
+        )
+
+        stored = {
+            "success": True,
+            "name": "lemma-user",
+            "content": "# Lemma User\n\nReal skill body."
+            + LOCAL_WORKSPACE_SKILL_OVERRIDE,
+        }
+
+        replayed = _history_tool_result(stored)
+
+        assert LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER not in replayed
+        assert "lemma_exec_command" not in replayed
+        # The skill itself still has to survive: the agent loaded it for a
+        # reason, and stripping the whole result would lose the reason.
+        assert "Real skill body." in replayed
+        assert "lemma-user" in replayed
+
+    def test_an_ordinary_tool_result_is_untouched(self):
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _history_tool_result,
+        )
+
+        stored = {"rows": [{"id": 1, "name": "a"}], "count": 1}
+        replayed = _history_tool_result(stored)
+
+        assert '"count": 1' in replayed
+        assert '"name": "a"' in replayed
