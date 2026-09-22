@@ -121,8 +121,13 @@ def _isolate_service_caches():
         cache.clear()
 
 
-def _service(sandbox: _FakeSandbox) -> WorkspaceSandboxService:
-    return WorkspaceSandboxService(sandbox=sandbox)  # type: ignore[arg-type]
+def _service(
+    sandbox: _FakeSandbox, *, storage_generation_store: object | None = None
+) -> WorkspaceSandboxService:
+    return WorkspaceSandboxService(
+        sandbox=sandbox,  # type: ignore[arg-type]
+        storage_generation_store=storage_generation_store,  # type: ignore[arg-type]
+    )
 
 
 @pytest.mark.asyncio
@@ -793,3 +798,61 @@ _real_sleep = asyncio.sleep
 
 async def _no_sleep(_delay: float, *args: Any) -> None:
     await _real_sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_the_interactive_ceiling_covers_minting_the_session_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Token minting and organization resolution are reads like any other."""
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    async def never_mints(**_: object) -> str:
+        await asyncio.sleep(30)
+        return "unreachable"
+
+    monkeypatch.setattr(
+        "app.modules.identity.contracts.delegated_tokens.mint_delegated_token",
+        never_mints,
+    )
+    service = _service(_FakeSandbox())
+    monkeypatch.setattr(service, "_get_manager_client", lambda: _FakeManagerClient())
+
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(SandboxUnavailable):
+        await service.get_session(
+            user_id=uuid4(),
+            pod_id=None,
+            organization_id=uuid4(),
+            ready_timeout_seconds=0.2,
+        )
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 5, f"minting the environment held the session {elapsed:.1f}s"
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_storage_generation_read_costs_the_notice_not_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Best effort, so a stall degrades to "not recreated" within the ceiling."""
+
+    class _StalledStore:
+        async def observe_storage_generation(self, **_: object) -> bool:
+            await asyncio.sleep(30)
+            return True
+
+    service = _service(_FakeSandbox(), storage_generation_store=_StalledStore())
+    monkeypatch.setattr(service, "_get_manager_client", lambda: _FakeManagerClient())
+
+    started = asyncio.get_running_loop().time()
+    session = await service.get_session(
+        user_id=uuid4(),
+        pod_id=None,
+        session_id="conversation",
+        env_vars={},
+        ready_timeout_seconds=0.2,
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 5, f"the storage read held the session {elapsed:.1f}s"
+    assert session is not None

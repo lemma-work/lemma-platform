@@ -13,7 +13,7 @@ fn the_splash_draws_something_for_every_state() {
             .find("function renderState(s) {")
             .expect("renderState exists");
         let end = splash[start..]
-            .find("\n  function ")
+            .find("\nfunction ")
             .map_or(splash.len(), |offset| start + offset);
         &splash[start..end]
     };

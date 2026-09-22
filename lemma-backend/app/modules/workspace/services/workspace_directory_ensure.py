@@ -205,10 +205,10 @@ class WorkspaceDirectoryEnsureMixin:
         return task
 
     @staticmethod
-    async def _await_shared(
-        coroutine: "Coroutine[object, object, SandboxInfo]",
+    async def _await_shared[T](
+        coroutine: "Coroutine[object, object, T]",
         ready_timeout_seconds: float | None,
-    ) -> SandboxInfo:
+    ) -> T:
         """Wait on work that is shared with other callers, but only so long.
 
         `get_or_create_sandbox` already shields the singleflight task it awaits,

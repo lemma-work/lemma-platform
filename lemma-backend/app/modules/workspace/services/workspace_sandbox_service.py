@@ -396,16 +396,21 @@ class WorkspaceSandboxService(
 
         if env_vars is None:
             with _tracer.start_as_current_span("lemma.workspace.env_vars"):
-                env_vars = await self.get_env_vars(
-                    user_id,
-                    pod_id,
-                    workspace_url=sandbox_info.endpoint,
-                    organization_id=organization_id,
-                    workload_type=workload_type,
-                    workload_id=workload_id,
-                    workload_name=workload_name,
-                    scope=scope,
-                    session_id=session_id,
+                # Minting the token and resolving the organization are reads
+                # like any other; a stalled one must not outlast the ceiling.
+                env_vars = await self._await_shared(
+                    self.get_env_vars(
+                        user_id,
+                        pod_id,
+                        workspace_url=sandbox_info.endpoint,
+                        organization_id=organization_id,
+                        workload_type=workload_type,
+                        workload_id=workload_id,
+                        workload_name=workload_name,
+                        scope=scope,
+                        session_id=session_id,
+                    ),
+                    budget.remaining(),
                 )
 
         # Tell this session, once, if the disk it is about to use is not the one
@@ -417,11 +422,14 @@ class WorkspaceSandboxService(
                 with _tracer.start_as_current_span(
                     "lemma.workspace.storage_generation"
                 ):
-                    workspace_recreated = (
-                        await self.storage_generation_store.observe_storage_generation(
+                    # Best effort, and bounded like the rest: the handler
+                    # below turns a timeout into "no notice".
+                    workspace_recreated = await asyncio.wait_for(
+                        self.storage_generation_store.observe_storage_generation(
                             session_id=session_id,
                             generation=sandbox_info.storage_generation,
-                        )
+                        ),
+                        timeout=budget.remaining(),
                     )
             except Exception:
                 # A missing notice is far better than a failed tool call.
