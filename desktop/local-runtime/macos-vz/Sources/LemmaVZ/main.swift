@@ -244,38 +244,6 @@ private final class StopCoordinator {
     }
 }
 
-private func writeAll(_ descriptor: Int32, _ data: Data) throws {
-    try data.withUnsafeBytes { rawBuffer in
-        guard let base = rawBuffer.baseAddress else { return }
-        var offset = 0
-        while offset < rawBuffer.count {
-            let count = Darwin.write(descriptor, base.advanced(by: offset), rawBuffer.count - offset)
-            if count < 0 {
-                if errno == EINTR { continue }
-                throw RuntimeError.system("write", errno)
-            }
-            offset += count
-        }
-    }
-}
-
-private func readLine(_ descriptor: Int32, limit: Int) throws -> Data {
-    var result = Data()
-    var byte: UInt8 = 0
-    while result.count <= limit {
-        let count = Darwin.read(descriptor, &byte, 1)
-        if count == 0 { break }
-        if count < 0 {
-            if errno == EINTR { continue }
-            throw RuntimeError.system("read", errno)
-        }
-        result.append(byte)
-        if byte == 0x0A { break }
-    }
-    guard result.count <= limit else { throw RuntimeError.invalid("Message exceeded size limit") }
-    return result
-}
-
 private func unixListener(path: String) throws -> Int32 {
     guard path.utf8.count < MemoryLayout<sockaddr_un>.size - 2 else {
         throw RuntimeError.invalid("Guest control socket path is too long")
@@ -382,54 +350,33 @@ private final class GuestBridge {
 
     private func transfer(client: Int32, connection: VZVirtioSocketConnection) {
         DispatchQueue.global(qos: .userInitiated).async { [self] in
-            let request: Data
-            do {
-                request = try readLine(client, limit: maxRequestBytes)
-            } catch {
-                vzLog("client read failed on port \(guestPort): \(error.localizedDescription)")
-                close(client)
-                finishRequest(connection)
-                return
+            let outcome = relayControlRequest(
+                client: client,
+                guest: connection.fileDescriptor,
+                requestLimit: maxRequestBytes,
+                responseLimit: maxResponseBytes
+            )
+            switch outcome {
+            case .answered, .clientSentNothing:
+                break
+            case .clientWentAway:
+                // Closing the guest connection below is what gives the slot
+                // back; the guest sees the close and abandons the reply.
+                vzLog("client on port \(guestPort) went away before the guest answered; released its request slot")
+            case .clientReadFailed(let error):
+                vzLog("client read failed on port \(guestPort): \(error)")
+            case .clientWriteFailed(let error):
+                vzLog("client write failed on port \(guestPort): \(error)")
+            case .guestUnavailable(let error):
+                vzLog("guest bridge failed: \(error)")
             }
-            guard !request.isEmpty else {
-                close(client)
-                finishRequest(connection)
-                return
-            }
-            do {
-                try writeAll(connection.fileDescriptor, request)
-                let response = try readLine(
-                    connection.fileDescriptor,
-                    limit: maxResponseBytes
-                )
-                guard !response.isEmpty else {
-                    throw RuntimeError.invalid("Guest control channel closed")
-                }
-                do {
-                    try writeAll(client, response)
-                } catch {
-                    // A timed-out bridge caller may close its Unix socket
-                    // while the guest operation finishes. Its answer has
-                    // nowhere to go, which is not an error worth failing over:
-                    // the guest did the work, and this connection is this
-                    // request's alone to close either way.
-                    vzLog("client write failed on port \(guestPort): \(error.localizedDescription)")
-                }
-                close(client)
-                finishRequest(connection)
-            } catch {
-                vzLog("guest bridge failed: \(error.localizedDescription)")
-                let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Guest control channel is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
-                _ = try? writeAll(client, Data(payload.utf8))
-                close(client)
-                finishRequest(connection)
-            }
+            close(client)
+            finishRequest(connection)
         }
     }
 
     private func fail(client: Int32) {
-        let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Private guest is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
-        _ = try? writeAll(client, Data(payload.utf8))
+        _ = try? writeAll(client, guestUnavailableReply("Private guest is unavailable"))
         close(client)
         finishRequest(nil)
     }
