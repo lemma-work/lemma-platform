@@ -14,6 +14,7 @@ nothing that an argument does not.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Protocol
 
 from sandbox_runtime.protocol import (
     CreatePythonSessionRequest,
@@ -25,11 +26,39 @@ from sandbox_runtime.protocol import (
 from app.modules.workspace.providers.base import ProviderInstance, PythonResult
 from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 from app.modules.workspace.providers.e2b_common import sdk_best_effort, sdk_errors
+from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
 
 
+class SessionHost(Protocol):
+    """What these functions need of the E2B provider, and nothing else.
+
+    Named so the provider is checked against it at the call sites: an untyped
+    ``ops`` would accept anything and fail on the first missing attribute.
+
+    The connected sandbox is passed separately, by the provider that owns the
+    connection. It is the E2B SDK's object, and that SDK is an optional
+    dependency, so it stays unannotated rather than pretending to a type the
+    checker may not be able to import.
+    """
+
+    _output: E2BOutputBuffer
+
+    async def _remember_pid(
+        self,
+        process_id: str,
+        pid: int,
+        *,
+        tty: bool,
+        sandbox_id: str = "",
+        expires_at: float = 0.0,
+        cwd: str = "",
+        command: str = "",
+    ) -> None: ...
+
+
 async def ensure_python_session(
-    ops, instance: ProviderInstance, request: CreatePythonSessionRequest
+    ops: SessionHost, instance: ProviderInstance, request: CreatePythonSessionRequest
 ) -> None:
     """No-op: a session is a file on disk, created on first execution.
 
@@ -47,7 +76,8 @@ async def ensure_python_session(
 
 
 async def execute_python(
-    ops,
+    ops: SessionHost,
+    sandbox,
     instance: ProviderInstance,
     session: PythonSessionRef,
     request: ExecutePythonRequest,
@@ -77,7 +107,6 @@ async def execute_python(
     own directory, so a file one tool wrote by relative path was invisible
     to the other.
     """
-    sandbox = await ops._connect(instance.provider_id)
     state_path = f"/tmp/lemma-python-{session.session_id}.pkl"
     code_path = f"/tmp/lemma-python-{request.operation_id}.code"
     result_path = f"/tmp/lemma-python-{request.operation_id}.result"
@@ -149,15 +178,17 @@ async def execute_python(
         result=result,
         error_name="ExecutionError" if failed else None,
         error_message=(outcome.stderr or None) if failed else None,
-        traceback=(),
+        traceback=None,
         output_truncated=False,
     )
 
 
 async def delete_python_session(
-    ops, instance: ProviderInstance, *, session_id: str, deadline_at: datetime
+    sandbox,
+    *,
+    session_id: str,
+    deadline_at: datetime,
 ) -> None:
-    sandbox = await ops._connect(instance.provider_id)
     # Nothing to forget is success.
     with sdk_best_effort():
         await sandbox.files.remove(f"/tmp/lemma-python-{session_id}.pkl")

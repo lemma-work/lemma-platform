@@ -59,6 +59,7 @@ from app.modules.workspace.providers.e2b_process_lifetime import (
     watch_for_exit,
 )
 from app.modules.workspace.providers import e2b_python_sessions
+from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
 from app.core.log.log import get_logger
 
@@ -91,6 +92,10 @@ class E2BOpsMixin(E2BReachMixin):
     capabilities = frozenset(
         {ProviderCapability.PORT_REACH, ProviderCapability.SECRET_DELIVERY}
     )
+
+    #: The provider's output buffer. Declared, not defined: `E2BProvider` sets
+    #: it, and naming it here lets `e2b_python_sessions.SessionHost` be checked.
+    _output: E2BOutputBuffer
 
     async def _remember_pid(
         self,
@@ -487,14 +492,16 @@ class E2BOpsMixin(E2BReachMixin):
         request: ExecutePythonRequest,
     ) -> PythonResult:
         return await e2b_python_sessions.execute_python(
-            self, instance, session, request
+            self, await self._connect(instance.provider_id), instance, session, request
         )
 
     async def delete_python_session(
         self, instance: ProviderInstance, *, session_id: str, deadline_at: datetime
     ) -> None:
         await e2b_python_sessions.delete_python_session(
-            self, instance, session_id=session_id, deadline_at=deadline_at
+            await self._connect(instance.provider_id),
+            session_id=session_id,
+            deadline_at=deadline_at,
         )
 
 
