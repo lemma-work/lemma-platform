@@ -15,6 +15,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
 from opentelemetry.context import Context
 from opentelemetry.propagate import extract
+from faststream.exceptions import NackMessage
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -33,6 +34,32 @@ tracer = trace.get_tracer(__name__)
 meter = metrics.get_meter(__name__)
 retry_counter = meter.create_counter("lemma.event.inbox.retry")
 dead_letter_counter = meter.create_counter("lemma.event.inbox.dead_lettered")
+
+
+class ClaimOutcome(StrEnum):
+    """Why a delivery is not going to run, when it is not going to run.
+
+    These were one value (``None``), and collapsing them lost an event every
+    time a worker died. ``None`` meant "do not run this", the handler returned
+    normally, and FastStream's acknowledgement middleware read that clean return
+    as success and XACKed -- which is the only thing that removes an entry from
+    the stream's pending-entries list. For a genuinely finished event that is
+    right. For one another worker was still holding it was fatal: if that worker
+    then died, the row stayed PROCESSING forever and the message was already
+    gone from the PEL, so nothing ever redelivered it.
+
+    Observed in production on 2026-09-21 as ~28,500 pending entries against
+    rows stuck in PROCESSING since July, while the triggers those events were
+    supposed to fire never fired.
+    """
+
+    #: Finished, or given up on, by someone. Acknowledge: the work is done and
+    #: redelivering it would only find the same answer.
+    ALREADY_SETTLED = "ALREADY_SETTLED"
+    #: Claimed by a live worker within ``abandon_after``. Must NOT be
+    #: acknowledged -- the PEL entry is the only record that this event still
+    #: needs doing if that worker does not finish.
+    IN_FLIGHT_ELSEWHERE = "IN_FLIGHT_ELSEWHERE"
 
 
 class InboxStatus(StrEnum):
@@ -120,9 +147,25 @@ class InboxConsumer:
         try:
             event_id = stable_event_id(event)
             event_type = _event_type(event)
-            attempt = await self._claim(consumer, event_id, event_type)
-            if attempt is None:
+            claimed = await self._claim(consumer, event_id, event_type)
+            if claimed is ClaimOutcome.IN_FLIGHT_ELSEWHERE:
+                # Hand the delivery back instead of returning quietly. On a
+                # Redis stream `nack` is precisely "do not XACK", so the entry
+                # stays in the pending-entries list and the reclaim subscriber
+                # offers it again once the holder's claim has aged out. The
+                # alternative -- returning False, as this did -- acknowledges,
+                # and an acknowledged entry a dead worker was holding is an
+                # event nothing will ever run.
+                logger.debug(
+                    "infrastructure.inbox.delivery_held_for_reclaim.observed",
+                    consumer=consumer,
+                    event_id=str(event_id),
+                    event_type=event_type,
+                )
+                raise NackMessage
+            if not isinstance(claimed, int):
                 return False
+            attempt = claimed
 
             with tracer.start_as_current_span("lemma.inbox.consume") as span:
                 span.set_attribute("lemma.event_id", str(event_id))
@@ -202,7 +245,13 @@ class InboxConsumer:
 
     async def _claim(
         self, consumer: str, event_id: UUID, event_type: str
-    ) -> int | None:
+    ) -> int | ClaimOutcome:
+        """The attempt number to run as, or why this delivery must not run.
+
+        Returns three distinguishable things where it used to return two,
+        because the caller has to acknowledge two of them differently. See
+        :class:`ClaimOutcome`.
+        """
         now = datetime.now(timezone.utc)
         async with self._session_maker() as session, session.begin():
             await session.execute(
@@ -228,19 +277,30 @@ class InboxConsumer:
                 .with_for_update()
             )
             if row is None:
-                return None
+                # Not reachable through the insert above, which either wrote the
+                # row or lost to a concurrent write of it. Settled rather than
+                # in-flight on purpose: with no row there is nothing to wait for,
+                # and holding the delivery would loop on an empty claim forever.
+                return ClaimOutcome.ALREADY_SETTLED
             if row.status in {
                 InboxStatus.COMPLETED.value,
                 InboxStatus.TERMINAL.value,
                 InboxStatus.DEAD_LETTER.value,
             }:
-                return None
+                return ClaimOutcome.ALREADY_SETTLED
             if (
                 row.status == InboxStatus.PROCESSING.value
                 and row.delivery_count > 0
                 and row.last_received_at > now - self.abandon_after
             ):
-                return None
+                # Someone else is mid-flight. Returning *before* the refresh
+                # below is load-bearing: this branch leaves `last_received_at`
+                # alone, so the holder's claim keeps ageing and the next
+                # redelivery (at least `abandon_after` later, since that is the
+                # reclaim subscriber's idle threshold) falls through and
+                # re-claims. That is what stops a held delivery bouncing
+                # forever.
+                return ClaimOutcome.IN_FLIGHT_ELSEWHERE
             row.status = InboxStatus.PROCESSING.value
             row.delivery_count += 1
             row.last_received_at = now

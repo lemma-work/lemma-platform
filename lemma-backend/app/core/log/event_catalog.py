@@ -616,6 +616,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic': EventSpec('debug', frozenset({'error_type'})),
     'infrastructure.consumer_groups.initial_ensure.failed': EventSpec('error', frozenset()),
     'infrastructure.consumer_groups.reconcile.failed': EventSpec('error', frozenset()),
+    'infrastructure.inbox.delivery_held_for_reclaim.observed': EventSpec('debug', frozenset({'consumer', 'event_id', 'event_type'})),
     'infrastructure.inbox.event_delivery_dead_lettered.failed': EventSpec('error', frozenset({'attempt', 'consumer', 'error_type', 'event_id', 'event_type'})),
     'infrastructure.inbox.terminal_event_validation.degraded': EventSpec('warning', frozenset({'consumer', 'event_id', 'event_type'})),
     'infrastructure.job_liveness.publish_failed.degraded': EventSpec('warning', frozenset({'job_id'})),

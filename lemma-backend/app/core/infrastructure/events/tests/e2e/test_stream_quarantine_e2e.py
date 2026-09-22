@@ -22,6 +22,7 @@ import json
 
 import pytest
 import redis.asyncio as redis_asyncio
+from faststream.exceptions import NackMessage
 from faststream.redis import RedisBroker, RedisRouter
 from pydantic import BaseModel
 
@@ -107,6 +108,9 @@ async def running_broker(test_redis_url, redis_client):
         # Mirrors every real consumer: take the envelope untyped, then parse.
         if event.get("event_type") != "probe.wanted":
             return
+        if event.get("hold"):
+            # What the inbox does when another worker already holds the claim.
+            raise NackMessage
         if event.get("explode"):
             # A real pydantic failure, because that is what actually happened:
             # the surface_events poison messages were ValidationErrors. A bare
@@ -210,6 +214,57 @@ async def test_a_poison_message_does_not_hold_up_the_next_one(
         "a healthy message queued behind a poison one was never processed",
     )
     await _wait_for(lambda: _pending_is(redis_client, 0), "still pending after drain")
+
+
+async def test_a_held_delivery_stays_pending_and_is_not_dead_lettered(
+    running_broker, redis_client
+):
+    """The other half of this file's assumption, and the one the inbox now rests on.
+
+    The tests above pin that a clean return acknowledges. This pins the
+    complement: raising ``NackMessage`` does *not* acknowledge, so the entry
+    stays in the pending-entries list where the reclaim subscriber can offer it
+    again. The inbox needs exactly that when another worker already holds the
+    claim -- acknowledging there is what lost events when the holder died, since
+    the PEL entry was the only remaining record that the work was still owed.
+
+    It also pins that a hand-back is not counted as a failure. ``NackMessage``
+    is an ordinary ``Exception``, so the quarantine middleware's ``except
+    Exception`` used to catch it, increment the message's failure counter and --
+    after ``MAX_DELIVERY_ATTEMPTS`` -- dead-letter it. A slow handler's message
+    would then be discarded for being redelivered often rather than for being
+    broken. The absent counter key below is what says that is not happening; the
+    counter is incremented on the *first* failure, so this catches it without
+    waiting for twelve redeliveries.
+    """
+    _, handled = running_broker
+
+    await _publish(
+        redis_client,
+        {"event_type": "probe.wanted", "id": "held-1", "hold": True},
+    )
+    # A second message, and the real subject of the wait below. `pending == 1`
+    # is already true the instant the first entry is *delivered*, long before
+    # the handler has had an opinion about it, so waiting on that alone would
+    # assert nothing. This consumer takes messages one at a time: once the
+    # healthy one behind it has been handled and acknowledged, the held one has
+    # certainly finished its trip through the middleware stack.
+    await _publish(redis_client, {"event_type": "probe.wanted", "id": "good-3"})
+
+    await _wait_for(
+        lambda: _handled_ids(handled, {"good-3"}),
+        "the message behind the held one never ran",
+    )
+    await _wait_for(
+        lambda: _pending_is(redis_client, 1),
+        "a held delivery was acknowledged — nothing will ever redeliver it",
+    )
+    assert "held-1" not in {event.get("id") for event in handled}
+    assert await redis_client.keys("lemma:stream-failure:*") == [], (
+        "a deliberate hand-back was counted as a failure, which walks the "
+        "message towards the dead-letter backstop"
+    )
+    assert int(await redis_client.xlen(dead_letter_stream(_STREAM))) == 0
 
 
 # -- small async predicates, kept out of the tests for readability -----------
