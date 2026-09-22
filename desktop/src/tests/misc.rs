@@ -429,3 +429,32 @@ fn local_desktop_context_disables_email_verification_before_page_scripts() {
     assert!(local.contains("AUTH_EMAIL_VERIFICATION_REQUIRED: \"false\""));
     assert!(!hosted.contains("AUTH_EMAIL_VERIFICATION_REQUIRED"));
 }
+
+/// One panic on a background thread must not become a crash on the next lock.
+///
+/// `lock().unwrap()` was the shell's idiom at fifty-one sites. A thread that
+/// panicked while holding `shell.ui` poisoned it, and the next menu refresh,
+/// tray update or quit then panicked too.
+#[test]
+fn a_lock_poisoned_by_a_panic_is_still_usable() {
+    use super::super::LockOrRecover;
+    use std::sync::{Arc, Mutex};
+
+    let shared = Arc::new(Mutex::new(1));
+    let poisoner = Arc::clone(&shared);
+    let _ = std::thread::spawn(move || {
+        let mut value = poisoner.lock().unwrap();
+        *value = 2;
+        panic!("a background thread failed while holding the lock");
+    })
+    .join();
+
+    assert!(shared.is_poisoned(), "the setup did not poison the lock");
+    assert_eq!(
+        *shared.lock_or_recover(),
+        2,
+        "the last value written is kept"
+    );
+    *shared.lock_or_recover() = 3;
+    assert_eq!(*shared.lock_or_recover(), 3);
+}

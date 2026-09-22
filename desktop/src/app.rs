@@ -189,7 +189,7 @@ pub(crate) fn run() {
                     // allowed to hold up a window the user can already see.
                     {
                         let shell: State<Shell> = handle.state();
-                        let mut ui = shell.ui.lock().unwrap();
+                        let mut ui = shell.ui.lock_or_recover();
                         ui.url = target.url.clone();
                         ui.api_url = target.api_url.clone();
                         ui.running = true;
@@ -209,7 +209,7 @@ pub(crate) fn run() {
                         let stand_down = |failure: Option<String>| {
                             let shell: State<Shell> = handle.state();
                             let snapshot = {
-                                let mut ui = shell.ui.lock().unwrap();
+                                let mut ui = shell.ui.lock_or_recover();
                                 ui.ready = false;
                                 if let Some(error) = failure {
                                     eprintln!("[desktop-resume] {error}");
@@ -268,7 +268,7 @@ pub(crate) fn run() {
                         let report = |error: String, code: Option<&str>| {
                             let shell: State<Shell> = handle.state();
                             let snapshot = {
-                                let mut ui = shell.ui.lock().unwrap();
+                                let mut ui = shell.ui.lock_or_recover();
                                 ui.error = true;
                                 ui.status = error;
                                 if let Some(code) = code {
@@ -372,7 +372,7 @@ pub(crate) fn run() {
                     // closing the last window is normal.
                     let snapshot = {
                         let shell: State<Shell> = app.state();
-                        let ui = shell.ui.lock().unwrap();
+                        let ui = shell.ui.lock_or_recover();
                         ui.clone()
                     };
                     match reopen_target(

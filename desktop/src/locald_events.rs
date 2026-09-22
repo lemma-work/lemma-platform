@@ -384,7 +384,7 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
     }
     let event_operation_id = locald_event_operation_id(event);
     if let Some(event_operation_id) = event_operation_id {
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         match admit_locald_event(
             &ui.active_operation_id,
             &ui.completed_operation_ids,
@@ -399,7 +399,7 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
     // Every reply that carries Agent Host state refreshes the tray, so a change
     // made in one surface shows in the others without anyone polling.
     if let Some(status) = event.get("agent_host").filter(|value| value.is_object()) {
-        *shell.agent_host_status.lock().unwrap() = Some(status.clone());
+        *shell.agent_host_status.lock_or_recover() = Some(status.clone());
         refresh_agent_host_tray(app, status);
     }
     // Same reason, for sharing: several events carry it, and Quit needs the last
@@ -409,7 +409,7 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
         .and_then(|sharing| sharing.get("mode"))
         .and_then(Value::as_str)
     {
-        *shell.sharing_mode.lock().unwrap() = Some(mode.to_owned());
+        *shell.sharing_mode.lock_or_recover() = Some(mode.to_owned());
     }
 
     if kind == "log" {
@@ -417,7 +417,7 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
         return;
     }
     let (snapshot, mut outcome) = {
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         let outcome = apply_locald_event(&mut ui, kind, event);
         (ui.clone(), outcome)
     };
@@ -469,7 +469,7 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
             std::thread::sleep(Duration::from_secs(8));
             let should_recover = {
                 let shell: State<Shell> = app.state();
-                let ui = shell.ui.lock().unwrap();
+                let ui = shell.ui.lock_or_recover();
                 ui.terminal_recovery_pending && ui.error && !ui.ready && ui.mode == "local"
             };
             if should_recover {

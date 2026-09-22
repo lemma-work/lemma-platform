@@ -94,13 +94,13 @@ pub(crate) fn ensure_runtime_artifacts_inner(
     let install_operation_id = operation_id("runtime-install");
     {
         let shell: State<Shell> = app.state();
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         ui.active_operation_id = install_operation_id.clone();
     }
     telemetry::note(telemetry::InstallEvent::RuntimeInstallStarted);
     {
         let shell: State<Shell> = app.state();
-        shell.ui.lock().unwrap().installed_this_launch = true;
+        shell.ui.lock_or_recover().installed_this_launch = true;
     }
     // Where the install got to, for the failure event. A install that dies is
     // only useful to hear about if we know which step died, and the progress
@@ -207,7 +207,7 @@ pub(crate) fn ensure_runtime_artifacts_inner(
     );
     {
         let shell: State<Shell> = app.state();
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         if ui.active_operation_id == install_operation_id {
             ui.active_operation_id.clear();
         }
@@ -390,7 +390,7 @@ pub(crate) fn emit_runtime_install_progress(
     emit_log(app, &detail);
     let shell: State<Shell> = app.state();
     let snapshot = {
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         ui.setup = true;
         ui.phase = label.to_owned();
         ui.phase_key = stage.to_owned();
@@ -409,7 +409,7 @@ pub(crate) fn emit_runtime_install_progress(
 pub(crate) fn emit_runtime_install_error(app: &AppHandle, message: &str) {
     let shell: State<Shell> = app.state();
     let snapshot = {
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         ui.setup = true;
         ui.phase = "Local runtime setup".into();
         ui.phase_key = "runtime-install".into();
@@ -478,7 +478,7 @@ pub(crate) fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {
         return Err("runtime repair is available only for a local workspace".into());
     }
     let shell: State<Shell> = app.state();
-    let _install_guard = shell.runtime_install.lock().unwrap();
+    let _install_guard = shell.runtime_install.lock_or_recover();
     require_no_recovery(&shell)?;
     let config = read_config();
     if config

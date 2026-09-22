@@ -1,5 +1,25 @@
 use super::*;
 
+/// Take a lock without letting one panic take the whole app down with it.
+///
+/// A poisoned mutex means some thread panicked while holding it. With
+/// `lock().unwrap()` -- the shell's idiom at fifty-one sites -- every later
+/// lock of the same mutex panics too, so one fault on a background thread
+/// became a crash on the next menu refresh, tray update or quit. Everything
+/// behind these locks is display state or a `Mutex<()>` used for exclusion;
+/// continuing with the last value written is always better than closing the
+/// window on the user. The agent-host has recovered this way throughout.
+pub(crate) trait LockOrRecover<T> {
+    fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> LockOrRecover<T> for std::sync::Mutex<T> {
+    fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 #[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UiState {
@@ -332,6 +352,6 @@ pub(crate) static REMEMBERED_ACCENT: Mutex<Option<(u8, u8, u8)>> = Mutex::new(No
 #[tauri::command]
 pub(crate) fn get_state(app: AppHandle) -> UiState {
     let shell: State<Shell> = app.state();
-    let snapshot = shell.ui.lock().unwrap().clone();
+    let snapshot = shell.ui.lock_or_recover().clone();
     snapshot
 }
