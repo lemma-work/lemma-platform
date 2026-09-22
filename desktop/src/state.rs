@@ -207,8 +207,10 @@ pub(crate) struct AppUpdateStatus {
     pub(crate) channel: &'static str,
     pub(crate) current_version: &'static str,
     pub(crate) build_commit: Option<&'static str>,
-    /// False for a nightly or a development build. The UI explains why rather
-    /// than silently omitting the control.
+    /// False for a development build, or one with no updater key. Nightly is
+    /// *not* excluded -- it updates to nightly on its own feed, which is what
+    /// keeps the mechanism exercised between releases. The UI explains why
+    /// rather than silently omitting the control.
     pub(crate) updates_supported: bool,
     pub(crate) available_version: Option<String>,
     /// Bytes of runtime the *next* launch downloads after an app update, read

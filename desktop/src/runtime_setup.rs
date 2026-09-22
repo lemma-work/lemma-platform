@@ -326,7 +326,14 @@ pub(crate) fn activate_installed_runtime(
         .ok_or("installed runtime has no release root")?
         .to_string_lossy()
         .into_owned();
-    let next = json!({"release": installed.release, "root": root});
+    // The Postgres major goes on the record at activation, so the compatibility
+    // answer does not depend on a manifest staying readable for the life of the
+    // installation. Derived, not assumed: an activation that cannot read it
+    // records nothing and `installed_postgres_major` falls back to the disk.
+    let mut next = json!({"release": installed.release, "root": root});
+    if let Some(major) = runtime_postgres_major(&installed.host_pack_root) {
+        next["dataCompatibility"] = json!({"postgres_major": major});
+    }
     write_config(|config| {
         let current = config
             .get("installedRuntime")
@@ -430,13 +437,6 @@ pub(crate) fn prepare_runtime_impl(app: AppHandle) -> Result<(), String> {
         &app,
         json!({"cmd":"runtime.prepare", "id":"shell-runtime-prepare"}),
     )
-}
-
-/// The Postgres major this installation's data was created with, if recorded.
-pub(crate) fn installed_postgres_major() -> Option<u64> {
-    read_config()
-        .pointer("/installedRuntime/dataCompatibility/postgres_major")
-        .and_then(Value::as_u64)
 }
 
 /// Where each platform keeps the disk holding this installation's databases.

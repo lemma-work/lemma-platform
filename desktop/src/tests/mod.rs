@@ -17,6 +17,7 @@ mod quit_prompt;
 mod runtime;
 mod splash;
 mod telemetry_privacy;
+mod update_compatibility;
 mod update_install;
 mod update_single_flight;
 mod window_placement;
