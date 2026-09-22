@@ -13,7 +13,7 @@ fn no_lock_is_held_across_the_runtime_install() {
         .find("ensure_runtime_artifacts(app)")
         .expect("ensure_locald installs the runtime");
     let connect = body
-        .find("locald_connect.lock()")
+        .find("locald_connect.lock_or_recover()")
         .expect("ensure_locald takes the connect guard");
     assert!(
         install < connect,
@@ -21,7 +21,7 @@ fn no_lock_is_held_across_the_runtime_install() {
          not inside it"
     );
     assert!(
-        body.contains("runtime_install.lock()"),
+        body.contains("runtime_install.lock_or_recover()"),
         "the install still needs its own single-flight so two callers cannot \
          download at once"
     );
