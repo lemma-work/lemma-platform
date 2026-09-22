@@ -31,6 +31,7 @@ from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderCapability,
     ProviderInstance,
+    ProviderRejected,
     SandboxEndpoint,
     require_capability,
 )
@@ -39,6 +40,9 @@ from app.modules.workspace.services.browser_proxy import (
     BROWSER_PROXY_DECISION_PATH,
     browser_proxy_for,
     decision_bytes,
+)
+from app.modules.workspace.services.browser_relay_commands import (
+    ENSURE_DISPLAY as _ENSURE_DISPLAY,
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
@@ -59,6 +63,26 @@ _QUICK_TIMEOUT_SECONDS = 30.0
 
 class BrowserRelayUnavailable(RuntimeError):
     """The relay did not answer, or this image does not have one."""
+
+
+class BrowserRelayNotServed(BrowserRelayUnavailable):
+    """This sandbox does not publish the relay's port at all.
+
+    The second half of its parent's sentence, said on its own, because the two
+    halves have different remedies: a relay that did not answer may answer in a
+    moment, and a port the fabric does not serve will not open however long
+    anyone waits. A viewer told the first retries and a viewer told the second
+    is done.
+
+    A subclass rather than a type of its own so that every caller which already
+    degrades on "the browser is out of reach" keeps degrading -- the sign-in
+    flow, the settings page, the page-url poll -- and only the two places that
+    care about the difference have to name it. Before this, the provider's
+    `ProviderRejected` reached those callers untranslated and none of them
+    caught it: it left the view socket as an unhandled exception, which the
+    pane read as an ordinary drop and retried for ever, and it made
+    `browser_sign_in` a 500.
+    """
 
 
 def relay_token(provider_id: str) -> str:
@@ -106,75 +130,6 @@ class ProfileCookies(TypedDict):
     signed_in: list[str]
 
 
-#: Bring the display stack up, on this image or on the one before it.
-#:
-#: `lemma-ensure-display` is `start-browser` renamed. The rename ships in the
-#: image and the image rollout is deliberately deferred, so for as long as
-#: that gap is open a backend that only knew the new name would fail to start
-#: the browser at all on every sandbox still running the old one -- not
-#: degrade, fail: the command does not exist, the relay never comes up, and
-#: the viewer gets "the browser relay did not start".
-#:
-#: Falling back costs one `command -v`. It comes out when the images are
-#: rolled, and until then this is the difference between a deploy that is
-#: safe in either order and one that is not.
-#:
-#: `start-vnc-bridge` is the viewing half -- x11vnc and websockify, 66 MiB
-#: measured -- which `lemma-ensure-display` no longer starts, because an
-#: agent doing research pays for it and nobody is watching. This is the
-#: viewer's own path, so this is where it is asked for. Guarded by
-#: `command -v` for the same rollout reason as the line above: on an image
-#: that predates the split, the two are already running and there is
-#: nothing to start.
-#: The proxy decision, applied here as well as in the script, and this is
-#: the half that reaches the fleet that exists today.
-#:
-#: The script reads the decision file itself -- but the script lives in the
-#: *image*, and the profile digest is deliberately not bumped in this branch,
-#: because bumping it refuses reuse of every existing sandbox and on E2B that
-#: means a new disk and a person's files gone. So on every sandbox already
-#: running, `lemma-ensure-display` is still the old one, which knows only
-#: `AGENT_BROWSER_PROXY`. Without these lines the server could not withdraw a
-#: proxy from a single sandbox currently proxied -- which is the entire
-#: feature, aimed exactly at the fleet that cannot get the new script.
-#:
-#: Harmless on a new image, and deliberately so: that script begins by
-#: `unset`ting `AGENT_BROWSER_PROXY` and reading the file itself, so the
-#: export below is overwritten by the same answer it came from. The two
-#: cannot disagree, because both read one file.
-#:
-#: Deletable when the image has rolled everywhere, like the `command -v`
-#: fallbacks around it.
-_APPLY_PROXY_DECISION = (
-    f'if [ -r "{BROWSER_PROXY_DECISION_PATH}" ]; then '
-    # `|| true`, never `|| VALUE=`: `read` returns non-zero at end-of-file
-    # without a trailing newline and has already assigned the line by then,
-    # and the server writes the URL unterminated. Clearing it there is the
-    # bug that made the whole mechanism inert in the script.
-    f'  IFS= read -r LEMMA_PROXY < "{BROWSER_PROXY_DECISION_PATH}" || true; '
-    '  if [ -n "${LEMMA_PROXY:-}" ]; then '
-    '    export AGENT_BROWSER_PROXY="$LEMMA_PROXY"; '
-    "  else "
-    # An empty decision is the server saying "no proxy", which has to be able
-    # to undo a value baked into an older sandbox's environment at create.
-    "    unset AGENT_BROWSER_PROXY; "
-    "  fi; "
-    "  unset LEMMA_PROXY; "
-    "fi; "
-)
-
-_ENSURE_DISPLAY = (
-    _APPLY_PROXY_DECISION + "if command -v lemma-ensure-display >/dev/null 2>&1; then "
-    "  lemma-ensure-display; "
-    "else "
-    "  start-browser; "
-    "fi; "
-    "if command -v start-vnc-bridge >/dev/null 2>&1; then "
-    "  start-vnc-bridge; "
-    "fi"
-)
-
-
 class BrowserRelayClient:
     """One sandbox's relay, reached through whatever door its fabric has."""
 
@@ -186,9 +141,17 @@ class BrowserRelayClient:
     async def _endpoint(self, *, deadline_seconds: float) -> SandboxEndpoint:
         require_capability(self._provider, ProviderCapability.PORT_REACH)
         deadline = datetime.now(timezone.utc) + timedelta(seconds=deadline_seconds)
-        return await self._provider.reach_port(
-            self._instance, port=WORKSPACE_BROWSER_RELAY_PORT, deadline_at=deadline
-        )
+        try:
+            return await self._provider.reach_port(
+                self._instance, port=WORKSPACE_BROWSER_RELAY_PORT, deadline_at=deadline
+            )
+        except ProviderRejected as exc:
+            # The fabric saying it does not publish this port. Every caller
+            # here is one that already knows what to do with a browser it
+            # cannot reach; none of them knew what a `ProviderRejected` was.
+            raise BrowserRelayNotServed(
+                f"this sandbox does not serve the browser relay: {exc}"
+            ) from exc
 
     async def deliver_browser_proxy(self, sandbox_id: UUID, kind: SandboxKind) -> None:
         """Tell the sandbox whether to proxy its browser, and through what.
@@ -583,6 +546,7 @@ def _detail(response: httpx.Response) -> str:
 
 __all__ = [
     "BrowserRelayClient",
+    "BrowserRelayNotServed",
     "BrowserRelayUnavailable",
     "RELAY_TOKEN_HEADER",
     "RELAY_TOKEN_PATH",

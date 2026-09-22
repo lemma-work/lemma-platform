@@ -299,3 +299,42 @@ async def test_bringing_a_viewer_up_asks_for_the_whole_display(_key) -> None:
         assert "start-vnc-bridge" in started[0]
     finally:
         relay.close()
+
+
+async def test_a_fabric_that_does_not_publish_the_relays_port_says_so_in_its_own_type(
+    _key,
+) -> None:
+    """A refusal from the fabric has to arrive as a browser failure.
+
+    `reach_port` raises `ProviderRejected`, which is the provider layer's word
+    and which nothing above this knew. It reached the view socket as an
+    unhandled exception — read by the pane as an ordinary drop and retried for
+    ever — and made `browser_sign_in` a 500. Every caller here already knows
+    what to do with a browser it cannot reach, so it is told in that language.
+
+    A `BrowserRelayUnavailable` and not merely convertible to one: the sign-in
+    flow and the settings page catch the parent and degrade, and they must
+    keep degrading without learning a second name.
+    """
+    from app.modules.workspace.providers.base import ProviderRejected
+    from app.modules.workspace.services.browser_relay_client import (
+        BrowserRelayNotServed,
+        BrowserRelayUnavailable,
+    )
+
+    class _RefusingProvider:
+        capabilities = frozenset({ProviderCapability.PORT_REACH})
+
+        async def reach_port(
+            self, _instance: object, *, port: int, deadline_at: datetime
+        ) -> SandboxEndpoint:
+            del deadline_at
+            raise ProviderRejected(
+                f"managed runtime does not expose sandbox port {port}"
+            )
+
+    with pytest.raises(BrowserRelayNotServed) as raised:
+        await _client(_RefusingProvider()).health()
+
+    assert isinstance(raised.value, BrowserRelayUnavailable)
+    assert "4850" in str(raised.value)

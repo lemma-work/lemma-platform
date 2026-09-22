@@ -26,10 +26,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
-from supertokens_python.recipe.session.asyncio import (
-    get_session_without_request_response,
-)
-
 from app.core.api.dependencies import CurrentUser
 from app.core.request_context import create_inherited_task
 
@@ -37,7 +33,12 @@ from app.core.config import settings
 from app.core.cors import get_allowed_cors_origin_regex
 from app.core.log.log import get_logger
 from app.modules.workspace.services.browser_relay_client import (
+    BrowserRelayNotServed,
     BrowserRelayUnavailable,
+)
+from app.modules.workspace.api.controllers.browser_view_session import (
+    UserIdResolver,
+    user_id_resolver,
 )
 from app.modules.workspace.api.controllers.browser_view_watchers import (
     watch_begun,
@@ -304,39 +305,6 @@ async def resize_display(
     return DisplaySizeResponse(size=size or None)
 
 
-async def _resolve_user_id(websocket: WebSocket):
-    """Whose session this handshake carries.
-
-    Same order as the datastore changes socket: bearer for the CLI and SDK, the
-    cookie for a browser on our own origin, then an `access_token` query
-    parameter for a browser that cannot attach the cookie. The query parameter
-    is not a weakening -- it is the only way a browser can authenticate a
-    WebSocket at all, since the API forbids setting headers on a handshake.
-    """
-    token: str | None = None
-    authorization = websocket.headers.get("authorization") or ""
-    scheme, _, raw = authorization.partition(" ")
-    if scheme.lower() == "bearer" and raw.strip():
-        token = raw.strip()
-    if token is None:
-        token = (
-            websocket.cookies.get("sAccessToken")
-            or websocket.cookies.get("st-access-token")
-            or websocket.query_params.get("access_token")
-        )
-    if not token:
-        raise PermissionError("the browser view needs a session")
-    session = await get_session_without_request_response(
-        token, anti_csrf_check=False, session_required=True
-    )
-    if session is None:
-        # `session_required=True` is documented to raise rather than return
-        # None, but the signature says otherwise and this is the one place a
-        # wrong answer would be an unauthenticated socket that got accepted.
-        raise PermissionError("the session could not be read")
-    return session.get_user_id()
-
-
 #: How often to say the sandbox is still wanted. Comfortably inside the
 #: shortest idle window anyone runs, and cheap: one row update.
 _KEEP_AWAKE_SECONDS = 60.0
@@ -461,6 +429,7 @@ async def browser_view(
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
     origins: Annotated[tuple[str, ...], Depends(allowed_origins)],
     origin_pattern: Annotated[str | None, Depends(allowed_origin_pattern)],
+    resolve_user_id: Annotated[UserIdResolver, Depends(user_id_resolver)],
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
     conversation: UUID | None = Query(default=None),
@@ -499,7 +468,7 @@ async def browser_view(
         return
 
     try:
-        user_id = await _resolve_user_id(websocket)
+        user_id = await resolve_user_id(websocket)
     except Exception:
         # Broad because the session library raises several unrelated types for
         # the same fact -- expired, malformed, revoked -- and the answer to all
@@ -523,6 +492,21 @@ async def browser_view(
     except SandboxCapabilityUnsupported:
         logger.warning("workspace.browser_view.unsupported.denied")
         await _refuse(websocket, CLOSE_UNSUPPORTED)
+        await service.close()
+        return
+    except BrowserRelayNotServed as exc:
+        # Before its parent below, because the pane branches on which of the
+        # two it was. A relay that did not answer may answer on the next
+        # attempt, so `CLOSE_NO_BROWSER` is retried; a port the fabric does not
+        # publish will not open however many times anybody asks, so this is one
+        # of the codes the pane stops on. Untyped, this arrived as a
+        # `ProviderRejected` nothing caught, and an unhandled exception in a
+        # socket handler reaches the pane as an ordinary drop -- which it
+        # retried, for ever, against a port that was never going to open.
+        logger.warning(
+            "workspace.browser_view.relay_not_served.degraded", reason=str(exc)
+        )
+        await _refuse(websocket, CLOSE_RELAY_ABSENT)
         await service.close()
         return
     except BrowserRelayUnavailable as exc:

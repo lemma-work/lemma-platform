@@ -28,7 +28,6 @@ import asyncio
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,6 +36,13 @@ from uuid import UUID
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.lemma_local_config import (
+    MAX_REQUEST_BYTES as _MAX_REQUEST_BYTES,
+    MAX_RESPONSE_BYTES as _MAX_RESPONSE_BYTES,
+    LemmaLocalProviderConfig,
+    LocalBridgeError,
+    LocalBridgeNotFound,
+)
 from app.modules.workspace.providers.lemma_local_snapshot import (
     guest_id_of as _guest_id_of,
     is_running as _is_running,
@@ -64,48 +70,6 @@ from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeClient,
     WorkspaceRuntimeError,
 )
-
-# The bridge is a local process, so these bound a malfunctioning one rather
-# than a hostile one.
-_MAX_REQUEST_BYTES = 1024 * 1024
-_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-
-
-class LocalBridgeError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str = "local_runtime_failed",
-        retryable: bool = True,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.retryable = retryable
-
-
-class LocalBridgeNotFound(LocalBridgeError):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class LemmaLocalProviderConfig:
-    executable: str
-    request_timeout_seconds: float = 600
-    workspace_memory: str = "2g"
-    workspace_cpus: str = "2"
-    function_memory: str = "2g"
-    function_cpus: str = "4"
-    callback_required: bool = False
-    callback_url: str | None = None
-    callback_health_path: str = "/health"
-    callback_timeout_seconds: float = 30
-
-    def __post_init__(self) -> None:
-        if not self.executable:
-            raise ValueError("managed runtime bridge executable is required")
-        if self.request_timeout_seconds <= 0:
-            raise ValueError("managed runtime timeout must be positive")
 
 
 class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
@@ -432,11 +396,13 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         from sandbox_runtime.errors import (
             SandboxPathConflict,
             SandboxPathNotFound,
+            SandboxRejected,
             SandboxUnavailable,
         )
         from app.modules.workspace.providers.runtime_client import (
             WorkspaceRuntimeFileConflict,
             WorkspaceRuntimeFileNotFound,
+            WorkspaceRuntimeFileRejected,
         )
 
         @asynccontextmanager
@@ -451,6 +417,16 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                 raise SandboxPathNotFound(str(exc)) from exc
             except WorkspaceRuntimeFileConflict as exc:
                 raise SandboxPathConflict(str(exc)) from exc
+            except WorkspaceRuntimeFileRejected as exc:
+                # 413, 422 and 507: too big, not a path this runtime will take,
+                # no room. Docker has mapped these to a refusal since they
+                # existed and this did not, so on Desktop alone they fell
+                # through to `SandboxUnavailable` below -- which
+                # `with_backpressure` retries until the deadline. A file that
+                # is too large, or a guest whose disk is full, became a retry
+                # loop on the machine's single vsock control channel instead of
+                # one sentence saying what was wrong.
+                raise SandboxRejected(str(exc)) from exc
             except ProviderGone:
                 raise
             except (WorkspaceRuntimeError, LocalBridgeError) as exc:
