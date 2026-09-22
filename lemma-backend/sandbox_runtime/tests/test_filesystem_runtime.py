@@ -248,3 +248,60 @@ async def test_filesystem_rejects_relative_and_symlink_escape(tmp_path: Path) ->
     assert symlink_stat.json()["kind"] == "symlink"
     assert write_through_symlink.status_code == 422
     assert not (outside / "stolen").exists()
+
+
+async def test_a_delivered_secret_is_not_readable_by_the_rest_of_the_sandbox(
+    tmp_path: Path,
+) -> None:
+    """`mode` restricts the written file, and does so before it is visible.
+
+    Docker delivers a secret as a 0600 tar entry and E2B chmods after writing;
+    Desktop delivers through this endpoint, which took the runtime's umask and
+    produced 0644. The browser relay token is delivered this way, so on Desktop
+    alone every process in the sandbox could read it.
+    """
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    secret = str(tmp_path / "relay.token")
+    ordinary = str(tmp_path / "ordinary.txt")
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        restricted = await client.put(
+            "/files:content",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+            params={"path": secret, "mode": "600"},
+            content=b"a-relay-token",
+        )
+        plain = await client.put(
+            "/files:content",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+            params={"path": ordinary},
+            content=b"not a secret",
+        )
+
+    assert restricted.status_code == 200
+    assert plain.status_code == 200
+    assert Path(secret).read_bytes() == b"a-relay-token"
+    assert Path(secret).stat().st_mode & 0o777 == 0o600
+    # Unrestricted writes are untouched by this: the parameter narrows a file,
+    # it does not become a new default.
+    assert Path(ordinary).stat().st_mode & 0o777 != 0o600
+
+
+async def test_a_mode_that_is_not_three_octal_digits_is_refused(tmp_path: Path) -> None:
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        for rejected in ("4755", "abc", "8", "-600"):
+            response = await client.put(
+                "/files:content",
+                headers={**HEADERS, "Content-Type": "application/octet-stream"},
+                params={"path": str(tmp_path / "x.bin"), "mode": rejected},
+                content=b"x",
+            )
+            assert response.status_code == 422, rejected

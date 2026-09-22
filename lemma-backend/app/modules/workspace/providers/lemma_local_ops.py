@@ -244,16 +244,24 @@ class LemmaLocalOpsMixin:
         deadline_at: datetime,
     ) -> None:
         """Write it through the guest runtime, which is the same protocol Docker uses."""
+        _, _, name = path.rpartition("/")
+        if not name:
+            raise ProviderRejected(f"{path!r} does not name a file")
 
         async def _one_chunk() -> AsyncIterator[bytes]:
             yield value
 
         async with self._ops(instance, deadline_at) as client:
+            # 0600, like Docker's tar entry and E2B's chmod. Delivered through
+            # the ordinary file API, this took the runtime's umask and landed
+            # 0644 -- so on Desktop alone the browser relay token was readable
+            # by every process in the sandbox, and on no other fabric was it.
             await client.write_file(
                 path,
                 _one_chunk(),
                 expected_sha256=None,
                 deadline_at=deadline_at,
+                mode=0o600,
             )
 
 

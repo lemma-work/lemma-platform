@@ -361,10 +361,13 @@ class WorkspaceRuntimeClient:
         *,
         expected_sha256: str | None,
         deadline_at: datetime,
+        mode: int | None = None,
     ) -> FileStat:
         params = {"path": path}
         if expected_sha256 is not None:
             params["expected_sha256"] = expected_sha256
+        if mode is not None:
+            params["mode"] = format(mode, "03o")
         response = await self._request(
             "PUT",
             "/files:content",

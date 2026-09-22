@@ -443,12 +443,17 @@ def create_app(
         expected_sha256: str | None = Query(
             default=None, pattern=r"^sha256:[0-9a-f]{64}$"
         ),
+        # Permission bits for the written file, as an octal string. Only used
+        # to deliver a secret, which is why the range is narrow: a caller may
+        # restrict a file, never widen one beyond what a umask would give.
+        mode: str | None = Query(default=None, pattern=r"^0?[0-7]{3}$"),
         _auth: None = Depends(authenticate),
     ) -> RuntimeFileStatResponse:
         stat = await filesystem.write_stream(
             path,
             request.stream(),
             expected_sha256=expected_sha256,
+            mode=int(mode, 8) if mode is not None else None,
         )
         return RuntimeFileStatResponse.from_domain(stat)
 
