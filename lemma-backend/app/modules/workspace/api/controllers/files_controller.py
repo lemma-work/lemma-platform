@@ -521,6 +521,16 @@ def _as_http_error(exc: BaseException, path: str) -> HTTPException:
     for a file that is not there should get a 404 from either.
     """
     name = type(exc).__name__
+    if "Unauthorized" in name:
+        # Before the size branch below, which matches every refusal by the word
+        # "Rejected": this one is Lemma failing to authenticate to its own
+        # sandbox, and telling the user their file was too large sent them
+        # looking for a problem they did not have.
+        logger.warning("workspace.files.runtime_unauthorized.failed", exc_info=exc)
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Lemma could not authenticate to the workspace.",
+        )
     if "NotFound" in name:
         return HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"No such path: {path}"

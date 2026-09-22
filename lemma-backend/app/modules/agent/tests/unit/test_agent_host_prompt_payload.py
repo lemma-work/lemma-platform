@@ -513,6 +513,39 @@ class TestReplayedHistory:
         assert "Real skill body." in replayed
         assert "lemma-user" in replayed
 
+    def test_the_override_is_stripped_when_the_skill_stayed_encoded(self):
+        """A result `unwrap_mcp_content` could not unwrap is double-encoded.
+
+        More than one content block keeps the skill as JSON text inside a text
+        block, so the paragraph is escaped by the tool and again on replay. The
+        single-escaped needle missed it, on the path it most needed removing.
+        """
+        import json as _json
+
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _history_tool_result,
+        )
+        from app.modules.agent.tools.skills.pydantic_adapter import (
+            LOCAL_WORKSPACE_SKILL_OVERRIDE,
+            LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
+        )
+
+        skill = {
+            "name": "lemma-user",
+            "content": "Body." + LOCAL_WORKSPACE_SKILL_OVERRIDE,
+        }
+        envelope = {
+            "content": [
+                {"type": "text", "text": _json.dumps(skill)},
+                {"type": "text", "text": "a second block"},
+            ]
+        }
+
+        replayed = _history_tool_result(envelope)
+
+        assert LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER not in replayed
+        assert "Body." in replayed
+
     def test_an_ordinary_tool_result_is_untouched(self):
         from app.modules.agent.infrastructure.harnesses.remote_payload import (
             _history_tool_result,

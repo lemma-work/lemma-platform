@@ -267,7 +267,9 @@ class DockerOpsMixin:
         from sandbox_runtime.errors import (
             SandboxPathConflict,
             SandboxPathNotFound,
+            SandboxProcessNotFound,
             SandboxRejected,
+            SandboxUnauthorized,
             SandboxUnavailable,
         )
 
@@ -284,14 +286,14 @@ class DockerOpsMixin:
         except WorkspaceRuntimeFileRejected as exc:
             raise SandboxRejected(str(exc)) from exc
         except WorkspaceRuntimeProcessGone as exc:
-            # Matches E2B, which has raised `ProviderGone` for an unknown
-            # process since it existed. On this path it was
-            # `SandboxUnavailable`, so polling a process id that will never
-            # exist retried until the deadline.
-            raise ProviderGone(str(exc)) from exc
+            # Definitive, and about the process rather than the sandbox.
+            # `ProviderGone` would make the client forget its handle to a
+            # workspace that is fine; `SandboxUnavailable` would retry a
+            # process that will never exist until the deadline.
+            raise SandboxProcessNotFound(str(exc)) from exc
         except WorkspaceRuntimeUnauthorized as exc:
             # Definitive: this credential will not become valid by waiting.
-            raise SandboxRejected(str(exc)) from exc
+            raise SandboxUnauthorized(str(exc)) from exc
         except ProviderGone:
             raise
         except asyncio.TimeoutError as exc:

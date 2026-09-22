@@ -27,6 +27,8 @@ impl TargetWorker {
         let events_ready = Arc::clone(&self.events_ready);
         let reprobe_requested = Arc::clone(&self.reprobe_requested);
         let run_id = spec.agent_run_id;
+        let credential = crate::runtime::credentials::RunCredential::new(&paths.root, run_id);
+        let retire_credential = crate::runtime::credentials::RetireOnDrop(Arc::clone(&credential));
         // Captured before the task takes ownership of `adapter`, so a failure
         // can name the agent rather than describing it as an internal error.
         let adapter_name = adapter.spec.display_name.clone();
@@ -131,16 +133,10 @@ impl TargetWorker {
             // user pressed Stop.
             let asked_to_stop = cancel_rx.clone();
             let agent_environment = crate::runtime::credentials::agent_environment(
-                &paths.root,
-                run_id,
+                &retire_credential.0,
                 &spec.mcp,
                 crate::acp::run_environment(&spec.mcp),
             );
-            // Held for the rest of this task. The explicit removal below is
-            // the ordinary path; this is the one that survives `handle.abort()`,
-            // which drops the task at an await point and would otherwise leave
-            // a delegated credential on disk.
-            let _credential = crate::runtime::credentials::RunCredential::new(&paths.root, run_id);
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
@@ -275,6 +271,7 @@ impl TargetWorker {
                 handle: OwnedTask(handle),
                 cancel: cancel_tx,
                 kill_at: None,
+                credential,
             },
         );
     }

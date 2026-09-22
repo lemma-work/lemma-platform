@@ -268,3 +268,38 @@ async def test_a_bridge_that_cannot_be_started_is_not_a_missing_sandbox(
         await provider.create_directory(
             _instance(uuid4()), path="/workspace/x", deadline_at=_deadline()
         )
+
+
+async def test_an_unknown_process_is_not_a_lost_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale process id must not cost the caller its workspace handle.
+
+    `LocalSandboxClient.read_process_output` treats `ProviderGone` as a dead
+    sandbox and forgets its handle, so the next operation re-ensures the whole
+    workspace. Mapping the runtime's 404 for an unknown process to that word
+    made polling a stale id look like losing the sandbox. It is a missing
+    process, and definitive.
+    """
+    from app.modules.workspace.providers.base import ProviderGone
+    from sandbox_runtime.errors import SandboxProcessNotFound
+
+    runtime = _FixedStatusRuntime(404)
+    try:
+        monkeypatch.setenv("RUNTIME_URL", runtime.url)
+        provider = LemmaLocalSandboxProvider(
+            LemmaLocalProviderConfig(executable=str(_bridge(tmp_path, _BRIDGE))),
+            RuntimeCredentialSigner(key=b"k" * 32),
+        )
+        with pytest.raises(SandboxProcessNotFound) as caught:
+            await provider.read_process_output(
+                _instance(uuid4()),
+                process_id=str(uuid4()),
+                after_sequence=0,
+                wait_seconds=0,
+                deadline_at=_deadline(),
+            )
+    finally:
+        runtime.close()
+
+    assert not isinstance(caught.value, ProviderGone)

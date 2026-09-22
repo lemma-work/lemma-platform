@@ -31,12 +31,12 @@ from sandbox_runtime.protocol import (
 from sandbox_runtime.errors import (
     SandboxPathConflict,
     SandboxPathNotFound,
+    SandboxProcessNotFound,
 )
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     PythonResult,
     ProviderCapability,
-    ProviderGone,
     ProviderInstance,
 )
 from app.modules.workspace.providers.e2b_common import (
@@ -121,7 +121,9 @@ class E2BOpsMixin(E2BReachMixin):
     async def _recall_pid(self, process_id: str) -> tuple[int, bool]:
         raw = await self._redis().get(pid_key(process_id))
         if raw is None:
-            raise ProviderGone(f"process {process_id} is no longer tracked")
+            # About the process, not the sandbox: `ProviderGone` here made the
+            # client forget its handle to a workspace that was fine.
+            raise SandboxProcessNotFound(f"process {process_id} is no longer tracked")
         return decode_pid(raw)
 
     async def list_processes(

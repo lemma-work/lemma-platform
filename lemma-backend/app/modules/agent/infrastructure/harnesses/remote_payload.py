@@ -432,8 +432,24 @@ def _history_tool_result(result: object) -> str:
     rendered = json.dumps(to_json_value(result), indent=2)
     if LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER not in rendered:
         return rendered
-    encoded = json.dumps(LOCAL_WORKSPACE_SKILL_OVERRIDE)[1:-1]
-    return rendered.replace(encoded, "")
+    # Every depth it can be stored at. A result `unwrap_mcp_content` could not
+    # unwrap -- more than one content block, say -- keeps the skill as JSON text
+    # inside a text block, so the paragraph is escaped once by the tool and
+    # again by the `json.dumps` above. Matching only the single-escaped form
+    # left it in, on exactly the path it most needed removing from.
+    for encoded in _encodings_of(LOCAL_WORKSPACE_SKILL_OVERRIDE, depth=3):
+        rendered = rendered.replace(encoded, "")
+    return rendered
+
+
+def _encodings_of(text: str, *, depth: int) -> list[str]:
+    """`text` as it reads after 1..depth rounds of JSON string escaping."""
+    forms = []
+    for _ in range(depth):
+        text = json.dumps(text)[1:-1]
+        forms.append(text)
+    # Deepest first, so a shallower form cannot match inside a deeper one.
+    return forms[::-1]
 
 
 def _message_text(message: Message) -> str:

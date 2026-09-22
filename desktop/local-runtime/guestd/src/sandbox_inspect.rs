@@ -30,9 +30,7 @@ pub(crate) fn snapshot_from_inspect(
     inspect: &serde_json::Map<String, Value>,
     endpoint_host: &str,
 ) -> Result<Value, GuestError> {
-    snapshot_from_inspect_with(sandbox_id, inspect, endpoint_host, &|host, port, path| {
-        crate::app_health::app_is_answering(host, port, path)
-    })
+    snapshot_from_inspect_with(sandbox_id, inspect, endpoint_host, &app_answers)
 }
 
 pub(crate) fn snapshot_from_inspect_with(
@@ -190,20 +188,14 @@ pub(crate) fn mapped_port(
         .and_then(|port| port.parse().ok())
 }
 
-pub(crate) fn eager_apps_healthy(snapshot: &Value, apps: &[AppSpec]) -> bool {
-    apps.iter().filter(|app| app.startup == "eager").all(|app| {
-        snapshot["status"]["apps"][&app.name]["private_url"]
-            .as_str()
-            .map(|base| {
-                let path = if app.health_path.starts_with('/') {
-                    app.health_path.clone()
-                } else {
-                    format!("/{}", app.health_path)
-                };
-                probe_http(&format!("{}{path}", base.trim_end_matches('/'))).is_ok()
-            })
-            .unwrap_or(false)
-    })
+/// Whether an app answers its health path, through the guest's one HTTP prober.
+///
+/// `probe_http` is what readiness has always used: any status below 500 is a
+/// server that is serving -- a 401 from the runtime, which wants a credential
+/// guestd does not hold, included -- and a 5xx is one that is not.
+pub(crate) fn app_answers(host: &str, port: u16, health_path: &str) -> bool {
+    let path = health_path.strip_prefix('/').unwrap_or(health_path);
+    probe_http(&format!("http://{host}:{port}/{path}")).is_ok()
 }
 
 impl<E: Engine + 'static> GuestService<E> {

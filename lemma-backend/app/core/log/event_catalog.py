@@ -855,6 +855,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.e2b.path_not_resolved.degraded': EventSpec('warning', frozenset({'error_type', 'path'})),
     'workspace.files.not_ready.degraded': EventSpec('warning', frozenset()),
     'workspace.files.read_failed.degraded': EventSpec('warning', frozenset()),
+    'workspace.files.runtime_unauthorized.failed': EventSpec('warning', frozenset()),
     'workspace.files.session_close.degraded': EventSpec('warning', frozenset()),
     'workspace.local_sandbox_client.adopted_sandbox_not_serving': EventSpec('warning', frozenset({'error_type', 'kind', 'sandbox_id'})),
     'workspace.mime_type.unknown': EventSpec('debug', frozenset()),

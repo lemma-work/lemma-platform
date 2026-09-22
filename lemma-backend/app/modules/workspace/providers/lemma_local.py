@@ -178,13 +178,13 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                         "lemma-sandbox-kind": spec.kind.value,
                         "lemma-epoch": str(spec.epoch),
                     },
-                    # Docker forwards `spec.env` and E2B forwards it; this was
-                    # the one fabric that took the caller's environment and
-                    # silently dropped it. The guest has accepted an `env` map
-                    # since it existed -- it writes one and passes it as
-                    # `--env-file` -- so nothing but the send was missing.
-                    # `LEMMA_MAX_FILE_TRANSFER_BYTES` is set this way, which is
-                    # why Desktop alone ran on the in-guest default.
+                    # The caller's environment, which Docker and E2B both
+                    # forward and this fabric used to drop. No caller sets one
+                    # today -- `SandboxService` builds the spec without `env` --
+                    # so this closes a contract gap rather than changing any
+                    # running sandbox. The guest validates every entry and
+                    # rejects the whole ensure on a bad one, which is the
+                    # behaviour a caller that starts setting it will want.
                     "env": dict(spec.env),
                     "runtime_token": (
                         self._runtime_credentials.token(guest_id) if workspace else None
@@ -421,7 +421,9 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         from sandbox_runtime.errors import (
             SandboxPathConflict,
             SandboxPathNotFound,
+            SandboxProcessNotFound,
             SandboxRejected,
+            SandboxUnauthorized,
             SandboxUnavailable,
         )
         from app.modules.workspace.providers.runtime_errors import (
@@ -455,14 +457,14 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                 # one sentence saying what was wrong.
                 raise SandboxRejected(str(exc)) from exc
             except WorkspaceRuntimeProcessGone as exc:
-                # Matches E2B, which has raised `ProviderGone` for an unknown
-                # process since it existed. On this path it was
-                # `SandboxUnavailable`, so polling a process id that will never
-                # exist retried until the deadline.
-                raise ProviderGone(str(exc)) from exc
+                # Definitive, and about the process rather than the sandbox.
+                # `ProviderGone` would make the client forget its handle to a
+                # workspace that is fine; `SandboxUnavailable` would retry a
+                # process that will never exist until the deadline.
+                raise SandboxProcessNotFound(str(exc)) from exc
             except WorkspaceRuntimeUnauthorized as exc:
                 # Definitive: this credential will not become valid by waiting.
-                raise SandboxRejected(str(exc)) from exc
+                raise SandboxUnauthorized(str(exc)) from exc
             except ProviderGone:
                 raise
             except asyncio.TimeoutError as exc:

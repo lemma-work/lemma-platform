@@ -148,9 +148,14 @@ impl TargetWorker {
             // the one copy a running agent can pick a new credential up from,
             // so a refresh that did not rewrite it would leave the agent's own
             // `lemma` commands failing while its MCP tools kept working.
+            //
+            // Through the run's own credential, so it is refused once the run
+            // has retired it. Journal state is not enough: an aborted run is
+            // not terminal there until `reap_finished`, and a bare write in
+            // that gap left a credential on disk that nothing would remove.
             if let Some(token) = mcp.get("token").and_then(serde_json::Value::as_str)
-                && let Err(error) =
-                    crate::runtime::credentials::write_run_token(&self.paths.root, run_id, token)
+                && let Some(active) = self.active_runs.get(&run_id)
+                && let Err(error) = active.credential.write(token)
             {
                 tracing::warn!(%run_id, %error, "could not rewrite the run credential file");
             }

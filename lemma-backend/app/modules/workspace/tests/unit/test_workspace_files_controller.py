@@ -210,6 +210,25 @@ def test_read_failures_map_to_something_the_caller_can_act_on(exc, expected) -> 
     assert controller._as_http_error(exc, f"{WORKSPACE_ROOT}/a").status_code == expected
 
 
+def test_a_refused_credential_is_not_reported_as_a_file_that_is_too_large() -> None:
+    """`SandboxUnauthorized` is a refusal, and refusals matched the size branch.
+
+    The size branch keys on the word "Rejected", which every refusal carries.
+    A runtime rejecting Lemma's own credential therefore reached the file
+    explorer as 413 "File is larger than this endpoint will serve" -- sending
+    the user after a problem with their file that they did not have.
+    """
+    from sandbox_runtime.errors import SandboxUnauthorized
+
+    error = controller._as_http_error(
+        SandboxUnauthorized("workspace runtime returned HTTP 401"),
+        f"{WORKSPACE_ROOT}/a",
+    )
+
+    assert error.status_code == 503
+    assert "larger" not in str(error.detail)
+
+
 def test_only_real_read_failures_are_dressed_as_a_status() -> None:
     """A defect must surface as a 500, not as "the workspace is busy"."""
     assert not isinstance(TypeError("bug"), controller._READ_FAILURES)

@@ -56,13 +56,13 @@ fn only_lemma_names_carrying_strings_are_accepted() {
 
 #[test]
 fn the_token_is_written_where_a_refresh_can_replace_it() {
-    use crate::runtime::credentials::{agent_environment, remove_run_token, write_run_token};
+    use crate::runtime::credentials::{RunCredential, agent_environment};
 
     let root = tempfile::tempdir().expect("temp dir");
-    let run_id = uuid::Uuid::new_v4();
+    let credential = RunCredential::new(root.path(), uuid::Uuid::new_v4());
     let mcp = json!({"token": "first", "environment": {"LEMMA_TOKEN": "first"}});
 
-    let environment = agent_environment(root.path(), run_id, &mcp, run_environment(&mcp));
+    let environment = agent_environment(&credential, &mcp, run_environment(&mcp));
     let path = environment
         .get("LEMMA_TOKEN_FILE")
         .expect("a run publishes the path its credential can be re-read from");
@@ -70,7 +70,7 @@ fn the_token_is_written_where_a_refresh_can_replace_it() {
 
     // A mid-run refresh rewrites the same path, which is the only way a
     // credential reaches a process that has already been spawned.
-    write_run_token(root.path(), run_id, "second").expect("rewrite");
+    credential.write("second").expect("rewrite");
     assert_eq!(std::fs::read_to_string(path).unwrap(), "second");
 
     #[cfg(unix)]
@@ -83,28 +83,20 @@ fn the_token_is_written_where_a_refresh_can_replace_it() {
             "a credential file must not be readable by others"
         );
     }
-
-    remove_run_token(root.path(), run_id);
-    assert!(
-        !std::path::Path::new(path).exists(),
-        "a finished run must not leave its credential behind"
-    );
 }
 
 #[test]
 fn a_dropped_run_takes_its_credential_with_it() {
-    use crate::runtime::credentials::{RunCredential, write_run_token};
+    use crate::runtime::credentials::{RetireOnDrop, RunCredential};
 
     let root = tempfile::tempdir().expect("temp dir");
-    let run_id = uuid::Uuid::new_v4();
-    let path = write_run_token(root.path(), run_id, "delegated").expect("write");
+    let credential = RunCredential::new(root.path(), uuid::Uuid::new_v4());
+    let path = credential.write("delegated").expect("write").expect("live");
     assert!(path.exists());
 
     // `handle.abort()` drops the run's task wherever it happens to be awaiting,
     // so the removal at the end of the run body is never reached. Drop is.
-    {
-        let _credential = RunCredential::new(root.path(), run_id);
-    }
+    drop(RetireOnDrop(std::sync::Arc::clone(&credential)));
 
     assert!(
         !path.exists(),
@@ -113,18 +105,40 @@ fn a_dropped_run_takes_its_credential_with_it() {
 }
 
 #[test]
-fn a_refresh_never_leaves_a_half_written_token() {
-    use crate::runtime::credentials::write_run_token;
+fn a_refresh_after_the_run_ended_does_not_resurrect_the_file() {
+    use crate::runtime::credentials::{RetireOnDrop, RunCredential};
 
     let root = tempfile::tempdir().expect("temp dir");
-    let run_id = uuid::Uuid::new_v4();
-    let path = write_run_token(root.path(), run_id, "first-token").expect("write");
+    let credential = RunCredential::new(root.path(), uuid::Uuid::new_v4());
+    let path = credential.write("first").expect("write").expect("live");
+    drop(RetireOnDrop(std::sync::Arc::clone(&credential)));
+
+    // An aborted run is not terminal in the journal until `reap_finished`
+    // catches up, so a `REFRESH_CREDENTIAL` can still arrive. It used to write
+    // the file back, after the only thing that would remove it had run.
+    assert_eq!(credential.write("refreshed").expect("no error"), None);
+    assert!(
+        !path.exists(),
+        "a refresh recreated a retired run's credential"
+    );
+}
+
+#[test]
+fn a_refresh_never_leaves_a_half_written_token() {
+    use crate::runtime::credentials::RunCredential;
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let credential = RunCredential::new(root.path(), uuid::Uuid::new_v4());
+    let path = credential
+        .write("first-token")
+        .expect("write")
+        .expect("live");
 
     // A refresh rewrites the same path while an agent may be reading it. The
     // rename means a reader sees one whole token or the other, never an empty
     // file or a prefix.
     for token in ["a-much-longer-second-token", "third"] {
-        write_run_token(root.path(), run_id, token).expect("rewrite");
+        credential.write(token).expect("rewrite");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), token);
     }
 
@@ -143,16 +157,12 @@ fn a_refresh_never_leaves_a_half_written_token() {
 
 #[test]
 fn a_run_with_no_token_publishes_no_file() {
-    use crate::runtime::credentials::agent_environment;
+    use crate::runtime::credentials::{RunCredential, agent_environment};
 
     let root = tempfile::tempdir().expect("temp dir");
+    let credential = RunCredential::new(root.path(), uuid::Uuid::new_v4());
     let mcp = json!({"environment": {"LEMMA_BASE_URL": "http://localhost"}});
-    let environment = agent_environment(
-        root.path(),
-        uuid::Uuid::new_v4(),
-        &mcp,
-        run_environment(&mcp),
-    );
+    let environment = agent_environment(&credential, &mcp, run_environment(&mcp));
     assert!(!environment.contains_key("LEMMA_TOKEN_FILE"));
     assert!(environment.contains_key("LEMMA_BASE_URL"));
 }

@@ -153,3 +153,36 @@ async def test_a_real_non_zero_exit_is_still_a_failure(buffer) -> None:
     assert snapshot.state is ProcessState.FAILED
     assert snapshot.exit_code == 1
     assert snapshot.state in TERMINAL_PROCESS_STATES
+
+
+@pytest.mark.asyncio
+async def test_a_process_nobody_ever_started_is_not_reported_running(buffer) -> None:
+    """A bad id used to read as "running, no output" forever."""
+    from sandbox_runtime.errors import SandboxProcessNotFound
+
+    with pytest.raises(SandboxProcessNotFound):
+        await buffer.read("never-started", after_sequence=0)
+
+
+@pytest.mark.asyncio
+async def test_a_polled_silent_process_stays_known(buffer) -> None:
+    """Reading renews the retention window.
+
+    It was renewed only when output arrived or the state changed, so a process
+    that ran for over an hour without printing -- a background server with
+    output redirected, a long quiet build -- lost both keys and read as never
+    having existed while it was still running.
+    """
+    # The buffer's own client: the fixture already stands `fakeredis` in for
+    # it, and a second patch of the same seam would only duplicate that one.
+    redis = buffer._redis
+    await buffer.record_start("quiet")
+    state_key = buffer._state_key("quiet")
+
+    # Most of the window has elapsed with nothing written.
+    await redis.expire(state_key, 5)
+    await buffer.read("quiet", after_sequence=0)
+
+    assert await redis.ttl(state_key) > 5, "a read did not renew the window"
+    snapshot = await buffer.read("quiet", after_sequence=0)
+    assert snapshot.state is ProcessState.RUNNING
