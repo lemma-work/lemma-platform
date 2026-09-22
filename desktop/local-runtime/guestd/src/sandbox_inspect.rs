@@ -107,12 +107,13 @@ pub(crate) fn snapshot_from_inspect(
         // `ready` is what let the guest promise a browser relay that refused
         // every connection.
         let published = running && host_port.is_some();
-        // Only eager apps are probed. A lazy one is not expected to be up
-        // until something starts it, so dialling it would report a fault for
-        // the ordinary resting state -- and would pay a connect timeout on
-        // every snapshot to do it.
+        // Every app is probed, eager and lazy alike. Lazy is the case this
+        // exists for: the browser and its relay were reported `ready: true`
+        // from a mapped port while both refused every connection, and the
+        // backend dialled an endpoint the guest had just promised was good.
+        // Probing a lazy app that has not started costs a connection refused,
+        // which on a container on this host is immediate.
         let answering = published
-            && app.startup == "eager"
             && host_port.is_some_and(|port| {
                 crate::app_health::app_is_answering(endpoint_host, port, &app.health_path)
             });
@@ -122,8 +123,10 @@ pub(crate) fn snapshot_from_inspect(
                 "name": app.name,
                 "public_slug": app.public_slug,
                 "port": app.port,
+                // What the engine knows: it is running and a port is mapped.
                 "published": published,
-                "ready": if app.startup == "eager" { answering } else { published },
+                // What was asked: it answered its declared health path.
+                "ready": answering,
                 "private_url": host_port.map(|port| format!("http://{endpoint_host}:{port}")),
             }),
         );

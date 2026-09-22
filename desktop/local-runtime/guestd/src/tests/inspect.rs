@@ -36,16 +36,21 @@ fn an_eager_app_nothing_is_serving_is_published_but_not_ready() {
     assert_eq!(snapshot["status"]["ready"], false);
 }
 
-/// A lazy app is not probed, because not being up yet is its resting state.
+/// A lazy app that has not started is published and not ready.
+///
+/// This is the case the probe exists for. The browser and its relay are both
+/// lazy, and both were reported `ready: true` off a mapped port while refusing
+/// every connection -- so the backend dialled an endpoint the guest had just
+/// promised was good and got ECONNREFUSED.
 #[test]
-fn a_lazy_app_is_reported_on_what_the_engine_knows() {
+fn a_lazy_app_that_has_not_started_says_so() {
     let parsed: Value = serde_json::from_str(&inspect()).unwrap();
     let snapshot =
         snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "127.0.0.1").unwrap();
 
     let browser = &snapshot["status"]["apps"]["browser"];
-    assert_eq!(browser["published"], true);
-    assert_eq!(browser["ready"], true, "published is all a lazy app claims");
+    assert_eq!(browser["published"], true, "the engine did map the port");
+    assert_eq!(browser["ready"], false, "but nothing answered on it");
 }
 
 /// The resting state of every idle workspace, read off a real guest that
@@ -175,7 +180,11 @@ fn a_sandbox_reports_the_apps_it_was_created_with_including_the_relay() {
     let relay = &snapshot["status"]["apps"]["relay"];
     assert_eq!(relay["port"], 4850);
     assert_eq!(relay["private_url"], "http://192.168.64.2:49154");
-    assert_eq!(relay["ready"], true);
+    // Published, because the container declared and mapped it. Not ready:
+    // nothing has started the relay, and saying otherwise is the bug this
+    // whole probe exists to stop.
+    assert_eq!(relay["published"], true);
+    assert_eq!(relay["ready"], false);
 }
 
 /// A container created before the label existed still has to be answered for.

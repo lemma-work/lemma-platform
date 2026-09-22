@@ -13,7 +13,7 @@ it("preserves HTTP and stream failure reasons consistently", () => {
   expect(assistantFailureDetails(new Error("unknown"))).toEqual({ code: null, reason: null });
 });
 
-test('a runtime notice survives the status frame it arrives on', () => {
+it('a runtime notice survives the status frame it arrives on', () => {
   // The Agent Host writes these with a human sentence in `detail`, and the
   // backend forwards them as STATUS frames. `normalizeStatus` only recognises
   // the twelve run-lifecycle words, so every one of these normalised to
@@ -30,14 +30,14 @@ test('a runtime notice survives the status frame it arrives on', () => {
   });
 });
 
-test('a lifecycle status is still a status and not a notice', () => {
+it('a lifecycle status is still a status and not a notice', () => {
   expect(parseAssistantStreamEvent({
     type: 'status',
     data: { status: 'COMPLETED', detail: 'ignored' },
   })).toEqual({ status: 'COMPLETED' });
 });
 
-test('a status frame with nothing to say produces nothing', () => {
+it('a status frame with nothing to say produces nothing', () => {
   expect(parseAssistantStreamEvent({ type: 'status', data: { status: 'config_update' } })).toEqual({});
   expect(parseAssistantStreamEvent({ type: 'status', data: { detail: '   ' } })).toEqual({});
 });

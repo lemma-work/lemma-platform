@@ -64,12 +64,8 @@ fn protocol_requires_capability_and_rejects_tags() {
 #[test]
 fn status_and_exact_purge_fail_closed() {
     let root = tempdir().unwrap();
-    // The runtime has to answer for the sandbox to report ready: `ready` is now
-    // a probe of the declared health path, not a mapped port.
-    let runtime = serving_app();
-    let inspected = inspect_serving(runtime.port);
     let service = GuestService::new(
-        FakeEngine::new(vec![output(true, &inspected), output(true, &inspected)]),
+        FakeEngine::new(vec![output(true, &inspect()), output(true, &inspect())]),
         root.path().into(),
         Some("127.0.0.1".into()),
         "192.168.64.1".into(),
@@ -91,7 +87,14 @@ fn status_and_exact_purge_fail_closed() {
         }),
     });
 
-    assert_eq!(status.result.unwrap()["status"]["ready"], true);
+    // `published`, not `ready`. This test is about the purge fencing; `ready`
+    // is now the answer to a live health probe, and asserting it here would
+    // make an unrelated test depend on a socket round-trip. Readiness has its
+    // own tests, which stand a listener up on purpose.
+    assert_eq!(
+        status.result.unwrap()["status"]["apps"]["runtime"]["published"],
+        true
+    );
     assert_eq!(conflict.error.unwrap().code, "generation_conflict");
 }
 
