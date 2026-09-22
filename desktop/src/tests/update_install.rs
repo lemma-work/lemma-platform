@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::{launch_failure_state, stand_down_state};
 
 #[test]
 fn a_resume_that_did_not_pan_out_stops_claiming_the_workspace_is_ready() {
@@ -8,36 +9,63 @@ fn a_resume_that_did_not_pan_out_stops_claiming_the_workspace_is_ready() {
     // error -- so every path that gives up and shows the splash has to
     // clear `ready` first, or the two bounce the user between a splash and
     // a dead workspace.
+    let seeded = || UiState {
+        url: "http://app.lemma.localhost:52501".into(),
+        running: true,
+        ready: true,
+        ..UiState::default()
+    };
+
+    let mut ui = seeded();
+    stand_down_state(&mut ui, None);
+    assert!(!ui.ready, "a replaced daemon still takes back `ready`");
+    assert!(!ui.error, "a replaced daemon is not a failure");
+    assert!(ui.running, "the stack is coming back, not gone");
+
+    let mut ui = seeded();
+    stand_down_state(&mut ui, Some("locald did not answer".into()));
+    assert!(!ui.ready && !ui.running && ui.error);
+    assert_eq!(ui.error_code, "resume-failed");
+    assert_eq!(ui.status, "locald did not answer");
+
+    // And the resume worker has no way to the splash except through it.
     let source = shell_source();
-    let setup = {
-        let start = source.find(".setup(move |app| {").expect("setup exists");
-        let end = source[start..]
-            .find("\n        .build(")
-            .or_else(|| source[start..].find("\n        .run("))
-            .map_or(source.len(), |offset| start + offset);
-        &source[start..end]
-    };
-    let resume = {
-        let start = setup
-            .find("if let Some(target) = resume.clone()")
-            .expect("the resume branch exists");
-        let end = setup[start..]
-            .find("\n                } else {")
-            .map_or(setup.len(), |offset| start + offset);
-        &setup[start..end]
-    };
+    let worker = function_body(&source, "fn reconnect_after_resume(");
     assert!(
-        resume.contains("ui.ready = false;"),
-        "giving up on a resume must clear the optimistic ready flag"
-    );
-    assert_eq!(
-        resume.matches("show_splash(&handle);").count(),
-        1,
-        "the resume branch must reach the splash only through stand_down, \
+        !worker.contains("show_splash"),
+        "the resume worker must reach the splash only through stand_down, \
          which is what clears the state the splash reads"
+    );
+    assert!(
+        function_body(&source, "fn stand_down(").contains("stand_down_state("),
+        "stand_down clears the optimistic state before showing the splash"
     );
 }
 
+#[test]
+fn a_failed_start_request_is_no_longer_ready_but_a_failed_connect_keeps_its_state() {
+    let mut ui = UiState {
+        ready: true,
+        ..UiState::default()
+    };
+    launch_failure_state(&mut ui, "locald is not running".into(), None);
+    assert!(ui.error);
+    assert_eq!(ui.status, "locald is not running");
+    assert!(
+        ui.error_code.is_empty(),
+        "a connect failure carries no code"
+    );
+
+    launch_failure_state(
+        &mut ui,
+        "start was refused".into(),
+        Some("startup-request-failed"),
+    );
+    assert_eq!(ui.error_code, "startup-request-failed");
+    assert!(!ui.ready);
+}
+
+/// A build that was never stamped with a release channel -- a CI artifact, a
 /// developer's `cargo tauri dev` -- must never follow an update feed, and
 /// must say so rather than appearing configured.
 #[test]
