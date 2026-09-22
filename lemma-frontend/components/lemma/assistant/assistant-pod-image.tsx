@@ -38,9 +38,19 @@ export function isPodFilePath(src: string | undefined): src is string {
   return src.startsWith(POD_FILE_PREFIX);
 }
 
+/**
+ * The backend's download route, as the OpenAPI spec names it.
+ *
+ * Kept as the spec's own template so a test can look it up there: the route
+ * was once written here without its `datastore` segment, and the test beside
+ * it repeated the same string, so every image 404'd with both green.
+ */
+export const POD_FILE_DOWNLOAD_ROUTE = "/pods/{pod_id}/datastore/files/download";
+
 export function podFileDownloadHref(podId: string, path: string): string {
   const base = getLemmaApiBaseUrl().replace(/\/$/, "");
-  return `${base}/pods/${podId}/files/download?path=${encodeURIComponent(path)}`;
+  const route = POD_FILE_DOWNLOAD_ROUTE.replace("{pod_id}", encodeURIComponent(podId));
+  return `${base}${route}?path=${encodeURIComponent(path)}`;
 }
 
 export function podFileBrowserHref(podId: string, path: string): string {
