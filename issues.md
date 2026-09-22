@@ -244,3 +244,76 @@ failing scenarios, having reasoned that the unique index left only one candidate
 a name could mean. CI's unit lane — wider than the local `-m unit` lane —
 failed on the bundle test, which is what made the bundle path visible at all.
 The widening was reverted; this is what it had walked into.
+
+### DEV-DESK-001 — The viewer's VNC server polls the whole screen, by a flag nobody explained
+**Violates:** nothing written down. No statement bounds what a sandbox may spend
+while somebody watches it.
+**Severity:** question
+**Where:** `lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh:103`
+**Required:** unwritten, and that is the finding. `PS-BROWSER-030` says a person
+can watch and drive their own browser; it says nothing about what watching costs
+the sandbox they are watching.
+**Actual:** `x11vnc` is started with `-noshm -forever -shared -nopw -noxdamage
+-quiet -xrandr resize`. Every flag there carries a comment saying why —
+`-noshm` because MIT-SHM attach takes x11vnc down under this container's X
+server, `-xrandr resize` so the picture follows a `/display:resize` — except
+`-noxdamage`, which has none. Without the X DAMAGE extension x11vnc cannot be
+told which tiles changed, so while a client is attached it polls the framebuffer
+instead. The display starts at `WORKSPACE_XVFB_SCREEN=1440x960x24` and may be
+resized up to `1920x1200x24`.
+
+The file it was extracted from (`lemma-ensure-display.sh`, before #751 split the
+viewing half out) does not explain it either, and the squash of #751 is the only
+commit that has ever touched it, so there is no history to read.
+
+It may well be deliberate: Xvfb carries DAMAGE, but DAMAGE reports are a hint
+and dropping one shows as a stale region rather than as an error, which is
+exactly the kind of bug a `-noxdamage` gets added for and then never removed.
+**Why it matters:** on Desktop the sandbox has 2 vCPUs
+(`lemma-backend/app/modules/workspace/providers/lemma_local.py`,
+`workspace_cpus`) inside a guest with at most 4
+(`desktop/local-runtime/macos-vz/Sources/LemmaVZ/main.swift:104`), shared with
+Postgres, Redis, SuperTokens and containerd. Chromium there renders in software.
+An open pane is the difference between a machine that is idle and one that is
+not, and the person watching is on a laptop.
+**Fix:** measure it, do not guess. Run the same page in the same image with and
+without the flag, with a viewer attached and the display still, and compare
+`x11vnc`'s CPU. If DAMAGE is sound there, drop the flag; if it is not, keep it
+and write down which update it was measured to lose. Either way the comment is
+the deliverable.
+**How it was found:** reading the file during a desktop parity review, because
+it is the one line in it that does not say why.
+
+### DEV-DESK-002 — The guest was sized before a browser lived in it
+**Violates:** nothing written down.
+**Severity:** question
+**Where:** `desktop/local-runtime/macos-vz/Sources/LemmaVZ/main.swift:104` and
+`:108`; `desktop/local-runtime/guestd/src/lib.rs:153` and `:159`
+**Required:** unwritten. The nearest thing is the comment at `main.swift:105`,
+which says changing guest memory needs "lifecycle and workload qualification,
+not a guess" — a rule about *how* to move the number, not about what it should
+be.
+**Actual:** the VZ guest gets a fixed 4 GiB and `min(4, max(2, processors / 2))`
+vCPUs, and inside it run PostgreSQL, Redis, SuperTokens, containerd and every
+sandbox. A workspace sandbox is capped at 2 GiB / 2 CPUs and, since #622, its
+image runs Xvfb, a *headed* Chromium, matchbox, x11vnc, websockify and ffmpeg.
+Admission asks only that 640 MiB be free
+(`SANDBOX_MEMORY_REQUEST_BYTES` + `GUEST_MEMORY_HEADROOM_BYTES`), deliberately,
+because a ceiling is not a reservation — which is right, and says nothing about
+whether the ceiling fits.
+
+`lemma-backend/sandbox_runtime/sandbox_memory.py` records the other half from
+measurement: `/proc/meminfo` is not namespaced, so Chrome sizes its renderer
+limit and its V8 heaps off the *host's* `MemTotal`, and a 2 GB sandbox was
+measured running 34 renderers.
+**Why it matters:** the failure is an OOM kill inside the sandbox while somebody
+is watching their own browser, which reads as the browser crashing rather than
+as the machine being too small. Two conversations with panes open is two
+workspace sandboxes.
+**Fix:** the qualification the comment asks for — a browser held open in one
+workspace, then two, on a 16 GB Mac and on an 8 GB one, watching
+`memory.events`' `oom_kill` and the guest's own `MemAvailable`. Then either the
+guest's allocation moves or the workspace ceiling does, with the measurement
+written down beside whichever moved.
+**How it was found:** a desktop parity review, tracing what the browser surface
+added to a sandbox after the guest's size was last set.
