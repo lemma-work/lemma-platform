@@ -64,6 +64,10 @@ class WorkspaceDirectoryEnsureMixin:
     ) -> SandboxInfo:
         raise NotImplementedError
 
+    @classmethod
+    def forget_workspace(cls, user_id: UUID) -> None:  # pragma: no cover
+        raise NotImplementedError
+
     async def _ensure_workspace_directory(
         self,
         user_id: UUID,
@@ -192,6 +196,17 @@ class WorkspaceDirectoryEnsureMixin:
         # message -- so the one sentence saying why a workspace never came up
         # existed on every iteration and survived none of them.
         reason = str(last_error) if last_error else "no attempt completed"
+        # Everything remembered about this workspace was learned from a fabric
+        # that has now failed every attempt, so none of it is worth believing:
+        # the readiness cache would otherwise let the next request skip the
+        # ensure entirely and go straight to an operation against the same dead
+        # endpoint, for up to a minute.
+        #
+        # Forgetting, not replacing. On Desktop and E2B the sandbox *is* the
+        # storage -- `ProviderStorageKind.SANDBOX_NATIVE` -- so destroying the
+        # instance to get a fresh one would take the user's files with it.
+        # Recovery here means dropping what we think we know and asking again.
+        self.forget_workspace(user_id)
         # `/health/capabilities` said `ready` throughout an outage in which
         # every file listing timed out, because the startup probe only ever
         # proved a provider object could be built. An operation that gave up is

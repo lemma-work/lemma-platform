@@ -4,16 +4,48 @@ use super::*;
 
 #[test]
 fn snapshot_uses_guest_ip_and_exact_container_generation() {
-    let parsed: Value = serde_json::from_str(&inspect()).unwrap();
+    let app = serving_app();
+    let parsed: Value = serde_json::from_str(&inspect_serving(app.port)).unwrap();
     let snapshot =
-        snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "192.168.64.2").unwrap();
+        snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "127.0.0.1").unwrap();
 
     assert_eq!(snapshot["provider_id"], "sha256:exact-generation");
     assert_eq!(
         snapshot["status"]["runtime_url"],
-        "http://192.168.64.2:49152"
+        format!("http://127.0.0.1:{}", app.port)
     );
     assert_eq!(snapshot["status"]["ready"], true);
+}
+
+/// The lie this whole probe exists to stop telling.
+///
+/// A mapped port and a running container were reported as `ready: true`. On a
+/// real install that is exactly what the browser and its relay looked like
+/// while both refused every connection, so the backend dialled an endpoint the
+/// guest had just promised was good and got ECONNREFUSED.
+#[test]
+fn an_eager_app_nothing_is_serving_is_published_but_not_ready() {
+    // A port that is mapped in the engine's view and bound by nobody.
+    let parsed: Value = serde_json::from_str(&inspect()).unwrap();
+    let snapshot =
+        snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "127.0.0.1").unwrap();
+
+    let runtime = &snapshot["status"]["apps"]["runtime"];
+    assert_eq!(runtime["published"], true, "the engine did map the port");
+    assert_eq!(runtime["ready"], false, "but nothing answered on it");
+    assert_eq!(snapshot["status"]["ready"], false);
+}
+
+/// A lazy app is not probed, because not being up yet is its resting state.
+#[test]
+fn a_lazy_app_is_reported_on_what_the_engine_knows() {
+    let parsed: Value = serde_json::from_str(&inspect()).unwrap();
+    let snapshot =
+        snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "127.0.0.1").unwrap();
+
+    let browser = &snapshot["status"]["apps"]["browser"];
+    assert_eq!(browser["published"], true);
+    assert_eq!(browser["ready"], true, "published is all a lazy app claims");
 }
 
 /// The resting state of every idle workspace, read off a real guest that
@@ -154,6 +186,7 @@ fn a_sandbox_reports_the_apps_it_was_created_with_including_the_relay() {
 /// back without the sandbox being recreated.
 #[test]
 fn a_sandbox_created_before_the_label_falls_back_to_the_compiled_list() {
+    let runtime = serving_app();
     let inspected = json!({
         "Id": "sha256:exact-generation",
         "State": {"Running": true, "Status": "running"},
@@ -163,20 +196,20 @@ fn a_sandbox_created_before_the_label_falls_back_to_the_compiled_list() {
             "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
         }},
         "NetworkSettings": {"Ports": {
-            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}],
+            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": runtime.port.to_string()}],
             "4850/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49154"}]
         }}
     });
 
     let snapshot =
-        snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
+        snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "127.0.0.1").unwrap();
 
     assert_eq!(
         snapshot["status"]["apps"]["relay"]["private_url"],
-        "http://192.168.64.2:49154"
+        "http://127.0.0.1:49154"
     );
     // Lazy, so a relay nobody has reached for does not hold the sandbox back
-    // from being ready.
+    // from being ready -- but the eager runtime has to actually answer.
     assert_eq!(snapshot["status"]["ready"], true);
 }
 

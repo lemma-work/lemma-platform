@@ -102,13 +102,28 @@ pub(crate) fn snapshot_from_inspect(
     let mut statuses = serde_json::Map::new();
     for app in &apps {
         let host_port = ports.and_then(|value| mapped_port(value, app.port));
+        // Published is what the engine can tell us: the container runs and a
+        // port is mapped. It is not the same as answering, and reporting it as
+        // `ready` is what let the guest promise a browser relay that refused
+        // every connection.
+        let published = running && host_port.is_some();
+        // Only eager apps are probed. A lazy one is not expected to be up
+        // until something starts it, so dialling it would report a fault for
+        // the ordinary resting state -- and would pay a connect timeout on
+        // every snapshot to do it.
+        let answering = published
+            && app.startup == "eager"
+            && host_port.is_some_and(|port| {
+                crate::app_health::app_is_answering(endpoint_host, port, &app.health_path)
+            });
         statuses.insert(
             app.name.clone(),
             json!({
                 "name": app.name,
                 "public_slug": app.public_slug,
                 "port": app.port,
-                "ready": running && host_port.is_some(),
+                "published": published,
+                "ready": if app.startup == "eager" { answering } else { published },
                 "private_url": host_port.map(|port| format!("http://{endpoint_host}:{port}")),
             }),
         );

@@ -220,6 +220,52 @@ pub(super) fn output(success: bool, stdout: &str) -> Output {
     }
 }
 
+/// A listener that answers one HTTP request, for readiness probes.
+///
+/// `ready` now means the app answered its declared health path, not that a
+/// port is mapped, so a fixture that wants a ready app has to serve one. That
+/// is the point: the previous assertions passed against an inspect payload
+/// with nothing behind it at all.
+pub(super) struct ServingApp {
+    pub(super) port: u16,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+pub(super) fn serving_app() -> ServingApp {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let thread = std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut discard = [0_u8; 256];
+            let _ = stream.read(&mut discard);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        }
+    });
+    ServingApp {
+        port,
+        _thread: thread,
+    }
+}
+
+pub(super) fn inspect_serving(port: u16) -> String {
+    json!([{
+        "Id": "sha256:exact-generation",
+        "State": {"Running": true, "Status": "running"},
+        "Config": {"Labels": {
+            "lemma.work/workload-kind": "workspace",
+            "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+            "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+        }},
+        "NetworkSettings": {"Ports": {
+            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": port.to_string()}],
+            "4848/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49153"}]
+        }}
+    }])
+    .to_string()
+}
+
 pub(super) fn inspect() -> String {
     json!([{
         "Id": "sha256:exact-generation",

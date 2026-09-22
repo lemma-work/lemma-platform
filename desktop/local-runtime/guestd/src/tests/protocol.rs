@@ -64,10 +64,14 @@ fn protocol_requires_capability_and_rejects_tags() {
 #[test]
 fn status_and_exact_purge_fail_closed() {
     let root = tempdir().unwrap();
+    // The runtime has to answer for the sandbox to report ready: `ready` is now
+    // a probe of the declared health path, not a mapped port.
+    let runtime = serving_app();
+    let inspected = inspect_serving(runtime.port);
     let service = GuestService::new(
-        FakeEngine::new(vec![output(true, &inspect()), output(true, &inspect())]),
+        FakeEngine::new(vec![output(true, &inspected), output(true, &inspected)]),
         root.path().into(),
-        Some("192.168.64.2".into()),
+        Some("127.0.0.1".into()),
         "192.168.64.1".into(),
         None,
     )

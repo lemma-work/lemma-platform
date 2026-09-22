@@ -4,6 +4,28 @@ import LemmaServiceBridge
 import Virtualization
 
 private let version = "0.1.0"
+
+/// One line of `vz.log`, stamped.
+///
+/// Every line here used to be a bare `fputs`, so the whole file was a wall of
+/// undated messages. When a workspace stopped answering and the backend spent
+/// five minutes timing out, `vz.log` held the transport resets that happened
+/// during it -- and there was no way to tell whether they came before, during
+/// or after, because nothing in the file said when anything happened. A log
+/// kept for diagnosis that cannot be correlated with anything is not one.
+private func vzLog(_ message: String) {
+    var now = timeval()
+    gettimeofday(&now, nil)
+    var seconds = time_t(now.tv_sec)
+    var parts = tm()
+    gmtime_r(&seconds, &parts)
+    var stamp = [CChar](repeating: 0, count: 32)
+    _ = strftime(&stamp, stamp.count, "%Y-%m-%dT%H:%M:%S", &parts)
+    let instant = String(cString: stamp)
+    let millis = Int(now.tv_usec) / 1000
+    fputs(String(format: "%@.%03dZ lemma-vz: %@\n", instant, millis, message), stderr)
+}
+
 private let guestPort: UInt32 = 42_411
 private let maxRequestBytes = 1_048_576
 private let maxResponseBytes = 4_194_304
@@ -174,13 +196,13 @@ private func configuration(
 
 private final class VirtualMachineDelegate: NSObject, VZVirtualMachineDelegate {
     func guestDidStop(_ virtualMachine: VZVirtualMachine) {
-        fputs("lemma-vz: guest stopped\n", stderr)
+        vzLog("guest stopped")
         fflush(stderr)
         exit(EXIT_SUCCESS)
     }
 
     func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
-        fputs("lemma-vz: guest stopped with error: \(error.localizedDescription)\n", stderr)
+        vzLog("guest stopped with error: \(error.localizedDescription)")
         fflush(stderr)
         exit(EXIT_FAILURE)
     }
@@ -197,25 +219,25 @@ private final class StopCoordinator {
     func request() {
         guard !requested else { return }
         requested = true
-        fputs("lemma-vz: graceful stop requested\n", stderr)
+        vzLog("graceful stop requested")
         fflush(stderr)
         if virtualMachine.canRequestStop {
             do {
                 try virtualMachine.requestStop()
                 return
             } catch {
-                fputs("lemma-vz: graceful guest stop failed: \(error.localizedDescription)\n", stderr)
+                vzLog("graceful guest stop failed: \(error.localizedDescription)")
             }
         }
         guard virtualMachine.canStop else {
-            fputs("lemma-vz: guest cannot be stopped in its current state\n", stderr)
+            vzLog("guest cannot be stopped in its current state")
             exit(EXIT_FAILURE)
         }
         // Last-resort VZ stop is destructive, but is still preferable to the
         // host killing the helper while disk writes are in flight.
         virtualMachine.stop { error in
             if let error {
-                fputs("lemma-vz: forced guest stop failed: \(error.localizedDescription)\n", stderr)
+                vzLog("forced guest stop failed: \(error.localizedDescription)")
                 exit(EXIT_FAILURE)
             }
         }
@@ -332,7 +354,7 @@ private final class GuestBridge {
                 let client = accept(listener, nil, nil)
                 if client < 0 {
                     if errno == EINTR { continue }
-                    fputs("lemma-vz: accept failed: \(String(cString: strerror(errno)))\n", stderr)
+                    vzLog("accept failed: \(String(cString: strerror(errno)))")
                     continue
                 }
                 _ = fcntl(client, F_SETFD, FD_CLOEXEC)
@@ -349,10 +371,7 @@ private final class GuestBridge {
             socketDevice.connect(toPort: guestPort) { [self] result in
                 switch result {
                 case .failure(let error):
-                    fputs(
-                        "lemma-vz: guest connect failed: \(error.localizedDescription)\n",
-                        stderr
-                    )
+                    vzLog("guest connect failed on port \(guestPort): \(error.localizedDescription)")
                     fail(client: client)
                 case .success(let connection):
                     transfer(client: client, connection: connection)
@@ -367,7 +386,7 @@ private final class GuestBridge {
             do {
                 request = try readLine(client, limit: maxRequestBytes)
             } catch {
-                fputs("lemma-vz: client read failed: \(error.localizedDescription)\n", stderr)
+                vzLog("client read failed on port \(guestPort): \(error.localizedDescription)")
                 close(client)
                 finishRequest(connection)
                 return
@@ -394,12 +413,12 @@ private final class GuestBridge {
                     // nowhere to go, which is not an error worth failing over:
                     // the guest did the work, and this connection is this
                     // request's alone to close either way.
-                    fputs("lemma-vz: client write failed: \(error.localizedDescription)\n", stderr)
+                    vzLog("client write failed on port \(guestPort): \(error.localizedDescription)")
                 }
                 close(client)
                 finishRequest(connection)
             } catch {
-                fputs("lemma-vz: guest bridge failed: \(error.localizedDescription)\n", stderr)
+                vzLog("guest bridge failed: \(error.localizedDescription)")
                 let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Guest control channel is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
                 _ = try? writeAll(client, Data(payload.utf8))
                 close(client)
@@ -490,11 +509,11 @@ private func serve(arguments: [String]) throws -> Never {
     vm.start { result in
         switch result {
         case .failure(let error):
-            fputs("lemma-vz: could not start guest: \(error.localizedDescription)\n", stderr)
+            vzLog("could not start guest: \(error.localizedDescription)")
             exit(EXIT_FAILURE)
         case .success:
             guard let socketDevice = vm.socketDevices.first as? VZVirtioSocketDevice else {
-                fputs("lemma-vz: guest socket device is unavailable\n", stderr)
+                vzLog("guest socket device is unavailable")
                 exit(EXIT_FAILURE)
             }
             do {
@@ -516,7 +535,7 @@ private func serve(arguments: [String]) throws -> Never {
                 )
                 bridges.control?.serve()
             } catch {
-                fputs("lemma-vz: control bridge failed: \(error.localizedDescription)\n", stderr)
+                vzLog("control bridge failed: \(error.localizedDescription)")
                 exit(EXIT_FAILURE)
             }
         }
@@ -556,6 +575,6 @@ private func main() throws {
 do {
     try main()
 } catch {
-    fputs("lemma-vz: \(error.localizedDescription)\n", stderr)
+    vzLog("\(error.localizedDescription)")
     exit(EXIT_FAILURE)
 }

@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod app_health;
 mod capacity;
 mod core;
 mod core_data;

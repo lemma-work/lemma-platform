@@ -474,3 +474,53 @@ async def test_a_session_tells_the_sandbox_whether_to_use_a_proxy(
         "an empty pool is still a decision -- it is how a withdrawal reaches "
         "a sandbox that already has a proxy"
     )
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_ensure_stops_believing_what_it_knew(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fabric that failed every attempt is not one to keep notes about.
+
+    The readiness cache holds a directory for a minute. Left in place after an
+    ensure gave up, the next request skipped the ensure entirely and went
+    straight to an operation against the same dead endpoint -- so a workspace
+    that had just spent its whole deadline failing reported a cached success
+    for the following minute.
+
+    Recovery is forgetting, not replacing: on Desktop and E2B the sandbox *is*
+    the storage, so destroying it to get a fresh one would take the user's
+    files with it.
+    """
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    from app import sandbox_health
+
+    user_id = uuid4()
+    sandbox = _FakeSandbox()
+    service = _service(sandbox)
+
+    class _NeverReady:
+        async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
+            raise SandboxUnavailable("the guest is not answering")
+
+    monkeypatch.setattr(
+        workspace_directory_ensure, "SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS", 0.3
+    )
+    monkeypatch.setattr(service, "_get_manager_client", lambda: _NeverReady())
+    sandbox_health._capability.update({"status": "ready", "detail": "provisioned"})
+
+    service._ready_directories[(id(asyncio.get_running_loop()), user_id, "/x", 1, "g")] = (
+        asyncio.get_running_loop().time()
+    )
+
+    with pytest.raises(TimeoutError) as caught:
+        await service.get_session(user_id=user_id, pod_id=None)
+
+    # The reason survives the loop -- it used to be bound and dropped on every
+    # attempt, leaving a bare TimeoutError that said nothing.
+    assert "not answering" in str(caught.value)
+    assert service._ready_directories == {}
+    assert sandbox_health.sandbox_capability()["status"] == "unavailable"
+
+    sandbox_health._capability.update({"status": "ready", "detail": "provisioned"})
