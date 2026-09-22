@@ -122,6 +122,16 @@ class SurfaceDelivery:
             conversation_id
         )
         if link is None:
+            # The one ordinary answer, and the reason the rest are not. Every
+            # agent run asks for an egress target, and most conversations are
+            # not on a surface at all -- somebody typed in the web app, and
+            # there is nobody on a platform waiting. That stays `debug`.
+            #
+            # Every branch below is different in kind: a link *exists*, so this
+            # conversation reached us from a platform and somebody there is
+            # waiting for an answer that is now not coming. Those are
+            # `warning`, because the failure is invisible from both ends --
+            # the run completes normally and the person just never hears back.
             logger.debug(
                 "agent_surfaces.egress.skipped_no_conversation.diagnostic",
                 conversation_id=conversation_id,
@@ -130,34 +140,46 @@ class SurfaceDelivery:
 
         surface = await self.surface_repository.get(link.surface_id)
         if surface is None or not surface.is_active:
-            logger.debug(
-                "agent_surfaces.egress.skipped_surface_missing.diagnostic",
-                conversation_id=conversation_id,
-                surface_id=link.surface_id,
+            logger.warning(
+                "agent_surfaces.egress.surface_cannot_answer.degraded",
+                conversation_id=str(conversation_id),
+                surface_id=str(link.surface_id),
+                platform=link.platform,
+                reason="deleted" if surface is None else "not active",
+                surface_status=None if surface is None else str(surface.status),
             )
             return None
 
         adapter = self.adapter_registry.get(surface.surface_type)
         if adapter is None:
-            logger.debug(
-                "agent_surfaces.egress.skipped_no_adapter.diagnostic",
-                surface_type=surface.surface_type,
-                conversation_id=conversation_id,
+            logger.warning(
+                "agent_surfaces.egress.no_adapter_for_platform.degraded",
+                surface_type=str(surface.surface_type),
+                conversation_id=str(conversation_id),
+                surface_id=str(surface.id),
             )
             return None
 
         if not link.last_event:
-            logger.debug(
-                "agent_surfaces.egress.skipped_missing_last.diagnostic",
-                conversation_id=conversation_id,
+            logger.warning(
+                "agent_surfaces.egress.link_has_no_inbound_event.degraded",
+                conversation_id=str(conversation_id),
+                surface_id=str(surface.id),
+                platform=str(surface.surface_type),
             )
             return None
         try:
             parsed_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
         except ValidationError:
-            logger.debug(
-                "agent_surfaces.egress.skipped_invalid_last.diagnostic",
-                conversation_id=conversation_id,
+            # With the traceback: a stored event that no longer parses is a
+            # shape change between writing it and reading it, and which field
+            # moved is the whole of what a reader needs.
+            logger.warning(
+                "agent_surfaces.egress.stored_inbound_event_unreadable.degraded",
+                conversation_id=str(conversation_id),
+                surface_id=str(surface.id),
+                platform=str(surface.surface_type),
+                exc_info=True,
             )
             return None
 
@@ -170,9 +192,14 @@ class SurfaceDelivery:
             self.uow, conversation_id
         )
         if conversation is None:
-            logger.debug(
-                "agent_surfaces.egress.skipped_no_conversation.diagnostic",
-                conversation_id=conversation_id,
+            # A link pointing at a conversation that is not there. Same class as
+            # the branches above -- somebody on a platform is waiting -- and not
+            # the ordinary "no link" case, which returned far earlier.
+            logger.warning(
+                "agent_surfaces.egress.conversation_missing_for_link.degraded",
+                conversation_id=str(conversation_id),
+                surface_id=str(surface.id),
+                platform=str(surface.surface_type),
             )
             return None
 
