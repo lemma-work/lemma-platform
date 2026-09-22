@@ -592,3 +592,204 @@ async def test_a_directory_task_without_a_cache_key_is_still_cancellable(
     waiting.cancel()
     with pytest.raises((asyncio.CancelledError, Exception)):
         await waiting
+
+
+class _BundledService(WorkspaceSandboxService):
+    """A service with a runtime bundle to install, through the seam for it."""
+
+    def _runtime_bundle(self):
+        from app.modules.workspace.infrastructure.runtime_bundle import RuntimeBundle
+
+        return RuntimeBundle(
+            version="sha256:" + "a" * 64,
+            archive=b"PK\x03\x04 pretend this is a zip",
+            archive_sha256="sha256:" + "b" * 64,
+            requires=("lemma_sdk",),
+        )
+
+
+class _HangingManagerClient(_FakeManagerClient):
+    """Answers the directory ensure at once and hangs on file I/O."""
+
+    async def read_file(self, *_args: Any, **_kwargs: Any) -> bytes:
+        await asyncio.sleep(30)
+        return b""
+
+    async def write_file(self, *_args: Any, **_kwargs: Any) -> None:
+        await asyncio.sleep(30)
+
+
+@pytest.mark.asyncio
+async def test_the_interactive_ceiling_covers_installing_the_runtime_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The directory was the only step the ceiling bounded.
+
+    A first session after an update installs the bundle, on its own much
+    longer budget; the caller's fifteen seconds did not apply to it at all.
+    The install is shared, so giving up must leave it running for the next
+    caller rather than cancel it.
+    """
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    service = _BundledService(sandbox=_FakeSandbox())  # type: ignore[arg-type]
+    monkeypatch.setattr(service, "_get_manager_client", _HangingManagerClient)
+
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(SandboxUnavailable):
+        await service.get_session(
+            user_id=uuid4(), pod_id=None, ready_timeout_seconds=0.2
+        )
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 5, f"the ceiling did not cover the bundle; waited {elapsed:.1f}s"
+
+    installs = [
+        task
+        for task in asyncio.all_tasks()
+        if task.get_name().startswith("workspace-runtime-bundle:")
+    ]
+    assert installs and not any(task.cancelled() for task in installs), (
+        "giving up must abandon the wait, not the shared install"
+    )
+    for task in installs:
+        task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_a_slow_browser_proxy_write_degrades_within_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Written on every session, and allowed to fail without failing it."""
+    service = _service(_FakeSandbox())
+    monkeypatch.setattr(service, "_get_manager_client", _HangingManagerClient)
+
+    started = asyncio.get_running_loop().time()
+    session = await service.get_session(
+        user_id=uuid4(), pod_id=None, env_vars={}, ready_timeout_seconds=0.2
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert session is not None
+    assert elapsed < 5, f"the proxy write held the session {elapsed:.1f}s"
+
+
+@pytest.fixture
+def _health_ready():
+    """Capability health as the startup probe leaves a working install."""
+    from app import sandbox_health
+
+    before = dict(sandbox_health._capability)
+    sandbox_health._capability.update({"status": "ready", "detail": "provisioned"})
+    yield sandbox_health
+    sandbox_health._capability.clear()
+    sandbox_health._capability.update(before)
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_that_refuses_the_credential_is_reported_unavailable(
+    monkeypatch: pytest.MonkeyPatch, _health_ready
+) -> None:
+    """Through the real ensure, not the health setter.
+
+    A 401/403 from the runtime is `SandboxUnauthorized`: definitive, so not
+    retried -- which also meant it left the loop before the only health update,
+    and `/health/capabilities` said `ready` while every operation failed.
+    """
+    from sandbox_runtime.errors import SandboxUnauthorized
+
+    attempts: list[str] = []
+
+    class _Refuses:
+        async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
+            attempts.append("mkdir")
+            raise SandboxUnauthorized("the runtime rejected Lemma's credential")
+
+    service = _service(_FakeSandbox())
+    monkeypatch.setattr(service, "_get_manager_client", lambda: _Refuses())
+
+    with pytest.raises(SandboxUnauthorized):
+        await service.get_session(user_id=uuid4(), pod_id=None, env_vars={})
+
+    assert attempts == ["mkdir"], "a refused credential is not retried"
+    assert _health_ready.sandbox_capability()["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_that_cannot_be_reconciled_is_reported_unavailable(
+    monkeypatch: pytest.MonkeyPatch, _health_ready
+) -> None:
+    """The reconcile used to sit above the `try`, outside every health update."""
+    from sandbox_runtime.errors import SandboxRejected
+
+    sandbox = _FakeSandbox()
+    ensures = 0
+
+    async def ensure_once_then_refuse(user_id: UUID) -> SandboxInfo:
+        nonlocal ensures
+        ensures += 1
+        if ensures > 1:
+            raise SandboxRejected("capacity exhausted")
+        return sandbox.infos.setdefault(user_id, _sandbox_info(user_id))
+
+    monkeypatch.setattr(sandbox, "ensure_sandbox", ensure_once_then_refuse)
+
+    class _NotYet:
+        async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
+            raise SandboxUnavailable("the guest is not answering")
+
+    service = _service(sandbox)
+    monkeypatch.setattr(service, "_get_manager_client", lambda: _NotYet())
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    with pytest.raises(SandboxRejected):
+        await service.get_session(user_id=uuid4(), pod_id=None, env_vars={})
+
+    assert _health_ready.sandbox_capability()["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_path_conflict_is_not_a_fabric_outage(
+    monkeypatch: pytest.MonkeyPatch, _health_ready
+) -> None:
+    """Definitive refusals about the directory itself leave health alone."""
+    from sandbox_runtime.errors import SandboxPathConflict
+
+    class _IsAFile:
+        async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
+            raise SandboxPathConflict("a file is in the way")
+
+    service = _service(_FakeSandbox())
+    monkeypatch.setattr(service, "_get_manager_client", lambda: _IsAFile())
+
+    with pytest.raises(SandboxPathConflict):
+        await service.get_session(user_id=uuid4(), pod_id=None, env_vars={})
+
+    assert _health_ready.sandbox_capability()["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_does_not_hide_a_setup_problem(
+    monkeypatch: pytest.MonkeyPatch, _health_ready
+) -> None:
+    """`needs_setup` is more actionable than any symptom of it."""
+    from sandbox_runtime.errors import SandboxUnauthorized
+
+    class _Refuses:
+        async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
+            raise SandboxUnauthorized("the runtime rejected Lemma's credential")
+
+    _health_ready._capability.update({"status": "needs_setup", "detail": "no socket"})
+    service = _service(_FakeSandbox())
+    monkeypatch.setattr(service, "_get_manager_client", lambda: _Refuses())
+
+    with pytest.raises(SandboxUnauthorized):
+        await service.get_session(user_id=uuid4(), pod_id=None, env_vars={})
+
+    assert _health_ready.sandbox_capability()["status"] == "needs_setup"
+
+
+_real_sleep = asyncio.sleep
+
+
+async def _no_sleep(_delay: float, *args: Any) -> None:
+    await _real_sleep(0)

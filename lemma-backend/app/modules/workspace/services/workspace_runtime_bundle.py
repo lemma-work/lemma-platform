@@ -438,7 +438,11 @@ class WorkspaceRuntimeBundleMixin:
         return None
 
     async def _ensure_browser_proxy(
-        self, user_id: UUID, sandbox_info: SandboxInfo
+        self,
+        user_id: UUID,
+        sandbox_info: SandboxInfo,
+        *,
+        wait_seconds: float | None = None,
     ) -> None:
         """Tell this sandbox whether its browser goes through a proxy.
 
@@ -458,17 +462,24 @@ class WorkspaceRuntimeBundleMixin:
         this mixin. A sandbox that could not be told keeps what it had --
         the state it was already in -- and the next session tries again.
         Refusing somebody a shell because a proxy file did not land would be
-        the worse trade.
+        the worse trade. Running out of the caller's `wait_seconds` is the
+        same case, and degrades the same way.
         """
         proxy = browser_proxy_for(_sandbox_uuid(sandbox_info), SandboxKind.WORKSPACE)
+        budget = _INSTALL_BUDGET_SECONDS
+        if wait_seconds is not None:
+            budget = min(budget, wait_seconds)
         try:
-            await self._get_manager_client().write_file(
-                user_id,
-                BROWSER_PROXY_DECISION_PATH,
-                decision_bytes(proxy),
-                deadline_at=_deadline(_INSTALL_BUDGET_SECONDS),
+            await asyncio.wait_for(
+                self._get_manager_client().write_file(
+                    user_id,
+                    BROWSER_PROXY_DECISION_PATH,
+                    decision_bytes(proxy),
+                    deadline_at=_deadline(budget),
+                ),
+                timeout=budget,
             )
-        except _SANDBOX_FAILURES:
+        except (*_SANDBOX_FAILURES, asyncio.TimeoutError):
             logger.warning(
                 "workspace.browser_proxy.delivery_failed.degraded",
                 user_id=str(user_id),

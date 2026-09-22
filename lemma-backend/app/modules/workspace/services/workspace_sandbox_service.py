@@ -42,6 +42,7 @@ from app.modules.workspace.services.workspace_storage_generation_store import (
     WorkspaceStorageGenerationStore,
 )
 from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.services.workspace_directory_ensure import ReadyBudget
 
 logger = get_logger(__name__)
 
@@ -377,15 +378,21 @@ class WorkspaceSandboxService(
         ready_timeout_seconds: float | None = None,
     ) -> IWorkspaceSession:
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
+        budget = ReadyBudget(ready_timeout_seconds)
         with _tracer.start_as_current_span("lemma.workspace.ensure_dir"):
             sandbox_info = await self._ensure_workspace_directory(
-                user_id,
-                resolved_cwd,
-                ready_timeout_seconds=ready_timeout_seconds,
+                user_id, resolved_cwd, budget=budget
             )
         with _tracer.start_as_current_span("lemma.workspace.runtime_bundle"):
-            await self._ensure_runtime_bundle(user_id, sandbox_info)
-            await self._ensure_browser_proxy(user_id, sandbox_info)
+            # The install is a shielded shared task: running out of budget
+            # abandons this caller's wait and leaves it running for the next.
+            await self._await_shared(
+                self._ensure_runtime_bundle(user_id, sandbox_info),
+                budget.remaining(),
+            )
+            await self._ensure_browser_proxy(
+                user_id, sandbox_info, wait_seconds=budget.remaining()
+            )
 
         if env_vars is None:
             with _tracer.start_as_current_span("lemma.workspace.env_vars"):

@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from time import monotonic
 from uuid import UUID
 
-from sandbox_runtime.errors import SandboxUnavailable
+from sandbox_runtime.errors import SandboxError, SandboxUnauthorized, SandboxUnavailable
 
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
@@ -51,11 +51,16 @@ INTERACTIVE_READY_SECONDS = 15.0
 _CacheKey = tuple[int, UUID, str, int, str]
 
 
-class _Budget:
+class ReadyBudget:
     """What is left of an interactive caller's patience.
 
     `None` means no ceiling, which is what a background caller gets: the
     sandbox manager's own deadline is the only limit that applies to it.
+
+    One absolute deadline for the whole of `get_session`, not one per step.
+    Acquiring the sandbox, creating the directory, installing the runtime
+    bundle and writing the browser-proxy decision are four waits; a ceiling
+    applied to one of them bounds nothing.
     """
 
     __slots__ = ("_deadline",)
@@ -102,17 +107,17 @@ class WorkspaceDirectoryEnsureMixin:
         user_id: UUID,
         path: str,
         *,
-        ready_timeout_seconds: float | None = None,
+        budget: ReadyBudget | None = None,
     ) -> SandboxInfo:
         deadline_at = datetime.now(timezone.utc) + timedelta(
             seconds=SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS
         )
-        # One budget across both phases. Acquiring the sandbox and creating the
-        # directory are two waits, and the ceiling used to apply only to the
-        # second -- so an interactive caller that asked for fifteen seconds
-        # could spend the manager's full three hundred in `get_or_create_sandbox`
-        # before its own limit was even consulted.
-        budget = _Budget(ready_timeout_seconds)
+        # The caller's budget across both phases. Acquiring the sandbox and
+        # creating the directory are two waits, and the ceiling used to apply
+        # only to the second -- so an interactive caller that asked for fifteen
+        # seconds could spend the manager's full three hundred in
+        # `get_or_create_sandbox` before its own limit was even consulted.
+        budget = budget or ReadyBudget(None)
         sandbox_info = await self._await_shared(
             self.get_or_create_sandbox(user_id), budget.remaining()
         )
@@ -259,12 +264,14 @@ class WorkspaceDirectoryEnsureMixin:
         attempts = 0
         last_error: SandboxUnavailable | None = None
         while datetime.now(timezone.utc) < deadline_at:
-            if force_reconcile:
-                sandbox_info = await self.get_or_create_sandbox(
-                    user_id,
-                    force_reconcile=True,
-                )
+            reconciling = force_reconcile
             try:
+                if reconciling:
+                    sandbox_info = await self.get_or_create_sandbox(
+                        user_id,
+                        force_reconcile=True,
+                    )
+                    reconciling = False
                 await self._get_manager_client().create_directory(
                     user_id,
                     path,
@@ -280,6 +287,21 @@ class WorkspaceDirectoryEnsureMixin:
                 await asyncio.sleep(min(delay, remaining))
                 force_reconcile = True
                 continue
+            except SandboxError as exc:
+                # Definitive, so not retried -- but a fabric that refuses Lemma's
+                # credential, or cannot be reconciled at all, is not usable, and
+                # capability health has to say so. Only those: a path conflict
+                # is about this directory, not about the fabric.
+                if reconciling or isinstance(exc, SandboxUnauthorized):
+                    record_sandbox_unreachable()
+                    logger.warning(
+                        "workspace.sandbox_service.directory_ensure_refused.degraded",
+                        user_id=str(user_id),
+                        path=path,
+                        reconciling=reconciling,
+                        error_type=type(exc).__name__,
+                    )
+                raise
             record_sandbox_reachable()
             return sandbox_info
         # Every attempt raised, and until this was written each one's reason was

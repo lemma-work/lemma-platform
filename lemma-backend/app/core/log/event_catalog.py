@@ -869,6 +869,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.runtime_bundle.loaded': EventSpec('info', frozenset({'component_version', 'size_bytes', 'source', 'version'})),
     'workspace.runtime_bundle.unusable.degraded': EventSpec('warning', frozenset({'directory', 'error_type'})),
     'workspace.sandbox_service.directory_ensure_exhausted.degraded': EventSpec('warning', frozenset({'attempts', 'path', 'reason', 'user_id'})),
+    'workspace.sandbox_service.directory_ensure_refused.degraded': EventSpec('warning', frozenset({'error_type', 'path', 'reconciling', 'user_id'})),
     'workspace.sandbox_service.ensure_retrying': EventSpec('info', frozenset({'attempt', 'reason', 'retry_after_ms', 'sandbox_id'})),
     'workspace.sandbox_service.provisioning_claim_expired': EventSpec('info', frozenset({'sandbox_id'})),
     'workspace.sandbox_service.workspace_storage_recreated': EventSpec('info', frozenset({'sandbox_id'})),
