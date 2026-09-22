@@ -273,14 +273,41 @@ exactly the kind of bug a `-noxdamage` gets added for and then never removed.
 (`lemma-backend/app/modules/workspace/providers/lemma_local.py`,
 `workspace_cpus`) inside a guest with at most 4
 (`desktop/local-runtime/macos-vz/Sources/LemmaVZ/main.swift:104`), shared with
-Postgres, Redis, SuperTokens and containerd. Chromium there renders in software.
-An open pane is the difference between a machine that is idle and one that is
-not, and the person watching is on a laptop.
-**Fix:** measure it, do not guess. Run the same page in the same image with and
-without the flag, with a viewer attached and the display still, and compare
-`x11vnc`'s CPU. If DAMAGE is sound there, drop the flag; if it is not, keep it
-and write down which update it was measured to lose. Either way the comment is
-the deliverable.
+Postgres, Redis, SuperTokens and containerd. Chromium there renders in software,
+and the person watching is on a laptop — so anything continuous is worth
+knowing the size of. The measurement below is what that turned out to be, and
+it is smaller than this paragraph originally assumed.
+**Measured**, since the first version of this entry asked for exactly that.
+Two `x11vnc` processes on one `:99` at the same moment — same image, same page,
+same encoding, one with the flag and one without — with a viewer attached to
+each and CPU read from `/proc/<pid>/stat`. Docker on Apple silicon, a 2 GiB /
+2 CPU container, 30-second samples:
+
+| screen | with DAMAGE | `-noxdamage` | |
+|---|---|---|---|
+| still (`about:blank`) | 54 ticks, 1.8% of one core | 86 ticks, 2.9% | 1.6x |
+| repainting canvas | 527 ticks, 17.6% | 529 ticks, 17.6% | 1.0x |
+
+So the flag costs about **one point of one core** while somebody watches a
+still screen, and nothing at all while the screen is busy — which is what the
+extension is for and the shape the theory predicted, at a size the theory did
+not. It is a real cost and a small one.
+
+Both viewers saw an identical picture on the still screen (3 rectangles,
+5,531,908 bytes each) and DAMAGE sent *fewer* rectangles on the repainting one
+(2,545 against 2,950), so nothing here suggests DAMAGE drops updates on this
+image. Thirty seconds on two pages is not enough to conclude that it does not.
+
+The comparison used raw encoding rather than the Tight/ZRLE noVNC negotiates,
+deliberately: the question is the cost of *finding* what changed, and asking
+for an encoding the measuring client cannot decode would have measured
+x11vnc's compressor as well. Both arms asked for the same thing, so the
+difference is the scan; the absolute percentages are lower than a real
+viewer's.
+**Fix:** leave the flag alone. The cost is one point of a core and the reason
+nobody wrote down is more likely to be a dropped update than an oversight —
+that is what `-noxdamage` is normally added for. Removing it needs a soak long
+enough to trust DAMAGE on this image, and the prize is 1% of one core.
 **How it was found:** reading the file during a desktop parity review, because
 it is the one line in it that does not say why.
 
@@ -310,10 +337,26 @@ measured running 34 renderers.
 is watching their own browser, which reads as the browser crashing rather than
 as the machine being too small. Two conversations with panes open is two
 workspace sandboxes.
-**Fix:** the qualification the comment asks for — a browser held open in one
-workspace, then two, on a 16 GB Mac and on an 8 GB one, watching
-`memory.events`' `oom_kill` and the guest's own `MemAvailable`. Then either the
-guest's allocation moves or the workspace ceiling does, with the measurement
-written down beside whichever moved.
+**Measured**, for the first half of the qualification. A workspace container at
+the shipped 2 GiB / 2 CPU limits, display up, headed Chromium (9 processes) on
+a canvas repainting 40 rectangles every 33 ms, viewers attached:
+
+    memory.current   603 MiB      anon  292 MiB    file  306 MiB
+    memory.peak      736 MiB
+
+So one workspace with an open browser sits comfortably inside its own 2 GiB
+ceiling — the ceiling is not the problem. The guest is: 736 MiB peak against a
+**4 GiB** guest already holding PostgreSQL, Redis, SuperTokens and containerd
+means the tight case is *concurrency*, not a single sandbox. Two conversations
+with panes open is two of these.
+
+Measured on Docker on Apple silicon rather than in the VZ guest, so the number
+is the image's and not the guest's: the guest's own kernel, page cache and
+data services are the other half and are what is still missing.
+**Fix:** the rest of the qualification — the same browser held open in one
+workspace and then two, inside the real guest, watching `memory.events`'
+`oom_kill` and the guest's own `MemAvailable` with the data services running.
+Then either the guest's allocation moves or the concurrent-workspace count
+does, with the measurement written down beside whichever moved.
 **How it was found:** a desktop parity review, tracing what the browser surface
 added to a sandbox after the guest's size was last set.
