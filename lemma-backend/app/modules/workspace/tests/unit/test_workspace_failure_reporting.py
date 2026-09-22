@@ -26,7 +26,7 @@ from sandbox_runtime.errors import SandboxRejected, SandboxUnavailable
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
-from app.modules.workspace.providers.base import ProviderInstance
+from app.modules.workspace.providers.base import ProviderInstance, ProviderRejected
 from app.modules.workspace.providers.docker import RuntimeCredentialSigner
 from app.modules.workspace.providers.lemma_local import (
     LemmaLocalProviderConfig,
@@ -229,3 +229,42 @@ async def test_a_second_operation_does_not_ask_the_guest_where_the_runtime_is_ag
     assert recorded.count("sandbox.status") == 1, (
         "each operation asked the guest where the runtime is: " + " ".join(recorded)
     )
+
+
+async def test_a_bridge_that_cannot_be_started_is_not_a_missing_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A release must not report success because the bridge is missing.
+
+    `LocalBridgeNotFound` means "the guest says that sandbox does not exist":
+    `_status` turns it into `ProviderGone`, and `_mutate` treats it as the
+    outcome already achieved and returns. So classifying a bridge that cannot
+    be spawned as *not found* would have reported a release, a delete and a
+    storage purge as done while none of them happened.
+    """
+    # Present at construction -- which is checked -- and not runnable when it
+    # is finally spawned. An upgrade that swaps the binary mid-flight looks
+    # exactly like this.
+    bridge = tmp_path / "lemma-bridge"
+    bridge.write_text("#!/usr/bin/env python3\n")
+    bridge.chmod(0o600)
+
+    monkeypatch.setenv("RUNTIME_URL", "http://127.0.0.1:1")
+    provider = LemmaLocalSandboxProvider(
+        LemmaLocalProviderConfig(executable=str(bridge)),
+        RuntimeCredentialSigner(key=b"k" * 32),
+    )
+
+    # A mutation must fail rather than quietly succeed.
+    with pytest.raises(ProviderRejected):
+        await provider.release(
+            _instance(uuid4()),
+            kind=SandboxKind.WORKSPACE,
+            deadline_at=_deadline(),
+        )
+
+    # And a status must not claim the sandbox is gone when we could not ask.
+    with pytest.raises(SandboxUnavailable):
+        await provider.create_directory(
+            _instance(uuid4()), path="/workspace/x", deadline_at=_deadline()
+        )

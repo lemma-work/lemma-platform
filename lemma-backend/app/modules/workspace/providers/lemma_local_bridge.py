@@ -74,8 +74,16 @@ async def call_bridge(
         # has to arrive in this module's vocabulary -- raw, it escaped the
         # provider entirely and every caller rendered it as an unhandled 500
         # rather than as a sandbox that cannot be reached.
-        raise LocalBridgeNotFound(
+        #
+        # `LocalBridgeError` and not `LocalBridgeNotFound`, which in this
+        # module means "the guest says that sandbox does not exist". `_status`
+        # turns that into `ProviderGone` and `_mutate` treats it as the outcome
+        # already achieved and returns successfully -- so a bridge nobody can
+        # run would have reported a release, a delete and a storage purge as
+        # done while none of them happened.
+        raise LocalBridgeError(
             f"managed runtime bridge could not be started: {exc.strerror or exc}",
+            code="local_runtime_unavailable",
             retryable=False,
         ) from exc
 
