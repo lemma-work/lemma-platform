@@ -330,8 +330,14 @@ async def test_deleting_nothing_is_distinguishable_from_deleting_something(
     async with httpx.AsyncClient(
         transport=transport, base_url="http://runtime.test"
     ) as client:
-        removed = await client.delete("/files", headers=HEADERS, params={"path": present})
-        nothing = await client.delete("/files", headers=HEADERS, params={"path": absent})
+        removed = await client.delete(
+            "/files", headers=HEADERS, params={"path": present}
+        )
+        nothing = await client.delete(
+            "/files", headers=HEADERS, params={"path": absent}
+        )
 
     assert removed.status_code == 200, "a file that was there reports as removed"
-    assert nothing.status_code == 204, "a file that was not there reports as not removed"
+    assert nothing.status_code == 204, (
+        "a file that was not there reports as not removed"
+    )

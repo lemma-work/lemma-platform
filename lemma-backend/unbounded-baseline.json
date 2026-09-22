@@ -39,8 +39,8 @@
     "app/modules/workspace/providers/e2b_output.py::E2BOutputBuffer._write_state::cpu-on-loop::json.dumps": 1,
     "app/modules/workspace/providers/e2b_output.py::E2BOutputBuffer.append::cpu-on-loop::json.dumps": 1,
     "app/modules/workspace/providers/e2b_output.py::E2BOutputBuffer.read::cpu-on-loop::json.loads": 2,
-    "app/modules/workspace/providers/lemma_local.py::LemmaLocalSandboxProvider._request::cpu-on-loop::json.dumps": 1,
-    "app/modules/workspace/providers/lemma_local.py::LemmaLocalSandboxProvider._request::cpu-on-loop::json.loads": 1,
+    "app/modules/workspace/providers/lemma_local_bridge.py::call_bridge::cpu-on-loop::json.dumps": 1,
+    "app/modules/workspace/providers/lemma_local_bridge.py::call_bridge::cpu-on-loop::json.loads": 1,
     "app/modules/workspace/services/workspace_env_cache.py::RedisWorkspaceEnvCache.get::cpu-on-loop::json.loads": 1,
     "app/modules/workspace/services/workspace_env_cache.py::RedisWorkspaceEnvCache.set::cpu-on-loop::json.dumps": 1
   }
