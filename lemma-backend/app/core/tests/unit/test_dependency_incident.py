@@ -72,13 +72,20 @@ def test_db_pool_pressure_emits_one_transition_pair(monkeypatch) -> None:
         def checkedout(self) -> int:
             return self._checked_out
 
-    class _ConnectionRecord:
-        def __init__(self, checked_out: int) -> None:
-            self.pool = _Pool(checked_out)
+    # The pool is passed at registration, which is where the real listener gets
+    # it. This test used to invent a connection record carrying a `.pool` and
+    # hand it to the listener -- a shape SQLAlchemy never produces, since
+    # `_ConnectionRecord` name-mangles that attribute. The assertions below
+    # passed for the whole life of a probe that raised `AttributeError` on
+    # every real checkout, which is the entire reason the incident never fired
+    # in production. Only the counters are stood in for now; the argument
+    # shape is no longer part of the fiction.
+    pressured = session_module._pool_utilization_listener(_Pool(4))
+    relieved = session_module._pool_utilization_listener(_Pool(1))
 
     for _ in range(4):
-        session_module._log_pool_utilization(None, _ConnectionRecord(4))
-    session_module._log_pool_utilization(None, _ConnectionRecord(1))
+        pressured(None, None)
+    relieved(None, None)
 
     assert [record[:2] for record in logger.records] == [
         ("warning", "dependency.degraded"),

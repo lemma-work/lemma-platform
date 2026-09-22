@@ -63,36 +63,52 @@ def _build_connect_args() -> dict:
     return connect_args
 
 
-def _log_pool_utilization(dbapi_conn, connection_record, proxy=None):
-    """Track a degraded/recovered pair for sustained pool utilization.
+def _pool_utilization_listener(pool):
+    """Build the checkout listener for one pool.
 
-    Called on each checkout (connection borrowed from pool). SQLAlchemy's
-    PoolEvents.checkout passes (dbapi_connection, connection_record, proxy).
-    Uses the pool's internal counters to compute checked-out vs. max
-    connections. This gives early visibility into pool exhaustion before it
-    surfaces as a ``TimeoutError`` (pool_timeout) to application code, without
-    emitting one warning for every checkout while the pool remains pressured.
+    The pool is closed over rather than read off the event's arguments. It used
+    to be `connection_record.pool`, and `_ConnectionRecord` has no such
+    attribute -- SQLAlchemy name-mangles it to `_ConnectionRecord__pool` inside
+    the class body. So the probe raised `AttributeError` on every checkout, the
+    handler below swallowed it, and the `next(...) == 0` guard meant it was
+    logged once per process and never again. The effect was not a noisy log but
+    a silent one: `_pool_pressure_incident` never recorded once, so the
+    `database_pool_capacity` incident that replaced the old concurrency
+    guardrail has never fired, and pool exhaustion still arrives only as an
+    unexplained `TimeoutError`. The pool is in hand at registration, which is
+    the one place it is unambiguous.
     """
-    try:
-        pool = connection_record.pool
-        max_conn = pool.size()
-        checked_out = pool.checkedout()
-        if max_conn > 0 and checked_out / max_conn >= 0.8:
-            _pool_pressure_incident.record_failure(error_type="PoolUtilizationHigh")
-        else:
-            _pool_pressure_incident.record_success()
-    except Exception as exc:
-        # This runs on every checkout, so the handler must never break one --
-        # but a bare `pass` means a diagnostic that starts failing is simply
-        # gone, and pool exhaustion goes back to arriving as an unexplained
-        # `TimeoutError`. Warned once, not per checkout: the second occurrence
-        # says nothing the first did not, and there can be thousands a second.
-        if next(_pool_probe_failures) == 0:
-            logger.warning(
-                "db.session.pool_utilization_probe_failed",
-                error_type=type(exc).__name__,
-                exc_info=exc,
-            )
+
+    def _log_pool_utilization(dbapi_conn, connection_record, proxy=None):
+        """Track a degraded/recovered pair for sustained pool utilization.
+
+        Called on each checkout (connection borrowed from pool). Compares
+        checked-out against max connections, giving visibility into pool
+        exhaustion before it surfaces as a ``TimeoutError`` to application
+        code, without one warning per checkout while the pool stays pressured.
+        """
+        try:
+            max_conn = pool.size()
+            checked_out = pool.checkedout()
+            if max_conn > 0 and checked_out / max_conn >= 0.8:
+                _pool_pressure_incident.record_failure(error_type="PoolUtilizationHigh")
+            else:
+                _pool_pressure_incident.record_success()
+        except Exception as exc:
+            # This runs on every checkout, so the handler must never break one
+            # -- but a bare `pass` means a diagnostic that starts failing is
+            # simply gone, and pool exhaustion goes back to arriving as an
+            # unexplained `TimeoutError`. Warned once, not per checkout: the
+            # second occurrence says nothing the first did not, and there can
+            # be thousands a second.
+            if next(_pool_probe_failures) == 0:
+                logger.warning(
+                    "db.session.pool_utilization_probe_failed",
+                    error_type=type(exc).__name__,
+                    exc_info=exc,
+                )
+
+    return _log_pool_utilization
 
 
 def get_engine():
@@ -132,7 +148,8 @@ def get_engine():
             **engine_kwargs,
         )
         if settings.environment != "testing":
-            event.listen(engine.sync_engine.pool, "checkout", _log_pool_utilization)
+            pool = engine.sync_engine.pool
+            event.listen(pool, "checkout", _pool_utilization_listener(pool))
         # Unconditional, unlike the pool-utilization listener above: the scope
         # monitor works under NullPool too (checkout/checkin still fire), which
         # is what lets the ordinary test suite catch a held connection without
