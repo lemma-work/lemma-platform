@@ -54,6 +54,10 @@ fn restrict(path: &Path, mode: u32) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
+// The signature mirrors the unix version above, which genuinely can fail.
+// Narrowing it here would make every caller cfg-dependent to save a branch
+// that is already free.
+#[allow(clippy::unnecessary_wraps)]
 fn restrict(_path: &Path, _mode: u32) -> std::io::Result<()> {
     // Windows inherits the Agent Host data directory's ACL, which is already
     // the user's own.
