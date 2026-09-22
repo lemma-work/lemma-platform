@@ -360,3 +360,44 @@ def test_distinct_conditions_are_distinct_signals(caplog):
     )
 
     assert len(_trim_warnings(caplog)) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_lagging_group_says_whether_anyone_still_declares_it(
+    monkeypatch, caplog
+) -> None:
+    """Two very different faults used to produce the same sentence.
+
+    A declared group that lags is a consumer falling behind, and the answer is
+    to make it keep up. A group nobody declares is one whose subscriber was
+    deleted, and the answer is the reaper. The warning named the group either
+    way and said nothing about which.
+
+    Production published `schedule_events` at its hard ceiling for three weeks
+    because a group abandoned in August still pinned the watermark. The hourly
+    line naming it, and the hourly line from the reaper naming it as abandoned,
+    were never joined up by anything.
+    """
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen", 100)
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen_overrides", {})
+    client = AsyncMock()
+    client.xinfo_groups.return_value = [
+        # Far enough behind to hold the cap, and declared by nobody.
+        {
+            "name": "ghost-of-a-deleted-subscriber",
+            "pending": 0,
+            "lag": 5_000,
+            "last-delivered-id": "1-0",
+        },
+    ]
+    client.xinfo_stream.return_value = {"last-generated-id": "100-0"}
+
+    bus = message_bus.FastStreamRedisMessageBus("redis://message-bus-test")
+
+    assert await bus._safe_publish_maxlen(client, "events") == 400
+    (warning,) = _trim_warnings(caplog)
+    assert warning["reason"] == "lagging"
+    assert warning["group"] == "ghost-of-a-deleted-subscriber"
+    assert warning["group_declared"] is False, (
+        "the line cannot distinguish a slow consumer from a dead one"
+    )

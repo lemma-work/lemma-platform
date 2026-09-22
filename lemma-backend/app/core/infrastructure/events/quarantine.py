@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from faststream import BaseMiddleware
+from faststream.exceptions import HandlerException
 from pydantic import ValidationError
 from redis.typing import EncodableT, FieldT
 
@@ -113,6 +114,17 @@ class StreamQuarantineMiddleware(BaseMiddleware):
     async def consume_scope(self, call_next: Any, msg: Any) -> Any:
         try:
             return await call_next(msg)
+        except HandlerException:
+            # Not a failure: FastStream's own acknowledgement signals
+            # (`NackMessage` and friends) are how a handler *asks* for a
+            # particular acknowledgement, and the middleware above is the one
+            # meant to read them. Counting them here would be counting a
+            # deliberate hand-back as an error -- and the inbox hands a
+            # delivery back every time another worker already holds the claim,
+            # so a slow handler's message would reach the delivery-count
+            # backstop and be dead-lettered for being popular rather than for
+            # being broken.
+            raise
         except Exception as error:
             if not await self._should_quarantine(msg, error):
                 raise

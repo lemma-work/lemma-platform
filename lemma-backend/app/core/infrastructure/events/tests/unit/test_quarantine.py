@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 import pytest
+from faststream.exceptions import NackMessage
 from pydantic import BaseModel, ValidationError
 
 from app.core.infrastructure.events import quarantine as q
@@ -209,3 +210,26 @@ def test_dead_letter_stream_is_derived_from_the_source():
 def test_message_details_survive_a_message_that_says_nothing():
     """This runs on the failure path; it must not raise on an odd message."""
     assert q.describe_message(object()) == ("", "")
+
+
+@pytest.mark.asyncio
+async def test_an_acknowledgement_signal_is_not_a_failure(redis):
+    """`NackMessage` is a request, not a fault, and must not be counted as one.
+
+    FastStream's acknowledgement exceptions are how a handler *asks* for a
+    particular acknowledgement; the middleware above this one is the one meant
+    to read them. They are ordinary `Exception`s though, so the transient branch
+    caught them, charged the message a failure, and after `MAX_DELIVERY_ATTEMPTS`
+    dead-lettered it.
+
+    That matters because the inbox raises `NackMessage` every time another
+    worker already holds an event's claim. A message behind a genuinely slow
+    handler is handed back repeatedly and entirely legitimately — charging those
+    to its retry budget would discard it for being popular rather than broken.
+    """
+    for _ in range(q.MAX_DELIVERY_ATTEMPTS + 2):
+        with pytest.raises(NackMessage):
+            await _consume(_middleware(), _Message(), NackMessage())
+
+    assert redis.counters == {}, "a hand-back was charged to the retry budget"
+    assert redis.streams == {}, "a hand-back was dead-lettered"

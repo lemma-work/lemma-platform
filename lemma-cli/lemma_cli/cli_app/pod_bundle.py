@@ -76,6 +76,7 @@ from lemma_pod_bundle.normalize import (
     _normalize_surface_payload,
     _normalize_table_payload,
     _normalize_workflow_payload,
+    _sanitize_agent_payload_for_import,
     _sanitize_app_payload_for_import,
     _sanitize_function_payload_for_import,
     _sanitize_table_payload_for_import,
@@ -801,6 +802,11 @@ def _is_pod_visible_file(item: dict[str, Any]) -> bool:
     return str(item.get("visibility") or "").upper() == "POD"
 
 
+def _is_pod_default_agent(item: dict[str, Any]) -> bool:
+    """Whether this is the assistant the pod came with, rather than one somebody made."""
+    return str(item.get("kind") or "").upper() == "POD_DEFAULT"
+
+
 def fetch_files_index(
     client: Lemma, pod_id: str
 ) -> tuple[dict[str | None, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
@@ -1131,10 +1137,17 @@ def export_pod_bundle(
 
     agents: list[dict[str, Any]] = []
     if should_export("agents"):
+        # The pod's own assistant is not a bundle's to carry -- every pod mints
+        # exactly one with itself, and what it does comes from constants rather
+        # than from its row. The server-side exporter has always skipped it
+        # (`pod_bundle.domain.exportable.is_exportable_agent`); this path listed
+        # every agent and wrote the default one out like any other, so a bundle
+        # exported here carried an agent the format says it cannot contain and
+        # importing it minted a duplicate beside the target pod's own.
         agents = [
             item
             for item in list_items(pod_sdk.agents.list(limit=1000))
-            if should_export_name(item)
+            if should_export_name(item) and not _is_pod_default_agent(item)
         ]
         for agent in sorted(agents, key=lambda item: str(item.get("name", ""))):
             agent_name = str(agent.get("name") or "")
@@ -1795,6 +1808,7 @@ def _validate_payload_fields(
     # `revision_hash`, an app's `url`) that the apply step strips. Those are not
     # authoring mistakes and must not be reported as such.
     sanitizers = {
+        "agents": _sanitize_agent_payload_for_import,
         "functions": _sanitize_function_payload_for_import,
         "apps": _sanitize_app_payload_for_import,
     }
@@ -2626,7 +2640,7 @@ def import_pod_bundle(
         payload, permissions_payload = _split_resource_permissions_payload(
             load_resource_payload(resource_dir, agent_name)
         )
-        payload = apply_variables(payload)
+        payload = _sanitize_agent_payload_for_import(apply_variables(payload))
         permissions_payload = _resolve_grant_permissions(
             apply_variables, permissions_payload, kind="agent", name=agent_name
         )
