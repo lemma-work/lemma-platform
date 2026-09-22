@@ -48,8 +48,10 @@ impl Daemon {
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            // Taken first, so a write that panics still releases admission.
+            let finish = daemon.lifecycle.finish_on_drop();
             let result = daemon.write_operator_config(|store| store.update(apply));
-            daemon.finish_config_write(result, id.as_ref());
+            daemon.finish_config_write(finish, result, id.as_ref());
         });
     }
 
@@ -117,8 +119,14 @@ impl Daemon {
 
     /// Announce the outcome of an operator-config write and release the guard.
     /// Announce the outcome of an operator-config write and release the guard.
+    /// Record the outcome, release admission, then announce it -- in that order.
+    ///
+    /// `finish` is dropped explicitly rather than at the end of scope: the
+    /// broadcast below can make the client send the next section's save at
+    /// once, and a lifecycle still held at that moment refuses it as busy.
     pub(super) fn finish_config_write(
         self: &Arc<Self>,
+        finish: crate::lifecycle::Finish<'_>,
         result: io::Result<Value>,
         id: Option<&Value>,
     ) {
@@ -142,12 +150,12 @@ impl Daemon {
         if let (Some(journal), Some(id)) = (&self.config_operations, id.and_then(Value::as_str)) {
             if let Err(error) = journal.finish(id, outcome) {
                 self.broadcast(error_event("config-outcome-unknown", format!("settings may have been applied, but completion could not be recorded: {error}; review settings before retrying"), Some(&json!(id))));
-                self.lifecycle.finish();
+                drop(finish);
                 return;
             }
         }
         // A completion can immediately trigger the next section's save.
-        self.lifecycle.finish();
+        drop(finish);
         match result {
             Ok(snapshot) => self.broadcast(json!({
                 "v": PROTOCOL_VERSION,
@@ -223,23 +231,13 @@ impl Daemon {
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            // Taken first, so a write that panics still releases admission.
+            let finish = daemon.lifecycle.finish_on_drop();
             let result = daemon.write_operator_config(|store| store.set_ai(payload));
-            daemon.finish_config_write(result, id.as_ref());
+            daemon.finish_config_write(finish, result, id.as_ref());
         });
     }
 
-    /// Ask a provider what it can run, without committing to anything.
-    ///
-    /// `config.apply` already probes, but it probes as one step of a write that
-    /// restarts the backend — so the only way to find out a provider's model
-    /// names was to guess one, apply, and read the error. That is why both the
-    /// onboarding step and Local settings asked people to type model ids from
-    /// memory. This is the same probe with no write behind it: connect, list,
-    /// then let the user pick before anything is saved.
-    ///
-    /// Deliberately not guarded by `lifecycle` — it mutates
-    /// nothing, and making a read-only lookup wait behind an unrelated start is
-    /// how a model picker ends up feeling broken.
     /// Ask a provider what it can run, without committing to anything.
     ///
     /// `config.apply` already probes, but it probes as one step of a write that

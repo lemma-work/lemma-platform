@@ -39,12 +39,11 @@ impl Daemon {
             if daemon.agent_lifecycle.checkpoint().is_err() {
                 return;
             }
-            if daemon.agent_lifecycle.begin().is_ok() {
+            if let Some(_finish) = daemon.agent_lifecycle.enter() {
                 if let Err(error) = daemon.agent_host.reconcile() {
                     let _ =
                         daemon.write_daemon_log(&format!("Agent Host recovery failed: {error}"));
                 }
-                daemon.agent_lifecycle.finish();
             }
             thread::sleep(std::time::Duration::from_secs(1));
         });
@@ -127,6 +126,8 @@ impl Daemon {
                                         }));
                                         let recovery = Arc::clone(&daemon);
                                         thread::spawn(move || {
+                                            // Released however this thread ends -- see `lifecycle::Finish`.
+                                            let _finish = recovery.lifecycle.finish_on_drop();
                                             let result = recovery.recover_managed_stack();
                                             if let Err(error) = result {
                                                 if let Some(manager) =
@@ -144,7 +145,6 @@ impl Daemon {
                                                     None,
                                                 ));
                                             }
-                                            recovery.lifecycle.finish();
                                         });
                                     }
                                 }
@@ -164,6 +164,8 @@ impl Daemon {
                             let recovery = Arc::clone(&daemon);
                             let sharing = Arc::clone(sharing);
                             thread::spawn(move || {
+                                // Released however this thread ends -- see `lifecycle::Finish`.
+                                let _finish = recovery.lifecycle.finish_on_drop();
                                 let result = recovery.disable_sharing_transaction(&sharing);
                                 match result {
                                     Ok(()) => {
@@ -187,7 +189,6 @@ impl Daemon {
                                         None,
                                     )),
                                 }
-                                recovery.lifecycle.finish();
                             });
                         }
                     }
