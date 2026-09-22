@@ -176,7 +176,7 @@ fn every_command_is_granted_to_exactly_the_surfaces_that_call_it() {
     // a page calling a command only its sibling was granted is still
     // rejected at runtime. Check each bundled page against its own grants.
     for (capability, script) in [
-        ("main", include_str!("../../ui/index.html")),
+        ("main", SPLASH),
         ("control", include_str!("../../ui/control.js")),
         ("confirmation", include_str!("../../ui/confirmation.js")),
     ] {

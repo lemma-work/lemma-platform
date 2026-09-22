@@ -7,7 +7,7 @@ fn the_splash_draws_something_for_every_state() {
     // early for a state with no phase, and again for an undecided
     // connection mode -- so those states left the bare static logo on
     // screen indefinitely, which is what a stuck first run looked like.
-    let splash = include_str!("../../ui/index.html").replace("\r\n", "\n");
+    let splash = SPLASH.replace("\r\n", "\n");
     let body = {
         let start = splash
             .find("function renderState(s) {")
@@ -40,7 +40,7 @@ fn the_splash_draws_something_for_every_state() {
 /// launch, every error and every shutdown flashed a full screen of cream.
 #[test]
 fn the_splash_is_the_products_colour_and_follows_the_system_theme() {
-    let splash = include_str!("../../ui/index.html").replace("\r\n", "\n");
+    let splash = SPLASH.replace("\r\n", "\n");
 
     for gold in [
         "#c0801f",

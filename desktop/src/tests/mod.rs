@@ -188,6 +188,19 @@ fn invoked_commands(script: &str) -> Vec<String> {
         .collect()
 }
 
+/// The splash as the app loads it: the page, its scripts and its styles.
+///
+/// Its code used to be inline in `index.html`, and the guards that read it
+/// read that one file. Moved out so the page could run under a policy with no
+/// inline script -- and a guard still reading only the markup would pass
+/// vacuously, finding none of what it looks for and none of what it forbids.
+pub(crate) const SPLASH: &str = concat!(
+    include_str!("../../ui/index.html"),
+    include_str!("../../ui/splash.js"),
+    include_str!("../../ui/splash-orb.js"),
+    include_str!("../../ui/splash.css"),
+);
+
 /// Every source file of the shell, concatenated.
 ///
 /// `main.rs` was 11,297 lines and the guards below scanned it by name. It is a

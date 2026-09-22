@@ -435,7 +435,7 @@ fn unpublished_online_runtime_error_is_actionable_and_logged_in_app() {
     assert!(!message.contains("Publish"), "{message}");
     assert!(!message.contains("PR test DMG"), "{message}");
 
-    let splash = include_str!("../../ui/index.html").replace("\r\n", "\n");
+    let splash = SPLASH.replace("\r\n", "\n");
     assert!(splash.contains("diagnosticLogs: (source, cursor = null)"));
     assert!(splash.contains("refreshDiagnosticLog"));
     assert!(splash.contains("id=\"log-tabs\""));
