@@ -41,6 +41,22 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
 )
 
 
+#: What a host agent is given of the user's Lemma identity. An allowlist rather
+#: than "whatever `get_env_vars` returned", so a sandbox-only variable added
+#: later does not silently start leaving the sandbox.
+_HOST_AGENT_ENVIRONMENT = frozenset(
+    {
+        "LEMMA_TOKEN",
+        "LEMMA_BASE_URL",
+        "LEMMA_AUTH_URL",
+        "LEMMA_HOST_ORIGIN",
+        "LEMMA_USER_ID",
+        "LEMMA_POD_ID",
+        "LEMMA_ORG_ID",
+    }
+)
+
+
 def run_start_payload(
     *,
     agent: Agent,
@@ -117,9 +133,19 @@ async def mcp_payload[DepsT: AgentContext](
             session_id=str(agent_run_id),
         )
         token = workspace_env["LEMMA_TOKEN"]
+        # The same identity the sandbox gets, for an agent that runs on the
+        # user's own machine instead. `LEMMA_WORKSPACE_URL` is deliberately not
+        # among them: it addresses the cloud sandbox, and a host agent that
+        # believed it would be pointed at the wrong filesystem.
+        agent_environment = {
+            name: value
+            for name, value in workspace_env.items()
+            if name in _HOST_AGENT_ENVIRONMENT
+        }
     finally:
         await workspace_service.close()
     return {
+        "environment": agent_environment,
         "server_name": LEMMA_MCP_SERVER_NAME,
         "url": (
             f"{settings.api_url.rstrip('/')}/agent-runtime/conversations/"

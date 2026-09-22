@@ -208,6 +208,27 @@ class TestCredentials:
 
         assert "runtime_credentials" not in payload
 
+    async def test_the_host_agent_is_given_the_users_lemma_identity(self):
+        """Distinct from the assertion above, and deliberately so.
+
+        `runtime_credentials` are the model provider's keys and have no
+        business on somebody's laptop. The Lemma environment is the opposite
+        case: it is the same run-scoped, pod-scoped delegated session the
+        sandbox agent already receives, and without it every `lemma` command
+        the skills instruct a host agent to run has no credential at all.
+        """
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _HOST_AGENT_ENVIRONMENT,
+        )
+
+        assert "LEMMA_TOKEN" in _HOST_AGENT_ENVIRONMENT
+        assert {"LEMMA_POD_ID", "LEMMA_ORG_ID", "LEMMA_USER_ID"} <= (
+            _HOST_AGENT_ENVIRONMENT
+        )
+        # Addresses the cloud sandbox. A host agent that believed it would be
+        # pointed at a filesystem that is not the folder it was bound to.
+        assert "LEMMA_WORKSPACE_URL" not in _HOST_AGENT_ENVIRONMENT
+
 
 def _system_prompt(*, toolsets: list[AgentToolset] | None = None) -> str:
     agent = _agent()

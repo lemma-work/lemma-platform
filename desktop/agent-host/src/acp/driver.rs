@@ -25,7 +25,8 @@ impl AgentDriver for AcpDriver {
         scratch_directory: PathBuf,
     ) -> anyhow::Result<AcpProbeOutcome> {
         std::fs::create_dir_all(&scratch_directory)?;
-        let agent = build_agent(&adapter);
+        // A probe asks a binary its version; it gets no credential.
+        let agent = build_agent(&adapter, std::collections::BTreeMap::default());
         let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
         let stderr = capture_stderr(stderr);
         let outcome = agent_client_protocol::Client
@@ -77,7 +78,7 @@ impl AgentDriver for AcpDriver {
     ) -> anyhow::Result<AcpRunOutcome> {
         std::fs::create_dir_all(&request.scratch_directory)?;
         let adapter_key = request.adapter.spec.key.clone();
-        let agent = build_agent(&request.adapter);
+        let agent = build_agent(&request.adapter, request.agent_environment.clone());
         let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
         let stderr = capture_stderr(stderr);
         let notification_callbacks = Arc::clone(&callbacks);

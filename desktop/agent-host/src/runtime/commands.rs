@@ -143,6 +143,17 @@ impl TargetWorker {
             .refresh_run_mcp(self.target.target_id, run_id, lease_epoch, mcp)?
         {
             tracing::debug!(%run_id, "refreshed the run's Lemma MCP credential");
+            // The bridge re-reads the journal, but the agent process cannot
+            // have its environment rewritten after spawn. The token file is
+            // the one copy a running agent can pick a new credential up from,
+            // so a refresh that did not rewrite it would leave the agent's own
+            // `lemma` commands failing while its MCP tools kept working.
+            if let Some(token) = mcp.get("token").and_then(serde_json::Value::as_str)
+                && let Err(error) =
+                    crate::runtime::credentials::write_run_token(&self.paths.root, run_id, token)
+            {
+                tracing::warn!(%run_id, %error, "could not rewrite the run credential file");
+            }
         }
         Ok(())
     }

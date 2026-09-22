@@ -130,10 +130,17 @@ impl TargetWorker {
             // Kept behind, so the failure path below can still ask whether the
             // user pressed Stop.
             let asked_to_stop = cancel_rx.clone();
+            let agent_environment = crate::runtime::credentials::agent_environment(
+                &paths.root,
+                run_id,
+                &spec.mcp,
+                crate::acp::run_environment(&spec.mcp),
+            );
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
                 scratch_directory: scratch.clone(),
+                agent_environment,
                 mcp_server: Some(mcp_server),
                 can_load_session,
                 published_config_options,
@@ -144,6 +151,8 @@ impl TargetWorker {
             };
             let outcome =
                 tokio::time::timeout(remaining, driver.run(request, callbacks.clone())).await;
+            // However the run ended, its credential stops being needed here.
+            crate::runtime::credentials::remove_run_token(&paths.root, run_id);
             if matches!(outcome, Ok(Ok(_)))
                 && let Err(error) = publish_generated_images(&scratch, callbacks.as_ref())
             {

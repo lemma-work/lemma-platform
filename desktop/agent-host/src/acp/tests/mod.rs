@@ -6,6 +6,7 @@ use super::*;
 
 mod lost_session;
 mod object_id_tests;
+mod run_environment_tests;
 mod scoped_mcp_approval_tests;
 mod session;
 mod setup_deadline_tests;
