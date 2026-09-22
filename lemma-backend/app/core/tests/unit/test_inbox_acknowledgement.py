@@ -178,3 +178,31 @@ def _session_maker(session):
         return session
 
     return make
+
+
+def test_a_claim_is_never_held_longer_than_the_reclaimer_waits(monkeypatch) -> None:
+    """The two windows have to agree, and they used to agree only by accident.
+
+    A handed-back delivery returns when the reclaim subscriber's
+    ``min_idle_time`` expires, and the claim it collided with is exactly that
+    old by then. If the inbox holds claims for *longer*, the returning delivery
+    is handed back again -- and again -- for as long as the difference lasts.
+
+    Both were 60: one a setting, one a literal in `InboxConsumer.__init__`.
+    Nothing connected them, so lowering `REDIS_STREAM_MIN_IDLE_TIME_MS` alone
+    would have opened exactly that gap, silently.
+    """
+    from datetime import timedelta
+
+    from app.core.infrastructure.events.config import event_transport_settings
+
+    monkeypatch.setattr(
+        event_transport_settings, "redis_stream_min_idle_time_ms", 15_000
+    )
+
+    inbox = InboxConsumer(AsyncMock())  # type: ignore[arg-type]
+
+    assert inbox.abandon_after == timedelta(seconds=15)
+    assert inbox.abandon_after <= timedelta(
+        milliseconds=event_transport_settings.redis_stream_min_idle_time_ms
+    ), "a claim outlives the reclaim window, so a hand-back repeats"

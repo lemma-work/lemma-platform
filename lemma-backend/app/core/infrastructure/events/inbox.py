@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.models import DomainEventInbox
 from app.core.log.log import get_logger
 from app.core.origin import origin_from_payload, origin_scope
@@ -125,10 +126,27 @@ class InboxConsumer:
         session_maker: Callable[[], AsyncSession],
         *,
         max_attempts: int = 10,
-        abandon_after_seconds: int = 60,
+        abandon_after_seconds: float | None = None,
     ) -> None:
         self._session_maker = session_maker
         self.max_attempts = max_attempts
+        # Taken from the reclaim subscriber's idle threshold rather than named
+        # again here, because the two have to agree and nothing said so. A
+        # delivery that is handed back (see `ClaimOutcome.IN_FLIGHT_ELSEWHERE`)
+        # comes round again when the reclaimer's `min_idle_time` expires, and
+        # the claim it collided with is exactly that old by then. Hold claims
+        # for *longer* than that and the returning delivery is handed back
+        # again, and again, for as long as the difference lasts.
+        #
+        # They were two independent numbers that happened to both be 60: one a
+        # setting, one a literal in this signature. Deriving one from the other
+        # makes the agreement a property of the code instead of a coincidence
+        # that the next person to tune `REDIS_STREAM_MIN_IDLE_TIME_MS` would
+        # have silently broken.
+        if abandon_after_seconds is None:
+            abandon_after_seconds = (
+                event_transport_settings.redis_stream_min_idle_time_ms / 1000
+            )
         self.abandon_after = timedelta(seconds=abandon_after_seconds)
 
     async def process(
