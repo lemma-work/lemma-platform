@@ -97,6 +97,18 @@ export interface SendAssistantControllerMessageOptions {
 
 export type AssistantUserApprovalDecision = "APPROVE_ONCE" | "APPROVE_FOR_SESSION" | "DENY";
 
+/**
+ * One sentence the agent's runtime wrote for a person.
+ *
+ * Not an error: the run carried on. `at` is there so a consumer can tell two
+ * identical notices apart and show the second one.
+ */
+export interface AssistantNotice {
+  text: string;
+  kind?: string;
+  at: number;
+}
+
 export interface UseAssistantControllerResult {
   messages: AssistantRenderableMessage[];
   conversations: Conversation[];
@@ -105,6 +117,8 @@ export interface UseAssistantControllerResult {
   availableModels: AvailableModelInfo[];
   conversationModel: ConversationModel | null;
   conversationRuntime: AgentRuntimeConfig | null;
+  /** The most recent runtime notice, or null if there has not been one. */
+  notice: AssistantNotice | null;
   isOpenedConversationRunning: boolean;
   isActiveConversationRunning: boolean;
   isLoading: boolean;
@@ -915,6 +929,15 @@ export function useAssistantController({
     )));
   }, []);
 
+  // Surfaced rather than swallowed, and deliberately not as an error: the run
+  // is fine. What reaches the consumer is one sentence the runtime wrote for a
+  // person, which the experience renders as a toast instead of leaving it to
+  // arrive inside the agent's own reply.
+  const [notice, setNotice] = useState<AssistantNotice | null>(null);
+  const handleAssistantNotice = useCallback((text: string, kind: string | undefined) => {
+    setNotice({ text, kind, at: Date.now() });
+  }, []);
+
   const assistantSession = useAssistantSession({
     client,
     podId: scope.podId ?? undefined,
@@ -927,6 +950,7 @@ export function useAssistantController({
     autoLoad: false,
     onTitle: handleConversationTitle,
     onError: handleAssistantSessionError,
+    onNotice: handleAssistantNotice,
   });
 
   const {
@@ -2391,6 +2415,7 @@ export function useAssistantController({
     error,
     errorCode,
     errorReason,
+    notice,
     canRetryFailedMessage,
     pendingActions,
     completedActions,

@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { AgentRuntimeConfig, AvailableModelInfo } from 'lemma-sdk';
+import { toast } from 'sonner';
 import {
     useAssistantController,
     type AssistantMessagePart as SdkAssistantMessagePart,
@@ -308,6 +309,19 @@ export function AIAssistantProvider({
         autoLoad: controllerGates.autoLoad,
         autoLoadMessages: isControllerEnabled,
     });
+
+    // A runtime notice is a sentence about the run, not part of the agent's
+    // reply, so it is shown beside the conversation rather than inside it. The
+    // host has always written these -- a model a harness no longer offers, a
+    // provider session that was lost and restarted -- and until the SDK
+    // carried them they were dropped without ever being seen.
+    const lastNoticeAtRef = useRef(0);
+    useEffect(() => {
+        const notice = controller.notice;
+        if (!notice || notice.at === lastNoticeAtRef.current) return;
+        lastNoticeAtRef.current = notice.at;
+        toast(notice.text);
+    }, [controller.notice]);
 
     const controllerRef = useRef(controller);
 
