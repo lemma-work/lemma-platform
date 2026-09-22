@@ -1070,6 +1070,143 @@ def test_a_schedule_exports_without_where_it_last_ran():
         assert runtime_only not in payload, runtime_only
 
 
+def test_an_agent_exports_only_fields_the_api_will_take():
+    """A bundle this code writes has to be one this code can import.
+
+    `kind` drifted in exactly as the schedule fields above did: export wrote it,
+    import refused it by name -- "Unrecognized field(s) on agent: kind" -- so
+    every bundle with an agent in it died at the plan step, and the only way
+    through was editing the JSON by hand.
+
+    Asserted as the whole-payload invariant rather than against `kind` alone,
+    because naming one field is what let the schedule list drift in the first
+    place: any future field added to `AgentResponse` and not to the requests
+    fails here, at the export, instead of on somebody's import.
+    """
+    from lemma_cli.cli_app.pod_bundle import _accepted_bundle_fields
+    from lemma_pod_bundle.normalize import _normalize_agent_payload
+
+    payload = _normalize_agent_payload(
+        {
+            "name": "triage",
+            "instruction": "Be helpful.",
+            "description": "Triages inbound mail",
+            "icon_url": None,
+            "visibility": "POD",
+            "agent_runtime": None,
+            "toolsets": ["WEB_SEARCH"],
+            "metadata": None,
+            # Server-owned, all of it.
+            "id": "agent_1",
+            "pod_id": "pod_1",
+            "user_id": "user_1",
+            "kind": "USER",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "allowed_actions": ["agent.read"],
+        }
+    )
+
+    # What an agent is, kept.
+    assert payload["name"] == "triage"
+    assert payload["instruction"] == "Be helpful."
+    assert payload["toolsets"] == ["WEB_SEARCH"]
+    # Which agents the pod came with is the receiving pod's to decide, not the
+    # bundle's to carry -- same category as pod_id and user_id beside it.
+    assert "kind" not in payload
+    assert not set(payload) - _accepted_bundle_fields("agents")
+
+
+def test_an_older_bundle_carrying_kind_still_imports(tmp_path: Path):
+    """Fixing the exporter does nothing for the bundles it already wrote.
+
+    Every bundle exported before the fix has `kind` sitting in its agent JSON,
+    and the import refuses unrecognized fields outright. So it is stripped on
+    the way in too, on the same terms as a function's `revision_hash`.
+    """
+    agents_root = tmp_path / "agents"
+    agent_dir = agents_root / "triage"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "triage.json").write_text(
+        json.dumps(
+            {
+                "name": "triage",
+                "instruction": "Be helpful.",
+                "kind": "USER",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    created_payloads: list[dict[str, object]] = []
+
+    client = FakeClient(
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {"items": []},
+            create=lambda pod_id, payload: (
+                created_payloads.append(_plain(payload)) or {"name": "triage"}
+            ),
+        ),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_123", source_dir=agents_root)
+
+    assert result["ok"] is True
+    assert len(created_payloads) == 1
+    assert created_payloads[0]["name"] == "triage"
+    assert "kind" not in created_payloads[0]
+
+
+def test_export_leaves_the_pods_own_assistant_out_of_the_bundle(tmp_path: Path):
+    """A bundle is a pod's design; the assistant every pod mints with itself is
+    not part of one. The server-side exporter has always skipped it
+    (`pod_bundle.domain.exportable`); this path wrote it out like any other
+    agent, so importing the bundle minted a duplicate beside the target pod's
+    own.
+    """
+    client = FakeClient(
+        pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "demo-pod"}),
+        agents=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {
+                "items": [
+                    {"name": "assistant", "kind": "POD_DEFAULT"},
+                    {"name": "triage", "kind": "USER"},
+                ]
+            },
+            get=lambda pod_id, agent_name: {
+                "id": f"agent_{agent_name}",
+                "pod_id": pod_id,
+                "name": agent_name,
+                "kind": "USER",
+                "instruction": f"Use {agent_name}.",
+            },
+            get_permissions=lambda pod_id, agent_name: {
+                "agent_name": agent_name,
+                "grants": [],
+            },
+        ),
+    )
+
+    result = export_pod_bundle(
+        client, pod_id="pod_123", output_dir=tmp_path, include={"agents"}
+    )
+
+    assert result["ok"] is True
+    assert result["counts"]["agents"] == 1
+    agents_root = tmp_path / "demo-pod" / "agents"
+    assert (agents_root / "triage").exists()
+    assert not (agents_root / "assistant").exists()
+
+
 def test_a_text_column_holding_digits_survives_a_csv_round_trip(tmp_path: Path):
     """`year` is TEXT and holds "2026"; CSV has no types, so the reader guessed
     int and Postgres refused the insert outright. The declared type is in the

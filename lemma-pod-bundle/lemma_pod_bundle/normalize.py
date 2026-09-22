@@ -156,11 +156,38 @@ def _sanitize_function_payload_for_import(payload: dict[str, Any]) -> dict[str, 
     return _strip_keys(payload, set(_FUNCTION_SERVER_FIELDS))
 
 
+# Server-owned fields on an agent, stripped on BOTH sides for the reason
+# _FUNCTION_SERVER_FIELDS spells out: on export so a fresh bundle is clean, and
+# again on import so a bundle an older exporter wrote still applies.
+#
+# `kind` is the one that used to slip through, and it broke every bundle with an
+# agent in it: export wrote the field, import refused it by name --
+# "Unrecognized field(s) on agent" -- so a bundle this code produced could not be
+# imported by it. It is not an authoring field. `kind` says which agents the pod
+# came with, and neither `CreateAgentRequest` nor `UpdateAgentRequest` has
+# anywhere to put it: an agent's kind is the receiving pod's to assign, exactly
+# like the `user_id` and `pod_id` stripped alongside it. A bundle cannot carry a
+# pod's own assistant at all (see `pod_bundle.domain.exportable`), so every agent
+# a bundle does carry is a USER one and the field says nothing either way.
+_AGENT_SERVER_FIELDS = frozenset(
+    {
+        "id",
+        "pod_id",
+        "user_id",
+        "kind",
+        "created_at",
+        "updated_at",
+        "allowed_actions",
+    }
+)
+
+
+def _sanitize_agent_payload_for_import(payload: dict[str, Any]) -> dict[str, Any]:
+    return _strip_keys(payload, set(_AGENT_SERVER_FIELDS))
+
+
 def _normalize_agent_payload(agent: dict[str, Any]) -> dict[str, Any]:
-    payload = _strip_keys(
-        agent,
-        {"id", "pod_id", "user_id", "created_at", "updated_at", "allowed_actions"},
-    )
+    payload = _strip_keys(agent, set(_AGENT_SERVER_FIELDS))
     # Make the structured-contract fields explicit in the bundle (as null when
     # unset) so the declarative intent is visible and a re-import faithfully
     # clears a schema the source agent no longer defines.
