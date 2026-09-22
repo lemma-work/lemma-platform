@@ -360,27 +360,33 @@ async def test_a_listing_that_fits_offers_no_next_page() -> None:
 
 
 def test_no_range_header_means_the_whole_file() -> None:
-    from app.modules.workspace.api.controllers.files_controller import _requested_range
+    from app.modules.workspace.api.controllers.workspace_file_ranges import (
+        requested_range,
+    )
 
-    assert _requested_range(None, 100) is None
-    assert _requested_range("", 100) is None
+    assert requested_range(None, 100) is None
+    assert requested_range("", 100) is None
 
 
 def test_a_range_becomes_an_offset_and_a_length() -> None:
-    from app.modules.workspace.api.controllers.files_controller import _requested_range
+    from app.modules.workspace.api.controllers.workspace_file_ranges import (
+        requested_range,
+    )
 
-    assert _requested_range("bytes=0-9", 100) == (0, 10)
+    assert requested_range("bytes=0-9", 100) == (0, 10)
     # An open-ended range runs to the end of the file.
-    assert _requested_range("bytes=10-", 100) == (10, 90)
+    assert requested_range("bytes=10-", 100) == (10, 90)
 
 
 def test_a_suffix_range_reads_the_end() -> None:
     """How a person peeks at the tail of a log without pulling all of it."""
-    from app.modules.workspace.api.controllers.files_controller import _requested_range
+    from app.modules.workspace.api.controllers.workspace_file_ranges import (
+        requested_range,
+    )
 
-    assert _requested_range("bytes=-20", 100) == (80, 20)
+    assert requested_range("bytes=-20", 100) == (80, 20)
     # Asking for more tail than there is file is the whole file, not an error.
-    assert _requested_range("bytes=-500", 100) == (0, 100)
+    assert requested_range("bytes=-500", 100) == (0, 100)
 
 
 def test_a_range_past_the_end_is_refused_rather_than_clamped() -> None:
@@ -389,48 +395,50 @@ def test_a_range_past_the_end_is_refused_rather_than_clamped() -> None:
     Clamping would answer 206 with bytes the caller did not ask for, and a
     resuming download would stitch them into the wrong place.
     """
-    from app.modules.workspace.api.controllers.files_controller import (
-        _UNSATISFIABLE,
-        _requested_range,
+    from app.modules.workspace.api.controllers.workspace_file_ranges import (
+        UNSATISFIABLE,
+        requested_range,
     )
 
-    assert _requested_range("bytes=200-300", 100) is _UNSATISFIABLE
-    assert _requested_range("bytes=100-", 100) is _UNSATISFIABLE
+    assert requested_range("bytes=200-300", 100) is UNSATISFIABLE
+    assert requested_range("bytes=100-", 100) is UNSATISFIABLE
 
 
 def test_a_range_this_does_not_understand_is_ignored_not_refused() -> None:
     """RFC 9110's instruction, and the safe direction: the caller gets the
     whole file, which is always a correct answer to a read."""
-    from app.modules.workspace.api.controllers.files_controller import _requested_range
+    from app.modules.workspace.api.controllers.workspace_file_ranges import (
+        requested_range,
+    )
 
     # Multipart would mean building a multipart body, and nothing asks for one.
-    assert _requested_range("bytes=0-1,5-6", 100) is None
-    assert _requested_range("items=0-1", 100) is None
-    assert _requested_range("bytes=abc-def", 100) is None
+    assert requested_range("bytes=0-1,5-6", 100) is None
+    assert requested_range("items=0-1", 100) is None
+    assert requested_range("bytes=abc-def", 100) is None
 
 
 def test_a_range_is_still_capped_at_one_read() -> None:
     """The ceiling is about what one request should transfer, so a range
     cannot be the way around it."""
-    from app.modules.workspace.api.controllers.files_controller import (
-        _MAX_CONTENT_BYTES,
-        _requested_range,
+    from app.modules.workspace.api.controllers.workspace_file_ranges import (
+        MAX_CONTENT_BYTES,
+        requested_range,
     )
 
-    huge = _MAX_CONTENT_BYTES * 4
-    offset, length = _requested_range(f"bytes=0-{huge}", huge)
-    assert (offset, length) == (0, _MAX_CONTENT_BYTES)
+    huge = MAX_CONTENT_BYTES * 4
+    offset, length = requested_range(f"bytes=0-{huge}", huge)
+    assert (offset, length) == (0, MAX_CONTENT_BYTES)
 
 
 def test_content_a_caller_already_holds_is_not_sent_again() -> None:
-    from app.modules.workspace.api.controllers.files_controller import _matches
+    from app.modules.workspace.api.controllers.workspace_file_ranges import matches_etag
 
-    assert _matches('"abc"', '"abc"')
-    assert _matches("*", '"abc"'), "anything the caller has will do"
+    assert matches_etag('"abc"', '"abc"')
+    assert matches_etag("*", '"abc"'), "anything the caller has will do"
     # A weak validator is the same bytes for this purpose.
-    assert _matches('W/"abc"', '"abc"')
-    assert _matches('"zzz", "abc"', '"abc"'), "a list is comma-separated"
-    assert not _matches('"zzz"', '"abc"')
+    assert matches_etag('W/"abc"', '"abc"')
+    assert matches_etag('"zzz", "abc"', '"abc"'), "a list is comma-separated"
+    assert not matches_etag('"zzz"', '"abc"')
 
 
 class TestTheBrowserProfileIsNotServed:
@@ -490,28 +498,26 @@ class TestSuffixRangesObeyTheSameRules:
     of the ordinary branch's guards."""
 
     def test_a_suffix_range_is_capped_like_any_other(self) -> None:
-        from app.modules.workspace.api.controllers.files_controller import (
-            _MAX_CONTENT_BYTES,
-            _requested_range,
+        from app.modules.workspace.api.controllers.workspace_file_ranges import (
+            MAX_CONTENT_BYTES,
+            requested_range,
         )
 
-        start, length = _requested_range(
-            "bytes=-999999999", total=_MAX_CONTENT_BYTES * 4
-        )
+        start, length = requested_range("bytes=-999999999", total=MAX_CONTENT_BYTES * 4)
 
-        assert length == _MAX_CONTENT_BYTES, (
+        assert length == MAX_CONTENT_BYTES, (
             "a suffix range could read far more in one response than "
             "`bytes=0-` could, which is the cap the whole-file reader is "
             "built around"
         )
-        assert start == _MAX_CONTENT_BYTES * 4 - 999999999 or start >= 0
+        assert start == MAX_CONTENT_BYTES * 4 - 999999999 or start >= 0
 
     def test_the_last_bytes_of_an_empty_file_cannot_be_satisfied(self) -> None:
         """`(0, 0)` renders as `bytes 0--1/0`. There is no last byte of
         nothing, and the honest answer is 416."""
-        from app.modules.workspace.api.controllers.files_controller import (
-            _UNSATISFIABLE,
-            _requested_range,
+        from app.modules.workspace.api.controllers.workspace_file_ranges import (
+            UNSATISFIABLE,
+            requested_range,
         )
 
-        assert _requested_range("bytes=-500", total=0) is _UNSATISFIABLE
+        assert requested_range("bytes=-500", total=0) is UNSATISFIABLE

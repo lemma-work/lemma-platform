@@ -46,8 +46,15 @@ from sandbox_runtime.paths import (
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
-from app.modules.workspace.services.workspace_sandbox_service import (
+from app.modules.workspace.api.controllers.workspace_file_ranges import (
+    Unsatisfiable,
+    matches_etag,
+    requested_range,
+)
+from app.modules.workspace.services.workspace_directory_ensure import (
     INTERACTIVE_READY_SECONDS,
+)
+from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
 from app.modules.workspace.session_support import sandbox_failure_types
@@ -427,14 +434,14 @@ async def read_workspace_file(
         # A viewer that already holds this exact content is told so rather
         # than sent it again. Cheap on a file pane, where re-selecting the
         # same file is the commonest thing a person does.
-        if etag and if_none_match and _matches(if_none_match, etag):
+        if etag and if_none_match and matches_etag(if_none_match, etag):
             await _release(service, session)
             return Response(
                 status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag}
             )
 
-        wanted = _requested_range(range_header, total)
-        if isinstance(wanted, _Unsatisfiable):
+        wanted = requested_range(range_header, total)
+        if isinstance(wanted, Unsatisfiable):
             await _release(service, session)
             raise HTTPException(
                 status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
@@ -490,78 +497,6 @@ async def read_workspace_file(
         media_type="application/octet-stream",
         headers=headers,
     )
-
-
-class _Unsatisfiable:
-    """A `Range` that names nothing this file has.
-
-    A type of its own rather than a bare `object` sentinel so the caller's
-    `isinstance` actually narrows -- with `object` in the union, unpacking the
-    tuple case does not typecheck, and silencing that would be silencing the
-    check that makes this safe to unpack at all.
-    """
-
-
-_UNSATISFIABLE = _Unsatisfiable()
-
-
-def _matches(if_none_match: str, etag: str) -> bool:
-    """Whether the caller already holds this exact content.
-
-    `*` matches anything, and a list is comma-separated. Weak validators
-    (`W/"..."`) compare equal to their strong form for this purpose: the
-    question is only "is this the same bytes".
-    """
-    candidates = [part.strip() for part in if_none_match.split(",")]
-    if "*" in candidates:
-        return True
-    return any(part.removeprefix("W/") == etag for part in candidates)
-
-
-def _requested_range(
-    header: str | None, total: int
-) -> tuple[int, int] | _Unsatisfiable | None:
-    """A `Range` header as an offset and a length, or `None` for the whole file.
-
-    Only `bytes=` with a single range: multipart ranges would mean building a
-    multipart body, and nothing that reads a workspace file asks for one. A
-    header this does not understand is ignored rather than refused, which is
-    what RFC 9110 asks for -- the caller gets the whole file, which is always
-    a correct answer.
-
-    A suffix range (`bytes=-500`, the last 500 bytes) is supported because it
-    is how a reader peeks at the end of a log.
-    """
-    if not header or not header.lower().startswith("bytes="):
-        return None
-    spec = header[len("bytes=") :].strip()
-    if "," in spec or "-" not in spec:
-        return None
-    first, _, last = spec.partition("-")
-    try:
-        if not first:
-            length = int(last)
-            if length <= 0:
-                return None
-            if total == 0:
-                # There is no last byte of an empty file. Falling through
-                # produced `(0, 0)`, which renders as `bytes 0--1/0` -- a
-                # malformed header for a range that cannot be satisfied.
-                return _UNSATISFIABLE
-            start = max(total - length, 0)
-            # The same ceiling the ordinary branch applies. Without it
-            # `bytes=-999999999` read far more in one response than
-            # `bytes=0-999999999` would, which is the cap the whole-file
-            # reader is built around.
-            return start, min(length, total - start, _MAX_CONTENT_BYTES)
-        start = int(first)
-        end = int(last) if last else total - 1
-    except ValueError:
-        return None
-    if start >= total or start > end:
-        return _UNSATISFIABLE
-    end = min(end, total - 1)
-    return start, min(end - start + 1, _MAX_CONTENT_BYTES)
 
 
 async def _release(service: WorkspaceSandboxService, session) -> None:

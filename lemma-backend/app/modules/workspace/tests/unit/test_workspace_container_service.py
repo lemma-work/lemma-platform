@@ -11,9 +11,7 @@ import pytest
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.config import settings
 from app.modules.workspace.contracts import SandboxInfo
-from app.modules.workspace.services import (
-    workspace_sandbox_service as container_service,
-)
+from app.modules.workspace.services import workspace_directory_ensure
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
@@ -321,7 +319,7 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     # is what the assertion below was really measuring. On a loaded runner
     # under coverage tracing it would start reporting a second mkdir for
     # reasons that have nothing to do with reuse. Production allows 60s.
-    monkeypatch.setattr(container_service, "_DIRECTORY_READY_SECONDS", 30.0)
+    monkeypatch.setattr(workspace_directory_ensure, "DIRECTORY_READY_SECONDS", 30.0)
 
     await asyncio.gather(
         service.get_session(user_id=user_id, pod_id=None, session_id="first"),
@@ -339,7 +337,7 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     # here expires the entry recorded above without waiting out the 30s. This
     # direction is safe to race: a slow machine only makes *more* time pass,
     # which is exactly what the assertion wants.
-    monkeypatch.setattr(container_service, "_DIRECTORY_READY_SECONDS", 0.05)
+    monkeypatch.setattr(workspace_directory_ensure, "DIRECTORY_READY_SECONDS", 0.05)
     await asyncio.sleep(0.08)
     await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
 
