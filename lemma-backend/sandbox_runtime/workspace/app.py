@@ -465,14 +465,19 @@ def create_app(
         await filesystem.move(request.source, request.destination)
         return Response(status_code=204)
 
-    @app.delete("/files", status_code=204)
+    @app.delete("/files")
     async def delete_file(
         path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
         recursive: bool = Query(default=False),
         _auth: None = Depends(authenticate),
     ) -> Response:
-        await filesystem.delete(path, recursive=recursive)
-        return Response(status_code=204)
+        # 204 when there was nothing to remove, 200 when there was. The manager
+        # has always computed this and the endpoint always threw it away, so
+        # both runtime-backed fabrics hard-coded `True` and told every caller
+        # something had been deleted -- including when nothing had. E2B has
+        # reported it truthfully since it existed.
+        removed = await filesystem.delete(path, recursive=recursive)
+        return Response(status_code=200 if removed else 204)
 
     return app
 

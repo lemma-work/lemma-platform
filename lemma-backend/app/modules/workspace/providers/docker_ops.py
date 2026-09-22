@@ -49,10 +49,13 @@ from app.modules.workspace.providers.docker_engine import (
 from app.modules.workspace.providers.profiles import SandboxProfile, profile_for
 from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeClient,
+)
+from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeError,
     WorkspaceRuntimeFileConflict,
     WorkspaceRuntimeFileNotFound,
     WorkspaceRuntimeFileRejected,
+    WorkspaceRuntimeProcessGone,
     WorkspaceRuntimeUnauthorized,
 )
 
@@ -222,8 +225,9 @@ class DockerOpsMixin:
         deadline_at: datetime,
     ) -> bool:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            await client.delete_file(path, recursive=recursive, deadline_at=deadline_at)
-            return True
+            return await client.delete_file(
+                path, recursive=recursive, deadline_at=deadline_at
+            )
 
     async def ensure_python_session(
         self,
@@ -279,6 +283,12 @@ class DockerOpsMixin:
             raise SandboxPathConflict(str(exc)) from exc
         except WorkspaceRuntimeFileRejected as exc:
             raise SandboxRejected(str(exc)) from exc
+        except WorkspaceRuntimeProcessGone as exc:
+            # Matches E2B, which has raised `ProviderGone` for an unknown
+            # process since it existed. On this path it was
+            # `SandboxUnavailable`, so polling a process id that will never
+            # exist retried until the deadline.
+            raise ProviderGone(str(exc)) from exc
         except WorkspaceRuntimeUnauthorized as exc:
             # Definitive: this credential will not become valid by waiting.
             raise SandboxRejected(str(exc)) from exc
@@ -425,7 +435,18 @@ class DockerOpsMixin:
         )
         if inspected is None:
             raise ProviderGone(f"sandbox container {instance.provider_id} is gone")
-        return SandboxEndpoint(url=self._base_url(inspected, runtime_port=port))
+        try:
+            url = self._base_url(inspected, runtime_port=port)
+        except WorkspaceRuntimeError as exc:
+            # `reach_port` sits outside `_ops_client`, so nothing mapped this.
+            # A port the container never published raised a raw
+            # `WorkspaceRuntimeError` straight through the provider: the port
+            # proxy catches `ProviderGone`/`ProviderRejected` and turns them
+            # into a 404, and caught neither of these -- so Docker answered an
+            # undeclared port with an unhandled 500 and an unframed WebSocket
+            # close, where Desktop answers a clean 404.
+            raise ProviderRejected(str(exc)) from exc
+        return SandboxEndpoint(url=url)
 
     async def deliver_secret(
         self,

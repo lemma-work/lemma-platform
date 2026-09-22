@@ -63,10 +63,8 @@ from app.modules.workspace.providers.docker_engine import (
     DockerVolumeCreateRequest,
 )
 from app.modules.workspace.providers.profiles import SandboxProfile, profile_for
-from app.modules.workspace.providers.runtime_client import (
-    WorkspaceRuntimeClient,
-    WorkspaceRuntimeError,
-)
+from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeClient
+from app.modules.workspace.providers.runtime_errors import WorkspaceRuntimeError
 
 
 def owner_label_for(tag: str | None) -> dict[str, str]:

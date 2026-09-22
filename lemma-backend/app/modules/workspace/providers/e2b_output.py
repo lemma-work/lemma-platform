@@ -33,6 +33,7 @@ from sandbox_runtime.protocol import (
 
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
+from app.modules.workspace.providers.base import ProviderGone
 
 # Long enough that an agent which parks a build and comes back still sees it,
 # short enough that abandoned output does not accumulate forever.
@@ -143,6 +144,15 @@ class E2BOutputBuffer:
         redis = self._redis
         key = self._chunks_key(process_id)
         total = await redis.llen(key)
+
+        raw_state_probe = await redis.get(self._state_key(process_id))
+        if total == 0 and raw_state_probe is None:
+            # Nothing was ever recorded under this id. The default below is
+            # `RUNNING`, which is right for a process that has started and not
+            # yet written anything -- and wrong for one that does not exist,
+            # which it reported as running, with no output, forever. A caller
+            # polling a bad id never learned anything was wrong.
+            raise ProviderGone(f"no process {process_id} in this sandbox")
 
         # The list is trimmed from the left, so the absolute sequence of the
         # oldest retained chunk is however many were dropped. Tracking total

@@ -190,8 +190,9 @@ class LemmaLocalOpsMixin:
         deadline_at: datetime,
     ) -> bool:
         async with self._ops(instance, deadline_at) as client:
-            await client.delete_file(path, recursive=recursive, deadline_at=deadline_at)
-            return True
+            return await client.delete_file(
+                path, recursive=recursive, deadline_at=deadline_at
+            )
 
     async def ensure_python_session(
         self, instance: ProviderInstance, request: CreatePythonSessionRequest

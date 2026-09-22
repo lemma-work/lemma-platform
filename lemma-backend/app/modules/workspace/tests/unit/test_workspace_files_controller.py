@@ -11,7 +11,7 @@ from sandbox_runtime.errors import SandboxPathNotFound, SandboxUnavailable
 
 from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 from app.modules.workspace.api.controllers import files_controller as controller
-from app.modules.workspace.providers.runtime_client import (
+from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeFileNotFound,
     WorkspaceRuntimeFileRejected,
 )

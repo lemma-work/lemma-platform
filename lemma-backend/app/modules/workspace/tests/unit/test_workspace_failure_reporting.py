@@ -34,6 +34,8 @@ from app.modules.workspace.providers.lemma_local import (
 )
 from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeClient,
+)
+from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeUnauthorized,
 )
 

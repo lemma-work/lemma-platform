@@ -808,25 +808,71 @@ async def test_deleting_a_missing_file_reports_that_nothing_was_removed(
     )
 
 
-async def test_a_mismatched_digest_is_refused_before_writing(
+async def test_the_digest_is_a_precondition_on_what_is_already_there(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
+    """`expected_sha256` means "replace the bytes I read", on every fabric.
+
+    It used to hash the *outgoing* payload here and the *existing* file
+    everywhere else, so the same argument asked opposite questions: on E2B "am
+    I sending what I think I am", and on Docker and Desktop "is the file I am
+    about to replace the one I read". Passing it therefore satisfied E2B and
+    made a first install impossible on the other two, which is why the one
+    caller that wants this stopped passing it at all.
+    """
+    import hashlib
+
+    from sandbox_runtime.errors import SandboxPathConflict
+
     instance = await provider.create(_spec(uuid4()))
+    path = f"{WORKSPACE_ROOT}/a.txt"
 
     async def payload():
-        yield b"contents"
+        yield b"replacement"
 
-    from sandbox_runtime.errors import SandboxRejected
-
-    with pytest.raises(SandboxRejected, match="digest"):
+    # Nothing is there, so there is nothing whose content can match.
+    with pytest.raises(SandboxPathConflict):
         await provider.write_file(
             instance,
-            path=f"{WORKSPACE_ROOT}/a.txt",
+            path=path,
             data=payload(),
-            expected_sha256="sha256:" + "0" * 64,
+            expected_sha256="sha256:" + hashlib.sha256(b"original").hexdigest(),
             deadline_at=_deadline(),
         )
-    assert f"{WORKSPACE_ROOT}/a.txt" not in world.files
+    assert path not in world.files
+
+    await provider.write_file(
+        instance,
+        path=path,
+        data=_stream(b"original"),
+        expected_sha256=None,
+        deadline_at=_deadline(),
+    )
+
+    # The wrong existing content is refused.
+    with pytest.raises(SandboxPathConflict):
+        await provider.write_file(
+            instance,
+            path=path,
+            data=_stream(b"replacement"),
+            expected_sha256="sha256:" + hashlib.sha256(b"something else").hexdigest(),
+            deadline_at=_deadline(),
+        )
+    assert world.files[path] == b"original"
+
+    # The right existing content goes through.
+    await provider.write_file(
+        instance,
+        path=path,
+        data=_stream(b"replacement"),
+        expected_sha256="sha256:" + hashlib.sha256(b"original").hexdigest(),
+        deadline_at=_deadline(),
+    )
+    assert world.files[path] == b"replacement"
+
+
+async def _stream(payload: bytes):
+    yield payload
 
 
 # ---------------------------------------------------------------------------

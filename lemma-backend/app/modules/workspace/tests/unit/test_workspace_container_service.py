@@ -510,9 +510,9 @@ async def test_an_exhausted_ensure_stops_believing_what_it_knew(
     monkeypatch.setattr(service, "_get_manager_client", lambda: _NeverReady())
     sandbox_health._capability.update({"status": "ready", "detail": "provisioned"})
 
-    service._ready_directories[(id(asyncio.get_running_loop()), user_id, "/x", 1, "g")] = (
-        asyncio.get_running_loop().time()
-    )
+    service._ready_directories[
+        (id(asyncio.get_running_loop()), user_id, "/x", 1, "g")
+    ] = asyncio.get_running_loop().time()
 
     with pytest.raises(TimeoutError) as caught:
         await service.get_session(user_id=user_id, pod_id=None)

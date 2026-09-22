@@ -376,16 +376,16 @@ class WorkspaceRuntimeBundleMixin:
             ARCHIVE_PATH,
             bundle.archive,
             deadline_at=deadline_at,
-            # No `expected_sha256` here, deliberately. The two providers read
-            # that argument differently -- the workspace runtime treats it as a
-            # precondition on the file *already* at this path, so a first upload
-            # to a path with nothing at it is a 409; E2B treats it as a checksum
-            # of the outgoing bytes. No single value is correct on both.
+            # No `expected_sha256` here, deliberately -- though no longer
+            # because the fabrics disagree about what it means. They read it
+            # the same way now: a precondition on the file *already* at this
+            # path, which a first upload to an empty path cannot satisfy on any
+            # of them.
             #
             # The installer hashes the staged archive against the version
-            # instead, which is stronger than either: the version *is* that
-            # digest, and the check runs against the bytes that actually landed
-            # rather than the ones we believe we sent.
+            # instead, which is stronger than a precondition either way: the
+            # version *is* that digest, and the check runs against the bytes
+            # that actually landed rather than the ones we believe we sent.
         )
 
     async def _run_installer(

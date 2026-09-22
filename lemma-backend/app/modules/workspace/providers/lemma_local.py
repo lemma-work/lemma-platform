@@ -67,6 +67,8 @@ from app.modules.workspace.providers.lemma_local_ops import (
 )
 from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeClient,
+)
+from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeError,
 )
 
@@ -176,6 +178,14 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                         "lemma-sandbox-kind": spec.kind.value,
                         "lemma-epoch": str(spec.epoch),
                     },
+                    # Docker forwards `spec.env` and E2B forwards it; this was
+                    # the one fabric that took the caller's environment and
+                    # silently dropped it. The guest has accepted an `env` map
+                    # since it existed -- it writes one and passes it as
+                    # `--env-file` -- so nothing but the send was missing.
+                    # `LEMMA_MAX_FILE_TRANSFER_BYTES` is set this way, which is
+                    # why Desktop alone ran on the in-guest default.
+                    "env": dict(spec.env),
                     "runtime_token": (
                         self._runtime_credentials.token(guest_id) if workspace else None
                     ),
@@ -414,10 +424,11 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             SandboxRejected,
             SandboxUnavailable,
         )
-        from app.modules.workspace.providers.runtime_client import (
+        from app.modules.workspace.providers.runtime_errors import (
             WorkspaceRuntimeFileConflict,
             WorkspaceRuntimeFileNotFound,
             WorkspaceRuntimeFileRejected,
+            WorkspaceRuntimeProcessGone,
             WorkspaceRuntimeUnauthorized,
         )
 
@@ -443,6 +454,12 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                 # loop on the machine's single vsock control channel instead of
                 # one sentence saying what was wrong.
                 raise SandboxRejected(str(exc)) from exc
+            except WorkspaceRuntimeProcessGone as exc:
+                # Matches E2B, which has raised `ProviderGone` for an unknown
+                # process since it existed. On this path it was
+                # `SandboxUnavailable`, so polling a process id that will never
+                # exist retried until the deadline.
+                raise ProviderGone(str(exc)) from exc
             except WorkspaceRuntimeUnauthorized as exc:
                 # Definitive: this credential will not become valid by waiting.
                 raise SandboxRejected(str(exc)) from exc
