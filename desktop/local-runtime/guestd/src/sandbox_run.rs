@@ -20,6 +20,17 @@ pub(crate) fn build_run_arguments(
 ) -> Vec<String> {
     let metadata = serde_json::to_string(&parameters.metadata)
         .expect("validated sandbox metadata must serialize");
+    // What this container serves, recorded on the container itself.
+    //
+    // `snapshot_from_inspect` used to rebuild this from a list compiled into
+    // `spec.rs`, which is a second copy of something the caller already sent --
+    // and the two disagreed for as long as the browser relay existed: declared
+    // by the backend, published by the loop below, and absent from the guest's
+    // own idea of what a workspace serves, so `reach_port` refused a port that
+    // was listening. Reading back what was asked for is the only version of
+    // this that cannot drift.
+    let apps =
+        serde_json::to_string(&parameters.apps).expect("validated sandbox apps must serialize");
     let mut arguments = vec![
         "run".into(),
         "--detach".into(),
@@ -45,6 +56,8 @@ pub(crate) fn build_run_arguments(
         format!("lemma.work/image-ref={}", parameters.image),
         "--label".into(),
         format!("lemma.work/metadata={metadata}"),
+        "--label".into(),
+        format!("lemma.work/apps={apps}"),
         "--env-file".into(),
         env_file.display().to_string(),
         "--add-host".into(),

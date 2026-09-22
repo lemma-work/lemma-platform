@@ -62,11 +62,26 @@ pub(crate) fn snapshot_from_inspect(
         .and_then(|value| value.get("lemma.work/workload-kind"))
         .and_then(Value::as_str)
         .ok_or_else(|| GuestError::engine("sandbox workload label is missing"))?;
-    let apps = match workload_kind {
+    // What the caller declared when this container was created, read back off
+    // the container. The compiled-in lists below are the fallback for one made
+    // before that label existed -- and the reason the label exists: they are a
+    // copy of a list the backend owns, and the copy was missing the browser
+    // relay, so every snapshot of a live sandbox said port 4850 was not served
+    // while the container was serving it.
+    let declared = labels
+        .and_then(|value| value.get("lemma.work/apps"))
+        .and_then(Value::as_str)
+        .and_then(|encoded| serde_json::from_str::<Vec<AppSpec>>(encoded).ok())
+        .filter(|apps| validate_apps(apps).is_ok());
+    // The kind is still checked when the label is present: an unrecognised one
+    // is a container this guest did not create, and answering for it at all is
+    // the mistake.
+    let fallback = match workload_kind {
         "workspace" => workspace_apps(),
         "function" => function_apps(),
         _ => return Err(GuestError::engine("sandbox workload label is invalid")),
     };
+    let apps = declared.unwrap_or(fallback);
     let image = labels
         .and_then(|value| value.get("lemma.work/image-ref"))
         .and_then(Value::as_str)

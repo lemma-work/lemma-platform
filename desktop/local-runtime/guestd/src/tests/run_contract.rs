@@ -32,7 +32,15 @@ fn run_contract_uses_digest_env_file_private_gateway_and_all_app_ports() {
     assert!(joined.contains("host.lemma.internal:192.168.64.1"));
     assert!(joined.contains("0.0.0.0::8080"));
     assert!(joined.contains("0.0.0.0::4848"));
+    assert!(joined.contains("0.0.0.0::4850"));
     assert!(!joined.contains("0.0.0.0::8090"));
+    // Recorded on the container, so that reading a sandbox back does not mean
+    // trusting a second copy of this list compiled into the guest.
+    assert!(
+        joined.contains(r#"lemma.work/apps=[{"name":"runtime""#),
+        "the declared apps are not written to the container: {joined}"
+    );
+    assert!(joined.contains(r#""port":4850"#));
     assert!(joined.contains("/var/lib/lemma/run/runtime-token-box-1,dst=/run/lemma-bootstrap"));
     assert!(!joined.contains("lemma-bootstrap,readonly"));
     assert!(joined.ends_with("ghcr.io/lemma/workspace@sha256:abc"));
