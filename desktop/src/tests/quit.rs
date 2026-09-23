@@ -250,7 +250,7 @@ mod locald_events {
     /// `ready` is the one arm that makes a launch usable. It clears a stale
     /// error, takes the origin the daemon names -- only a trusted one -- and
     /// asks for the resume target and time-to-ready to be recorded, without
-    /// recording either itself: that disk work used to run under `shell.ui`.
+    /// recording either itself: that disk work must not run under `shell.ui`.
     #[test]
     fn ready_makes_the_launch_usable_and_asks_for_its_side_effects() {
         let mut ui = UiState {

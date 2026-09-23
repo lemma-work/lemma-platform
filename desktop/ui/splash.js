@@ -127,17 +127,13 @@ const operationStatus = document.getElementById("operation-status");
 const operationDetail = document.getElementById("operation-detail");
 const operationMeta = document.getElementById("operation-meta");
 
-// Three of these used to be rewritten one id at a time, which meant the ones
-// written from JS -- the boot subtitle and the local-install question --
-// stayed "Mac" on a PC. "this Mac" is never right on Windows anywhere, so
-// this rewrites text nodes wholesale rather than keeping a list nobody
-// remembers to extend. Attributes and element structure are untouched.
+// "this Mac" is never right on Windows, so text nodes are rewritten wholesale
+// rather than by a list of ids someone has to remember to extend. Attributes
+// and element structure are untouched.
 function speakTheRightDevice(root) {
   if (!IS_WINDOWS) return;
-  // SCRIPT and STYLE hold text nodes too, and this page's script is inline.
-  // Rewriting it after it has run changes nothing anyone sees, but it does
-  // leave a DOM whose source no longer matches the file -- which is a nasty
-  // half hour for whoever next reads it in a devtools window.
+  // SCRIPT and STYLE hold text nodes too. Rewriting them changes nothing
+  // anyone sees, but leaves a DOM whose source no longer matches the file.
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode: (node) =>
       node.parentNode && /^(SCRIPT|STYLE)$/.test(node.parentNode.nodeName)

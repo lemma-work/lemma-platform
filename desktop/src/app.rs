@@ -294,9 +294,8 @@ pub(crate) fn stand_down_state(ui: &mut UiState, failure: Option<String>) {
 /// `ensure_locald` installs the runtime artifacts before it can spawn
 /// anything, which on a first run or an upgrade is an unpack of hundreds of
 /// megabytes, and it then waits up to LOCALD_START_BUDGET for the daemon to
-/// answer. It used to run inside `setup`, before the event loop started
-/// pumping -- so the splash froze on "Starting Lemma." for the whole install,
-/// with no progress and no way to tell it apart from a hang.
+/// answer. Inside `setup`, before the event loop pumps, that would freeze the
+/// splash for the whole install with no way to tell it from a hang.
 fn connect_on_launch(handle: &AppHandle) {
     let failure = match ensure_locald(handle) {
         Err(error) => Some((error, None)),
@@ -426,11 +425,9 @@ fn reopen_from_dock(app: &AppHandle) {
         let _ = window.set_focus();
         return;
     }
-    // Every window closed, which on macOS leaves the app running. This used to
-    // only ever show a window that already existed, so in exactly that state
-    // clicking the Dock icon did nothing at all -- the one gesture whose whole
-    // purpose is bringing a running app back, on the one platform where
-    // closing the last window is normal.
+    // Every window closed, which on macOS leaves the app running. The Dock
+    // icon is how a person brings it back, so with no window to show, one is
+    // opened.
     let snapshot = {
         let shell: State<Shell> = app.state();
         let ui = shell.ui.lock_or_recover();

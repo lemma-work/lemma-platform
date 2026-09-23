@@ -69,18 +69,14 @@ async def call_bridge(
     except subprocess.TimeoutExpired as exc:
         raise asyncio.TimeoutError from exc
     except OSError as exc:
-        # The bridge could not be started at all: it is not where the
-        # installation says it is, or it is not executable. Definitive, and it
-        # has to arrive in this module's vocabulary -- raw, it escaped the
-        # provider entirely and every caller rendered it as an unhandled 500
-        # rather than as a sandbox that cannot be reached.
+        # The bridge could not be started at all: missing, or not executable.
+        # Definitive, and in this module's vocabulary so callers report a
+        # sandbox that cannot be reached rather than an unhandled 500.
         #
-        # `LocalBridgeError` and not `LocalBridgeNotFound`, which in this
-        # module means "the guest says that sandbox does not exist". `_status`
-        # turns that into `ProviderGone` and `_mutate` treats it as the outcome
-        # already achieved and returns successfully -- so a bridge nobody can
-        # run would have reported a release, a delete and a storage purge as
-        # done while none of them happened.
+        # `LocalBridgeError` and not `LocalBridgeNotFound`, which here means
+        # "the guest says that sandbox does not exist" -- an outcome `_mutate`
+        # treats as already achieved, so a bridge nobody can run would report a
+        # release, a delete or a purge as done.
         raise LocalBridgeError(
             f"managed runtime bridge could not be started: {exc.strerror or exc}",
             code="local_runtime_unavailable",

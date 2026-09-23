@@ -92,13 +92,10 @@ pub(crate) fn guarded<T>(lifecycle: &Lifecycle, work: impl FnOnce() -> T) -> Opt
 
 /// Releases the lifecycle when dropped, including while unwinding.
 ///
-/// Every operation used to pair `begin` and `finish` by hand -- nineteen
-/// sites, each ending its work with a bare `finish()`. A panic or early return
-/// between the two left `active` set for the rest of the process: every later
-/// operation was refused as "already working", and `wait_idle` on the quit
-/// path blocked forever, so the app could not even be closed. The existing
-/// `guarded` helper had the same gap, and its test asserted the guard was
-/// released "however the work ended" while only ever ending it normally.
+/// A `finish()` paired by hand is skipped by a panic or an early return, which
+/// leaves `active` set for the rest of the process: every later operation is
+/// refused as "already working", and `wait_idle` on the quit path never
+/// returns. Holding this instead releases it on every exit.
 #[must_use = "the lifecycle is released when this guard is dropped"]
 pub(crate) struct Finish<'a>(&'a Lifecycle);
 

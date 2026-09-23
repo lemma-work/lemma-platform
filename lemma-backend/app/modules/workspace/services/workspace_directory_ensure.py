@@ -122,7 +122,7 @@ class WorkspaceDirectoryEnsureMixin:
             self.get_or_create_sandbox(user_id), budget.remaining()
         )
         resolved = self._directory_cache_key(user_id, path, sandbox_info)
-        # Two separate questions, and conflating them was the bug here.
+        # Two separate questions.
         #
         # Whether readiness may be *remembered* needs an epoch and a storage
         # generation, so that a recreated workspace stops looking ready. When
@@ -304,11 +304,9 @@ class WorkspaceDirectoryEnsureMixin:
                 raise
             record_sandbox_reachable()
             return sandbox_info
-        # Every attempt raised, and until this was written each one's reason was
-        # bound and dropped. What reached the caller was a bare `TimeoutError`
-        # after the full deadline -- rendered as `500 INTERNAL_ERROR` with a null
-        # message -- so the one sentence saying why a workspace never came up
-        # existed on every iteration and survived none of them.
+        # Every attempt raised. The last reason is the only account of why the
+        # workspace never came up, so it goes in the error rather than a bare
+        # timeout.
         reason = str(last_error) if last_error else "no attempt completed"
         # Everything remembered about this workspace was learned from a fabric
         # that has now failed every attempt, so none of it is worth believing:
@@ -321,10 +319,9 @@ class WorkspaceDirectoryEnsureMixin:
         # instance to get a fresh one would take the user's files with it.
         # Recovery here means dropping what we think we know and asking again.
         self.forget_workspace(user_id)
-        # `/health/capabilities` said `ready` throughout an outage in which
-        # every file listing timed out, because the startup probe only ever
-        # proved a provider object could be built. An operation that gave up is
-        # the strongest evidence there is that the fabric is not usable.
+        # The startup probe proves only that a provider object can be built. An
+        # operation that gave up is the evidence that the fabric is not usable,
+        # so `/health/capabilities` has to hear about it.
         record_sandbox_unreachable()
         logger.warning(
             "workspace.sandbox_service.directory_ensure_exhausted.degraded",

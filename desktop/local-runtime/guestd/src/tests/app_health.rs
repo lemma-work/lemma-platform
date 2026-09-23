@@ -2,14 +2,10 @@
 //!
 //! `app_answers` over the guest's one HTTP prober, `readiness::probe_http`.
 //!
-//! The only place in this suite that opens one. Everything else decides the
-//! answer, because fixtures elsewhere map ports like 49152-49154 — inside
-//! Linux's ephemeral range — so a listener another test had just been assigned
-//! could answer a probe meant for nothing, and readiness assertions passed on
-//! macOS and failed on Linux for reasons unrelated to the code under test.
-//!
-//! These bind their own ports and probe only those, so there is nothing to
-//! collide with.
+//! The only tests here that open sockets. Everything else decides the answer,
+//! because fixtures elsewhere name fixed ports inside Linux's ephemeral range,
+//! where another test's listener may be. These bind their own ports and probe
+//! only those.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;

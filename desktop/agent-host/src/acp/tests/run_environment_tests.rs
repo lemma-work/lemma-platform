@@ -1,10 +1,7 @@
 //! What a run puts into its agent's environment.
 //!
-//! A host agent used to be spawned with `PATH` and nothing else, while a
-//! sandbox agent running the same skills got the user's whole `LEMMA_*`
-//! environment. Every `lemma` command a host agent was instructed to run had
-//! no credential, and a user saw that as the agent reporting that the pod
-//! connection would not authenticate.
+//! A host agent runs the same skills as a sandbox agent, and their `lemma`
+//! commands need the same `LEMMA_*` environment to authenticate.
 
 use super::*;
 use serde_json::json;
@@ -114,8 +111,8 @@ fn a_refresh_after_the_run_ended_does_not_resurrect_the_file() {
     drop(RetireOnDrop(std::sync::Arc::clone(&credential)));
 
     // An aborted run is not terminal in the journal until `reap_finished`
-    // catches up, so a `REFRESH_CREDENTIAL` can still arrive. It used to write
-    // the file back, after the only thing that would remove it had run.
+    // catches up, so a `REFRESH_CREDENTIAL` can still arrive -- and nothing
+    // would remove a file it wrote back.
     assert_eq!(credential.write("refreshed").expect("no error"), None);
     assert!(
         !path.exists(),

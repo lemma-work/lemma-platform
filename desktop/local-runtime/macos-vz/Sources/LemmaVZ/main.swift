@@ -7,12 +7,9 @@ private let version = "0.1.0"
 
 /// One line of `vz.log`, stamped.
 ///
-/// Every line here used to be a bare `fputs`, so the whole file was a wall of
-/// undated messages. When a workspace stopped answering and the backend spent
-/// five minutes timing out, `vz.log` held the transport resets that happened
-/// during it -- and there was no way to tell whether they came before, during
-/// or after, because nothing in the file said when anything happened. A log
-/// kept for diagnosis that cannot be correlated with anything is not one.
+/// Stamped so a transport reset in `vz.log` can be lined up against the
+/// backend's own logs; an undated line cannot be placed before, during or after
+/// the failure it might explain.
 private func vzLog(_ message: String) {
     var now = timeval()
     gettimeofday(&now, nil)

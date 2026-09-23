@@ -1,11 +1,7 @@
 // The Local settings modules, loaded in Node against just enough DOM.
 //
-// These tests used to slice function bodies out of one 1,700-line control.js
-// and run each in a hand-built context that re-declared whatever it happened to
-// read. So a test exercised a copy of a function next to stand-ins for its
-// neighbours, and passed as long as the text between two markers still parsed.
-// Now the page is modules, and a test imports the real ones: a function calls
-// the real functions it calls, and only the shell and the DOM are faked.
+// Tests import the real modules, so a function calls the real functions it
+// calls; only the shell and the DOM are faked.
 
 const ui = new URL('../../ui/control/', import.meta.url);
 

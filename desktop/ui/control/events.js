@@ -17,22 +17,14 @@ import { render, renderAgentHost, renderSandboxImage } from "./overview.js";
 
 /* The page that exists to explain a problem must not be the page that gives up.
  *
- * This used to be called once on load and thereafter only from the daemon
- * event handler -- which needs a live daemon. So if the first call rejected,
- * nothing ever asked again: `render()` returns early with no snapshot, the
- * state pill stays "Connecting…" forever, and the only feedback is a toast that
- * clears itself after five seconds. That is the state a user reaches by opening
- * Local settings *because* the stack is broken.
- *
- * Now it retries on a heartbeat until a snapshot arrives, and says so on screen
- * while it is trying.
+ * Local settings is often opened *because* the stack is broken, so a failed
+ * first request must not be the last one: it retries until a snapshot arrives,
+ * and says so on screen while it does. Only a live daemon sends events, so
+ * waiting for one to ask again would wait forever.
  */
 // Backed off rather than flat. A daemon that is coming back does so within a
-// second or two, and one that is not is usually not coming back at all -- a
-// stopped stack, a crash loop, a machine going to sleep with this window open.
-// A fixed five seconds asked that question for ever at the same rate, which is
-// a wake-up every five seconds on a laptop lid nobody has opened. Starting
-// sooner also makes the ordinary case feel faster than the flat interval did.
+// second or two; one that is not -- a stopped stack, a machine asleep with this
+// window open -- should not be asked at a fixed rate for ever.
 const SNAPSHOT_RETRY_FLOOR_MS = 1000;
 const SNAPSHOT_RETRY_CEILING_MS = 30000;
 let snapshotRetryDelay = SNAPSHOT_RETRY_FLOOR_MS;

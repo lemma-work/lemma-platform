@@ -4,10 +4,9 @@
 import { $, invoke } from "./core.js";
 
 /* ---------------------------------------------------------------- logs ---
- * Local settings used to show only the *paths* to the logs, which meant the
- * page that exists to explain a problem could not show one. The backing
- * command already tails by cursor, survives rotation and redacts secrets --
- * the only thing missing was the capability grant and somewhere to put it.
+ * The page that exists to explain a problem shows the logs, not just their
+ * paths. The backing command tails by cursor, survives rotation and redacts
+ * secrets.
  */
 
 let activeLogSource = "locald";

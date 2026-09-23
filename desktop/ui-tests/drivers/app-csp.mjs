@@ -1,10 +1,8 @@
 // The Content-Security-Policy the app serves its own pages with, applied by
 // every harness that loads one.
 //
-// The pages used to be tested with no policy at all, while the app ran them
-// under one -- so nothing checked that the policy and the pages agreed. That
-// is also why the policy could keep `'unsafe-inline'` for scripts: nothing
-// would have noticed the page that needed it, or the day none did.
+// Tested under the policy they ship with, so a page that needs something the
+// policy forbids fails here rather than in the app.
 import { readFileSync } from 'node:fs';
 
 const config = JSON.parse(

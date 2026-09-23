@@ -11,9 +11,8 @@ import {
 } from "./core.js";
 
 /* ------------------------------------------------------------- updates ---
- * Until now there was no updater at all, so a DMG in someone's hands could
- * never be fixed. The check runs in Rust, which is why the webview's CSP does
- * not have to learn about github.com.
+ * The check runs in Rust, which is why the webview's CSP does not have to
+ * learn about github.com.
  */
 
 function formatBytes(bytes) {

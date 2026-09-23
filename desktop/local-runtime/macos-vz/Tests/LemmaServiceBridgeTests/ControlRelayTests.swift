@@ -49,8 +49,8 @@ final class ControlRelayTests: XCTestCase {
         XCTAssertEqual(outcome(), .answered)
     }
 
-    /// The defect: a caller whose own deadline passed used to leave its
-    /// request slot held until the guest finished, however long that took.
+    /// A caller whose own deadline passed must not hold a request slot until
+    /// the guest finishes.
     func testACallerThatLeavesReleasesTheRequestWithoutWaitingForTheGuest() throws {
         let (client, caller) = try pair()
         let (guest, guestd) = try pair()

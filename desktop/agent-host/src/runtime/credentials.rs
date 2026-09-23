@@ -28,12 +28,11 @@ fn token_path(root: &Path, run_id: Uuid) -> PathBuf {
 /// One run's credential file, and whether the run is still alive to use it.
 ///
 /// Shared between the run task and the command handler that applies
-/// `REFRESH_CREDENTIAL`, and the lock is the point. An aborted run's task is
-/// dropped at an await point, and its journal row is not terminal until
-/// `reap_finished` catches up -- so a refresh arriving in that gap used to
-/// rewrite a file the run had just removed, and nothing removed it again. Here
-/// a retire and a rewrite cannot interleave, and once retired a rewrite is
-/// refused.
+/// `REFRESH_CREDENTIAL`, and the lock is the point. An aborted run's journal
+/// row is not terminal until `reap_finished` catches up, so a refresh can
+/// arrive after the run has retired its file. Under the lock a retire and a
+/// rewrite cannot interleave, and once retired a rewrite is refused -- nothing
+/// would remove the file a late rewrite left behind.
 ///
 /// The same lock serializes the first write against a refresh, which is what
 /// lets the staging file be named per process rather than per write.
@@ -95,10 +94,8 @@ impl Drop for RetireOnDrop {
 /// Replace the token file atomically.
 ///
 /// Through a temporary file and a rename, because a refresh rewrites this path
-/// while an agent may be reading it. `fs::write` truncates first, so a reader
-/// that arrives mid-refresh gets an empty or half-written token and fails to
-/// authenticate -- for a credential whose whole purpose is surviving a
-/// refresh, that is the one moment it must not do.
+/// while an agent may be reading it, and `fs::write` truncates first: a reader
+/// arriving mid-refresh would get an empty or partial token.
 fn write_token_file(path: &Path, token: &str) -> std::io::Result<PathBuf> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

@@ -286,10 +286,7 @@ impl LemmaUpdateMetadata {
     /// cannot open a data directory another major wrote, and Lemma ships no
     /// `pg_upgrade` step. So that, and only that, is refused.
     ///
-    /// Not knowing one side is not evidence of a change. This used to block
-    /// on "unknown", and the installed side was never recorded -- so every
-    /// Local Lemma update, on every platform, showed a disabled button over a
-    /// warning about data, for a database that had never changed version.
+    /// Not knowing one side is not evidence of a change, so it does not block.
     /// Even the refused case destroys nothing: Postgres will not start on a
     /// foreign data directory, and the previous runtime stays on disk.
     pub(crate) fn compatibility_with(&self, installed: Option<u64>) -> &'static str {

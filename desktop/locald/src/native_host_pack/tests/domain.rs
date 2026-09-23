@@ -329,10 +329,9 @@ fn no_sandbox_is_given_an_address_only_the_mac_can_resolve() {
 ///
 /// Two network perspectives share one backend. A sandbox reaches it through
 /// `host.lemma.internal`, which only guestd's containers can resolve; an agent
-/// running on the Mac reaches it through the install's own domain. The backend
-/// used to hand the host agent the sandbox's address, and its tests passed
-/// because they were given a working URL instead of the one the host pack
-/// actually emits. Pinned here so the backend's test reads the real thing.
+/// running on the Mac reaches it through the install's own domain. Pinned here
+/// so the backend's host-agent test reads what the host pack actually emits,
+/// not a URL that happens to work from both sides.
 #[test]
 fn the_backend_url_contract_matches_what_the_host_pack_emits() {
     let root = tempdir().unwrap();

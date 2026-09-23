@@ -300,14 +300,10 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
 
 /// The disk work an event asked for, done after `shell.ui` is released.
 ///
-/// Both of these used to run inside `apply_locald_event`, under the lock. The
-/// resume write had already been moved to a worker for that reason -- the main
-/// thread takes `shell.ui` on every navigation, and holding it across two
-/// fsyncs stalled WebKit's navigation delegate -- but `telemetry::note`, a
-/// read-modify-write of its own state file, still ran synchronously right
-/// beside it. Taking both out also makes `apply_locald_event` the pure fold its
-/// documentation says it is, which is what lets the `ready` arm be tested
-/// without writing into the real configuration.
+/// Not in `apply_locald_event`: the main thread takes `shell.ui` on every
+/// navigation, and file writes under it stall WebKit's navigation delegate.
+/// Kept out, `apply_locald_event` stays a pure fold, which is also what lets
+/// the `ready` arm be tested without writing into the real configuration.
 fn perform_event_side_effects(outcome: &mut EventOutcome) {
     if let Some(ReadyReached {
         cached,

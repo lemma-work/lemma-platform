@@ -106,9 +106,8 @@ impl<E: Engine + 'static> GuestService<E> {
         let mut applications_healthy = false;
         while Instant::now() < deadline {
             match self.snapshot_optional(&parameters.sandbox_id)? {
-                // `ready` is the eager apps answering their health paths; it
-                // used to be a mapped port, which is why this arm once asked a
-                // second question with its own probe.
+                // `ready` is the eager apps answering their health paths, so it
+                // needs no second probe here.
                 Some(snapshot) if snapshot["status"]["ready"] == true => {
                     last_snapshot = Some(snapshot);
                     applications_healthy = true;

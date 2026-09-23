@@ -286,8 +286,8 @@ async fn set_option(
 ///
 /// A cancel is asked for, not inflicted. Killing the process here is what the
 /// supervisor falls back to, and it is the worst moment to do it: the provider
-/// has not flushed the session file the *next* turn resumes from, so
-/// cancelling one message used to cost the conversation its whole history.
+/// has not flushed the session file the *next* turn resumes from, so killing it
+/// can cost the conversation its whole history.
 pub(crate) async fn prompt_turn(
     connection: &ConnectionTo<Agent>,
     session_id: SessionId,

@@ -140,8 +140,7 @@ fn only_a_known_postgres_major_change_refuses_an_update() {
         "postgres-major-change",
         "a new major cannot open the existing data directory"
     );
-    // Not knowing a side is not evidence of a change. Refusing on it is what
-    // disabled every Local Lemma update while both sides were 18.
+    // Not knowing a side is not evidence of a change.
     assert_eq!(eighteen.compatibility_with(None), "compatible");
     assert_eq!(
         LemmaUpdateMetadata::default().compatibility_with(Some(18)),

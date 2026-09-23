@@ -73,13 +73,9 @@ def test_db_pool_pressure_emits_one_transition_pair(monkeypatch) -> None:
             return self._checked_out
 
     # The pool is passed at registration, which is where the real listener gets
-    # it. This test used to invent a connection record carrying a `.pool` and
-    # hand it to the listener -- a shape SQLAlchemy never produces, since
-    # `_ConnectionRecord` name-mangles that attribute. The assertions below
-    # passed for the whole life of a probe that raised `AttributeError` on
-    # every real checkout, which is the entire reason the incident never fired
-    # in production. Only the counters are stood in for now; the argument
-    # shape is no longer part of the fiction.
+    # it. A connection record carrying a `.pool` is not a shape SQLAlchemy
+    # produces -- `_ConnectionRecord` name-mangles that attribute -- so only the
+    # counters are stood in for here, not the argument shape.
     pressured = session_module._pool_utilization_listener(_Pool(4))
     relieved = session_module._pool_utilization_listener(_Pool(1))
 

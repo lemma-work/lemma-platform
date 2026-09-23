@@ -127,7 +127,7 @@ fn a_value_outside_the_offered_list_is_refused() {
 }
 
 /// Planning is what makes the run fail before it writes anything: a bad
-/// selection after a valid model used to arrive after the model was set.
+/// selection must not arrive after the model was already set.
 #[test]
 fn one_bad_selection_fails_the_whole_plan() {
     let options = [

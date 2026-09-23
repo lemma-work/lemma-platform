@@ -199,13 +199,10 @@ pub(crate) fn capture_stderr(
 /// The Lemma identity a run hands its agent, read out of the run's own MCP
 /// configuration.
 ///
-/// A host agent used to get `PATH` and nothing else, while the sandbox agent
-/// running the same skills got the user's `LEMMA_*` environment. So every
-/// `lemma` command a host agent was told to run had no credential, and the
-/// failure surfaced to the user as the agent announcing that the pod connection
-/// would not authenticate. The token is the same run-scoped, pod-scoped,
-/// ~1h delegated session the sandbox receives; it already reaches this machine
-/// inside the run spec, it simply never reached the process.
+/// The skills a host agent runs tell it to use `lemma` commands, which need the
+/// same `LEMMA_*` environment a sandbox agent gets. The token is the run-scoped,
+/// pod-scoped, short-lived delegated session the sandbox receives; it arrives
+/// inside the run spec, and this is how it reaches the process.
 pub(crate) fn run_environment(mcp: &serde_json::Value) -> BTreeMap<String, String> {
     let mut environment = BTreeMap::new();
     let Some(published) = mcp

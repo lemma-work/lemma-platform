@@ -12,12 +12,10 @@ public enum ControlRelayOutcome: Equatable {
     case clientSentNothing
     /// The client gave up while the guest was still working.
     ///
-    /// The case this type exists for. `lemma-runtime` has its own deadline and
-    /// closes its socket when it passes. The bridge used to go on waiting for
-    /// the guest regardless -- holding one of `RequestGate`'s eight slots for
-    /// a caller that had already left -- so a handful of abandoned slow
-    /// operations queued every later request behind them, the health probe
-    /// included, until the host concluded its guest was gone.
+    /// `lemma-runtime` closes its socket when its own deadline passes. Waiting
+    /// on the guest past that point holds one of `RequestGate`'s few slots for
+    /// nobody, and enough abandoned slow operations queue every later request
+    /// -- the health probe included -- behind them.
     case clientWentAway
     /// The guest's answer arrived after the client could take it.
     case clientWriteFailed(String)
@@ -116,10 +114,9 @@ public func writeAll(_ descriptor: Int32, _ data: Data) throws {
 
 /// Read one newline-terminated line, or everything up to end of stream.
 ///
-/// In chunks: this used to be one `read(2)` per byte, which for a 4 MiB guest
-/// reply is four million system calls on the path of every workspace
-/// operation. The protocol is one line per connection in each direction, so
-/// nothing after the newline is lost by reading past it.
+/// In chunks rather than a byte per `read(2)`: replies run to megabytes, on the
+/// path of every workspace operation. The protocol is one line per connection
+/// in each direction, so nothing after the newline is lost by reading past it.
 ///
 /// With `abandonIfClosed`, the wait also watches that descriptor, and gives
 /// up with `LineError.abandoned` if it hangs up first.

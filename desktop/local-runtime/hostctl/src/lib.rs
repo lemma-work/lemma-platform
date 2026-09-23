@@ -76,13 +76,10 @@ impl BridgeConfig {
 
 /// A path the bridge must be told, never one it works out for itself.
 ///
-/// There used to be a fallback under `~/.lemma/local/run` (or
-/// `$LEMMA_LOCALD_ROOT`). It never matched the runtime manager, which keeps
-/// both files under `<state root>/local/run` in the platform's application
-/// data directory, so a bridge started without these variables failed with a
-/// bare "No such file or directory" that named neither the file nor how to
-/// point at the right one. locald always sets both; anyone running the
-/// bridge by hand should get told which variable to set.
+/// The runtime manager decides where these live, under its state root; a
+/// default here could only be a second, drifting copy of that decision. locald
+/// always sets both, and anyone running the bridge by hand is told which
+/// variable to set.
 fn required_path(variable: &str, configured: Option<std::ffi::OsString>) -> io::Result<PathBuf> {
     match configured {
         Some(value) if !value.is_empty() => Ok(PathBuf::from(value)),
