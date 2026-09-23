@@ -261,8 +261,13 @@ pub(crate) struct AppUpdateStatus {
     /// user commits is the difference between a considered choice and a
     /// surprise.
     pub(crate) runtime_download_bytes: Option<u64>,
-    /// Known database compatibility; this alone is not upgrade qualification.
+    /// Whether installing keeps this installation's data usable. See
+    /// `LemmaUpdateMetadata::compatibility_with`.
     pub(crate) data_compatibility: &'static str,
+    /// The Postgres majors behind a `postgres-major-change`, so the UI can say
+    /// which change it is refusing rather than that it is refusing.
+    pub(crate) installed_postgres_major: Option<u64>,
+    pub(crate) candidate_postgres_major: Option<u64>,
 }
 
 /// The `lemma` block a release feed carries alongside the standard fields.
@@ -273,12 +278,24 @@ pub(crate) struct LemmaUpdateMetadata {
 }
 
 impl LemmaUpdateMetadata {
-    /// Unknown compatibility blocks replacement when local runtime data exists.
+    /// Whether this update leaves the installation's data usable.
+    ///
+    /// Everything Lemma keeps is a Postgres data directory and a folder of
+    /// files, and schema changes are migrations that run on the next start.
+    /// The one change a migration cannot carry is a new Postgres *major*: it
+    /// cannot open a data directory another major wrote, and Lemma ships no
+    /// `pg_upgrade` step. So that, and only that, is refused.
+    ///
+    /// Not knowing one side is not evidence of a change. This used to block
+    /// on "unknown", and the installed side was never recorded -- so every
+    /// Local Lemma update, on every platform, showed a disabled button over a
+    /// warning about data, for a database that had never changed version.
+    /// Even the refused case destroys nothing: Postgres will not start on a
+    /// foreign data directory, and the previous runtime stays on disk.
     pub(crate) fn compatibility_with(&self, installed: Option<u64>) -> &'static str {
         match (installed, self.postgres_major) {
-            (Some(installed), Some(candidate)) if installed == candidate => "compatible",
-            (Some(_), Some(_)) => "migration-unavailable",
-            _ => "unknown",
+            (Some(installed), Some(candidate)) if installed != candidate => "postgres-major-change",
+            _ => "compatible",
         }
     }
 }

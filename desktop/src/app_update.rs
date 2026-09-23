@@ -152,7 +152,9 @@ pub(crate) async fn check_for_app_update(
         updates_supported: updates_enabled(),
         available_version: None,
         runtime_download_bytes: None,
-        data_compatibility: "unknown",
+        data_compatibility: "compatible",
+        installed_postgres_major: None,
+        candidate_postgres_major: None,
     };
     if !updates_enabled() {
         return Ok(status);
@@ -167,7 +169,6 @@ pub(crate) async fn check_for_app_update(
         .await
         .map_err(|error| format!("could not check for updates: {error}"))?;
     let Some(update) = update else {
-        status.data_compatibility = "compatible";
         return Ok(status);
     };
     status.available_version = Some(update.version.clone());
@@ -175,13 +176,16 @@ pub(crate) async fn check_for_app_update(
     // and hands back the parsed document, so this costs no extra request.
     let metadata = lemma_update_metadata(&update.raw_json);
     status.runtime_download_bytes = metadata.runtime_download_bytes;
-    status.data_compatibility = if !has_local_runtime_data() {
-        "compatible"
-    } else if cfg!(windows) {
-        "migration-unavailable"
-    } else {
-        metadata.compatibility_with(installed_postgres_major())
-    };
+    // No Windows exception: its data lives in a separate holder distribution,
+    // and replacing the runtime already refuses to run until that holder says
+    // it has the data (`refuse_replacement_without_holder`) -- a check at the
+    // point of risk, where a blanket refusal here only hid every update.
+    if has_local_runtime_data() {
+        let installed = installed_postgres_major();
+        status.data_compatibility = metadata.compatibility_with(installed);
+        status.installed_postgres_major = installed;
+        status.candidate_postgres_major = metadata.postgres_major;
+    }
     Ok(status)
 }
 
@@ -274,8 +278,8 @@ pub(crate) async fn install_app_update(
     ensure_update_preserves_data(
         reset_data,
         has_local_runtime_data(),
-        lemma_update_metadata(&update.raw_json).compatibility_with(installed_postgres_major()),
-        cfg!(windows),
+        installed_postgres_major(),
+        lemma_update_metadata(&update.raw_json).postgres_major,
     )?;
 
     // Downloaded first, and deliberately not with `download_and_install`.

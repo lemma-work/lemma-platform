@@ -139,11 +139,12 @@ test('an existing snapshot does not prevent reconnect or hide an outage', () => 
 });
 
 
-test('unsupported updates never invoke the installer or request a reset', async () => {
+test('an update that changes the Postgres major never reaches the installer', async () => {
   const { context } = fixture();
   const commands = [];
   context.invoke = async (command) => { commands.push(command); };
-  context.appUpdate = { dataCompatibility: 'requires-reset' };
+  context.appUpdate = { dataCompatibility: 'postgres-major-change', installedPostgresMajor: 18, candidatePostgresMajor: 19 };
+  load(context, 'function postgresMajorChangeMessage(', 'async function loadAppUpdate(');
   context.runtimeInfo = null;
   context.button = { dataset: { action: 'install-app-update' } };
   context.document.querySelectorAll = () => [];
@@ -292,4 +293,14 @@ test('a daemon that does not come back is asked less and less often', () => {
   delays.length = 0;
   vm.runInContext('scheduleSnapshotRetry()', context);
   assert.deepEqual(delays, [1000]);
+});
+
+test('a refused update names the change it refuses', () => {
+  const { context } = fixture();
+  load(context, 'function postgresMajorChangeMessage(', 'async function loadAppUpdate(');
+  const named = vm.runInContext(
+    'postgresMajorChangeMessage({ installedPostgresMajor: 18, candidatePostgresMajor: 19 })', context);
+  assert.match(named, /from Postgres 18 to Postgres 19/);
+  assert.match(named, /Nothing was changed/);
+  assert.match(vm.runInContext('postgresMajorChangeMessage({})', context), /a different Postgres version/);
 });

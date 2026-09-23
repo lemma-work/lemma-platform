@@ -247,9 +247,23 @@ function renderAppUpdate() {
     ? `The update itself is small. After Lemma restarts it downloads about ${runtime} of runtime before the workspace opens.`
     : "After Lemma restarts it downloads its runtime once before the workspace opens.";
   if (!LOCAL_MODE) $("app-update-cost").textContent = "Updates the desktop app and its local agent support. Cloud mode does not download the complete Local Lemma stack.";
-  const blocked = ["requires-reset", "migration-unavailable", "unknown"].includes(appUpdate.dataCompatibility);
-  $("app-update-reset-warning").hidden = !blocked;
+  // Only a new Postgres major is refused -- the one change a migration cannot
+  // carry. Everything else is an ordinary update: data stays where it is and
+  // migrations run on the next start.
+  const blocked = appUpdate.dataCompatibility === "postgres-major-change";
+  const warning = $("app-update-reset-warning");
+  warning.hidden = !blocked;
+  if (blocked) warning.textContent = postgresMajorChangeMessage(appUpdate);
   document.querySelector('[data-action="install-app-update"]').disabled = blocked;
+}
+
+/** What the refused update would change, in the words the shell uses too. */
+export function postgresMajorChangeMessage(update) {
+  const from = update?.installedPostgresMajor;
+  const to = update?.candidatePostgresMajor;
+  const change = from && to ? `from Postgres ${from} to Postgres ${to}` : "to a different Postgres version";
+  return `This update moves Lemma's database ${change}, which Lemma can't migrate automatically yet. `
+    + "Nothing was changed: your current version, pods, files and accounts are as they were.";
 }
 
 async function loadAppUpdate() {
@@ -826,8 +840,8 @@ async function runDesktopAction(button) {
     if (action === "install-app-update") {
       button.disabled = true;
       button.textContent = "Downloading…";
-      if (appUpdate?.dataCompatibility !== "compatible") {
-        throw new Error("This update has no supported data-preserving migration. Your current version and data have been kept.");
+      if (appUpdate?.dataCompatibility === "postgres-major-change") {
+        throw new Error(postgresMajorChangeMessage(appUpdate));
       }
       // The version the user is looking at, so the command can refuse if the
       // feed has moved on since they were shown it.

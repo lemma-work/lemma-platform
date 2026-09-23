@@ -461,16 +461,31 @@ pub(crate) fn has_local_runtime_data() -> bool {
 pub(crate) fn ensure_update_preserves_data(
     reset_requested: bool,
     has_runtime: bool,
-    compatibility: &str,
-    windows: bool,
+    installed_postgres_major: Option<u64>,
+    candidate_postgres_major: Option<u64>,
 ) -> Result<(), String> {
     if reset_requested {
         return Err("Updates never reset local data. Factory reset is a separate destructive action in recovery.".into());
     }
-    if has_runtime && (windows || compatibility != "compatible") {
-        return Err("This update has no supported data-preserving migration for this installation. Your current version and data have been kept. Wait for a compatible update.".into());
+    match (
+        has_runtime,
+        installed_postgres_major,
+        candidate_postgres_major,
+    ) {
+        (true, Some(installed), Some(candidate)) if installed != candidate => {
+            Err(postgres_major_change_message(installed, candidate))
+        }
+        _ => Ok(()),
     }
-    Ok(())
+}
+
+/// Why an update was refused, in the terms of the one change that refuses it.
+pub(crate) fn postgres_major_change_message(installed: u64, candidate: u64) -> String {
+    format!(
+        "This update moves Lemma's database from Postgres {installed} to Postgres \
+         {candidate}, which Lemma can't migrate automatically yet. Nothing was \
+         changed: your current version, pods, files and accounts are as they were."
+    )
 }
 
 pub(crate) fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {

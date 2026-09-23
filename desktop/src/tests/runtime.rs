@@ -123,43 +123,61 @@ fn nothing_in_setup_installs_the_runtime_on_the_main_thread() {
     }
 }
 
-/// The feed's compatibility block decides before anything is downloaded.
+/// Only a known change of Postgres major is refused.
+///
+/// Everything else Lemma changes between releases is carried by migrations
+/// on the next start. A new major is the one thing that cannot be: it will
+/// not open the old major's data directory.
 #[test]
-fn an_update_that_would_strand_local_data_says_so_first() {
-    let same = LemmaUpdateMetadata {
+fn only_a_known_postgres_major_change_refuses_an_update() {
+    let eighteen = LemmaUpdateMetadata {
         postgres_major: Some(18),
         runtime_download_bytes: Some(531_000_000),
     };
-    assert_eq!(same.compatibility_with(Some(18)), "compatible");
+    assert_eq!(eighteen.compatibility_with(Some(18)), "compatible");
     assert_eq!(
-        same.compatibility_with(Some(16)),
-        "migration-unavailable",
-        "a Postgres major bump cannot open the existing cluster"
+        eighteen.compatibility_with(Some(17)),
+        "postgres-major-change",
+        "a new major cannot open the existing data directory"
     );
-
-    // The caller blocks an unknown pairing if an installed runtime has data.
-    assert_eq!(same.compatibility_with(None), "unknown");
+    // Not knowing a side is not evidence of a change. Refusing on it is what
+    // disabled every Local Lemma update while both sides were 18.
+    assert_eq!(eighteen.compatibility_with(None), "compatible");
     assert_eq!(
         LemmaUpdateMetadata::default().compatibility_with(Some(18)),
-        "unknown"
+        "compatible"
     );
 }
 
 #[test]
-fn update_preflight_rejects_data_reset_and_unsupported_migrations() {
-    for windows in [false, true] {
-        for has_runtime in [false, true] {
-            assert!(
-                ensure_update_preserves_data(true, has_runtime, "compatible", windows).is_err()
-            );
-        }
+fn the_install_gate_refuses_a_reset_and_a_major_change_and_nothing_else() {
+    for has_runtime in [false, true] {
+        assert!(
+            ensure_update_preserves_data(true, has_runtime, Some(18), Some(18)).is_err(),
+            "an update never resets data"
+        );
     }
-    for compatibility in ["unknown", "requires-reset", "migration-unavailable"] {
-        assert!(ensure_update_preserves_data(false, true, compatibility, false).is_err());
+    let refused = ensure_update_preserves_data(false, true, Some(18), Some(19))
+        .expect_err("a major change is refused");
+    assert!(
+        refused.contains("Postgres 18") && refused.contains("Postgres 19"),
+        "the refusal names the change it is refusing: {refused}"
+    );
+    for (installed, candidate) in [
+        (Some(18), Some(18)),
+        (None, Some(18)),
+        (Some(18), None),
+        (None, None),
+    ] {
+        assert!(
+            ensure_update_preserves_data(false, true, installed, candidate).is_ok(),
+            "{installed:?} -> {candidate:?} is an ordinary update"
+        );
     }
-    assert!(ensure_update_preserves_data(false, true, "compatible", true).is_err());
-    assert!(ensure_update_preserves_data(false, true, "compatible", false).is_ok());
-    assert!(ensure_update_preserves_data(false, false, "unknown", true).is_ok());
+    assert!(
+        ensure_update_preserves_data(false, false, Some(18), Some(19)).is_ok(),
+        "with no local data there is no data directory to strand"
+    );
 }
 
 /// A feed without the block, or with junk in it, is read safely.

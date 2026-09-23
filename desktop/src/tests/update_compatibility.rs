@@ -71,7 +71,7 @@ fn the_installed_postgres_major_is_read_from_the_runtime_that_is_installed() {
 /// The installation this reproduces is the one that reported the bug: a config
 /// carrying only `{release, root}` -- which is all `activate_installed_runtime`
 /// has ever written -- against a feed that does carry its major. It answered
-/// "unknown", which `ensure_update_preserves_data` refuses, so the button was
+/// "unknown", which `ensure_update_preserves_data` then refused, so the button was
 /// disabled and the banner said no data-preserving upgrade had been
 /// established. Both numbers were 18.
 #[test]
@@ -94,8 +94,8 @@ fn an_installation_that_recorded_nothing_can_still_be_found_compatible() {
         crate::runtime_setup::ensure_update_preserves_data(
             false,
             true,
-            feed.compatibility_with(installed),
-            false,
+            installed,
+            feed.postgres_major,
         )
         .is_ok(),
         "an installation whose data matches the offered release must be allowed to update"
