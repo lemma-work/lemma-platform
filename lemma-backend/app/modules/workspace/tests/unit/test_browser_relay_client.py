@@ -338,3 +338,22 @@ async def test_a_fabric_that_does_not_publish_the_relays_port_says_so_in_its_own
 
     assert isinstance(raised.value, BrowserRelayUnavailable)
     assert "4850" in str(raised.value)
+
+
+async def test_the_display_starts_somewhere_that_exists_on_fresh_storage(_key) -> None:
+    """The project root is made by the first session, not by the storage.
+
+    A viewer that arrived before any session -- the first thing a person does
+    after an update recreated the workspace's storage -- started its display
+    in `~/lemma`, which did not exist yet, and every attempt failed. The home
+    is the storage mount itself.
+    """
+    from sandbox_runtime.paths import HOME_ROOT
+
+    relay = _Relay(200)
+    provider = _Provider(relay, starts_answering=True)
+    try:
+        await _client(provider).ensure_running()
+    finally:
+        relay.close()
+    assert [request.cwd for request in provider.start_requests] == [HOME_ROOT]

@@ -187,6 +187,18 @@ fn host_processes_use_private_guest_services_without_published_infra_ports() {
         environment["LEMMA_WSL_DISTRIBUTION"],
         "LemmaRuntime-separate-installation"
     );
+    // Sandbox ports go over vsock on macOS, never over the guest's address,
+    // which needs a Local Network permission the backend is never prompted for.
+    match environment.get("WORKSPACE_LOCAL_TUNNEL_SOCKET") {
+        Some(socket) if cfg!(target_os = "macos") => {
+            assert!(
+                Path::new(socket).ends_with("local/run/service-42412.sock"),
+                "{socket}"
+            );
+        }
+        None if !cfg!(target_os = "macos") => {}
+        other => panic!("tunnel socket on the wrong platform: {other:?}"),
+    }
     assert_eq!(
         environment.values().any(|value| value.contains(":55432")),
         cfg!(target_os = "macos")

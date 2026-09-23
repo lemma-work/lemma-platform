@@ -123,7 +123,7 @@ impl ManagedRuntime {
             remove_if_present(&self.data_disk_fresh_marker)?;
         }
         remove_if_present(&self.control_socket)?;
-        for port in [5432, 6379, 3567] {
+        for port in [5432, 6379, 3567, SANDBOX_TUNNEL_PORT] {
             remove_if_present(&self.service_socket(port))?;
         }
         let log_path = self.config.local_root.join("logs/vz.log");

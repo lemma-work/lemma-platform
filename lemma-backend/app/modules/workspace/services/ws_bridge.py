@@ -53,8 +53,14 @@ async def connect_upstream(
     """
     import websockets
 
+    from app.modules.workspace.providers.desktop_tunnel import tunneled_socket
+
+    # A Desktop guest address arrives already connected through the tunnel;
+    # anything else is dialled by `websockets` itself.
+    tunneled = await tunneled_socket(url)
     return websockets.connect(
         url,
+        sock=tunneled,
         additional_headers=dict(headers or {}),
         subprotocols=list(subprotocols) if subprotocols else None,
         max_size=MAX_FRAME_BYTES,

@@ -435,6 +435,7 @@ export type { WorkspaceAppAccessRequest } from './models/WorkspaceAppAccessReque
 export type { WorkspaceAppAccessResponse } from './models/WorkspaceAppAccessResponse.js';
 export { WorkspaceFileEntry } from './models/WorkspaceFileEntry.js';
 export type { WorkspaceFileListResponse } from './models/WorkspaceFileListResponse.js';
+export { WorkspaceStatusResponse } from './models/WorkspaceStatusResponse.js';
 
 export { AgentConversationsService } from './services/AgentConversationsService.js';
 export { AgentHostService } from './services/AgentHostService.js';

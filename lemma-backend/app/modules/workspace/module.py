@@ -18,8 +18,11 @@ def _routers():
     from app.modules.workspace.api.controllers.port_proxy_controller import (
         router as port_proxy,
     )
+    from app.modules.workspace.api.controllers.workspace_status_controller import (
+        router as status,
+    )
 
-    return [browser, browser_view, files, port_proxy]
+    return [browser, browser_view, files, port_proxy, status]
 
 
 def _register_streaq() -> None:

@@ -17,6 +17,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `workspace.files.content` | GET | `/workspace/files:content` | Read workspace file content |
 | `workspace.files.list` | GET | `/workspace/files` | List workspace files |
 | `workspace.files.stat` | GET | `/workspace/files:stat` | Stat one workspace file |
+| `workspace.status` | GET | `/workspace/status` | Whether your computer is ready |
 
 <!-- /generated:operations -->
 

@@ -43,6 +43,7 @@ from sandbox_runtime.workspace.models import (
 )
 
 
+from app.modules.workspace.providers.desktop_tunnel import sandbox_transport
 from app.modules.workspace.providers.runtime_errors import (  # noqa: E402
     _FILESYSTEM_STATUS_ERRORS,
     _PROCESS_STATUS_ERRORS,
@@ -66,6 +67,8 @@ class WorkspaceRuntimeClient:
             base_url=base_url,
             headers={"X-Lemma-Runtime-Token": token},
             timeout=None,
+            # On Desktop, the guest's sandbox addresses go over vsock.
+            transport=sandbox_transport(),
         )
 
     async def close(self) -> None:

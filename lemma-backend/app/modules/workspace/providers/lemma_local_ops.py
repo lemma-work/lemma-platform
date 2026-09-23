@@ -24,6 +24,7 @@ from sandbox_runtime.protocol import (
 
 from typing import Any
 
+from app.modules.workspace.providers.desktop_tunnel import remember_guest_address
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     ProviderCapability,
@@ -270,4 +271,12 @@ def _status_object(snapshot: dict[str, Any]) -> dict[str, Any]:
     status = snapshot.get("status")
     if not isinstance(status, dict):
         raise ProviderRejected("managed runtime status is invalid")
+    # Every address the guest reports for a sandbox is one it can tunnel to,
+    # and this is where every such address passes through.
+    remember_guest_address(status.get("runtime_url"))
+    apps = status.get("apps")
+    if isinstance(apps, dict):
+        for app in apps.values():
+            if isinstance(app, dict):
+                remember_guest_address(app.get("private_url"))
     return status

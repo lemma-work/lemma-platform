@@ -301,8 +301,9 @@ def test_the_close_codes_are_distinct() -> None:
         view.CLOSE_NO_BROWSER,
         view.CLOSE_UNSUPPORTED,
         view.CLOSE_RELAY_ABSENT,
+        view.CLOSE_SANDBOX_UNAVAILABLE,
     }
-    assert len(codes) == 5
+    assert len(codes) == 6
     assert all(4000 <= code < 5000 for code in codes)
 
 
@@ -834,3 +835,44 @@ async def test_a_poll_for_the_current_page_writes_nothing_into_the_sandbox() -> 
     # which is what an arriving viewer depends on.
     await service._relay(uuid4(), start=True)
     assert delivered == ["token", "proxy"]
+
+
+def _close_code_for(failure: Exception) -> tuple[int, bool]:
+    """What the viewer socket answers when opening the session raises `failure`."""
+    service = _FakeService(fail=failure)
+
+    async def _signed_in(_websocket):
+        return str(uuid4())
+
+    client = _client(service)
+    client.app.dependency_overrides[user_id_resolver] = lambda: _signed_in
+    with client.websocket_connect(
+        "/workspace/browser/view", headers={"Origin": "https://app.lemma.test"}
+    ) as socket:
+        refusal = socket.receive()
+    assert refusal["type"] == "websocket.close"
+    return refusal["code"], service.closed
+
+
+def test_a_computer_that_is_still_starting_is_a_close_the_pane_retries() -> None:
+    """`SandboxUnavailable` used to escape the handler.
+
+    An unhandled exception in a socket handler reaches the pane as an ordinary
+    drop, so a workspace whose new image was still downloading read as "the
+    connection dropped" -- and nothing in the log said why.
+    """
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    code, closed = _close_code_for(
+        SandboxUnavailable("workspace runtime transport failed: ConnectError")
+    )
+    assert code == view.CLOSE_SANDBOX_UNAVAILABLE
+    assert closed, "the service was left open on the way out"
+
+
+def test_a_definitive_sandbox_refusal_is_a_close_the_pane_stops_on() -> None:
+    from sandbox_runtime.errors import SandboxRejected
+
+    code, closed = _close_code_for(SandboxRejected("no such port"))
+    assert code == view.CLOSE_RELAY_ABSENT
+    assert closed

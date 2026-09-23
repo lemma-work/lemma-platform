@@ -178,6 +178,15 @@ impl ManagedRuntime {
         &self.control_socket
     }
 
+    /// The unix socket `lemma-vz` bridges to the guest's sandbox tunnel.
+    ///
+    /// The backend reaches sandbox ports through it rather than over the
+    /// guest's network address; see `sandbox_tunnel` in lemma-guestd.
+    #[cfg(target_os = "macos")]
+    pub fn sandbox_tunnel_socket(&self) -> PathBuf {
+        self.service_socket(SANDBOX_TUNNEL_PORT)
+    }
+
     #[cfg(target_os = "macos")]
     pub fn service_socket(&self, port: u16) -> PathBuf {
         self.config

@@ -293,6 +293,16 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("WORKSPACE_LOCAL_RUNTIME_CLI"),
         description="Executable bridging to the Lemma Desktop guest runtime",
     )
+    local_tunnel_socket: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("WORKSPACE_LOCAL_TUNNEL_SOCKET"),
+        description=(
+            "Unix socket reaching the Lemma Desktop guest's sandbox ports over "
+            "vsock. When set, connections to the addresses the guest reports "
+            "for its sandboxes go through it instead of the network, which "
+            "macOS gates behind a Local Network permission."
+        ),
+    )
     local_callback_required: bool = Field(
         default=False,
         validation_alias=AliasChoices("WORKSPACE_LOCAL_CALLBACK_REQUIRED"),

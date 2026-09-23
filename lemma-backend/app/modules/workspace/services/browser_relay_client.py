@@ -24,7 +24,8 @@ from uuid import UUID
 
 import httpx
 
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import HOME_ROOT
+from app.modules.workspace.providers.desktop_tunnel import sandbox_transport
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.domain.sandbox import SandboxKind
@@ -212,7 +213,9 @@ class BrowserRelayClient:
         endpoint = await self._endpoint(deadline_seconds=timeout)
         headers = {**endpoint.headers, RELAY_TOKEN_HEADER: self._token}
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout, transport=sandbox_transport()
+            ) as client:
                 return await client.request(
                     method,
                     f"{endpoint.url.rstrip('/')}{path}",
@@ -318,7 +321,11 @@ class BrowserRelayClient:
                 operation_id=uuid4(),
                 shell_command=_ENSURE_DISPLAY,
                 argv=None,
-                cwd=WORKSPACE_ROOT,
+                # The home, not the project root under it. The home is the
+                # storage mount and exists from the first moment; the project
+                # root is created by the first session, so on fresh storage a
+                # viewer that arrived first could not start its display there.
+                cwd=HOME_ROOT,
                 environment=(),
                 tty=None,
                 output_limit_bytes=4096,

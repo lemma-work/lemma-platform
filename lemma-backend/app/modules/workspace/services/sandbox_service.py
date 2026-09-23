@@ -35,6 +35,7 @@ from sandbox_runtime.errors import (
     SandboxRejected,
     SandboxUnavailable,
 )
+from app.modules.workspace.services.sandbox_progress import clear_phase, record_phase
 from app.modules.workspace.domain.sandbox import (
     DEFAULT_SLUG,
     Sandbox,
@@ -228,11 +229,15 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
         attempt = 0
         while True:
             try:
-                return await self._attempt_ensure(sandbox_id, deadline_at=deadline_at)
+                handle = await self._attempt_ensure(sandbox_id, deadline_at=deadline_at)
+                if attempt:
+                    await clear_phase(sandbox_id)
+                return handle
             except SandboxUnavailable as exc:
                 remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
                 if remaining <= 0:
-                    raise
+                    raise  # The phase expires by itself.
+                await record_phase(sandbox_id, str(exc))
                 # The provider's hint is a floor, not the whole answer: backing
                 # off further stops a herd of waiting callers from retrying in
                 # lockstep and re-triggering the same limit.
@@ -242,11 +247,8 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
                     "workspace.sandbox_service.ensure_retrying",
                     sandbox_id=str(sandbox_id),
                     attempt=attempt,
-                    # Why, not just how many times. Without this a sandbox that
-                    # never comes up produces dozens of identical lines and no
-                    # indication of the cause -- the caller sees only "endpoint
-                    # was not ready before the deadline", and the one process
-                    # that knew the reason threw it away.
+                    # Why, not just how many times: the caller only ever sees
+                    # "not ready before the deadline".
                     reason=str(exc) or type(exc).__name__,
                     retry_after_ms=exc.retry_after_ms,
                 )

@@ -56,7 +56,8 @@ from app.modules.workspace.services.ws_bridge import (
     origins_from,
     origin_refusal_hint,
 )
-from sandbox_runtime.errors import SandboxCapabilityUnsupported
+from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxError
+from sandbox_runtime.errors import SandboxUnavailable
 
 logger = get_logger(__name__)
 
@@ -94,6 +95,8 @@ CLOSE_ORIGIN_REFUSED = 4403
 CLOSE_NO_BROWSER = 4409
 CLOSE_UNSUPPORTED = 4422
 CLOSE_RELAY_ABSENT = 4426
+#: The computer is still starting or briefly unreachable. Worth retrying.
+CLOSE_SANDBOX_UNAVAILABLE = 4503
 
 
 class BrowserStatusResponse(BaseModel):
@@ -520,6 +523,25 @@ async def browser_view(
             reason=str(exc),
         )
         await _refuse(websocket, CLOSE_NO_BROWSER)
+        await service.close()
+        return
+    except SandboxUnavailable as exc:
+        # Still starting (an image downloading, a port not published yet): the
+        # pane waits and retries instead of reporting "the connection dropped".
+        logger.warning(
+            "workspace.browser_view.sandbox_unavailable.degraded", reason=str(exc)
+        )
+        await _refuse(websocket, CLOSE_SANDBOX_UNAVAILABLE)
+        await service.close()
+        return
+    except SandboxError as exc:
+        # Refused for good; retrying changes nothing.
+        logger.warning(
+            "workspace.browser_view.sandbox_refused.degraded",
+            error_type=type(exc).__name__,
+            reason=str(exc),
+        )
+        await _refuse(websocket, CLOSE_RELAY_ABSENT)
         await service.close()
         return
     except (OSError, httpx.HTTPError, _engine_error()) as exc:

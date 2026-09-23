@@ -561,6 +561,8 @@ _NAME_TO_MODULE = {
     'WorkspaceFileEntry': 'workspace_file_entry',
     'WorkspaceFileEntryKind': 'workspace_file_entry_kind',
     'WorkspaceFileListResponse': 'workspace_file_list_response',
+    'WorkspaceStatusResponse': 'workspace_status_response',
+    'WorkspaceStatusResponseState': 'workspace_status_response_state',
 }
 
 if TYPE_CHECKING:
@@ -1116,6 +1118,8 @@ if TYPE_CHECKING:
     from .workspace_file_entry import WorkspaceFileEntry
     from .workspace_file_entry_kind import WorkspaceFileEntryKind
     from .workspace_file_list_response import WorkspaceFileListResponse
+    from .workspace_status_response import WorkspaceStatusResponse
+    from .workspace_status_response_state import WorkspaceStatusResponseState
 
 
 def __getattr__(name: str):
@@ -1684,4 +1688,6 @@ __all__ = [
     'WorkspaceFileEntry',
     'WorkspaceFileEntryKind',
     'WorkspaceFileListResponse',
+    'WorkspaceStatusResponse',
+    'WorkspaceStatusResponseState',
 ]

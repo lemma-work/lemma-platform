@@ -11,7 +11,15 @@ import { cn } from '@/lib/utils';
 
 import type NoVncClient from '@novnc/novnc';
 
-type PaneState = 'connecting' | 'live' | 'lost' | 'refused' | 'no-browser' | 'unsupported' | 'stale-image';
+type PaneState =
+    | 'connecting'
+    | 'live'
+    | 'lost'
+    | 'refused'
+    | 'no-browser'
+    | 'starting'
+    | 'unsupported'
+    | 'stale-image';
 
 //: Why a socket closed, in numbers a client can branch on -- matches
 //: `browser_view_controller.py`'s `CLOSE_*` constants exactly. Read off the
@@ -27,6 +35,7 @@ const CLOSE_ORIGIN_REFUSED = 4403;
 const CLOSE_NO_BROWSER = 4409;
 const CLOSE_UNSUPPORTED = 4422;
 const CLOSE_STALE_IMAGE = 4426;
+const CLOSE_SANDBOX_UNAVAILABLE = 4503;
 
 const closeCodeToState = (code: number): PaneState => {
     switch (code) {
@@ -39,6 +48,8 @@ const closeCodeToState = (code: number): PaneState => {
             return 'unsupported';
         case CLOSE_STALE_IMAGE:
             return 'stale-image';
+        case CLOSE_SANDBOX_UNAVAILABLE:
+            return 'starting';
         default:
             return 'lost';
     }
@@ -595,6 +606,7 @@ const TITLES: Record<PaneState, string> = {
     connecting: 'Connecting…',
     live: '',
     'no-browser': 'The browser is not running',
+    starting: 'Your computer is starting',
     unsupported: 'Not available on this computer',
     'stale-image': 'This computer needs restarting',
     refused: 'You are not signed in',
@@ -605,6 +617,7 @@ const DESCRIPTIONS: Record<PaneState, string> = {
     connecting: 'Waking the computer and starting its browser. The first time takes a moment.',
     live: '',
     'no-browser': 'It starts when the agent opens a page, or when you take control.',
+    starting: 'It connects on its own once it is ready. After an update the first start downloads the new workspace.',
     unsupported: 'This kind of sandbox cannot show a live browser.',
     'stale-image':
         'It is running an older image with no VNC channel. Restart it to pick up the current one.',

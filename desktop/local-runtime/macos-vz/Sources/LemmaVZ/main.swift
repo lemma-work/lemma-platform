@@ -24,6 +24,8 @@ private func vzLog(_ message: String) {
 }
 
 private let guestPort: UInt32 = 42_411
+/// guestd's sandbox tunnel. See `sandbox_tunnel` in lemma-guestd.
+private let sandboxTunnelPort: UInt32 = 42_412
 private let maxRequestBytes = 1_048_576
 private let maxResponseBytes = 4_194_304
 
@@ -461,7 +463,12 @@ private func serve(arguments: [String]) throws -> Never {
                 exit(EXIT_FAILURE)
             }
             do {
-                for port: UInt32 in [5432, 6379, 3567] {
+                // Postgres, Redis and SuperTokens, and the sandbox tunnel: every
+                // stream the host opens into the guest arrives this way rather
+                // than over the guest's network address, which macOS gates
+                // behind a Local Network permission a background process
+                // cannot be prompted for.
+                for port: UInt32 in [5432, 6379, 3567, sandboxTunnelPort] {
                     let service = try ServiceBridge(
                         path: socketParent.appendingPathComponent("service-\(port).sock").path
                     ) { completed in

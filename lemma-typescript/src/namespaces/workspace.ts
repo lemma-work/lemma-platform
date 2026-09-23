@@ -218,6 +218,20 @@ export class WorkspaceNamespace {
   }
 
   /**
+   * Whether this person's computer is ready, without starting anything.
+   *
+   * `ready` it is running; `downloading` it is fetching its image, which the
+   * first start after an update does; `starting` it is coming up; `asleep` it
+   * is not running and starts on first use; `unavailable` it could not be asked.
+   */
+  status(): Promise<{
+    state: "ready" | "downloading" | "starting" | "asleep" | "unavailable";
+    detail: string | null;
+  }> {
+    return this.http.request("GET", "/workspace/status");
+  }
+
+  /**
    * Whether the browser can be watched, without starting anything.
    *
    * `asleep` the computer is paused; `stopped` it is up but the browser is not

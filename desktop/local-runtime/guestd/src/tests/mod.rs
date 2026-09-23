@@ -13,6 +13,7 @@ mod limits;
 mod network;
 mod protocol;
 mod run_contract;
+mod sandbox_tunnel;
 
 use super::*;
 use crate::protocol::*;

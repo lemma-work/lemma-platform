@@ -313,6 +313,23 @@ describe('a disconnect that will not fix itself by retrying', () => {
         await waitFor(() => expect(rfbInstances).toHaveLength(2));
     });
 
+    // The backend closes with 4503 while the computer is starting -- after an
+    // update the first start downloads a new workspace image -- and used to
+    // leave the socket as an unhandled error instead, which read as "The
+    // connection dropped" for as long as the download took.
+    it('says the computer is starting, and keeps retrying, on an unavailable close', async () => {
+        render(<BrowserPane origin="https://example.com" />);
+        await waitFor(() => expect(rfbInstances).toHaveLength(1));
+        act(() => {
+            rfbInstances[0].socket!.closeWith(4503);
+            rfbInstances[0].emit('disconnect');
+        });
+
+        expect(screen.getByText('Your computer is starting')).toBeTruthy();
+        expect(screen.queryByText('The connection dropped')).toBeNull();
+        await waitFor(() => expect(rfbInstances).toHaveLength(2));
+    });
+
     it('keeps the picture through a drop it expects to recover from', async () => {
         // Blanking to "Connecting..." on every hiccup is what made a live
         // pane feel broken: the page was still there a second later, but the

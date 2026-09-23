@@ -29,6 +29,7 @@ import httpx
 from fastapi import APIRouter, Request, Response, WebSocket, status
 from fastapi.responses import StreamingResponse
 
+from app.modules.workspace.providers.desktop_tunnel import sandbox_transport
 from app.core.log.log import get_logger
 
 from app.core.config import settings
@@ -289,7 +290,9 @@ async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Re
     # makes the host un-influenceable by construction.
     target = httpx.URL(base_url).copy_with(path="/" + quote(path.lstrip("/"), safe="/"))
 
-    upstream = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+    upstream = httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0), transport=sandbox_transport()
+    )
     try:
         proxied = await upstream.request(
             request.method,
