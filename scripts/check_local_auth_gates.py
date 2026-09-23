@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = ROOT / "Makefile"
 STACK_RENDER = ROOT / "lemma-stack/lemma_stack/config/render.py"
 CONFIG = ROOT / "lemma-backend/app/core/config.py"
-FRONTEND_CONFIG = ROOT / "lemma-frontend/components/auth/portal/auth/config.ts"
+FRONTEND_CONFIG = ROOT / "lemma-harness/components/auth/portal/auth/config.ts"
 
 
 def gates_on_by_default():

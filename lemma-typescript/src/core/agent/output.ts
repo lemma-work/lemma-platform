@@ -3,7 +3,7 @@
 // Pulling the result out of a finished agent run is genuinely fiddly: the answer
 // can live in message metadata (`is_final_answer` + `structured_output`), in a
 // `final_result`/`final_answer` tool call, in a raw tool message, or as JSON
-// (sometimes fenced) in the assistant text. lemma-frontend grew a robust
+// (sometimes fenced) in the assistant text. lemma-harness grew a robust
 // multi-path extractor for this; it's pure, so it lives here now and the product
 // consumes it from the SDK — one implementation for hooks, web components, and
 // the app. No React, no DOM.

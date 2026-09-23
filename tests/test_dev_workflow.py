@@ -187,5 +187,22 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertIn("NEXT_PUBLIC_AUTH_URL=http://localhost:3710", frontend.stdout)
 
 
+    def test_workspace_setup_preserves_custom_configuration(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            workspace = tmp / "lemma-frontend"
+            variables = {"WORKSPACE_DIR": str(workspace)}
+            self.run_make(tmp, "_init-workspace-env", variables=variables)
+            config = workspace / ".env.local"
+            self.assertEqual(
+                self.env_values(config)["NEXT_PUBLIC_API_URL"], "http://localhost:8710"
+            )
+            config.write_text("NEXT_PUBLIC_API_URL=https://api.example.test\n")
+            self.run_make(tmp, "_init-workspace-env", variables=variables)
+            self.assertEqual(
+                config.read_text(), "NEXT_PUBLIC_API_URL=https://api.example.test\n"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

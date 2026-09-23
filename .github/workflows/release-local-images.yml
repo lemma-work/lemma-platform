@@ -103,6 +103,9 @@ jobs:
           - name: lemma-frontend
             context: .
             dockerfile: lemma-frontend/Dockerfile
+          - name: lemma-harness
+            context: .
+            dockerfile: lemma-harness/Dockerfile
           - name: lemma-workspace
             context: .
             dockerfile: lemma-backend/sandbox-images/Dockerfile.workspace
@@ -141,6 +144,9 @@ jobs:
           # the images whose Dockerfile does not declare the ARG.
           build-args: |
             LEMMA_RELEASE_SHA=${{ github.sha }}
+            NEXT_PUBLIC_API_URL=${{ vars.FRONTEND_API_URL }}
+            NEXT_PUBLIC_AUTH_URL=${{ vars.FRONTEND_AUTH_URL }}
+            NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=${{ vars.FRONTEND_APPS_DOMAIN_SUFFIX }}
           # Push by digest only; the merge job assembles the tagged manifest list.
           outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
           # Per-(image, arch) cache scope so the two arch builds never clobber
@@ -175,6 +181,7 @@ jobs:
         image:
           - lemma-backend
           - lemma-frontend
+          - lemma-harness
           - lemma-workspace
           - lemma-function
     steps:
@@ -534,7 +541,7 @@ jobs:
               "min_admin_version": "0.1.0",
               "images": {
                   "backend": image("lemma-backend"),
-                  "frontend": image("lemma-frontend"),
+                  "frontend": image("lemma-harness"),
                   "workspace": image("lemma-workspace"),
                   "function": image("lemma-function"),
                   # Same refs under the pre-rename keys. A lemma-stack or locald
@@ -800,7 +807,7 @@ jobs:
               "min_admin_version": "0.1.0",
               "images": {
                   "backend": image("lemma-backend"),
-                  "frontend": image("lemma-frontend"),
+                  "frontend": image("lemma-harness"),
                   "workspace": image("lemma-workspace"),
                   "function": image("lemma-function"),
                   # Same refs under the pre-rename keys, for clients already

@@ -127,7 +127,7 @@ make desktop-fmt-fix       # rewrite instead of check
 swift build --package-path desktop/local-runtime/macos-vz
 uv run --project lemma-backend pytest \
   lemma-backend/app/tests/unit/test_health_endpoints.py
-npx tsc --noEmit --project lemma-frontend/tsconfig.json
+npx tsc --noEmit --project lemma-harness/tsconfig.json
 ```
 
 **What `make desktop-check` cannot cover.** Bundling and codesigning need

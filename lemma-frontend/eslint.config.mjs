@@ -1,49 +1,40 @@
-import { defineConfig, globalIgnores } from "eslint/config";
-import nextVitals from "eslint-config-next/core-web-vitals";
-import nextTs from "eslint-config-next/typescript";
+import tseslint from 'typescript-eslint';
+import hooks from 'eslint-plugin-react-hooks';
 
-const eslintConfig = defineConfig([
-  ...nextVitals,
-  ...nextTs,
-  {
-    files: ["**/*.{js,jsx,ts,tsx}"],
+/* `typescript-eslint` is here as a parser first and a plugin second: this is a
+   deliberately small rule set, not a preset. Two rules earn their place because
+   each catches something no other check in this repo can see.
+
+   NOT enabled, and recorded rather than omitted: `react-hooks/exhaustive-deps`.
+   It reports twelve sites, and several of them are deliberate — `use-huddle.ts`
+   omits `backend` and `agents-view.tsx` keys a draft on the agent rather than on
+   the fetched object, both for reasons written down beside them. Turning it on
+   means either changing twelve hooks, which is a behaviour change dressed as a
+   lint fix, or twelve disable comments. Worth doing as its own pass, with the
+   dependency arrays actually read. */
+const unused = ['error', {
+    /* `const { is_active: _dropped, ...without } = wire` is how a test omits a
+       key. Both halves of that idiom are named here so the rule does not turn
+       a deliberate omission into an error. */
+    varsIgnorePattern: '^_',
+    argsIgnorePattern: '^_',
+    ignoreRestSiblings: true,
+}];
+
+export default [{
+    files: ['src/**/*.{ts,tsx}'],
+    languageOptions: { parser: tseslint.parser, parserOptions: { ecmaFeatures: { jsx: true } } },
+    plugins: { 'react-hooks': hooks, '@typescript-eslint': tseslint.plugin },
     rules: {
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "JSXAttribute[name.name='style']",
-          message:
-            "Use className with Tailwind/CSS tokens instead of inline styles. Keep inline style only for unavoidable runtime geometry.",
-        },
-        // Loading is a shared system, not a per-screen decision. Every ad-hoc
-        // spinner and pulse was a different answer to "what shows while this
-        // loads", and the sum of those answers is why the app used to re-flow
-        // two or three times per page load.
-        //   content coming  → <Skeleton /> or a shape from components/shared/loading
-        //   an action running → <Button loading> or <StepLoader />
-        //   something is alive → .lemma-live-pulse
-        //   a refresh control turning → .lemma-spin
-        {
-          selector: "Literal[value=/(^|\\s)animate-(spin|pulse)(\\s|$)/]",
-          message:
-            "Don't hand-roll loading motion. Use components/shared/loading (Skeleton, AsyncRegion), <Button loading>, or <StepLoader />; for liveness use .lemma-live-pulse, and for a spinning refresh control .lemma-spin.",
-        },
-        {
-          selector: "TemplateElement[value.raw=/(^|\\s)animate-(spin|pulse)(\\s|$)/]",
-          message:
-            "Don't hand-roll loading motion. Use components/shared/loading (Skeleton, AsyncRegion), <Button loading>, or <StepLoader />; for liveness use .lemma-live-pulse, and for a spinning refresh control .lemma-spin.",
-        },
-      ],
+        'react-hooks/rules-of-hooks': 'error',
+        '@typescript-eslint/no-unused-vars': unused,
     },
-  },
-  // Override default ignores of eslint-config-next.
-  globalIgnores([
-    // Default ignores of eslint-config-next:
-    ".next/**",
-    "out/**",
-    "build/**",
-    "next-env.d.ts",
-  ]),
-]);
-
-export default eslintConfig;
+}, {
+    /* The custom server, the checks and the tests had no rules at all applying
+       to them — `npm run lint` named only `src`, and the config matched only
+       `src`, so linting them was silent rather than clean. */
+    files: ['server/**/*.mjs', 'scripts/**/*.mjs', 'tests/**/*.{ts,mjs}', 'server.mjs'],
+    languageOptions: { parser: tseslint.parser },
+    plugins: { '@typescript-eslint': tseslint.plugin },
+    rules: { '@typescript-eslint/no-unused-vars': unused },
+}];

@@ -17,7 +17,7 @@ def manifest():
             "min_admin_version": "0.1.0",
             "images": {
                 "backend": "ghcr.io/lemma-work/lemma-backend:v1.0.0",
-                "frontend": "ghcr.io/lemma-work/lemma-frontend:v1.0.0",
+                "frontend": "ghcr.io/lemma-work/lemma-harness:v1.0.0",
                 "workspace": "ghcr.io/lemma-work/lemma-workspace:v1.0.0",
                 "function": "ghcr.io/lemma-work/lemma-function:v1.0.0",
             },

@@ -85,7 +85,7 @@ dashboard choose later.
 
 ### REACH_RULE, and why engagement is not one number
 
-Stated once in `lemma-frontend/lib/recipes/recipes.ts` and threaded through
+Stated once in `lemma-harness/lib/recipes/recipes.ts` and threaded through
 every starter prompt:
 
 > Only members of this pod can message its surfaces or open its apps — anyone
@@ -277,7 +277,7 @@ Enforced structurally, not by a runtime `if`:
   constructs `NullSink`** — a null object, not a disabled PostHogSink, so no
   code path can be induced into sending pod content by flipping one boolean.
 - The frontend calls the existing `isLocalDeployment()`
-  (`lemma-frontend/lib/config.ts`) and never initializes posthog-js locally.
+  (`lemma-harness/lib/config.ts`) and never initializes posthog-js locally.
 - Desktop and self-hosted use a **separate write key and a separate, smaller
   catalog** — not the product catalog with fields omitted, but a contract that
   structurally cannot express a pod id.
@@ -370,7 +370,7 @@ Mirror what the observability plane already does:
 Two things must close before the first production event, both outside the code:
 
 1. **A DPA with PostHog**, and PostHog on the subprocessor list.
-2. **The privacy page is a 12-line stub** (`lemma-frontend/app/privacy/page.tsx`).
+2. **The privacy page is a 12-line stub** (`lemma-harness/app/privacy/page.tsx`).
    It has to name what is collected, by whom, and how to opt out — and be
    consistent with the README's "run it on your laptop" promise, which under
    the posture above it is.

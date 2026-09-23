@@ -66,7 +66,7 @@ anything is published** — because a `trigger_id` expires in about three second
 — and `app_event_handler.py` consults `status` nowhere. So a disabled Slack
 surface still opens its channel-setup modal.
 
-Nothing in `lemma-frontend/src` mentions the status, so there is no way to see or
+Nothing in `lemma-harness/src` mentions the status, so there is no way to see or
 unset it from the product.
 **Why it matters:** the platform side keeps working — the bot is still in the
 channel, the number still receives — so a person messaging a disabled surface
@@ -83,7 +83,7 @@ it is switched off; (c) it should exist, stay silent, and gain UI so somebody ca
 see why nothing is happening. Decide before writing code.
 **How it was found:** tracing `AgentSurfaceStatus.INACTIVE` from
 `domain/entities.py:248` to its readers during the surfaces schema rework, then
-grepping `lemma-frontend/src` for any reference to it and finding none.
+grepping `lemma-harness/src` for any reference to it and finding none.
 
 ### DEV-SURF-002 — A reassigned phone number signs in as the person who had it
 **Violates:** nothing. Decided: a number belongs to one person until somebody

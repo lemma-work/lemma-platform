@@ -1,0 +1,280 @@
+/* Palette and scale.
+   Weight never exceeds 500 — hierarchy comes from size and the space above,
+   never from bold. The accent appears about four times per screen.
+
+   The ground is paper, not screen. Every neutral here is warm and none of
+   them is #ffffff: a card at pure white on a near-white canvas has to be
+   found by its border, where a warm white on cream is simply a different
+   material and needs no line at all. This is also what lets a saturated
+   field sit on the page without looking like a notification — the reference
+   the whole language comes from is ink on stock, and cream is the stock. */
+:root {
+    --paper: #fffefa;
+    --canvas: #f4f3ed;
+    --wash-a: #efeafc;
+    --wash-b: #f8f6fe;
+    --chrome: #ecebe1;
+    --ink: #20211f;
+    --ink-2: #55564e;
+    --ink-3: #6a6b62;
+    --line: rgb(32 33 31 / 0.05);
+    --line-2: rgb(32 33 31 / 0.10);
+    --accent: #6b4fe0;
+    /* What goes ON an `--accent` fill, which is a different question from what
+       `--accent` is — the same split as `--bad` and `--on-bad`, and needed for
+       the same reason. An accent is chosen to be *read* against the page, so
+       in dark mode it is a light colour: filling a button with it and writing
+       white on top measures 2.71:1 on violet and 1.20:1 on ink, which is not a
+       primary action, it is an empty pill. Every fill that uses `--accent` as
+       a background takes this as its ink.
+
+       `accents.css` overrides it per accent. Coral and amber in light mode are
+       the two that cannot reach 4.5:1 against either ink — 4.42:1 and 4.25:1
+       with the near-black, which clears AA for large text and for UI component
+       contrast but not for body text. Clearing it properly means darkening
+       those two accents, which is a palette decision rather than a pairing
+       one. */
+    --on-accent: #fffefa;
+    /* The wordmark's three bars. Deliberately NOT `--accent`: the accent is a
+       preference somebody sets, and a brand that follows it is not a brand.
+       It is a violet a shade deeper than the default accent in light and a
+       shade lighter in dark, so it holds its weight against either page
+       without becoming the page's own colour. */
+    --brand: #5a3fd4;
+    --accent-soft: rgb(107 79 224 / 0.09);
+    --accent-line: rgb(107 79 224 / 0.26);
+    --wait: #b5811f;
+    /* State, for the things this app draws rarely and a widget draws often.
+       They do not move with the accent: "danger" is not a matter of taste. */
+    --ok: #2f7d57;
+    /* The ink for an `--ok` fill, paired for the same reason as `--on-bad` and
+       `--on-accent`: `--ok` is a dark green in light mode and a light one in
+       dark, so a fixed white on it is 4.96:1 in one appearance and 1.88:1 in
+       the other. 4.96:1 and 9.17:1 with the pairing. */
+    --on-ok: #fffefa;
+    /* Between fine and refused. Weighted to match `--bad` rather than to
+       shout: the one place it is used says a limit is close, not reached.
+       5.06:1 on `--chrome`, 5.64:1 on `--paper`. */
+    --warn: #8a5f0f;
+    --bad: #b3261e;
+    /* What goes ON a `--bad` fill, which is not the same question as what
+       `--bad` is. In dark mode `--bad` is a light red chosen to be *read* on a
+       dark page; filling a button with it and writing white on top measures
+       2.43:1, which is not a warning, it is a smudge. So the pairing is a token
+       in both themes rather than a rule inside a media query. */
+    --on-bad: #ffffff;
+    --info: #2563a8;
+    /* The two older names now point at the depth scale, so the twenty-odd
+       surfaces already asking for them — menus, popovers, tooltips, hire
+       cards, the screen glass — get the same layered falloff as the cards
+       and the badge without each one being rewritten. One shadow language,
+       everywhere. */
+    --shadow-soft: var(--depth-rest);
+    --shadow-lift: var(--depth-raise);
+    --mark-bg: 91%;
+    --mark-fg: 34%;
+    --mark-sat: 58%;
+
+    /* Three faces, one job each. The chrome and the conversation are read in
+       glances, so they take a grotesque built for small sizes. A document is
+       read for minutes, so it takes a text face — Newsreader was already being
+       downloaded on every page load and used for nothing at all. Code, paths
+       and anything meant to be compared character by character stay mono. */
+    --ui: "Schibsted Grotesk", system-ui, -apple-system, sans-serif;
+    --serif: "Newsreader", Iowan Old Style, Georgia, serif;
+    --mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* Type scale — five sizes, and they do not drift. */
+    --t-pod: 21px;
+    --t-lead: 19px;
+    --t-body: 16px;
+    --t-ui: 14px;
+    --t-meta: 11.5px;
+
+    /* ── The credential layer ──────────────────────────────────────────
+       A sixth size, deliberately outside the scale above, and the rules
+       that go with it. This is for the places where identity is the
+       *subject* rather than the label on something else — a badge, a
+       teammate's own header, the moment a hire is issued. It is a figure
+       against the quiet ground the rest of the tokens describe, and it
+       stops being a figure the instant it is used for chrome, so it is
+       named for the thing rather than for its size.
+
+       Weight stays at 500. The reference sets its wordmark far heavier,
+       but a 500 pulled to -0.055em reads as the same gesture and keeps
+       the one rule the rest of the app is built on. */
+    --t-display: 34px;
+    --t-figure: 26px;
+    --track-display: -0.055em;
+    --track-micro: 0.14em;
+    --t-micro: 10px;
+
+    /* ── The press ────────────────────────────────────────────────────
+       Five printed inks, hues spread 11° / 66° / 154° / 229° / 289°, and
+       every one of them carries the warm white. That last part is a rule,
+       not a coincidence: the reference prints black on its orange, and an
+       orange bright enough to need black type cannot carry white anywhere
+       else in the app — the Message button came out black-on-red and looked
+       broken. So the press gives up the brightest orange to keep one ink
+       colour everywhere.
+
+       These are NOT the identity tones. A `being` is a small solid body
+       chosen to separate five creatures at 16px; at full bleed those read
+       as a salmon and a mud.
+
+       **A teammate's field does not move with the theme.** It is their
+       identity, so it is the one colour in the app that stays put when the
+       appearance changes. */
+    --press-0: #d33714;        /* signal red · 4.8:1 on paper */
+    --press-1: #5c6414;        /* olive · 6.3:1 on paper */
+    --press-2: #10643f;        /* forest · 7.1:1 on paper */
+    --press-3: #193bd1;        /* klein blue · 8.0:1 on paper */
+    --press-4: #6b2b7a;        /* aubergine · 9.2:1 on paper */
+    --press-ink: #fffefa;
+
+    /* A subject's own colour, set from its slot in the press. */
+    --field: var(--press-0);
+    --field-ink: var(--press-ink);
+
+    /* No ground layer. The background is `--canvas` — one value in light, one
+       in dark — and everything a tinted, graded, grained surface would be
+       asked for is asked of the depth scale below instead. Three attempts at
+       colouring it (7-21% accent, then 2.5% flat, with a radial falloff and a
+       noise plate) all read as the app being tinted rather than as somewhere
+       with depth in it. Shadow carries the realism; the page stays out of the
+       way. */
+
+    /* ── Depth ────────────────────────────────────────────────────────
+       Four levels, and a surface picks one rather than inventing a shadow.
+       The rule is where a thing sits relative to the page: recessed into it,
+       flush with it, resting on it, or floating above it. Each is a pair —
+       a shadow for the mass and an edge for the lit side — because a shadow
+       on its own reads as a blur and an edge on its own reads as a border.
+
+       `--edge-lit` is a highlight along the top and `--edge-dark` a shade
+       along the bottom, which is what gives a surface thickness instead of
+       just separation. Both are neutral and translucent, so they modulate
+       whatever colour they are laid over and one set works on every theme
+       and in both appearances. */
+    --depth-well:
+        inset 0 1px 3px rgb(25 23 18 / 0.10),
+        inset 0 0 0 1px rgb(25 23 18 / 0.04);
+    --depth-rest:
+        0 1px 2px rgb(25 23 18 / 0.03),
+        0 4px 14px rgb(25 23 18 / 0.05),
+        0 10px 28px rgb(25 23 18 / 0.04);
+    --depth-raise:
+        0 1px 2px rgb(25 23 18 / 0.07),
+        0 6px 14px rgb(25 23 18 / 0.09),
+        0 18px 34px rgb(25 23 18 / 0.07);
+    --edge-lit: inset 0 1px 0 rgb(255 255 255 / 0.30);
+    /* What a hanging object throws on the page behind it. Its own token
+       because it is painted, not blurred from a box — see `.idcast`. */
+    --cast: rgb(38 35 28 / 0.40);
+    /* How a hung thing comes to rest: out past the mark, then back. Used by
+       the card, its shadow, the strap and the clasp so they settle together
+       rather than on four different clocks. */
+    --swing: cubic-bezier(0.22, 1.24, 0.36, 1);
+    --edge-dark: inset 0 -1px 0 rgb(25 23 18 / 0.04);
+
+    /* No `--chrome-solid`. The rail was tinted three different ways and all
+       three read as a smudge or as a different app; it is stock now, and the
+       theme shows in the accent — focus rings, the active tab, links, the
+       brand mark — rather than in a surface. */
+
+    /* An object resting on the page, rather than a panel floating over it:
+       the offset is directional and the blur is tight. `--shadow-lift` is
+       still the right answer for a dialog, which really is above the page. */
+    --shadow-object: 4px 10px 16px rgb(32 33 31 / 0.13), 1px 2px 4px rgb(32 33 31 / 0.08);
+
+    /* Corner scale — overridden by [data-corners]. */
+    --r-sm: 7px;
+    --r-md: 10px;
+    --r-lg: 14px;
+    --r-xl: 20px;
+    --r-mark: 8px;
+
+    --side-w: 176px;
+    --gutter: 48px;
+    --reading-w: 860px;
+}
+
+/* Dark is the same material under less light, not a different one: the
+   neutrals keep their warmth and the ink keeps its cream cast, so a field
+   printed on either ground is recognisably the same card. */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --depth-well: inset 0 1px 3px rgb(0 0 0 / 0.40), inset 0 0 0 1px rgb(0 0 0 / 0.20);
+        --depth-rest: 0 1px 2px rgb(0 0 0 / 0.22), 0 4px 14px rgb(0 0 0 / 0.26), 0 10px 28px rgb(0 0 0 / 0.22);
+        --depth-raise: 0 1px 2px rgb(0 0 0 / 0.35), 0 6px 14px rgb(0 0 0 / 0.38), 0 18px 34px rgb(0 0 0 / 0.30);
+        --edge-lit: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    --cast: rgb(0 0 0 / 0.58);
+        --cast: rgb(0 0 0 / 0.58);
+        --edge-dark: inset 0 -1px 0 rgb(0 0 0 / 0.18);
+        --paper: #1e1c17;
+        --canvas: #141310;
+        --wash-a: #221d3d;
+        --wash-b: #17161f;
+        --chrome: #272520;
+        --ink: #f6f4ec;
+        --ink-2: #aaa79a;
+        --ink-3: #8b8878;
+        --line: rgb(246 244 236 / 0.07);
+        --line-2: rgb(246 244 236 / 0.12);
+        --accent: #a08cff;
+        --on-accent: #1b1a18;
+        --brand: #8b7af5;
+        --accent-soft: rgb(160 140 255 / 0.14);
+        --accent-line: rgb(160 140 255 / 0.32);
+        --wait: #dcb06a;
+        --ok: #6ecf9c;
+        --on-ok: #1b1a18;
+        --warn: #dcb06a;   /* 7.67:1 on --chrome, 8.46:1 on --paper */
+        --bad: #f08a7e;
+        --on-bad: #2a1512;
+        --info: #7fb4e8;
+        --shadow-soft: var(--depth-rest);
+        --shadow-lift: var(--depth-raise);
+        --shadow-object: 4px 10px 18px rgb(0 0 0 / 0.42), 1px 2px 4px rgb(0 0 0 / 0.3);
+        --mark-bg: 26%;
+        --mark-fg: 76%;
+        --mark-sat: 42%;
+    }
+}
+
+:root[data-theme="dark"] {
+    --depth-well: inset 0 1px 3px rgb(0 0 0 / 0.40), inset 0 0 0 1px rgb(0 0 0 / 0.20);
+    --depth-rest: 0 1px 2px rgb(0 0 0 / 0.22), 0 4px 14px rgb(0 0 0 / 0.26), 0 10px 28px rgb(0 0 0 / 0.22);
+    --depth-raise: 0 1px 2px rgb(0 0 0 / 0.35), 0 6px 14px rgb(0 0 0 / 0.38), 0 18px 34px rgb(0 0 0 / 0.30);
+    --edge-lit: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    --cast: rgb(0 0 0 / 0.58);
+    --edge-dark: inset 0 -1px 0 rgb(0 0 0 / 0.18);
+    --paper: #1e1c17;
+    --canvas: #141310;
+    --wash-a: #221d3d;
+    --wash-b: #17161f;
+    --chrome: #272520;
+    --ink: #f6f4ec;
+    --ink-2: #aaa79a;
+    --ink-3: #8b8878;
+    --line: rgb(246 244 236 / 0.07);
+    --line-2: rgb(246 244 236 / 0.12);
+    --accent: #a08cff;
+    --on-accent: #1b1a18;
+    --brand: #8b7af5;
+    --accent-soft: rgb(160 140 255 / 0.14);
+    --accent-line: rgb(160 140 255 / 0.32);
+    --wait: #dcb06a;
+    --ok: #6ecf9c;
+    --on-ok: #1b1a18;
+    --warn: #dcb06a;
+    --bad: #f08a7e;
+    --on-bad: #2a1512;
+    --info: #7fb4e8;
+    --shadow-soft: var(--depth-rest);
+    --shadow-lift: var(--depth-raise);
+    --shadow-object: 4px 10px 18px rgb(0 0 0 / 0.42), 1px 2px 4px rgb(0 0 0 / 0.3);
+    --mark-bg: 26%;
+    --mark-fg: 76%;
+    --mark-sat: 42%;
+}

@@ -23,7 +23,7 @@ Everything in the repo exists to serve one of four jobs:
 
 | Job | Components |
 |---|---|
-| Run the platform | `lemma-backend`, `lemma-frontend` |
+| Run the platform | `lemma-backend`, `lemma-frontend`, `lemma-harness` |
 | Install and operate it locally | `desktop`, `lemma-stack` |
 | Build and operate pods | `lemma-cli`, `lemma-skills`, `lemma-pod-bundle` |
 | Build on top of it | `lemma-python`, `lemma-typescript` |
@@ -33,7 +33,8 @@ Everything in the repo exists to serve one of four jobs:
 ```mermaid
 flowchart TB
     subgraph clients["People and agents"]
-        WEB["lemma-frontend<br/>Next.js workspace + pod apps"]
+        WEB["lemma-frontend<br/>Conversations + teammate apps"]
+        HARNESS["lemma-harness<br/>Operator tools + desktop web runtime"]
         CLI["lemma-cli<br/>lemma terminal"]
         SURF["Surfaces<br/>Slack · Teams · Telegram · WhatsApp · Email"]
         SDK["lemma-python · lemma-typescript"]
@@ -57,6 +58,7 @@ flowchart TB
     end
 
     WEB --> API
+    HARNESS --> API
     CLI --> API
     SDK --> API
     SURF -->|webhooks| API
@@ -105,6 +107,12 @@ event path are identical.
 each naming the tables it owns.
 
 ### lemma-frontend — the workspace
+
+The user-facing Next.js app runs conversations, teammate apps, files, workflows
+and voice calls. It uses the TypeScript SDK and a custom WebSocket server.
+See [its README](lemma-frontend/README.md) for setup and checks.
+
+### lemma-harness — operator tools and desktop runtime
 
 Next.js 16 / React 19. The pod workspace, the operator UI, and the public site.
 Pod **apps** are separate deployable frontends that talk to the same pod APIs
@@ -225,7 +233,7 @@ by review.
 
 The split is deliberate and follows the deployment boundary:
 
-- **AGPLv3** — `lemma-backend`, `lemma-frontend`, `desktop`. Server-delivered
+- **AGPLv3** — `lemma-backend`, `lemma-frontend`, `lemma-harness`, `desktop`. Server-delivered
   core: modify and offer it over a network, and your modifications are
   AGPL too.
 - **Apache-2.0** — `lemma-stack`, `lemma-cli`, `lemma-python`,

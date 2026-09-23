@@ -1,0 +1,279 @@
+/* The portal.
+ *
+ * It borrows `.screen` wholesale — the same frame the sign-in door, `/connect`
+ * and "Nobody here yet" already use — and adds only what a form with a second
+ * way in needs. A sign-in page that looked like its own product would be the
+ * first thing somebody sees of this one, saying it was assembled from parts.
+ */
+
+/* ── the two panes ───────────────────────────────────────────────────── */
+
+.portal {
+    display: grid;
+    grid-template-columns: 1.05fr 1fr;
+    min-height: 100dvh;
+}
+
+/* The aspirational half. Its own ground, so the form beside it reads as the
+   page and this reads as the window next to it. */
+/* A logo pinned to the corner, and everything else as one centred block.
+ *
+ * It was `space-between` with a stretched middle, which on a tall window put
+ * three hundred pixels of nothing above the cast and three hundred below the
+ * copy — the page read as furniture pushed against the walls. The logo is the
+ * only thing that belongs in a corner; the rest is one composition and is
+ * centred as one. */
+.portal__aside {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    background: var(--chrome);
+    border-right: 1px solid var(--line);
+}
+.portal__brand {
+    position: absolute;
+    top: 32px;
+    left: 32px;
+}
+
+/* The cast, the line about them, and what they do — one block, tight. */
+.portal__middle {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    text-align: center;
+    max-width: 30rem;
+}
+.portal__headline {
+    margin: 0;
+    max-width: 22ch;
+    font-size: 24px;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+}
+.portal__sub {
+    margin: 0;
+    max-width: 36ch;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--ink-3);
+    /* Held open: the line swaps between two lengths when the cast turns away,
+       and a box that resized would shuffle everything above it. */
+    min-height: 3.1em;
+}
+
+/* Three jobs a teammate actually holds. Directly under the promise and left
+   aligned inside a centred block: a bulleted list that is itself centred has
+   no edge for the eye to run down. */
+.portal__does {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 18px 0 0;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+    width: 100%;
+    max-width: 24rem;
+}
+.portal__does li {
+    position: relative;
+    padding-left: 18px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--ink-3);
+}
+.portal__does li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    opacity: 0.55;
+}
+
+/* The ask. Centred in its own half rather than in the window, so it does not
+   drift as the pane widths change. */
+.portal__pane {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+}
+.portal__form { width: min(100%, 25rem); }
+.portal__form h2 { margin: 0 0 8px; }
+.portal__lead {
+    margin: 0 0 4px;
+    color: var(--ink-3);
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+/* One column under a laptop. The aside keeps the logo and the cast and drops
+   the job list — on a phone that list is three lines of scrolling before
+   somebody reaches the thing they came to do. */
+/* On a phone, the logo and nothing else.
+ *
+ * A shrunken version of the left pane above the form is the worst of both: it
+ * costs the whole first screen and still cannot hold a composition. Somebody
+ * on a phone came to sign in. They get the mark, so they know whose door this
+ * is, and then the form. The cast, the promise and the list are a desktop
+ * composition and are simply not there — three rigs running
+ * requestAnimationFrame is also not what a phone wants behind a login. */
+@media (max-width: 860px) {
+    .portal { grid-template-columns: 1fr; min-height: 100dvh; align-content: start; }
+    .portal__aside {
+        border-right: 0;
+        padding: 24px 20px 4px;
+        align-items: flex-start;
+        background: none;
+    }
+    .portal__brand { position: static; }
+    /* Both, and they are siblings — hiding the middle alone left the job list
+       sitting under the logo with its divider, which is the one piece of the
+       composition that makes no sense on its own. */
+    .portal__middle,
+    .portal__does { display: none; }
+    .portal__pane { padding: 20px 20px 40px; align-items: flex-start; }
+}
+
+/* The providers come first, because for most people they are the answer, and
+   a form above them reads as the way in with the buttons as an afterthought. */
+.auth__providers {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 20px 0 0;
+}
+/* The mark sits with the words rather than pinned to the edge: a logo in the
+   far corner of a full-width button reads as a stray icon, not as whose button
+   it is. Centred as a pair, and the gap is the only thing holding them. */
+.auth__provider {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 11px 13px;
+}
+.auth__provider > svg { flex: none; }
+
+/* A rule with a word in it. The word is the point: without it the two halves
+   read as one form somebody has to fill in all of. */
+.auth__or {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 20px 0;
+    color: var(--ink-3);
+    font-size: 12px;
+}
+.auth__or::before,
+.auth__or::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+}
+
+/* A refusal, against the form rather than above the title: somebody who just
+   pressed a button is looking at the button. */
+.auth__problem {
+    margin: 0 0 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--bad);
+}
+
+.auth__note {
+    margin: 0 0 14px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--ink-3);
+}
+
+/* What the server said about one input, under that input. A password rule
+   printed at the top of a form is a rule somebody reads after failing it. */
+.field__said {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--bad);
+}
+
+/* ── who is waiting ──────────────────────────────────────────────────── */
+
+.waiting { display: flex; justify-content: center; }
+
+/* They stand in a line and overlap slightly, the way a group photographs
+   rather than the way a toolbar lays out. */
+.waiting__cast {
+    display: flex;
+    justify-content: center;
+}
+.waiting__one {
+    display: block;
+    margin-inline: -10px;
+    transition: transform 320ms cubic-bezier(.2, .7, .3, 1);
+    /* Staggered, so they turn as a group of individuals rather than as one
+       object. The delay is per position, from the inline `--at`. */
+    transition-delay: calc(var(--at, 0) * 45ms);
+}
+
+/* Alive while they are waiting, and only then.
+ *
+ * Breathing rather than bouncing: a couple of pixels over three seconds, out
+ * of phase per position so they are three creatures standing about and not a
+ * row of one creature. The animation is on the inner element so it cannot
+ * fight the turn, which owns `transform` on the wrapper. */
+.waiting[data-looking] .waiting__one > * {
+    animation: waiting-breathe 3.2s ease-in-out infinite;
+    animation-delay: calc(var(--at, 0) * -900ms);
+}
+@keyframes waiting-breathe {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+}
+
+/* Turned away, while a password is being typed. They rotate out and drop
+   slightly, which reads as looking off rather than as sliding sideways. */
+.waiting:not([data-looking]) .waiting__one:nth-child(odd) {
+    transform: rotate(-26deg) translateY(6%);
+}
+.waiting:not([data-looking]) .waiting__one:nth-child(even) {
+    transform: rotate(24deg) translateY(6%);
+}
+
+/* Somebody who has asked for less motion has asked for less of it. The turn
+   still happens — it carries meaning — but instantly, and nothing breathes. */
+@media (prefers-reduced-motion: reduce) {
+    .waiting__one { transition: none; }
+    .waiting[data-looking] .waiting__one > * { animation: none; }
+}
+
+/* ── autofill ────────────────────────────────────────────────────────── */
+
+/* A filled-in field is the browser's, not ours: Chrome paints its own near-
+   white background and near-black text over whatever we set, which on a dark
+   page is two glaring white boxes in the middle of the form. There is no
+   property that overrides it — the only lever is an inset shadow the size of
+   the field, plus `-webkit-text-fill-color` for the text, which do beat it.
+   The long transition is the other half of the trick: the override is applied
+   on a delay so long it never visibly reverts. */
+.field input:-webkit-autofill,
+.field input:-webkit-autofill:hover,
+.field input:-webkit-autofill:focus {
+    -webkit-text-fill-color: var(--ink);
+    -webkit-box-shadow: 0 0 0 100px var(--paper) inset;
+    box-shadow: 0 0 0 100px var(--paper) inset;
+    caret-color: var(--ink);
+    transition: background-color 100000s ease-in-out 0s;
+}

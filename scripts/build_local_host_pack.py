@@ -599,6 +599,7 @@ def standalone_server(root: Path) -> Path:
     candidates = (
         root / "server.js",
         root / "app/server.js",
+        root / "lemma-harness/server.js",
         root / "lemma-frontend/server.js",
     )
     for candidate in candidates:
@@ -614,24 +615,24 @@ def build_frontend(output: Path, explicit_node_root: Path | None) -> None:
     npm = npm_executable()
     run(npm, "ci", cwd=REPO_ROOT / "lemma-typescript")
     run(npm, "run", "build", cwd=REPO_ROOT / "lemma-typescript")
-    run(npm, "ci", cwd=REPO_ROOT / "lemma-frontend")
-    run(npm, "run", "build", cwd=REPO_ROOT / "lemma-frontend")
+    run(npm, "ci", cwd=REPO_ROOT / "lemma-harness")
+    run(npm, "run", "build", cwd=REPO_ROOT / "lemma-harness")
 
     frontend = output / "frontend"
     copy_node_runtime(frontend, explicit_node_root)
-    standalone = REPO_ROOT / "lemma-frontend/.next/standalone"
+    standalone = REPO_ROOT / "lemma-harness/.next/standalone"
     if not standalone.is_dir():
         raise SystemExit(f"Next standalone output is missing: {standalone}")
     server = standalone_server(standalone)
     shutil.copytree(standalone, frontend, dirs_exist_ok=True)
     server_dir = frontend / server.relative_to(standalone).parent
     shutil.copytree(
-        REPO_ROOT / "lemma-frontend/public",
+        REPO_ROOT / "lemma-harness/public",
         server_dir / "public",
         dirs_exist_ok=True,
     )
     shutil.copytree(
-        REPO_ROOT / "lemma-frontend/.next/static",
+        REPO_ROOT / "lemma-harness/.next/static",
         server_dir / ".next/static",
         dirs_exist_ok=True,
     )

@@ -332,7 +332,7 @@ reading the approval card, approving or denying the native tool, live Unicode
 streaming, Stop, simultaneous approvals with different decisions, a provider
 crash, closing/reopening a streaming chat, and reloading
 the resulting transcript. Install the locked dependencies in `lemma-typescript`,
-`lemma-frontend`, and `desktop/ui-tests`, then install Playwright Chromium with
+`lemma-harness`, and `desktop/ui-tests`, then install Playwright Chromium with
 `npm exec --prefix desktop/ui-tests -- playwright install chromium`. Alternatively,
 set `LEMMA_TEST_BROWSER_CHANNEL=chrome` to use installed Chrome. The test creates
 its own account, host, frontend server and browser profile; process groups and

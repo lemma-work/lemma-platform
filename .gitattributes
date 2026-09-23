@@ -53,3 +53,5 @@ Makefile    text eol=lf
 # a finding in a file you are not allowed to edit is noise by construction.
 lemma-typescript/public/lemma-client.js linguist-generated=true
 lemma-typescript/public/lemma-ui.js     linguist-generated=true
+
+*.pdf binary

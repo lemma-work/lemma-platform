@@ -1,0 +1,199 @@
+/* The shapes a table takes when the grid is not one of them.
+   Built inside `.library-view`, which already resets every button in here to
+   bare text — so anything that needs to look like a control says so. */
+
+/* The app's button reset clears font, colour, background, border and cursor,
+   and stops short of padding — so every one of these carried the browser's own
+   1px 6px. On a card that put the title six pixels right of the labels beneath
+   it and a pixel below the top it was supposed to sit on; in the checklist it
+   pushed every line clear of the tick column. It reads as a heading that has
+   drifted, which is what it is. */
+.form-open,.form-edit{padding:0}
+.form-open{font-weight:500;color:var(--ink);text-align:left;font-size:14px;line-height:1.35;display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.form-open:hover{color:var(--accent)}
+.form-meta{display:flex;flex-wrap:wrap;gap:10px;margin:0;font-size:12px;color:var(--ink-3);min-width:0}
+.form-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}
+/* A chip and a picker are the same object with different jobs, so they are
+   one set of metrics and not two that happen to look similar. They sat side by
+   side at different heights, different corner radii and different text insets,
+   because one was ours and the other was whatever the platform draws a select
+   as. */
+.form-tag,.form-status{display:inline-flex;align-items:center;height:24px;box-sizing:border-box;padding:0 10px;border-radius:999px;background:var(--accent-soft);color:var(--ink-2);font-size:11.5px;line-height:1;max-width:100%}
+.form-tag{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;line-height:24px}
+.form-status{position:relative;padding-right:24px;cursor:pointer}
+.form-status>select{appearance:none;-webkit-appearance:none;font:inherit;color:inherit;background:transparent;border:0;padding:0;margin:0;cursor:pointer;max-width:100%;text-overflow:ellipsis}
+.form-status>select:focus{outline:none}
+.form-status:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+.form-status::after{content:"";position:absolute;right:9px;top:50%;width:6px;height:6px;margin-top:-4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);opacity:.55;pointer-events:none}
+.form-status--new{padding-right:10px;background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-sm);cursor:text;font:inherit;font-size:11.5px}
+.form-status--new::after{content:none}
+
+/* feed — the column the row exists for, whole */
+.form-feed{display:flex;flex-direction:column;gap:2px}
+.form-feed article{padding:22px 4px;border-bottom:1px solid var(--line)}
+.form-feed header{display:flex;flex-direction:column;gap:7px;margin-bottom:11px}
+.form-prose{margin:0;max-width:var(--reading-w,68ch);white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.62;color:var(--ink-2)}
+.form-prose.is-clipped{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
+.form-more{font-size:12px;color:var(--accent);padding:7px 0 0}
+
+/* chart — small multiples, one measure each, never two scales on one frame */
+.form-charts{display:flex;flex-direction:column;gap:26px}
+.form-plot{margin:0}
+.form-plot figcaption{display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:13px;font-weight:500;color:var(--ink);margin-bottom:6px}
+.form-plot figcaption span{font-size:12px;font-weight:400;color:var(--ink-3)}
+.form-plot svg{width:100%;height:auto;display:block;overflow:visible}
+.form-plot__grid{stroke:var(--line);stroke-width:1}
+.form-plot__tick,.form-plot__edge{fill:var(--ink-3);font-size:10px;font-family:var(--ui)}
+.form-plot__line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.form-plot__cross{stroke:var(--line-2);stroke-width:1;stroke-dasharray:3 3}
+.form-plot__dot{fill:var(--accent);stroke:var(--paper);stroke-width:2}
+.form-plot__read{margin:4px 0 0;font-size:12px;color:var(--ink-3);min-height:1.2em}
+.form-plot__read strong{color:var(--ink);font-weight:500}
+
+/* checklist — what is left, and when */
+.form-list__count{margin:0 0 12px;font-size:12px;color:var(--ink-3)}
+.form-list ul{list-style:none;margin:0;padding:0}
+.form-list li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;align-items:center;column-gap:12px;row-gap:7px;padding:13px 6px;border-bottom:1px solid var(--line)}
+/* Placed, not auto-flowed. Left to find its own cell the due date landed in
+   the tick's 22px column and overflowed sideways over the tags. */
+.form-list li>.form-tick{grid-column:1;grid-row:1}
+.form-list li>.form-open{grid-column:2;grid-row:1}
+.form-list li>.form-due{grid-column:3;grid-row:1;justify-self:end}
+.form-list li>.form-meta{grid-column:2/4;grid-row:2;font-size:11.5px;align-items:center}
+.form-tick{display:grid;place-items:center;width:19px;height:19px;border:1px solid var(--line-2);border-radius:5px;font-size:12px;color:var(--ok)}
+/* No box where there is nothing to tick — an empty one is an invitation the
+   row cannot honour. The space is kept so the titles still line up. */
+.form-tick--none{display:block;width:19px;height:19px}
+.is-done .form-tick{background:var(--accent-soft);border-color:transparent}
+.is-done .form-open{color:var(--ink-3);text-decoration:line-through}
+.form-due{font-size:12px;color:var(--ink-3);white-space:nowrap}
+.form-due.is-late{color:var(--bad)}
+
+/* board — where every row sits */
+.form-board{display:flex;gap:14px;overflow-x:auto;padding-bottom:10px;align-items:flex-start}
+.form-board section{flex:0 0 268px;background:var(--chrome);border:1px solid var(--line);border-radius:var(--r-lg);padding:10px}
+.form-board h3{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 10px;font-size:12px;font-weight:500;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em}
+.form-board h3 span{background:var(--paper);border-radius:999px;padding:1px 8px;letter-spacing:0;text-transform:none}
+.form-board ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.form-board li{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-md);padding:9px 11px;display:flex;flex-direction:column;gap:7px;transition:border-color .15s}
+.form-board li:hover{border-color:var(--line-2)}
+.form-board ol{gap:7px}
+/* Tightened until the three facts fit a 268px column on one line. They were a
+   few pixels over, so some cards wrapped their last chip and others did not,
+   and a pile of twenty-five came out ragged down the side. */
+.form-board .form-meta{gap:6px}
+.form-board .form-status{max-width:116px}
+.form-board .form-open{font-size:13px;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+
+/* cards — named things with a few facts each */
+.form-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.form-cards article{border:1px solid var(--line);border-radius:var(--r-lg);padding:15px 16px}
+.form-cards article:hover{border-color:var(--line-2)}
+.form-cards dl{margin:11px 0 0;display:flex;flex-direction:column;gap:8px}
+.form-cards dt{font-size:11px;color:var(--ink-3);margin-bottom:2px}
+/* One line each. A card that grows with its longest value makes every card
+   beside it grow too, and a row of them becomes a staircase. The whole value
+   is on the row's own page, and in the title. */
+.form-cards dd{margin:0;font-size:13px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.form-cards dd:has(.form-status){overflow:visible}
+
+@media(max-width:600px){
+  .form-list li{grid-template-columns:22px minmax(0,1fr)}
+  .form-list li>.form-due{grid-column:2;grid-row:2;justify-self:start}
+  .form-list li>.form-meta{grid-row:3}
+  .form-board section{flex-basis:78vw}
+}
+
+/* the controls a shape needs to be worked in rather than looked at */
+.form-add{font-size:12px;color:var(--ink-3);padding:6px 0}
+.form-add:hover{color:var(--accent)}
+.form-board .form-add{width:100%;text-align:left;padding:8px 0 2px}
+.form-list__count{display:flex;align-items:center;justify-content:space-between;gap:12px}
+input.form-tick{appearance:none;width:19px;height:19px;border:1px solid var(--line-2);border-radius:5px;cursor:pointer;display:grid;place-items:center;background:var(--paper)}
+/* Filled with the teammate's field and ticked in its paired ink. A white tick
+   on `var(--accent)` is 2.07:1 on amber in dark — a checkbox you cannot tell
+   is checked. */
+input.form-tick:checked{background:var(--field);border-color:var(--field)}
+input.form-tick:checked::after{content:"✓";color:var(--field-ink);font-size:12px;line-height:1}
+input.form-tick:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.form-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.form-edit{font-size:11.5px;color:var(--ink-3);opacity:0;flex-shrink:0}
+.form-cards article:hover .form-edit,.form-feed article:hover .form-edit,.form-edit:focus-visible{opacity:1}
+.form-edit:hover{color:var(--accent)}
+.form-cards__add{border:1px dashed var(--line-2);border-radius:var(--r-lg);min-height:64px;text-align:center}
+
+.record-form__known{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.record-form__known button{font:inherit;font-size:11.5px;color:var(--ink-2);background:var(--chrome);border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer}
+.record-form__known button[aria-pressed=true]{background:var(--field);border-color:var(--field);color:var(--field-ink)}
+
+/* timeline — what happened, in the order it happened */
+.form-timeline{list-style:none;margin:0;padding:0}
+.form-timeline li{position:relative;padding-left:20px}
+/* Two pixels of the teammate's own tint rather than a hairline of black at ten
+   percent: the line tokens are made for full-width rules, where that much
+   contrast is plenty and the same value vanishes stood on its end. */
+.form-timeline li::before{content:"";position:absolute;left:3.5px;top:0;bottom:0;width:2px;background:var(--accent-soft)}
+.form-timeline li:last-child::before{bottom:auto;height:26px}
+.form-timeline__day{display:flex;align-items:baseline;gap:9px;margin:0;padding:18px 0 7px;font-size:12px;font-weight:500;color:var(--ink-2)}
+.form-timeline__day span{font-weight:400;color:var(--ink-3)}
+.form-timeline__event{position:relative;padding:9px 0 13px}
+.form-timeline__event::before{content:"";position:absolute;left:-20px;top:15px;width:9px;height:9px;border-radius:50%;background:var(--paper);border:2px solid var(--accent)}
+.form-timeline__event .form-meta{margin-top:6px}
+
+/* full screen — the browser gives the whole display to one element, and for a
+   board of twenty-five cards in three piles that is the difference between
+   seeing the pile and scrolling it */
+.table-view:fullscreen,.table-view.is-expanded{max-width:none;background:var(--paper);overflow:auto;padding:26px 40px}
+.table-view.is-expanded{position:fixed;inset:0;z-index:60;margin:0}
+.table-view:fullscreen .form-board,.table-view.is-expanded .form-board{padding-bottom:20px}
+.table-view:fullscreen .form-cards,.table-view.is-expanded .form-cards{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+
+/* drawing fewer than were read */
+.form-more-rows{font-size:12px;color:var(--accent);padding:10px 0 2px;width:100%;text-align:left}
+.form-feed .form-more-rows,.form-list .form-more-rows{padding-top:16px}
+.form-cards__more{grid-column:1/-1}
+.form-timeline__end{padding-left:20px}
+.form-timeline__end::before{content:none}
+
+/* asking a table something, and being told what it came out as — one line.
+   No fill and no border: this sits directly over the rows, and a second ruled
+   box above a table that already has its own edges is one frame too many. */
+.table-ask{margin:0 0 16px}
+.table-ask__bar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-3)}
+/* Takes the slack, so the actions sit hard right whatever is to its left. */
+.table-ask__note{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.table-ask__actions{display:flex;align-items:center;gap:16px;flex-shrink:0;margin-left:auto}
+.table-ask__actions button{color:var(--accent);white-space:nowrap;font-size:12.5px}
+.table-ask__toggle{color:var(--ink-2);font-size:12.5px}
+.table-ask__toggle[aria-expanded=true]{color:var(--accent)}
+.table-ask__sort{display:flex;align-items:center;gap:8px}
+.table-ask__sort select{font:inherit;font-size:12.5px;color:var(--ink-2);background:transparent;border:1px solid var(--line);border-radius:var(--r-sm);padding:4px 8px;cursor:pointer}
+.table-ask__dir,.table-ask__clear{color:var(--accent);font-size:12.5px}
+.table-ask__body{margin-top:12px;padding:12px 14px;background:var(--chrome);border:1px solid var(--line);border-radius:var(--r-md);display:flex;flex-direction:column;gap:11px}
+.table-ask__row{display:flex;align-items:flex-start;gap:14px}
+.table-ask__label{flex:0 0 116px;font-size:11.5px;color:var(--ink-3);padding-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.table-ask__chips{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.table-ask__chips button{font-size:11.5px;color:var(--ink-2);background:var(--paper);border:1px solid var(--line);border-radius:999px;padding:4px 11px}
+.table-ask__chips button:hover{border-color:var(--line-2)}
+.table-ask__chips button[aria-pressed=true]{background:var(--field);border-color:var(--field);color:var(--field-ink)}
+/* One line is a desktop luxury. On a phone the sentence wraps rather than
+   truncating to nothing, and the actions follow it down. */
+@media(max-width:600px){
+  .table-ask__bar{gap:10px 14px}
+  .table-ask__note{flex:1 1 auto;white-space:normal;overflow:visible}
+  .table-ask__actions{margin-left:0;gap:14px}
+  .table-ask__row{flex-direction:column;gap:6px}
+  .table-ask__label{flex:none}
+}
+
+/* a row on its own page */
+.record-state{display:flex;align-items:center;gap:9px;margin:0 0 14px}
+.record-state small{font-size:11px;color:var(--ink-3)}
+.record-empties{font-size:12px;color:var(--accent);padding:12px 0 0}
+.record-blank dd{color:var(--ink-3)}
+.record-prose p{margin:0;max-width:var(--reading-w,68ch);white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.62;color:var(--ink-2)}
+.record-quiet summary{cursor:pointer;font-size:12.5px;color:var(--ink-3);list-style:none}
+.record-quiet summary::-webkit-details-marker{display:none}
+.record-quiet summary::before{content:"▸ "}
+.record-quiet[open] summary::before{content:"▾ "}
+.record-quiet dd{font-family:var(--mono,monospace);font-size:12px;color:var(--ink-3)}

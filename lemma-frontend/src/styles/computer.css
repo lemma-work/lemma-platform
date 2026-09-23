@@ -1,0 +1,235 @@
+/* ── the computer ───────────────────────────────────────────────────
+   Built on `.library-view`, because a directory and a library listing are the
+   same act of reading and two visual languages for one act is how a product
+   starts feeling assembled. What is new here is only what is genuinely new:
+   a state, a path, and a file. */
+
+
+/* ── the head: a screen, and what the machine is ────────────────────
+   Two columns on a wide pane and stacked on a narrow one. The screen leads
+   because that is what a computer is from the outside; the paragraph beside it
+   is the only place this app says whose machine it is and how it is shared,
+   and it is worth the width to say it once properly. */
+.computer-head{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:28px;align-items:start;margin-bottom:30px}
+.computer-intro h1{font-size:24px;line-height:1.25;margin:0 0 10px}
+.computer-intro p{margin:0 0 10px;font-size:13px;line-height:1.65;color:var(--ink-3);max-width:46ch}
+.computer-intro p:last-child{margin-bottom:0}
+
+/* Dark in both themes, deliberately: an idle display is not a sheet of paper,
+   and a screen that went white in light mode stopped reading as a screen at
+   all. Its own tokens, because everything inside sits on this surface rather
+   than on the page. */
+.screen-panel{--screen-bg:#14131a;--screen-ink:rgb(255 255 255 / 0.9);--screen-ink-2:rgb(255 255 255 / 0.55);min-width:0}
+.screen-glass{position:relative;aspect-ratio:16/10;border-radius:var(--r-lg);overflow:hidden;background:var(--screen-bg);border:1px solid var(--line-2);box-shadow:var(--shadow-soft);display:grid;place-items:center}
+/* Qualified by the view, and it has to be: `.library-view button` resets every
+   button inside this pane to bare inherited text on no background — which on a
+   dark screen painted this one in the page's ink and made the only way out of
+   an asleep machine almost impossible to see. Measured, not guessed: it was
+   rendering near-black on near-black. */
+.computer-view .screen-action{position:relative;z-index:1;display:inline-flex;align-items:center;gap:7px;font:inherit;font-size:12.5px;cursor:pointer;padding:8px 16px;border-radius:999px;color:#14131a;background:rgb(255 255 255 / 0.92);border:1px solid transparent}
+.computer-view .screen-action:hover:not(:disabled){background:#fff}
+.computer-view .screen-action:disabled{opacity:.55;cursor:default}
+.computer-view .screen-action:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.screen-caption{margin:12px 2px 0;font-size:12px;line-height:1.55;color:var(--ink-3)}
+.screen-caption strong{font-weight:500;color:var(--ink-2)}
+
+/* Off, and looking it. No animation on an idle screen: a machine doing
+   nothing should look like a machine doing nothing, and anything drifting
+   about on the glass was decoration pretending to be a status. The faint
+   gradient is the only thing here, and it is there so the panel reads as a
+   surface rather than as a hole in the page. */
+.screen-glass{background:radial-gradient(130% 100% at 50% 0%, #1d1b26 0%, var(--screen-bg) 68%)}
+.screen-panel--asleep .screen-glass{background:var(--screen-bg);border-color:var(--line)}
+
+/* Live, the picture owns the glass: no gradient behind it, and the canvas
+   noVNC inserts is centred and scaled to fit by RFB itself. */
+.screen-panel--live .screen-glass{background:#000}
+.screen-live{position:absolute;inset:0}
+.screen-live canvas{display:block}
+/* One per connection attempt, stacked, so a reconnect keeps the last picture
+   until the new one has a frame to replace it with. Usually there is exactly
+   one; two for the seconds a browser takes to come back. */
+.screen-surface{position:absolute;inset:0}
+/* Always there rather than revealed on hover: half the people who open
+   this are on a touch screen, where a control that needs a pointer over it
+   first does not exist. Quiet until you go for it. */
+.computer-view .screen-stop{position:absolute;z-index:2;top:10px;right:10px;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;cursor:pointer;color:#fff;background:rgb(0 0 0 / 0.45);border:1px solid rgb(255 255 255 / 0.22);opacity:.55;transition:opacity .15s}
+.screen-panel:hover .screen-stop,.computer-view .screen-stop:focus-visible{opacity:1}
+
+.computer-path{display:flex;align-items:center;flex-wrap:wrap;gap:2px;padding:0 0 12px;margin-bottom:4px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+.computer-path span{display:inline-flex;align-items:center;gap:2px;min-width:0}
+.computer-path button{padding:5px 7px;border-radius:6px;color:var(--ink-3);max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.computer-path button:hover:not(:disabled){background:var(--chrome);color:var(--ink)}
+/* The one you are on: still readable, and no longer a link to here. */
+.computer-path button:disabled{opacity:1;color:var(--ink);cursor:default}
+.computer-up{margin-right:6px;display:inline-grid;place-items:center;width:28px;height:28px;border-radius:7px;border:1px solid var(--line);color:var(--ink-3);flex-shrink:0}
+.computer-up:hover{border-color:var(--ink-3);color:var(--ink)}
+/* Pushed to the far end of the path bar: it is about the listing below, not
+   about the machine, and up beside the screen it read as reloading that. */
+.computer-again{margin-left:auto;display:inline-grid;place-items:center;width:28px;height:28px;border-radius:7px;color:var(--ink-3);flex-shrink:0}
+.computer-again:hover:not(:disabled){background:var(--chrome);color:var(--ink)}
+.computer-where{margin:10px 2px 0;font-size:12px;color:var(--ink-3);line-height:1.5}
+
+.computer-note{font-size:13px;color:var(--ink-3);line-height:1.6;padding:18px 2px;margin:0}
+.computer-inline{color:var(--accent);display:inline-flex;align-items:center;gap:5px;vertical-align:baseline}
+.computer-inline:hover{text-decoration:underline}
+
+/* Given space on purpose: every one of these is a true and unremarkable answer —
+   asleep, empty, not written yet — and cramming them into a line makes each
+   one look like something went wrong. */
+.computer-empty{display:flex;flex-direction:column;align-items:center;gap:14px;padding:64px 24px;text-align:center;color:var(--ink-3)}
+.computer-empty p{margin:0;max-width:46ch;line-height:1.6;font-size:13px}
+.computer-empty svg{color:var(--line-2)}
+
+.computer-file{padding:8px 0 24px}
+.computer-file img{max-width:100%;border:1px solid var(--line);border-radius:var(--r-md)}
+/* The agent's own output, so it keeps its whitespace and wraps rather than
+   scrolling sideways — a log read one horizontal drag at a time is not read. */
+.computer-text{font-family:var(--mono);font-size:12.5px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:16px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--chrome);color:var(--ink-2);max-height:70vh;overflow:auto}
+.computer-file .computer-note{padding:12px 2px 0}
+
+.computer-footer-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+
+@media(max-width:900px){
+  .computer-head{grid-template-columns:minmax(0,1fr);gap:20px}
+  .screen-panel{max-width:420px}
+}
+@media(max-width:600px){
+  .computer-view .library-actions{flex-wrap:wrap}
+  .computer-path button{max-width:18ch}
+  .computer-empty{padding:44px 12px}
+}
+
+/* ── what the browser is signed in to ────────────────────────
+   A shut door by default, because opening it costs a walk into the sandbox —
+   these are read from the browser itself, not from a table. So it looks like
+   something you open rather than something that failed to load. */
+.logins{border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-bottom:18px}
+.computer-view .logins__door{display:flex;align-items:center;gap:8px;width:100%;padding:12px 2px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.computer-view .logins__door:hover{color:var(--ink)}
+.computer-view .logins__door small{margin-left:auto;font-size:11.5px;color:var(--ink-3)}
+.logins__body{padding-bottom:10px}
+/* The band between the two groups, and it only appears when both are
+   occupied. Set like the door above it rather than like a row, so it reads as
+   a division of the list and not as another site in it. */
+.logins__band{display:flex;align-items:center;gap:8px;margin:0;padding:16px 2px 4px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+.logins__band small{margin-left:auto;font-size:11.5px;color:var(--ink-3)}
+.logins__row{display:flex;align-items:center;gap:12px;padding:9px 2px;border-top:1px solid var(--line)}
+.logins__mark{display:grid;place-items:center;color:var(--ink-3);flex-shrink:0}
+.logins__what{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.logins__what strong{font-weight:500;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logins__what small{font-size:11.5px;color:var(--ink-3)}
+/* The row becomes the question rather than growing a popover beside it: what
+   is going is named in the sentence, and the two answers sit under it. */
+.logins__row--asking{flex-direction:column;align-items:flex-start;gap:10px;padding:14px 2px}
+.logins__row--asking p{margin:0;font-size:13px;line-height:1.6;color:var(--ink-2)}
+.logins__row--asking strong{font-weight:500;color:var(--ink)}
+.logins__actions{display:flex;gap:10px;flex-wrap:wrap}
+
+/* ── signing in to a site ───────────────────────────────
+   A teammate's browser with a person typing a password into it. Everything
+   here serves one job the rest of this pane does not have: making the site
+   above the field unmissable, and keeping it attached to the picture rather
+   than floating over the page as a heading. */
+.signin{display:flex;flex-direction:column;gap:12px;min-height:0}
+/* Arrived at from a message rather than from inside the app: one errand on an
+   empty page, held to a readable width and centred, because there is no shell
+   around it to give it a place. */
+.signin-page{max-width:840px;margin:0 auto;padding:24px var(--gutter);min-height:100dvh;display:flex;flex-direction:column;justify-content:center}
+.signin__head{display:flex;flex-direction:column;gap:6px}
+/* The one label on this screen somebody is asked to trust, so it is the
+   largest thing on it and the only thing at full ink. */
+.signin__host{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:0;font-size:14px;color:var(--ink-3)}
+.signin__host strong{font-weight:500;color:var(--ink);font-size:15px}
+.signin__lock{color:var(--ok)}
+.signin__lock--open{color:var(--warn)}
+.signin__warn{font-size:11.5px;color:var(--warn)}
+/* Said, not hidden: a hop to an identity provider is what a real sign-in
+   looks like, and a pane that concealed it would teach people to ignore the
+   host changing. */
+.signin__aside{font-size:11.5px;color:var(--ink-3)}
+.signin__reason{margin:0;font-size:13px;line-height:1.6;color:var(--ink-2)}
+.signin__fine{margin:0;font-size:11.5px;line-height:1.55;color:var(--ink-3)}
+
+/* Taller than the watching screen's 16:10, because this one is worked in
+   rather than looked at: a login form in a letterbox is a form you scroll. */
+.signin__glass{position:relative;aspect-ratio:4/3;max-height:58vh;border-radius:var(--r-lg);overflow:hidden;background:#14131a;border:1px solid var(--line-2);display:grid;place-items:center}
+.signin__glass .screen-live{position:absolute;inset:0}
+.signin__glass canvas{display:block}
+/* Over the glass rather than under it: the picture below is a blank browser
+   until the steer lands, and a caption under the frame reads as a note about
+   something that already happened. */
+.signin__waiting{position:absolute;z-index:1;display:flex;align-items:center;gap:12px;margin:0;padding:8px 14px;border-radius:999px;font-size:12px;color:rgb(255 255 255 / 0.82);background:rgb(0 0 0 / 0.5)}
+/* The handle for a steer that never landed. On the pill rather than under the
+   glass because it is about the sentence beside it and nothing else, and the
+   glass below is a blank browser somebody is waiting on. */
+.signin__again{font:inherit;font-size:12px;color:#fff;text-decoration:underline;text-underline-offset:2px;cursor:pointer;background:none;border:0;padding:0}
+.signin__again:disabled{opacity:.55;cursor:default}
+.signin__foot{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+
+/* Only where it is both true and actionable — this pane can drive and the
+   keyboard is not in it yet. Bottom, so it never covers the field somebody is
+   about to click. */
+.screen-hint{position:absolute;z-index:1;left:50%;bottom:12px;transform:translateX(-50%);margin:0;padding:6px 12px;border-radius:999px;font-size:11.5px;white-space:nowrap;color:rgb(255 255 255 / 0.78);background:rgb(0 0 0 / 0.45);pointer-events:none}
+
+@media(max-width:600px){
+  .signin__glass{aspect-ratio:3/4;max-height:52vh}
+  .signin__foot .btn{flex:1}
+}
+
+/* ── connecting ─────────────────────────────────────────────────────
+   The form is whatever the connector described, so none of this styles a
+   field by name — it styles the shapes `schema.ts` can produce. It leans on
+   `.record-form`, which is already this app's answer to "a server owns this
+   field list": the record editor and the notification form are the same act
+   wearing different schemas. */
+
+/* `stretch`, not `center`. The two controls are different heights — the search
+   box pads 9px and a button pads 8px, and their text metrics differ besides —
+   so centring them left the tops and bottoms 5px out of step with each other.
+   Stretching makes the button exactly as tall as the box beside it.
+
+   And the search box carries a `margin-top` from when it was the first thing
+   in this section. In a flex row that margin is inside the centring, so it
+   pushed the box down past the button as well as making it taller: measured at
+   42/84 against 37/75. */
+.connectors__top{display:flex;align-items:stretch;gap:10px;margin:14px 0 12px}
+.connectors__top .connectors__find{flex:1;margin:0}
+.connectors__top .btn{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+
+.connect-lead{margin:0 0 16px;font-size:13px;line-height:1.6;color:var(--ink-3)}
+
+/* A map whose keys the tenant chooses, so it is pairs rather than inputs. */
+.connect-pairs{display:flex;flex-direction:column;gap:6px}
+.connect-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 30px;gap:6px}
+.connect-pair input{min-width:0}
+.connect-pair button{display:grid;place-items:center;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--paper);color:var(--ink-3);cursor:pointer}
+.connect-pair button:hover{border-color:var(--bad);color:var(--bad)}
+.connect-add{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12px;color:var(--accent);background:none;border:0;padding:4px 0;cursor:pointer}
+.connect-add:hover{text-decoration:underline}
+.connect-check{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
+.connect-check input{width:auto}
+
+/* What you are connecting, before which one. Every MCP server is one
+   catalogue row, so "pick a connector" is the wrong first question. */
+.connect-picks{display:flex;flex-direction:column;gap:8px}
+.connect-pick{display:flex;align-items:flex-start;gap:12px;width:100%;text-align:left;padding:14px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);color:var(--ink);font:inherit;cursor:pointer}
+.connect-pick:hover{border-color:var(--accent-line);background:var(--accent-soft)}
+.connect-pick:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.connect-pick__glyph{display:grid;place-items:center;width:38px;height:38px;border-radius:9px;border:1px solid var(--line);color:var(--ink-3);flex-shrink:0}
+.connect-pick strong{display:block;font-size:13.5px;font-weight:500}
+.connect-pick small{display:block;margin-top:4px;font-size:12px;line-height:1.5;color:var(--ink-3)}
+
+.connect-result{display:flex;align-items:flex-start;gap:9px;margin:0 0 14px;font-size:13px;line-height:1.55;color:var(--ok)}
+.connect-result--warn{color:var(--warn)}
+
+.acct__acts{display:inline-flex;align-items:center;gap:12px;margin-left:auto;flex-shrink:0}
+.acct__acts .linkish{margin-left:0}
+/* What discovery said, which is information rather than a warning. */
+.acct__trouble--quiet{color:var(--ink-3)}
+
+@media(max-width:600px){
+  .connectors__top{flex-wrap:wrap}
+  .connect-pair{grid-template-columns:minmax(0,1fr) 30px}
+  .connect-pair input:nth-child(2){grid-column:1 / -1}
+}

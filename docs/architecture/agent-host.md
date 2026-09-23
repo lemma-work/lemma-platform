@@ -54,7 +54,7 @@ the app being open, the way an open window is.
 ## Connecting is automatic
 
 This computer pairs itself, once per workspace per page load, from
-`lemma-frontend/lib/desktop/auto-connect.ts`, which is mounted wherever
+`lemma-harness/lib/desktop/auto-connect.ts`, which is mounted wherever
 `protected-route` is. The user is never asked to connect and cannot disconnect
 the machine they are sitting at — those buttons are gone, along with the
 `localStorage` flag that used to referee between them.

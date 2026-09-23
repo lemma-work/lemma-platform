@@ -66,7 +66,8 @@ E2E_TEMP_ROOT ?= /tmp/lemma-desktop-e2e
 UNIT_MARKERS  ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
 
 BACKEND_DIR   := lemma-backend
-FRONTEND_DIR  := lemma-frontend
+FRONTEND_DIR  := lemma-harness
+WORKSPACE_DIR := lemma-frontend
 CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
@@ -366,7 +367,8 @@ help:
 	@echo "    make init               create .env files with local defaults (idempotent)"
 	@echo ""
 	@echo "  Dev stack"
-	@echo "    make dev                start infra + backend + frontend"
+	@echo "    make dev                start infra + backend + harness"
+	@echo "    make dev-frontend       start the user-facing workspace on port 3000"
 	@echo "    make dev-public         start with an ephemeral public API tunnel"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
 	@echo "    make stop               stop app and tunnel processes"
@@ -402,7 +404,7 @@ help:
 	@echo "    make test-backend       backend unit + fast e2e"
 	@echo "    make test-backend-unit  backend unit tests only"
 	@echo "    make test-backend-e2e   backend fast e2e (E2E_WORKERS=$(E2E_WORKERS))"
-	@echo "    make test-frontend      frontend vitest suite"
+	@echo "    make test-frontend      harness vitest suite"
 	@echo "    make test-cli           lemma-cli unit + e2e tests"
 	@echo "    make test-cli-unit      lemma-cli unit tests only (no docker)"
 	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
@@ -463,6 +465,7 @@ init:
 	@cd $(PYTHON_DIR) && uv sync --quiet
 	@cd $(TS_DIR) && npm install --silent
 	@cd $(FRONTEND_DIR) && npm install --silent
+	@cd $(WORKSPACE_DIR) && npm install --silent
 	@echo "  ✓ Dependencies installed"
 	@echo ""
 	@echo "→ Building lemma-sdk (lemma-typescript)…"
@@ -476,6 +479,7 @@ init:
 	@echo "→ Creating .env files (skipped if already present)…"
 	@$(MAKE) --no-print-directory _init-backend-env
 	@$(MAKE) --no-print-directory _init-frontend-env
+	@$(MAKE) --no-print-directory _init-workspace-env
 	@echo ""
 	@$(MAKE) --no-print-directory _ensure-sandbox-images
 	@echo ""
@@ -1530,7 +1534,7 @@ script-portability-check:
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-test: test-dev-workflow test-backend-unit test-backend-e2e test-cli test-python test-frontend
+test: test-dev-workflow test-backend-unit test-backend-e2e test-cli test-python test-frontend test-workspace
 	@echo ""
 	@echo "✓ All test suites complete."
 
@@ -2112,12 +2116,13 @@ codeql-all:
 # frontend plus CodeQL" -- reported success on a machine where not one frontend
 # gate had run, and said so in a line that scrolled past.
 quality-frontend:
-	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ] || [ ! -d "$(TS_DIR)/node_modules" ]; then \
+	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ] || [ ! -d "$(WORKSPACE_DIR)/node_modules" ] || [ ! -d "$(TS_DIR)/node_modules" ]; then \
 		echo "make: *** cannot run the frontend gates: node_modules is missing."; \
-		echo "    run 'npm ci' in $(TS_DIR) and $(FRONTEND_DIR),"; \
+		echo "    run 'npm ci' in $(TS_DIR), $(FRONTEND_DIR) and $(WORKSPACE_DIR),"; \
 		echo "    or run 'make quality' if your change is Python-only."; \
 		exit 1; \
 	fi
+	@cd $(WORKSPACE_DIR) && npm run check
 	@echo "→ TypeScript SDK test types…"
 	@cd $(TS_DIR) && npx tsc --noEmit -p tsconfig.test.json
 	@echo "→ Frontend lint, types, design audit, education anchors…"
@@ -2131,3 +2136,17 @@ check: quality quality-frontend codeql
 migrate:
 	@echo "→ Applying database migrations…"
 	@cd $(BACKEND_DIR) && uv run alembic upgrade head
+
+.PHONY: dev-frontend test-workspace _init-workspace-env
+
+dev-frontend:
+	@cd $(WORKSPACE_DIR) && npm run dev
+
+test-workspace:
+	@cd $(WORKSPACE_DIR) && npm test
+
+_init-workspace-env:
+	@mkdir -p $(WORKSPACE_DIR)
+	@if [ ! -f $(WORKSPACE_DIR)/.env.local ]; then \
+		printf 'NEXT_PUBLIC_DATA=live\nNEXT_PUBLIC_API_URL=%s\n' '$(DEV_BACKEND_URL)' > $(WORKSPACE_DIR)/.env.local; \
+	fi
