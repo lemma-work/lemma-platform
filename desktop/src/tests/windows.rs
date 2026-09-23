@@ -376,7 +376,7 @@ fn the_pod_app_window_is_granted_no_commands() {
 #[test]
 fn every_page_that_ships_on_windows_renames_the_machine() {
     let splash = SPLASH.replace("\r\n", "\n");
-    let control = include_str!("../../ui/control.js").replace("\r\n", "\n");
+    let control = CONTROL.replace("\r\n", "\n");
 
     for (page, source) in [("index.html", &splash), ("control.js", &control)] {
         assert!(

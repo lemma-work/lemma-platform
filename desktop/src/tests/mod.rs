@@ -188,6 +188,38 @@ fn invoked_commands(script: &str) -> Vec<String> {
         .collect()
 }
 
+/// Local settings as the app loads it: the entry script and every module.
+///
+/// `control.js` was one file until it was split into `control/`, one module
+/// per concern. A guard reading only the entry would find none of what it
+/// looks for and none of what it forbids -- the command-grant check would
+/// pass with the page calling nothing at all. A module added to `control/`
+/// must be added here; `every_control_module_is_read_by_the_guards` fails
+/// until it is.
+pub(crate) const CONTROL: &str = concat!(
+    include_str!("../../ui/control.js"),
+    include_str!("../../ui/control/actions.js"),
+    include_str!("../../ui/control/config.js"),
+    include_str!("../../ui/control/core.js"),
+    include_str!("../../ui/control/events.js"),
+    include_str!("../../ui/control/logs.js"),
+    include_str!("../../ui/control/overview.js"),
+    include_str!("../../ui/control/sharing.js"),
+    include_str!("../../ui/control/updates.js"),
+);
+
+/// The modules `CONTROL` includes, by file name.
+pub(crate) const CONTROL_MODULES: &[&str] = &[
+    "actions.js",
+    "config.js",
+    "core.js",
+    "events.js",
+    "logs.js",
+    "overview.js",
+    "sharing.js",
+    "updates.js",
+];
+
 /// The splash as the app loads it: the page, its scripts and its styles.
 ///
 /// Its code used to be inline in `index.html`, and the guards that read it

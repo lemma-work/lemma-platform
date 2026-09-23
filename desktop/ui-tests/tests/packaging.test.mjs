@@ -13,6 +13,7 @@ test('Tauri web assets exclude the test harness and package dependencies', async
   for (const page of [
     'index.html', 'splash.js', 'splash-orb.js', 'splash.css', 'screen-state.mjs',
     'control.html', 'control.js', 'control.css',
+    'control/core.js', 'control/events.js', 'control/config.js',
     'confirmation.html', 'confirmation.js', 'confirmation.css',
   ]) {
     assert.ok(entries.includes(page), `missing shipped asset: ${page}`);

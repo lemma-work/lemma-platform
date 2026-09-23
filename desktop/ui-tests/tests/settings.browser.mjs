@@ -20,7 +20,11 @@ async function settings(t, mode = 'local', daemonOffline = false) {
   t.after(() => assert.deepEqual(errors, []));
   await page.route('https://desktop.test/**', async (route) => {
     const name = new URL(route.request().url()).pathname.slice(1);
-    if (!['control.html', 'control.js', 'control.css'].includes(name)) return route.abort();
+    // The page and its modules; anything else is a request the app would
+    // not serve either.
+    if (!['control.html', 'control.js', 'control.css'].includes(name) && !/^control\/[a-z-]+\.js$/.test(name)) {
+      return route.abort();
+    }
     await route.fulfill({
       body: await readFile(new URL(`../../ui/${name}`, import.meta.url)),
       contentType: name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css' : 'text/javascript',

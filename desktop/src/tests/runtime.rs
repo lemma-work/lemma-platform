@@ -463,7 +463,7 @@ fn unpublished_online_runtime_error_is_actionable_and_logged_in_app() {
 #[test]
 fn local_settings_exposes_honest_runtime_repair_and_rollback_boundaries() {
     let html = include_str!("../../ui/control.html").replace("\r\n", "\n");
-    let script = include_str!("../../ui/control.js").replace("\r\n", "\n");
+    let script = CONTROL.replace("\r\n", "\n");
 
     assert!(html.contains("Signed release lifecycle"));
     assert!(script.contains("repair_runtime"));

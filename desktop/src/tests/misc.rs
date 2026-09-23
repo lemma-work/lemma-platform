@@ -87,7 +87,7 @@ fn local_settings_says_which_integrations_are_set_up() {
     // inside the input -- grey, and invisible until the drawer was opened.
     // Somebody who had just saved a Deepgram key had no way to see it land.
     let markup = include_str!("../../ui/control.html").replace("\r\n", "\n");
-    let script = include_str!("../../ui/control.js").replace("\r\n", "\n");
+    let script = CONTROL.replace("\r\n", "\n");
     let style = include_str!("../../ui/control.css").replace("\r\n", "\n");
 
     assert!(
@@ -129,7 +129,7 @@ fn local_settings_never_gates_a_button_on_a_webview_confirm() {
     // does not implement, so it returns false without drawing anything:
     // the click is received and discarded, and the button looks inert.
     // Destructive actions go through the native dialog command instead.
-    let script = include_str!("../../ui/control.js").replace("\r\n", "\n");
+    let script = CONTROL.replace("\r\n", "\n");
     assert!(
         !script.contains("window.confirm("),
         "a destructive button is gated on a confirm() that always says no"
@@ -177,7 +177,7 @@ fn every_command_is_granted_to_exactly_the_surfaces_that_call_it() {
     // rejected at runtime. Check each bundled page against its own grants.
     for (capability, script) in [
         ("main", SPLASH),
-        ("control", include_str!("../../ui/control.js")),
+        ("control", CONTROL),
         ("confirmation", include_str!("../../ui/confirmation.js")),
     ] {
         let grants = granted(capability);
@@ -411,7 +411,7 @@ fn iframes_may_render_their_own_inline_content() {
 #[test]
 fn cloudflare_sharing_defaults_to_safe_automatic_provisioning() {
     let html = include_str!("../../ui/control.html").replace("\r\n", "\n");
-    let script = include_str!("../../ui/control.js").replace("\r\n", "\n");
+    let script = CONTROL.replace("\r\n", "\n");
 
     assert!(html.contains("Automatic setup · recommended"));
     assert!(html.contains("Use an existing named tunnel"));
@@ -457,4 +457,27 @@ fn a_lock_poisoned_by_a_panic_is_still_usable() {
     );
     *shared.lock_or_recover() = 3;
     assert_eq!(*shared.lock_or_recover(), 3);
+}
+
+/// `CONTROL` lists its modules by hand, because `include_str!` needs literal
+/// paths. A module added to `ui/control/` and not to that list would be
+/// invisible to every guard that reads Local settings.
+#[test]
+fn every_control_module_is_read_by_the_guards() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/control");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&directory)
+        .expect("ui/control exists")
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".js"))
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = CONTROL_MODULES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    listed.sort();
+    assert_eq!(
+        on_disk, listed,
+        "add the new module to CONTROL in src/tests/mod.rs"
+    );
 }
