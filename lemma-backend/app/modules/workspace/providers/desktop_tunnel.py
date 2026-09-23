@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 #: What guestd sends before splicing, and the longest answer worth reading.
 _ACCEPTED = b"ok\n"
 _MAX_ANSWER_BYTES = 256
+#: Covers the vsock connect inside the guest, which is quick when it works.
+_HANDSHAKE_TIMEOUT_SECONDS = 10.0
 
 #: The guest's addresses, as it reported them. One guest, so a handful at most.
 #: An address rather than cached data: worthless to another process, which is
@@ -184,11 +186,19 @@ async def tunneled_socket(
     connection.setblocking(False)
     with contextlib.ExitStack() as on_failure:
         on_failure.callback(connection.close)
-        await loop.sock_connect(connection, path)
-        await _handshake(
-            lambda size: loop.sock_recv(connection, size),
-            lambda data: loop.sock_sendall(connection, data),
-            port,
-        )
+        try:
+            # A bridge that accepts and never answers must not hold a viewer
+            # open forever; `websockets`' own open timeout starts after this.
+            async with asyncio.timeout(_HANDSHAKE_TIMEOUT_SECONDS):
+                await loop.sock_connect(connection, path)
+                await _handshake(
+                    lambda size: loop.sock_recv(connection, size),
+                    lambda data: loop.sock_sendall(connection, data),
+                    port,
+                )
+        except TimeoutError as exc:
+            raise TunnelRefused(
+                f"the Desktop guest did not open a tunnel to port {port} in time"
+            ) from exc
         on_failure.pop_all()
     return connection

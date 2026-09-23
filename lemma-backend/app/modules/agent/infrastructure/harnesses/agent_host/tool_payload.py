@@ -236,6 +236,9 @@ def _command_result(raw: object, payload: JsonObject) -> JsonObject:
     stderr = fields.get("stderr")
     if isinstance(stderr, str) and stderr:
         result["stderr"] = bounded_tool_value(stderr)
+    if not result and raw not in (None, "", {}, []):
+        # A shape none of the above names: keep it rather than lose the output.
+        result["output"] = bounded_tool_value(unwrap_mcp_content(raw))
     return result
 
 

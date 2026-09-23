@@ -125,3 +125,20 @@ fn a_refused_request_is_told_why() {
     );
     served.join().unwrap();
 }
+
+/// A sandbox that answers and closes -- an HTTP response ending the
+/// connection -- must reach the host as EOF while the host is still open.
+#[test]
+fn a_sandbox_that_closes_first_reaches_the_host_as_eof() {
+    let port = echo_port();
+    let (mut host, guest) = link();
+    let served = tunnel(guest);
+
+    host.write_all(format!("{port}\nbye").as_bytes()).unwrap();
+    let mut received = Vec::new();
+    host.read_to_end(&mut received)
+        .expect("EOF within the read timeout, not a hang");
+    assert_eq!(received, b"ok\nbye");
+    drop(host);
+    served.join().unwrap();
+}

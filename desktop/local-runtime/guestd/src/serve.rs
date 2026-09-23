@@ -61,7 +61,16 @@ fn serve_tunnels<E: Engine + 'static>(service: &GuestService<E>) -> io::Result<(
     let listener = vsock::listen(TUNNEL_VSOCK_PORT)?;
     let open = Arc::new(AtomicUsize::new(0));
     loop {
-        let connection = std::fs::File::from(vsock::accept(&listener)?);
+        // A failed accept (descriptors short, a peer gone) must not end the
+        // listener: every sandbox port would stay unreachable until restart.
+        let connection = match vsock::accept(&listener) {
+            Ok(connection) => std::fs::File::from(connection),
+            Err(error) => {
+                eprintln!("lemma-guestd: tunnel accept failed: {error}");
+                thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
+        };
         // Each tunnel is two threads for its lifetime -- a browser viewer holds
         // one open for as long as it watches -- so they are bounded like the
         // control connections, with room for a page's worth of assets.

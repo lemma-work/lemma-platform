@@ -164,3 +164,22 @@ async def test_every_address_in_a_guest_status_is_remembered():
         }
     )
     assert GUEST in desktop_tunnel._guest_hosts
+
+
+async def test_a_bridge_that_never_answers_is_refused_not_awaited_forever():
+    async def silent(reader, writer):
+        await reader.read()
+
+    path = str(Path(tempfile.mkdtemp(prefix="lt", dir="/tmp")) / "s.sock")
+    server = await asyncio.start_unix_server(silent, path=path)
+    desktop_tunnel.remember_guest_address(f"http://{GUEST}:49155")
+    try:
+        desktop_tunnel._HANDSHAKE_TIMEOUT_SECONDS = 0.1
+        with pytest.raises(desktop_tunnel.TunnelRefused, match="in time"):
+            await desktop_tunnel.tunneled_socket(
+                f"ws://{GUEST}:49155/x", socket_path=path
+            )
+    finally:
+        desktop_tunnel._HANDSHAKE_TIMEOUT_SECONDS = 10.0
+        server.close()
+        await server.wait_closed()

@@ -128,3 +128,9 @@ def test_a_file_tools_own_path_wins():
 def test_a_denied_call_says_so():
     result = tool_result("web_fetch", "DENIED", {"kind": "fetch"})
     assert result == {"success": False, "error": "not allowed"}
+
+
+def test_a_command_output_in_an_unrecognised_shape_is_kept():
+    envelope = [{"type": "text", "text": "hello from mcp"}]
+    result = tool_result("exec_command", "COMPLETED", {"rawOutput": envelope})
+    assert result == {"output": envelope}
