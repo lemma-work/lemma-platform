@@ -450,3 +450,15 @@ fn legacy_connection_preferences_require_the_released_chooser_once() {
         "local"
     );
 }
+
+/// A check that can hang leaves Settings on "Checking for updates..." for good.
+#[test]
+fn an_update_check_gives_up_rather_than_hanging() {
+    let source = shell_source();
+    let check = function_body(&source, "pub(crate) async fn check_for_app_update(");
+    assert!(
+        check.contains(".timeout(UPDATE_CHECK_TIMEOUT)"),
+        "the check must bound its request to the feed"
+    );
+    assert!(UPDATE_CHECK_TIMEOUT <= std::time::Duration::from_secs(60));
+}

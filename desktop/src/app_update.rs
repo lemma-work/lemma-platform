@@ -139,6 +139,15 @@ pub(crate) fn announce_incomplete_update(app: &AppHandle, message: String) {
 /// would need `github.com` and `objects.githubusercontent.com` in
 /// `connect-src`, widening the network policy of the same webview that hosts
 /// the remote workspace origin.
+/// How long a check may take before Settings says it could not check.
+///
+/// The updater has no timeout of its own, so a stalled connection to the feed
+/// left the page on "Checking for updates..." with no error and no way on. The
+/// feed is one small JSON document behind a redirect; this is generous for it.
+/// The install path has none: it downloads the app bundle, which a slow link
+/// may legitimately take longer over.
+pub(crate) const UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[tauri::command]
 pub(crate) async fn check_for_app_update(
     window: Webview,
@@ -163,6 +172,7 @@ pub(crate) async fn check_for_app_update(
         .updater_builder()
         .endpoints(parsed_updater_endpoints())
         .map_err(|error| format!("could not check for updates: {error}"))?
+        .timeout(UPDATE_CHECK_TIMEOUT)
         .build()
         .map_err(|error| format!("could not check for updates: {error}"))?
         .check()
