@@ -105,8 +105,10 @@ class WorkspaceSandboxService(
         sandbox: Optional[ISandbox] = None,
         storage_generation_store: Optional[WorkspaceStorageGenerationStore] = None,
         process_store: Optional[WorkspaceProcessStore] = None,
+        manager_client: Optional[LocalSandboxClient] = None,
     ):
         self._sandbox = sandbox
+        self._manager_client = manager_client
         self.storage_generation_store = (
             storage_generation_store or get_workspace_storage_generation_store()
         )
@@ -454,8 +456,12 @@ class WorkspaceSandboxService(
         """The client the session and file operations run through.
 
         In-process, with the surface the sandbox HTTP client had -- which is
-        why the session above it never needed to know the difference.
+        why the session above it never needed to know the difference. A client
+        passed to the constructor is used instead, which is how a test gives
+        the service a fabric without replacing part of the service itself.
         """
+        if self._manager_client is not None:
+            return self._manager_client
         from app.modules.workspace.services.sandbox_composition import (
             build_local_client,
         )

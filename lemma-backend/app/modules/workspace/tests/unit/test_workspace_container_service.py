@@ -122,11 +122,32 @@ def _isolate_service_caches():
 
 
 def _service(
-    sandbox: _FakeSandbox, *, storage_generation_store: object | None = None
+    sandbox: _FakeSandbox,
+    *,
+    storage_generation_store: object | None = None,
+    manager_client: object | None = None,
 ) -> WorkspaceSandboxService:
+    """The service under test, with its collaborators passed in.
+
+    Through the constructor rather than by replacing the service's own
+    methods: a double inside the subject certifies the half nobody wrote.
+    """
     return WorkspaceSandboxService(
         sandbox=sandbox,  # type: ignore[arg-type]
         storage_generation_store=storage_generation_store,  # type: ignore[arg-type]
+        manager_client=manager_client,  # type: ignore[arg-type]
+    )
+
+
+def _mint_session_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Session tokens without an identity database: the identity module's
+    minter, not the workspace service, is what is replaced."""
+
+    async def mint(**_: object) -> str:
+        return "dynamic"
+
+    monkeypatch.setattr(
+        "app.modules.identity.contracts.delegated_tokens.mint_delegated_token", mint
     )
 
 
@@ -275,14 +296,10 @@ async def test_get_session_uses_canonical_logical_workspace_id(
 ) -> None:
     user_id = uuid4()
     sandbox = _FakeSandbox()
-    service = _service(sandbox)
     manager_client = _FakeManagerClient()
 
-    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
-        return {"LEMMA_TOKEN": "dynamic"}
-
-    monkeypatch.setattr(service, "get_env_vars", environment)
-    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+    _mint_session_tokens(monkeypatch)
+    service = _service(sandbox, manager_client=manager_client)
 
     session = await service.get_session(
         user_id=user_id,
@@ -293,7 +310,8 @@ async def test_get_session_uses_canonical_logical_workspace_id(
     assert session.logical_id == user_id
     assert session.sandbox_id == str(user_id)
     assert session.client is manager_client
-    assert session.env_vars == {"LEMMA_TOKEN": "dynamic"}
+    # What `get_env_vars` built for this session, not a stand-in for it.
+    assert session.env_vars["LEMMA_TOKEN"] == "dynamic"
     assert manager_client.directories == [(user_id, f"{WORKSPACE_ROOT}")]
 
 
@@ -309,14 +327,10 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
         allocation_id=first_allocation_id,
         allocation_epoch=1,
     )
-    service = _service(sandbox)
     manager_client = _FakeManagerClient()
 
-    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
-        return {"LEMMA_TOKEN": "dynamic"}
-
-    monkeypatch.setattr(service, "get_env_vars", environment)
-    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+    _mint_session_tokens(monkeypatch)
+    service = _service(sandbox, manager_client=manager_client)
 
     # Deliberately generous for the reuse half. What is under test is that a
     # call inside the window skips the mkdir, not that three in-memory calls
@@ -389,7 +403,6 @@ async def test_get_session_reensures_after_missing_provider_allocation(
 ) -> None:
     user_id = uuid4()
     sandbox = _FakeSandbox()
-    service = _service(sandbox)
 
     class _RecoveringManagerClient(_FakeManagerClient):
         async def create_directory(
@@ -409,9 +422,6 @@ async def test_get_session_reensures_after_missing_provider_allocation(
 
     manager_client = _RecoveringManagerClient()
 
-    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
-        return {"LEMMA_TOKEN": "dynamic"}
-
     # Yields once rather than returning outright, and that one `await` is
     # load-bearing. `async def no_wait(_): return None` never reaches the
     # event loop, so the retry loop it stands in for -- `while now <
@@ -427,8 +437,8 @@ async def test_get_session_reensures_after_missing_provider_allocation(
     async def no_wait(_seconds: float) -> None:
         await real_sleep(0)
 
-    monkeypatch.setattr(service, "get_env_vars", environment)
-    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+    _mint_session_tokens(monkeypatch)
+    service = _service(sandbox, manager_client=manager_client)
     monkeypatch.setattr(asyncio, "sleep", no_wait)
 
     session = await service.get_session(
@@ -463,14 +473,10 @@ async def test_a_session_tells_the_sandbox_whether_to_use_a_proxy(
 
     user_id = uuid4()
     sandbox = _FakeSandbox()
-    service = _service(sandbox)
     manager_client = _FakeManagerClient()
 
-    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
-        return {"LEMMA_TOKEN": "dynamic"}
-
-    monkeypatch.setattr(service, "get_env_vars", environment)
-    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+    _mint_session_tokens(monkeypatch)
+    service = _service(sandbox, manager_client=manager_client)
 
     await service.get_session(user_id=user_id, pod_id=None, session_id="conversation")
 
@@ -503,7 +509,6 @@ async def test_an_exhausted_ensure_stops_believing_what_it_knew(
 
     user_id = uuid4()
     sandbox = _FakeSandbox()
-    service = _service(sandbox)
 
     class _NeverReady:
         async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
@@ -512,7 +517,7 @@ async def test_an_exhausted_ensure_stops_believing_what_it_knew(
     monkeypatch.setattr(
         workspace_directory_ensure, "SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS", 0.3
     )
-    monkeypatch.setattr(service, "_get_manager_client", lambda: _NeverReady())
+    service = _service(sandbox, manager_client=_NeverReady())
     sandbox_health._capability.update({"status": "ready", "detail": "provisioned"})
 
     service._ready_directories[
@@ -572,7 +577,6 @@ async def test_a_directory_task_without_a_cache_key_is_still_cancellable(
     survives the stop and re-provisions the sandbox it was told to abandon.
     """
     user_id = uuid4()
-    service = _service(_FakeSandbox())
     started = asyncio.Event()
 
     class _Slow:
@@ -580,7 +584,7 @@ async def test_a_directory_task_without_a_cache_key_is_still_cancellable(
             started.set()
             await asyncio.sleep(30)
 
-    monkeypatch.setattr(service, "_get_manager_client", lambda: _Slow())
+    service = _service(_FakeSandbox(), manager_client=_Slow())
     # No cache key: the branch this test is about.
     monkeypatch.setattr(service, "_directory_cache_key", lambda *_a, **_k: None)
 
@@ -637,8 +641,9 @@ async def test_the_interactive_ceiling_covers_installing_the_runtime_bundle(
     """
     from sandbox_runtime.errors import SandboxUnavailable
 
-    service = _BundledService(sandbox=_FakeSandbox())  # type: ignore[arg-type]
-    monkeypatch.setattr(service, "_get_manager_client", _HangingManagerClient)
+    service = _BundledService(
+        sandbox=_FakeSandbox(), manager_client=_HangingManagerClient()
+    )  # type: ignore[arg-type]
 
     started = asyncio.get_running_loop().time()
     with pytest.raises(SandboxUnavailable):
@@ -665,8 +670,7 @@ async def test_a_slow_browser_proxy_write_degrades_within_the_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Written on every session, and allowed to fail without failing it."""
-    service = _service(_FakeSandbox())
-    monkeypatch.setattr(service, "_get_manager_client", _HangingManagerClient)
+    service = _service(_FakeSandbox(), manager_client=_HangingManagerClient())
 
     started = asyncio.get_running_loop().time()
     session = await service.get_session(
@@ -709,8 +713,7 @@ async def test_a_runtime_that_refuses_the_credential_is_reported_unavailable(
             attempts.append("mkdir")
             raise SandboxUnauthorized("the runtime rejected Lemma's credential")
 
-    service = _service(_FakeSandbox())
-    monkeypatch.setattr(service, "_get_manager_client", lambda: _Refuses())
+    service = _service(_FakeSandbox(), manager_client=_Refuses())
 
     with pytest.raises(SandboxUnauthorized):
         await service.get_session(user_id=uuid4(), pod_id=None, env_vars={})
@@ -742,8 +745,7 @@ async def test_a_sandbox_that_cannot_be_reconciled_is_reported_unavailable(
         async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
             raise SandboxUnavailable("the guest is not answering")
 
-    service = _service(sandbox)
-    monkeypatch.setattr(service, "_get_manager_client", lambda: _NotYet())
+    service = _service(sandbox, manager_client=_NotYet())
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
     with pytest.raises(SandboxRejected):
@@ -763,8 +765,7 @@ async def test_a_path_conflict_is_not_a_fabric_outage(
         async def create_directory(self, *_args: Any, **_kwargs: Any) -> None:
             raise SandboxPathConflict("a file is in the way")
 
-    service = _service(_FakeSandbox())
-    monkeypatch.setattr(service, "_get_manager_client", lambda: _IsAFile())
+    service = _service(_FakeSandbox(), manager_client=_IsAFile())
 
     with pytest.raises(SandboxPathConflict):
         await service.get_session(user_id=uuid4(), pod_id=None, env_vars={})
@@ -784,8 +785,7 @@ async def test_a_refusal_does_not_hide_a_setup_problem(
             raise SandboxUnauthorized("the runtime rejected Lemma's credential")
 
     _health_ready._capability.update({"status": "needs_setup", "detail": "no socket"})
-    service = _service(_FakeSandbox())
-    monkeypatch.setattr(service, "_get_manager_client", lambda: _Refuses())
+    service = _service(_FakeSandbox(), manager_client=_Refuses())
 
     with pytest.raises(SandboxUnauthorized):
         await service.get_session(user_id=uuid4(), pod_id=None, env_vars={})
@@ -815,8 +815,7 @@ async def test_the_interactive_ceiling_covers_minting_the_session_environment(
         "app.modules.identity.contracts.delegated_tokens.mint_delegated_token",
         never_mints,
     )
-    service = _service(_FakeSandbox())
-    monkeypatch.setattr(service, "_get_manager_client", lambda: _FakeManagerClient())
+    service = _service(_FakeSandbox(), manager_client=_FakeManagerClient())
 
     started = asyncio.get_running_loop().time()
     with pytest.raises(SandboxUnavailable):
@@ -841,8 +840,11 @@ async def test_a_stalled_storage_generation_read_costs_the_notice_not_the_sessio
             await asyncio.sleep(30)
             return True
 
-    service = _service(_FakeSandbox(), storage_generation_store=_StalledStore())
-    monkeypatch.setattr(service, "_get_manager_client", lambda: _FakeManagerClient())
+    service = _service(
+        _FakeSandbox(),
+        storage_generation_store=_StalledStore(),
+        manager_client=_FakeManagerClient(),
+    )
 
     started = asyncio.get_running_loop().time()
     session = await service.get_session(
