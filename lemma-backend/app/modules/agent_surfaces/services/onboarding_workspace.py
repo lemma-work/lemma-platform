@@ -45,7 +45,10 @@ from app.modules.identity.contracts.surfaces import (
     set_user_preferences,
     user_preferences,
 )
-from app.modules.pod.contracts.personal_workspace import create_named_workspace
+from app.modules.pod.contracts.personal_workspace import (
+    PodLimitReachedError,
+    create_named_workspace,
+)
 
 
 from app.modules.agent_surfaces.domain.onboarding_state import (
@@ -376,12 +379,15 @@ async def attach_chosen_workspace(
                     "That account is not in any Lemma organization yet, so there "
                     "is nowhere to put a workspace. Ask your admin to add you."
                 )
-            made = await create_named_workspace(
-                uow,
-                organization_id=organization_id,
-                owner_user_id=user.id,
-                name=choice.new_name,
-            )
+            try:
+                made = await create_named_workspace(
+                    uow,
+                    organization_id=organization_id,
+                    owner_user_id=user.id,
+                    name=choice.new_name,
+                )
+            except PodLimitReachedError as refused:
+                return refused.message
             pod_id = made.pod_id
         else:
             # Re-proving membership rather than trusting the stored list: the

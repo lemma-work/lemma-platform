@@ -103,6 +103,13 @@ class OrganizationRepositoryPort(Protocol):
 
     async def count_members(self, organization_id: UUID) -> int: ...
 
+    #: Held until the transaction ends, before who is in the organization
+    #: changes, so a plan's member cap is counted one change at a time.
+    async def lock_seats(self, organization_id: UUID) -> None: ...
+
+    #: Refuses when the person owns as many organizations as their plan allows.
+    async def refuse_if_at_organization_limit(self, user_id: UUID) -> None: ...
+
     async def count_members_with_role_for_update(
         self, organization_id: UUID, role: OrganizationRole
     ) -> int: ...

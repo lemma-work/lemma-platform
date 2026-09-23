@@ -282,9 +282,22 @@ E2B_DOMAIN=
 # production; override it for anything sharing an E2B account with real
 # workspaces.
 E2B_METADATA_NAMESPACE=
+# Only for a deployment whose plans sell workspace sizes. JSON, keyed
+# `{cpu}x{memory_mb}`, one template per size.
+E2B_WORKSPACE_SIZE_TEMPLATES=
 ```
 
-These five are the whole backend-side E2B surface. In particular:
+These six are the whole backend-side E2B surface. In particular:
+
+- **A workspace size is a template.** E2B fixes CPU and memory when a template
+  is built, so a deployment whose plans size workspaces builds one workspace
+  template per size — `build_templates.py --name-suffix -4x8192` with
+  `E2B_WORKSPACE_CPU_COUNT=4` and `E2B_WORKSPACE_MEMORY_MB=8192` — and maps
+  the sizes here, e.g. `{"4x8192": "lemma-workspace-4x8192"}`. A size with no
+  entry is served from `E2B_WORKSPACE_TEMPLATE`, and logged. Without a plan
+  provider nothing asks for a size and this is never read. A workspace that
+  already exists keeps the template it was created on: here the sandbox is its
+  disk, so it cannot be rebuilt at a new size without carrying its files across.
 
 - **Whether a sandbox is on the internet is not one of them.** E2B gives every
   port a sandbox listens on a public name, so sandboxes are created closed:

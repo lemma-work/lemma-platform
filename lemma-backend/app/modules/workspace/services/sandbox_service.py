@@ -59,6 +59,7 @@ from app.modules.workspace.providers.profiles import profile_for, profile_is_sta
 from app.modules.workspace.services.sandbox_addressing import (
     SandboxAddressingMixin,
 )
+from app.modules.workspace.services.sandbox_sizing import plan_size_for
 from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
 
 logger = get_logger(__name__)
@@ -395,6 +396,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
                 else sandbox.epoch
             )
             profile = profile_for(sandbox.kind)
+            size = await plan_size_for(uow, sandbox)
             # Record what this sandbox is actually being built from, every
             # time. Writing it only once would freeze the row at whatever was
             # configured on first provision, and the staleness check above
@@ -430,6 +432,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             deadline_at=deadline_at,
             volume_name=volume_name,
             mounts=sandbox.mounts,
+            size=size,
         )
         try:
             created = await self._provider.create(spec)

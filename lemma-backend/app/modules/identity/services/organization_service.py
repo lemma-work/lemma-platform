@@ -105,13 +105,12 @@ class OrganizationService:
     ) -> OrganizationEntity:
         """Create an organization owned by ``owner_user_id``.
 
-        See :func:`assign_organization_identity` for what
-        ``resolve_name_conflicts`` settles.
+        See :func:`assign_organization_identity` for ``resolve_name_conflicts``.
         """
         owner = await self.user_repository.get(owner_user_id)
         if not owner:
             raise UserNotFoundError()
-
+        await self.organization_repository.refuse_if_at_organization_limit(owner.id)
         await assign_organization_identity(
             entity,
             get_by_slug=self.organization_repository.get_by_slug,
@@ -530,8 +529,9 @@ class OrganizationService:
             organization_name=organization.name,
         )
 
-        persisted_member = await self.organization_repository.add_member(member)
+        await self.organization_repository.lock_seats(invitation.organization_id)
         await self.organization_repository.update_invitation(invitation)
+        persisted_member = await self.organization_repository.add_member(member)
 
         if pod_grant is not None:
             user_name_parts = [
