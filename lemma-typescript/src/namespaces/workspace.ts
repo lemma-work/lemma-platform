@@ -223,10 +223,14 @@ export class WorkspaceNamespace {
    * `ready` it is running; `downloading` it is fetching its image, which the
    * first start after an update does; `starting` it is coming up; `asleep` it
    * is not running and starts on first use; `unavailable` it could not be asked.
+   * While `downloading`, `done_mb` and `total_mb` say how far it has got, once
+   * that can be measured.
    */
   status(): Promise<{
     state: "ready" | "downloading" | "starting" | "asleep" | "unavailable";
     detail: string | null;
+    done_mb?: number | null;
+    total_mb?: number | null;
   }> {
     return this.http.request("GET", "/workspace/status");
   }

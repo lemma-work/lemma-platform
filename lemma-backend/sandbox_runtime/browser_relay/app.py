@@ -75,7 +75,7 @@ VNC_WS_PORT = int(os.environ.get("LEMMA_BROWSER_VNC_WS_PORT", "5901"))
 #: default" for everybody. See the note on `chrome.DEFAULT_SESSION`.
 
 #: How often to touch the browser while somebody is watching. Comfortably inside
-#: agent-browser's two-minute idle timeout, which counts *commands* -- and
+#: agent-browser's five-minute idle timeout, which counts *commands* -- and
 #: watching is not one, so without this the browser retires under a person who
 #: is reading the page.
 _KEEPALIVE_SECONDS = 45.0

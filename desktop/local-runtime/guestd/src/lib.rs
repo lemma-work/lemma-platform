@@ -29,6 +29,7 @@ mod images;
 mod network;
 mod protocol;
 mod pull_claim;
+mod pull_progress;
 mod readiness;
 mod sandbox;
 mod sandbox_inspect;

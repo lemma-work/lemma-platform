@@ -6,6 +6,7 @@ import { FileTypeIcon } from '@/components/documents/file-type-icon';
 import { Button } from '@/components/ui/button';
 import { ChevronRight, Folder, RefreshCw } from '@/components/ui/icons';
 import { HOME_ROOT, useWorkspaceFiles } from '@/lib/hooks/use-workspace-files';
+import { isComingUp, useWorkspaceStatus } from '@/lib/hooks/use-workspace-status';
 import { FileBody, formatSize, orderedEntries } from './file-preview';
 
 /** The next directory up, stopping at the ceiling rather than climbing past it. */
@@ -103,6 +104,7 @@ export function WorkspaceFilesPane({
         wake,
         after,
     );
+    const { data: workspaceStatus } = useWorkspaceStatus();
 
     const open = useCallback((path: string, isDirectory: boolean) => {
         if (isDirectory) {
@@ -125,6 +127,19 @@ export function WorkspaceFilesPane({
     // because that is what the person is actually looking at up there.
     const inHome = directory === home || directory.startsWith(`${home}/`);
     const segments = segmentsOf(directory, home, ceiling);
+
+    // Coming up -- after an update, fetching a new workspace image for minutes.
+    // Said as that rather than "asleep", or a 503, while it is true.
+    if (isComingUp(workspaceStatus)) {
+        return (
+            <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
+                <p className="text-sm font-medium text-[var(--text-primary)]">Preparing your workspace…</p>
+                {workspaceStatus?.detail ? (
+                    <p className="max-w-sm text-xs text-[var(--text-secondary)]">{workspaceStatus.detail}</p>
+                ) : null}
+            </div>
+        );
+    }
 
     if (data?.sleeping) {
         return (

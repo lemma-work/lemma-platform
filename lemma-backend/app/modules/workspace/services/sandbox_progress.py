@@ -13,7 +13,8 @@ ensure is rarely the one answering the status request.
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+import re
+from typing import Literal, NotRequired, TypedDict
 from uuid import UUID
 
 from redis.exceptions import RedisError
@@ -38,6 +39,13 @@ _STORE_FAILURES = (RedisError, OSError, ValueError)
 class SandboxPhase(TypedDict):
     phase: Phase
     detail: str
+    #: Megabytes fetched and in total, while the guest can say.
+    done_mb: NotRequired[int]
+    total_mb: NotRequired[int]
+
+
+#: The guest's "still downloading <image> (412 MB of 980 MB)".
+_DOWNLOADED = re.compile(r"\((\d+) MB of (\d+) MB\)")
 
 
 _cache: RedisJsonCache | None = None
@@ -71,10 +79,13 @@ def _use_store_for_tests(redis: object | None) -> None:
 def phase_for(reason: str) -> SandboxPhase:
     """The phase a fabric's "not ready yet" describes, in words for a person."""
     if "still downloading" in reason:
-        return {
+        phase: SandboxPhase = {
             "phase": "downloading",
             "detail": "Downloading the workspace image. The first start after an update takes a few minutes.",
         }
+        if found := _DOWNLOADED.search(reason):
+            phase["done_mb"], phase["total_mb"] = int(found[1]), int(found[2])
+        return phase
     return {"phase": "starting", "detail": "Starting your computer."}
 
 
@@ -112,5 +123,12 @@ async def current_phase(sandbox_id: UUID) -> SandboxPhase | None:
         )
         return None
     if isinstance(found, dict) and found.get("phase") in ("downloading", "starting"):
-        return {"phase": found["phase"], "detail": str(found.get("detail") or "")}
+        phase: SandboxPhase = {
+            "phase": found["phase"],
+            "detail": str(found.get("detail") or ""),
+        }
+        for key in ("done_mb", "total_mb"):
+            if isinstance(value := found.get(key), int) and not isinstance(value, bool):
+                phase[key] = value
+        return phase
     return None

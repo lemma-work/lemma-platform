@@ -8,7 +8,7 @@ vi.mock('@/lib/sdk/lemma-client', () => ({
     getLemmaClient: () => ({ workspace: { status } }),
 }));
 
-import { WorkspaceStartingIndicator } from './workspace-starting-indicator';
+import { downloadFraction, WorkspaceStartingIndicator } from './workspace-starting-indicator';
 
 function renderIndicator() {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -45,5 +45,14 @@ describe('WorkspaceStartingIndicator', () => {
         renderIndicator();
         await waitFor(() => expect(status).toHaveBeenCalled());
         expect(screen.queryByRole('status')).toBeNull();
+    });
+});
+
+describe('downloadFraction', () => {
+    it('is measured only while downloading with a known total', () => {
+        expect(downloadFraction({ state: 'downloading', done_mb: 245, total_mb: 980 } as never)).toBe(0.25);
+        expect(downloadFraction({ state: 'downloading' } as never)).toBeNull();
+        expect(downloadFraction({ state: 'starting', done_mb: 1, total_mb: 2 } as never)).toBeNull();
+        expect(downloadFraction({ state: 'downloading', done_mb: 5, total_mb: 0 } as never)).toBeNull();
     });
 });

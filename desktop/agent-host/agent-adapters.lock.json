@@ -12,6 +12,9 @@
       "upstream_command": "codex",
       "upstream_version_args": ["--version"],
       "upstream_path_env": "CODEX_PATH",
+      "environment": {
+        "CODEX_CONFIG": "{\"plugins\":{\"browser@openai-bundled\":{\"enabled\":false},\"chrome@openai-bundled\":{\"enabled\":false},\"computer-use@openai-bundled\":{\"enabled\":false},\"unified-computer-use@openai-bundled\":{\"enabled\":false}}}"
+      },
       "omit_optional_dependencies": true,
       "minimum_upstream_version": null,
       "distribution": "npm:@agentclientprotocol/codex-acp@1.1.7",
