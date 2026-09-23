@@ -6,7 +6,8 @@ test('Tauri web assets exclude the test harness and package dependencies', async
   const desktop = new URL('../../', import.meta.url);
   const config = JSON.parse(await readFile(new URL('tauri.conf.json', desktop), 'utf8'));
   const assets = new URL(`${config.build.frontendDist}/`, desktop);
-  const entries = await readdir(assets, { recursive: true });
+  // Forward slashes on every platform: Windows lists `control\\core.js`.
+  const entries = (await readdir(assets, { recursive: true })).map((entry) => entry.replaceAll('\\', '/'));
   const forbidden = entries.filter((entry) =>
     /(^|[/\\])(node_modules|package(?:-lock)?\.json|tests)([/\\]|$)/.test(entry));
   assert.deepEqual(forbidden, [], 'Tauri bundles this directory; test dependencies must stay outside it');
