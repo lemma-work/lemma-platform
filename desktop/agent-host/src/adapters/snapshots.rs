@@ -35,7 +35,7 @@ impl ResolvedAdapter {
 
     #[must_use]
     pub fn environment(&self) -> BTreeMap<String, String> {
-        let mut environment = BTreeMap::new();
+        let mut environment = self.spec.environment.clone();
         let paths = adapter_search_paths(&self.command, &self.upstream_command);
         if let Ok(joined) = env::join_paths(paths) {
             environment.insert("PATH".to_owned(), joined.to_string_lossy().into_owned());

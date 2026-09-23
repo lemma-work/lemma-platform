@@ -31,6 +31,8 @@ If you are using this skill through Lemma's local harness or MCP-routed
 workspace injects Lemma environment variables for the current user and pod. Do
 not run raw localhost API/Auth probes from workspace exec: workspace
 `localhost` is the isolated workspace container, not the host Lemma app.
+`agent-browser` drives the browser the person sees only when run through
+`lemma_exec_command`; never use a native or computer-use browser instead.
 """
 
 #: The heading that identifies the block above inside a stored tool result.

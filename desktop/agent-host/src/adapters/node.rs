@@ -281,6 +281,7 @@ mod tests {
             upstream_command: "codex".to_owned(),
             upstream_version_args: vec!["--version".to_owned()],
             upstream_path_env: None,
+            environment: Default::default(),
             omit_optional_dependencies: true,
             minimum_upstream_version: None,
             distribution: distribution.to_owned(),
