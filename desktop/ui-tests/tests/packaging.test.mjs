@@ -14,10 +14,17 @@ test('Tauri web assets exclude the test harness and package dependencies', async
   for (const page of [
     'index.html', 'splash.js', 'splash-orb.js', 'splash.css', 'screen-state.mjs',
     'control.html', 'control.js', 'control.css',
-    'control/core.js', 'control/events.js', 'control/config.js',
     'confirmation.html', 'confirmation.js', 'confirmation.css',
   ]) {
     assert.ok(entries.includes(page), `missing shipped asset: ${page}`);
+  }
+  // Every module the settings page imports, read from the page itself so a new
+  // module cannot be forgotten here.
+  const control = await readFile(new URL('control.js', assets), 'utf8');
+  const imported = [...control.matchAll(/from "\.\/(control\/[\w-]+\.js)"/g)].map((match) => match[1]);
+  assert.ok(imported.length > 0, 'control.js imports its modules');
+  for (const module of imported) {
+    assert.ok(entries.includes(module), `missing shipped module: ${module}`);
   }
 });
 
