@@ -61,8 +61,8 @@ class SurfaceChromeMixin:
         pod_name: str | None,
         agent_name: str,
         channel_ids: list[str],
-        agents: list | None = None,
-        apps: list | None = None,
+        agents: list[tuple[str, str | None]] | None = None,
+        apps: list[tuple[str, str]] | None = None,
         workspace_url: str | None = None,
         logo_url: str | None = None,
         surface_choices: list[tuple[str, str]] | None = None,
@@ -142,7 +142,7 @@ class SurfaceChromeMixin:
         return
 
     # The in-chat set-up flow. Only Slack drives configuration from inside the
-    # chat app today, but `SurfaceConfigurationMixin` calls all of these on
+    # chat app today, but `AppEventHandler` calls all of these on
     # whichever adapter the inbound webhook resolved to — so they are part of
     # the adapter contract, not Slack's private surface. Declared here with
     # inert defaults: a platform that cannot configure itself in-chat answers

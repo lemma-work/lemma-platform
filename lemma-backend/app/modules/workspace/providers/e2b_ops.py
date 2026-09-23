@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 
@@ -22,26 +23,29 @@ from sandbox_runtime.protocol import (
     ProcessOutputChannel,
     ProcessOutputSnapshot,
     ProcessState,
-    PythonExecutionState,
-    PythonResult,
     PythonSessionRef,
     StartProcessRequest,
     TerminalSize,
 )
 
 from sandbox_runtime.errors import (
+    SandboxPathConflict,
     SandboxPathNotFound,
-    SandboxRejected,
+    SandboxProcessNotFound,
 )
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
-    ProviderGone,
+    PythonResult,
+    ProviderCapability,
     ProviderInstance,
 )
 from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
     sdk_errors,
 )
+from app.modules.workspace.providers.e2b_paths import resolve_real_path
+from app.modules.workspace.providers.e2b_ranged_read import read_range
+from app.modules.workspace.providers.e2b_reach import E2BReachMixin
 from app.modules.workspace.providers.e2b_process_index import (
     ENTRY_TTL_SECONDS,
     decode_pid,
@@ -54,9 +58,12 @@ from app.modules.workspace.providers.e2b_process_lifetime import (
     seconds_until,
     watch_for_exit,
 )
-from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
+from app.modules.workspace.providers import e2b_python_sessions
+from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
-WORKSPACE_MOUNT = "/workspace"
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 # A process that has stopped will produce no further output, so a reader
 # waiting for more has nothing left to wait for.
@@ -74,13 +81,21 @@ def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
     return snapshot.state in _FINISHED_PROCESS_STATES
 
 
-class E2BOpsMixin:
+class E2BOpsMixin(E2BReachMixin):
     """The `SandboxOpsProvider` half of the E2B provider.
 
     A mixin rather than a collaborator because the ops protocol is defined on
     the provider itself, and splitting it into an object the provider forwards
     to would add a layer that exists only to satisfy a line count.
     """
+
+    capabilities = frozenset(
+        {ProviderCapability.PORT_REACH, ProviderCapability.SECRET_DELIVERY}
+    )
+
+    #: The provider's output buffer. Declared, not defined: `E2BProvider` sets
+    #: it, and naming it here lets `e2b_python_sessions.SessionHost` be checked.
+    _output: E2BOutputBuffer
 
     async def _remember_pid(
         self,
@@ -111,7 +126,9 @@ class E2BOpsMixin:
     async def _recall_pid(self, process_id: str) -> tuple[int, bool]:
         raw = await self._redis().get(pid_key(process_id))
         if raw is None:
-            raise ProviderGone(f"process {process_id} is no longer tracked")
+            # About the process, not the sandbox: `ProviderGone` here made the
+            # client forget its handle to a workspace that was fine.
+            raise SandboxProcessNotFound(f"process {process_id} is no longer tracked")
         return decode_pid(raw)
 
     async def list_processes(
@@ -320,10 +337,22 @@ class E2BOpsMixin:
     async def stat_file(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
     ) -> FileStat:
+        """Where this path really is, and whether it is a link.
+
+        E2B's file SDK answers neither, and the files API's containment check
+        needs both -- see `e2b_paths.resolve_real_path`, which is where that is
+        explained and where the boundary is enforced.
+        """
         sandbox = await self._connect(instance.provider_id)
         with sdk_errors(path):
             info = await sandbox.files.get_info(path)
-        return _to_stat(info)
+        stat = _to_stat(info)
+        resolved, is_link = await resolve_real_path(sandbox, path)
+        return replace(
+            stat,
+            path=resolved,
+            kind=FileKind.SYMLINK if is_link else stat.kind,
+        )
 
     async def list_files(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
@@ -349,16 +378,13 @@ class E2BOpsMixin:
         deadline_at: datetime,
     ) -> AsyncIterator[bytes]:
         sandbox = await self._connect(instance.provider_id)
-        with sdk_errors(path):
-            content = await sandbox.files.read(path, format="bytes")
-
-        # E2B reads whole files, so the range is applied here. Callers use it
-        # for previews and image thumbnails, where the file is small; a genuine
-        # partial read of a huge file would need SDK support to avoid pulling
-        # the whole thing.
-        start = byte_range.offset or 0
-        end = start + byte_range.length if byte_range.length else len(content)
-        yield bytes(content)[start:end]
+        # Not `files.read`: it has no notion of a range and returns the whole
+        # file for the caller to slice, which made a 1 GiB download into 128
+        # requests of 1 GiB each. See `e2b_ranged_read`.
+        async for chunk in read_range(
+            sandbox, path=path, byte_range=byte_range, deadline_at=deadline_at
+        ):
+            yield chunk
 
     async def write_file(
         self,
@@ -369,29 +395,54 @@ class E2BOpsMixin:
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
-        # Hashed as the chunks arrive rather than in one pass over the joined
-        # payload. Both cost the same CPU; only this one has an await between
-        # the blocks, so a large file is a series of short bursts instead of a
-        # single uninterrupted one on the loop that also serves every other
-        # agent run in this process. `filesystem_manager.write_stream` and
-        # `stage_upload_limited` already do it this way.
-        digest = hashlib.sha256() if expected_sha256 is not None else None
+        sandbox = await self._connect(instance.provider_id)
+        if expected_sha256 is not None:
+            # A precondition on what is already at the path, which is what the
+            # contract says and what the runtime-backed fabrics have always
+            # done. This used to hash the *outgoing* bytes instead, so the same
+            # argument meant opposite things: on E2B it asked "am I sending
+            # what I think I am", and everywhere else "is the file I am about
+            # to replace the one I read". Passing the digest therefore
+            # satisfied E2B and made the very first install impossible on
+            # Docker and Desktop, which is why the one caller that wants this
+            # stopped passing it at all.
+            await self._require_existing_digest(
+                sandbox, path=path, expected_sha256=expected_sha256
+            )
         blocks: list[bytes] = []
         async for chunk in data:
             blocks.append(chunk)
-            if digest is not None:
-                digest.update(chunk)
         payload = b"".join(blocks)
-        if digest is not None and expected_sha256 is not None:
-            hexdigest = digest.hexdigest()
-            if hexdigest != expected_sha256.removeprefix("sha256:"):
-                raise SandboxRejected(
-                    f"content digest {hexdigest} does not match the expected value"
-                )
-        sandbox = await self._connect(instance.provider_id)
         with sdk_errors():
             info = await sandbox.files.write(path, payload)
         return _to_stat(info)
+
+    async def _require_existing_digest(
+        self, sandbox: object, *, path: str, expected_sha256: str
+    ) -> None:
+        """Refuse unless the file already at `path` hashes to this.
+
+        A missing file fails the precondition rather than passing it: the
+        caller is saying "replace the exact bytes I read", and there being
+        nothing there means it is not replacing them.
+        """
+        wanted = expected_sha256.removeprefix("sha256:")
+        try:
+            # `sdk_errors(path)`, not the bare form: on a filesystem call "not
+            # found" is a missing file, and the bare form classifies it as a
+            # missing *sandbox*. `ProviderGone` is deliberately not caught
+            # below -- a sandbox that is gone is not a content conflict, and
+            # answering one with the other would tell a caller to give up
+            # instead of re-ensuring.
+            with sdk_errors(path):
+                current = await sandbox.files.read(path, format="bytes")
+        except SandboxPathNotFound as exc:
+            raise SandboxPathConflict(
+                f"{path} does not exist, so its content cannot match"
+            ) from exc
+        found = hashlib.sha256(bytes(current)).hexdigest()
+        if found != wanted:
+            raise SandboxPathConflict(f"{path} holds {found}, not the expected content")
 
     async def move_file(
         self,
@@ -426,22 +477,13 @@ class E2BOpsMixin:
     # Python sessions
     # ------------------------------------------------------------------
 
+    # Delegated rather than inherited: these need the sandbox connection and
+    # output buffer above, which an argument carries as well as a base class
+    # would, and the provider already has three.
     async def ensure_python_session(
         self, instance: ProviderInstance, request: CreatePythonSessionRequest
     ) -> None:
-        """No-op: a session is a file on disk, created on first execution.
-
-        E2B has no resident-interpreter concept to reserve, so there is nothing
-        to allocate ahead of time and pretending otherwise would mean tracking
-        state with no backing.
-
-        The request's ``cwd`` is deliberately not remembered here either. It
-        arrives again on every ``execute_python`` through the session reference,
-        which is the only form of it that survives this backend running in more
-        than one process -- remembering it in this one would work until the next
-        call landed on another worker.
-        """
-        return
+        await e2b_python_sessions.ensure_python_session(self, instance, request)
 
     async def execute_python(
         self,
@@ -449,127 +491,18 @@ class E2BOpsMixin:
         session: PythonSessionRef,
         request: ExecutePythonRequest,
     ) -> PythonResult:
-        """Run code with REPL semantics and session continuity.
-
-        The workspace image keeps a real interpreter per session. E2B's plain
-        sandbox does not, so both properties are rebuilt here from what it does
-        offer, and neither is faked:
-
-        *Continuity* -- each execution restores the session's namespace from
-        disk and saves it back, so a name bound in one call is available in the
-        next. Only picklable values survive, which is the honest limit: an open
-        file handle cannot cross a process boundary, and pretending it did
-        would be worse than losing it.
-
-        *A result* -- a REPL reports the value of a trailing expression, so the
-        code is split with `ast` and the last node evaluated separately when it
-        is an expression. Without this, `x = 6 * 7` followed by `x` returns
-        nothing and an agent cannot see what it computed.
-
-        *A working directory* -- the interpreter starts in the session's `cwd`,
-        the very same one `start_process` gives a shell command. A fresh process
-        per call means there is no shell to inherit it from, and without this it
-        started in whatever directory the image defaults to: `execute_python`
-        reported `/workspace` while `exec_command` reported the conversation's
-        own directory, so a file one tool wrote by relative path was invisible
-        to the other.
-        """
-        sandbox = await self._connect(instance.provider_id)
-        state_path = f"/tmp/lemma-python-{session.session_id}.pkl"
-        code_path = f"/tmp/lemma-python-{request.operation_id}.code"
-        result_path = f"/tmp/lemma-python-{request.operation_id}.result"
-        runner_path = f"/tmp/lemma-python-{request.operation_id}.py"
-
-        # Registered like any other process, because the idle sweep decides
-        # what to release from this index and nothing put `execute_python` in
-        # it. The comment below reasoned that a runaway loop would be held by
-        # "the idle sweeper will not release a sandbox with live processes" --
-        # true of `exec_command`, and never true of this call, so a ten-minute
-        # analysis had no protection at all. The pid is not recorded: this run
-        # is blocking, so nothing addresses it by pid.
-        tracked_id = str(request.operation_id)
-        await self._remember_pid(
-            tracked_id,
-            0,
-            tty=False,
-            sandbox_id=instance.provider_id,
-            expires_at=request.deadline_at.timestamp(),
-            cwd=session.cwd or "",
-            command="execute_python",
-        )
-        await self._output.record_start(tracked_id)
-        exit_code: int | None = None
-        try:
-            with sdk_errors():
-                await sandbox.files.write(code_path, request.code)
-                await sandbox.files.write(
-                    runner_path,
-                    PYTHON_RUNNER.format(
-                        state_path=state_path,
-                        code_path=code_path,
-                        result_path=result_path,
-                    ),
-                )
-                outcome = await sandbox.commands.run(
-                    f"python3 {runner_path}",
-                    cwd=session.cwd,
-                    envs={item.name: item.value for item in request.environment},
-                    # `None` here meant unbounded, so `execute_python`'s
-                    # `timeout_seconds` bounded only how long the backend
-                    # waited -- nothing stopped the code itself. A runaway loop
-                    # kept running in the sandbox after the tool had returned,
-                    # holding CPU and memory on a box with one core.
-                    timeout=seconds_until(request.deadline_at),
-                )
-            exit_code = outcome.exit_code
-        finally:
-            if exit_code is None:
-                await self._output.record_unknown(tracked_id)
-            else:
-                await self._output.record_exit(tracked_id, exit_code=exit_code)
-
-        # No trailing expression, or a run that failed before writing one,
-        # both mean there is no result to report.
-        result: str | None = None
-        with sdk_best_effort(result_path):
-            raw = await sandbox.files.read(result_path, format="text")
-            result = raw if raw else None
-
-        failed = outcome.exit_code != 0
-        return PythonResult(
-            operation_id=request.operation_id,
-            state=(
-                PythonExecutionState.FAILED
-                if failed
-                else PythonExecutionState.SUCCEEDED
-            ),
-            stdout=outcome.stdout or "",
-            stderr=outcome.stderr or "",
-            result=result,
-            error_name="ExecutionError" if failed else None,
-            error_message=(outcome.stderr or None) if failed else None,
-            traceback=(),
-            output_truncated=False,
+        return await e2b_python_sessions.execute_python(
+            self, await self._connect(instance.provider_id), instance, session, request
         )
 
     async def delete_python_session(
         self, instance: ProviderInstance, *, session_id: str, deadline_at: datetime
     ) -> None:
-        sandbox = await self._connect(instance.provider_id)
-        # Nothing to forget is success.
-        with sdk_best_effort():
-            await sandbox.files.remove(f"/tmp/lemma-python-{session_id}.pkl")
-
-    # ------------------------------------------------------------------
-    # Ports
-    # ------------------------------------------------------------------
-
-    async def port_base_url(
-        self, instance: ProviderInstance, *, port: int, deadline_at: datetime
-    ) -> str:
-        sandbox = await self._connect(instance.provider_id)
-        with sdk_errors():
-            return f"https://{sandbox.get_host(port)}"
+        await e2b_python_sessions.delete_python_session(
+            await self._connect(instance.provider_id),
+            session_id=session_id,
+            deadline_at=deadline_at,
+        )
 
 
 def _to_stat(entry) -> FileStat:

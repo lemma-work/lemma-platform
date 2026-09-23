@@ -61,6 +61,25 @@ class ContextBudget:
     summarization_token_limit: int
     hard_token_ceiling: int
 
+    @property
+    def reply_token_budget(self) -> int:
+        """What is left of the window for the model to answer in.
+
+        The gap between the ceiling and the window was always reserved for the
+        reply -- the docstring above says so -- but it was never *told* to the
+        model, so every request went out on whatever output cap the provider
+        happened to default to. On a reasoning model that is how a run dies
+        with nothing: thinking tokens are output tokens, they fill a small
+        default first, and the provider stops the response before any
+        actionable content exists. pydantic-ai raises `UnexpectedModelBehavior`
+        at that point and the run ends having produced no answer.
+
+        Sending it makes the reservation real, and keeps input and output
+        inside one window by construction: everything before the reply is held
+        under the ceiling, and this is the rest.
+        """
+        return max(0, self.window - self.hard_token_ceiling)
+
 
 def _coerce_window(value: object) -> int | None:
     """A usable window from catalog metadata, or None.

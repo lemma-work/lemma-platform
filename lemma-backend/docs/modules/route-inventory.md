@@ -62,6 +62,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
+| GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.verify_whatsapp_number` | Verify a pooled WhatsApp number's own callback URL |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
 | GET | `/surfaces/{surface_id}/webhook` | `surface.webhook.verify_surface` | Verify surface webhook using a surface-level callback URL |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
@@ -74,6 +75,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
+| POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
 | POST | `/surfaces/{surface_id}/webhook` | `surface.webhook.handle_surface` | Handle surface-level webhook |
 | PUT | `/surfaces/me/default` | `agent.surface.set_my_default` | Set My Default Surface |
@@ -134,6 +136,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/datastore/files/by-path` | `file.delete` | Delete File Or Folder |
 | DELETE | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.detach` | Detach Document Markdown |
+| DELETE | `/pods/{pod_id}/datastore/files/signed-urls/{code}` | `file.signed_url.revoke` | Revoke a public signed URL |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.delete` | Delete Table |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.remove` | Remove Column |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.delete` | Delete Record |
@@ -142,6 +145,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/files/children` | `file.children.list` | List a document's derived child files |
 | GET | `/pods/{pod_id}/datastore/files/children/content` | `file.child.get` | Fetch a document's child artifact by path |
 | GET | `/pods/{pod_id}/datastore/files/download` | `file.download` | Download File |
+| GET | `/pods/{pod_id}/datastore/files/signed-urls` | `file.signed_url.list` | List this pod's public signed URLs |
 | GET | `/pods/{pod_id}/datastore/files/tree` | `file.tree` | Get Directory Tree |
 | GET | `/pods/{pod_id}/datastore/files/url` | `file.url` | Get a short-lived URL for a file |
 | GET | `/pods/{pod_id}/datastore/files/{file_id}` | `file.get_by_id` | Get File by ID |
@@ -215,6 +219,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/invitations/{invitation_id}/accept` | `org.invitation.accept` | Accept Invitation |
 | POST | `/organizations/{organization_id}/invitations` | `org.invitation.invite` | Invite Member |
 | POST | `/organizations/{organization_id}/join` | `org.join_auto_join` | Join Auto-Join Organization |
+| POST | `/users/me/first-workspace` | `users.ensure_first_workspace` | Ensure The Current User Has A Workspace |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
 
 ## pod
@@ -295,6 +300,15 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/usage/organizations/{organization_id}/stats` | `usage.organization.stats.get` | Get Usage Stats |
 | GET | `/usage/organizations/{organization_id}/summary` | `usage.organization.summary.get` | Get Organization Usage Summary |
 
+## web_login
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| DELETE | `/web-logins` | `web_login.delete` | Sign your browser out of a site |
+| GET | `/web-logins` | `web_login.list` | List the sites your browser is signed in to |
+| GET | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}` | `web_login.sign_in.pending` | What a sign-in link is asking for |
+| POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer` | `web_login.sign_in.answer` | Say whether you signed in |
+
 ## workflow
 
 | Method | Path | Operation ID | Summary |
@@ -320,4 +334,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| GET | `/workspace/browser/current-page-url` | `workspace.browser.current_page_url` | What page a sign-in's browser is actually showing |
+| GET | `/workspace/browser/status` | `workspace.browser.status` | Whether the workspace browser can be watched |
+| GET | `/workspace/files` | `workspace.files.list` | List workspace files |
+| GET | `/workspace/files:content` | `workspace.files.content` | Read workspace file content |
+| GET | `/workspace/files:stat` | `workspace.files.stat` | Stat one workspace file |
+| GET | `/workspace/status` | `workspace.status` | Whether your computer is ready |
 | POST | `/workspace/apps/browser/access` | `workspace.browser.access` | Create workspace browser access URL |
+| POST | `/workspace/browser/display-size` | `workspace.browser.resize_display` | Fit the workspace display to the pane showing it |

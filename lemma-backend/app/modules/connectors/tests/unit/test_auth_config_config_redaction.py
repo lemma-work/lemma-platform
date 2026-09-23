@@ -205,3 +205,75 @@ class TestOnlyAManagerSeesTheConfig:
         )
 
         assert [item.config for item in listing.items] == [None]
+
+
+class TestOnlyAnUnmanagedComposioInstallIsMaskedWholesale:
+    """The org's own app credentials for a toolkit Composio does not broker.
+
+    Before these installs existed a Composio config was always empty, so nothing
+    in it could leak. Now it holds the third party's app credentials, derived
+    from that toolkit's own auth-config-creation fields -- which means the key
+    names are Composio's, vary per toolkit, and are not a set this repo controls.
+    A name heuristic cannot be complete over them, so the values are masked by
+    position instead, exactly as `extra_headers` already is.
+    """
+
+    @staticmethod
+    def _install(config_source: AuthConfigSource, config: dict) -> AuthConfigEntity:
+        return AuthConfigEntity(
+            id=uuid4(),
+            organization_id=uuid4(),
+            connector_id="twitter",
+            kind=ConnectorKind.COMPOSIO,
+            config_source=config_source,
+            name="acme-twitter",
+            config=config,
+        )
+
+    @staticmethod
+    def _service(install: AuthConfigEntity) -> AsyncMock:
+        return AsyncMock(
+            get_auth_config_by_name=AsyncMock(return_value=install),
+            may_read_install_config=AsyncMock(return_value=True),
+            install_auth_schemes=AsyncMock(return_value={install.id: "OAUTH2"}),
+        )
+
+    async def test_a_field_no_heuristic_would_name_is_masked_anyway(self):
+        install = self._install(
+            AuthConfigSource.ORG_CUSTOM,
+            {
+                "client_id": "public-enough",
+                "client_secret": "shh",
+                # Named by the toolkit, not by us. `is_sensitive_key` matches
+                # none of these three, which is the whole reason for the rule.
+                "consumer_key": "also-a-credential",
+                "shop": "acme.myshopify.com",
+            },
+        )
+
+        response = await get_auth_config(
+            user=Mock(id=uuid4()),
+            organization_id=uuid4(),
+            auth_config_name="acme-twitter",
+            connector_service=self._service(install),
+        )
+
+        assert response.config == {
+            "client_id": MASK,
+            "client_secret": MASK,
+            "consumer_key": MASK,
+            "shop": MASK,
+        }
+
+    async def test_a_managed_install_is_unaffected(self):
+        """It has no org config to mask, and must not start reporting one."""
+        install = self._install(AuthConfigSource.SYSTEM_DEFAULT, {})
+
+        response = await get_auth_config(
+            user=Mock(id=uuid4()),
+            organization_id=uuid4(),
+            auth_config_name="acme-twitter",
+            connector_service=self._service(install),
+        )
+
+        assert response.config == {}

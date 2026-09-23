@@ -1,6 +1,15 @@
-"""Progress-streaming tool-coverage matrix: tool-call activity renders as a
-live, edited message on Slack (chat.update), Telegram (editMessageText), and
-Teams (PUT activity).
+"""Progress-streaming tool-coverage matrix: tool activity as a live message.
+
+Which platforms belong here is decided by ``ProgressStyle`` on the platform
+capability (see ``progress_display.py``), and the cells this file does not cover
+are the styles that are not a live message:
+
+- **WhatsApp** (``POST``) has no message-edit API, so it cannot appear in a
+  matrix about edits. It is not silent — it posts the agent's plan as its own
+  message, rationed — but that path is driven by plan changes rather than by
+  per-tool comments, and is covered in ``tests/unit/test_progress_observer.py``.
+- **Email** (``NONE``) gets one composed reply, never a stream — Gmail/Outlook/
+  Resend recipients would find a live-editing inbox message bizarre.
 
 Each scripted tool call carries a ``comment`` (nested under ``request``, since
 every platform tool takes a single ``request: Model`` parameter and no such
@@ -9,237 +18,164 @@ progress observer reads that comment straight off the persisted (pre-tool-
 execution) event to drive the live status text, independent of whatever the
 wrapped tool itself returns.
 
-Which platforms belong here is decided by ``ProgressStyle`` on the platform
-capability (see ``progress_display.py``), and the cells this file does not cover
-are the styles that are not an edited message:
-
-- **WhatsApp** (``POST``) has no message-edit API, so it cannot appear in a
-  matrix about edits. It is not silent — it posts the agent's plan as its own
-  message, rationed — but that path is driven by plan changes rather than by
-  per-tool comments, and is covered in ``tests/unit/test_progress_observer.py``.
-- **Email** (``NONE``) gets one composed reply, never a stream — Gmail/Outlook/
-  Resend recipients would find a live-editing inbox message bizarre.
+The journey is one sentence on every platform: say something, and watch the
+work happen before the answer arrives. What differs is the shape the platform
+gives that, and *that* is the subject here — so the staging is shared through
+`stage_surface` and the assertions are deliberately not. Telegram and Teams
+both edit a message in place and share a case; Slack opens a native stream,
+which is a different thing and keeps its own.
 """
 
 from __future__ import annotations
 
 import json
-from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.ingress_request import (
-    SurfacePlatformWebhookIngress,
-)
-from app.modules.agent_surfaces.tests.e2e.helpers import (
-    REAL_TEAMS_CHANNEL_ID,
-    REAL_TEAMS_TENANT_ID,
-    _create_agent_surface,
-    _ensure_connector_account,
-    _load_slack_dm_fixture,
-    _load_teams_channel_mention_fixture,
-    _seed_external_user,
-    _telegram_payload,
-)
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_messages,
     wait_for_slack_text,
 )
-from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
-    process_ingress_and_run_scripted,
-    script_progress,
-)
+from app.modules.agent_surfaces.tests.e2e.scripted_llm import script_progress
+from app.modules.agent_surfaces.tests.e2e.surface_journey import stage_surface
 
 pytestmark = pytest.mark.e2e
 
+COMMENTS = ["Searching the web", "Reading the results"]
+FINAL = "Here is the answer."
 
-async def test_progress_streams_via_chat_update_on_slack(
+#: The platform tool each script calls. The tool is incidental — the progress
+#: comment is read off the persisted event, not off what the tool returns — but
+#: it has to be one the platform actually offers.
+CONTEXT_TOOL = {
+    SurfacePlatform.SLACK: "slack_get_recent_channel_messages",
+    SurfacePlatform.TELEGRAM: "telegram_get_current_chat",
+    SurfacePlatform.TEAMS: "teams_get_recent_channel_messages",
+}
+
+#: Where an in-place edit lands in the message store, per platform.
+EDIT_BUCKET = {
+    SurfacePlatform.TELEGRAM: "TELEGRAM_EDIT",
+    SurfacePlatform.TEAMS: "TEAMS_UPDATE",
+}
+
+
+@pytest.fixture(autouse=True)
+def _stream_every_comment(monkeypatch):
+    """Both comments stream: the inter-update throttle is off for these tests."""
+    from app.modules.agent_surfaces.services import progress_display
+
+    monkeypatch.setattr(progress_display, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
+
+
+async def _staged(platform, platform_fake, **kwargs):
+    return await stage_surface(platform, fake=platform_fake[platform], **kwargs)
+
+
+@pytest.mark.parametrize(
+    "platform",
+    [SurfacePlatform.TELEGRAM, SurfacePlatform.TEAMS],
+    ids=lambda p: p.value,
+)
+async def test_progress_is_an_edited_message_and_the_answer_is_a_new_one(
+    platform: SurfacePlatform,
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
-    fake_slack,
+    fixed_test_org,
     message_store,
     monkeypatch,
-):
-    """Slack opens one native stream, appends the answer, and closes it."""
-    from app.core.config import settings as app_settings
-    from app.modules.agent_surfaces.services import progress_display as _pd
-
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
-    # Disable the inter-update throttle so both progress comments stream.
-    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="slack",
-        credentials={
-            "access_token": "xoxb-progress-matrix",
-            "scope": "chat:write",
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "bot_user_id": "U0AGSSTQZLH",
-                "team_id": "T0123456",
-                "api_base_url": fake_slack.base_url,
-            },
-        },
-    )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "SLACK", "account_id": str(account.id)},
+    platform_fake,
+) -> None:
+    stage = await _staged(
+        platform,
+        platform_fake,
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
     )
 
-    dm_payload = _load_slack_dm_fixture(text="do some work", ts="1700004100.600600")
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
+    await stage.say(
+        "do some work",
         script=script_progress(
-            ["Searching the web", "Reading the results"],
-            final_text="Here is the answer.",
-            tool_name="slack_get_recent_channel_messages",
+            COMMENTS, final_text=FINAL, tool_name=CONTEXT_TOOL[platform]
+        ),
+    )
+
+    edits = await wait_for_messages(message_store, EDIT_BUCKET[platform], min_count=1)
+    assert any(COMMENTS[-1] in json.dumps(edit, default=str) for edit in edits), (
+        f"{platform.value}: the work never showed up as an edit: {edits}"
+    )
+    # Not the full sentence: Telegram renders MarkdownV2 and escapes the
+    # trailing period, so the punctuation is the platform's business.
+    assert await stage.saw("Here is the answer")
+
+
+async def test_progress_opens_one_native_stream_on_slack(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fixed_test_org,
+    message_store,
+    monkeypatch,
+    platform_fake,
+) -> None:
+    """Slack is not an edit: it opens a stream, appends, and closes it.
+
+    Kept apart from the pair above because the assertion is about a lifecycle
+    — one start, appends, and a stop naming the same message — rather than
+    about an edit landing.
+    """
+    stage = await _staged(
+        SurfacePlatform.SLACK,
+        platform_fake,
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
+    )
+
+    await stage.say(
+        "do some work",
+        script=script_progress(
+            COMMENTS,
+            final_text=FINAL,
+            tool_name=CONTEXT_TOOL[SurfacePlatform.SLACK],
         ),
     )
 
     starts = await wait_for_messages(message_store, "SLACK_STREAM_START", min_count=1)
-    assert starts[-1]["channel"] == "D0123456"
+    assert starts[-1]["channel"] == stage.surface["_dm_channel"]
     chunks = await wait_for_messages(message_store, "SLACK_STREAM_APPEND", min_count=1)
     # Across appends, not within one: the token buffer flushes on a size *or*
     # time trigger, so the answer can be split at an arbitrary character.
-    delivered = await wait_for_slack_text(message_store, "Here is the answer.")
-    assert any("Here is the answer." in text for text in delivered), delivered
+    delivered = await wait_for_slack_text(message_store, FINAL)
+    assert any(FINAL in text for text in delivered), delivered
     stops = await wait_for_messages(message_store, "SLACK_STREAM_STOP", min_count=1)
-    assert stops[-1]["ts"] == chunks[-1]["ts"]
-
-
-async def test_progress_streams_via_edit_message_on_telegram(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_telegram,
-    message_store,
-    monkeypatch,
-):
-    """Tool activity streams as an edited Telegram message (editMessageText);
-    the placeholder is cleared before the final answer is sent as a new one."""
-    from app.modules.agent_surfaces.services import progress_display as _pd
-
-    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
-    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
-        f"{fake_telegram.api_base}/bot",
-    )
-    pod_id = test_pod["id"]
-    sender_id = 555070809
-    await _create_agent_surface(
-        authenticated_client, pod_id, config={"type": "TELEGRAM"}
-    )
-    await _seed_external_user(
-        db_session,
-        platform="TELEGRAM",
-        external_user_id=str(sender_id),
-        resolved_user_id=UUID(fixed_test_user["id"]),
+    assert stops[-1]["ts"] == chunks[-1]["ts"], (
+        "the stream that was closed is not the one that was appended to"
     )
 
-    payload = _telegram_payload(
-        text="do some work", message_id=941, sender_id=sender_id
+    # Counted only now, with the answer delivered and the stream closed: a
+    # count taken while the turn is still running says nothing, because a
+    # second start has not had its chance to arrive yet. "One stream" is the
+    # claim in this test's name, and two would be two live messages racing to
+    # show the same work.
+    assert len(message_store.get_all("SLACK_STREAM_START")) == 1, (
+        f"expected one stream, got {message_store.get_all('SLACK_STREAM_START')}"
     )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        script=script_progress(
-            ["Searching the web", "Reading the results"],
-            final_text="Here is the answer.",
-            tool_name="telegram_get_current_chat",
-        ),
+    assert len(message_store.get_all("SLACK_STREAM_STOP")) == 1, (
+        f"expected one close, got {message_store.get_all('SLACK_STREAM_STOP')}"
     )
-
-    edits = await wait_for_messages(message_store, "TELEGRAM_EDIT", min_count=1)
-    assert any("Reading the results" in json.dumps(e) for e in edits)
-    final = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
-    # Telegram renders MarkdownV2, which escapes the trailing "." — match the
-    # unescaped portion of the reply text only.
-    assert "Here is the answer" in final[-1]["text"]
-
-
-async def test_progress_streams_via_put_activity_on_teams(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_teams,
-    message_store,
-    monkeypatch,
-):
-    """Tool activity streams as a PUT-edited Teams activity; the final answer
-    is a new activity POST."""
-    from app.core.config import settings as app_settings
-    from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-    from app.modules.agent_surfaces.services import progress_display as _pd
-
-    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
-
-    async def _fake_bot_token(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return "teams-bot-token"
-
-    async def _disable_graph(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return None
-
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_bot_token", _fake_bot_token)
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_graph_token", _disable_graph)
-    monkeypatch.setattr(
-        surface_settings,
-        "microsoft_bot_openid_config_url",
-        fake_teams.openid_config_url,
-    )
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="microsoft_teams",
-        credentials={
-            "access_token": "teams-token",
-            "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
-        },
-    )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={
-            "type": "TEAMS",
-            "account_id": str(account.id),
-            "allowed_channel_ids": [REAL_TEAMS_CHANNEL_ID],
-        },
-    )
-
-    payload = _load_teams_channel_mention_fixture(fake_teams)
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="teams", payload=payload, headers={}),
-        script=script_progress(
-            ["Searching the web", "Reading the results"],
-            final_text="Here is the answer.",
-            tool_name="teams_get_recent_channel_messages",
-        ),
-    )
-
-    updates = await wait_for_messages(message_store, "TEAMS_UPDATE", min_count=1)
-    assert any("Reading the results" in json.dumps(u) for u in updates)
-    final = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    final_bodies = [
-        m["body"] for m in final if m.get("body", {}).get("type") == "message"
-    ]
-    assert "Here is the answer." in final_bodies[-1].get("text", "")

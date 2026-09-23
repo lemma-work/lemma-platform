@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -19,6 +19,7 @@ async def test_delete_agent_revokes_delegation(monkeypatch):
     agent = SimpleNamespace(id=uuid4(), user_id=uuid4(), kind=AgentKind.USER)
     repo = AsyncMock()
     uow = AsyncMock()
+    uow.after_commit = MagicMock()
     service = AgentService(
         uow=uow, agent_repository=repo, authorization_service=AsyncMock()
     )
@@ -36,6 +37,16 @@ async def test_delete_agent_revokes_delegation(monkeypatch):
     await service.delete_agent(pod_id=uuid4(), name="reporter")
 
     repo.delete.assert_awaited_once_with(agent.id)
+
+    # Registered, not run: revoking before the delete is durable would leave a
+    # working agent whose tokens had been killed if the transaction rolled back,
+    # and a Redis write inside the transaction holds a pooled connection across
+    # it. Driving the callback is what a commit does.
+    revoke_spy.assert_not_awaited()
+    deferred = [call.args[0] for call in uow.after_commit.call_args_list]
+    assert len(deferred) == 1
+
+    await deferred[0]()
     revoke_spy.assert_awaited_once_with(actor_id=agent.id)
 
 

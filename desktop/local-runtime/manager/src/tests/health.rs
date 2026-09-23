@@ -58,6 +58,18 @@ fn an_exit_is_explained_by_the_last_complaint_not_the_first_boot_retry() {
 }
 
 #[test]
+fn a_caller_that_left_is_not_the_reason_the_runtime_exited() {
+    let log = b"lemma-vz: guest data disk is full\n\
+                2026-09-22T10:00:00.000Z lemma-vz: client on port 42411 went away before the guest answered; released its request slot\n\
+                2026-09-22T10:00:01.000Z lemma-vz: client write failed on port 42411: write failed: Broken pipe\n"
+        as &[u8];
+    assert_eq!(
+        last_diagnostic(log, "fallback"),
+        "lemma-vz: guest data disk is full"
+    );
+}
+
+#[test]
 fn a_log_of_only_boot_retries_explains_nothing_and_says_so() {
     let log = b"lemma-vz: guest connect failed: Connection reset by peer\n\
                 lemma-vz: guest connect failed: Connection reset by peer\n"

@@ -19,11 +19,71 @@ class UsageLimitsResponse:
     """
     Attributes:
         allowed (bool):
-        org_monthly (UsageLimitScopeResponse):
+        org_monthly (UsageLimitScopeResponse): One spend window, as a caller outside the deployment may see it.
+
+            **The cap is expressed as a percentage, never as an amount.** This used to
+            carry `limit_usd` and `remaining_usd`, which state a dollar allowance —
+            and a dollar allowance is a promise the product does not make. What a plan
+            includes is set per plan and may be retuned; what a given request costs
+            depends on the model it routes to. Publishing "$12.40 remaining" invites a
+            customer to plan against a number that is neither fixed nor ours to
+            guarantee, and turns any retune into a broken promise.
+
+            What is published instead is how much of the window is gone. That is the
+            fact a caller can act on — show a meter, warn at 80%, stop starting new
+            work — and it stays true however the underlying allowance is set.
+
+            `used_usd` and `reserved_usd` remain, and deliberately: those are what the
+            customer has actually spent, which is theirs to know. It is the *boundary*
+            that is percentage-only, not the consumption.
+
+            The internal `UsageLimitScope` keeps its dollar fields — enforcement is done
+            in dollars, and `usage_service` reserves against them. This is the API
+            boundary, and the boundary is where the promise is made.
         organization_id (None | UUID):
         user_id (UUID):
-        user_monthly (UsageLimitScopeResponse):
-        user_weekly (UsageLimitScopeResponse):
+        user_monthly (UsageLimitScopeResponse): One spend window, as a caller outside the deployment may see it.
+
+            **The cap is expressed as a percentage, never as an amount.** This used to
+            carry `limit_usd` and `remaining_usd`, which state a dollar allowance —
+            and a dollar allowance is a promise the product does not make. What a plan
+            includes is set per plan and may be retuned; what a given request costs
+            depends on the model it routes to. Publishing "$12.40 remaining" invites a
+            customer to plan against a number that is neither fixed nor ours to
+            guarantee, and turns any retune into a broken promise.
+
+            What is published instead is how much of the window is gone. That is the
+            fact a caller can act on — show a meter, warn at 80%, stop starting new
+            work — and it stays true however the underlying allowance is set.
+
+            `used_usd` and `reserved_usd` remain, and deliberately: those are what the
+            customer has actually spent, which is theirs to know. It is the *boundary*
+            that is percentage-only, not the consumption.
+
+            The internal `UsageLimitScope` keeps its dollar fields — enforcement is done
+            in dollars, and `usage_service` reserves against them. This is the API
+            boundary, and the boundary is where the promise is made.
+        user_weekly (UsageLimitScopeResponse): One spend window, as a caller outside the deployment may see it.
+
+            **The cap is expressed as a percentage, never as an amount.** This used to
+            carry `limit_usd` and `remaining_usd`, which state a dollar allowance —
+            and a dollar allowance is a promise the product does not make. What a plan
+            includes is set per plan and may be retuned; what a given request costs
+            depends on the model it routes to. Publishing "$12.40 remaining" invites a
+            customer to plan against a number that is neither fixed nor ours to
+            guarantee, and turns any retune into a broken promise.
+
+            What is published instead is how much of the window is gone. That is the
+            fact a caller can act on — show a meter, warn at 80%, stop starting new
+            work — and it stays true however the underlying allowance is set.
+
+            `used_usd` and `reserved_usd` remain, and deliberately: those are what the
+            customer has actually spent, which is theirs to know. It is the *boundary*
+            that is percentage-only, not the consumption.
+
+            The internal `UsageLimitScope` keeps its dollar fields — enforcement is done
+            in dollars, and `usage_service` reserves against them. This is the API
+            boundary, and the boundary is where the promise is made.
     """
 
     allowed: bool

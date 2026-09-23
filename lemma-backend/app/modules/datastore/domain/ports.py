@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterable,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+)
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -19,7 +28,7 @@ from app.modules.datastore.domain.document_processing import (
     IndexingMetrics,
 )
 from app.modules.datastore.domain.file_projections import DispatchableFileRef
-from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
+from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
@@ -121,16 +130,37 @@ class DatastoreFileRepositoryPort(Protocol):
         ctx: Context | None = None,
     ) -> Optional[DatastoreFileEntity]: ...
 
+    async def delete_entities(self, entities: Sequence[DatastoreFileEntity]) -> int: ...
+
+    async def rewrite_descendant_paths(
+        self,
+        pod_id: UUID,
+        *,
+        previous_prefix: str,
+        new_prefix: str,
+        planned: Sequence[tuple[UUID, str]],
+    ) -> int: ...
+
+    async def get_direct_children(
+        self,
+        pod_id: UUID,
+        directory_path: str,
+    ) -> Sequence[DatastoreFileEntity]: ...
+
     async def get_descendants(
         self,
         pod_id: UUID,
         path_prefix: str,
     ) -> Sequence[DatastoreFileEntity]: ...
 
-    async def get_all_by_datastore(
+    async def get_tree_items(
         self,
         pod_id: UUID,
-        owner_user_id: UUID | None = None,
+        *,
+        ctx: Context,
+        subtree_root: str,
+        files_per_directory: int,
+        walk_ancestors: bool,
     ) -> Sequence[DatastoreFileEntity]: ...
 
     async def get_by_paths(
@@ -145,15 +175,9 @@ class DatastoreFileRepositoryPort(Protocol):
         pod_id: UUID,
         ctx: Context,
         walk_ancestors: bool,
+        among: Iterable[UUID] | None = None,
+        limit: int | None = None,
     ) -> set[UUID]: ...
-
-    async def file_visibility_split(
-        self,
-        *,
-        pod_id: UUID,
-        ctx: Context,
-        walk_ancestors: bool,
-    ) -> tuple[set[UUID], set[UUID]]: ...
 
     async def filter_visible_ids(
         self,
@@ -378,11 +402,20 @@ class DatastoreStoragePort(Protocol):
 
     def iter_download(self, source_blob_name: str) -> AsyncIterator[bytes]: ...
 
+    async def open_download(
+        self,
+        source_blob_name: str,
+        *,
+        byte_range: tuple[int, int] | None = None,
+    ) -> tuple[int, AsyncIterator[bytes]]: ...
+
     async def get_signed_url(self, blob_name: str, expires_hours: int = 1) -> str: ...
 
     async def delete_file(self, blob_name: str) -> bool: ...
 
     async def delete_prefix(self, prefix: str) -> int: ...
+
+    async def copy_prefix(self, source_prefix: str, destination_prefix: str) -> int: ...
 
 
 class DocumentProcessorPort(Protocol):
@@ -446,6 +479,8 @@ class DatastoreSearchPort(Protocol):
 
     async def remove_file(self, file_id: UUID) -> None: ...
 
+    async def remove_files(self, file_ids: Sequence[UUID]) -> None: ...
+
     async def update_file_path(
         self,
         file_id: UUID,
@@ -461,7 +496,7 @@ class DatastoreSearchPort(Protocol):
         scope_path: str | None = None,
         include_descendants: bool = True,
         *,
-        visibility: FileVisibilityFilter,
+        file_scope: SearchFileScope,
     ) -> list[DatastoreFileSearchResult]: ...
 
 

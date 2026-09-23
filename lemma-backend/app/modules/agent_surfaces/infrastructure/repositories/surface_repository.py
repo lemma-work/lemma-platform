@@ -1,27 +1,36 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from datetime import datetime, timezone
+import hashlib
+
+from collections.abc import Collection
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.crypto import get_secret_cipher
 from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+from app.core.infrastructure.db.transaction_locks import (
+    mark_transaction_scoped_lock,
+)
 from app.modules.agent_surfaces.domain.ports import (
+    PlatformIdentityHolder,
     SurfaceInstallationRepositoryPort,
 )
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurface,
-    AgentSurfaceConversationLinkModel,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql import (
+    active_surfaces_of_type,
+    in_a_live_pod,
+    routing_surfaces,
 )
 from app.modules.pod.contracts.orm import Pod
 from app.modules.agent.contracts.conversations import (
@@ -29,16 +38,21 @@ from app.modules.agent.contracts.conversations import (
 )
 
 
-#: A surface belongs to a pod, and a deleted pod has no business answering on
-#: it. `PS-OPS-020` says deleting a pod stops the work it was doing and keeps it
-#: stopped -- and a surface is the one piece of standing work that keeps running
-#: without anybody in Lemma asking it to, because the trigger comes from
-#: outside. The surface row itself stays ACTIVE on purpose: deletion is soft, so
-#: nothing is rewritten and an undelete would restore a working surface. What
-#: changes is that the pod is joined and checked here, once, rather than by each
-#: of the ingress paths remembering to.
-def _in_a_live_pod():
-    return (Pod.id == AgentSurface.pod_id) & (Pod.is_deleted.is_(False))
+def _identity_claim_lock_key(
+    platform: str, workspace_id: str, bot_identity: str
+) -> int:
+    """A stable signed 64-bit lock key for one bot in one workspace.
+
+    Hashed rather than composed so the key says nothing about the workspace it
+    locks, and so a long identity cannot overflow the space -- the same shape
+    `identity.mobile_number_claims` uses for the same reason.
+    """
+    digest = hashlib.blake2b(
+        f"{platform}\x00{workspace_id}\x00{bot_identity}".encode(),
+        digest_size=8,
+        person=b"lemma-surface",
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
 
 
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
@@ -108,8 +122,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
 
         # A row naming a retired platform drops out rather than taking the
         # whole page with it; see `AgentSurface.to_entity_or_none`.
-        # A row naming a retired platform drops out rather than taking the
-        # whole page with it; see `AgentSurface.to_entity_or_none`.
         entities = [
             entity
             for entity in (model.to_entity_or_none() for model in models)
@@ -139,19 +151,38 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         return model.to_entity() if model else None
 
     async def list_active_by_type(self, surface_type: str) -> list[AgentSurfaceEntity]:
-        # Stable ordering so surface selection is deterministic when a sender
-        # resolves to several candidate surfaces on a shared bot/number (the
-        # ingress tiebreak relies on this order).
-        stmt = (
-            select(AgentSurface)
-            .where(
-                AgentSurface.surface_type == surface_type,
-                AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
+        """Every live surface of one platform. **No production caller, by design.**
+
+        This was the read every routing path started from, and narrowing them
+        left it with no caller and no place on the port -- an unnarrowed read is
+        not something a routing path should be able to reach for. It stays here
+        as the oracle the equivalence tests compare against: they filter this in
+        Python and assert `list_active_for_routing` returns the same rows.
+        """
+        result = await self.session.execute(active_surfaces_of_type(surface_type))
+        return [model.to_entity() for model in result.scalars().all()]
+
+    async def list_active_for_routing(
+        self,
+        surface_type: str,
+        *,
+        surface_ids: Collection[UUID] | None = None,
+        pod_ids: Collection[UUID] | None = None,
+        external_workspace_id: str | None = None,
+        system_credentials_only: bool = False,
+        surface_identity_id: str | None = None,
+    ) -> list[AgentSurfaceEntity]:
+        """The live surfaces an inbound event could be for; see `routing_surfaces`."""
+        result = await self.session.execute(
+            routing_surfaces(
+                surface_type,
+                surface_ids=surface_ids,
+                pod_ids=pod_ids,
+                external_workspace_id=external_workspace_id,
+                system_credentials_only=system_credentials_only,
+                surface_identity_id=surface_identity_id,
             )
-            .join(Pod, _in_a_live_pod())
-            .order_by(AgentSurface.created_at, AgentSurface.id)
         )
-        result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
 
     async def list_active_native_receiver_surfaces(
@@ -168,7 +199,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 ),
                 AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
             )
-            .join(Pod, _in_a_live_pod())
+            .join(Pod, in_a_live_pod())
             .order_by(AgentSurface.surface_type, AgentSurface.id)
         )
         result = await self.session.execute(stmt)
@@ -219,6 +250,85 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
+    async def get_platform_identity_holder(
+        self,
+        *,
+        pod_id: UUID,
+        platform: str,
+        external_workspace_id: str,
+        surface_identity_id: str,
+        exclude_surface_id: UUID | None = None,
+    ) -> PlatformIdentityHolder | None:
+        """Whoever already answers as this bot, in any organization.
+
+        The pair is the delivery key: which workspace, and which bot in it.
+        Slack routes an event to the *app*, so two surfaces naming one bot are
+        two rows the platform cannot tell apart -- wherever they sit. That is
+        why this one read is not scoped to the organization the way
+        `get_account_conflict_in_org` above it is.
+
+        Selects ``same_org`` alongside the row rather than filtering on it,
+        because the caller needs the distinction rather than one side of it: a
+        holder in the reader's own organization is named in the refusal, and one
+        outside it is not. ``created_at, id`` matches the routing tiebreak, so
+        where rows written before this rule do collide, the one named here is
+        the one that would have answered.
+
+        Not narrowed to ACTIVE: a paused surface still holds its bot, and
+        letting a second take it would make resuming the first re-create the
+        collision. Deleting the surface, or its pod, is what releases it.
+        """
+        # Taken before the read, and held until this transaction ends, because
+        # the answer is only worth having if it is still true when the surface
+        # is written. The check and the write share a session -- `create` and
+        # `update` flush without committing -- so without this two creates can
+        # both read "nobody holds it" and both commit, which is the ambiguous
+        # routing this rule exists to prevent, arrived at a different way.
+        #
+        # A lock rather than a unique index, deliberately. An index would be the
+        # stronger arbiter, but it cannot be added to a deployment that already
+        # has colliding rows: `CREATE UNIQUE INDEX` would fail on exactly the
+        # data `warn_if_tied_on_one_bot` exists to report. Serializing the claim
+        # closes the race without making an upgrade conditional on a cleanup.
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {
+                "lock_key": _identity_claim_lock_key(
+                    str(platform).upper(), external_workspace_id, surface_identity_id
+                )
+            },
+        )
+        # Held on a Session, so a connection-scope release could commit it and
+        # drop the lock mid-claim; the mark is what stops that.
+        mark_transaction_scoped_lock(self.session)
+        target_org_id = (
+            select(Pod.organization_id).where(Pod.id == pod_id).scalar_subquery()
+        )
+        stmt = (
+            select(
+                AgentSurface,
+                (Pod.organization_id == target_org_id).label("same_org"),
+            )
+            .join(Pod, in_a_live_pod())
+            .where(
+                AgentSurface.surface_type == str(platform).upper(),
+                AgentSurface.external_workspace_id == external_workspace_id,
+                AgentSurface.surface_identity_id == surface_identity_id,
+            )
+            .order_by(AgentSurface.created_at, AgentSurface.id)
+            .limit(1)
+        )
+        if exclude_surface_id is not None:
+            stmt = stmt.where(AgentSurface.id != exclude_surface_id)
+        row = (await self.session.execute(stmt)).first()
+        if row is None:
+            return None
+        model, same_org = row[0], bool(row[1])
+        entity = model.to_entity_or_none()
+        if entity is None:
+            return None
+        return PlatformIdentityHolder(surface=entity, same_org=same_org)
+
     async def get_account_conflict_in_org(
         self,
         *,
@@ -246,23 +356,44 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         # would otherwise 500 the creation of an unrelated surface.
         return model.to_entity_or_none() if model else None
 
+    async def organization_for_pod(self, pod_id: UUID) -> UUID:
+        """The organisation this surface is in, read from the pod that defines it.
+
+        Carried on the row rather than joined for, because per-organisation
+        uniqueness of a pooled WhatsApp number has to be expressible as an
+        index, and an index cannot reach through a join.
+
+        Read here rather than taken from the entity, and that is the whole
+        reason it is not on `AgentSurfaceEntity`: a denormalised column a caller
+        can set is a denormalised column a caller can set wrongly. The composite
+        foreign key would catch it, but it would catch it as a constraint
+        violation naming `pods`, which tells whoever is reading the traceback
+        nothing about which caller was confused. One reader, one definition.
+
+        `update` needs no equivalent: it never moves a surface between pods, and
+        a pod that changes organisation drags its surfaces along through
+        `ON UPDATE CASCADE` without anything here running.
+        """
+        organization_id = await self.session.scalar(
+            select(Pod.organization_id).where(Pod.id == pod_id)
+        )
+        if organization_id is None:
+            raise AgentSurfaceValidationError(
+                f"Cannot create a surface for pod {pod_id}: it does not exist, "
+                "so there is no organization to scope it to"
+            )
+        return organization_id
+
     async def create(self, entity: AgentSurfaceEntity) -> AgentSurfaceEntity:
         model = AgentSurface(
             id=entity.id,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
             pod_id=entity.pod_id,
+            organization_id=await self.organization_for_pod(entity.pod_id),
             name=entity.name,
             agent_id=entity.agent_id,
             surface_type=entity.surface_type.value,
-            mode=entity.mode.value
-            if hasattr(entity.mode, "value")
-            else str(entity.mode),
-            event_mode=(
-                entity.event_mode.value
-                if hasattr(entity.event_mode, "value")
-                else str(entity.event_mode)
-            ),
             credential_mode=(
                 entity.credential_mode.value
                 if hasattr(entity.credential_mode, "value")
@@ -291,14 +422,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.updated_at = entity.updated_at
         model.agent_id = entity.agent_id
         model.surface_type = entity.surface_type.value
-        model.mode = (
-            entity.mode.value if hasattr(entity.mode, "value") else str(entity.mode)
-        )
-        model.event_mode = (
-            entity.event_mode.value
-            if hasattr(entity.event_mode, "value")
-            else str(entity.event_mode)
-        )
         model.credential_mode = (
             entity.credential_mode.value
             if hasattr(entity.credential_mode, "value")
@@ -324,267 +447,3 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             return
         await self.session.delete(model)
         await self.session.flush()
-
-
-class SurfaceConversationLinkRepository:
-    """Repository for external platform threads mapped to agent conversations."""
-
-    def __init__(self, uow: IUnitOfWork):
-        self.uow = uow
-        self.session: Session = uow.session
-
-    async def get_by_external_thread(
-        self,
-        *,
-        surface_id: UUID,
-        platform: str,
-        external_channel_id: str | None,
-        external_thread_id: str,
-        external_user_id: str | None,
-    ) -> AgentSurfaceConversationLink | None:
-        stmt = select(AgentSurfaceConversationLinkModel).where(
-            AgentSurfaceConversationLinkModel.surface_id == surface_id,
-            AgentSurfaceConversationLinkModel.platform == platform,
-            AgentSurfaceConversationLinkModel.external_thread_id == external_thread_id,
-        )
-        if external_channel_id is None:
-            stmt = stmt.where(
-                AgentSurfaceConversationLinkModel.external_channel_id.is_(None)
-            )
-        else:
-            stmt = stmt.where(
-                AgentSurfaceConversationLinkModel.external_channel_id
-                == external_channel_id
-            )
-        if external_user_id is None:
-            stmt = stmt.where(
-                AgentSurfaceConversationLinkModel.external_user_id.is_(None)
-            )
-        else:
-            stmt = stmt.where(
-                AgentSurfaceConversationLinkModel.external_user_id == external_user_id
-            )
-        result = await self.session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
-
-    async def find_surface_id_for_external_thread(
-        self,
-        *,
-        platform: str,
-        external_channel_id: str | None,
-        external_thread_id: str,
-        external_user_id: str | None,
-    ) -> UUID | None:
-        """The surface an existing conversation for this exact chat lives on.
-
-        Same match shape as ``get_by_external_thread`` but NOT scoped to a
-        surface id — used at ingress to keep a returning chat on the surface it
-        first landed on, so a sender reachable via a shared bot across several
-        pods doesn't bounce between them. Returns the most-recently-updated
-        link's surface id, or None when the chat is new.
-        """
-        stmt = select(AgentSurfaceConversationLinkModel.surface_id).where(
-            AgentSurfaceConversationLinkModel.platform == platform,
-            AgentSurfaceConversationLinkModel.external_thread_id == external_thread_id,
-        )
-        if external_channel_id is None:
-            stmt = stmt.where(
-                AgentSurfaceConversationLinkModel.external_channel_id.is_(None)
-            )
-        else:
-            stmt = stmt.where(
-                AgentSurfaceConversationLinkModel.external_channel_id
-                == external_channel_id
-            )
-        if external_user_id is None:
-            stmt = stmt.where(
-                AgentSurfaceConversationLinkModel.external_user_id.is_(None)
-            )
-        else:
-            stmt = stmt.where(
-                AgentSurfaceConversationLinkModel.external_user_id == external_user_id
-            )
-        stmt = stmt.order_by(AgentSurfaceConversationLinkModel.updated_at.desc()).limit(
-            1
-        )
-        return await self.session.scalar(stmt)
-
-    async def get_latest_by_surface_and_external_user(
-        self,
-        *,
-        surface_id: UUID,
-        external_user_id: str,
-    ) -> AgentSurfaceConversationLink | None:
-        """The member's most recent thread on a surface.
-
-        ``surface.send`` and notification delivery reuse this existing thread
-        (and its valid reply target) to reach a member proactively — bots can't
-        cold-DM, so a prior interaction is required.
-
-        One member's slice of ``list_latest_by_surface_and_external_users``,
-        which owns the ordering — see there for why it is inbound recency.
-        """
-        links = await self.list_latest_by_surface_and_external_users(
-            surface_id=surface_id, external_user_ids=[external_user_id]
-        )
-        return links.get(external_user_id)
-
-    async def list_latest_by_surface_and_external_users(
-        self,
-        *,
-        surface_id: UUID,
-        external_user_ids: Sequence[str],
-    ) -> dict[str, AgentSurfaceConversationLink]:
-        """``{external_user_id: their most recent thread}`` on one surface.
-
-        Ordered by inbound recency, not ``updated_at``: an outbound message also
-        bumps ``updated_at``, so ranking by it would mean "the thread we last
-        talked *at* them on" rather than "the thread they last talked to us on".
-        Only the second is evidence of where they are actually looking. COALESCE
-        keeps pre-migration rows, where the two were the same thing, in the sort.
-
-        DISTINCT ON picks per person in the database rather than dragging a busy
-        surface's whole history back to reduce it here. The single-member form
-        delegates to this one so a reachability check and the send that follows
-        it can never disagree about which thread is theirs.
-        """
-        if not external_user_ids:
-            return {}
-        recency = func.coalesce(
-            AgentSurfaceConversationLinkModel.last_inbound_at,
-            AgentSurfaceConversationLinkModel.updated_at,
-        )
-        stmt = (
-            select(AgentSurfaceConversationLinkModel)
-            .where(
-                AgentSurfaceConversationLinkModel.surface_id == surface_id,
-                AgentSurfaceConversationLinkModel.external_user_id.in_(
-                    external_user_ids
-                ),
-            )
-            .distinct(AgentSurfaceConversationLinkModel.external_user_id)
-            .order_by(
-                AgentSurfaceConversationLinkModel.external_user_id,
-                recency.desc(),
-            )
-        )
-        result = await self.session.execute(stmt)
-        return {
-            link.external_user_id: link
-            for link in (model.to_entity() for model in result.scalars().all())
-            if link.external_user_id
-        }
-
-    async def get_by_conversation_id(
-        self,
-        conversation_id: UUID,
-    ) -> AgentSurfaceConversationLink | None:
-        stmt = (
-            select(AgentSurfaceConversationLinkModel)
-            .where(AgentSurfaceConversationLinkModel.conversation_id == conversation_id)
-            .order_by(AgentSurfaceConversationLinkModel.updated_at.desc())
-            .limit(1)
-        )
-        result = await self.session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
-
-    async def create(
-        self,
-        link: AgentSurfaceConversationLink,
-    ) -> AgentSurfaceConversationLink:
-        model = AgentSurfaceConversationLinkModel(
-            id=link.id,
-            created_at=link.created_at,
-            updated_at=link.updated_at,
-            surface_id=link.surface_id,
-            conversation_id=link.conversation_id,
-            platform=link.platform,
-            external_channel_id=link.external_channel_id,
-            external_thread_id=link.external_thread_id,
-            external_user_id=link.external_user_id,
-            routed_agent_id=link.routed_agent_id,
-            conversation_kind=link.conversation_kind,
-            route_key=link.route_key,
-            last_event=link.last_event,
-            last_message_id=link.last_message_id,
-            last_inbound_at=link.last_inbound_at,
-        )
-        self.session.add(model)
-        await self.session.flush()
-        return model.to_entity()
-
-    async def update_last_event(
-        self,
-        *,
-        link_id: UUID,
-        last_event: dict,
-        last_message_id: str | None,
-    ) -> AgentSurfaceConversationLink | None:
-        model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
-        if model is None:
-            return None
-        model.last_event = last_event
-        model.last_message_id = last_message_id
-        # Unconditional: this method exists to record an inbound event, and its
-        # only caller is the ingress path. An outbound send that needs to repoint
-        # a link uses ``repoint_conversation_for_outbound`` precisely so it can
-        # never land here and fake inbound activity.
-        model.last_inbound_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return model.to_entity()
-
-    async def repoint_conversation_for_outbound(
-        self,
-        *,
-        link_id: UUID,
-        conversation_id: UUID,
-        expected_conversation_id: UUID,
-    ) -> AgentSurfaceConversationLink | None:
-        """Point a thread at a newly opened conversation, without faking inbound.
-
-        Used when a notification opens a fresh conversation on a cold thread.
-        Deliberately narrow next to ``update_conversation``: it leaves
-        ``last_event``, ``last_message_id`` and ``last_inbound_at`` untouched, so
-        the surface still knows when the person last spoke and the DM reset rule
-        still works.
-
-        Compare-and-set on ``expected_conversation_id``: an inbound arriving
-        between our read and this write has already repointed the link, and
-        stealing it back would split one thread across two conversations. Losing
-        that race returns None and the caller delivers into the conversation the
-        inbound created.
-        """
-        model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
-        if model is None or model.conversation_id != expected_conversation_id:
-            return None
-        model.conversation_id = conversation_id
-        await self.session.flush()
-        return model.to_entity()
-
-    async def update_conversation(
-        self,
-        *,
-        link_id: UUID,
-        conversation_id: UUID,
-        last_event: dict,
-        last_message_id: str | None,
-        routed_agent_id: UUID | None = None,
-        conversation_kind: str | None = None,
-        route_key: str | None = None,
-    ) -> AgentSurfaceConversationLink | None:
-        model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
-        if model is None:
-            return None
-        model.conversation_id = conversation_id
-        model.last_event = last_event
-        model.last_message_id = last_message_id
-        model.routed_agent_id = routed_agent_id
-        if conversation_kind is not None:
-            model.conversation_kind = conversation_kind
-        model.route_key = route_key
-        # See ``update_last_event``: this is an inbound writer.
-        model.last_inbound_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return model.to_entity()

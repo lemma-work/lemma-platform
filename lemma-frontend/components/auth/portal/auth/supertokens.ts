@@ -23,6 +23,34 @@ export function isTelegramMiniApp(): boolean {
   return Boolean(telegramWindow.Telegram?.WebApp?.initData) || /Telegram/i.test(navigator.userAgent);
 }
 
+export type ThirdPartyId = "google" | "active-directory";
+export type ThirdPartyProvider = { id: ThirdPartyId; name: string };
+
+/**
+ * The providers, in one place, for the recipe and for the screen alike.
+ *
+ * They used to be reachable only as buttons drawn inside
+ * `getRoutingComponent`, so a sign-in screen that stops calling it would have
+ * silently dropped Google and Microsoft. Declaring them once means the recipe
+ * and the screen cannot disagree about which exist -- in particular, the
+ * Telegram mini app empties both lists through the same predicate rather than
+ * through two that have to be kept in step.
+ */
+const THIRD_PARTY_PROVIDERS = [
+  { id: "google", name: "Google", init: () => Google.init() },
+  {
+    id: "active-directory",
+    name: "Microsoft",
+    init: () => ActiveDirectory.init({ name: "Microsoft" }),
+  },
+] as const satisfies readonly (ThirdPartyProvider & { init: () => unknown })[];
+
+export function thirdPartyProviders(): readonly ThirdPartyProvider[] {
+  return isTelegramMiniApp()
+    ? []
+    : THIRD_PARTY_PROVIDERS.map(({ id, name }) => ({ id, name }));
+}
+
 let hasInitialised = false;
 
 const authSurfaceStyle = `
@@ -319,7 +347,7 @@ export function ensureSuperTokensInit(): void {
         signInAndUpFeature: {
           providers: isTelegramMiniApp()
             ? []
-            : [Google.init(), ActiveDirectory.init({name: "Microsoft"})],
+            : THIRD_PARTY_PROVIDERS.map((provider) => provider.init()),
         },
       }),
     ],

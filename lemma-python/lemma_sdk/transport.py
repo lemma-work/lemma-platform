@@ -21,7 +21,18 @@ MISSING = object()
 # Conservative retry set: 429 is an explicit back-off, and 502/503/504 are
 # gateway errors where the request may never have reached the handler. 500 is
 # excluded (it may indicate a partial side effect).
+#
+# 401 is deliberately NOT in here. Replaying the same request with the same
+# dead token just fails again, so it is not a retry -- it is a refresh followed
+# by one replay, handled separately below. `tests/test_sdk_reliability.py`
+# asserts this set by equality for exactly that reason, and the TypeScript SDK
+# draws the same line ("401 means the session is gone -- 403 is a permission
+# error").
 _RETRYABLE_STATUS = frozenset({429, 502, 503, 504})
+
+#: The endpoint that trades a refresh token for a fresh session. Same path the
+#: CLI uses, on the API host rather than the auth host.
+_REFRESH_PATH = "/auth/cli/refresh"
 
 # 429 is refused by the rate limiter before the handler runs, so replaying it
 # cannot repeat a side effect whatever the method. A gateway error carries no
@@ -64,6 +75,23 @@ def _client_header() -> str:
     return f"lemma-sdk-py/{ver}"
 
 
+def _refreshed_session(payload: object) -> tuple[str, str | None] | None:
+    """The access token, and the rotated refresh token if there is one.
+
+    ``None`` for anything that is not a refresh response: the caller turns that
+    into "the session expired", which is what the user needs to hear whether the
+    endpoint refused, returned something unexpected, or was not the endpoint at
+    all.
+    """
+    if not isinstance(payload, dict):
+        return None
+    access_token = payload.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        return None
+    rotated = payload.get("refresh_token")
+    return access_token, rotated if isinstance(rotated, str) and rotated else None
+
+
 class LemmaTransport:
     def __init__(
         self,
@@ -73,6 +101,7 @@ class LemmaTransport:
         timeout: float = 30.0,
         verify_ssl: bool = True,
         max_retries: int = 2,
+        refresh_token: str | None = None,
     ) -> None:
         self.generated = AuthenticatedClient(
             base_url=base_url.rstrip("/"),
@@ -83,11 +112,64 @@ class LemmaTransport:
         )
         self._timeout = timeout
         self._max_retries = max(0, max_retries)
+        self._refresh_token = refresh_token
 
     @property
     def timeout(self) -> float:
         """The configured per-request timeout, in seconds."""
         return self._timeout
+
+    def set_token(self, token: str) -> None:
+        """Use ``token`` from now on, including on the client already built.
+
+        The generated client bakes the Authorization header into its
+        ``httpx.Client`` the first time it is asked for one and caches it, so
+        setting ``generated.token`` alone changes what a *future* client would
+        send and nothing about the one in hand.
+        """
+        self.generated.token = token
+        client = getattr(self.generated, "_client", None)
+        if client is not None:
+            client.headers[self.generated.auth_header_name] = (
+                f"{self.generated.prefix} {token}" if self.generated.prefix else token
+            )
+
+    def _refresh_session(self) -> bool:
+        """Trade the refresh token for a new access token. One attempt, no raise.
+
+        Over this transport's own ``httpx`` client rather than
+        ``lemma_sdk.auth.refresh_cli_session``, which imports ``requests`` --
+        about a second of import that the SDK keeps out of its hot path on
+        purpose.
+
+        Every failure is False rather than an exception: the caller is already
+        holding a 401 to raise, and a refresh that did not work should surface
+        as "your session expired", not as whatever went wrong while trying to
+        renew it.
+        """
+        if not self._refresh_token:
+            return False
+        client = self.generated.get_httpx_client()
+        url = f"{self.generated._base_url.rstrip('/')}{_REFRESH_PATH}"
+        try:
+            response = client.post(
+                url,
+                json={"refresh_token": self._refresh_token},
+                headers={"Accept": "application/json"},
+            )
+            payload = response.json() if response.status_code < 400 else None
+        except httpx.HTTPError, ValueError:
+            return False
+        session = _refreshed_session(payload)
+        if session is None:
+            return False
+        access_token, rotated = session
+        # The rotated refresh token, when the server sends one. Keeping the old
+        # one works until it is invalidated, and then fails in a way that looks
+        # like the refresh never happened at all.
+        self._refresh_token = rotated or self._refresh_token
+        self.set_token(access_token)
+        return True
 
     def close(self) -> None:
         if getattr(self.generated, "_client", None) is not None:
@@ -109,6 +191,7 @@ class LemmaTransport:
             )
 
         attempt = 0
+        refreshed = False
         while True:
             try:
                 response = endpoint.sync_detailed(
@@ -135,6 +218,14 @@ class LemmaTransport:
             ):
                 time.sleep(_retry_delay(attempt, headers.get("retry-after")))
                 attempt += 1
+                continue
+            # Once, and only once. The CLI shipped this exact loop as a spin
+            # (`test_datastore_watch.py`): a refresh that returns a token the
+            # server still rejects would otherwise retry forever, and every
+            # attempt is a round trip against an endpoint that is already
+            # saying no.
+            if status_code == 401 and not refreshed and self._refresh_session():
+                refreshed = True
                 continue
             if status_code >= 400:
                 raise self.error_from_response(

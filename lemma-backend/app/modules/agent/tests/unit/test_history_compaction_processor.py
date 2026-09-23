@@ -529,7 +529,7 @@ class TestSyntheticMessagesNeverDisplaceTheRequest:
     async def _leading_placeholder(self):
         from pydantic_ai.messages import ModelResponse, TextPart
 
-        from app.modules.agent.domain.value_objects import HarnessOptions
+        from app.modules.agent.domain.harness_options import HarnessOptions
         from app.modules.agent.infrastructure.harnesses.history import (
             build_history_processors,
         )
@@ -563,7 +563,7 @@ class TestSyntheticMessagesNeverDisplaceTheRequest:
         """It runs on every model request over history it already rewrote."""
         from pydantic_ai.messages import ModelResponse, TextPart
 
-        from app.modules.agent.domain.value_objects import HarnessOptions
+        from app.modules.agent.domain.harness_options import HarnessOptions
         from app.modules.agent.infrastructure.harnesses.history import (
             build_history_processors,
         )

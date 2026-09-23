@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .pod import Pod
     from .resources import (
         AgentHosts,
+        WebLogins,
         BoundConnectors,
         BoundOrg,
         BoundOrgRuntime,
@@ -65,6 +66,7 @@ class Lemma:
                 token=self.settings.token,
                 timeout=self.settings.timeout,
                 verify_ssl=self.settings.verify_ssl,
+                refresh_token=self.settings.refresh_token,
             )
         self.org_id = self.settings.org_id
         self.default_pod_id = self.settings.pod_id
@@ -113,6 +115,17 @@ class Lemma:
         from .resources import AgentHosts
 
         return AgentHosts(self._transport)
+
+    @cached_property
+    def web_logins(self) -> "WebLogins":
+        """Sites you have signed in to on an agent's behalf.
+
+        Per person, not per pod: a saved login is one human's identity at a
+        site, so there is no pod or organization to scope it by.
+        """
+        from .resources import WebLogins
+
+        return WebLogins(self._transport)
 
     @cached_property
     def org_runtime(self) -> "BoundOrgRuntime":

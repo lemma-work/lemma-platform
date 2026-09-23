@@ -84,6 +84,14 @@ pub struct HostProcessManager {
     service_environment: Mutex<HashMap<String, HashMap<String, String>>>,
     desired_running: AtomicBool,
     health_ready: AtomicBool,
+    /// The last capabilities answer, and when it was fetched.
+    ///
+    /// `status_event` embeds capabilities, the status monitor builds one every
+    /// second, and building one *is* an HTTP request -- a fresh TCP connection
+    /// to the backend, `Connection: close`, 86,400 times a day for as long as
+    /// the app is open. The answer it fetches is settings and two capability
+    /// probes; it does not change second to second.
+    capabilities_cache: Mutex<Option<(Instant, Value)>>,
     startup_in_progress: AtomicBool,
     dependency_ready: AtomicBool,
     dependency_error: Mutex<Option<String>>,
@@ -211,6 +219,7 @@ impl HostProcessManager {
             service_environment: Mutex::new(HashMap::new()),
             desired_running: AtomicBool::new(false),
             health_ready: AtomicBool::new(false),
+            capabilities_cache: Mutex::new(None),
             startup_in_progress: AtomicBool::new(false),
             dependency_ready: AtomicBool::new(true),
             dependency_error: Mutex::new(None),

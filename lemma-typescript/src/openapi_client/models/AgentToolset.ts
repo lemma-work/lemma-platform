@@ -7,6 +7,7 @@
  */
 export enum AgentToolset {
     WORKSPACE_CLI = 'WORKSPACE_CLI',
+    BROWSER = 'BROWSER',
     SKILLS = 'SKILLS',
     WEB_SEARCH = 'WEB_SEARCH',
     USER_INTERACTION = 'USER_INTERACTION',
@@ -15,7 +16,7 @@ export enum AgentToolset {
     SUBAGENTS = 'SUBAGENTS',
     TODO = 'TODO',
     CONNECTORS = 'CONNECTORS',
-    SNOOZE = 'SNOOZE',
+    WAIT = 'WAIT',
     MESSAGING = 'MESSAGING',
     MEMORY = 'MEMORY',
     VIEW_IMAGE = 'VIEW_IMAGE',

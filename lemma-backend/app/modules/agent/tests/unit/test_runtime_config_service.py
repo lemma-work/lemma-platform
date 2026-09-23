@@ -16,10 +16,10 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
     reveal_credentials,
 )
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     HarnessKind,
-    HarnessOptions,
 )
 from app.modules.agent.agent_runtime_defaults import (
     AgentRuntimeDefaultError,

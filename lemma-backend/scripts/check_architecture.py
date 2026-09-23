@@ -41,6 +41,26 @@ ALLOWED_PUBLIC_SURFACES = {"contracts"}
 CORE_MODULE_IMPORT_EXEMPT = {"app/core/registry/installed.py"}
 MAX_FILE_LINES = 600
 MAX_COMPLEXITY = 15
+# How many classes an object is made of, counting itself. Above this it is worth
+# naming in the baseline. Deliberately the size of the ancestry rather than the
+# length of the longest chain: eight mixins side by side are a chain two deep and
+# an object made of nine classes, and it is the nine a reader has to hold.
+#
+# Counted only for an object that is *assembled* -- one where some class in the
+# ancestry, itself included, declares more than one base. A single-inheritance
+# chain is depth and not composition, and a reader holds one link of it at a
+# time: `AgentSurfaceNumberPoolExhaustedError -> AgentSurfaceError ->
+# AppDomainError -> Exception` is four classes and no burden at all.
+#
+# Without that condition the metric was a tax on ordinary code rather than a
+# signal. It named 274 classes, and the top of the list was 46 ORM models on
+# `UUIDAuditBase`, 16 aggregates and every error hierarchy in the backend --
+# so *any* new table or error type failed a ratchet that only fails on growth,
+# and the fix was always to re-record the baseline, which is how a gate stops
+# meaning anything. With it, 12 classes are named, and they are the mixin piles
+# the rule was written for: `AgentSurfaceService`, the platform adapters, the
+# progress observer, the repositories.
+MAX_ANCESTRY = 3
 # Generated files are exempt from the size rule. `event_catalog.py` is one line
 # per logging event, emitted by scripts/generate_logging_event_catalogs.py, and
 # it was already 128 lines over the limit -- so adding a single `logger.info`
@@ -252,6 +272,205 @@ class _FunctionMetrics(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class _ClassShape(ast.NodeVisitor):
+    """What a class reaches for that it never declared, and how deep it inherits.
+
+    `MAX_FILE_LINES` caps the page and `MAX_COMPLEXITY` caps the function. Both
+    are satisfied by splitting, and that is how one class here reached ninety-two
+    methods across fourteen files while recording zero violations of either:
+    every file sat under six hundred lines, every method under the complexity
+    cap, and the object they compose was never measured at all. `services/` grew
+    to eighty-six files under exactly that incentive.
+
+    `undeclared_self_attributes` is the number splitting cannot improve. A mixin
+    that reads `self.surface_repository` without declaring it is not a unit; it
+    is a fragment of some other object, and moving it into a file of its own
+    makes this worse rather than better. A class with a constructor scores zero.
+
+    Classes with a base this pass cannot resolve -- `BaseModel`, `Protocol`,
+    anything from a library -- are skipped rather than guessed at, because their
+    attributes come from a metaclass we cannot read and every one of them would
+    count as undeclared. That exemption costs nothing here: the shape this
+    measures is mixins, which have no bases at all.
+    """
+
+    def __init__(self, relative_path: str) -> None:
+        self.relative_path = relative_path
+        self.classes: dict[str, dict[str, Any]] = {}
+        #: Local name -> the module it was imported from, for this file. Shared
+        #: by reference with every class entry below, so it is complete by the
+        #: time resolution reads it however late in the file an import sits.
+        self.imported: dict[str, str] = {}
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        # Absolute only. A relative import would have to be resolved against
+        # this file's package to name a module, and it lands in that same
+        # package by construction -- which the same-package tie-breaker in
+        # `resolve` already covers. There are 23 of them against 9,617
+        # absolute, so the resolution they would add is not worth carrying a
+        # package calculation for.
+        if node.module and not node.level:
+            for alias in node.names:
+                self.imported[alias.asname or alias.name] = node.module
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        declared: set[str] = set()
+        read: set[str] = set()
+        for statement in node.body:
+            if isinstance(statement, ast.AnnAssign) and isinstance(
+                statement.target, ast.Name
+            ):
+                declared.add(statement.target.id)
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                declared.add(statement.name)
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Attribute):
+                continue
+            if not isinstance(child.value, ast.Name) or child.value.id != "self":
+                continue
+            if isinstance(child.ctx, (ast.Store, ast.Del)):
+                declared.add(child.attr)
+            else:
+                read.add(child.attr)
+        # Keyed by file *and* name. Keyed by name alone, the sixteen duplicate
+        # class names in this tree collided: `AgentRepository` is a Protocol in
+        # `agent/domain/ports.py` and a concrete class in
+        # `agent/infrastructure/repositories/`, and whichever was visited last
+        # replaced the other -- so one of them stopped being measured at all,
+        # and anything inheriting the name resolved through whichever won.
+        self.classes[f"{self.relative_path}:{node.name}"] = {
+            "name": node.name,
+            "key": f"{self.relative_path}:{node.name}",
+            "bases": [base.id for base in node.bases if isinstance(base, ast.Name)],
+            "unresolved_bases": len(node.bases)
+            - len([base for base in node.bases if isinstance(base, ast.Name)]),
+            "declared": declared,
+            "read": read,
+            "imports": self.imported,
+        }
+        self.generic_visit(node)
+
+
+def _class_shapes(
+    classes: dict[str, dict[str, Any]],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Undeclared reads and ancestry size, resolved across the whole app.
+
+    Entries are keyed by ``path:name``; a base, written in source, is only a
+    name. So base resolution goes through an index built here, and a name held
+    by more than one class is never resolved to whichever file happened to be
+    walked last.
+
+    Refusing to resolve an ambiguous name outright is the safe reading, but it
+    is not a free one, and the cost runs the wrong way: the chain simply stops,
+    the class measures shallower than it is, and **the ratchet only fails on
+    growth**, so the smaller number becomes the new floor. A second
+    ``DomainEvent`` added anywhere in the tree would silently drop sixty-six
+    units of measured depth across thirty-five subclasses and report success.
+    Ambiguity that costs coverage quietly is how a gate stops measuring the
+    thing it was added for.
+
+    So an ambiguous name is disambiguated by evidence, in descending order of
+    how much the evidence is worth: an actual ``from X import Base`` in the
+    asking file, then a definition in that same file, then one in the same
+    package. Only the first is proof; the other two are proximity, and they are
+    tie-breakers rather than the rule. A name with none of the three stays
+    unresolved, which for `undeclared_self_attributes` means the class is
+    skipped -- the same rule that skips anything inheriting a pydantic model or
+    a Protocol.
+    """
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for entry in classes.values():
+        by_name.setdefault(entry["name"], []).append(entry)
+
+    def _path_of(entry: dict[str, Any]) -> str:
+        return entry["key"].rsplit(":", 1)[0]
+
+    def _defines(entry: dict[str, Any], module: str) -> bool:
+        """Is this candidate the class ``module`` names?"""
+        stem = module.replace(".", "/")
+        path = _path_of(entry)
+        return path.endswith((f"{stem}.py", f"{stem}/__init__.py"))
+
+    def resolve(base: str, asking: dict[str, Any]) -> dict[str, Any] | None:
+        found = by_name.get(base)
+        if not found:
+            return None
+        if len(found) == 1:
+            return found[0]
+        module = asking["imports"].get(base)
+        if module:
+            imported = [entry for entry in found if _defines(entry, module)]
+            if len(imported) == 1:
+                return imported[0]
+        here = _path_of(asking)
+        same_file = [entry for entry in found if _path_of(entry) == here]
+        if len(same_file) == 1:
+            return same_file[0]
+        package = here.rsplit("/", 1)[0]
+        same_package = [
+            entry for entry in found if _path_of(entry).rsplit("/", 1)[0] == package
+        ]
+        if len(same_package) == 1:
+            return same_package[0]
+        return None
+
+    def inherited(entry: dict[str, Any], seen: frozenset[str]) -> set[str]:
+        if entry["key"] in seen:
+            return set()
+        names = set(entry["declared"])
+        for base in entry["bases"]:
+            found = resolve(base, entry)
+            if found is not None:
+                names |= inherited(found, seen | {entry["key"]})
+        return names
+
+    def ancestry(entry: dict[str, Any], seen: frozenset[str]) -> tuple[set[str], bool]:
+        """Every class this one is made of, and whether any of them is assembled.
+
+        The second half is what separates composition from depth -- see
+        `MAX_ANCESTRY`. True as soon as one class in the chain declares more
+        than one base, because that is the point where a reader stops being able
+        to follow a single line.
+        """
+        if entry["key"] in seen:
+            return set(), False
+        found: set[str] = set()
+        assembled = len(entry["bases"]) > 1
+        for base in entry["bases"]:
+            found.add(base)
+            resolved = resolve(base, entry)
+            if resolved is not None:
+                inherited_names, inherited_assembled = ancestry(
+                    resolved, seen | {entry["key"]}
+                )
+                found |= inherited_names
+                assembled = assembled or inherited_assembled
+        return found, assembled
+
+    undeclared: dict[str, int] = {}
+    deep: dict[str, int] = {}
+    for entry in classes.values():
+        ancestors, assembled = ancestry(entry, frozenset())
+        made_of = 1 + len(ancestors)
+        if made_of > MAX_ANCESTRY and assembled:
+            deep[entry["key"]] = made_of
+        if entry["unresolved_bases"] or any(
+            resolve(base, entry) is None for base in entry["bases"]
+        ):
+            continue
+        known = set(entry["declared"])
+        for base in entry["bases"]:
+            found = resolve(base, entry)
+            if found is not None:
+                known |= inherited(found, frozenset({entry["key"]}))
+        missing = entry["read"] - known
+        if missing:
+            undeclared[entry["key"]] = len(missing)
+    return undeclared, deep
+
+
 def snapshot() -> dict[str, Any]:
     forbidden: dict[str, int] = defaultdict(int)
     dependency_graph: dict[str, set[str]] = defaultdict(set)
@@ -260,6 +479,7 @@ def snapshot() -> dict[str, Any]:
     broad_catches: dict[str, int] = {}
     untyped_escapes: dict[str, int] = {}
     core_module_imports: dict[str, int] = defaultdict(int)
+    classes: dict[str, dict[str, Any]] = {}
 
     for path in _python_files():
         relative = path.relative_to(ROOT).as_posix()
@@ -274,6 +494,10 @@ def snapshot() -> dict[str, Any]:
         metrics.visit(tree)
         complex_functions.update(metrics.complex)
         broad_catches.update(metrics.broad_catches)
+
+        shapes = _ClassShape(relative)
+        shapes.visit(tree)
+        classes.update(shapes.classes)
 
         escapes = _UntypedEscapes(relative)
         escapes.visit(tree)
@@ -303,6 +527,7 @@ def snapshot() -> dict[str, Any]:
                     # indistinguishable from the tangle it is leaving.
                     dependency_graph[source].add(target)
 
+    undeclared_self, deep_inheritance = _class_shapes(classes)
     return {
         "forbidden_imports": dict(sorted(forbidden.items())),
         "core_module_imports": dict(sorted(core_module_imports.items())),
@@ -311,6 +536,8 @@ def snapshot() -> dict[str, Any]:
         "complex_functions": _aggregate_by_module(complex_functions),
         "broad_catches": _aggregate_by_module(broad_catches),
         "untyped_escapes": _aggregate_by_module(untyped_escapes),
+        "undeclared_self_attributes": _aggregate_by_module(undeclared_self),
+        "ancestry_size": _aggregate_by_module(deep_inheritance),
     }
 
 
@@ -405,6 +632,8 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         ("complex function", "complex_functions"),
         ("broad catch count", "broad_catches"),
         ("untyped escape count", "untyped_escapes"),
+        ("undeclared self attribute count", "undeclared_self_attributes"),
+        ("ancestry size", "ancestry_size"),
     ):
         for name, (before, after) in _growth(
             current[key], baseline.get(key, {})

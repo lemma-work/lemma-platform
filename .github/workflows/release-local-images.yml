@@ -39,7 +39,10 @@ env:
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
 
 permissions:
-  actions: read
+  # `actions: write` so a stable publish can start `release-desktop.yml`
+  # itself. It cannot rely on the `release: published` event: GitHub raises no
+  # workflow-triggering event for a release created with `GITHUB_TOKEN`.
+  actions: write
   contents: write
   packages: write
 
@@ -864,6 +867,48 @@ jobs:
           # re-runs are used to repair an existing release (backfill the
           # lemma-local.json asset) and must not overwrite the release body.
           generate_release_notes: ${{ github.event_name == 'push' }}
+
+      # The step above creates the `v*` release, and creating it is what is
+      # supposed to start `release-desktop.yml` -- it listens for
+      # `release: published`. It does not, and the reason is not visible from
+      # either file: GitHub does not raise workflow-triggering events for
+      # things done with the default `GITHUB_TOKEN`, so a release this job
+      # creates starts nothing.
+      #
+      # What that cost: `v0.8.0` was published on 2026-09-10 with the runtime
+      # assets from this workflow and none of the app ones. It became `Latest`
+      # immediately, so `releases/latest/download/latest.json` -- the URL every
+      # installed stable build polls -- answered 404 for twelve days, and the
+      # last good feed on `v0.7.2` was unreachable behind it. The demotion
+      # guard that exists for exactly this lives inside `release-desktop.yml`
+      # and never ran, because the workflow never ran.
+      #
+      # Dispatched explicitly instead. `gh workflow run` from this job is an
+      # `actions: write` call rather than an event, so the suppression does not
+      # apply to it.
+      - name: Start the desktop release for this version
+        if: github.event_name == 'push' || inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -uo pipefail
+          if gh run list --workflow release-desktop.yml --limit 20 \
+              --json headBranch,status --jq '.[] | select(.status != "completed")' \
+              | grep -q .; then
+            echo "A desktop release run is already in flight; not starting a second."
+            exit 0
+          fi
+          if ! gh workflow run release-desktop.yml -f "version=${VERSION}"; then
+            echo "::error title=Desktop release not started::" \
+                 "v${VERSION} carries runtime assets but no app or update feed." \
+                 "Run release-desktop.yml for ${VERSION}, or mark v${VERSION} a" \
+                 "prerelease so installed apps keep seeing the previous feed."
+            exit 1
+          fi
+          echo "Dispatched release-desktop.yml for ${VERSION}."
 
       # The manifest a shared build ships points at this prerelease, so the
       # assets have to be here before the DMG that references them is built.

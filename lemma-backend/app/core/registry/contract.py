@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # type-only — never imported at runtime, so no cycles / cos
     from app.core.authorization.pod_liveness import PodLivenessReader
     from app.core.authorization.resource_names import ResourceNameTable
     from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext
+    from app.core.ports.plan_limits import PlanLimitsFactory
 
 
 # --- thunk aliases -----------------------------------------------------------
@@ -63,6 +64,10 @@ drag a module's ORM models into every process that merely imports the registry.
 type PodLivenessProvider = Callable[[], PodLivenessReader]
 """Returns the reader core's deleted-pod guard asks whether a pod is live."""
 
+type PlanLimitsProvider = Callable[[], PlanLimitsFactory]
+"""Returns what builds the answerer for how many pods, members and how much
+compute a plan allows. At most one module in a list may declare it."""
+
 type StreaqRegistrar = Callable[[], None]
 """Imports the module's ``@streaq_task``/``@streaq_cron`` modules for side effects."""
 
@@ -81,7 +86,6 @@ class LemmaModule:
     # --- API process ---
     routers: RouterProvider | None = None
     api_lifespans: Sequence[ApiLifespan] = ()
-
     # --- Worker process ---
     event_routers: EventRouterProvider | None = None
     register_streaq: StreaqRegistrar | None = None
@@ -98,3 +102,7 @@ class LemmaModule:
     # A deleted pod stops answering for its contents. Core owns that rule and
     # this module owns the row it turns on.
     pod_liveness: PodLivenessProvider | None = None
+
+    # What a plan allows. Declared by a deployment that sells plans; the
+    # open-source list declares none, and nothing is limited.
+    plan_limits: PlanLimitsProvider | None = None

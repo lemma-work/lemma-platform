@@ -13,6 +13,7 @@ it.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from uuid import UUID
 
 from sqlalchemy import select
@@ -27,6 +28,33 @@ async def pod_organization_id(uow, pod_id: UUID) -> UUID | None:
     ).scalar_one_or_none()
 
 
+async def pod_organization_ids(
+    uow, pod_ids: Collection[UUID]
+) -> dict[UUID, UUID | None]:
+    """The organization holding each of these pods, in one statement.
+
+    The singular form in a loop is what this replaces: resolving a company
+    installation asked it once per surface in order to check that they all
+    belong to one organization -- N statements to compute a set the caller then
+    asserts has size one.
+
+    A pod with no row is absent from the result rather than mapped to None, so a
+    caller that wants "every pod answered" compares lengths.
+    """
+    if not pod_ids:
+        return {}
+    rows = await uow.session.execute(
+        select(Pod.id, Pod.organization_id).where(Pod.id.in_(list(pod_ids)))
+    )
+    return dict(rows.all())
+
+
+async def live_pod_organization_id(uow, pod_id: UUID) -> UUID | None:
+    return await uow.session.scalar(
+        select(Pod.organization_id).where(Pod.id == pod_id, Pod.is_deleted.is_(False))
+    )
+
+
 async def pod_config(uow, pod_id: UUID) -> dict[str, object]:
     """The pod's config blob, empty when the pod is gone or never set one."""
     return (
@@ -34,4 +62,4 @@ async def pod_config(uow, pod_id: UUID) -> dict[str, object]:
     ).scalar_one_or_none() or {}
 
 
-__all__ = ["pod_config", "pod_organization_id"]
+__all__ = ["pod_config", "pod_organization_id", "live_pod_organization_id"]

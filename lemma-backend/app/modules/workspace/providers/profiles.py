@@ -14,11 +14,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sandbox_runtime.paths import HOME_ROOT
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.domain.sandbox import SandboxKind
 
 WORKSPACE_RUNTIME_PORT = 8080
+#: The agent-browser dashboard. Serves `display_resource(BROWSER)`, which is a
+#: person following a signed link to watch — no input path, by its own design.
 WORKSPACE_BROWSER_PORT = 4848
+#: The browser relay: the backend's own door to the sandbox's browser, and the
+#: one channel that carries input. Separate from the dashboard because they
+#: answer to different callers with different credentials.
+WORKSPACE_BROWSER_RELAY_PORT = 4850
 FUNCTION_RUNTIME_PORT = 8090
 
 
@@ -66,8 +73,17 @@ def workspace_profile(*, image: str | None = None) -> SandboxProfile:
         image=resolved_image,
         kind=SandboxKind.WORKSPACE,
         runtime_port=WORKSPACE_RUNTIME_PORT,
-        published_ports=(WORKSPACE_RUNTIME_PORT, WORKSPACE_BROWSER_PORT),
-        working_dir="/workspace",
+        published_ports=(
+            WORKSPACE_RUNTIME_PORT,
+            WORKSPACE_BROWSER_PORT,
+            WORKSPACE_BROWSER_RELAY_PORT,
+        ),
+        # The home, not the project root inside it. A container's working
+        # directory is created by the engine when it does not exist -- as root,
+        # which would leave uid 10001 unable to write to its own cwd on any
+        # volume that predates the project root. Every session passes the cwd it
+        # actually wants, and the runtime creates that one as the sandbox user.
+        working_dir=HOME_ROOT,
     )
 
 

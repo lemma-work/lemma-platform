@@ -8,33 +8,56 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
-from ..types import UNSET, Unset
-
 T = TypeVar("T", bound="UsageLimitScopeResponse")
 
 
 @_attrs_define
 class UsageLimitScopeResponse:
-    """
-    Attributes:
-        allowed (bool):
-        reserved_usd (float):
-        reset_at (datetime.datetime):
-        scope (str):
-        used_usd (float):
-        window_start (datetime.datetime):
-        limit_usd (float | None | Unset):
-        remaining_usd (float | None | Unset):
+    """One spend window, as a caller outside the deployment may see it.
+
+    **The cap is expressed as a percentage, never as an amount.** This used to
+    carry `limit_usd` and `remaining_usd`, which state a dollar allowance —
+    and a dollar allowance is a promise the product does not make. What a plan
+    includes is set per plan and may be retuned; what a given request costs
+    depends on the model it routes to. Publishing "$12.40 remaining" invites a
+    customer to plan against a number that is neither fixed nor ours to
+    guarantee, and turns any retune into a broken promise.
+
+    What is published instead is how much of the window is gone. That is the
+    fact a caller can act on — show a meter, warn at 80%, stop starting new
+    work — and it stays true however the underlying allowance is set.
+
+    `used_usd` and `reserved_usd` remain, and deliberately: those are what the
+    customer has actually spent, which is theirs to know. It is the *boundary*
+    that is percentage-only, not the consumption.
+
+    The internal `UsageLimitScope` keeps its dollar fields — enforcement is done
+    in dollars, and `usage_service` reserves against them. This is the API
+    boundary, and the boundary is where the promise is made.
+
+        Attributes:
+            allowed (bool):
+            reserved_usd (float): Spend held against this window for work in flight. A reservation is released if the work
+                does not happen, and moves into `used_usd` when it settles, so this is not a second charge.
+            reset_at (datetime.datetime):
+            scope (str):
+            used_percent (float | None): How much of this window is consumed, as a percentage of its cap, counting
+                `used_usd` and `reserved_usd` together — a meter that ignored reservations would read low exactly while a burst
+                was landing. Null means the window is uncapped, which is a different statement from 0% used. May exceed 100: a
+                reservation can settle above what it reserved, and a caller wanting a meter should clamp it itself rather than
+                be handed a number that has already lost the overage.
+            used_usd (float): Settled spend in this window: work that has finished and been charged. Does not include
+                reservations still held for work in flight — those are `reserved_usd`.
+            window_start (datetime.datetime):
     """
 
     allowed: bool
     reserved_usd: float
     reset_at: datetime.datetime
     scope: str
+    used_percent: float | None
     used_usd: float
     window_start: datetime.datetime
-    limit_usd: float | None | Unset = UNSET
-    remaining_usd: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,21 +69,12 @@ class UsageLimitScopeResponse:
 
         scope = self.scope
 
+        used_percent: float | None
+        used_percent = self.used_percent
+
         used_usd = self.used_usd
 
         window_start = self.window_start.isoformat()
-
-        limit_usd: float | None | Unset
-        if isinstance(self.limit_usd, Unset):
-            limit_usd = UNSET
-        else:
-            limit_usd = self.limit_usd
-
-        remaining_usd: float | None | Unset
-        if isinstance(self.remaining_usd, Unset):
-            remaining_usd = UNSET
-        else:
-            remaining_usd = self.remaining_usd
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -70,14 +84,11 @@ class UsageLimitScopeResponse:
                 "reserved_usd": reserved_usd,
                 "reset_at": reset_at,
                 "scope": scope,
+                "used_percent": used_percent,
                 "used_usd": used_usd,
                 "window_start": window_start,
             }
         )
-        if limit_usd is not UNSET:
-            field_dict["limit_usd"] = limit_usd
-        if remaining_usd is not UNSET:
-            field_dict["remaining_usd"] = remaining_usd
 
         return field_dict
 
@@ -92,37 +103,25 @@ class UsageLimitScopeResponse:
 
         scope = d.pop("scope")
 
+        def _parse_used_percent(data: object) -> float | None:
+            if data is None:
+                return data
+            return cast(float | None, data)
+
+        used_percent = _parse_used_percent(d.pop("used_percent"))
+
         used_usd = d.pop("used_usd")
 
         window_start = isoparse(d.pop("window_start"))
-
-        def _parse_limit_usd(data: object) -> float | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(float | None | Unset, data)
-
-        limit_usd = _parse_limit_usd(d.pop("limit_usd", UNSET))
-
-        def _parse_remaining_usd(data: object) -> float | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(float | None | Unset, data)
-
-        remaining_usd = _parse_remaining_usd(d.pop("remaining_usd", UNSET))
 
         usage_limit_scope_response = cls(
             allowed=allowed,
             reserved_usd=reserved_usd,
             reset_at=reset_at,
             scope=scope,
+            used_percent=used_percent,
             used_usd=used_usd,
             window_start=window_start,
-            limit_usd=limit_usd,
-            remaining_usd=remaining_usd,
         )
 
         usage_limit_scope_response.additional_properties = d

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,10 +21,15 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ResolvedSurfaceUser,
     SurfaceConfig,
-    SurfaceMode,
 )
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
+)
+from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
+from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
+from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
+from app.modules.test_support.surface_routing_double import (
+    routing_surfaces_double,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -114,13 +121,30 @@ def _conversation_operations(monkeypatch, *, conversation):
 
 
 def _build_service(*, surface, monkeypatch):
+    """The two halves of one journey: prepare the ingress, then start the turn.
+
+    They were one object with two constructor modes. A sample event still
+    travels through both, so the fixture hands back both -- over one doubled
+    session, which is what a request and its queued follow-up share in
+    production anyway.
+    """
     uow = SimpleNamespace(session=AsyncMock())
     surface_repository = AsyncMock()
-    surface_repository.list_active_by_type.return_value = [surface]
+    surface_repository.list_active_for_routing.side_effect = routing_surfaces_double(
+        [surface]
+    )
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = None
     conversation_link_repository.create.side_effect = lambda link: link
-    service = AgentSurfaceIngressService(
+    slack_credentials = {
+        "access_token": "xoxb-test",
+        "scope": "assistant:write,chat:write.customize,reactions:write",
+    }
+    credential_resolver = SimpleNamespace(
+        for_surface=AsyncMock(return_value=slack_credentials),
+        for_platform=AsyncMock(return_value=slack_credentials),
+    )
+    router = SurfaceRouter(
         uow=uow,
         surface_repository=surface_repository,
         conversation_link_repository=conversation_link_repository,
@@ -128,28 +152,29 @@ def _build_service(*, surface, monkeypatch):
             get_user_pod_ids=AsyncMock(return_value=[surface.pod_id]),
             get_user_email=AsyncMock(return_value="sender@example.com"),
         ),
-    )
-    service.identity_service = SimpleNamespace(
-        resolve=AsyncMock(
-            return_value=ResolvedSurfaceUser(
-                internal_user_id=surface.agent_id,
-                external_user_id="U-RESOLVED",
-                email="sender@example.com",
-                display_name="Sample Sender",
+        identity_service=SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=ResolvedSurfaceUser(
+                    internal_user_id=surface.agent_id,
+                    external_user_id="U-RESOLVED",
+                    email="sender@example.com",
+                    display_name="Sample Sender",
+                )
             )
-        )
+        ),
+        credential_resolver=credential_resolver,
     )
-    service._resolve_credentials = AsyncMock(
-        return_value={
-            "access_token": "xoxb-test",
-            "scope": "assistant:write,chat:write.customize,reactions:write",
-        }
-    )
-    service._resolve_credentials_from_context = AsyncMock(
-        return_value={
-            "access_token": "xoxb-test",
-            "scope": "assistant:write,chat:write.customize,reactions:write",
-        }
+    service = AgentSurfaceIngressService(
+        uow=uow,
+        router=router,
+        binder=ConversationBinder(
+            uow=uow,
+            surface_repository=surface_repository,
+            conversation_link_repository=conversation_link_repository,
+        ),
+        surface_repository=surface_repository,
+        conversation_link_repository=conversation_link_repository,
+        credential_resolver=credential_resolver,
     )
     service._resolve_account_credentials = AsyncMock(return_value={})
     service.event_dedup_store = SimpleNamespace(
@@ -168,7 +193,15 @@ def _build_service(*, surface, monkeypatch):
             )
         ),
     )
-    return service
+
+    @asynccontextmanager
+    async def uow_factory():
+        yield uow
+
+    starter = SurfaceTurnStarter(uow_factory=uow_factory)
+    starter._credentials_for = AsyncMock(return_value=slack_credentials)
+    starter.event_dedup_store = service.event_dedup_store
+    return SimpleNamespace(ingress=service, starter=starter)
 
 
 async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch):
@@ -213,7 +246,6 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
         name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         external_workspace_id=payload["team_id"],
         surface_identity_id=payload["authorizations"][0]["user_id"],
@@ -231,7 +263,7 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     conversations = _conversation_operations(monkeypatch, conversation=conversation)
     service = _build_service(surface=surface, monkeypatch=monkeypatch)
 
-    context = await service.prepare_ingress(
+    context = await service.ingress.prepare_ingress(
         SurfacePlatformWebhookIngress(source="slack", payload=payload, headers={})
     )
 
@@ -248,7 +280,7 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     assert create_kwargs["metadata"]["surface_platform"] == "SLACK"
     assert create_kwargs["metadata"]["external_thread_id"] == event["ts"]
 
-    await service.execute_chat(context)
+    await service.starter.execute_chat(context)
 
     conversations.start_surface_turn.assert_awaited_once()
     set_title.assert_awaited_once()
@@ -302,7 +334,6 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
         name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         external_workspace_id=payload["team_id"],
         external_channel_id=event["channel"],
@@ -321,7 +352,7 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
     conversations = _conversation_operations(monkeypatch, conversation=conversation)
     service = _build_service(surface=surface, monkeypatch=monkeypatch)
 
-    context = await service.prepare_ingress(
+    context = await service.ingress.prepare_ingress(
         SurfacePlatformWebhookIngress(source="slack", payload=payload, headers={})
     )
 
@@ -337,7 +368,7 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
     assert create_kwargs["metadata"]["external_thread_id"] == event["ts"]
     assert create_kwargs["metadata"]["external_channel_id"] == event["channel"]
 
-    await service.execute_chat(context)
+    await service.starter.execute_chat(context)
 
     conversations.start_surface_turn.assert_awaited_once()
     message_kwargs = conversations.start_surface_turn.await_args.kwargs

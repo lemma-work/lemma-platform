@@ -45,21 +45,33 @@ def _tenant_scope(surface: AgentSurfaceEntity) -> str:
 def inbound_address_key(surface: AgentSurfaceEntity) -> str:
     """An opaque key equal for two surfaces exactly when they share an address.
 
-    The deployment's system credential is one identity per platform (see
-    ``system_credential_is_identity``), so every surface riding it shares a key,
+    Where the deployment's system credential is one identity per platform (see
+    ``system_credential_is_identity``), every surface riding it shares a key,
     narrowed by the workspace/tenant inbound events are matched against.
     Everything else is keyed on the identity it actually owns — its mailbox
     address, its connected account, its resolved handle — and falls back to the
     surface's own id, which can never collide, when none of those is known yet.
+
+    Where the credential is shared but the *identity* is allocated per surface —
+    Resend's address off one API key, a WhatsApp number out of the pool — two
+    surfaces collide only when they were handed the same one. A surface that has
+    not been allocated anything yet is still riding the one shared credential,
+    so it keys as the system one does: two personal pods on the shared WhatsApp
+    line do contend, and they stopped contending the moment WhatsApp's
+    ``system_credential_is_identity`` went false, until this said so.
     """
     platform = surface.surface_type.value
     capabilities = get_platform_capabilities(platform)
     if (
         surface.account_id is None
         and surface.credential_mode is SurfaceCredentialMode.SYSTEM
-        and (capabilities is None or capabilities.system_credential_is_identity)
     ):
-        return f"system:{platform}:{_tenant_scope(surface)}"
+        if capabilities is None or capabilities.system_credential_is_identity:
+            return f"system:{platform}:{_tenant_scope(surface)}"
+        if surface.surface_identity_id:
+            return f"identity:{platform}:{surface.surface_identity_id}"
+        if not surface.surface_identity_email:
+            return f"system:{platform}:{_tenant_scope(surface)}"
     if surface.surface_identity_email:
         return f"email:{surface.surface_identity_email.strip().lower()}"
     if surface.account_id is not None:

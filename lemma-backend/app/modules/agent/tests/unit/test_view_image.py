@@ -12,7 +12,7 @@ from app.modules.agent.tools.file_access import (
     _best_mime,
     read_workspace_file_bytes,
 )
-from app.modules.agent.tools.workspace_cli import workspace_cli
+from app.modules.agent.tools.workspace_cli import view_image as workspace_cli
 from app.modules.agent.tools.workspace_cli.models import (
     ViewImageRequest,
     ViewImageResponse,

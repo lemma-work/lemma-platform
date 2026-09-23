@@ -164,9 +164,10 @@ gating on Docker/E2B/network at runtime — ratchet
 
 A lane that selects nothing is green forever.
 
-*Today:* `empty_markers` = `identity`, `local_cli`, `pod`, `protected` — and the
-protected-e2e workflow selects `local_cli` and `protected`, both empty — hard
-once cleared
+*Today:* `empty_markers` = `protected`, named by the protected-e2e workflow and
+carried by nothing — hard once cleared. `local_cli` stopped being empty in #631,
+and the lane naming it could not build what those tests need; the protected
+workflow's comment has the story
 
 ### TST-13 — coverage floors are per module and ratcheted; the global number is advisory
 

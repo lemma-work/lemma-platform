@@ -19,6 +19,7 @@ import { MobileSidebarDrawer } from "@/components/pod/mobile-sidebar-drawer";
 import { LocalSettingsButton } from "@/components/desktop/local-settings-button";
 import { PodLayoutProvider, usePodLayout } from "@/components/pod/pod-layout-context";
 import { WorkspaceSidebar } from "@/components/pod/workspace-sidebar";
+import { WorkspaceStartingIndicator } from "@/components/workspace/workspace-starting-indicator";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, PanelLeftOpen, X } from "@/components/ui/icons";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -683,6 +684,9 @@ function PodShell({
                             <TooltipProvider>
                                 <HelpMenu />
                             </TooltipProvider>
+                            {/* Fixed to the bottom right; mounted with the pod so
+                                it is there whichever page is open. */}
+                            <WorkspaceStartingIndicator />
                         </div>
                 </header>
                 {!isPodHome && !isConversationRoute && !isAppViewRoute && !topbar.hideContextBar ? (

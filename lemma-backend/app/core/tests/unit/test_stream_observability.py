@@ -51,7 +51,7 @@ async def test_snapshot_accepts_normalized_last_delivered_id(monkeypatch) -> Non
         (
             "redis.stream.snapshot",
             {
-                "stream": "function_run_events",
+                "stream_name": "function_run_events",
                 "group": "workers",
                 "length": 120,
                 "delayed": 0,

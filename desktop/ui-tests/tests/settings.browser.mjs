@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
+import { reportPolicyViolations, servedHeaders } from '../drivers/app-csp.mjs';
 
 let browser;
 before(async () => {
@@ -15,13 +16,19 @@ async function settings(t, mode = 'local', daemonOffline = false) {
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
+  reportPolicyViolations(page, errors);
   t.after(() => assert.deepEqual(errors, []));
   await page.route('https://desktop.test/**', async (route) => {
     const name = new URL(route.request().url()).pathname.slice(1);
-    if (!['control.html', 'control.js', 'control.css'].includes(name)) return route.abort();
+    // The page and its modules; anything else is a request the app would
+    // not serve either.
+    if (!['control.html', 'control.js', 'control.css'].includes(name) && !/^control\/[a-z-]+\.js$/.test(name)) {
+      return route.abort();
+    }
     await route.fulfill({
       body: await readFile(new URL(`../../ui/${name}`, import.meta.url)),
       contentType: name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css' : 'text/javascript',
+      headers: servedHeaders(name),
     });
   });
   await page.addInitScript(({mode, daemonOffline}) => {
@@ -116,7 +123,13 @@ test('settings before deployment selection do not claim the workspace is in the 
 
 test('settings content remains readable when an embedded webview suspends animation', async (t) => {
   const page = await settings(t, 'cloud');
-  await page.addStyleTag({ content: '* { animation-play-state: paused !important; }' });
+  // Through the CSSOM rather than `addStyleTag`: that inserts an inline
+  // <style>, which the app's policy refuses, exactly as it should.
+  await page.evaluate(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('* { animation-play-state: paused !important; }');
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+  });
   for (const name of ['Updates', 'This computer', 'Recovery']) {
     // Prefix, not exact: a nav item's accessible name now carries its health
     // as well, which is what stops it being colour alone.

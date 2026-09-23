@@ -1,22 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
-    ParsedInboundSurfaceEvent,
-    ParsedSurfaceInteraction,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
-from app.modules.agent_surfaces.domain.models import SurfaceChannelInfo
-from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
-from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
-from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.identity.contracts import UserPreferences
 
 
@@ -93,7 +87,28 @@ class SurfaceAuthConfigPort(Protocol):
     ) -> SurfaceAuthConfigInfo | None: ...
 
 
+class PlatformIdentityHolder(BaseModel):
+    """The surface already answering as a bot, and whether it is ours to name.
+
+    Two fields rather than a bare surface, because the caller has to say it two
+    ways. A holder in the reader's own organization is named -- the point of
+    refusing is to send them to the surface that has it. A holder in another
+    organization is not: its pod name and id are that organization's, and a
+    refusal is not a reason to hand them over.
+    """
+
+    surface: AgentSurfaceEntity
+    same_org: bool
+
+
 class SurfaceInstallationRepositoryPort(Protocol):
+    #: The unit of work this repository was built with. Declared because two
+    #: callers legitimately need it -- publishing after commit, and handing a
+    #: session to a free function -- and reaching for it through an undeclared
+    #: attribute type-checks as nothing, which is how those two reads sat in the
+    #: baseline looking like every other unresolvable name.
+    uow: IUnitOfWork
+
     async def get(self, id: UUID) -> AgentSurfaceEntity | None: ...
 
     async def merge_conversation_metadata(
@@ -125,8 +140,15 @@ class SurfaceInstallationRepositoryPort(Protocol):
         limit: int = 100,
     ) -> tuple[list[AgentSurfaceEntity], UUID | None]: ...
 
-    async def list_active_by_type(
-        self, surface_type: str
+    async def list_active_for_routing(
+        self,
+        surface_type: str,
+        *,
+        surface_ids: Collection[UUID] | None = None,
+        pod_ids: Collection[UUID] | None = None,
+        external_workspace_id: str | None = None,
+        system_credentials_only: bool = False,
+        surface_identity_id: str | None = None,
     ) -> list[AgentSurfaceEntity]: ...
 
     async def list_active_native_receiver_surfaces(
@@ -149,6 +171,16 @@ class SurfaceInstallationRepositoryPort(Protocol):
         platform: str,
         exclude_surface_id: UUID | None = None,
     ) -> AgentSurfaceEntity | None: ...
+
+    async def get_platform_identity_holder(
+        self,
+        *,
+        pod_id: UUID,
+        platform: str,
+        external_workspace_id: str,
+        surface_identity_id: str,
+        exclude_surface_id: UUID | None = None,
+    ) -> PlatformIdentityHolder | None: ...
 
     async def get_account_conflict_in_org(
         self,
@@ -178,154 +210,6 @@ class SurfaceAccountBindingPort(Protocol):
     # Returns (external_tenant_id, external_workspace_id, surface_identity_id).
 
 
-class SurfacePlatformAdapterPort(Protocol):
-    platform: str
-
-    def split_inbound_payloads(
-        self, payload: dict[str, Any]
-    ) -> list[dict[str, Any]]: ...
-
-    async def parse_inbound_event(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
-    ) -> ParsedInboundSurfaceEvent | None: ...
-
-    async def enrich_inbound_event(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
-    ) -> ParsedInboundSurfaceEvent: ...
-
-    async def fetch_sender_profile(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
-    ) -> SurfaceSenderProfile | None: ...
-
-    async def send_message(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        message: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None: ...
-
-    # The text primitive `deliver` degrades onto, and the only way to say
-    # something before a conversation exists (the signup and setup replies).
-
-    async def deliver(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        envelope: SurfaceEnvelope,
-        metadata: dict[str, Any] | None = None,
-    ) -> DeliveryReceipt:
-        """The one outbound seam for conversation content.
-
-        Every kind of content is a field on the envelope, and the receipt says
-        how each part landed -- natively, degraded to text or a link, or
-        reaching nobody.
-
-        The ``_render_*`` hooks it composes are deliberately not declared on
-        this port. They are a platform's private half of this call, and naming
-        them here made the seam read as six verbs a caller could choose between
-        -- which is how content came to be rendered past ``deliver`` in the
-        first place.
-        """
-        ...
-
-    async def fetch_thread_context(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        limit: int = 15,
-    ) -> list["SurfaceContextMessage"]: ...
-
-    # Fetch the last few messages of the inbound thread/channel for background
-    # context on a group mention (each user has a separate conversation, so this
-    # gives continuity). Best-effort, fetched fresh per run. Default: none.
-
-    async def parse_inbound_interaction(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
-    ) -> "ParsedSurfaceInteraction | None": ...
-
-    async def acknowledge_interaction(
-        self,
-        *,
-        credentials: dict[str, Any],
-        interaction: "ParsedSurfaceInteraction",
-        text: str | None = None,
-        show_alert: bool = False,
-        clear_actions: bool = False,
-    ) -> None:
-        raise NotImplementedError
-
-    # Parse an interaction submission (Slack block_actions, Teams Action.Submit)
-    # into a routable interaction, or None when the payload is not an interaction.
-
-    async def add_processing_indicator(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        metadata: dict[str, Any] | None = None,
-    ) -> None: ...
-
-    async def stream_progress(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None: ...
-
-    # Show live progress text on platforms that support an editable message
-    # (Telegram, Teams). Returns an opaque handle (e.g. {"message_id": ...}) to
-    # pass back on the next call so the same message is edited. None → platform
-    # has no editable progress; the caller keeps using typing indicators.
-
-    async def end_progress(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> None: ...
-
-    # Clean up the streaming progress message at run end (e.g. delete it before
-    # the final answer is delivered).
-
-    async def download_attachment(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        attachment: dict[str, Any],
-    ) -> tuple[bytes, str, str] | None: ...
-
-    # (content, file_name, mime_type) for a user-provided inbound attachment, or
-    # None when it cannot be downloaded. Used by inbound auto-ingest; not an
-    # agent tool.
-
-    async def list_channels(
-        self, *, credentials: dict[str, Any]
-    ) -> list[SurfaceChannelInfo]: ...
-
-    # Channels/groups the bot can be configured in (Slack/Teams). Empty for
-    # platforms without an enumerable channel concept.
-
-    def unresolved_sender_reply(
-        self, event: ParsedInboundSurfaceEvent
-    ) -> tuple[str, dict[str, Any]] | None: ...
-
-    # (message, reply_metadata) for unresolved senders; None → default signup prompt.
-
-    def linked_sender_confirmation(
-        self, event: ParsedInboundSurfaceEvent
-    ) -> tuple[str, dict[str, Any]] | None: ...
-
-    # Non-None → send this reply instead of starting a chat (identity-link events).
-
-
 class ColdEmailThread(BaseModel):
     """What a cold-opened email thread leaves behind, so the reply can find it.
 
@@ -340,7 +224,8 @@ class ColdEmailThread(BaseModel):
     external_channel_id: str | None = None
     external_message_id: str | None = None
     # A serialized ParsedInboundSurfaceEvent. Stored as ``link.last_event``
-    # because ``_resolve_egress_target`` refuses to send on a link whose last
+    # because ``SurfaceDelivery.resolve_egress_target`` refuses to send on a
+    # link whose last
     # event is missing or unparseable — without it the agent's own next message
     # in this conversation would quietly go nowhere.
     last_event: dict[str, Any] = {}

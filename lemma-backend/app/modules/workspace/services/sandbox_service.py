@@ -35,6 +35,7 @@ from sandbox_runtime.errors import (
     SandboxRejected,
     SandboxUnavailable,
 )
+from app.modules.workspace.services.sandbox_progress import clear_phase, record_phase
 from app.modules.workspace.domain.sandbox import (
     DEFAULT_SLUG,
     Sandbox,
@@ -43,7 +44,6 @@ from app.modules.workspace.domain.sandbox import (
     SandboxInstanceState,
     SandboxKind,
     SandboxOwnerKind,
-    capabilities_for,
 )
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.providers import naming
@@ -57,6 +57,10 @@ from app.modules.workspace.providers.base import (
     resumes_stopped_instances,
 )
 from app.modules.workspace.providers.profiles import profile_for, profile_is_stale
+from app.modules.workspace.services.sandbox_addressing import (
+    SandboxAddressingMixin,
+)
+from app.modules.workspace.services.sandbox_sizing import plan_size_for
 from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
 
 logger = get_logger(__name__)
@@ -72,7 +76,7 @@ _CLAIM_TIMEOUT_SECONDS = 180.0
 _ENSURE_REUSE_SECONDS = 5.0
 
 
-class SandboxService(SandboxVolumeMixin):
+class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
     """Owns the sandbox state machine. One instance per unit-of-work factory."""
 
     # Keyed by (event loop, sandbox id). A herd of tool calls arriving together
@@ -157,7 +161,6 @@ class SandboxService(SandboxVolumeMixin):
             storage_generation=sandbox.storage_generation,
         )
 
-    # ------------------------------------------------------------------
     # Ensure
     # ------------------------------------------------------------------
 
@@ -226,11 +229,15 @@ class SandboxService(SandboxVolumeMixin):
         attempt = 0
         while True:
             try:
-                return await self._attempt_ensure(sandbox_id, deadline_at=deadline_at)
+                handle = await self._attempt_ensure(sandbox_id, deadline_at=deadline_at)
+                if attempt:
+                    await clear_phase(sandbox_id)
+                return handle
             except SandboxUnavailable as exc:
                 remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
                 if remaining <= 0:
-                    raise
+                    raise  # The phase expires by itself.
+                await record_phase(sandbox_id, str(exc))
                 # The provider's hint is a floor, not the whole answer: backing
                 # off further stops a herd of waiting callers from retrying in
                 # lockstep and re-triggering the same limit.
@@ -240,11 +247,8 @@ class SandboxService(SandboxVolumeMixin):
                     "workspace.sandbox_service.ensure_retrying",
                     sandbox_id=str(sandbox_id),
                     attempt=attempt,
-                    # Why, not just how many times. Without this a sandbox that
-                    # never comes up produces dozens of identical lines and no
-                    # indication of the cause -- the caller sees only "endpoint
-                    # was not ready before the deadline", and the one process
-                    # that knew the reason threw it away.
+                    # Why, not just how many times: the caller only ever sees
+                    # "not ready before the deadline".
                     reason=str(exc) or type(exc).__name__,
                     retry_after_ms=exc.retry_after_ms,
                 )
@@ -394,6 +398,7 @@ class SandboxService(SandboxVolumeMixin):
                 else sandbox.epoch
             )
             profile = profile_for(sandbox.kind)
+            size = await plan_size_for(uow, sandbox)
             # Record what this sandbox is actually being built from, every
             # time. Writing it only once would freeze the row at whatever was
             # configured on first provision, and the staleness check above
@@ -429,6 +434,7 @@ class SandboxService(SandboxVolumeMixin):
             deadline_at=deadline_at,
             volume_name=volume_name,
             mounts=sandbox.mounts,
+            size=size,
         )
         try:
             created = await self._provider.create(spec)
@@ -551,6 +557,23 @@ class SandboxService(SandboxVolumeMixin):
     # Helpers
     # ------------------------------------------------------------------
 
+    async def touch(self, sandbox_id: UUID) -> None:
+        """Say this sandbox is still wanted, so the idle sweep leaves it alone.
+
+        Public because "in use" is not only "a tool call is running". Somebody
+        watching their browser, or part-way through signing in to a site, is
+        using it just as much -- and the sweep measures idleness from the last
+        time a caller *asked* for the sandbox, so a long look at a live page
+        counted as fifteen minutes of nothing.
+
+        What releasing costs has changed. Quiesce used to delete the browser
+        profile, so a person signing in slowly had the half-finished session
+        thrown away under them; it now removes only the lock files that name
+        a dead process. Being stopped part-way through is still worth
+        avoiding -- it is just no longer destructive.
+        """
+        await self._touch(sandbox_id)
+
     async def _touch(self, sandbox_id: UUID) -> None:
         async with self._uow_factory() as uow:
             await SandboxRepository(uow).touch(sandbox_id)
@@ -572,28 +595,6 @@ class SandboxService(SandboxVolumeMixin):
         async with self._uow_factory() as uow:
             await SandboxRepository(uow).mark_instance_error(instance_id, error)
             await uow.commit()
-
-    def _handle(
-        self,
-        sandbox: Sandbox,
-        instance: ProviderInstance,
-        *,
-        epoch: int | None = None,
-        storage_generation: int | None = None,
-    ) -> SandboxHandle:
-        return SandboxHandle(
-            sandbox_id=sandbox.id,
-            kind=sandbox.kind,
-            epoch=epoch if epoch is not None else sandbox.epoch,
-            provider=self._provider.name,
-            provider_id=instance.provider_id,
-            capabilities=capabilities_for(sandbox.kind),
-            storage_generation=(
-                storage_generation
-                if storage_generation is not None
-                else sandbox.storage_generation
-            ),
-        )
 
     async def close(self) -> None:
         await self._provider.close()

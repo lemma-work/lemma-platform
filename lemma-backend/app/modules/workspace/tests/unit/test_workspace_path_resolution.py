@@ -13,8 +13,11 @@ It affected every method on the manager, not just the one where it was noticed.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
@@ -25,7 +28,7 @@ def _manager(cwd: str) -> WorkspaceFileManager:
 
 
 CWD = "conversations/01a01397-f051-7303-a4ef-a4ae8781f49a"
-ROOT = f"/workspace/{CWD}"
+ROOT = f"{WORKSPACE_ROOT}/{CWD}"
 
 
 @pytest.mark.parametrize(
@@ -45,8 +48,8 @@ def test_both_spellings_of_one_path_resolve_to_it(given, expected):
 def test_an_absolute_path_is_not_joined_onto_the_root_twice():
     """The exact shape of the bug, named so a regression is unmistakable."""
     resolved = _manager(CWD)._workspace_path(f"{ROOT}/probe.wav")
-    assert "workspace/conversations" in resolved
-    assert resolved.count("/workspace/") == 1
+    assert "conversations" in resolved
+    assert resolved.count(f"{WORKSPACE_ROOT}/") == 1
     assert CWD in resolved
     assert resolved.count(CWD) == 1
 
@@ -58,7 +61,7 @@ def test_another_conversations_path_is_refused_not_quietly_re_homed():
     path naming somebody else's conversation was turned into one naming the
     caller's and read from there. Refusing is the point of the guard.
     """
-    other = "/workspace/conversations/00000000-0000-0000-0000-000000000000/secret.txt"
+    other = f"{WORKSPACE_ROOT}/conversations/00000000-0000-0000-0000-000000000000/secret.txt"
     with pytest.raises(ValueError, match="escapes its configured root"):
         _manager(CWD)._workspace_path(other)
 
@@ -70,6 +73,34 @@ def test_traversal_is_still_refused():
 
 def test_a_rootless_session_still_resolves_both_forms():
     manager = _manager("")
-    assert manager._workspace_path("a.txt") == "/workspace/a.txt"
-    assert manager._workspace_path("/workspace/a.txt") == "/workspace/a.txt"
-    assert manager._workspace_path("/workspace") == "/workspace"
+    assert manager._workspace_path("a.txt") == f"{WORKSPACE_ROOT}/a.txt"
+    assert (
+        manager._workspace_path(f"{WORKSPACE_ROOT}/a.txt") == f"{WORKSPACE_ROOT}/a.txt"
+    )
+    assert manager._workspace_path(WORKSPACE_ROOT) == WORKSPACE_ROOT
+
+
+def test_a_workspace_is_rooted_at_the_project_root():
+    manager = WorkspaceFileManager(uuid4(), cwd=f"{WORKSPACE_ROOT}/c/x")
+
+    assert manager._workspace_path("f.txt") == f"{WORKSPACE_ROOT}/c/x/f.txt"
+
+
+def test_a_path_in_the_home_but_outside_the_project_root_is_refused():
+    """The home is browsable and durable; it is not this session's directory.
+
+    `/home/user/.npm` is a real path the runtime serves, so it reaches the
+    already-rooted branch rather than being joined on -- and is then compared
+    against the caller's own directory, which is what refuses it. Without that
+    comparison it would be read as if it belonged to the conversation.
+    """
+    manager = WorkspaceFileManager(uuid4(), cwd=f"{WORKSPACE_ROOT}/c/x")
+
+    with pytest.raises(ValueError, match="escapes its configured root"):
+        manager._workspace_path(f"{HOME_ROOT}/.npm/secret")
+
+
+def test_a_cwd_under_no_workspace_root_is_refused():
+    for cwd in ("/tmp/elsewhere", "/etc"):
+        with pytest.raises(ValueError, match="must be relative"):
+            WorkspaceFileManager(uuid4(), cwd=cwd)

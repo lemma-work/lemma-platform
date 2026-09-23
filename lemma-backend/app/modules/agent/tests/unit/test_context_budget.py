@@ -258,3 +258,74 @@ class TestDiscoveryReadsTheWindowFromTheProvider:
         (model,) = self._parse({"data": [{"id": "m", "context_length": "lots"}]})
 
         assert model.context_window is None
+
+
+def test_the_window_leaves_the_model_room_to_answer_in():
+    """The gap above the ceiling was reserved for the reply and never spent.
+
+    Everything before the reply is held under the hard ceiling, so what is left
+    of the window is what the answer may use. Deriving it rather than picking a
+    number keeps the two halves of one window from being set independently and
+    drifting into a sum larger than the window.
+    """
+    budget = context_budget_for(None)
+
+    assert budget.reply_token_budget == budget.window - budget.hard_token_ceiling
+    assert budget.hard_token_ceiling + budget.reply_token_budget == budget.window
+    assert budget.reply_token_budget > 0
+
+
+def test_a_ceiling_at_the_window_leaves_nothing_and_says_so():
+    """Rather than a negative budget, which would be sent as a max_tokens."""
+    budget = ContextBudget(
+        window=1000, summarization_token_limit=800, hard_token_ceiling=1000
+    )
+
+    assert budget.reply_token_budget == 0
+
+
+def test_the_reply_budget_is_sent_as_max_tokens():
+    """Nothing set `max_tokens`, so every request used the provider default.
+
+    On a model that thinks before answering that is fatal rather than merely
+    untidy: thinking tokens are output tokens, a small default is spent on them
+    before any content exists, and a length-stopped response with no actionable
+    part ends the run. A trace of 19 model calls and 18 tool calls died exactly
+    that way, with nothing to show for the work.
+    """
+    from app.modules.agent.services.agent_runner_service import _with_reply_budget
+
+    budget = context_budget_for(None)
+
+    assert _with_reply_budget(None, budget) == {"max_tokens": budget.reply_token_budget}
+    assert _with_reply_budget({"temperature": 0.2}, budget) == {
+        "temperature": 0.2,
+        "max_tokens": budget.reply_token_budget,
+    }
+
+
+def test_an_operator_who_set_max_tokens_keeps_it():
+    """They know something about their model that a fraction of a window does
+    not, and a default that overrode them would be unfixable from config."""
+    from app.modules.agent.services.agent_runner_service import _with_reply_budget
+
+    settings = {"max_tokens": 512}
+
+    assert _with_reply_budget(settings, context_budget_for(None)) == settings
+
+
+def test_an_explicit_zero_is_a_choice_and_is_kept():
+    """A truthiness check treated `max_tokens: 0` as unset and replaced it.
+
+    Zero is a value somebody typed. A provider rejecting it tells them so;
+    substituting a number they did not choose leaves them looking at a setting
+    that silently did nothing. Absent and null are the two that mean unset.
+    """
+    from app.modules.agent.services.agent_runner_service import _with_reply_budget
+
+    budget = context_budget_for(None)
+
+    assert _with_reply_budget({"max_tokens": 0}, budget) == {"max_tokens": 0}
+    assert _with_reply_budget({"max_tokens": None}, budget) == {
+        "max_tokens": budget.reply_token_budget
+    }

@@ -51,15 +51,15 @@ pub struct BridgeConfig {
 
 impl BridgeConfig {
     pub fn discover() -> io::Result<Self> {
-        let capability_file = std::env::var_os("LEMMA_GUEST_CAPABILITY_FILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| local_root().join("guest.capability"));
+        let capability_file = required_path(
+            "LEMMA_GUEST_CAPABILITY_FILE",
+            std::env::var_os("LEMMA_GUEST_CAPABILITY_FILE"),
+        )?;
         #[cfg(unix)]
-        let transport = Transport::Unix(
-            std::env::var_os("LEMMA_GUEST_CONTROL_SOCKET")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| local_root().join("guest.sock")),
-        );
+        let transport = Transport::Unix(required_path(
+            "LEMMA_GUEST_CONTROL_SOCKET",
+            std::env::var_os("LEMMA_GUEST_CONTROL_SOCKET"),
+        )?);
         #[cfg(windows)]
         let transport = Transport::Wsl {
             executable: std::env::var_os("LEMMA_WSL_BIN")
@@ -72,6 +72,34 @@ impl BridgeConfig {
             transport,
         })
     }
+}
+
+/// A path the bridge must be told, never one it works out for itself.
+///
+/// The runtime manager decides where these live, under its state root; a
+/// default here could only be a second, drifting copy of that decision. locald
+/// always sets both, and anyone running the bridge by hand is told which
+/// variable to set.
+fn required_path(variable: &str, configured: Option<std::ffi::OsString>) -> io::Result<PathBuf> {
+    match configured {
+        Some(value) if !value.is_empty() => Ok(PathBuf::from(value)),
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{variable} is empty"),
+        )),
+        None => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "{variable} is not set; lemma-locald sets it for the backend, and a \
+                 bridge run by hand must be given the path explicitly"
+            ),
+        )),
+    }
+}
+
+/// The same error, now saying which file it was about.
+fn at_path(path: &Path, what: &str, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{what} {}: {error}", path.display()))
 }
 
 /// Which private distribution this bridge addresses.
@@ -186,15 +214,20 @@ fn read_capability(path: &Path) -> io::Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let metadata = fs::symlink_metadata(path)?;
+        let metadata =
+            fs::symlink_metadata(path).map_err(|error| at_path(path, "guest capability", error))?;
         if !metadata.file_type().is_file() || metadata.mode() & 0o077 != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "guest capability must be a private regular file",
+                format!(
+                    "guest capability {} must be a private regular file",
+                    path.display()
+                ),
             ));
         }
     }
-    let value = fs::read_to_string(path)?;
+    let value =
+        fs::read_to_string(path).map_err(|error| at_path(path, "guest capability", error))?;
     let value = value.trim();
     if value.len() < 32 || value.len() > 512 {
         return Err(io::Error::new(
@@ -209,7 +242,8 @@ fn read_capability(path: &Path) -> io::Result<String> {
 fn exchange(transport: &Transport, request: &[u8]) -> io::Result<Vec<u8>> {
     use std::os::unix::net::UnixStream;
     let Transport::Unix(path) = transport;
-    let mut stream = UnixStream::connect(path)?;
+    let mut stream =
+        UnixStream::connect(path).map_err(|error| at_path(path, "guest control socket", error))?;
     // A first-run core.ensure may pull several multi-architecture images on a
     // slow connection. Keep the exchange bounded without treating a normal
     // cold install as a failed guest.
@@ -279,26 +313,6 @@ fn exchange(transport: &Transport, request: &[u8]) -> io::Result<Vec<u8>> {
         )));
     }
     Ok(output.stdout)
-}
-
-fn local_root() -> PathBuf {
-    if let Some(root) = std::env::var_os("LEMMA_LOCALD_ROOT") {
-        return PathBuf::from(root);
-    }
-    #[cfg(unix)]
-    {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".lemma/local/run")
-    }
-    #[cfg(windows)]
-    {
-        std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("Lemma/runtime")
-    }
 }
 
 // The bridge speaks to the guest over a unix socket on macOS and over
@@ -443,6 +457,72 @@ mod tests {
         assert_eq!(
             wsl_distribution(Some(std::ffi::OsString::from("LemmaRuntime-dev"))).unwrap(),
             "LemmaRuntime-dev"
+        );
+    }
+
+    /// The fallback these replaced never matched where the runtime manager
+    /// keeps the files, so it only ever produced a bare ENOENT.
+    #[test]
+    fn an_unset_path_is_refused_by_name_rather_than_guessed() {
+        let error = required_path("LEMMA_GUEST_CONTROL_SOCKET", None)
+            .expect_err("there is no correct default");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            error.to_string().contains("LEMMA_GUEST_CONTROL_SOCKET"),
+            "the error says which variable to set: {error}"
+        );
+        let error = required_path("LEMMA_GUEST_CAPABILITY_FILE", Some("".into()))
+            .expect_err("an empty path names nothing");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            required_path(
+                "LEMMA_GUEST_CAPABILITY_FILE",
+                Some("/x/guest.capability".into())
+            )
+            .unwrap(),
+            PathBuf::from("/x/guest.capability")
+        );
+    }
+
+    #[test]
+    fn a_missing_socket_or_capability_is_reported_with_its_path() {
+        let root = tempdir().unwrap();
+        let socket = root.path().join("nobody-listening.sock");
+        let config = BridgeConfig {
+            capability_file: capability(root.path()),
+            transport: Transport::Unix(socket.clone()),
+        };
+        let error = request(
+            b"{\"version\":1,\"operation\":\"health\",\"parameters\":{}}\n".as_slice(),
+            Vec::new(),
+            &config,
+        )
+        .expect_err("nothing is listening");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::NotFound,
+            "the kind survives: {error}"
+        );
+        assert!(
+            error.to_string().contains(&socket.display().to_string()),
+            "the error names the socket it tried: {error}"
+        );
+
+        let missing = root.path().join("absent.capability");
+        let config = BridgeConfig {
+            capability_file: missing.clone(),
+            transport: Transport::Unix(socket),
+        };
+        let error = request(
+            b"{\"version\":1,\"operation\":\"health\",\"parameters\":{}}\n".as_slice(),
+            Vec::new(),
+            &config,
+        )
+        .expect_err("there is no capability");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            error.to_string().contains(&missing.display().to_string()),
+            "the error names the capability file it tried: {error}"
         );
     }
 }

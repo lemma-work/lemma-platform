@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import re
 from datetime import datetime
 from typing import Any, Optional, Sequence
 from uuid import UUID
@@ -15,6 +14,7 @@ from app.modules.datastore.domain.errors import (
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileUpdateEntity,
+    DatastoreSignedLinkEntity,
     SearchMethod,
 )
 from app.modules.datastore.domain.ports import (
@@ -30,13 +30,13 @@ from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.files.authorizer import FileAuthorizer
 from app.modules.datastore.services.files.lookup import FileLookup
 from app.modules.datastore.services.files.path_resolver import PathResolver
-from app.modules.datastore.services.files.projection import (
-    FileProjection,
-    datastore_storage_key,
-)
+from app.modules.datastore.services.files.projection import FileProjection
 from app.modules.datastore.services.files.file_url import build_file_url
-from app.modules.datastore.services.files.signed_url import get_signed_url_store
-from app.modules.datastore.infrastructure.storage_paths import is_child_page_artifact
+from app.modules.datastore.services.files.signed_links import SignedLinks
+from app.modules.datastore.infrastructure.storage_paths import (
+    child_page_number,
+    is_child_page_artifact,
+)
 from app.modules.datastore.services.files.reader import FileReader
 from app.modules.datastore.services.files.renderer import FilePageRenderer, RenderedPage
 from app.modules.datastore.services.files.searcher import FileSearcher
@@ -47,14 +47,6 @@ from app.modules.datastore.services.files.transaction_facade import (
     FileTransactionFacade,
 )
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
-
-
-_CHILD_PAGE_RE = re.compile(r"page_(\d+)\.jpg$")
-
-
-def _child_page_number(artifact_rel: str) -> int | None:
-    match = _CHILD_PAGE_RE.search(artifact_rel)
-    return int(match.group(1)) if match else None
 
 
 class DatastoreFileService(FileTransactionFacade):
@@ -147,6 +139,7 @@ class DatastoreFileService(FileTransactionFacade):
         self._projection = projection
         self._lookup = lookup
         self._reader = reader
+        self.signed_links = SignedLinks(reader, file_repository)
         self._searcher = searcher
         self._tree = tree
         self._writer = writer
@@ -441,7 +434,7 @@ class DatastoreFileService(FileTransactionFacade):
         read from the manifest-backed child container. Touches only storage/CPU —
         **no DB session** — so it is safe to call after the resolving UoW closed."""
         if is_child_page_artifact(artifact_rel):
-            page_number = _child_page_number(artifact_rel)
+            page_number = child_page_number(artifact_rel)
             if page_number is None:
                 raise DatastoreValidationError("Invalid page artifact reference")
             pages = await self._renderer.render_pages_for_entity(
@@ -561,7 +554,10 @@ class DatastoreFileService(FileTransactionFacade):
         if entity.is_folder:
             raise DatastoreValidationError("Folders do not have a downloadable URL")
         url, expires_at = await build_file_url(
-            self.storage, entity, expires_seconds=expires_seconds
+            self.storage,
+            entity,
+            expires_seconds=expires_seconds,
+            session=getattr(self.file_repository, "session", None),
         )
         return entity, url, expires_at
 
@@ -573,28 +569,28 @@ class DatastoreFileService(FileTransactionFacade):
         expires_seconds: int | None = None,
         max_hits: int | None = None,
     ) -> tuple[DatastoreFileEntity, str, datetime, int]:
-        """Mint a public, hit-capped short signed URL for a pod file.
-
-        The returned ``{api_url}/s/{code}`` link needs no auth to open, expires
-        after ``expires_seconds`` (clamped to the configured ceiling), and serves
-        the bytes at most ``max_hits`` times (also clamped). Authorization to
-        create one mirrors a normal file read.
-        """
-        entity = await self._reader.get_file_by_path(pod_id, path, ctx.user_id, ctx=ctx)
-        if entity.is_folder:
-            raise DatastoreValidationError("Folders do not have a downloadable URL")
-        object_key = datastore_storage_key(entity)
-        (
-            _code,
-            signed_url,
-            expires_at,
-            effective_max_hits,
-        ) = await get_signed_url_store().create(
-            object_key=object_key,
-            pod_id=entity.pod_id,
-            path=entity.path,
-            content_sha256=entity.content_sha256,
-            expires_seconds=expires_seconds,
-            max_hits=max_hits,
+        return await self.signed_links.create(
+            pod_id, path, ctx, expires_seconds=expires_seconds, max_hits=max_hits
         )
-        return entity, signed_url, expires_at, effective_max_hits
+
+    async def list_signed_urls(
+        self,
+        pod_id: UUID,
+        ctx: Context,
+        *,
+        include_dead: bool = False,
+        limit: int = 100,
+        before: datetime | None = None,
+        before_id: UUID | None = None,
+    ) -> list[DatastoreSignedLinkEntity]:
+        return await self.signed_links.list(
+            pod_id,
+            ctx,
+            include_dead=include_dead,
+            limit=limit,
+            before=before,
+            before_id=before_id,
+        )
+
+    async def revoke_signed_url(self, pod_id: UUID, code: str, ctx: Context) -> bool:
+        return await self.signed_links.revoke(pod_id, code, ctx)

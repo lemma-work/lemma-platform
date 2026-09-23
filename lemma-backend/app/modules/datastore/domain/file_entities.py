@@ -176,6 +176,35 @@ class DatastoreFileEntity(AggregateRoot):
         self.status = FileStatus.FAILED_PERMANENT
         self.last_processing_error = error
 
+    def mark_moved(self, actor_id: UUID | None = None) -> None:
+        """Announce a path change without claiming the content changed.
+
+        A rename has always emitted ``DatastoreFileUpdatedEvent``, but only as a
+        side effect of ``mark_content_updated`` on every descendant -- which
+        also set them PENDING, and that is what re-extracted a whole folder's
+        worth of documents to produce artifacts identical to the ones it had.
+
+        The event still matters, and for a reason unrelated to indexing: it is
+        what drops the cached memory brief, and that cache clears by pod (or by
+        owner) prefix, so **one** event covers a renamed subtree -- the hundreds
+        that used to follow it were each clearing what the first one had.
+
+        Touching no column is what makes this safe to send: the reindex consumer
+        enqueues only a PENDING row, so a file that is merely somewhere else is
+        offered to the queue and declined.
+        """
+        from app.modules.datastore.domain.events import DatastoreFileUpdatedEvent
+
+        self.add_event(
+            DatastoreFileUpdatedEvent(
+                file_id=self.id,
+                pod_id=self.pod_id,
+                actor_id=actor_id,
+                path=self.path,
+                metadata=self.metadata or {},
+            )
+        )
+
     def mark_deleted(self, actor_id: UUID | None = None) -> None:
         from app.modules.datastore.domain.events import DatastoreFileDeletedEvent
 
@@ -212,3 +241,46 @@ class DatastoreFileSearchResult(BaseModel):
     # page annotation was added.
     page_number: int | None = None
     page_end: int | None = None
+
+
+class DatastoreSignedLinkEntity(BaseModel):
+    """A public short link to one file, as the durable record knows it.
+
+    Deliberately not an ``AggregateRoot``: a link has no behaviour and emits no
+    events. It is a row that says "this code, until this instant, resolves to
+    these bytes" — plus the two things the serving route cannot look up for
+    itself, because it runs unauthenticated with no pod context.
+    """
+
+    id: UUID
+    code: str
+    pod_id: UUID
+    created_by_user_id: UUID | None = None
+    path: str
+    object_key: str
+    content_type: str
+    filename: str
+    content_sha256: str | None = None
+    size_bytes: int = 0
+    max_hits: int
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    exhausted_at: datetime | None = None
+    created_at: datetime | None = None
+
+    @property
+    def is_live(self) -> bool:
+        """Whether this link still resolves.
+
+        Redis owns how much budget is *left*; the row owns the three ways a
+        link stops resolving for good. Exhaustion is among them because the
+        serving path rehydrates from this row whenever Redis has nothing — and
+        spending the budget is precisely when the key gets dropped, so without
+        it the very next fetch would mint a fresh budget and serve again.
+        """
+        if self.revoked_at is not None or self.exhausted_at is not None:
+            return False
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return expires_at > datetime.now(timezone.utc)

@@ -9,13 +9,29 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.app_release_list_response import AppReleaseListResponse
 from ...models.error_response import ErrorResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     pod_id: UUID,
     app_name: str,
+    *,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
+
+    params: dict[str, Any] = {}
+
+    params["limit"] = limit
+
+    json_page_token: None | str | Unset
+    if isinstance(page_token, Unset):
+        json_page_token = UNSET
+    else:
+        json_page_token = page_token
+    params["page_token"] = json_page_token
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "get",
@@ -23,6 +39,7 @@ def _get_kwargs(
             pod_id=quote(str(pod_id), safe=""),
             app_name=quote(str(app_name), safe=""),
         ),
+        "params": params,
     }
 
     return _kwargs
@@ -63,12 +80,17 @@ def sync_detailed(
     app_name: str,
     *,
     client: AuthenticatedClient | Client,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> Response[AppReleaseListResponse | ErrorResponse]:
     """List App Releases
 
     Args:
         pod_id (UUID):
         app_name (str):
+        limit (int | Unset): Max releases to return, up to 200. Page beyond that with
+            `page_token`. Default: 50.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -81,6 +103,8 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         app_name=app_name,
+        limit=limit,
+        page_token=page_token,
     )
 
     response = client.get_httpx_client().request(
@@ -95,12 +119,17 @@ def sync(
     app_name: str,
     *,
     client: AuthenticatedClient | Client,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> AppReleaseListResponse | ErrorResponse | None:
     """List App Releases
 
     Args:
         pod_id (UUID):
         app_name (str):
+        limit (int | Unset): Max releases to return, up to 200. Page beyond that with
+            `page_token`. Default: 50.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -114,6 +143,8 @@ def sync(
         pod_id=pod_id,
         app_name=app_name,
         client=client,
+        limit=limit,
+        page_token=page_token,
     ).parsed
 
 
@@ -122,12 +153,17 @@ async def asyncio_detailed(
     app_name: str,
     *,
     client: AuthenticatedClient | Client,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> Response[AppReleaseListResponse | ErrorResponse]:
     """List App Releases
 
     Args:
         pod_id (UUID):
         app_name (str):
+        limit (int | Unset): Max releases to return, up to 200. Page beyond that with
+            `page_token`. Default: 50.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -140,6 +176,8 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         app_name=app_name,
+        limit=limit,
+        page_token=page_token,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -152,12 +190,17 @@ async def asyncio(
     app_name: str,
     *,
     client: AuthenticatedClient | Client,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> AppReleaseListResponse | ErrorResponse | None:
     """List App Releases
 
     Args:
         pod_id (UUID):
         app_name (str):
+        limit (int | Unset): Max releases to return, up to 200. Page beyond that with
+            `page_token`. Default: 50.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -172,5 +215,7 @@ async def asyncio(
             pod_id=pod_id,
             app_name=app_name,
             client=client,
+            limit=limit,
+            page_token=page_token,
         )
     ).parsed

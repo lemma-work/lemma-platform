@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 import hashlib
 import json
 import shlex
@@ -10,12 +10,12 @@ import statistics
 import time
 from uuid import UUID, uuid4
 
-import anyio
 import httpx
+import httpx2
 import pytest
 from fastapi import status
 from mcp import ClientSession
-from mcp.client.streamable_http import StreamableHTTPTransport
+from mcp.client.streamable_http import streamable_http_client
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
@@ -51,6 +51,7 @@ from app.modules.workspace.services.workspace_sandbox_service import (
 )
 from app.modules.test_support.e2e.worker_process import production_worker_process
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 
 pytestmark = [
@@ -636,12 +637,55 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     assert pod_response.status_code == status.HTTP_201_CREATED, pod_response.text
     pod = pod_response.json()
 
+    # A real conversation, because the cwd assertion below is about where a
+    # sandbox actually runs and a fabricated id has no directory to run in.
+    #
+    # It used to build a context with `conversation_id=uuid4()` and no
+    # `workspace_cwd`, which is the "no conversation" case: `get_workspace_cwd`
+    # answers `WORKSPACE_ROOT` for it, deliberately and with a unit test of its
+    # own (`test_workspace_location.py`, which asserts `/conversations/` is
+    # *not* in the answer). So the assertion here was checking a shape the code
+    # had stopped producing, and the two tests contradicted each other -- this
+    # one only ever passed while conversations still lived at
+    # `conversations/{id}`.
+    #
+    # Every production dispatch path resolves the location and passes it
+    # (`run_context_builder`, `conversation_resume_return`,
+    # `conversation_mcp_service`, the Agent Host `dispatch`), so this is what a
+    # tool call actually carries. The sibling test that checks the same thing
+    # is `provider`-marked and the protected lane excludes it, which is how
+    # this went unnoticed.
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod['id']}/agents",
+        json={
+            "name": f"Workspace Tools Agent {uuid4().hex[:8]}",
+            "instruction": "You run workspace tools.",
+            "toolsets": ["WORKSPACE_CLI"],
+        },
+    )
+    assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+
+    create_conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": create_agent.json()["name"],
+            "title": "workspace cli tools acceptance",
+            "type": "CHAT",
+        },
+    )
+    assert create_conversation.status_code == status.HTTP_201_CREATED, (
+        create_conversation.text
+    )
+    conversation = create_conversation.json()
+    conversation_cwd = conversation["metadata"]["cwd"]
+
     ctx = BaseAgentContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),
-        conversation_id=uuid4(),
+        conversation_id=UUID(conversation["id"]),
         agent_name="workspace_tools_e2e",
+        workspace_cwd=conversation_cwd,
     )
 
     python_set = await execute_python_internal(
@@ -685,7 +729,12 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     )
     assert shell.success is True, shell.stdout or shell
     assert shell.completed is True
-    assert f"/workspace/conversations/{ctx.conversation_id}" in (shell.stdout or "")
+    # The directory the conversation's metadata names, which is what a tool
+    # call carries -- `{root}/c/{date}/{slug}`, not a directory named after the
+    # conversation id. That the sandbox honours it is provider behaviour, and
+    # is the whole reason this assertion is in a real-sandbox test.
+    assert conversation_cwd.startswith(f"{WORKSPACE_ROOT}/"), conversation_cwd
+    assert conversation_cwd in (shell.stdout or ""), shell.stdout
     assert f"pod={pod['id']}" in (shell.stdout or "")
     assert f"user={fixed_test_user['id']}" in (shell.stdout or "")
     if _SANDBOX_CAN_REACH_TEST_BACKEND:
@@ -765,47 +814,35 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
 
 @asynccontextmanager
 async def _mcp_client_session(url: str, token: str):
-    async with httpx.AsyncClient(
-        timeout=None,
-        headers={"Authorization": f"Bearer {token}"},
-    ) as http_client:
-        read_stream_writer, read_stream = anyio.create_memory_object_stream(0)
-        write_stream, write_stream_reader = anyio.create_memory_object_stream(0)
-        transport = StreamableHTTPTransport(url)
+    """A real MCP client against the conversation's streamable-HTTP endpoint.
 
-        async with anyio.create_task_group() as task_group:
-            try:
-                async with AsyncExitStack() as stack:
-                    stack.push_async_callback(read_stream.aclose)
-                    stack.push_async_callback(read_stream_writer.aclose)
-                    stack.push_async_callback(write_stream.aclose)
-                    stack.push_async_callback(write_stream_reader.aclose)
+    Through the library's own entry point, deliberately. This used to hand-wire
+    `StreamableHTTPTransport.post_writer` onto a pair of plain
+    `anyio.create_memory_object_stream` channels -- a copy of
+    `streamable_http_client`'s body, one version behind it. The SDK's internal
+    wiring is not a contract, and `mcp` 2.x changed it: the client now carries
+    the sender's `contextvars.Context` across those channels and reads it back
+    as `write_stream_reader.last_context`, which a plain memory stream does not
+    have. Every session died in `post_writer` with an `AttributeError` the
+    caller only ever saw as `MCPError(-32000, 'Connection closed')` out of
+    `initialize()`.
 
-                    def start_get_stream() -> None:
-                        task_group.start_soon(
-                            transport.handle_get_stream,
-                            http_client,
-                            read_stream_writer,
-                        )
-
-                    task_group.start_soon(
-                        transport.post_writer,
-                        http_client,
-                        write_stream_reader,
-                        read_stream_writer,
-                        write_stream,
-                        start_get_stream,
-                        task_group,
-                    )
-
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        yield session
-
-                    if transport.session_id:
-                        await transport.terminate_session(http_client)
-            finally:
-                task_group.cancel_scope.cancel()
+    Nothing is lost by asking the library instead: `streamable_http_client`
+    takes the authenticated client, which is the only reason to be down here.
+    """
+    async with (
+        httpx2.AsyncClient(
+            timeout=None,
+            headers={"Authorization": f"Bearer {token}"},
+        ) as http_client,
+        streamable_http_client(url, http_client=http_client) as (
+            read_stream,
+            write_stream,
+        ),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        await session.initialize()
+        yield session
 
 
 def _latency_summary(values: list[float]) -> dict[str, float]:

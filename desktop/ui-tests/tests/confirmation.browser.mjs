@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
+import { reportPolicyViolations, servedHeaders } from '../drivers/app-csp.mjs';
 let browser;
 before(async () => { browser = await chromium.launch({ channel: process.env.LEMMA_TEST_BROWSER_CHANNEL || undefined }); });
 after(async () => { await browser?.close(); });
@@ -9,10 +10,19 @@ async function prompt(t, overrides = {}) {
   const context = await browser.newContext({ viewport: { width: 650, height: 600 } });
   t.after(() => context.close());
   const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  reportPolicyViolations(page, errors);
+  t.after(() => assert.deepEqual(errors, []));
+  const types = { html: 'text/html', js: 'text/javascript', css: 'text/css' };
   await page.route('https://desktop.test/**', async (route) => {
     const name = new URL(route.request().url()).pathname.slice(1);
-    if (!['confirmation.html', 'confirmation.js'].includes(name)) return route.abort();
-    await route.fulfill({ body: await readFile(new URL(`../../ui/${name}`, import.meta.url)), contentType: name.endsWith('html') ? 'text/html' : 'text/javascript' });
+    if (!['confirmation.html', 'confirmation.js', 'confirmation.css'].includes(name)) return route.abort();
+    await route.fulfill({
+      body: await readFile(new URL(`../../ui/${name}`, import.meta.url)),
+      contentType: types[name.slice(name.lastIndexOf('.') + 1)],
+      headers: servedHeaders(name),
+    });
   });
   await page.addInitScript((overrides) => {
     window.__LEMMA_CONFIRMATION__ = { id: 'owned-operation', title: 'Erase local Lemma?', message: 'Permanently deletes local data.\nNo automatic backup.', confirmLabel: 'Erase Local Lemma', cancelable: true, ...overrides };

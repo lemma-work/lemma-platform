@@ -15,6 +15,7 @@ _CATEGORIES = (
     "outbox_dead_letter",
     "inbox_completed",
     "inbox_dead_letter",
+    "inbox_abandoned",
 )
 
 
@@ -57,7 +58,7 @@ _NOW = datetime(2026, 7, 10, tzinfo=timezone.utc)
 @pytest.mark.asyncio
 async def test_a_short_batch_ends_that_category() -> None:
     """The steady state: nothing to reclaim, so one statement per category."""
-    session_maker, sessions = _harness([1] * 4)
+    session_maker, sessions = _harness([1] * 5)
 
     deleted = await prune_event_delivery_records(
         session_maker,  # type: ignore[arg-type]
@@ -65,7 +66,7 @@ async def test_a_short_batch_ends_that_category() -> None:
     )
 
     assert deleted == dict.fromkeys(_CATEGORIES, 1)
-    assert len(sessions) == 4
+    assert len(sessions) == 5
     assert all(len(session.statements) == 1 for session in sessions)
 
 
@@ -81,7 +82,7 @@ async def test_a_backlog_larger_than_one_batch_drains_fully(monkeypatch) -> None
     """
     monkeypatch.setattr(event_transport_settings, "event_retention_batch_size", 10)
     # Three full batches then a short one, for the first category only.
-    session_maker, sessions = _harness([10, 10, 10, 4] + [0] * 3)
+    session_maker, sessions = _harness([10, 10, 10, 4] + [0] * 4)
 
     deleted = await prune_event_delivery_records(
         session_maker,  # type: ignore[arg-type]
@@ -91,7 +92,7 @@ async def test_a_backlog_larger_than_one_batch_drains_fully(monkeypatch) -> None
     assert deleted["outbox_published"] == 34
     assert all(deleted[name] == 0 for name in _CATEGORIES[1:])
     # Four transactions for the drained category, one each for the rest.
-    assert len(sessions) == 7
+    assert len(sessions) == 8
 
 
 @pytest.mark.asyncio
@@ -130,7 +131,7 @@ async def test_a_zero_budget_restores_one_batch_per_category(monkeypatch) -> Non
     monkeypatch.setattr(
         event_transport_settings, "event_retention_run_budget_seconds", 0.0
     )
-    session_maker, sessions = _harness([10] * 4)
+    session_maker, sessions = _harness([10] * 5)
 
     deleted = await prune_event_delivery_records(
         session_maker,  # type: ignore[arg-type]
@@ -138,4 +139,38 @@ async def test_a_zero_budget_restores_one_batch_per_category(monkeypatch) -> Non
     )
 
     assert deleted == dict.fromkeys(_CATEGORIES, 10)
-    assert len(sessions) == 4
+    assert len(sessions) == 5
+
+
+@pytest.mark.asyncio
+async def test_a_claim_nothing_ever_finished_is_still_swept() -> None:
+    """The leak that had no category, and so had no cutoff.
+
+    Every other filter keys off a completion timestamp -- ``published_at``,
+    ``completed_at``, ``dead_lettered_at``. A row abandoned mid-flight has none
+    of them, so it matched nothing and was never deleted: production held rows
+    in PROCESSING and RETRYING dating back to the table's own beginning.
+
+    Asserted on the compiled SQL rather than on a row count, because what broke
+    was which rows the statement *names* -- a count is satisfied by a delete
+    that sweeps the wrong set.
+    """
+    session_maker, sessions = _harness([0] * 5)
+
+    deleted = await prune_event_delivery_records(
+        session_maker,  # type: ignore[arg-type]
+        now=_NOW,
+    )
+
+    assert "inbox_abandoned" in deleted
+    sql = str(
+        sessions[-1].statements[0].compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "domain_event_inbox" in sql
+    # The two statuses that carry no completion timestamp of any kind.
+    assert "PROCESSING" in sql and "RETRYING" in sql
+    # Dated off the one clock every delivery stamps, so "has not moved since"
+    # covers both a dead worker's claim and a retry nothing redelivered.
+    assert "last_received_at" in sql
+    # Not swept on status alone: a claim made moments ago is in flight.
+    assert "2026-06-26" in sql  # _NOW minus the 14-day abandoned window

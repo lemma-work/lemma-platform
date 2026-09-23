@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
@@ -35,6 +37,13 @@ from app.modules.identity.infrastructure.models import (
     OrganizationInvitation,
     OrganizationMember,
     User,
+)
+from app.modules.identity.infrastructure.member_cap import (
+    lock_organization_seats,
+    refuse_if_organization_full,
+)
+from app.modules.identity.infrastructure.organization_cap import (
+    refuse_if_at_organization_limit,
 )
 
 
@@ -106,6 +115,25 @@ class OrganizationRepository(OrganizationRepositoryPort):
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
 
+    async def get_many(
+        self, ids: Iterable[UUID | None]
+    ) -> dict[UUID, OrganizationEntity]:
+        """Several organizations at once, keyed by id.
+
+        A listing labels every row with its organization's name, and every row
+        in one listing has the same organization -- so asking per row read the
+        same tenant a hundred times to print one string.
+        """
+        wanted = {id for id in ids if id is not None}
+        if not wanted:
+            return {}
+        result = await self.session.execute(
+            select(Organization).where(Organization.id.in_(wanted))
+        )
+        return {
+            instance.id: instance.to_entity() for instance in result.scalars().all()
+        }
+
     async def get_by_slug(self, slug: str) -> Optional[OrganizationEntity]:
         stmt = select(Organization).where(Organization.slug == slug)
         result = await self.session.execute(stmt)
@@ -173,6 +201,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def add_member(
         self, entity: OrganizationMemberEntity
     ) -> OrganizationMemberEntity:
+        await refuse_if_organization_full(self.uow, entity.organization_id)
         member = OrganizationMember(
             id=entity.id,
             user_id=entity.user_id,
@@ -262,6 +291,12 @@ class OrganizationRepository(OrganizationRepositoryPort):
 
         return [m.to_entity() for m in members], next_cursor
 
+    async def lock_seats(self, organization_id: UUID) -> None:
+        await lock_organization_seats(self.uow, organization_id)
+
+    async def refuse_if_at_organization_limit(self, user_id: UUID) -> None:
+        await refuse_if_at_organization_limit(self.uow, user_id)
+
     async def count_members(self, organization_id: UUID) -> int:
         result = await self.session.execute(
             select(func.count())
@@ -347,6 +382,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def add_invitation(
         self, entity: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:
+        await refuse_if_organization_full(self.uow, entity.organization_id)
         invitation = OrganizationInvitation(
             **entity.model_dump(
                 exclude={"organization_name", "pod_name", "pod_description"}

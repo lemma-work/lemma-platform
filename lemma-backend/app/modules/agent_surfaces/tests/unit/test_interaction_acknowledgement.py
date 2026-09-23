@@ -233,3 +233,86 @@ async def test_whatsapp_says_the_outcomes_a_tap_cannot_imply() -> None:
 async def test_whatsapp_stays_quiet_on_a_routine_confirmation(text: str) -> None:
     """No edit API here, so a confirmation costs a message that repeats their own tap."""
     assert await _whatsapp_ack(text=text, show_alert=False) == []
+
+
+async def test_whatsapp_answers_from_the_number_the_tap_arrived_on() -> None:
+    """A pool means the adapter's configured number is not necessarily theirs.
+
+    Everything else WhatsApp sends -- replies, progress, files -- prefers
+    `reply_target["phone_number_id"]`, the number the message came in on. The
+    interaction path had neither half: the parser never put it in the reply
+    target, so the acknowledgement had nothing to prefer and fell back to the
+    number this adapter happened to be built with.
+
+    With one number those were the same value. With a pool they are not, and a
+    person who tapped a button in their chat with number B was answered by
+    number A -- a stranger, in a thread they were not looking at, about
+    something they had just done somewhere else.
+
+    Driven through the parser rather than a hand-built reply target, because the
+    two halves are only worth anything together.
+    """
+    from app.modules.agent_surfaces.platforms.whatsapp.parser import (
+        WhatsAppMessageParser,
+    )
+    from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
+        WHATSAPP_INTERACTION_SEP,
+    )
+    from app.modules.agent_surfaces.platforms.whatsapp.service import (
+        WhatsAppPlatformService,
+    )
+
+    interaction = WhatsAppMessageParser().parse_interaction(
+        {
+            "entry": [
+                {
+                    "id": "waba-1",
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "arrived-on-b"},
+                                "messages": [
+                                    {
+                                        "id": "wamid.1",
+                                        "from": "4477",
+                                        "type": "interactive",
+                                        "interactive": {
+                                            "button_reply": {
+                                                "id": WHATSAPP_INTERACTION_SEP.join(
+                                                    ("cb-1", "confirm", "yes")
+                                                ),
+                                                "title": "Yes",
+                                            }
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert interaction is not None
+    assert interaction.reply_target["phone_number_id"] == "arrived-on-b"
+
+    service = WhatsAppPlatformService(
+        {"access_token": "token", "phone_number_id": "configured-a"}
+    )
+    calls: list[dict[str, Any]] = []
+    service._client.send_message_payload = AsyncMock(  # type: ignore[method-assign]
+        side_effect=lambda **kwargs: calls.append(kwargs)
+    )
+
+    await service.acknowledge_interaction(
+        interaction,
+        text="This action expired.",
+        show_alert=True,
+        clear_actions=True,
+    )
+
+    assert [call["phone_number_id"] for call in calls] == ["arrived-on-b"], (
+        "the acknowledgement went out from the deployment's number instead of "
+        "the one the person is actually talking to"
+    )

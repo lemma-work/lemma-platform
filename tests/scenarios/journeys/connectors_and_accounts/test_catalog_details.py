@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
@@ -186,6 +188,18 @@ async def test_connecting_needs_a_consent_flow(world, provider):
 @proves("PS-CONN-021")
 @covers("connector.oauth.callback")
 async def test_an_unknown_callback_is_refused(world):
+    """Refused, and the refusal is in the redirect rather than the body.
+
+    This asserted `status >= 400 or "error" in response.text` and had been red,
+    which is the worse half of the finding: the scenario said `covered` while
+    its proof failed. The callback answers a browser the way its contract says
+    it does -- 303 back into the app with the outcome in the query string -- so
+    there is no body to read and 303 is not >= 400. Nothing was wrong with the
+    product; the test was looking in the wrong place.
+
+    What the promise needs is that the callback is not *honoured*: no account is
+    connected, and the app is told it went wrong. Both are in the `Location`.
+    """
     anonymous = await world.new_person("anonymous", sign_up=False)
 
     response = await anonymous.api.call(
@@ -194,7 +208,18 @@ async def test_an_unknown_callback_is_refused(world):
         params={"state": "not-a-state-we-issued", "code": "whatever"},
     )
 
-    assert response.status_code >= 400 or "error" in response.text.lower(), (
+    if response.status_code >= 400:
+        # A JSON-shaped refusal is equally good, and is what `format=json` gets.
+        return
+
+    assert response.status_code == 303, (
         f"a callback we never started must not be honoured: "
         f"{response.status_code} {response.text[:200]}"
     )
+    outcome = parse_qs(urlsplit(response.headers.get("location", "")).query)
+    assert outcome.get("connect") == ["error"], (
+        f"the app must be told the callback failed, not handed a connection: "
+        f"{response.headers.get('location')!r}"
+    )
+    # And nothing was connected: a successful outcome carries the account.
+    assert "account" not in outcome, response.headers.get("location")

@@ -32,6 +32,7 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_int
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.timeout(600)]
 
@@ -103,14 +104,17 @@ async def test_a_workspace_keeps_its_files_across_a_release_and_resume(
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
     user_id = UUID(fixed_test_user["id"])
 
-    await _run(ctx, "mkdir -p /workspace/keep && echo durable > /workspace/keep/file")
+    await _run(
+        ctx,
+        f"mkdir -p {WORKSPACE_ROOT}/keep && echo durable > {WORKSPACE_ROOT}/keep/file",
+    )
 
     service = _sandbox_service()
     before = await service.get(user_id)
     assert before is not None
     await service.release(user_id)
 
-    read_back = await _run(ctx, "cat /workspace/keep/file")
+    read_back = await _run(ctx, f"cat {WORKSPACE_ROOT}/keep/file")
     assert "durable" in (read_back.stdout or ""), read_back
 
     after = await service.get(user_id)
@@ -118,6 +122,116 @@ async def test_a_workspace_keeps_its_files_across_a_release_and_resume(
     # The generation is the signal an agent reads as "your files are gone". A
     # release must never move it -- that is the difference between a resume and
     # a replacement, and the agent has no other way to tell them apart.
+    assert after.storage_generation == before.storage_generation
+
+
+#: A cookie set and read over CDP, inside the sandbox, with the interpreter
+#: the relay itself runs on. No website: `Storage.setCookies` does not need
+#: one, and standing up an origin would only add a way for this to fail for
+#: reasons that are not the thing under test.
+_COOKIE_OVER_CDP = r"""
+set -e
+PORT=$(head -1 /home/user/.lemma/browser/profile/DevToolsActivePort)
+PYTHONPATH=/app /opt/lemma-python/bin/python - "$PORT" "VERB" <<'PY'
+import asyncio, json, sys, urllib.request
+import websockets
+
+port, verb = sys.argv[1], sys.argv[2]
+version = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version"))
+
+
+async def main():
+    async with websockets.connect(version["webSocketDebuggerUrl"], max_size=None) as ws:
+        async def call(method, params=None):
+            await ws.send(json.dumps({"id": 1, "method": method, "params": params or {}}))
+            while True:
+                message = json.loads(await ws.recv())
+                if message.get("id") == 1:
+                    return message.get("result", {})
+
+        if verb == "set":
+            await call("Storage.setCookies", {"cookies": [{
+                "name": "lemma_durability",
+                "value": "survived",
+                "domain": "durability.example",
+                "path": "/",
+                "expires": 2 ** 31 - 1,
+            }]})
+            print("cookie set")
+        else:
+            found = [
+                c for c in (await call("Storage.getCookies")).get("cookies", [])
+                if c.get("name") == "lemma_durability"
+            ]
+            print("FOUND " + found[0]["value"] if found else "MISSING")
+
+
+asyncio.run(main())
+PY
+"""
+
+
+def _cookie_script(verb: str) -> str:
+    return _COOKIE_OVER_CDP.replace("VERB", verb)
+
+
+async def test_the_browser_profile_survives_a_release_and_resume(
+    local_sandbox_server,
+    backend_server,
+    configure_workspace_api_url,
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+) -> None:
+    """The headline claim of the durable profile, and the only thing that
+    proves it.
+
+    "Sign in once and the agent stays signed in" is the whole reason the
+    browser was given a profile on the persisted disk, and until now nothing
+    tested it across the event that actually happens. The sign-in e2e proves
+    a login survives *closing the browser*; the quiescer is unit-tested
+    against a fake. Neither touches a release -- which is what the idle sweep
+    does to every workspace a few minutes after its person stops typing. If
+    this broke, everybody would be signed out constantly and the suite would
+    stay green.
+
+    Two things have to hold together and either is easy to get wrong alone.
+    The profile has to live under `HOME_ROOT`, the disk a release keeps;
+    a path that merely looks as durable would lose it. And the browser has to
+    be *closed* before the release, because agent-browser copies its working
+    profile back to the configured one on a clean close and at no other time
+    -- measured, the durable `Cookies` file does not move while Chrome runs.
+    A release that stopped compute under a live browser would take the login
+    with it however durable the disk was.
+    """
+    del local_sandbox_server, backend_server, configure_workspace_api_url
+    ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
+    user_id = UUID(fixed_test_user["id"])
+
+    await _run(ctx, "lemma-ensure-display about:blank")
+    written = await _run(ctx, _cookie_script("set"))
+    assert "cookie set" in (written.stdout or ""), written
+    # `close --all`, because it is the only stop that writes the profile
+    # back. The product's own release path takes this step too, so asserting
+    # the disk without it would be testing a claim nothing relies on.
+    await _run(ctx, "agent-browser close --all >/dev/null 2>&1 || true")
+
+    service = _sandbox_service()
+    before = await service.get(user_id)
+    assert before is not None
+    await service.release(user_id)
+
+    # The next command resumes it. A fresh browser on the same disk: if the
+    # profile came back, so did the cookie.
+    await _run(ctx, "lemma-ensure-display about:blank")
+    read_back = await _run(ctx, _cookie_script("get"))
+    assert "FOUND survived" in (read_back.stdout or ""), read_back
+
+    after = await service.get(user_id)
+    assert after is not None
+    # Same disk, not a new one. A moved generation would mean the cookie
+    # above came from a replacement that happened to be built the same way
+    # -- the test would pass while the property was gone.
     assert after.storage_generation == before.storage_generation
 
 
@@ -143,7 +257,7 @@ async def test_the_orphan_sweep_leaves_a_live_workspace_and_its_files_alone(
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
     user_id = UUID(fixed_test_user["id"])
 
-    await _run(ctx, "echo swept-but-alive > /workspace/sentinel")
+    await _run(ctx, f"echo swept-but-alive > {WORKSPACE_ROOT}/sentinel")
 
     service = _sandbox_service()
     uow_factory = SessionUnitOfWorkFactory(db_manager.session_factory)
@@ -154,7 +268,7 @@ async def test_the_orphan_sweep_leaves_a_live_workspace_and_its_files_alone(
 
     assert await sweeper.reclaim_orphans() == ()
 
-    survived = await _run(ctx, "cat /workspace/sentinel")
+    survived = await _run(ctx, f"cat {WORKSPACE_ROOT}/sentinel")
     assert "swept-but-alive" in (survived.stdout or ""), survived
     after = await service.get(user_id)
     assert after is not None
@@ -177,7 +291,7 @@ async def test_the_orphan_sweep_leaves_a_live_workspace_and_its_files_alone(
     finally:
         sweeper_module.SandboxRepository = original  # type: ignore[assignment]
 
-    still_there = await _run(ctx, "cat /workspace/sentinel")
+    still_there = await _run(ctx, f"cat {WORKSPACE_ROOT}/sentinel")
     assert "swept-but-alive" in (still_there.stdout or ""), still_there
 
 

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.modules.function.infrastructure.repositories import _expired_run_error
+from app.modules.function.infrastructure.run_repository import _expired_run_error
 
 pytestmark = pytest.mark.unit
 

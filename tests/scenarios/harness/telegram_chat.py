@@ -294,6 +294,24 @@ class ForgedChat(Chat):
         )
         return stranger
 
+    def as_another_person(self, handle: str) -> ForgedChat:
+        """The same bot, messaged by a different Lemma user from their own chat.
+
+        Not a stranger: somebody with an account and an `@username` Lemma can
+        resolve, who simply has no business in this pod. Only a forged delivery
+        can arrange that — a Telegram account belongs to one person
+        deployment-wide, so a real one cannot be the member and the outsider in
+        the same run, and the live lane has exactly one account which is already
+        the member.
+
+        Its own chat id, clear of the member's and of `as_a_stranger`'s, because
+        what the bot says to one of them must never be read as something it said
+        to another.
+        """
+        return ForgedChat(
+            self._alice, self._view, handle=handle, chat_id=self.chat_id + 700
+        )
+
     def in_another_chat(self) -> ForgedChat:
         """The same sender, in a different conversation.
 

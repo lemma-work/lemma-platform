@@ -143,7 +143,7 @@ Read what the task needs:
 - `references/functions.md` — code contract, in-function SDK (`Pod.from_env()`), grants, testing.
 - `references/agents.md` — agent JSON, toolsets, instructions, agents/functions as tools (sub-agents), runtime profiles, testing.
 - `references/workflows.md` — every node type, expressions, human-in-the-loop patterns, run debugging.
-- `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; connector kinds (`package`/`composio`/`http`/`sql`/`mcp`); delegated execution.
+- `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; connector kinds (`composio`/`http`/`sql`/`mcp`); custom connectors from an OpenAPI spec, MCP server or database; delegated execution.
 - `references/schedules-and-triggers.md` — TIME/DATASTORE/WEBHOOK triggers, event payloads, LLM event filtering.
 - `references/surfaces.md` — exposing one pod agent on Slack/Teams/Telegram/WhatsApp/email (Gmail/Outlook are connectors, not surfaces).
 - `references/apps.md` — app architecture, SDK/auth/data wiring, scaffold/dev/deploy, and components. Pair it with `lemma-app-design` for UX/visual direction and `lemma-app-qa` for systematic release testing.

@@ -48,10 +48,38 @@ jobs:
         # Matches what actually ships: lemma-backend/Dockerfile and every
         # other backend workflow sync `--extra local`.
         run: uv sync --extra local
+      # Two clauses have come out of this filter, both because what they select
+      # cannot report a defect from here. Every release gate reads this run, so
+      # a red that is not a defect costs a Desktop release and a nightly DMG.
+      #
+      # `local_cli` names tests needing a locally built agent CLI -- pytest.ini
+      # says so, and says "each dedicated lane supplies its binaries". This lane
+      # supplies none: it installs no Rust toolchain and never runs
+      # `cargo build -p lemma-agent-host`, so all fourteen tests in
+      # `test_agent_host_process_e2e.py` asserted "Build lemma-agent-host first"
+      # on every run from 2026-09-08, when #631 gave that file the marker. Seven
+      # of them also want a built TypeScript SDK, a Playwright browser and a CORS
+      # override. CI's `Desktop contracts` job builds all of that and runs the
+      # same fourteen -- `make desktop-agent-host-e2e` and
+      # `make desktop-agent-host-browser-e2e` between them -- on every pull
+      # request touching `lemma-backend/**`. Building it again here would add
+      # twenty minutes to a release gate to repeat a merge gate.
+      #
+      # `not benchmark` is the function-execution benchmark, whose budgets are
+      # wall-clock p95s on a shared runner: it failed on 2026-09-09 with
+      # "platform overhead p95 3.502s exceeds 2.000s" and passed on 2026-09-10,
+      # with one deleted dead line in `sandbox_runtime/function/runner.py` the
+      # only change to function execution between the two runs. So the number
+      # moved and the code did not. `sandbox-function-benchmark.yml` runs it
+      # nightly
+      # at the timeout and provider settings it was written for, keeps the
+      # report, and is one of the workflows notify-failure.yml watches. A
+      # latency budget belongs in the lane that trends it, not in the one that
+      # decides whether a build may be cut.
       - name: Run protected suite
         run: >-
           uv run pytest
-          -m "e2e and (slow or workspace or indexing or local_cli or protected) and not provider"
+          -m "e2e and (slow or workspace or indexing or protected) and not provider and not benchmark"
           --junitxml=protected-e2e.xml
           -o timeout=300
         env:

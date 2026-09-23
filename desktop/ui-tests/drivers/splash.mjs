@@ -9,6 +9,7 @@
 // by the move; everything new is opt-in.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { reportPolicyViolations, servedHeaders } from './app-csp.mjs';
 
 // What the app itself serves, so the harness cannot pass on an asset the app
 // would refuse or refuse one the app serves. Tauri derives the type from the
@@ -70,6 +71,7 @@ export async function launchSplash(browser, t, {
   if (requests) page.on('request', request => requests.push(request.url()));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  reportPolicyViolations(page, errors);
   t.after(() => assert.deepEqual(errors, []));
   const assets = new URL('../../ui/', import.meta.url);
   await page.route('https://desktop.test/**', async route => {
@@ -89,7 +91,7 @@ export async function launchSplash(browser, t, {
       throw new Error(`${error.message} (requested by the page under test)`);
     }
     try {
-      await route.fulfill({ body: await readFile(file), contentType });
+      await route.fulfill({ body: await readFile(file), contentType, headers: servedHeaders(name) });
     } catch {
       await route.abort();
     }

@@ -54,11 +54,34 @@ def test_no_model_facing_text_teaches_an_empty_chars_argument(path: Path):
         )
 
 
-def test_omitting_chars_is_the_documented_way_to_poll():
-    """The replacement is present, so the guidance was rewritten rather than
-    merely deleted -- an agent still has to learn how to poll."""
+def test_waiting_is_the_documented_way_to_wait_for_a_process():
+    """The replacement is present, so the guidance was rewritten, not deleted.
+
+    An agent that is told not to poll and not told what to do instead invents
+    something, and what it invents is `sleep` in a shell.
+    """
     prompt = (_PROMPTS / "workspace_cli.md").read_text(encoding="utf-8")
-    assert 'manage_process(action="input", process_id="<id>")' in prompt
+    assert "wait_for(" in prompt
+    assert "process_id" in prompt
+
+
+@pytest.mark.parametrize("path", _MODEL_FACING, ids=lambda p: p.name)
+def test_no_model_facing_text_teaches_a_poll_loop(path: Path):
+    """Waiting by repetition is what `wait_for` exists to replace.
+
+    Before it existed, a large share of all tool time went on waiting the agent
+    could not block on -- `sleep` in a shell, or a poll that returned on its own
+    short deadline however long it asked for, so a slow build absorbed a long
+    run of polls that each said nothing. The tool is only half the fix; text
+    that still teaches the loop is the other half, and nothing but this test
+    would notice it coming back.
+    """
+    text = path.read_text(encoding="utf-8").lower()
+    for needle in ("keep polling", "poll it with", "poll that process", "poll again"):
+        assert needle not in text, (
+            f"{path.name} still teaches a poll loop ({needle!r}). Point at "
+            "`wait_for` instead: it ends the turn and resumes on the event."
+        )
 
 
 def test_an_omitted_chars_still_polls_rather_than_writing_stdin():
@@ -78,8 +101,8 @@ def test_the_agent_host_prompt_teaches_both_ways_of_waiting():
 
     They used to return `interaction_fallback: true` and the prompt said so.
     Then `ask_user`/`request_approval` learned to hold their MCP response open
-    while a person decides, and `snooze` learned to end the turn and be woken --
-    two different contracts, neither of them a fallback. A prompt still
+    while a person decides, and `wait_for` learned to end the turn and be woken
+    -- two different contracts, neither of them a fallback. A prompt still
     describing the old refusal is worse than one saying nothing: an agent that
     believes asking is unavailable will not ask.
     """
@@ -87,7 +110,7 @@ def test_the_agent_host_prompt_teaches_both_ways_of_waiting():
 
     prompt = load_agent_host_runtime_prompt()
 
-    for tool in ("ask_user", "request_approval", "snooze"):
+    for tool in ("ask_user", "request_approval", "wait_for"):
         assert tool in prompt, f"{tool} works here and goes unmentioned"
     # Nothing may still describe them as refusing, or as unable to pause. Both
     # sentences were true once and are now the opposite of the behaviour.
@@ -95,5 +118,5 @@ def test_the_agent_host_prompt_teaches_both_ways_of_waiting():
     assert "cannot suspend a turn" not in prompt
     # The two contracts are different in the one way that changes what the agent
     # should do, so the prompt has to distinguish them.
-    assert "keep you in this turn" in prompt
-    assert "ends this turn" in prompt
+    assert "pause this turn until the person answers" in prompt
+    assert "ends the turn and resumes later" in prompt

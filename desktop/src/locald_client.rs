@@ -11,7 +11,7 @@ const LOCALD_WRITE_BACKLOG: usize = 256;
 pub(crate) fn install_locald_connection(app: &AppHandle, connection: LocaldConnection) {
     let shell: State<Shell> = app.state();
     let (sender, outbound) = mpsc::sync_channel::<String>(LOCALD_WRITE_BACKLOG);
-    *shell.locald_writer.lock().unwrap() = Some(sender);
+    *shell.locald_writer.lock_or_recover() = Some(sender);
     // The one thread that touches the socket, so a write that blocks blocks
     // only itself. It ends when the sender is dropped, which is what
     // `locald_gone` does.
@@ -67,7 +67,7 @@ pub(crate) fn install_locald_connection(app: &AppHandle, connection: LocaldConne
 /// act on rather than a wait it cannot escape.
 pub(crate) fn send_to_locald(app: &AppHandle, message: Value) -> Result<(), String> {
     let shell: State<Shell> = app.state();
-    let guard = shell.locald_writer.lock().unwrap();
+    let guard = shell.locald_writer.lock_or_recover();
     let writer = guard.as_ref().ok_or("lemma-locald is not connected")?;
     writer
         .try_send(message.to_string())
@@ -105,13 +105,13 @@ pub(crate) fn send_local_operation(
 ) -> Result<(), String> {
     {
         let shell: State<Shell> = app.state();
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         reserve_ui_operation(&mut ui, request["cmd"].as_str().unwrap_or_default(), &id)?;
     }
     request["id"] = Value::String(id.clone());
     if let Err(error) = send_to_locald(app, request) {
         let shell: State<Shell> = app.state();
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         if ui.active_operation_id == id {
             ui.active_operation_id.clear();
         }
@@ -122,9 +122,9 @@ pub(crate) fn send_local_operation(
 
 pub(crate) fn locald_gone(app: &AppHandle) {
     let shell: State<Shell> = app.state();
-    *shell.locald_writer.lock().unwrap() = None;
+    *shell.locald_writer.lock_or_recover() = None;
     let snapshot = {
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         if ui.running {
             ui.status = "Local service manager disconnected".into();
             ui.error = true;
@@ -176,7 +176,7 @@ pub(crate) fn agent_host_request(app: &AppHandle, command: Value) -> Result<(), 
     let response = locald_request(command, Duration::from_secs(190))?;
     if let Some(status) = response.get("agent_host").filter(|value| value.is_object()) {
         let shell: State<Shell> = app.state();
-        *shell.agent_host_status.lock().unwrap() = Some(status.clone());
+        *shell.agent_host_status.lock_or_recover() = Some(status.clone());
         refresh_agent_host_tray(app, status);
     }
     Ok(())

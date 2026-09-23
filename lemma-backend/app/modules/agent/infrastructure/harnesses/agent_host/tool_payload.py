@@ -15,6 +15,7 @@ Arguments are deliberately exempt: see :func:`unbounded_tool_value`.
 from __future__ import annotations
 
 import json
+import shlex
 
 from app.modules.agent.domain.value_objects import JsonObject, JsonValue
 from app.modules.agent.infrastructure.mcp import normalize_local_mcp_tool_name
@@ -63,17 +64,28 @@ def _reported_tool_name(payload: JsonObject) -> str:
     kind = payload.get("kind")
     if isinstance(kind, str) and kind.strip():
         normalized = kind.strip().lower()
-        if normalized == "execute":
-            return "exec_command"
         # "other" is the ACP kind for everything an adapter has no category
         # for — every MCP tool included. It names nothing, so the title (which
         # for those calls *is* the tool name) is the better answer.
         if normalized != "other":
-            return normalized
+            return _KIND_NAMES.get(normalized, normalized)
     title = payload.get("title")
     if isinstance(title, str) and title.strip():
         return title.strip()
     return "tool"
+
+
+#: ACP's categories, in the names Lemma's own tools use -- every label, icon and
+#: card is keyed on the name, so a host agent's read renders as a read.
+_KIND_NAMES = {
+    "execute": "exec_command",
+    "read": "read_file",
+    "edit": "edit_file",
+    "delete": "delete_file",
+    "move": "move_file",
+    "search": "grep",
+    "fetch": "web_fetch",
+}
 
 
 def _meta_tool_name(meta: object) -> str | None:
@@ -111,13 +123,151 @@ def raw_tool_args(payload: JsonObject) -> object:
 
 def tool_args(payload: JsonObject, tool_name: str) -> JsonValue:
     value = raw_tool_args(payload)
-    if tool_name == "exec_command" and isinstance(value, dict):
-        normalized = dict(value)
-        command = normalized.pop("command", None)
-        if "cmd" not in normalized and isinstance(command, str):
-            normalized["cmd"] = command
-        value = normalized
+    if tool_name == "exec_command":
+        value = _command_args(value, payload)
+    elif tool_name in _FILE_TOOLS:
+        value = _file_args(value, payload)
     return unbounded_tool_value(value)
+
+
+#: Tools whose card is labelled by the file they touched.
+_FILE_TOOLS = frozenset({"read_file", "edit_file", "delete_file", "move_file"})
+
+#: Shells whose `-c` script is the command a person would recognise.
+_SHELLS = frozenset(
+    {"bash", "sh", "zsh", "/bin/bash", "/bin/sh", "/bin/zsh", "/usr/bin/bash"}
+)
+
+
+def _command_args(value: object, payload: JsonObject) -> object:
+    """A command, as the text a terminal card shows: `cmd` is a string.
+
+    Adapters send `command` as argv -- Codex's is `["bash", "-lc", "pwd"]` --
+    and the card only reads a string, so every such call rendered as a bare
+    "Terminal command". A shell's `-c` script is the command; any other argv is
+    joined as it would be typed. An adapter that sends no command at all still
+    titles the call with it, so the title is the last resort.
+    """
+    arguments = dict(value) if isinstance(value, dict) else {}
+    command = arguments.pop("command", None)
+    if "cmd" not in arguments:
+        text = _command_text(command)
+        if text is None:
+            title = payload.get("title")
+            text = title.strip().strip("`").strip() if isinstance(title, str) else None
+        if text:
+            arguments["cmd"] = text
+    elif command is not None:
+        arguments["command"] = command
+    return arguments if arguments or value is not None else value
+
+
+def _command_text(command: object) -> str | None:
+    if isinstance(command, str):
+        return command.strip() or None
+    if not isinstance(command, list) or not all(
+        isinstance(part, str) for part in command
+    ):
+        return None
+    if (
+        len(command) >= 3
+        and command[0] in _SHELLS
+        and command[1] in ("-c", "-lc", "-lic", "-ic")
+    ):
+        return command[2].strip() or None
+    return shlex.join(command) or None
+
+
+def _file_args(value: object, payload: JsonObject) -> object:
+    """A file tool's arguments, with its path where the card looks for one.
+
+    ACP reports the files a call touched in `locations`, which adapters fill even
+    when their own arguments name the file differently or not at all.
+    """
+    arguments = dict(value) if isinstance(value, dict) else {}
+    if not any(
+        key in arguments for key in ("file_path", "path", "filepath", "target_file")
+    ):
+        locations = payload.get("locations")
+        if isinstance(locations, list):
+            for location in locations:
+                path = location.get("path") if isinstance(location, dict) else None
+                if isinstance(path, str) and path:
+                    arguments["file_path"] = path
+                    break
+    return arguments if arguments or value is not None else value
+
+
+def tool_result(tool_name: str, status: str, payload: JsonObject) -> JsonValue:
+    """What a finished call returned, in the shape Lemma's own tools return.
+
+    A terminal card reads `exit_code`, `stdout` and `stderr`. A failure keeps
+    its output: replacing the result with `{"success": false}` is what left a
+    failed command showing only the word "failed", when what a person needed
+    was the error the command printed.
+    """
+    raw = first_present(payload, "result", "rawOutput")
+    if tool_name == "exec_command":
+        result: JsonObject = _command_result(raw, payload)
+    else:
+        unwrapped = bounded_tool_value(unwrap_mcp_content(raw))
+        if status == "COMPLETED":
+            return unwrapped
+        result = {"output": unwrapped} if unwrapped not in (None, "", {}, []) else {}
+    if status != "COMPLETED":
+        result["success"] = False
+        result["error"] = _failure_sentence(status, payload, result)
+    return result
+
+
+def _command_result(raw: object, payload: JsonObject) -> JsonObject:
+    fields = raw if isinstance(raw, dict) else {}
+    result: JsonObject = {}
+    exit_code = first_present(fields, "exit_code", "exitCode")
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+        result["exit_code"] = exit_code
+    stdout = first_present(
+        fields, "stdout", "aggregated_output", "formatted_output", "output"
+    )
+    if not isinstance(stdout, str):
+        stdout = raw if isinstance(raw, str) else _content_text(payload)
+    if stdout:
+        result["stdout"] = bounded_tool_value(stdout)
+    stderr = fields.get("stderr")
+    if isinstance(stderr, str) and stderr:
+        result["stderr"] = bounded_tool_value(stderr)
+    if not result and raw not in (None, "", {}, []):
+        # A shape none of the above names: keep it rather than lose the output.
+        result["output"] = bounded_tool_value(unwrap_mcp_content(raw))
+    return result
+
+
+def _content_text(payload: JsonObject) -> str:
+    """Text an adapter reported as ACP `content` blocks rather than `rawOutput`."""
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        block = item.get("content") if isinstance(item, dict) else None
+        text = block.get("text") if isinstance(block, dict) else None
+        if isinstance(text, str):
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _failure_sentence(status: str, payload: JsonObject, result: JsonObject) -> str:
+    error = payload.get("error")
+    if isinstance(error, str) and error.strip():
+        return error.strip()
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        return error["message"]
+    exit_code = result.get("exit_code")
+    if isinstance(exit_code, int):
+        return f"exited with code {exit_code}"
+    return {"DENIED": "not allowed", "CANCELLED": "cancelled"}.get(
+        status, status.lower()
+    )
 
 
 def unbounded_tool_value(value: object) -> JsonValue:

@@ -25,7 +25,7 @@ async fn persisted_conversation_cwd_reaches_the_native_session_and_checkpoint() 
         PermissionAnswer::Deny,
     )
     .await;
-    control.set_workspace_cwd("/workspace/c/2026-09-07/Δ project");
+    control.set_workspace_cwd("/home/user/lemma/c/2026-09-07/Δ project");
     let host = HostProcess::start(directory.path(), &control, &shims).await;
     control
         .wait_for(
@@ -69,7 +69,7 @@ async fn invalid_conversation_cwd_fails_without_dispatching_a_prompt() {
         PermissionAnswer::Deny,
     )
     .await;
-    control.set_workspace_cwd("/workspace/../../escape");
+    control.set_workspace_cwd("/home/user/lemma/../../escape");
     let host = HostProcess::start(directory.path(), &control, &shims).await;
     control
         .wait_for(

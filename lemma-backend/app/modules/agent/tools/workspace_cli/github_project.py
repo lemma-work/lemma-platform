@@ -1,7 +1,7 @@
 """Put a conversation's project on disk before the agent looks for it.
 
 A conversation started against a repo (``metadata.repo``) resolves its cwd to
-``/workspace/repos/{owner}/{repo}``. The directory itself always exists -- every
+``<workspace root>/repos/{owner}/{repo}``. The directory itself always exists -- every
 ``get_session`` calls ``_ensure_workspace_directory`` -- so without this step the
 agent would open a project and find an empty folder, which is precisely the
 ambiguity ``WORKSPACE_RECREATED_NOTICE`` exists to prevent elsewhere.

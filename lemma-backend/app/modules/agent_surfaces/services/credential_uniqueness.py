@@ -1,23 +1,39 @@
-"""Write-side enforcement of "one surface may claim a credential" rules.
+"""Write-side enforcement of the surface uniqueness rules.
 
 A connected account, and the Lemma-managed identity for a platform, are each
 claimable once per organization. ``available_surfaces_builder`` reads the same
 rule to disable an option before the user picks it; this module is what refuses
 the write when two pods race for the identity anyway.
 
+And one agent reaches a platform in one place. That one is a database
+constraint as well, so what this adds is a refusal a person can read instead of
+an IntegrityError that arrives too late to do anything with.
+
+One rule is wider than the rest, because the thing it protects is. A bot the
+platform delivers to -- a Slack app in a workspace -- answers for exactly one
+surface *everywhere*, since the platform routes to the bot and has never heard
+of our organizations.
+
 Kept beside the service rather than inside it: these are pure policy over the
 repository, with no surface state, no runtime, and no side effects — and the
 service is already the largest file in the module.
+
+`warn_if_tied_on_one_bot` is the read side of the last rule and lives here for
+that reason. A write-side refusal cannot reach rows written before it existed,
+so routing reports the collisions it still meets; keeping both halves in one
+file is what stops the reporting and the refusing drifting apart.
 """
 
 from __future__ import annotations
 
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceCredentialMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceAgentPlatformConflictError,
     AgentSurfaceCredentialConflictError,
     AgentSurfaceValidationError,
 )
@@ -25,8 +41,10 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
-    get_platform_capabilities,
+    system_credential_claim_applies,
 )
+
+logger = get_logger(__name__)
 
 
 async def ensure_unique_org_credential_binding(
@@ -59,6 +77,23 @@ async def ensure_unique_org_credential_binding(
     if surface.credential_mode is not SurfaceCredentialMode.SYSTEM:
         return
 
+    # WhatsApp and Telegram were exempt here, on the grounds that shared-bot
+    # routing authorizes the sender and the personal pod separately. The
+    # exemption covered the two platforms whose system credential is most
+    # plainly an identity -- one number, one bot -- and so made the branch below
+    # unreachable for exactly the cases it was written for. With two
+    # organizations each holding the shared number, an inbound message has no
+    # predictable answer to "whose", which is the thing worth refusing.
+    #
+    # `onboarding_workspace._ensure_shared_surface` writes through
+    # `SurfaceRepository.create` and does not come through here. That bypass is
+    # deliberate and stays for now: every personal pod needs its own system
+    # surface for routing to reach it, so "once per organization" applied there
+    # would refuse the second person in a domain-join organization a workspace
+    # at all. One organization per number is a rule for pool allocation, which
+    # is where the pool will be. What this binds is the API and bundle paths --
+    # the ones somebody drives on purpose.
+
     # Only when the system credential *is* an identity. One Slack app, one
     # Telegram bot, one WhatsApp number: inbound arrives keyed on that identity
     # and nothing else, so a second pod claiming it would receive the first
@@ -71,8 +106,19 @@ async def ensure_unique_org_credential_binding(
     # created in an organization silently blocked every mailbox after it,
     # including further agents in the same pod, since this query does not
     # exclude the surface's own pod either.
-    capabilities = get_platform_capabilities(surface.surface_type.value)
-    if capabilities is not None and not capabilities.system_credential_is_identity:
+    #
+    # WhatsApp fails it *conditionally*, which is why the identity this surface
+    # holds is part of the question. A surface holding a pooled number has its
+    # own identity and `uq_agent_org_whatsapp_number` keeps it exclusive. A
+    # surface holding none — every WhatsApp surface in a deployment that owns no
+    # pool — is on the single number in settings, and that index is partial on
+    # `surface_identity_id IS NOT NULL`, so it does not constrain it. Exempting
+    # those too left the shared number claimable by every pod in an
+    # organization, with nothing at all to say otherwise.
+    if not system_credential_claim_applies(
+        surface.surface_type.value,
+        holds_own_identity=bool(surface.surface_identity_id),
+    ):
         return
 
     conflict = await surface_repository.get_system_credential_conflict_in_org(
@@ -89,6 +135,110 @@ async def ensure_unique_org_credential_binding(
             surface_name=conflict.name,
             kind="SYSTEM",
         )
+
+
+async def ensure_unique_platform_identity(
+    surface: AgentSurfaceEntity,
+    *,
+    surface_repository: SurfaceInstallationRepositoryPort,
+) -> None:
+    """Refuse a surface that would answer as a bot another surface already is.
+
+    `PS-SURF-001` already states it: "a surface shall answer as exactly one
+    agent... where a person wants a second agent reachable on a platform, the
+    system shall let them make that agent its own bot rather than sharing one."
+    This is the half that was never enforced.
+
+    `ensure_unique_org_credential_binding` cannot enforce it, because it
+    compares ``account_id`` -- a row in *our* database. Connected accounts are
+    per person (``accounts.user_id`` is in the unique key), so two colleagues
+    installing the same Slack app into the same workspace get two account rows
+    with different ids and one bot behind them. Nothing about that is a
+    credential conflict; it is two pods claiming one identity, and inbound
+    cannot tell them apart: the webhook is grouped by app id, both surfaces land
+    in ``receiver_surface_ids``, both pass ``allows_inbound_event``, and routing
+    settles it on creation order. The colleague who set theirs up second gets a
+    surface that reads ACTIVE and never receives a message.
+
+    Keyed on what the platform actually delivers to -- which workspace, and
+    which bot in it -- rather than on a platform name. That is why there is no
+    branch here: a surface recording both is one the platform routes by
+    identity, and today Slack is the only one whose binding resolves both
+    (`SurfaceAccountBindingResolver`). Telegram and WhatsApp record neither and
+    are covered by their own account-level rule; Teams records a tenant but no
+    bot, because its bot is the deployment's. A platform added later that
+    records both gets this rule for free, which is the intent.
+
+    Missing fields are not a wildcard. A surface that never recorded who its bot
+    is cannot be compared against one that did, so it is left alone rather than
+    treated as matching everything -- the same reading `routing_surfaces` takes
+    of a NULL workspace, and the opposite of `matches_tenant`, which answers a
+    different question.
+    """
+    workspace_id = str(surface.external_workspace_id or "").strip()
+    bot_identity = str(surface.surface_identity_id or "").strip()
+    if not workspace_id or not bot_identity:
+        return
+
+    holder = await surface_repository.get_platform_identity_holder(
+        pod_id=surface.pod_id,
+        platform=surface.surface_type.value,
+        external_workspace_id=workspace_id,
+        surface_identity_id=bot_identity,
+        exclude_surface_id=surface.id,
+    )
+    if holder is None:
+        return
+
+    platform_name = surface.surface_type.value.title()
+    if holder.same_org:
+        raise AgentSurfaceCredentialConflictError(
+            f"This {platform_name} bot already answers for another surface in "
+            "this organization. Delete that surface, or add a second bot, so "
+            "each agent has an identity of its own.",
+            pod_id=holder.surface.pod_id,
+            surface_name=holder.surface.name,
+            kind="IDENTITY",
+        )
+    # Another organization holds it. Naming their pod would tell this caller
+    # something about a tenant they have no relationship with, so the refusal
+    # says what is wrong and nothing about who.
+    raise AgentSurfaceValidationError(
+        f"This {platform_name} bot is already connected to Lemma elsewhere. A "
+        "bot answers for one surface, so this one needs an app of its own in "
+        f"the {platform_name} workspace."
+    )
+
+
+async def ensure_one_surface_per_agent(
+    surface: AgentSurfaceEntity,
+    *,
+    surface_repository: SurfaceInstallationRepositoryPort,
+) -> None:
+    """An agent reaches a platform in exactly one place.
+
+    One Slack app, one WhatsApp number, one Telegram bot. The WhatsApp numbers
+    come from a pool and each surface takes one, so an agent quietly holding two
+    is an agent holding two of a scarce thing -- which is why the rule is broad
+    rather than limited to the system-credential case.
+
+    Scoped to the agent's own pod because a surface's ``pod_id`` is its agent's:
+    the column is a routing scope, not a second owner.
+    """
+    existing, _ = await surface_repository.list_by_pod(
+        surface.pod_id,
+        platform=surface.surface_type.value,
+        agent_id=surface.agent_id,
+        match_agent=True,
+    )
+    conflict = next((item for item in existing if item.id != surface.id), None)
+    if conflict is None:
+        return
+    raise AgentSurfaceAgentPlatformConflictError(
+        platform=surface.surface_type.value,
+        pod_id=conflict.pod_id,
+        surface_name=conflict.name,
+    )
 
 
 async def ensure_unique_telegram_account(
@@ -111,4 +261,44 @@ async def ensure_unique_telegram_account(
     if existing is not None:
         raise AgentSurfaceValidationError(
             "Telegram account is already connected to another surface"
+        )
+
+
+def warn_if_tied_on_one_bot(
+    member_candidates: list[AgentSurfaceEntity], *, platform: str
+) -> None:
+    """Report a tie `ensure_unique_platform_identity` would now have prevented.
+
+    Reaching the tiebreak is ordinary for a shared Lemma bot: one Telegram bot
+    or WhatsApp number legitimately serves several pods, and `PS-SURF-023`
+    promises each person is routed to the right one. It is *not* ordinary for
+    surfaces bound to connected accounts naming one bot in one workspace --
+    that pair cannot be created any more, so a tie here is a row from before the
+    rule existed, and creation order is deciding whose agent answers.
+
+    A warning rather than a refusal: the message is real and somebody is waiting
+    on it, and half-answering it would be worse than answering it from the older
+    pod. This is how the rows that need cleaning up become findable, since a
+    write-side rule cannot reach the ones already written.
+    """
+    if len(member_candidates) < 2:
+        return
+    by_identity: dict[tuple[str, str], list[AgentSurfaceEntity]] = {}
+    for surface in member_candidates:
+        if surface.account_id is None:
+            continue
+        if not surface.external_workspace_id or not surface.surface_identity_id:
+            continue
+        key = (str(surface.external_workspace_id), str(surface.surface_identity_id))
+        by_identity.setdefault(key, []).append(surface)
+    for (workspace_id, bot_identity), surfaces in by_identity.items():
+        if len(surfaces) < 2:
+            continue
+        logger.warning(
+            "agent_surfaces.credential_uniqueness.several_surfaces_share_one_bot.degraded",
+            platform=platform,
+            external_workspace_id=workspace_id,
+            surface_identity_id=bot_identity,
+            surface_ids=[str(surface.id) for surface in surfaces],
+            answered_by=str(surfaces[0].id),
         )

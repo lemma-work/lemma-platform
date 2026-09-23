@@ -12,6 +12,19 @@ EMAIL_PASSWORD_SIGN_IN_METHOD = "email and password"
 GOOGLE_SIGN_IN_METHOD = "Google"
 
 
+def has_passwordless_login_method(users: list[User], email: str) -> bool:
+    email = normalize_identity_email(email)
+    return any(
+        method.recipe_id == "passwordless" and method.has_same_email_as(email)
+        for user in users
+        for method in user.login_methods
+    )
+
+
+def get_passwordless_conflict_reason() -> str:
+    return "This email uses email-code login. Choose Continue with email code."
+
+
 async def list_users_by_email(
     *,
     tenant_id: str,

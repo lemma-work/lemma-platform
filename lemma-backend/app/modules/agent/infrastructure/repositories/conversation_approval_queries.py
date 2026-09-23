@@ -211,7 +211,7 @@ class ConversationApprovalQueriesMixin:
 
         A call counts as answered once it has *either* a recorded approval
         decision or a persisted tool return. Approvals write the decision first
-        and the return second, so the decision is what unblocks them; a snooze
+        and the return second, so the decision is what unblocks them; a wait
         has no decision at all and is answered purely by its return. The union
         lets one query serve both without either knowing about the other.
 

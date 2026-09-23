@@ -27,6 +27,7 @@ under a busier test session).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -35,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -95,10 +96,10 @@ async def test_resend_webhook_ignores_unmatched_address(
     fails closed rather than guessing a destination. The Svix signature is valid;
     only the destination is unknown."""
     monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     envelope = _raw_resend_envelope(
         sender_email=fixed_test_user["email"],
-        to_address="pod-nonexistent@ops.asur.work",
+        to_address="pod-nonexistent@ops.lemma.work",
         message_id="resend-raw-unmatched-1",
         text="Is anyone there?",
         subject="Surface Resend Raw E2E",
@@ -122,10 +123,10 @@ async def test_resend_webhook_rejects_invalid_signature(
     """An inbound envelope with a bad/absent Svix signature is rejected (401)
     before any address routing — proves inbound is authenticated."""
     monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     envelope = _raw_resend_envelope(
         sender_email="attacker@evil.test",
-        to_address="pod-anything@ops.asur.work",
+        to_address="pod-anything@ops.lemma.work",
         message_id="resend-forged-1",
         text="Forged inbound",
         subject="Forged",
@@ -156,7 +157,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
     monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,
@@ -180,7 +181,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
         assistant_address = surface_model.surface_identity_email
     assert assistant_address
     # Minted per agent by `email_surface_provisioning`, not a fixed constant.
-    assert assistant_address.endswith("@ops.asur.work")
+    assert assistant_address.endswith("@ops.lemma.work")
 
     envelope = _raw_resend_envelope(
         sender_email=fixed_test_user["email"],
@@ -250,7 +251,7 @@ async def test_a_spoofed_sender_gets_neither_the_members_identity_nor_a_reply(
     still the guarantee; silence is how it is kept without writing to a
     stranger.
     """
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,
@@ -276,7 +277,7 @@ async def test_a_spoofed_sender_gets_neither_the_members_identity_nor_a_reply(
 
     victim = fixed_test_user["email"]
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
+    handler = build_surface_ingress(uow)
     context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(
             source="resend",
@@ -369,6 +370,199 @@ async def test_connecting_email_returns_the_address_the_agent_already_has(
         ).scalars()
     )
     assert len(after) == 1, f"the agent ended up with {len(after)} mailboxes"
+
+
+async def test_a_named_mailbox_for_an_agent_that_has_one_is_refused(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    pod_with_a_mailbox,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The API's answer to a named connect, which is not the applier's.
+
+    Deliberately narrow, and the narrowness was learned the hard way: an earlier
+    version of this claimed to be "the same request the applier makes", and it is
+    not. `surface_apply` looks for an existing surface *by name* before it
+    creates anything; the controller does not. The bundle path is covered by
+    `test_what_the_bundle_applier_does_with_an_email_surface`, which drives the
+    applier itself.
+
+    What this pins is the controller: `agent_id` is `NOT NULL` and
+    `uq_agent_surface_agent_type` is unique on `(agent_id, surface_type)`, so an
+    agent holds at most one Resend surface and every agent is given one when it
+    is created. A named `POST /surfaces` therefore always loses, *including* when
+    the name it asks for is the one the mailbox already has -- there is no
+    lookup in front of it to notice. Named rather than unnamed is the whole
+    difference from the test above.
+    """
+    from app.modules.agent_surfaces.tests.e2e.helpers import (
+        _create_agent,
+    )
+
+    pod_id = pod_with_a_mailbox["id"]
+    agent = await _create_agent(authenticated_client, pod_id)
+    await db_session.commit()
+
+    held = list(
+        (
+            await db_session.execute(
+                _select_agent_resend_surfaces(pod_id, agent_id=agent["id"])
+            )
+        ).scalars()
+    )
+    assert len(held) == 1, f"an agent should be created holding one mailbox: {held}"
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={
+            "platform": "RESEND",
+            "name": "support",
+            "config": {},
+            "default_agent_name": agent["name"],
+        },
+    )
+
+    assert response.status_code == 409, (
+        "a bundle naming its own mailbox is refused by the one-surface-per-agent "
+        f"rule; if this ever stops being a 409, DEV-SURF-003 needs rewriting: "
+        f"{response.status_code} {response.text}"
+    )
+    body = response.json()
+    assert body["code"] == "AGENT_SURFACE_AGENT_PLATFORM_CONFLICT", body
+    # And it says the one thing the person needs: the name the mailbox has.
+    # "Pick another agent" is advice for installing a Slack app; the agent did
+    # not choose to have a mailbox, it was given one.
+    assert "Pick another agent" not in body["message"], body["message"]
+    assert held[0].name in body["message"], body["message"]
+    # And it names the surface the operator never created, which is the part
+    # that makes the refusal unreadable from inside a bundle import.
+    assert body["details"]["conflicting_surface"]["name"] == held[0].name, body
+
+    await db_session.commit()
+    after = list(
+        (
+            await db_session.execute(
+                _select_agent_resend_surfaces(pod_id, agent_id=agent["id"])
+            )
+        ).scalars()
+    )
+    assert len(after) == 1, f"the refusal must leave the agent's mailbox alone: {after}"
+
+
+async def test_what_the_bundle_applier_does_with_an_email_surface(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    pod_with_a_mailbox,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+    tmp_path,
+):
+    """Both halves of `DEV-SURF-003`, through the real applier on a real schema.
+
+    The applier is what the register is about, and it is not the API: it looks
+    for an existing surface *by name* before it creates anything
+    (`surface_apply.py`), which the controller does not. A test that posts to
+    `/surfaces` therefore proves nothing about a bundle -- the first version of
+    this one did exactly that and drew the wrong conclusion from a 409.
+
+    `BundleApplier.apply_step` is an ordinary call, so no worker and no import
+    machinery are needed: build it the way `pod_bundle/events/handlers.py` does
+    and hand it a bundle root on disk.
+
+    The two halves:
+
+    * A bundle carrying the name the exporter wrote -- `resend-{slug}`, derived
+      from the agent name and nothing random -- matches the mailbox the agent was
+      given at creation, so a round trip lands on it. This is the case the
+      register first called broken, and it is not.
+    * A bundle carrying any other name finds nothing, takes the create path, and
+      `ensure_one_surface_per_agent` refuses it. That is the real scope: a
+      hand-written bundle, or one whose agent was renamed between export and
+      import.
+    """
+    from app.core.authorization.service import AuthorizationDataService
+    from app.modules.agent_surfaces.domain.errors import (
+        AgentSurfaceAgentPlatformConflictError,
+    )
+    from app.modules.agent_surfaces.services.email_surface_provisioning import (
+        surface_name_for,
+    )
+    from app.modules.agent_surfaces.tests.e2e.helpers import _create_agent
+    from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+    from app.modules.pod_bundle.infrastructure.applier import BundleApplier
+
+    pod_id = pod_with_a_mailbox["id"]
+    agent = await _create_agent(authenticated_client, pod_id)
+    await db_session.commit()
+
+    held = list(
+        (
+            await db_session.execute(
+                _select_agent_resend_surfaces(pod_id, agent_id=agent["id"])
+            )
+        ).scalars()
+    )
+    assert len(held) == 1, f"an agent should be created holding one mailbox: {held}"
+    exported_name = held[0].name
+    assert exported_name == surface_name_for(agent["name"]), (
+        "the exporter writes the surface's own name, and it must be derivable "
+        f"from the agent name or no bundle can match it: {exported_name!r}"
+    )
+
+    def _bundle(name: str) -> Path:
+        root = tmp_path / name
+        manifest = root / "surfaces" / name
+        manifest.mkdir(parents=True, exist_ok=True)
+        (manifest / f"{name}.json").write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "platform": "RESEND",
+                    "default_agent_name": agent["name"],
+                    "is_enabled": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return root
+
+    async def _apply(name: str):
+        uow = SqlAlchemyUnitOfWork(db_session)
+        ctx = await AuthorizationDataService(db_session).build_user_context(
+            user_id=UUID(fixed_test_user["id"]), pod_id=UUID(pod_id)
+        )
+        applier = BundleApplier(
+            uow=uow,
+            ctx=ctx,
+            pod_id=UUID(pod_id),
+            user_id=UUID(fixed_test_user["id"]),
+            bundle_root=_bundle(name),
+        )
+        await applier.apply_step(
+            PlanStep(
+                index=0, kind=StepKind.SURFACE, name=name, action=StepAction.CREATE
+            )
+        )
+
+    # The round trip: the bundle names what the exporter wrote, and it lands.
+    await _apply(exported_name)
+    await db_session.commit()
+    after = list(
+        (
+            await db_session.execute(
+                _select_agent_resend_surfaces(pod_id, agent_id=agent["id"])
+            )
+        ).scalars()
+    )
+    assert len(after) == 1, f"a round trip must not mint a second mailbox: {after}"
+    assert after[0].id == held[0].id
+
+    # Any other name is the case DEV-SURF-003 is actually about.
+    with pytest.raises(AgentSurfaceAgentPlatformConflictError):
+        await _apply("support")
 
 
 def _select_agent_resend_surfaces(pod_id: str, *, agent_id: str):

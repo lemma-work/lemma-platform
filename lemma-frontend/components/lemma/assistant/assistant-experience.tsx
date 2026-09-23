@@ -21,7 +21,7 @@ import type {
 import {
   buildDisplayMessageRows,
   findPendingUserApprovalInvocation,
-  isAskUserToolName,
+  isAskUserToolName, isSignInToolName,
   latestPlanSummary,
   latestUserIndex,
 } from "lemma-sdk";
@@ -367,12 +367,33 @@ export function AssistantExperienceView({
   const pendingInteractionCallId = activePendingApprovalInvocation?.toolCallId ?? null;
   const pendingInteractionIsAsk = !!activePendingApprovalInvocation
     && isAskUserToolName(activePendingApprovalInvocation.toolName);
+  // A sign-in is neither: there is nothing to approve and nothing to answer,
+  // so "Approve or reject to continue" tells the person to do something the
+  // card does not offer.
+  const pendingInteractionIsSignIn = !!activePendingApprovalInvocation
+    && isSignInToolName(activePendingApprovalInvocation.toolName);
   const scrollToPendingInteraction = useCallback(() => {
     if (!pendingInteractionCallId) return;
+    // A sign-in opens the browser beside the conversation, rather than only
+    // scrolling to the card that offers to. Scrolling alone was the whole of
+    // this button, and it is silent when it fails -- `scrollIntoView` on a
+    // missing element does nothing and says nothing, so a card that is not
+    // mounted reads to the person as a dead button. Opening the panel is also
+    // simply what "Sign in to continue" sounds like it should do.
+    if (pendingInteractionIsSignIn && onNavigateResource && activeConversationId) {
+      onNavigateResource("sign_in", pendingInteractionCallId, {
+        conversationId: activeConversationId,
+      });
+    }
     document
       .getElementById(interactionAnchorId(pendingInteractionCallId))
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [pendingInteractionCallId]);
+  }, [
+    pendingInteractionCallId,
+    pendingInteractionIsSignIn,
+    onNavigateResource,
+    activeConversationId,
+  ]);
 
   const canLoadOlder = hasOlderMessages && !isLoadingMessages && !isLoadingOlderMessages;
   const loadOlder = useCallback(() => {
@@ -597,9 +618,11 @@ export function AssistantExperienceView({
           onClick={scrollToPendingInteraction}
           className="h-auto px-0 text-xs font-normal"
         >
-          {pendingInteractionIsAsk
-            ? "Answer the question to continue"
-            : "Approve or reject to continue"}
+          {pendingInteractionIsSignIn
+            ? "Sign in to continue"
+            : pendingInteractionIsAsk
+              ? "Answer the question to continue"
+              : "Approve or reject to continue"}
         </Button>
       ) : null}
       {showComposerStatus && runStatusModel ? (

@@ -127,6 +127,10 @@ DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
 DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
 DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
+# A sandbox browser needs an origin, not a path: the dashboard is a Next.js
+# app whose assets are all absolute. `*.localhost` resolves without any DNS
+# or hosts-file setup in every current browser.
+DEV_BROWSER_BASE_DOMAIN := browser.lemma.localhost:$(DEV_BACKEND_PORT)
 DEV_APPS_DOMAIN_SUFFIX := apps.lemma.localhost
 DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma
 DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma_datastore
@@ -225,6 +229,7 @@ BACKEND_WORKSPACE_CALLBACK_API_URL ?= $(DEV_SANDBOX_BACKEND_URL)
 BACKEND_WORKSPACE_CALLBACK_AUTH_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_WORKSPACE_CALLBACK_FRONTEND_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_APP_BASE_DOMAIN         ?= $(DEV_APP_BASE_DOMAIN)
+BACKEND_BROWSER_BASE_DOMAIN     ?= $(DEV_BROWSER_BASE_DOMAIN)
 BACKEND_SESSION_COOKIE_DOMAIN   ?=
 BACKEND_SESSION_COOKIE_SECURE   ?= false
 BACKEND_SESSION_COOKIE_SAME_SITE?= lax
@@ -243,13 +248,40 @@ BACKEND_SLACK_SOCKET_MODE       ?= true
 # account in fifteen minutes locked the developer out of their own laptop for
 # four minutes. None of these gates protects anything on localhost; they exist
 # to stop strangers abusing a public deployment.
+#
+# The frontend needs telling too, and that is the one that bites. It reads
+# `AUTH_EMAIL_VERIFICATION_REQUIRED` from its own runtime config and defaults
+# it to *true* when nothing sets it -- so turning verification off here alone
+# left the two halves disagreeing: the backend stopped registering the
+# verification recipe, the frontend kept gating on it, and its call to
+# `/st/auth/user/email/verify` answered 404. What a person saw after signing in
+# was "we couldn't reach the verification service", on a screen with no way
+# past it, for a gate that was supposed to be off.
 DEV_LOCAL_AUTH_ENV := \
 	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED=false \
 	AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=false \
 	AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false \
 	AUTH_ABUSE_PROTECTION_ENABLED=false \
 	AUTH_ALTCHA_ENABLED=false
 DEV_LOCAL_AUTH_KEYS := $(foreach pair,$(DEV_LOCAL_AUTH_ENV),$(firstword $(subst =, ,$(pair))))
+
+# The one gate above the *browser* also has an opinion about, and the reason the
+# fix above was only half of one.
+#
+# `supertokens-auth-react` mounts the email-verification recipe, and its claim
+# validator, from the frontend's own copy of this setting -- which defaults to
+# `true` when unset (`auth/config.ts`). The backend, told `false`, does not
+# register the recipe at all, so `/st/auth/user/email/verify` is not a route.
+# Signing in then ends on a 404 the person reads as "We couldn't reach the
+# verification service", and there is no way through it: a fresh `make init &&
+# make dev` could not sign in at all. `lemma-stack` has always rendered both
+# halves; `make dev` rendered one.
+#
+# Derived from the list above rather than written again, so changing the gate
+# changes both ends of it.
+DEV_FRONTEND_EMAIL_VERIFICATION := $(patsubst AUTH_EMAIL_VERIFICATION_REQUIRED=%,%,\
+	$(filter AUTH_EMAIL_VERIFICATION_REQUIRED=%,$(DEV_LOCAL_AUTH_ENV)))
 
 BACKEND_DEV_ENV := \
 	ENVIRONMENT=local \
@@ -283,6 +315,7 @@ BACKEND_DEV_ENV := \
 	ENABLE_TELEGRAM_POLLING_MODE=$(BACKEND_TELEGRAM_POLLING) \
 	ENABLE_SLACK_SOCKET_MODE=$(BACKEND_SLACK_SOCKET_MODE) \
 	APP_BASE_DOMAIN=$(BACKEND_APP_BASE_DOMAIN) \
+	WORKSPACE_BROWSER_BASE_DOMAIN=$(BACKEND_BROWSER_BASE_DOMAIN) \
 	SESSION_COOKIE_DOMAIN=$(BACKEND_SESSION_COOKIE_DOMAIN) \
 	SESSION_COOKIE_SECURE=$(BACKEND_SESSION_COOKIE_SECURE) \
 	SESSION_COOKIE_SAME_SITE=$(BACKEND_SESSION_COOKIE_SAME_SITE) \
@@ -300,7 +333,8 @@ FRONTEND_DEV_ENV := \
 	NEXT_PUBLIC_SITE_URL=$(FRONTEND_SITE_URL) \
 	NEXT_PUBLIC_AUTH_URL=$(FRONTEND_AUTH_URL) \
 	NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=$(FRONTEND_SESSION_TOKEN_DOMAIN) \
-	NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(FRONTEND_APPS_DOMAIN_SUFFIX)
+	NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(FRONTEND_APPS_DOMAIN_SUFFIX) \
+	NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=false
 
 
 # ── Workspace sandbox provisioning ────────────────────────────────────────────
@@ -447,12 +481,26 @@ init:
 	@echo ""
 	@echo "Done. Run 'make dev' to start the stack."
 
+# Present is not the same as usable. The workspace image used to be built for
+# linux/amd64 whatever the machine, so anyone who ran this before that changed
+# has an emulated image sitting under the name this checks -- and a presence
+# test would keep it forever, which is a cold browser start of ~15s instead of
+# ~2s and browser tools timing out against their 90s budget. So the workspace
+# image is checked for the architecture it will actually run on. The function
+# image is deliberately amd64 everywhere (see SANDBOX_FUNCTION_PLATFORM), so it
+# is only checked for presence.
 _ensure-sandbox-images:
-	@if docker image inspect "$(DEV_WORKSPACE_IMAGE)" >/dev/null 2>&1 \
+	@host_arch="$$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo amd64)"; \
+	workspace_arch="$$(docker image inspect --format '{{.Architecture}}' "$(DEV_WORKSPACE_IMAGE)" 2>/dev/null || true)"; \
+	if [ "$$workspace_arch" = "$$host_arch" ] \
 		&& docker image inspect "$(DEV_FUNCTION_IMAGE)" >/dev/null 2>&1; then \
 		echo "  ✓ workspace/function sandbox images already present"; \
 	else \
-		echo "→ Building canonical workspace/function sandbox images…"; \
+		if [ -n "$$workspace_arch" ] && [ "$$workspace_arch" != "$$host_arch" ]; then \
+			echo "→ Rebuilding sandbox images: the workspace image is $$workspace_arch on a $$host_arch machine, so everything in it runs emulated…"; \
+		else \
+			echo "→ Building canonical workspace/function sandbox images…"; \
+		fi; \
 		$(MAKE) -C $(BACKEND_DIR) sandbox-image-workspace \
 			WORKSPACE_IMAGE="$(DEV_WORKSPACE_IMAGE_NAME)" \
 			SANDBOX_TAG="$(DEV_WORKSPACE_IMAGE_TAG)"; \
@@ -570,6 +618,7 @@ _init-frontend-env:
 			echo "NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL)"; \
 			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 			echo "NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(DEV_APPS_DOMAIN_SUFFIX)"; \
+			echo "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=$(DEV_FRONTEND_EMAIL_VERIFICATION)"; \
 		} > $(FRONTEND_DIR)/.env.local; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	else \
@@ -578,7 +627,8 @@ _init-frontend-env:
 
 _ensure-frontend-env-keys:
 	@set -e; missing=""; \
-	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL NEXT_PUBLIC_APPS_DOMAIN_SUFFIX; do \
+	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL NEXT_PUBLIC_APPS_DOMAIN_SUFFIX \
+		NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED; do \
 		if ! grep -qE "^$$k=" $(FRONTEND_DIR)/.env.local; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -591,6 +641,7 @@ _ensure-frontend-env-keys:
 		append NEXT_PUBLIC_SITE_URL '$(DEV_FRONTEND_URL)'; \
 		append NEXT_PUBLIC_AUTH_URL '$(DEV_AUTH_FRONTEND_URL)'; \
 		append NEXT_PUBLIC_APPS_DOMAIN_SUFFIX '$(DEV_APPS_DOMAIN_SUFFIX)'; \
+		append NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED '$(DEV_FRONTEND_EMAIL_VERIFICATION)'; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	fi
 
@@ -1932,12 +1983,17 @@ quality:
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded-reads
 	@echo "→ Import-bound defaults…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-bound-defaults
 	@echo "→ Typed surfaces…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-controller-types
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+	@echo "→ Public prose…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-public-prose
+	@echo "→ Migration order…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-migration-order
 	@echo "→ In-subject test doubles…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-test-doubles
 	@echo "→ Import budget…"

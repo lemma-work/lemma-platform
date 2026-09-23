@@ -143,7 +143,10 @@ def apply_surface_history_window(
 
 
 def bound_runtime_history(
-    runs: list[AgentRun], conversation: Conversation | None = None
+    runs: list[AgentRun],
+    conversation: Conversation | None = None,
+    *,
+    total_runs: int | None = None,
 ) -> tuple[list[AgentRun], int]:
     """The runs the prompt will carry, and how many were dropped to get there.
 
@@ -155,10 +158,12 @@ def bound_runtime_history(
 
     The dropped count comes back because it is the one thing the trimmed list no
     longer knows about itself, and the notice announcing those runs to the model
-    is built from it.
+    is built from it. ``total_runs`` is how many the conversation actually has,
+    for a caller whose ``runs`` is already a window: without it the count starts
+    from the window and the notice under-reports by everything the window took.
     """
     bounded = apply_surface_history_window(runs, conversation)
-    return bounded, len(runs) - len(bounded)
+    return bounded, (len(runs) if total_runs is None else total_runs) - len(bounded)
 
 
 def runtime_full_run_ids(
@@ -360,7 +365,7 @@ def _is_unpaired_tool_call(message: Message) -> bool:
 
     Eliding a run to its first and last message is fine until the first message
     is an assistant tool call -- which is the normal shape for a run with no
-    user message: an approval resume and a snooze wake both create a run and go
+    user message: an approval resume and a wait resolution both create a run and go
     straight into a tool (`pause_resume.start_resume_run_if_ready`).
 
     Keeping that call without its return is worse than dropping it. The history

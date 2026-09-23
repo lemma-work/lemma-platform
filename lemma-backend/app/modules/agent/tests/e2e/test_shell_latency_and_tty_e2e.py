@@ -43,6 +43,7 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import (
     write_stdin_internal,
 )
 from app.modules.test_support.e2e.waiters import eventually
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 # asyncio, not anyio, like the other 139 e2e files. Neither of these two files
 # uses anyio for anything -- no anyio API, no trio, no task groups -- but the
@@ -121,11 +122,11 @@ async def test_commands_that_print_nothing_return_immediately(
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
 
     silent = [
-        "mkdir -p /workspace/reports /workspace/research",
-        "touch /workspace/reports/notes.md",
-        "cd /workspace && true",
+        f"mkdir -p {WORKSPACE_ROOT}/reports {WORKSPACE_ROOT}/research",
+        f"touch {WORKSPACE_ROOT}/reports/notes.md",
+        f"cd {WORKSPACE_ROOT} && true",
         "export BUILD_ENV=ci",
-        "cp /workspace/reports/notes.md /workspace/reports/copy.md",
+        f"cp {WORKSPACE_ROOT}/reports/notes.md {WORKSPACE_ROOT}/reports/copy.md",
     ]
 
     total = 0.0
@@ -345,7 +346,7 @@ async def test_a_large_paste_into_a_tty_is_delivered_whole(
         ctx,
         ExecCommandRequest(
             comment="read a heredoc from stdin",
-            cmd="cat > /workspace/pasted.txt",
+            cmd=f"cat > {WORKSPACE_ROOT}/pasted.txt",
             tty=True,
             yield_time_ms=800,
         ),
@@ -377,7 +378,7 @@ async def test_a_large_paste_into_a_tty_is_delivered_whole(
         ctx,
         ExecCommandRequest(
             comment="confirm the paste landed",
-            cmd="grep -c '^x\\{199\\}' /workspace/pasted.txt",
+            cmd=f"grep -c '^x\\{{199\\}}' {WORKSPACE_ROOT}/pasted.txt",
         ),
     )
     assert check.exit_code == 0, check

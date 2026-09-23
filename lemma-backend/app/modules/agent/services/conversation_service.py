@@ -351,6 +351,27 @@ class ConversationService:
             tool_names=("request_approval",),
         )
 
+    async def get_pending_sign_in(
+        self,
+        *,
+        conversation_id: UUID,
+    ) -> dict[str, object] | None:
+        """Oldest unresolved ``browser_sign_in`` pause, or ``None``.
+
+        Its own lookup for the same reason :meth:`get_pending_approval` is: a
+        conversation can hold several unresolved pauses, and the oldest of *any*
+        kind is the wrong one to render a sign-in link for.
+
+        This is what replaced a table. A sign-in used to write a row carrying
+        the origin, the reason and a status -- all three of which are already
+        here: the first two in the paused call's arguments, and the third in
+        whether this returns anything at all.
+        """
+        return await self.approvals.oldest_unresolved_pause(
+            conversation_id=conversation_id,
+            tool_names=("browser_sign_in",),
+        )
+
     async def get_pending_user_interaction(
         self,
         *,
@@ -460,5 +481,5 @@ class ConversationService:
 
     @property
     def wait_repository(self) -> AgentConversationWaitRepository:
-        """The snooze timer store, reached through the turn coordinator."""
+        """The conversation wait store, reached through the turn coordinator."""
         return self.turns.wait_repository

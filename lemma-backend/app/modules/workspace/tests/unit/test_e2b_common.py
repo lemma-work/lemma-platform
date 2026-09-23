@@ -216,3 +216,99 @@ async def test_a_stopped_workspace_vm_is_not_polled() -> None:
         await ensure_agent_serving(
             _AgentSandbox([True], running=False), "i12345", budget_seconds=0.5
         )
+
+
+class TestClosingTheBrowserBeforeAPause:
+    """The one step that keeps a person's logins, and it had no test at all.
+
+    An E2B workspace pause is `keep_memory=False` -- power loss, as far as
+    Chrome is concerned -- and `agent-browser` runs Chrome on a throwaway
+    `--user-data-dir` under `/tmp`, copying it to the durable profile only
+    on a clean close. So this call is the whole of what makes a sign-in
+    outlive a release on the fabric that serves users.
+
+    It was reachable from two source files and named in none. Docker gets
+    the same property from the quiescer and is covered end to end; the e2e
+    suite pins `WORKSPACE_PROVIDER=docker`, so the covered fabric was the
+    one nobody runs on and the uncovered one was dev and prod.
+    """
+
+    class _Commands:
+        def __init__(self, raises: Exception | None = None) -> None:
+            self.calls: list[tuple[str, object]] = []
+            self._raises = raises
+
+        async def run(self, command: str, *, timeout=None, **api):
+            self.calls.append((command, timeout))
+            if self._raises is not None:
+                raise self._raises
+
+    class _Sandbox:
+        def __init__(self, commands) -> None:
+            self.commands = commands
+
+    async def test_it_asks_the_daemon_to_close_every_session(self) -> None:
+        """`close --all`, not a signal: the daemon owns the process, and
+        `--all` because a sign-in runs in its own `login-<host>` session
+        whose profile is just as much the person's."""
+        from app.modules.workspace.providers.e2b_common import (
+            BROWSER_CLOSE_SECONDS,
+            close_browser,
+        )
+
+        commands = self._Commands()
+
+        await close_browser(self._Sandbox(commands), "sbx-1")
+
+        assert commands.calls == [("agent-browser close --all", BROWSER_CLOSE_SECONDS)]
+
+    @pytest.mark.parametrize("failure", ["gone", "rejected", "unavailable"])
+    async def test_a_browser_that_cannot_be_reached_does_not_fail_the_release(
+        self, failure: str
+    ) -> None:
+        """Best effort, for the same reason Docker's quiesce is: a sandbox
+        whose browser cannot be reached is exactly the one most in need of
+        being released. Worst case the pause proceeds as it did before this
+        existed -- and the person loses a login, which is why the handler
+        warns rather than swallowing.
+        """
+        from sandbox_runtime.errors import SandboxUnavailable
+
+        from app.modules.workspace.providers.base import (
+            ProviderGone,
+            ProviderRejected,
+        )
+        from app.modules.workspace.providers.e2b_common import close_browser
+
+        raised = {
+            "gone": ProviderGone("gone"),
+            "rejected": ProviderRejected("rejected"),
+            "unavailable": SandboxUnavailable("unavailable"),
+        }[failure]
+        commands = self._Commands(raises=raised)
+
+        await close_browser(self._Sandbox(commands), "sbx-1")
+
+        assert commands.calls, "it must still have tried"
+
+    async def test_a_bug_in_this_call_is_reported_as_a_close_that_failed(
+        self,
+    ) -> None:
+        """Pinned because the code used to claim the opposite.
+
+        `sdk_errors` catches every `Exception` and maps it through
+        `classify`, and `classify` answers `SandboxUnavailable` for a plain
+        `AttributeError` -- so a typo here is caught by the same handler as
+        an unreachable sandbox and the release carries on. That is the
+        accepted trade, not an accident: the warning names the step, and a
+        release logging `browser_close_failed` every single time is a bug
+        announcing itself. It is written down here so the next person does
+        not read the handler as narrower than it is.
+        """
+        from app.modules.workspace.providers.e2b_common import close_browser
+
+        commands = self._Commands(raises=AttributeError("renamed in the SDK"))
+
+        await close_browser(self._Sandbox(commands), "sbx-1")
+
+        assert commands.calls, "it must still have tried"

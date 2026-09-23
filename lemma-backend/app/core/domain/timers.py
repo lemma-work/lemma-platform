@@ -1,6 +1,7 @@
 """What a claimed one-shot timer looks like, wherever it came from.
 
-Timers live in the modules that own them -- workflow waits in workflow, snoozes
+Timers live in the modules that own them -- workflow waits in workflow, agent
+conversation waits
 in agent -- because a module owning a table should own the query against it. The
 poller collects them through injected claimers rather than importing those
 models.

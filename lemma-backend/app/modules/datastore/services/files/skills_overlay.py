@@ -30,24 +30,95 @@ class SkillsOverlay:
         self.paths = path_resolver
         self.lookup = lookup
 
-    async def _visible_pod_items_under_system_skills(
+    async def _visible_pod_items(
         self,
+        items: Sequence[DatastoreFileEntity],
         *,
         pod_id: UUID,
         requester_user_id: UUID,
         ctx: Context,
     ) -> list[DatastoreFileEntity]:
-        all_pod_items = await self.file_repository.get_all_by_datastore(pod_id)
-        skills_items = [
-            item for item in all_pod_items if self.system_skill_files.is_path(item.path)
-        ]
         return await self.authorizer.filter_visible_items(
-            skills_items,
+            items,
             requester_user_id,
             pod_id,
-            include_full_datastore_context=False,
             ctx=ctx,
         )
+
+    async def _visible_children_of(
+        self,
+        *,
+        pod_id: UUID,
+        directory_path: str,
+        requester_user_id: UUID,
+        ctx: Context,
+    ) -> list[DatastoreFileEntity]:
+        """The pod-created entries of one directory under `/skills`.
+
+        `PS-DATA-031` says a person can list one folder's contents without
+        loading the whole tree, and listing a folder here loaded the whole
+        `/skills` subtree so it could keep the rows whose parent matched. The
+        directory is known before the read; asking for its children is the same
+        question, without the descent.
+        """
+        return await self._visible_pod_items(
+            await self.file_repository.get_direct_children(pod_id, directory_path),
+            pod_id=pod_id,
+            requester_user_id=requester_user_id,
+            ctx=ctx,
+        )
+
+    async def _visible_tree_items(
+        self,
+        *,
+        pod_id: UUID,
+        root_path: str,
+        files_per_directory: int,
+        requester_user_id: UUID,
+        ctx: Context,
+    ) -> list[DatastoreFileEntity]:
+        """What a tree rooted here can display, and nothing else.
+
+        Two narrowings, and the first one on its own was not enough. A tree
+        rooted at `/skills/one-skill` used to read the whole `/skills` subtree
+        and keep the rows under the root; rooting the query fixed *that* and
+        left the second half untouched -- every file beneath the root was still
+        loaded so that Python could show `files_per_directory` of each folder.
+        A skill with a thousand attachments still read a thousand rows to
+        render three.
+
+        `get_tree_items` is the shape the ordinary directory tree already uses:
+        folders whole, because they are the tree's structure and there are far
+        fewer of them, and files ranked inside their own directory and cut at
+        one more than will be shown -- the extra row being how `has_more_files`
+        can still tell a directory was truncated. Visibility is applied inside
+        that window rather than over its result, so a caller never spends the
+        cap on files they cannot read.
+
+        The root row is fetched separately because those statements match what
+        is *under* a prefix, and the tree needs the node it is rooted at. It is
+        one indexed lookup, and it goes through the short-list visibility check
+        so the root is authorized like everything else.
+        """
+        root = await self._visible_pod_items(
+            await self.file_repository.get_by_paths(pod_id, [root_path]),
+            pod_id=pod_id,
+            requester_user_id=requester_user_id,
+            ctx=ctx,
+        )
+        return [
+            *root,
+            *await self.file_repository.get_tree_items(
+                pod_id,
+                ctx=ctx,
+                subtree_root=root_path,
+                files_per_directory=files_per_directory,
+                # Asked rather than restated: the human/workload split is the
+                # authorizer's rule, and a second copy of it here would be a
+                # second thing to keep right.
+                walk_ancestors=self.authorizer.walks_ancestors(ctx),
+            ),
+        ]
 
     async def list_overlay_files(
         self,
@@ -72,15 +143,12 @@ class SkillsOverlay:
             if not directory.is_folder:
                 raise DatastoreValidationError("Path must point to a folder")
 
-        db_children = [
-            item
-            for item in await self._visible_pod_items_under_system_skills(
-                pod_id=pod_id,
-                requester_user_id=requester_user_id,
-                ctx=ctx,
-            )
-            if self.paths._parent_path(item.path) == normalized_directory
-        ]
+        db_children = await self._visible_children_of(
+            pod_id=pod_id,
+            directory_path=normalized_directory,
+            requester_user_id=requester_user_id,
+            ctx=ctx,
+        )
         system_children = self.system_skill_files.list_direct_children(
             pod_id,
             normalized_directory,
@@ -120,9 +188,19 @@ class SkillsOverlay:
         ctx: Context,
     ) -> dict[str, Any]:
         normalized_root = self.paths._normalize_path(root_path)
-        system_items = self.system_skill_files.all_entities(pod_id)
-        db_items = await self._visible_pod_items_under_system_skills(
+        # Both sides narrowed to the requested root. The system entities are
+        # in memory so filtering them is free; the pod's are a query, and
+        # reading `/skills` to render one skill is what this used to cost.
+        system_items = [
+            item
+            for item in self.system_skill_files.all_entities(pod_id)
+            if item.path == normalized_root
+            or item.path.startswith(f"{normalized_root}/")
+        ]
+        db_items = await self._visible_tree_items(
             pod_id=pod_id,
+            root_path=normalized_root,
+            files_per_directory=files_per_directory,
             requester_user_id=requester_user_id,
             ctx=ctx,
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Optional, Protocol, Sequence, Tuple, runtime_checkable
 from uuid import UUID
 
@@ -20,6 +21,8 @@ class UserRepositoryPort(Protocol):
     async def create(self, entity: UserEntity) -> UserEntity: ...
 
     async def get(self, id: UUID) -> Optional[UserEntity]: ...
+
+    async def existing_ids(self, user_ids: Collection[UUID]) -> set[UUID]: ...
 
     async def get_by_email(self, email: str) -> Optional[UserEntity]: ...
 
@@ -57,6 +60,8 @@ class OrganizationRepositoryPort(Protocol):
     async def get(self, id: UUID) -> Optional[OrganizationEntity]: ...
 
     async def get_by_slug(self, slug: str) -> Optional[OrganizationEntity]: ...
+
+    async def get_many(self, ids) -> dict[UUID, OrganizationEntity]: ...
 
     async def update(self, entity: OrganizationEntity) -> OrganizationEntity: ...
 
@@ -97,6 +102,13 @@ class OrganizationRepositoryPort(Protocol):
     ) -> Tuple[Sequence[OrganizationMemberEntity], Optional[str]]: ...
 
     async def count_members(self, organization_id: UUID) -> int: ...
+
+    #: Held until the transaction ends, before who is in the organization
+    #: changes, so a plan's member cap is counted one change at a time.
+    async def lock_seats(self, organization_id: UUID) -> None: ...
+
+    #: Refuses when the person owns as many organizations as their plan allows.
+    async def refuse_if_at_organization_limit(self, user_id: UUID) -> None: ...
 
     async def count_members_with_role_for_update(
         self, organization_id: UUID, role: OrganizationRole
@@ -149,6 +161,10 @@ class OrganizationRepositoryPort(Protocol):
 
 @runtime_checkable
 class IdentityEmailPort(Protocol):
+    async def send_phone_changed_email(
+        self, *, to_email: str, mobile_number: str
+    ) -> bool: ...
+
     async def send_invitation_email(
         self,
         *,

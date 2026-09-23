@@ -339,9 +339,24 @@ export class HttpClient {
     return response.body;
   }
 
-  async requestBytes(method: string, path: string): Promise<Blob> {
+  /**
+   * A binary response, optionally only part of one.
+   *
+   * `headers` exists for `Range`. Without it a file past the server's
+   * single-read ceiling was simply unreachable through this client: the read
+   * was capped and there was no way to ask for the rest.
+   */
+  async requestBytes(
+    method: string,
+    path: string,
+    options: { headers?: Record<string, string> } = {},
+  ): Promise<Blob> {
     const url = `${this.apiUrl}${path}`;
-    const response = await this.fetchWithTimeout(url, this.auth.getRequestInit({ method }));
+    const init = this.auth.getRequestInit({ method });
+    if (options.headers) {
+      init.headers = { ...(init.headers as Record<string, string>), ...options.headers };
+    }
+    const response = await this.fetchWithTimeout(url, init);
 
     if (response.status === 401) {
       this.auth.markUnauthenticated();

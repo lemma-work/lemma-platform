@@ -15,8 +15,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
     SurfaceCredentialMode,
-    SurfaceEventMode,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
@@ -35,14 +33,19 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.services.surface_bulk_teardown import (
+    delete_matching_surfaces,
+)
 from app.modules.agent_surfaces.services.credential_uniqueness import (
+    ensure_one_surface_per_agent,
     ensure_unique_org_credential_binding,
+    ensure_unique_platform_identity,
 )
 from app.modules.agent_surfaces.services.event_receiver_service import (
     notify_surface_receiver_config_changed,
 )
-from app.modules.agent_surfaces.services.telegram_mini_app_mixin import (
-    TelegramMiniAppSyncMixin,
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    sync_telegram_mini_app,
 )
 from app.modules.agent_surfaces.services.surface_setup_read import (
     SurfaceSetupReadMixin,
@@ -54,6 +57,7 @@ from app.modules.agent_surfaces.services.surface_telegram_webhook import (
 from app.modules.agent_surfaces.services.surface_consent import (
     SurfaceConsentMixin,
 )
+from app.core.infrastructure.db.session_uow import active_uow
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -70,7 +74,6 @@ class AgentSurfaceService(
     SurfaceConsentMixin,
     SurfaceTelegramWebhookMixin,
     SurfaceSetupReadMixin,
-    TelegramMiniAppSyncMixin,
 ):
     def __init__(
         self,
@@ -111,14 +114,13 @@ class AgentSurfaceService(
         platform: SurfacePlatform,
         name: str | None = None,
         config: SurfaceConfig | None = None,
-        mode: SurfaceMode | None = None,
-        event_mode: SurfaceEventMode | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
         account_id: UUID | None = None,
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
         surface_identity_email: str | None = None,
+        surface_identity_id: str | None = None,
         ctx: Context | None = None,
     ) -> AgentSurfaceEntity:
         # A surface is addressed by its pod-unique name (defaults to the
@@ -137,25 +139,32 @@ class AgentSurfaceService(
         (
             resolved_tenant_id,
             resolved_workspace_id,
-            surface_identity_id,
+            bound_identity_id,
         ) = await self.account_binding_resolver.resolve_binding(
             platform,
             account_id=account_id,
         )
+        # The binding resolver answers for the platforms whose identity is
+        # *derivable* from a connected account -- Slack's bot user id, and so
+        # on. A pooled WhatsApp number is not derivable: it is allocated, and
+        # the allocation is the caller's because the arbiter for it is a unique
+        # index on the row this call is about to write. So a caller-supplied
+        # identity wins where the resolver has none, exactly as
+        # `surface_identity_email` does for Resend, and can never silently
+        # overwrite one the resolver did produce.
+        resolved_identity_id = bound_identity_id or surface_identity_id
         entity = AgentSurfaceEntity.create(
             pod_id=pod_id,
             surface_type=platform,
             name=resolved_name,
             agent_id=agent_id,
             config=config,
-            mode=mode,
-            event_mode=event_mode,
             credential_mode=credential_mode,
             account_id=account_id,
             external_workspace_id=external_workspace_id or resolved_workspace_id,
             external_tenant_id=external_tenant_id or resolved_tenant_id,
             external_channel_id=external_channel_id,
-            surface_identity_id=surface_identity_id,
+            surface_identity_id=resolved_identity_id,
         )
         # Resend is a system-credentialed email surface: it needs an inbound
         # address that routing matches on and outbound uses as the From. (Other
@@ -179,7 +188,10 @@ class AgentSurfaceService(
                 )
             entity.surface_identity_email = surface_identity_email
         self._validate_runtime_supported(entity)
-        await self._ensure_unique_org_credential_binding(entity)
+        await ensure_one_surface_per_agent(
+            entity, surface_repository=self.surface_repository
+        )
+        await self._ensure_identity_is_claimable(entity)
         telegram_credentials: dict[str, Any] | None = None
         if telegram_requires_webhook_setup(entity):
             await self._ensure_unique_telegram_account(entity)
@@ -191,70 +203,47 @@ class AgentSurfaceService(
                 webhook_url=self._build_public_surface_webhook_url(created.id),
                 webhook_secret=created.webhook_secret or "",
             )
-        await notify_surface_receiver_config_changed(created.id)
+        await self._notify_receivers_after_commit(created.id)
         return created
 
-    async def create_surface_minting_address(
-        self,
-        *,
-        pod_id: UUID,
-        agent_id: UUID | None,
-        agent_name: str | None,
-        platform: SurfacePlatform,
-        name: str | None = None,
-        config: SurfaceConfig | None = None,
-        credential_mode: SurfaceCredentialMode | None = None,
-        account_id: UUID | None = None,
-        ctx: Context | None = None,
-    ) -> AgentSurfaceEntity:
-        """:meth:`create_surface`, minting an address when the platform needs one.
+    async def _notify_receivers_after_commit(self, surface_id: UUID | None) -> None:
+        """Wake the receiver coordinators once the change has actually committed.
 
-        For the two callers a person drives — the surfaces API and the bundle
-        applier. They bring their own name, config and credentials, so they
-        cannot use ``provision_email_surface``, and calling ``create_surface``
-        straight through is what used to land them on the ``pod-<hex>@``
-        fallback: unreadable, and never screened for reserved local parts.
+        Not inline, for the same two reasons the authorization service gives for
+        its snapshot invalidation: publishing inside the transaction holds a
+        pooled connection across a Redis round trip, and it is the wrong order
+        besides -- a coordinator woken before the commit reads the surface
+        configuration this change is about to replace.
 
-        Takes the agent's id and name rather than the agent, because those are
-        the two things minting needs and both callers already hold them.
+        Falls back to publishing immediately when there is no unit of work to
+        defer to, which is also when there is no pooled connection to keep.
         """
-        from app.modules.agent_surfaces.services.email_surface_provisioning import (
-            create_surface_on_minted_address,
-        )
+        uow = active_uow(self.surface_repository)
 
-        return await create_surface_on_minted_address(
-            self,
-            self.surface_repository.uow,
-            pod_id=pod_id,
-            # No agent named means the pod's own assistant, whose row id is
-            # the pod's. The *name* stays None regardless, because it is what
-            # the address is built from and the assistant's stored name is the
-            # internal `pod_default` -- that would mint `pod-default.acme@` for
-            # a pod that answers at `acme@`.
-            agent_id=agent_id or pod_id,
-            agent_name=agent_name,
-            platform=platform,
-            name=name,
-            config=config or SurfaceConfig(),
-            credential_mode=credential_mode,
-            account_id=account_id,
-            ctx=ctx,
+        async def _run() -> None:
+            await notify_surface_receiver_config_changed(surface_id)
+
+        if uow is None:
+            await _run()
+            return
+        uow.after_commit(_run)
+
+    async def sync_telegram_mini_app(self, surface: AgentSurfaceEntity) -> None:
+        """Bind the surface's Mini App to its bot's menu button.
+
+        A plain method. It was a base class of its own -- eighteen lines whose
+        whole content was handing two of this class's own attributes to a free
+        function, which is a call, not an inheritance.
+        """
+        await sync_telegram_mini_app(
+            surface=surface,
+            credential_resolver=self._credential_resolver,
+            uow=self.surface_repository.uow,
         )
 
     async def get_surface(self, surface_id: UUID) -> AgentSurfaceEntity:
         surface = await self.surface_repository.get(surface_id)
         if surface is None:
-            raise AgentSurfaceNotFoundError(str(surface_id))
-        return surface
-
-    async def get_surface_in_pod(
-        self,
-        *,
-        pod_id: UUID,
-        surface_id: UUID,
-    ) -> AgentSurfaceEntity:
-        surface = await self.get_surface(surface_id)
-        if surface.pod_id != pod_id:
             raise AgentSurfaceNotFoundError(str(surface_id))
         return surface
 
@@ -307,8 +296,6 @@ class AgentSurfaceService(
         agent_id: UUID | None = None,
         update_agent_id: bool = False,
         config: SurfaceConfig | None = None,
-        mode: SurfaceMode | None = None,
-        event_mode: SurfaceEventMode | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
         account_id: UUID | None = None,
         external_workspace_id: str | None = None,
@@ -322,14 +309,19 @@ class AgentSurfaceService(
 
         if update_agent_id:
             surface.update_agent(agent_id)
+            # Only when the agent changes: re-checking otherwise would refuse
+            # every ordinary edit to a surface, since the surface it conflicts
+            # with is itself -- and `id` excludes it only because it already has
+            # one. A surface being created does not.
+            await ensure_one_surface_per_agent(
+                surface, surface_repository=self.surface_repository
+            )
 
         # Any one of these touches the account binding, and the binding has to be
         # re-resolved as a whole rather than field by field.
         binding_changes = (
             config,
             account_id,
-            mode,
-            event_mode,
             credential_mode,
             external_workspace_id,
             external_tenant_id,
@@ -340,8 +332,6 @@ class AgentSurfaceService(
                 surface,
                 config=config,
                 account_id=account_id,
-                mode=mode,
-                event_mode=event_mode,
                 credential_mode=credential_mode,
                 external_workspace_id=external_workspace_id,
                 external_tenant_id=external_tenant_id,
@@ -365,7 +355,7 @@ class AgentSurfaceService(
                 webhook_url=self._build_public_surface_webhook_url(updated.id),
                 webhook_secret=updated.webhook_secret or "",
             )
-        await notify_surface_receiver_config_changed(updated.id)
+        await self._notify_receivers_after_commit(updated.id)
         return updated
 
     async def _apply_binding_update(
@@ -374,8 +364,6 @@ class AgentSurfaceService(
         *,
         config: SurfaceConfig | None,
         account_id: UUID | None,
-        mode: SurfaceMode | None,
-        event_mode: SurfaceEventMode | None,
         credential_mode: SurfaceCredentialMode | None,
         external_workspace_id: str | None,
         external_tenant_id: str | None,
@@ -393,8 +381,6 @@ class AgentSurfaceService(
         surface.update_config(
             config if config is not None else surface.config,
             account_id=account_id,
-            mode=mode,
-            event_mode=event_mode,
             credential_mode=credential_mode,
             external_workspace_id=external_workspace_id or resolved_workspace_id,
             external_tenant_id=external_tenant_id or resolved_tenant_id,
@@ -402,7 +388,7 @@ class AgentSurfaceService(
             surface_identity_id=surface_identity_id,
         )
         self._validate_runtime_supported(surface)
-        await self._ensure_unique_org_credential_binding(surface)
+        await self._ensure_identity_is_claimable(surface)
 
     async def list_surfaces_by_pod(
         self,
@@ -429,11 +415,11 @@ class AgentSurfaceService(
             if telegram_requires_webhook_setup(surface):
                 await self._delete_telegram_webhook(surface)
         await self.surface_repository.delete(surface_id)
-        await notify_surface_receiver_config_changed(surface_id)
+        await self._notify_receivers_after_commit(surface_id)
 
     async def delete_all_surfaces_for_pod(self, pod_id: UUID) -> int:
         """Remove every surface in a pod so its accounts become free again."""
-        return await self._delete_matching_surfaces(pod_id)
+        return await delete_matching_surfaces(self, pod_id)
 
     async def delete_surfaces_for_agent(self, pod_id: UUID, agent_id: UUID) -> int:
         """Remove the surfaces belonging to one agent, as it is deleted.
@@ -445,67 +431,48 @@ class AgentSurfaceService(
         starts answering from a deleted agent's address. Harmless while most pods
         had no agentless surface; every pod has one now.
         """
-        return await self._delete_matching_surfaces(
-            pod_id, agent_id=agent_id, match_agent=True
+        return await delete_matching_surfaces(
+            self, pod_id, agent_id=agent_id, match_agent=True
         )
 
-    async def delete_email_surfaces_for_pod(self, pod_id: UUID) -> int:
-        """Remove the pod's Resend surfaces, freeing their inbound addresses.
+    async def release_scarce_identities_for_pod(self, pod_id: UUID) -> int:
+        """Free the finite things this pod holds, inline as it is deleted.
 
-        Called inline as a pod is deleted, because the pod's name is freed in
-        that same request and a pod recreated under it otherwise races the worker
-        for the address. Resend only, which is what keeps it bounded and
-        provider-free: everything else still goes through the pod-deleted event
-        and :meth:`delete_all_surfaces_for_pod`.
+        Two kinds, for one reason: a Resend inbound address and a WhatsApp
+        number out of the pool. Both are allocated per surface off a shared
+        credential, both are exhaustible, and neither makes a provider call on
+        the way out -- Resend receives on a catch-all webhook, and a pooled
+        number's webhook belongs to the number rather than to the surface, so
+        there is nothing to deregister. That is what keeps this bounded and
+        safe to do inside the delete transaction; everything else still goes
+        through the pod-deleted event and :meth:`delete_all_surfaces_for_pod`.
+
+        Inline rather than on the event, because pod deletion is **soft** and
+        the surface row survives on purpose so an undelete restores a working
+        surface. That is the right trade for a Slack app and the wrong one for
+        something scarce: a soft-deleted pod would hold a number out of a finite
+        pool indefinitely, and the deployment would run out on behalf of pods
+        nobody is using. For the address there is a second reason -- the pod's
+        org-unique *name* is freed in this same request, so a pod recreated
+        under it races the worker for the address.
+
+        The cost, stated rather than discovered: an undeleted pod does not get
+        its number back, exactly as it does not get its address back. Somebody
+        restoring a pod re-allocates, and may find the pool empty.
+
+        Only WhatsApp surfaces that actually hold a number are released. One on
+        the shared line has taken nothing scarce, so it keeps the ordinary
+        teardown path.
         """
-        return await self._delete_matching_surfaces(
-            pod_id, platform=SurfacePlatform.RESEND.value
+        released = await delete_matching_surfaces(
+            self, pod_id, platform=SurfacePlatform.RESEND.value
         )
-
-    async def _delete_matching_surfaces(
-        self,
-        pod_id: UUID,
-        *,
-        platform: str | None = None,
-        agent_id: UUID | None = None,
-        match_agent: bool = False,
-    ) -> int:
-        """Delete a pod's surfaces, or the subset the filters name.
-
-        One loop for all three callers — a pod being deleted, an agent being
-        deleted, and a pod releasing its addresses — because the awkward part is
-        identical and worth having in one place: page through, tear each one
-        down, and never let one failure strand the rest.
-
-        Best-effort per surface. ``delete_surface`` runs the external teardown (a
-        Telegram webhook, a Composio polling schedule) and deletes the row even
-        when that fails, so an unreachable provider can neither keep a deleted
-        agent's mailbox alive nor hold an org-unique account binding hostage.
-        """
-        deleted = 0
-        failure_count = 0
-        cursor: UUID | None = None
-        while True:
-            surfaces, cursor = await self.list_surfaces_by_pod(
-                pod_id,
-                platform=platform,
-                agent_id=agent_id,
-                match_agent=match_agent,
-                cursor=cursor,
-            )
-            for surface in surfaces:
-                try:
-                    await self.delete_surface(surface.id)
-                    deleted += 1
-                except Exception:
-                    failure_count += 1
-            if cursor is None:
-                break
-        if failure_count:
-            logger.error(
-                "surface.cleanup.failed", pod_id=pod_id, failure_count=failure_count
-            )
-        return deleted
+        return released + await delete_matching_surfaces(
+            self,
+            pod_id,
+            platform=SurfacePlatform.WHATSAPP.value,
+            only_holding_an_identity=True,
+        )
 
     async def _get_connected_account(self, account_id: UUID) -> SurfaceAccountInfo:
         if self._account_port is None:
@@ -551,13 +518,27 @@ class AgentSurfaceService(
             "(ENABLE_RESEND_POLLING_MODE) work without a public webhook URL."
         )
 
-    async def _ensure_unique_org_credential_binding(
+    async def _ensure_identity_is_claimable(
         self,
         surface: AgentSurfaceEntity,
     ) -> None:
+        """Refuse a surface claiming something another surface already holds.
+
+        Two rules, not one, because they are about two different things and
+        reach different distances. The credential is a thing a person in this
+        organization chose, and is theirs to hold once. The bot is a thing the
+        *platform* delivers to, so it is claimable once anywhere.
+
+        The account rule goes first so that the most specific explanation wins.
+        Reusing one account in one organization trips both -- it is the same
+        account *and* the same bot -- and "this connected account is already
+        used" is the sentence that names what the person actually did. The
+        identity rule then answers only what the account rule cannot see: two
+        different accounts behind one bot, which is the case it was written for.
+        """
         await ensure_unique_org_credential_binding(
             surface, surface_repository=self.surface_repository
         )
-
-    def _is_email_surface(self, surface: AgentSurfaceEntity) -> bool:
-        return surface.surface_type.is_email
+        await ensure_unique_platform_identity(
+            surface, surface_repository=self.surface_repository
+        )

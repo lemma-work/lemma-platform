@@ -128,6 +128,9 @@ pub(crate) struct ActiveRun {
     pub(crate) handle: OwnedTask<anyhow::Result<()>>,
     pub(crate) cancel: watch::Sender<bool>,
     pub(crate) kill_at: Option<tokio::time::Instant>,
+    /// Where a mid-run `REFRESH_CREDENTIAL` writes the new token. The run's
+    /// task holds the other half and retires it on the way out.
+    pub(crate) credential: std::sync::Arc<crate::runtime::credentials::RunCredential>,
 }
 
 /// One completed refresh: what Lemma accepted, and what the probes learned.
@@ -510,6 +513,10 @@ impl TargetWorker {
                 handle: OwnedTask(handle),
                 cancel: watch::channel(false).0,
                 kill_at: None,
+                credential: crate::runtime::credentials::RunCredential::new(
+                    &self.paths.root,
+                    run_id,
+                ),
             },
         );
     }

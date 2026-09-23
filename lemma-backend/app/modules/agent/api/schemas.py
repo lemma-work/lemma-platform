@@ -31,7 +31,10 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
-from app.modules.agent.services.workspace_location import pod_cwd_for
+from app.modules.agent.services.workspace_location import (
+    pod_cwd_for,
+    workspace_location_for,
+)
 from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import AgentHostStatus
@@ -179,6 +182,30 @@ class ConversationResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field(  # type: ignore[prop-decorator]
+        return_type=str,
+        description=(
+            "The conversation's working directory in the sandbox. This is "
+            "where the agent's shell starts and where its files land, so it is "
+            "the directory a file pane should be showing."
+        ),
+    )
+    @property
+    def workspace_cwd(self) -> str:
+        # The sibling of `pod_cwd`, and added for the same reason one filesystem
+        # over. The file pane rebuilt this path itself as
+        # `/workspace/conversations/{id}` -- which is the *fallback* branch of
+        # `BaseAgentContext.get_workspace_cwd()`, reached only by contexts with
+        # no conversation row. Every real run resolves through the ladder below
+        # to `/workspace/c/{date}/{slug}`, so the pane asked for a directory
+        # that has never existed and got back an empty listing, because a
+        # missing directory and an empty one answer identically.
+        return workspace_location_for(
+            metadata=self.metadata,
+            conversation_id=self.id,
+            created_at=self.created_at,
+        ).cwd
 
     @computed_field(  # type: ignore[prop-decorator]
         return_type=str,

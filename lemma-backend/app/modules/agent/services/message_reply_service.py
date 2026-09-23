@@ -11,8 +11,8 @@ rule as a person typing, and the same one this module's own
 ``infrastructure.adapters.workflow_control`` already uses to hand a
 system-triggered run its prompt.
 
-Which is why an agent no longer has any reason to ``snooze`` after
-``message_user``. Snooze is a timer for work with a real gap in it — a build, a
+Which is why an agent no longer has any reason to ``wait_for`` after
+``message_user``. Waiting is for work with a real gap in it — a build, a
 thing that needs to settle — and it stopped being this feature's business.
 """
 
@@ -30,7 +30,7 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.services.snooze_wake_service import SnoozeWakeService
+from app.modules.agent.services.wait_wake_service import AgentWaitService
 
 logger = get_logger(__name__)
 
@@ -81,7 +81,7 @@ class MessageReplyService:
                 # Asleep for its own reasons. Resolving the pause it is holding
                 # is the way back in: a new message would supersede that pause
                 # while leaving its wait row armed to fire a second time later.
-                return await SnoozeWakeService(self.uow).wake(
+                return await AgentWaitService(self.uow).wake(
                     wait=wait, reason=AgentWaitWakeReason.ANSWERED
                 )
 

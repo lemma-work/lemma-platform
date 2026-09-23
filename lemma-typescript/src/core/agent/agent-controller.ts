@@ -99,6 +99,17 @@ export interface AgentControllerOptions {
   /** The conversation was renamed mid-stream by the server's title generator. */
   onTitle?: (title: string, conversationId: string | null) => void;
   onError?: (error: unknown) => void;
+  /**
+   * Something the runtime wants the person to read, which is not an error and
+   * not a run status: a model the harness no longer offers, a provider session
+   * that was lost and restarted, an image that could not be saved.
+   *
+   * A host writes these with a human sentence in them and the backend forwards
+   * them; nothing consumed them, so they were written and dropped. Delivered
+   * separately from `onError` because the run is fine -- a consumer should show
+   * these and carry on.
+   */
+  onNotice?: (notice: string, kind: string | undefined) => void;
 }
 
 /** Derived, render-ready outputs computed from a session snapshot. */
@@ -660,6 +671,9 @@ export class AgentController {
           // false is what sends this into the catch-up-and-reconnect path
           // below, which is what the server is asking for.
           continue;
+        }
+        if (parsed.notice) {
+          this.options.onNotice?.(parsed.notice, parsed.noticeKind);
         }
         if (parsed.error) {
           const streamError = new Error(parsed.error);

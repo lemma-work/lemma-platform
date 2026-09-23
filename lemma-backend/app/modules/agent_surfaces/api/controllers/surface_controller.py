@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import partial
 from uuid import UUID
 
@@ -16,10 +17,14 @@ from app.modules.connectors.contracts.surfaces import (
     require_account_owner,
     surface_connector,
 )
-from app.modules.agent.contracts.agents import agent_id_for_name, agent_name_for_id
+from app.modules.agent.contracts.agents import (
+    agent_id_for_name,
+    agent_name_for_id,
+    agent_names_for_ids,
+)
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceConnectionResolverDep,
-    SurfaceEventHandlerDep,
+    MemberReachDep,
     get_surface_service,
 )
 from app.modules.agent_surfaces.api.schemas import (
@@ -48,6 +53,9 @@ from app.modules.agent_surfaces.api.surface_config_resolver import (
     surface_setup_for_reader,
 )
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
+from app.modules.agent_surfaces.services.surface_identity_claim import (
+    create_surface_claiming_identity,
+)
 from app.modules.agent_surfaces.services.available_surfaces_builder import (
     build_available_surfaces,
 )
@@ -74,22 +82,32 @@ available_surfaces_router = APIRouter(
 )
 
 
+async def _resolve_surface_reaches(
+    surfaces: Sequence[AgentSurfaceEntity],
+    *,
+    service: AgentSurfaceService,
+    uow,
+) -> list[SurfaceReach]:
+    """``reach`` for a page of surfaces, in one call rather than a gather of
+    one call per surface -- resolving a reach reads and writes through ``uow``,
+    and a session cannot serve two of those at once. See ``resolve_many``."""
+    return await SurfaceReachResolver().resolve_many(
+        surfaces,
+        credential_resolver=service._credential_resolver,
+        find_account=partial(account, uow),
+        surface_repository=service.surface_repository,
+    )
+
+
 async def _resolve_surface_reach(
     surface: AgentSurfaceEntity,
     *,
     service: AgentSurfaceService,
     uow,
 ) -> SurfaceReach | None:
-    """Best-effort ``reach`` for a surface (never breaks the response)."""
-    try:
-        return await SurfaceReachResolver().resolve(
-            surface,
-            credential_resolver=service._credential_resolver,
-            find_account=partial(account, uow),
-            surface_repository=service.surface_repository,
-        )
-    except Exception:
-        return None
+    """``reach`` for one surface."""
+    reaches = await _resolve_surface_reaches([surface], service=service, uow=uow)
+    return reaches[0]
 
 
 async def _resolve_agent_id_filter(
@@ -146,9 +164,9 @@ async def list_surfaces(
         cursor=cursor,
         limit=limit,
     )
-    visible: list[tuple[AgentSurfaceEntity, str | None, SurfaceReach | None]] = []
+    readable: list[AgentSurfaceEntity] = []
+    named: set[UUID] = set()
     for surface in surfaces:
-        resolved_agent_name = None
         # The assistant's surfaces stay visible to every pod member: it is
         # pod-scoped, so there is no per-agent grant to hold. Reading this as an
         # ordinary agent would silently drop the pod's own mailbox out of the
@@ -164,11 +182,21 @@ async def list_surfaces(
             )
             if not allowed:
                 continue
-            resolved_agent_name = await _resolve_agent_display_name(
-                uow.session, surface.agent_id
-            )
-        reach = await _resolve_surface_reach(surface, service=service, uow=uow)
-        visible.append((surface, resolved_agent_name, reach))
+            named.add(surface.agent_id)
+        readable.append(surface)
+
+    # One lookup for the page's agents, and one for its reaches, rather than
+    # one of each per row.
+    agent_names = await agent_names_for_ids(uow.session, named)
+    reaches = await _resolve_surface_reaches(readable, service=service, uow=uow)
+    visible: list[tuple[AgentSurfaceEntity, str | None, SurfaceReach | None]] = [
+        (
+            surface,
+            agent_names.get(surface.agent_id) if surface.agent_id in named else None,
+            reach,
+        )
+        for surface, reach in zip(readable, reaches)
+    ]
 
     # Resolved once for the page, after the per-agent filter, so the two queries
     # it costs cover only surfaces this caller can actually see.
@@ -207,9 +235,10 @@ async def create_surface(
     connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
-    """Create a surface. ``name`` defaults to the lowercased platform — pass an
-    explicit name to create a second surface of the same platform (e.g. a
-    second bot routed to a different agent)."""
+    """Create a surface. ``name`` defaults to the lowercased platform and is the
+    pod-unique handle the API addresses it by. A second surface of the same
+    platform has to belong to a different agent: one agent reaches a platform in
+    one place — one Slack app, one WhatsApp number, one Telegram bot."""
     await require_own_account(
         request.account_id,
         user_id=user.id,
@@ -242,7 +271,8 @@ async def create_surface(
         config_input=request.config,
         ctx=ctx,
     )
-    surface = await service.create_surface_minting_address(
+    surface = await create_surface_claiming_identity(
+        service,
         pod_id=pod_id,
         agent_id=agent_name_id,
         agent_name=request.default_agent_name or None,
@@ -440,7 +470,7 @@ async def send_surface_message(
     request: SurfaceSendRequest,
     user: CurrentUser,
     ctx: PodContextDep,
-    ingress: SurfaceEventHandlerDep,
+    reach: MemberReachDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> SurfaceSendResponse:
     """Proactively send a message to a pod member on this surface.
@@ -455,7 +485,7 @@ async def send_surface_message(
         agent_id=surface.agent_id,
         action=Permissions.AGENT_UPDATE,
     )
-    undeliverable = await ingress.send_to_member(
+    undeliverable = await reach.send_to_member(
         surface=surface,
         user_id=request.user_id,
         message=request.message,

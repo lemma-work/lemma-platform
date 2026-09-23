@@ -1289,6 +1289,8 @@ def test_chat_can_use_default_pod_agent_with_message_option(monkeypatch):
                 def iter_lines(self, decode_unicode=True):
                     yield 'data: {"type":"token","data":"default reply"}'
                     yield ""
+                    yield 'data: {"type":"completed","data":{"status":"completed"}}'
+                    yield ""
 
                 def close(self):
                     captured["closed"] = True
@@ -1334,6 +1336,8 @@ def test_chat_treats_a_quoted_question_as_the_message_not_an_agent(monkeypatch):
             class Response:
                 def iter_lines(self, decode_unicode=True):
                     yield 'data: {"type":"token","data":"a lot"}'
+                    yield ""
+                    yield 'data: {"type":"completed","data":{"status":"completed"}}'
                     yield ""
 
                 def close(self):

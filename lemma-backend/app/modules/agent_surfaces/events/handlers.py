@@ -1,4 +1,8 @@
 from __future__ import annotations
+from collections.abc import Awaitable, Callable
+
+from datetime import datetime, timezone
+from sqlalchemy import false, update
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
@@ -24,34 +28,35 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
-from app.modules.agent_surfaces.api import dependencies as surface_dependencies
-from app.modules.agent_surfaces.api.dependencies import (
-    get_surface_service,
-    surface_repository_factory,
+from app.modules.agent_surfaces.composition import (
+    build_app_event_handler,
+    build_surface_ingress,
+    build_surface_service,
+    build_surface_turn_starter,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.events import (
+    SurfaceWebhookReceivedEvent,
+    SurfaceOnboardingReadyEvent,
+    SurfaceEvents,
+)
+from app.modules.agent_surfaces.infrastructure.onboarding_models import (
+    VerifiedSurfaceIdentity,
+)
 from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfaceIngressRequest,
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
+from app.modules.agent_surfaces.domain.onboarding_state import OnboardingIngressResult
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
-)
-from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
-    SqlAlchemySurfaceRoutingResolutionAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-    SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
 from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
     get_surface_event_dedup_store,
-)
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
 )
 from app.modules.agent_surfaces.services.surface_inbound import (
     release_ingress_claim,
@@ -73,13 +78,42 @@ def provide_job_queue() -> SharedStreaqJobQueue:
     return get_streaq_job_queue()
 
 
-def build_surface_event_handler(uow):
-    return AgentSurfaceIngressService(
-        uow=uow,
-        surface_repository=surface_repository_factory(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
+@reliable_redis_stream_subscriber(
+    router,
+    SurfaceEvents.STREAM,
+    group="agent-surfaces.onboarding",
+    consumer="agent-surfaces.onboarding-consumer",
+)
+async def handle_onboarding_ready(
+    event: dict[str, object],
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+    job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+) -> None:
+    if event.get("event_type") != SurfaceOnboardingReadyEvent.get_event_type():
+        return
+
+    async def process() -> None:
+        from app.modules.agent_surfaces.services.onboarding_replay import (
+            replay_onboarding,
+        )
+
+        ready = SurfaceOnboardingReadyEvent.model_validate(event)
+        await replay_onboarding(
+            ready.pending_id, uow_factory=uow_factory, job_queue=job_queue
+        )
+
+    await inbox.process("agent-surfaces.onboarding", event, process)
+
+
+def provide_onboarding_handler(
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+) -> Callable[[SurfaceIngressRequest], Awaitable[OnboardingIngressResult]]:
+    from app.modules.agent_surfaces.services.chat_onboarding import (
+        ChatOnboardingCoordinator,
     )
+
+    return ChatOnboardingCoordinator(uow_factory).handle
 
 
 @reliable_redis_stream_subscriber(
@@ -94,6 +128,9 @@ async def handle_surface_webhook(
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ] = Depends(provide_onboarding_handler),
 ) -> None:
     # ``surface_events`` also carries ``surface.connected`` and
     # ``surface.message.answered``, which exist for the analytics projections.
@@ -114,10 +151,53 @@ async def handle_surface_webhook(
 
     async def process() -> None:
         await _process_surface_webhook(
-            received, fs_logger, uow_factory=uow_factory, job_queue=job_queue
+            received,
+            fs_logger,
+            uow_factory=uow_factory,
+            job_queue=job_queue,
+            onboarding_handler=onboarding_handler,
         )
 
     await inbox.process("agent-surfaces.webhook", received, process)
+
+
+async def _context_for_delivery(
+    part: SurfaceIngressRequest,
+    *,
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ],
+    uow_factory: UnitOfWorkFactory,
+) -> AgentSurfaceContext | None:
+    """Onboarding's answer for one delivery, or ordinary ingestion's.
+
+    The two refusals caught here mean "this message cannot go the onboarding
+    way", and neither gets better on a retry: a personal route dies when the pod
+    is deleted, the person is removed from it, or the app is uninstalled.
+    Uncaught, they left the inbox retrying a message that can never succeed and
+    the person with no answer at all. Ordinary ingestion is the right next
+    thing -- it routes by pod membership, and where it cannot it says so, which
+    is the reply this was costing them.
+    """
+    from app.modules.agent_surfaces.services.onboarding_private_delivery import (
+        PrivateDeliveryUnavailable,
+    )
+    from app.modules.agent_surfaces.services.personal_dm_routes import (
+        PersonalRouteUnavailable,
+    )
+
+    try:
+        onboarding = await onboarding_handler(part)
+    except (PersonalRouteUnavailable, PrivateDeliveryUnavailable) as unavailable:
+        logger.info(
+            "agent_surfaces.events.handlers.onboarding_route_unavailable",
+            reason=str(unavailable),
+        )
+    else:
+        if onboarding.handled:
+            return onboarding.context
+    async with uow_factory() as uow:
+        return await build_surface_ingress(uow).prepare_ingress(part)
 
 
 async def _release_claim_for_retry(
@@ -158,6 +238,10 @@ async def _process_surface_webhook(
     *,
     uow_factory: UnitOfWorkFactory,
     job_queue: SharedStreaqJobQueue,
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ]
+    | None = None,
 ) -> None:
 
     if event.surface_id:
@@ -175,29 +259,48 @@ async def _process_surface_webhook(
         )
 
     async with uow_factory() as uow:
-        handler = build_surface_event_handler(uow)
+        handler = build_surface_ingress(uow)
         # Lifecycle events (the bot joined a channel, someone opened the app
         # home) are about the app itself: they never become a conversation, so
         # they are answered and stopped before the interaction/message paths.
         # Channel setup is time-critical: Slack expires the modal trigger in
         # ~3 seconds, so it runs before anything slower.
-        if await handler.try_handle_channel_setup(ingress_request):
+        app_events = build_app_event_handler(uow)
+        if await app_events.try_handle_channel_setup(ingress_request):
             return
 
-        if await handler.try_handle_lifecycle(ingress_request):
+        if await app_events.try_handle_lifecycle(ingress_request):
             return
 
-        if await handler.try_handle_interaction(ingress_request):
+        from app.modules.agent_surfaces.services.onboarding_inputs import (
+            is_onboarding_input,
+        )
+
+        if not is_onboarding_input(
+            ingress_request.payload
+        ) and await handler.try_handle_interaction(ingress_request):
             return
 
-        # One delivery can carry more than one message on a platform that
-        # batches; every other platform hands back the request unchanged.
-        contexts = [
-            (index, await handler.prepare_ingress(part))
-            for index, part in enumerate(
-                handler.split_webhook_deliveries(ingress_request)
+        deliveries = handler.split_webhook_deliveries(ingress_request)
+
+    if onboarding_handler is None:
+        from app.modules.agent_surfaces.services.chat_onboarding import (
+            ChatOnboardingCoordinator,
+        )
+
+        onboarding_handler = ChatOnboardingCoordinator(uow_factory).handle
+    contexts: list[tuple[int, AgentSurfaceContext | None]] = []
+    for index, part in enumerate(deliveries):
+        contexts.append(
+            (
+                index,
+                await _context_for_delivery(
+                    part,
+                    onboarding_handler=onboarding_handler,
+                    uow_factory=uow_factory,
+                ),
             )
-        ]
+        )
 
     for index, context in contexts:
         if not context:
@@ -251,7 +354,7 @@ async def on_pod_deleted(
     async def process() -> None:
         parsed = PodDeletedEvent.model_validate(event)
         async with uow_factory() as uow:
-            await get_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
+            await build_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
 
     await inbox.process("agent-surfaces.pod-deletion", event, process)
 
@@ -271,9 +374,30 @@ async def on_identity_event(
         return
 
     async def process() -> None:
+        from app.modules.identity.contracts.onboarding import current_verified_phone
+
         parsed = UserMobileChangedEvent.model_validate(event)
+        phone = await current_verified_phone(uow_factory, parsed.user_id)
         async with uow_factory() as uow:
             await ExternalSurfaceUserRepository(uow).clear_resolved_user(parsed.user_id)
+            # Every phone-bound identity goes when the account no longer has a
+            # verified number; otherwise only the ones bound to the old one. The
+            # `phone is None` arm has to be written as a SQL literal -- a plain
+            # Python bool inside `or_` reads as SQL and is not.
+            still_bound = (
+                VerifiedSurfaceIdentity.verified_phone == phone
+                if phone is not None
+                else false()
+            )
+            await uow.session.execute(
+                update(VerifiedSurfaceIdentity)
+                .where(
+                    VerifiedSurfaceIdentity.user_id == parsed.user_id,
+                    VerifiedSurfaceIdentity.verified_phone.isnot(None),
+                    ~still_bound,
+                )
+                .values(revoked_at=datetime.now(timezone.utc))
+            )
 
     await inbox.process("agent-surfaces.identity", event, process)
 
@@ -284,11 +408,9 @@ async def process_surface_message(
 ):
     worker_ctx: AppWorkerContext = streaq_worker.context
     task_payload = SurfaceProcessMessageTaskPayload.model_validate(payload)
-    # The service scopes its own short UoWs (credential read + message-write
+    # The starter scopes its own short UoWs (credential read + message-write
     # tail) around the long external I/O inside execute_chat — platform API
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
-    service = surface_dependencies.build_surface_event_handler_with_factory(
-        worker_ctx.uow_factory
-    )
-    await service.execute_chat(task_payload.context)
+    starter = build_surface_turn_starter(worker_ctx.uow_factory)
+    await starter.execute_chat(task_payload.context)

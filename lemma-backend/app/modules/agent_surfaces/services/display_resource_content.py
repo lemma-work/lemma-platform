@@ -281,7 +281,7 @@ async def _read_table_preview(
     conversation_id: UUID,
     request: DisplayResourceRequest,
 ) -> TablePreview | None:
-    pod_id = target.surface.pod_id
+    pod_id = target.pod_id
     ctx = await _pod_context(
         uow=uow,
         conversation_id=conversation_id,
@@ -381,7 +381,7 @@ async def _read_pod_file(
     path: str,
     require_inline_fit: bool,
 ) -> tuple[Any, bytes | None, Context] | None:
-    pod_id = target.surface.pod_id
+    pod_id = target.pod_id
     ctx = await _pod_context(
         uow=uow,
         conversation_id=conversation_id,
@@ -443,7 +443,7 @@ async def _page_preview_part(
     try:
         image = await render_pod_file_page(
             uow,
-            pod_id=target.surface.pod_id,
+            pod_id=target.pod_id,
             path=path,
             ctx=ctx,
             page=_PREVIEW_PAGE,

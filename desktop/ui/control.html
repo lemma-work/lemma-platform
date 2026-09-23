@@ -299,10 +299,8 @@
           <div class="warning-box" id="app-update-available" hidden>
             <strong id="app-update-headline">A new version of Lemma is available.</strong>
             <p id="app-update-cost"></p>
-            <p class="danger-warning" id="app-update-reset-warning" hidden>
-              A data-preserving upgrade has not been established for this installation.
-              Your current version, pods, files, and accounts are kept. Wait for a compatible update.
-            </p>
+            <!-- Filled in by control.js with the two Postgres versions. -->
+            <p class="danger-warning" id="app-update-reset-warning" hidden></p>
             <div class="button-row">
               <button class="btn primary" data-action="install-app-update">Download and install</button>
             </div>

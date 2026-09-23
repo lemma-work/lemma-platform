@@ -13,7 +13,10 @@ three platforms where ``acknowledge_interaction`` was a no-op.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.core.infrastructure.db.transaction_locks import connection_released
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 
@@ -23,6 +26,7 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.conversations_for_surfaces import SurfaceConversation
 from app.modules.agent_surfaces.domain.entities import (
+    platform_value_for_source,
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -47,12 +51,33 @@ from app.modules.agent_surfaces.services.interaction_helpers import (
 )
 from app.core.log.log import get_logger
 
+from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
+from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
+
 logger = get_logger(__name__)
 
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
 
+def _authorized_surface_ids(request) -> list[UUID] | None:
+    """The surfaces this verified request may act on, or `None` for all of them.
+
+    A surface-addressed webhook proved exactly one. A platform webhook proved
+    whatever `receiver_surface_ids` names -- for Slack and Teams that is derived
+    from the workspace the signature belongs to, which is the boundary a forged
+    payload cannot cross. `None` survives only where the secret was ours.
+    """
+    if isinstance(request, SurfaceDirectWebhookIngress):
+        return [request.surface_id]
+    return request.receiver_surface_ids
+
+
 class SurfaceInteractionMixin:
+    #: Supplied by `AgentSurfaceIngressService`; see `SurfaceInboundMixin`.
+    uow: SqlAlchemyUnitOfWork
+    router: SurfaceRouter
+    binder: ConversationBinder
+
     async def try_handle_interaction(
         self,
         request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
@@ -70,7 +95,7 @@ class SurfaceInteractionMixin:
                 return False
             adapter = self.adapter_registry.get(surface.surface_type)
         else:
-            platform = self._resolve_platform(request.source)
+            platform = platform_value_for_source(request.source)
             adapter = self.adapter_registry.get(platform) if platform else None
         if adapter is None:
             return False
@@ -87,7 +112,7 @@ class SurfaceInteractionMixin:
                     if surface is not None:
                         break
             if surface is not None:
-                credentials = await self._resolve_credentials(surface)
+                credentials = await self.credential_resolver.for_surface(surface)
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
@@ -97,11 +122,25 @@ class SurfaceInteractionMixin:
                         clear_actions=True,
                     )
             return True
-        await self.handle_interaction(parsed)
+        await self.handle_interaction(
+            parsed, authorized_surface_ids=_authorized_surface_ids(request)
+        )
         return True
 
-    async def handle_interaction(self, parsed: ParsedSurfaceInteraction) -> None:
+    async def handle_interaction(
+        self,
+        parsed: ParsedSurfaceInteraction,
+        *,
+        authorized_surface_ids: list[UUID] | None = None,
+    ) -> None:
         """Resume a paused ``ask_user`` run from a native answer submission.
+
+        ``authorized_surface_ids`` is what the signature actually proved, and it
+        is the difference between resolving an interaction and resolving
+        *anybody's* interaction. The button carries an unsigned
+        ``conversation_id|tool_call_id``, so without it the id alone decided
+        whose conversation was reached. Defaulted to ``None`` for the callers
+        that genuinely have no receiver list -- see `_within_authorized_scope`.
 
         The submitted values are keyed by question header (the native render uses
         the header as each input's id), so they map straight into
@@ -114,7 +153,9 @@ class SurfaceInteractionMixin:
         try:
             if parsed.action == "retry":
                 tool_call_id = ""
-                delivery = await resolve_current_interaction_delivery(self, parsed)
+                delivery = await resolve_current_interaction_delivery(
+                    self, parsed, authorized_surface_ids=authorized_surface_ids
+                )
             else:
                 target = parse_interaction_target(parsed)
                 if target is None:
@@ -124,6 +165,7 @@ class SurfaceInteractionMixin:
                     self,
                     parsed,
                     conversation_id,
+                    authorized_surface_ids=authorized_surface_ids,
                 )
             if delivery is None:
                 return
@@ -152,13 +194,19 @@ class SurfaceInteractionMixin:
 
             # Replay protection: each submission is processed once. A repeat is an
             # expected double-tap, not an error — debug only.
-            claimed = await self.event_dedup_store.claim_message(
-                surface_installation_id=surface.id,
-                platform=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_message_id=parsed.dedup_id,
-            )
+            #
+            # The connection goes back for it. This is a Redis round trip in the
+            # middle of the interaction path, and everything above it has only
+            # read -- the writes start below, so `safe_to_release` genuinely
+            # releases here rather than quietly declining.
+            async with connection_released(self.uow.session):
+                claimed = await self.event_dedup_store.claim_message(
+                    surface_installation_id=surface.id,
+                    platform=surface.surface_type,
+                    external_channel_id=parsed.external_channel_id,
+                    external_thread_id=parsed.external_thread_id,
+                    external_message_id=parsed.dedup_id,
+                )
             if not claimed:
                 logger.debug(
                     "agent_surfaces.ingress_service.surface_interaction_ignored_replay_duplicate.observed",
@@ -306,10 +354,10 @@ class SurfaceInteractionMixin:
             last_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
         except TypeError, ValueError:
             return link, conversation, False
-        route = await self._resolve_route(surface=surface, parsed=last_event)
+        route = await self.router.resolve_route(surface=surface, parsed=last_event)
         if route is None:
             return link, conversation, False
-        refreshed_link, _ = await self._get_or_create_conversation_link(
+        refreshed_link, _ = await self.binder.bind_conversation(
             surface=surface,
             parsed=last_event,
             resolved_user=ResolvedSurfaceUser(

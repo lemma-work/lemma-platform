@@ -288,6 +288,9 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                         adapter,
                         run_spec: spec,
                         scratch_directory: scratch,
+                        // A smoke run talks to no Lemma, so it is given no
+                        // credential.
+                        agent_environment: std::collections::BTreeMap::default(),
                         mcp_server: None,
                         can_load_session: false,
                         published_config_options: Vec::new(),

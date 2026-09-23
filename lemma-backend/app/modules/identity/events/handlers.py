@@ -16,6 +16,7 @@ from app.modules.identity.domain.events import (
     OrganizationInvitationAcceptedEvent,
     OrganizationInvitationCreatedEvent,
     UserSignedUpEvent,
+    UserPhoneReplacedEvent,
     WhatsAppMobileVerificationReceivedEvent,
 )
 from app.modules.identity.domain.organization_entities import OrganizationRole
@@ -49,10 +50,10 @@ async def handle_identity_event(
 ):
     """Dispatch identity events to email adapter."""
 
-    async def dispatch() -> None:
+    async def send_identity_email() -> None:
         await _dispatch_identity_event(event, fs_logger, email_port)
 
-    await inbox.process("identity-email-events", event, dispatch)
+    await inbox.process("identity-email-events", event, send_identity_email)
 
 
 async def _dispatch_identity_event(
@@ -61,6 +62,14 @@ async def _dispatch_identity_event(
     email_port: IdentityEmailPort,
 ) -> None:
     event_type = event.get("event_type")
+
+    if event_type == UserPhoneReplacedEvent.get_event_type():
+        parsed_phone = UserPhoneReplacedEvent.model_validate(event)
+        if not await email_port.send_phone_changed_email(
+            to_email=parsed_phone.email, mobile_number=parsed_phone.mobile_number
+        ):
+            raise RuntimeError("Phone change notice could not be delivered")
+        return
 
     if event_type == OrganizationInvitationCreatedEvent.get_event_type():
         parsed = OrganizationInvitationCreatedEvent.model_validate(event)
@@ -108,7 +117,7 @@ async def handle_mobile_verification_event(
     ):
         return
 
-    async def dispatch() -> None:
+    async def consume_mobile_verification() -> None:
         parsed = WhatsAppMobileVerificationReceivedEvent.model_validate(event)
         await get_whatsapp_mobile_verification_service().consume_message(
             code=parsed.code,
@@ -117,4 +126,6 @@ async def handle_mobile_verification_event(
             whatsapp_message_id=parsed.whatsapp_message_id,
         )
 
-    await inbox.process("identity-mobile-verification-events", event, dispatch)
+    await inbox.process(
+        "identity-mobile-verification-events", event, consume_mobile_verification
+    )

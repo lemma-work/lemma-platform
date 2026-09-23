@@ -14,10 +14,30 @@ pub(crate) fn container_has_exited(state: &serde_json::Map<String, Value>) -> bo
             .is_some_and(|value| !value.trim().is_empty())
 }
 
+/// Whether an app answers on a host and port.
+///
+/// Taken as an argument rather than called directly so a unit test can decide
+/// the answer. The real probe opens a TCP connection, and fixtures here map
+/// ports like 49152-49154, which sit inside Linux's ephemeral range -- so a
+/// listener another test had just been assigned could answer a probe meant for
+/// nothing, and a probe meant for a listener could queue behind it. That made
+/// readiness assertions pass on macOS and fail on Linux for reasons that had
+/// nothing to do with the code under test.
+pub(crate) type AppProbe<'a> = &'a dyn Fn(&str, u16, &str) -> bool;
+
 pub(crate) fn snapshot_from_inspect(
     sandbox_id: &str,
     inspect: &serde_json::Map<String, Value>,
     endpoint_host: &str,
+) -> Result<Value, GuestError> {
+    snapshot_from_inspect_with(sandbox_id, inspect, endpoint_host, &app_answers)
+}
+
+pub(crate) fn snapshot_from_inspect_with(
+    sandbox_id: &str,
+    inspect: &serde_json::Map<String, Value>,
+    endpoint_host: &str,
+    probe: AppProbe<'_>,
 ) -> Result<Value, GuestError> {
     let provider_id = inspect
         .get("Id")
@@ -62,11 +82,26 @@ pub(crate) fn snapshot_from_inspect(
         .and_then(|value| value.get("lemma.work/workload-kind"))
         .and_then(Value::as_str)
         .ok_or_else(|| GuestError::engine("sandbox workload label is missing"))?;
-    let apps = match workload_kind {
+    // What the caller declared when this container was created, read back off
+    // the container. The compiled-in lists below are the fallback for one made
+    // before that label existed -- and the reason the label exists: they are a
+    // copy of a list the backend owns, and the copy was missing the browser
+    // relay, so every snapshot of a live sandbox said port 4850 was not served
+    // while the container was serving it.
+    let declared = labels
+        .and_then(|value| value.get("lemma.work/apps"))
+        .and_then(Value::as_str)
+        .and_then(|encoded| serde_json::from_str::<Vec<AppSpec>>(encoded).ok())
+        .filter(|apps| validate_apps(apps).is_ok());
+    // The kind is still checked when the label is present: an unrecognised one
+    // is a container this guest did not create, and answering for it at all is
+    // the mistake.
+    let fallback = match workload_kind {
         "workspace" => workspace_apps(),
         "function" => function_apps(),
         _ => return Err(GuestError::engine("sandbox workload label is invalid")),
     };
+    let apps = declared.unwrap_or(fallback);
     let image = labels
         .and_then(|value| value.get("lemma.work/image-ref"))
         .and_then(Value::as_str)
@@ -87,13 +122,29 @@ pub(crate) fn snapshot_from_inspect(
     let mut statuses = serde_json::Map::new();
     for app in &apps {
         let host_port = ports.and_then(|value| mapped_port(value, app.port));
+        // Published is what the engine can tell us: the container runs and a
+        // port is mapped. It is not the same as answering, and reporting it as
+        // `ready` is what let the guest promise a browser relay that refused
+        // every connection.
+        let published = running && host_port.is_some();
+        // Every app is probed, eager and lazy alike. Lazy is the case this
+        // exists for: the browser and its relay were reported `ready: true`
+        // from a mapped port while both refused every connection, and the
+        // backend dialled an endpoint the guest had just promised was good.
+        // Probing a lazy app that has not started costs a connection refused,
+        // which on a container on this host is immediate.
+        let answering =
+            published && host_port.is_some_and(|port| probe(endpoint_host, port, &app.health_path));
         statuses.insert(
             app.name.clone(),
             json!({
                 "name": app.name,
                 "public_slug": app.public_slug,
                 "port": app.port,
-                "ready": running && host_port.is_some(),
+                // What the engine knows: it is running and a port is mapped.
+                "published": published,
+                // What was asked: it answered its declared health path.
+                "ready": answering,
                 "private_url": host_port.map(|port| format!("http://{endpoint_host}:{port}")),
             }),
         );
@@ -137,20 +188,14 @@ pub(crate) fn mapped_port(
         .and_then(|port| port.parse().ok())
 }
 
-pub(crate) fn eager_apps_healthy(snapshot: &Value, apps: &[AppSpec]) -> bool {
-    apps.iter().filter(|app| app.startup == "eager").all(|app| {
-        snapshot["status"]["apps"][&app.name]["private_url"]
-            .as_str()
-            .map(|base| {
-                let path = if app.health_path.starts_with('/') {
-                    app.health_path.clone()
-                } else {
-                    format!("/{}", app.health_path)
-                };
-                probe_http(&format!("{}{path}", base.trim_end_matches('/'))).is_ok()
-            })
-            .unwrap_or(false)
-    })
+/// Whether an app answers its health path, through the guest's one HTTP prober.
+///
+/// `probe_http` is what readiness has always used: any status below 500 is a
+/// server that is serving -- a 401 from the runtime, which wants a credential
+/// guestd does not hold, included -- and a 5xx is one that is not.
+pub(crate) fn app_answers(host: &str, port: u16, health_path: &str) -> bool {
+    let path = health_path.strip_prefix('/').unwrap_or(health_path);
+    probe_http(&format!("http://{host}:{port}/{path}")).is_ok()
 }
 
 impl<E: Engine + 'static> GuestService<E> {

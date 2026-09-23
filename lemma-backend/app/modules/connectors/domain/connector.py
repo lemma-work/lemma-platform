@@ -165,27 +165,51 @@ class KindSpecBase(BaseModel):
 class ComposioKindSpec(KindSpecBase):
     """A toolkit Composio brokers on Lemma's behalf.
 
-    Always system-credentialed: every Composio toolkit runs on Lemma's own
-    Composio account, so ``system_default_available`` is always True and an
-    install is always SYSTEM_DEFAULT (see
-    ``COMPOSIO_SYSTEM_CREDENTIALS_ONLY``). A ``supports_org_custom_auth_config``
-    flag used to sit here promising the opposite; it was hardcoded False by the
-    only thing that produced it, force-set False again on read, and rejected
-    two layers earlier than the one branch that consulted it -- so it never
-    carried information. ``supports_org_custom_oauth`` on the base class is the
-    real "org may bring its own client" flag, and it belongs to the kinds that
-    can honour it.
+    Composio is always reached with Lemma's own Composio account -- there is no
+    per-org Composio key. What is *not* constant is whether Composio holds
+    credentials for a given toolkit: it does for Gmail and Slack, and does not
+    for Twitter or Spotify, where the org has to bring the app's own client.
+    ``system_default_available`` carries that per-toolkit answer from the
+    catalog. It used to be pinned ``True`` here, hardcoded ``True`` by the
+    importer and forced ``True`` again on read, which is how an unconnectable
+    toolkit came to advertise a Connect button.
 
-    ``auth_config_schema`` is NOT an org install form here: for a non-OAuth
-    toolkit the catalog fills it with the *end user's* credential fields
-    (derived from Composio's ``connected_account_initiation``), which is what
-    the connect dialog renders.
+    ``supports_org_custom_oauth`` on the base class means the same thing it
+    means everywhere: the org may bring its own OAuth client. For a Composio
+    toolkit that is true exactly when Composio manages none.
+
+    Two schemas, and they are not interchangeable:
+
+    - ``auth_config_schema`` -- for a non-OAuth toolkit, the *end user's*
+      credential fields (Composio's ``connected_account_initiation``), which the
+      connect dialog renders after the install exists.
+    - ``install_config_schema`` -- for an unmanaged toolkit, the *org's* install
+      fields (Composio's ``auth_config_creation``): a client id and secret, plus
+      whatever else that toolkit needs — Twitter also wants a `generic_id`.
     """
 
     kind: Literal[ConnectorKind.COMPOSIO] = ConnectorKind.COMPOSIO
     auth_scheme: AuthScheme = AuthScheme.OAUTH2
     toolkit_slug: str
+    # Still defaulted True, and deliberately so now that nothing overwrites it
+    # on read. A catalog row written before this field carried a per-toolkit
+    # answer has no key to deserialize, and every one of those rows was for a
+    # toolkit that did connect -- so the absent value must keep meaning what it
+    # used to. Only a re-imported catalog says False, and only for the toolkits
+    # the importer found Composio manages no credentials for.
     system_default_available: bool = True
+    install_config_schema: dict[str, Any] | None = None
+
+    @property
+    def install_schema(self) -> dict[str, Any] | None:
+        """What the org fills in -- not the end user's credential form.
+
+        Overrides the base property, which aliases ``auth_config_schema``. On
+        every other kind those are the same thing; here they are two different
+        forms for two different people, and a caller asking "what does the org
+        supply?" must not be handed the credential fields.
+        """
+        return self.install_config_schema
 
 
 class HttpKindSpec(KindSpecBase):

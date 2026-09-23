@@ -53,6 +53,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     paired_machine,
     stale_after,
 )
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = pytest.mark.e2e
 
@@ -241,10 +242,10 @@ async def test_the_bridge_hands_tools_the_directory_the_prompt_names(
     """The agent's prompt and the agent's tools disagreed about where it is.
 
     `resolve_workspace_location` puts a conversation at
-    `/workspace/c/<date>/<slug>`, stamps it into the conversation's metadata,
+    `<root>/c/<date>/<slug>`, stamps it into the conversation's metadata,
     and the prompt quotes it. The tools go wherever `ctx.get_workspace_cwd()`
     says -- and this bridge never set `workspace_cwd`, so it fell back to
-    `/workspace/conversations/<uuid>`. For the in-process harness the prompt was
+    `<root>/conversations/<uuid>`. For the in-process harness the prompt was
     true; for every remote harness it named a directory the tools never entered,
     which is why `pwd` disagreed with the Working Directory section.
 
@@ -266,7 +267,7 @@ async def test_the_bridge_hands_tools_the_directory_the_prompt_names(
     assert ctx.get_workspace_cwd() == expected.cwd
     assert ctx.get_pod_cwd() == resolve_pod_cwd(conversation)
     # Named explicitly: this is the shape the tools used to get.
-    assert not ctx.get_workspace_cwd().startswith("/workspace/conversations/")
+    assert not ctx.get_workspace_cwd().startswith(f"{WORKSPACE_ROOT}/conversations/")
 
 
 @pytest.mark.asyncio
@@ -371,4 +372,4 @@ async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
         )
     )
     assert stored.get("cwd") == ctx.get_workspace_cwd(), stored
-    assert stored["cwd"].startswith("/workspace/c/"), stored
+    assert stored["cwd"].startswith(f"{WORKSPACE_ROOT}/c/"), stored

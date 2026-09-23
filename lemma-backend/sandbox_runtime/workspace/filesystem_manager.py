@@ -91,9 +91,10 @@ class FilesystemManager:
         data: AsyncIterable[bytes],
         *,
         expected_sha256: str | None,
+        mode: int | None = None,
     ) -> FileStat:
         candidate, temporary, handle = await asyncio.to_thread(
-            self._prepare_write_sync, path, expected_sha256
+            self._prepare_write_sync, path, expected_sha256, mode
         )
         digest = hashlib.sha256()
         size = 0
@@ -192,7 +193,7 @@ class FilesystemManager:
         return handle, requested
 
     def _prepare_write_sync(
-        self, path: str, expected_sha256: str | None
+        self, path: str, expected_sha256: str | None, mode: int | None = None
     ) -> tuple[Path, Path, BinaryIO]:
         candidate = self._new_path(path)
         if expected_sha256 is not None:
@@ -205,7 +206,15 @@ class FilesystemManager:
             ):
                 raise FileConflictError("file content digest does not match")
         temporary = candidate.with_name(f".{candidate.name}.lemma-{uuid4().hex}")
-        return candidate, temporary, temporary.open("xb")
+        handle = temporary.open("xb")
+        if mode is not None:
+            # Applied to the temporary, before `os.replace` makes the path
+            # visible: a file that is briefly world-readable is world-readable.
+            # This is how a delivered secret gets 0600 -- without it the write
+            # took the process umask, and on Desktop the browser relay token
+            # landed 0644 while Docker and E2B both wrote it 0600.
+            os.fchmod(handle.fileno(), mode)
+        return candidate, temporary, handle
 
     @staticmethod
     def _commit_write_sync(
@@ -269,8 +278,9 @@ class FilesystemManager:
         if not candidate.is_absolute():
             raise ValueError("filesystem path must be absolute")
         # Creating an allowed root is an idempotent operation. Requiring its
-        # parent to be allowed would incorrectly reject "/workspace" because
-        # "/" is intentionally outside the runtime's filesystem capability.
+        # parent to be allowed would incorrectly reject a root like
+        # "/home/user", because "/" is intentionally outside the runtime's
+        # filesystem capability.
         if candidate in self._roots:
             return candidate
         parent = candidate.parent

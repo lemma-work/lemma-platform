@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { FirstWorkspaceRequest } from '../models/FirstWorkspaceRequest.js';
+import type { FirstWorkspaceResponse } from '../models/FirstWorkspaceResponse.js';
 import type { UserProfileRequest } from '../models/UserProfileRequest.js';
 import type { UserResponse } from '../models/UserResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
@@ -18,6 +20,26 @@ export class UsersService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/users/me',
+        });
+    }
+    /**
+     * Ensure The Current User Has A Workspace
+     * Select an eligible organization and idempotently ensure the current user has a private pod and assistant.
+     * @param requestBody
+     * @returns FirstWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static usersEnsureFirstWorkspace(
+        requestBody?: (FirstWorkspaceRequest | null),
+    ): CancelablePromise<FirstWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/users/me/first-workspace',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
         });
     }
     /**

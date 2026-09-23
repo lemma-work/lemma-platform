@@ -5,7 +5,7 @@ so it holds the pod path instead. This is where the promise it made comes true,
 and it happens at the moment the reply is built -- so a run that never replies
 leaves nothing behind for the next one to pick up.
 
-Split out of ``surface_egress`` because it is the only thing there that needs
+Split out of egress because it is the only thing there that needs
 both the pod (to load bytes and to sign links) and the platform (to know which
 of the two that platform can use), and because the file it was in was already
 at the size ratchet's ceiling.

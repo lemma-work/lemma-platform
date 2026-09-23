@@ -65,4 +65,32 @@ async def append_recipe(
     )
 
 
-__all__ = ["append_recipe", "get_pod"]
+async def create_first_pod(
+    uow,
+    *,
+    organization_id: UUID,
+    owner_user_id: UUID,
+    name: str,
+) -> PodEntity:
+    """The pod a person lands in, made for them rather than by them.
+
+    Onboarding needs this from outside pod: identity owns the organization and
+    the moment a person acquires one, and the pod that follows is the difference
+    between an empty account and somewhere to work. The alternative was identity
+    holding `PodService`, which is the arrangement the contracts exist to end.
+
+    Nothing pod-specific is decided here on the caller's behalf -- the name is
+    the caller's, and `create_pod` provisions the pod's assistant itself, so a
+    pod made this way is talkable-to the moment it exists.
+    """
+    return await get_pod_service(uow).create_pod(
+        PodEntity(
+            user_id=owner_user_id,
+            organization_id=organization_id,
+            name=name,
+        ),
+        owner_user_id,
+    )
+
+
+__all__ = ["append_recipe", "create_first_pod", "get_pod"]

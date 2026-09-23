@@ -55,6 +55,16 @@ export interface UseAssistantSessionOptions {
   /** The conversation was renamed mid-stream by the server's title generator. */
   onTitle?: (title: string, conversationId: string | null) => void;
   onError?: (error: unknown) => void;
+  /**
+   * Something the runtime wants a person to read that is neither an error nor
+   * a run status -- a model a harness no longer offers, a provider session
+   * that was lost and restarted, an image that could not be saved.
+   *
+   * The host writes these with a human sentence in them and the backend
+   * forwards them as status frames. Nothing read them, so they were written
+   * and dropped at this boundary.
+   */
+  onNotice?: (notice: string, kind: string | undefined) => void;
 }
 
 export interface CreateConversationInput {
@@ -399,6 +409,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     onMessage,
     onTitle,
     onError,
+    onNotice,
   } = options;
 
   const [conversationId, setConversationIdState] = useState<string | null>(externalConversationId);
@@ -431,6 +442,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   const onMessageRef = useRef(onMessage);
   const onTitleRef = useRef(onTitle);
   const onErrorRef = useRef(onError);
+  const onNoticeRef = useRef(onNotice);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const consumeRef = useRef<(opts: any) => Promise<void>>(null!);
   const streamReconnectCountRef = useRef(0);
@@ -523,6 +535,10 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   useEffect(() => {
     onErrorRef.current = onError;
   }, [onError]);
+
+  useEffect(() => {
+    onNoticeRef.current = onNotice;
+  }, [onNotice]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -887,6 +903,11 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
             rememberConversation({ ...renamed, title: parsed.title });
           }
           onTitleRef.current?.(parsed.title, renamedConversationId ?? null);
+        }
+        if (parsed.notice) {
+          // Not an error and not a status: the run carries on, and the person
+          // is told what happened to it.
+          onNoticeRef.current?.(parsed.notice, parsed.noticeKind);
         }
         if (parsed.status) {
           setConversationStatus(parsed.status);

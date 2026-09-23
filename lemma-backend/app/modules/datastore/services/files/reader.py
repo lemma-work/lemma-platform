@@ -12,6 +12,7 @@ from app.modules.datastore.domain.errors import (
     DatastoreObjectNotFoundError,
     DatastoreValidationError,
 )
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     FileStatus,
@@ -297,7 +298,19 @@ class FileReader:
             requester_user_id,
             ctx=ctx,
         )
-        content = await self.read_content_for_entity(file_entity)
+        # The two halves were already separate -- `resolve_readable_file_by_path`
+        # and `read_content_for_entity` both say in their docstrings that they
+        # exist so the transfer does not pin a pooled connection -- and this
+        # convenience wrapper called them back to back without ever handing the
+        # connection back in between. Every caller of the short form inherited
+        # the hold: the agent's file-read tool, the skills loader, outbound email
+        # attachments, and the memory brief on every agent run.
+        #
+        # Releasing here rather than at each call site is what makes the short
+        # form safe to keep. The resolve above is the only database work; nothing
+        # below it touches a session.
+        async with connection_released(getattr(self.file_repository, "session", None)):
+            content = await self.read_content_for_entity(file_entity)
         return file_entity, content
 
     async def resolve_readable_file_by_path(

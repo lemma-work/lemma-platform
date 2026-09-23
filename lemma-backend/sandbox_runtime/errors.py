@@ -59,3 +59,24 @@ class SandboxPathNotFound(SandboxRejected):
 
 class SandboxPathConflict(SandboxRejected):
     """A filesystem precondition or destination constraint was not satisfied."""
+
+
+class SandboxProcessNotFound(SandboxRejected):
+    """The sandbox has no process with this id.
+
+    Its own type because the nearest words were both wrong. `ProviderGone`
+    says the *sandbox* is gone, and callers act on that by forgetting their
+    handle to it and re-ensuring -- so a stale process id cost a lost
+    workspace handle. `SandboxUnavailable` says wait, and waiting for a
+    process that does not exist ends only at the deadline.
+    """
+
+
+class SandboxUnauthorized(SandboxRejected):
+    """The sandbox refused this caller's credential.
+
+    Definitive -- a credential does not become valid by waiting -- and kept
+    apart from the other refusals because they mean "your request was wrong",
+    which is what a reader tells a user, and this means "Lemma could not
+    authenticate to its own sandbox", which is not the user's to fix.
+    """

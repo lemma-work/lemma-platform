@@ -2,11 +2,27 @@
 
 use super::*;
 
+/// Every app answers. Readiness here is about how a snapshot is assembled, not
+/// about whether a socket can be opened -- that has its own test.
+fn answering(_host: &str, _port: u16, _path: &str) -> bool {
+    true
+}
+
+/// Nothing answers.
+fn refused(_host: &str, _port: u16, _path: &str) -> bool {
+    false
+}
+
 #[test]
 fn snapshot_uses_guest_ip_and_exact_container_generation() {
     let parsed: Value = serde_json::from_str(&inspect()).unwrap();
-    let snapshot =
-        snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "192.168.64.2").unwrap();
+    let snapshot = snapshot_from_inspect_with(
+        "box-1",
+        parsed[0].as_object().unwrap(),
+        "192.168.64.2",
+        &answering,
+    )
+    .unwrap();
 
     assert_eq!(snapshot["provider_id"], "sha256:exact-generation");
     assert_eq!(
@@ -14,6 +30,52 @@ fn snapshot_uses_guest_ip_and_exact_container_generation() {
         "http://192.168.64.2:49152"
     );
     assert_eq!(snapshot["status"]["ready"], true);
+}
+
+/// The lie this whole probe exists to stop telling.
+///
+/// A mapped port and a running container were reported as `ready: true`. On a
+/// real install that is exactly what the browser and its relay looked like
+/// while both refused every connection, so the backend dialled an endpoint the
+/// guest had just promised was good and got ECONNREFUSED.
+#[test]
+fn an_eager_app_nothing_is_serving_is_published_but_not_ready() {
+    // A port that is mapped in the engine's view and bound by nobody.
+    let parsed: Value = serde_json::from_str(&inspect()).unwrap();
+    let snapshot = snapshot_from_inspect_with(
+        "box-1",
+        parsed[0].as_object().unwrap(),
+        "192.168.64.2",
+        &refused,
+    )
+    .unwrap();
+
+    let runtime = &snapshot["status"]["apps"]["runtime"];
+    assert_eq!(runtime["published"], true, "the engine did map the port");
+    assert_eq!(runtime["ready"], false, "but nothing answered on it");
+    assert_eq!(snapshot["status"]["ready"], false);
+}
+
+/// A lazy app that has not started is published and not ready.
+///
+/// This is the case the probe exists for. The browser and its relay are both
+/// lazy, and both were reported `ready: true` off a mapped port while refusing
+/// every connection -- so the backend dialled an endpoint the guest had just
+/// promised was good and got ECONNREFUSED.
+#[test]
+fn a_lazy_app_that_has_not_started_says_so() {
+    let parsed: Value = serde_json::from_str(&inspect()).unwrap();
+    let snapshot = snapshot_from_inspect_with(
+        "box-1",
+        parsed[0].as_object().unwrap(),
+        "192.168.64.2",
+        &refused,
+    )
+    .unwrap();
+
+    let browser = &snapshot["status"]["apps"]["browser"];
+    assert_eq!(browser["published"], true, "the engine did map the port");
+    assert_eq!(browser["ready"], false, "but nothing answered on it");
 }
 
 /// The resting state of every idle workspace, read off a real guest that
@@ -107,4 +169,119 @@ fn a_container_that_never_started_still_reads_as_an_error() {
         snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
 
     assert_eq!(snapshot["status"]["status"], "ERROR");
+}
+
+/// The browser relay is a port a viewer's whole experience hangs off, and
+/// for as long as this list was compiled in rather than read back, the guest
+/// said it was not served.
+///
+/// The container really did listen: `build_run_arguments` publishes every app
+/// the caller declared, and the backend has declared three since the relay
+/// existed. Only the *reporting* side disagreed, so `reach_port(4850)` refused
+/// a live port and the VNC pane, `browser_sign_in` and saved logins were all
+/// unreachable on Desktop with nothing broken to find in the sandbox.
+#[test]
+fn a_sandbox_reports_the_apps_it_was_created_with_including_the_relay() {
+    let declared = serde_json::to_string(&workspace_apps()).unwrap();
+    let inspected = json!({
+        "Id": "sha256:exact-generation",
+        "State": {"Running": true, "Status": "running"},
+        "Config": {"Labels": {
+            "lemma.work/workload-kind": "workspace",
+            "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+            "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}",
+            "lemma.work/apps": declared
+        }},
+        "NetworkSettings": {"Ports": {
+            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}],
+            "4848/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49153"}],
+            "4850/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49154"}]
+        }}
+    });
+
+    let snapshot =
+        snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2").unwrap();
+
+    let relay = &snapshot["status"]["apps"]["relay"];
+    assert_eq!(relay["port"], 4850);
+    assert_eq!(relay["private_url"], "http://192.168.64.2:49154");
+    // Published, because the container declared and mapped it. Not ready:
+    // nothing has started the relay, and saying otherwise is the bug this
+    // whole probe exists to stop.
+    assert_eq!(relay["published"], true);
+    assert_eq!(relay["ready"], false);
+}
+
+/// A container created before the label existed still has to be answered for.
+///
+/// Its ports were published from the same declaration; only the record of what
+/// they were is missing. The compiled-in list stands in, and it now names the
+/// relay too -- so an installation upgrading into this fix gets its browser
+/// back without the sandbox being recreated.
+#[test]
+fn a_sandbox_created_before_the_label_falls_back_to_the_compiled_list() {
+    let inspected = json!({
+        "Id": "sha256:exact-generation",
+        "State": {"Running": true, "Status": "running"},
+        "Config": {"Labels": {
+            "lemma.work/workload-kind": "workspace",
+            "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+            "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+        }},
+        "NetworkSettings": {"Ports": {
+            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}],
+            "4850/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49154"}]
+        }}
+    });
+
+    let snapshot = snapshot_from_inspect_with(
+        "box-1",
+        inspected.as_object().unwrap(),
+        "192.168.64.2",
+        &answering,
+    )
+    .unwrap();
+
+    assert_eq!(
+        snapshot["status"]["apps"]["relay"]["private_url"],
+        "http://192.168.64.2:49154"
+    );
+    // Lazy, so a relay nobody has reached for does not hold the sandbox back
+    // from being ready -- but the eager runtime has to actually answer.
+    assert_eq!(snapshot["status"]["ready"], true);
+}
+
+/// A label that is not a valid app list is ignored rather than trusted.
+///
+/// It is written by this guest, so a malformed one means a container this
+/// guest did not create or a record that was damaged -- and the compiled-in
+/// list is a better answer than a parse failure, which would take an
+/// otherwise healthy sandbox out of `sandbox.list` entirely.
+#[test]
+fn an_unreadable_apps_label_falls_back_instead_of_failing_the_snapshot() {
+    for damaged in [
+        "not json",
+        "[]",
+        "[{\"name\":\"\",\"public_slug\":\"x\",\"port\":0}]",
+    ] {
+        let inspected = json!({
+            "Id": "sha256:exact-generation",
+            "State": {"Running": true, "Status": "running"},
+            "Config": {"Labels": {
+                "lemma.work/workload-kind": "workspace",
+                "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}",
+                "lemma.work/apps": damaged
+            }},
+            "NetworkSettings": {"Ports": {
+                "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}]
+            }}
+        });
+
+        let snapshot =
+            snapshot_from_inspect("box-1", inspected.as_object().unwrap(), "192.168.64.2")
+                .unwrap_or_else(|error| panic!("{damaged:?} failed the snapshot: {error:?}"));
+
+        assert_eq!(snapshot["status"]["apps"]["runtime"]["port"], 8080);
+    }
 }

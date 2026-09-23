@@ -105,3 +105,32 @@ async def test_renaming_an_organization_keeps_its_handle(world):
         "the handle is what links and references resolve through, so a rename "
         "must not move it"
     )
+
+
+@scenario("First-chat setup is idempotent and includes a personal assistant")
+@proves("PS-ONB-050")
+@covers("users.ensure_first_workspace")
+async def test_first_chat_workspace_is_ready_and_reused(world):
+    import asyncio
+
+    person = await world.new_person("first_chat")
+    first, second = await asyncio.gather(
+        person.prepares_first_workspace(), person.prepares_first_workspace()
+    )
+    assert first["organization_id"] == second["organization_id"]
+    assert first["pod_id"] == second["pod_id"]
+    assert first["assistant_id"] == second["assistant_id"]
+    assert first["pod_id"] and first["assistant_id"]
+    assert sum(result["pod_created"] for result in (first, second)) == 1
+
+
+@scenario("An importer can prepare only the organization and add chat later")
+@proves("PS-ONB-050")
+@covers("users.ensure_first_workspace")
+async def test_importer_can_defer_personal_pod_creation(world):
+    person = await world.new_person("import_then_chat")
+    imported = await person.prepares_first_workspace(with_pod=False)
+    assert imported["pod_id"] is None and imported["assistant_id"] is None
+    ready = await person.prepares_first_workspace()
+    assert ready["organization_id"] == imported["organization_id"]
+    assert ready["pod_id"] and ready["assistant_id"]

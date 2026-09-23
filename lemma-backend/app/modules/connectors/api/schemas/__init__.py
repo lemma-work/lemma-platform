@@ -10,13 +10,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationSummary,
 )
+from app.core.api.schemas import BaseSchema
 from app.modules.connectors.domain.connector import AuthScheme, ConnectorKind
-
-
-class BaseSchema(BaseModel):
-    """Base schema with common configuration."""
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class OAuth2DefaultsResponseSchema(BaseModel):
@@ -61,6 +56,19 @@ class ConnectorKindResponseSchema(BaseModel):
     discovery: str = "none"
     # `composio` only.
     toolkit_slug: Optional[str] = None
+    # `composio` only, and deliberately not merged into `config_schema`. On a
+    # Composio kind those two are forms for two different people: `config_schema`
+    # holds the *end user's* credential fields, which the connect dialog renders
+    # after the install exists, while this holds the *organization's* install
+    # fields for a toolkit Composio has no managed credentials for. Writing one
+    # into the other empties the connect dialog for every API-key toolkit.
+    install_config_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "JSON Schema for the organization-supplied install config, when the "
+            "connector cannot be installed with the platform's own credentials."
+        ),
+    )
 
 
 # Connector Schemas

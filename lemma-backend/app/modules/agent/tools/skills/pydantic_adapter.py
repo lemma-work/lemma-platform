@@ -33,6 +33,12 @@ not run raw localhost API/Auth probes from workspace exec: workspace
 `localhost` is the isolated workspace container, not the host Lemma app.
 """
 
+#: The heading that identifies the block above inside a stored tool result.
+#: `remote_payload` strips it when replaying history, because everything it
+#: renders is concatenated into a single user turn and Lemma's instructions to
+#: an agent must not reach a model as the user's own words.
+LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER = "## Local Lemma Workspace Override"
+
 
 logger = get_logger(__name__)
 

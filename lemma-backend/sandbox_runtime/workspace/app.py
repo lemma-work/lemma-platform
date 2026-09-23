@@ -9,6 +9,7 @@ from pathlib import Path
 import struct
 from uuid import UUID
 
+
 from fastapi import (
     Body,
     Depends,
@@ -23,6 +24,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from sandbox_runtime.protocol import ByteRange, ProcessState
 from sandbox_runtime.tasks import create_inherited_task
 
@@ -90,7 +92,7 @@ def _load_token(explicit_token: str | None) -> str:
 def create_app(
     *,
     token: str | None = None,
-    allowed_roots: tuple[str, ...] = ("/workspace", "/tmp"),
+    allowed_roots: tuple[str, ...] = RUNTIME_FILESYSTEM_ROOTS,
     max_file_transfer_bytes: int | None = None,
 ) -> FastAPI:
     runtime_token = _load_token(token)
@@ -122,9 +124,9 @@ def create_app(
                     # One bad sweep must not end the loop; the next tick retries.
                     await manager.reap_expired()
                 with suppress(Exception):
-                    _shed_browser_under_pressure()
+                    await _shed_browser_under_pressure()
 
-        def _shed_browser_under_pressure() -> None:
+        async def _shed_browser_under_pressure() -> None:
             """Take the browser back when the sandbox has nothing left.
 
             Runs on the same tick as the deadline sweep because it needs no
@@ -137,15 +139,23 @@ def create_app(
             repaired itself would leave whoever reads these logs with the same
             unexplained `exit_code: 124` this was built from.
             """
-            outcome = shed_browser_if_starved()
+            outcome = await shed_browser_if_starved()
             if outcome is None:
                 return
-            available_mb, killed = outcome
+            # Which signal, not just that it happened: "oom_kill" and
+            # "headroom" call for different responses from whoever reads
+            # this, and the old line could not tell them apart because
+            # there was only one signal to report.
             logging.getLogger(__name__).warning(
-                "workspace runtime shed the browser: %s MB available, "
-                "%s processes killed. It will start again on the next capture.",
-                available_mb,
-                killed,
+                "workspace runtime shed the browser: signal=%s closed=%s "
+                "headroom=%sMB anon=%sMB oom_kill=%s host_available=%sMB. "
+                "It will start again on the next capture.",
+                outcome.signal,
+                outcome.closed,
+                outcome.headroom_mb,
+                outcome.anon_mb,
+                outcome.oom_kill,
+                outcome.available_mb,
             )
 
         reaper = create_inherited_task(_reap_forever(), name="process-deadline-reaper")
@@ -433,12 +443,17 @@ def create_app(
         expected_sha256: str | None = Query(
             default=None, pattern=r"^sha256:[0-9a-f]{64}$"
         ),
+        # Permission bits for the written file, as an octal string. Only used
+        # to deliver a secret, which is why the range is narrow: a caller may
+        # restrict a file, never widen one beyond what a umask would give.
+        mode: str | None = Query(default=None, pattern=r"^0?[0-7]{3}$"),
         _auth: None = Depends(authenticate),
     ) -> RuntimeFileStatResponse:
         stat = await filesystem.write_stream(
             path,
             request.stream(),
             expected_sha256=expected_sha256,
+            mode=int(mode, 8) if mode is not None else None,
         )
         return RuntimeFileStatResponse.from_domain(stat)
 
@@ -450,14 +465,26 @@ def create_app(
         await filesystem.move(request.source, request.destination)
         return Response(status_code=204)
 
-    @app.delete("/files", status_code=204)
+    @app.delete("/files")
     async def delete_file(
         path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
         recursive: bool = Query(default=False),
         _auth: None = Depends(authenticate),
     ) -> Response:
-        await filesystem.delete(path, recursive=recursive)
-        return Response(status_code=204)
+        # 204 when there was nothing to remove, 200 when there was. The manager
+        # has always computed this and the endpoint always threw it away, so
+        # both runtime-backed fabrics hard-coded `True` and told every caller
+        # something had been deleted -- including when nothing had. E2B has
+        # reported it truthfully since it existed.
+        try:
+            removed = await filesystem.delete(path, recursive=recursive)
+        except FileNotFoundError:
+            # A missing *parent* raises, where a missing leaf under a parent
+            # that exists returns False. Both are "nothing was there", and
+            # answering one 404 and the other 204 made the same question have
+            # two answers depending on how deep the absence went.
+            removed = False
+        return Response(status_code=200 if removed else 204)
 
     return app
 

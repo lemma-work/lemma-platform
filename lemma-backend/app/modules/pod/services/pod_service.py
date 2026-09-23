@@ -7,10 +7,12 @@ from typing import Optional
 from app.core.authorization.cache import invalidate_role_snapshot_cache
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
+from app.core.ports.plan_limits import PlanLimits
 from app.modules.identity.contracts import OrganizationJoinPolicy, OrganizationRole
 from app.modules.icon.contracts import IconCleanupPort
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
+    PodLimitReachedError,
     PodNotFoundError,
     PodValidationError,
 )
@@ -24,6 +26,7 @@ from app.modules.pod.domain.pod_entities import (
 )
 from app.modules.pod.domain.ports import (
     OrganizationMembershipPort,
+    OwnedPodsPort,
     PodMemberRepositoryPort,
     PodRepositoryPort,
     PodScheduleTeardownPort,
@@ -43,6 +46,8 @@ class PodService:
         icon_service: IconCleanupPort | None = None,
         schedule_teardown: PodScheduleTeardownPort | None = None,
         uow: object | None = None,
+        plan_limits: PlanLimits | None = None,
+        owned_pods: OwnedPodsPort | None = None,
     ):
         self.pod_repository = pod_repository
         self.pod_member_repository = pod_member_repository
@@ -52,6 +57,12 @@ class PodService:
         self.icon_service = icon_service
         self.schedule_teardown = schedule_teardown
         self._uow = uow
+        # Both or neither: an allowance with nothing to count against it would
+        # be a limit that is never enforced, and that should fail at wiring.
+        if (plan_limits is None) != (owned_pods is None):
+            raise ValueError("plan_limits and owned_pods are given together")
+        self._plan_limits = plan_limits
+        self._owned_pods = owned_pods
 
     async def create_pod(self, entity: PodEntity, creator_user_id: UUID) -> PodEntity:
         member = await self.organization_repository.get_member(
@@ -63,6 +74,9 @@ class PodService:
             )
 
         entity.name = self._normalize_name(entity.name)
+        await self._refuse_past_pod_allowance(
+            owner_user_id=entity.user_id, organization_id=entity.organization_id
+        )
 
         # Aggregate method registers pod.created event.
         entity.mark_created(creator_user_id)
@@ -121,6 +135,30 @@ class PodService:
             )
 
         return pod
+
+    async def _refuse_past_pod_allowance(
+        self, *, owner_user_id: UUID, organization_id: UUID
+    ) -> None:
+        """Refuse a pod the owner's plan has no room for.
+
+        Every pod counts, including the one onboarding makes for a person when
+        they join an organization: one rule, with no exceptions to remember. It
+        is counted against the pod's *owner* -- the person it is made for --
+        which is who the plan belongs to.
+        """
+        if self._plan_limits is None or self._owned_pods is None:
+            return
+        allowance = await self._plan_limits.pod_allowance(
+            user_id=owner_user_id, organization_id=organization_id
+        )
+        if allowance is None:
+            return
+        used = await self._owned_pods.lock_and_count(
+            user_id=owner_user_id,
+            excluding_organization_ids=allowance.excluded_organization_ids,
+        )
+        if used >= allowance.limit:
+            raise PodLimitReachedError(limit=allowance.limit, used=used)
 
     async def get_pod(
         self, pod_id: UUID, requester_user_id: UUID
@@ -324,18 +362,20 @@ class PodService:
         # written to by its correspondents. Which of the two came down to queue
         # lag. Every pod holds an address now, so this stopped being a corner.
         #
-        # Only the email surfaces, deliberately. The comment above is right that
-        # an unbounded number of Composio round trips must not go inside this
-        # transaction — but a Resend surface has none: it receives on a
-        # catch-all webhook, so `delete_surface` makes no provider call for it
-        # and `_sync_email_schedule` returns early. Bounded by the number of
-        # agents in the pod, and the rest still waits for the worker.
+        # Only the scarce identities, deliberately. The comment above is right
+        # that an unbounded number of Composio round trips must not go inside
+        # this transaction — but neither of these makes one: a Resend surface
+        # receives on a catch-all webhook, so `delete_surface` makes no provider
+        # call for it and `_sync_email_schedule` returns early, and a pooled
+        # WhatsApp number's webhook belongs to the number rather than to the
+        # surface. Bounded by the number of agents in the pod, and the rest
+        # still waits for the worker.
         if self._uow is not None:
             from app.modules.agent_surfaces.contracts.email_surfaces import (
-                release_pod_inbound_addresses,
+                release_pod_scarce_identities,
             )
 
-            await release_pod_inbound_addresses(self._uow, pod_id=pod_id)
+            await release_pod_scarce_identities(self._uow, pod_id=pod_id)
         # Cached role snapshots outlive the pod otherwise, and they are what
         # authorizes every pod-scoped request. The snapshot carries
         # `pod_is_deleted`, so one written *before* this moment says the pod is

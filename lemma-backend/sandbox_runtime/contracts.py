@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from sandbox_runtime.protocol import (
     AdmissionClass,
     SandboxRuntimeError,
@@ -254,7 +255,9 @@ class MoveFileRequest(StrictApiModel):
 
 
 class CreatePythonSessionModel(StrictApiModel):
-    cwd: str = Field(default="/workspace", min_length=1, max_length=4096, pattern=r"^/")
+    cwd: str = Field(
+        default=WORKSPACE_ROOT, min_length=1, max_length=4096, pattern=r"^/"
+    )
     environment_keys: tuple[str, ...] = ()
     deadline_at: datetime
 

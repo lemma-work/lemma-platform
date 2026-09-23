@@ -122,7 +122,7 @@ async def _snapshot_stream(
             return 0
         logger.info(
             "redis.stream.snapshot",
-            stream=stream,
+            stream_name=stream,
             group="",
             length=0,
             delayed=delayed,
@@ -150,7 +150,7 @@ async def _snapshot_stream(
             return 0
         logger.info(
             "redis.stream.snapshot",
-            stream=stream,
+            stream_name=stream,
             group="",
             length=stream_length,
             delayed=delayed,
@@ -229,7 +229,7 @@ async def _snapshot_stream(
         reported += 1
         logger.info(
             "redis.stream.snapshot",
-            stream=stream,
+            stream_name=stream,
             group=_text(_value(group, "name", "unknown")),
             length=stream_length,
             delayed=delayed,

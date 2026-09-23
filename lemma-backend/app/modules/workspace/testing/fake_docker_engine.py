@@ -31,6 +31,14 @@ class FakeContainer:
     running: bool = False
     status: str = "created"
     exit_code: int = 0
+    #: Container port -> host port, for whatever create asked to publish.
+    #:
+    #: Answered from the request rather than spelled out, because a fixed map
+    #: is how a double comes to certify half a system. This one used to report
+    #: `8080/tcp` and nothing else, so `reach_port` could only ever be checked
+    #: on the runtime -- and the browser relay's 4850, which the whole VNC
+    #: pane and every saved login hang off, had no covering test on any fabric.
+    published: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -41,6 +49,10 @@ class FakeDockerEngine:
     destroyed: list[str] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
     archives: list[tuple[str, str]] = field(default_factory=list)
+    #: The bytes too: what is *in* a delivered archive -- a 0700 directory and
+    #: a 0600 file -- is the property worth asserting, and a fake that dropped
+    #: the payload could not be asked about it.
+    archive_payloads: list[tuple[str, bytes]] = field(default_factory=list)
     # Set to raise from the next create, to exercise recovery paths.
     fail_next_create: Exception | None = None
     _next_id: int = 0
@@ -95,6 +107,10 @@ class FakeDockerEngine:
             name=name,
             image=request.image,
             labels=dict(request.labels),
+            published={
+                port: 34567 + offset
+                for offset, port in enumerate(sorted(request.host_config.port_bindings))
+            },
         )
         return DockerContainerCreateResponse.model_validate(
             {"Id": container_id, "Warnings": []}
@@ -155,7 +171,11 @@ class FakeDockerEngine:
         container = self._find(ref)
         if container is None:
             raise DockerEngineError("no such container")
+        # The bytes as well as the destination: what is *in* the archive is
+        # the security property worth asserting -- a 0700 directory and a 0600
+        # file -- and a fake that dropped the payload could not be asked.
         self.archives.append((container.name, path))
+        self.archive_payloads.append((path, payload))
 
     async def close(self) -> None:
         return None
@@ -183,7 +203,10 @@ def _inspect_payload(container: FakeContainer) -> Any:
             },
             "Config": {"Image": container.image, "Labels": dict(container.labels)},
             "NetworkSettings": {
-                "Ports": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "34567"}]},
+                "Ports": {
+                    port: [{"HostIp": "127.0.0.1", "HostPort": str(host_port)}]
+                    for port, host_port in container.published.items()
+                },
                 "Networks": {},
             },
         }

@@ -23,10 +23,22 @@ from app.core.domain.aggregate import AggregateRoot
 class AgentWaitType(str, Enum):
     """What the conversation is waiting on.
 
-    Only TIME today. Waking on a record change was scoped out deliberately:
-    reacting to a row changing is what a DATASTORE trigger is for, and a second
-    path to the same event is a duplication this codebase can do without. If it
-    comes back it arrives as a new member here, not as a flag on this one.
+    Every member is armed with a ``scheduled_at`` and swept, whatever else
+    resolves it: the timer is what guarantees the agent comes back at all, and a
+    condition only resolves the wait sooner. For TIME the timer *is* the
+    condition; for the others it is the deadline.
+
+    How each is answered differs, and that is the only interesting difference:
+    SUBAGENT is pushed (the child's ``AgentRunCompletedEvent`` already flows on
+    the agent event stream), while PROCESS is pulled, because nothing anywhere
+    publishes a process exit -- the E2B watcher records it into Redis and tells
+    nobody, and docker/lemma_local keep it inside the sandbox. A pulled wait
+    re-arms its own ``scheduled_at`` between checks, so the poll costs a Redis
+    read on a worker rather than a model round trip on the agent's turn.
+
+    Waking on a record change was scoped out deliberately: reacting to a row
+    changing is what a DATASTORE trigger is for, and a second path to the same
+    event is a duplication this codebase can do without.
 
     Human pauses are also absent: they resolve through the approval-decision
     row, which records *who* decided. Adding them would mean two sources of
@@ -34,6 +46,13 @@ class AgentWaitType(str, Enum):
     """
 
     TIME = "TIME"
+    PROCESS = "PROCESS"
+    SUBAGENT = "SUBAGENT"
+
+
+#: Wait types whose condition nobody publishes, so the claim has to look. These
+#: re-arm between checks instead of waking; see ``AgentWaitType``.
+POLLED_WAIT_TYPES = frozenset({AgentWaitType.PROCESS})
 
 
 class AgentWaitStatus(str, Enum):
@@ -62,6 +81,15 @@ class AgentWaitWakeReason(str, Enum):
     # Everything this conversation asked a person with `message_user` has been
     # answered. Unlike TIMER this *does* say something happened.
     ANSWERED = "ANSWERED"
+    # The thing being waited on reached a terminal state. Says only that it
+    # ended -- an exit code of 1 finishes just as much as an exit code of 0.
+    TARGET_FINISHED = "TARGET_FINISHED"
+    # It cannot be looked at any more: the sandbox went away, the child
+    # conversation was deleted. The outcome is unknown rather than bad.
+    TARGET_GONE = "TARGET_GONE"
+    # The ceiling ran out with the target still unfinished. Distinct from TIMER,
+    # which is a TIME wait arriving exactly where it meant to.
+    DEADLINE = "DEADLINE"
 
 
 class AgentConversationWaitEntity(AggregateRoot):
@@ -81,9 +109,26 @@ class AgentConversationWaitEntity(AggregateRoot):
     # so it survives the rollback of the attempt it is counting.
     wake_attempts: int = 0
 
-    # The snooze request verbatim, plus whatever the wake recorded.
+    # The wait request verbatim, plus whatever the resolution recorded.
     spec: dict[str, Any] = Field(default_factory=dict)
     completed_at: datetime | None = None
+
+    def rearm(self, next_at: datetime) -> None:
+        """Push a polled wait's next check out, without waking the agent.
+
+        ``wake_attempts`` is reset because it counts *failed wakes*, and a
+        re-arm is a successful check that found the target still running. A
+        PROCESS wait checks every few seconds for up to an hour, so a counter
+        that only ever climbed would cross ``MAX_WAKE_ATTEMPTS`` on three
+        unrelated transient errors spread across that hour and abandon a wait
+        whose target was perfectly healthy.
+        """
+        self.scheduled_at = next_at
+        self.wake_attempts = 0
+        self.spec = {
+            **self.spec,
+            "poll_attempt": int(self.spec.get("poll_attempt", 0)) + 1,
+        }
 
     def complete(self, reason: AgentWaitWakeReason) -> None:
         self.status = AgentWaitStatus.COMPLETED

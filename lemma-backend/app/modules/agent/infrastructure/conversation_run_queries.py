@@ -28,6 +28,11 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ACTIVE_AGENT_RUN_STATUSES,
 )
+from app.modules.agent.domain.entities import RuntimeHistoryWindow
+from app.modules.agent.infrastructure.runtime_history_window import (
+    newest_runs,
+    run_count,
+)
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     MessageModel,
@@ -242,19 +247,24 @@ class ConversationRunQueriesMixin:
     async def load_runtime_history_digests_by_run_id(
         self,
         agent_run_id: UUID,
-    ) -> list[AgentRunEntity]:
-        """Every run of the conversation, with sizes and timings but no messages.
+        *,
+        limit: int,
+    ) -> RuntimeHistoryWindow:
+        """The newest ``limit`` runs of a conversation, with sizes and timings.
 
-        The runtime prompt keeps recent runs whole and elides older ones, but
-        *which* runs are recent is decided only after the caller's trims have
-        run -- and the surface age window keeps a run whose newest message is
-        recent even when runs created after it are dropped, so it is a filter
-        rather than a truncation and the surviving list is not a suffix.
+        No messages: the runtime prompt keeps recent runs whole and elides older
+        ones, but *which* runs are recent is decided only after the caller's
+        trims have run -- and the surface age window keeps a run whose newest
+        message is recent even when runs created after it are dropped, so it is
+        a filter rather than a truncation and the surviving list is not a
+        suffix. Deciding what to load from position alone therefore drops
+        messages from a run the trim then keeps in full, without an elision
+        notice, because the shortened list never reaches the elision branch. So
+        the caller gets the shape first, decides, and asks for messages second.
 
-        Deciding what to load from position alone therefore drops messages from
-        a run the trim then keeps in full, without an elision notice, because
-        the shortened list never reaches the elision branch. So the caller gets
-        the shape first, decides, and asks for messages second.
+        ``limit`` is the caller's own ceiling, applied here rather than to the
+        result. See `runtime_history_window` for why the total and the resumed
+        run come back with it.
         """
         conversation_id = (
             await self.session.execute(
@@ -264,20 +274,50 @@ class ConversationRunQueriesMixin:
             )
         ).scalar_one_or_none()
         if conversation_id is None:
-            return []
+            return RuntimeHistoryWindow(runs=[], total_runs=0, current_run=None)
 
-        runs = list(
-            (
-                await self.session.execute(
-                    select(AgentRunModel)
-                    .where(AgentRunModel.conversation_id == conversation_id)
-                    .order_by(AgentRunModel.created_at.asc(), AgentRunModel.id.asc())
-                )
-            ).scalars()
+        rows = list(
+            (await self.session.execute(newest_runs(conversation_id, limit))).scalars()
         )
-        if not runs:
-            return []
+        rows.reverse()
+        total_runs = int(
+            (await self.session.execute(run_count(conversation_id))).scalar_one()
+        )
+        entities = await self._with_message_digests(rows)
+        current_run = next(
+            (entity for entity in entities if entity.id == agent_run_id), None
+        )
+        if current_run is None:
+            # Older than the window. It is still the run being executed, and the
+            # runner refuses the whole request when it cannot find it, so it is
+            # fetched on its own -- one extra statement on the rare path rather
+            # than a wider window on every one.
+            resumed = (
+                (
+                    await self.session.execute(
+                        select(AgentRunModel).where(AgentRunModel.id == agent_run_id)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if resumed is not None:
+                current_run = (await self._with_message_digests([resumed]))[0]
+        return RuntimeHistoryWindow(
+            runs=entities, total_runs=total_runs, current_run=current_run
+        )
 
+    async def _with_message_digests(
+        self, rows: list[AgentRunModel]
+    ) -> list[AgentRunEntity]:
+        """Hydrate runs carrying their message count and newest timestamp.
+
+        The count has to come from here rather than from ``len(run.messages)``:
+        the loader deliberately fetches older runs down to two messages, so the
+        list is not the size.
+        """
+        if not rows:
+            return []
         digests = {
             row[0]: (row[1], row[2])
             for row in (
@@ -287,16 +327,15 @@ class ConversationRunQueriesMixin:
                         func.count(),
                         func.max(MessageModel.created_at),
                     )
-                    .where(MessageModel.agent_run_id.in_([run.id for run in runs]))
+                    .where(MessageModel.agent_run_id.in_([row.id for row in rows]))
                     .group_by(MessageModel.agent_run_id)
                 )
             ).all()
         }
-
         entities: list[AgentRunEntity] = []
-        for run in runs:
-            entity = run.to_entity()
-            count, newest = digests.get(run.id, (0, None))
+        for row in rows:
+            entity = row.to_entity()
+            count, newest = digests.get(row.id, (0, None))
             entity.messages = []
             entity.total_message_count = count
             entity.newest_message_at = newest

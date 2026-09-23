@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from typing import Optional, Any
 from uuid import UUID
 
+from sandbox_runtime.protocol import FileStat
+
 from app.modules.workspace.contracts import (
     SandboxInfo,
     PythonExecutionResult,
@@ -99,6 +101,25 @@ class IWorkspaceSession(ABC):
     @abstractmethod
     async def list_processes(self) -> list[dict[str, Any]]:
         """List tracked shell processes in the session."""
+
+    @abstractmethod
+    async def stat_file(self, path: str, *, timeout: int = 30) -> FileStat:
+        """Metadata for one path, raising when it is not there."""
+
+    @abstractmethod
+    async def list_files(self, path: str, *, timeout: int = 30) -> tuple[FileStat, ...]:
+        """One directory's entries."""
+
+    @abstractmethod
+    async def read_file(
+        self,
+        path: str,
+        *,
+        offset: int = 0,
+        length: int | None = None,
+        timeout: int = 60,
+    ) -> bytes:
+        """Raw bytes of one file, from `offset`, at most `length` of them."""
 
     @abstractmethod
     async def close(self) -> None:

@@ -70,7 +70,20 @@ export const getPrimaryKindSpec = (app: Connector | null | undefined): Connector
 export const getPrimaryKind = (app: Connector | null | undefined): string =>
     getPrimaryKindSpec(app)?.kind || getSupportedKinds(app)[0] || KIND.HTTP;
 
+/**
+ * The form the *organization* fills in to create an install.
+ *
+ * `install_config_schema` is read first and exists on Composio kinds only,
+ * where `config_schema` is somebody else's form: for a non-OAuth toolkit it
+ * holds the end user's credential fields (see `getCredentialSchema`), so an
+ * unmanaged toolkit asking the org for a client id and secret has nowhere else
+ * to put them. Every other kind has one schema and answers the same either way.
+ */
 export const getConfigSchema = (capability: ConnectorKindSpec | null): JsonSchemaLike | null => {
+    const install = capability && 'install_config_schema' in capability
+        ? capability.install_config_schema
+        : null;
+    if (isRecord(install)) return install as JsonSchemaLike;
     const schema = capability?.config_schema;
     return isRecord(schema) ? (schema as JsonSchemaLike) : null;
 };
@@ -100,7 +113,12 @@ export const getCredentialSchema = (capability: ConnectorKindSpec | null): JsonS
     const direct = 'credential_schema' in capability ? capability.credential_schema : null;
     if (isRecord(direct)) return direct as JsonSchemaLike;
     if (usesDirectCredentials(capability)) {
-        return getConfigSchema(capability);
+        // `config_schema` directly, not `getConfigSchema`, which now prefers the
+        // org's install form. These are two different forms for two different
+        // people and this one is the end user's; reading the org's here would
+        // ask whoever is connecting an account for a client id and secret.
+        const schema = capability.config_schema;
+        return isRecord(schema) ? (schema as JsonSchemaLike) : null;
     }
     return null;
 };
@@ -125,12 +143,25 @@ export const isOAuthOverHttp = (
 /**
  * Composio brokers this toolkit on Lemma's behalf.
  *
- * Always Lemma's own Composio account — there is no per-org Composio key, and
- * the backend rejects an org-supplied install outright. Anything that offers
- * the org a choice has to check this first.
+ * Always Lemma's own Composio account — there is no per-org Composio key. What
+ * varies per toolkit is whether *Composio* holds credentials for it: it does
+ * for Gmail, and for Twitter or Spotify it does not, so the org has to bring
+ * the app's own OAuth client. `system_default_available` carries that answer,
+ * so anything offering the org a choice checks both, never this alone.
  */
 export const isComposio = (capability: ConnectorKindSpec | null): boolean =>
     String(capability?.kind ?? '') === KIND.COMPOSIO;
+
+/**
+ * A Composio toolkit Composio has no managed credentials for.
+ *
+ * The one case where a Composio install needs something from the org, and the
+ * case the UI had no way to express: the catalog said `system_default_available`
+ * unconditionally, so Connect went out, asked Composio for managed credentials
+ * that do not exist, and came back 500.
+ */
+export const isUnmanagedComposio = (capability: ConnectorKindSpec | null): boolean =>
+    isComposio(capability) && !hasSystemDefault(capability);
 
 /**
  * True when *the org supplies the address* for this install.
@@ -169,13 +200,18 @@ export const isTenantConfigured = (capability: ConnectorKindSpec | null): boolea
  */
 export const requiresInstallConfig = (capability: ConnectorKindSpec | null): boolean => {
     if (!capability) return false;
-    // A Composio install carries no org config at all: it runs on Lemma's
-    // Composio account. What its `config_schema` holds for an API-key toolkit
-    // is the *account's* credential form (see `getCredentialSchema`), which
-    // Connect collects after the install exists — reading it as an install
-    // config sent every such connector to Advanced setup instead of the
+    // A *managed* Composio install carries no org config at all: it runs on
+    // Lemma's Composio account. What its `config_schema` holds for an API-key
+    // toolkit is the *account's* credential form (see `getCredentialSchema`),
+    // which Connect collects after the install exists — reading it as an
+    // install config sent every such connector to Advanced setup instead of the
     // credential dialog, and offered it a "Use my own" that always 400s.
-    if (isComposio(capability)) return false;
+    //
+    // An unmanaged one is the opposite and falls through: it cannot be created
+    // at all until the org supplies the app's own client, which arrives on
+    // `install_config_schema` rather than on `config_schema` for exactly this
+    // reason.
+    if (isComposio(capability) && hasSystemDefault(capability)) return false;
     // For an OAuth kind the config schema describes the org's own OAuth app —
     // opt-in, and unnecessary when the platform's client is available. This
     // mirrors the backend, which validates an OAuth system-default install
@@ -201,11 +237,20 @@ export const canConnectWithDefaults = (capability: ConnectorKindSpec | null): bo
 
 export const supportsCustomConfig = (capability: ConnectorKindSpec | null): boolean => {
     if (!capability) return false;
-    // Composio brokers every toolkit through Lemma's own Composio account, so
-    // there is no org-supplied anything to offer. Without this, an API-key
+    // Composio brokers a *managed* toolkit through Lemma's own Composio account,
+    // so there is no org-supplied anything to offer. Without this, an API-key
     // toolkit reaches the branch below and renders "Use my own" — a button
     // whose only outcome is a 400 from the backend.
-    if (isComposio(capability)) return false;
+    //
+    // For an unmanaged toolkit that same form is the only way in, so it returns
+    // here rather than falling through: the OAuth branch below would ask for
+    // `oauth2_defaults`, which describes the endpoints Lemma sends people to,
+    // and Composio owns that leg. What the org brings here is credentials
+    // Composio pairs with endpoints it already knows.
+    if (isComposio(capability)) {
+        return isUnmanagedComposio(capability)
+            && schemaHasFields(getConfigSchema(capability));
+    }
     const hasConfigFields = schemaHasFields(getConfigSchema(capability));
     if (!hasConfigFields) return false;
     // For an OAuth kind the config schema describes the org's *own OAuth app*,
@@ -476,6 +521,14 @@ export const describeConnectorError = (error: unknown, fallback: string): string
         const reason = typeof firstViolation.message === 'string' ? firstViolation.message : null;
         if (reason) return path && path !== '(root)' ? `${path}: ${reason}` : reason;
     }
+    // What the provider itself said, when the top-line message is ours and
+    // generic. A failed connect answers "Unable to initiate the OAuth flow."
+    // beside an `upstream_message` reading "Composio does not have managed
+    // credentials for this toolkit" — the whole explanation, one field away,
+    // and previously shown to nobody. Appended rather than substituted: ours
+    // says which step failed, theirs says why.
+    const upstream = typeof details?.upstream_message === 'string' ? details.upstream_message.trim() : '';
+    if (upstream) return `${message} ${upstream}`;
     return message;
 };
 
