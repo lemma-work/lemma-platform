@@ -56,6 +56,8 @@ pub(crate) fn pull_with(
     let Some(_claim) = claimed else {
         return Err(PullFailure::Busy);
     };
+    // Dropped with the pull, taking its figures with it.
+    let _progress = crate::pull_progress::Sampler::start(image);
     let output = engine
         .run(&[
             "pull".into(),
@@ -75,9 +77,15 @@ pub(crate) fn pull_with(
 }
 
 pub(crate) fn pull_in_progress(image: &str) -> GuestError {
+    // "(412 MB of 980 MB)" once the manifest is in: read by a person as it
+    // stands, and by the backend to show a progress bar.
+    let progress = crate::pull_progress::progress_for(image)
+        .filter(|progress| progress.total > 0)
+        .map(|progress| format!(" ({})", progress.sentence()))
+        .unwrap_or_default();
     GuestError {
         code: "image_pulling".into(),
-        message: format!("still downloading {image}"),
+        message: format!("still downloading {image}{progress}"),
         retryable: true,
         status_code: 503,
     }

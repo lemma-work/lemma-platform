@@ -253,21 +253,10 @@ _COMMAND_FIELDS = frozenset(
 def _command_result(raw: object, payload: JsonObject) -> JsonObject:
     fields = raw if isinstance(raw, dict) else {}
     result: JsonObject = {}
-    exit_code = first_present(fields, "exit_code", "exitCode")
-    if isinstance(exit_code, str) and exit_code.lstrip("-").isdigit():
-        exit_code = int(exit_code)
-    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+    exit_code = _exit_code(fields)
+    if exit_code is not None:
         result["exit_code"] = exit_code
-    # The first that says something: Codex sends `stdout: ""` beside the real
-    # text in `aggregated_output`, and `formatted_output` alone at completion.
-    stdout = next(
-        (
-            value
-            for key in ("stdout", "aggregated_output", "formatted_output", "output")
-            if isinstance(value := fields.get(key), str) and value
-        ),
-        None,
-    )
+    stdout = _command_output(fields)
     if stdout is None:
         stdout = raw if isinstance(raw, str) else _content_text(payload)
     if stdout:
@@ -275,14 +264,36 @@ def _command_result(raw: object, payload: JsonObject) -> JsonObject:
     stderr = fields.get("stderr")
     if isinstance(stderr, str) and stderr:
         result["stderr"] = bounded_tool_value(stderr)
-    if (
-        not result
-        and raw not in (None, "", {}, [])
-        and not _COMMAND_FIELDS & set(fields)
-    ):
+    if not result and _unrecognised(raw, fields):
         # A shape none of the above names: keep it rather than lose the output.
         result["output"] = bounded_tool_value(unwrap_mcp_content(raw))
     return result
+
+
+def _exit_code(fields: JsonObject) -> int | None:
+    value = first_present(fields, "exit_code", "exitCode")
+    if isinstance(value, str) and value.lstrip("-").isdigit():
+        return int(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _command_output(fields: JsonObject) -> str | None:
+    """The first output field that says something.
+
+    Codex sends `stdout: ""` beside the real text in `aggregated_output`, and
+    `formatted_output` alone at completion.
+    """
+    for key in ("stdout", "aggregated_output", "formatted_output", "output"):
+        value = fields.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _unrecognised(raw: object, fields: JsonObject) -> bool:
+    return raw not in (None, "", {}, []) and not _COMMAND_FIELDS & set(fields)
 
 
 def _content_text(payload: JsonObject) -> str:

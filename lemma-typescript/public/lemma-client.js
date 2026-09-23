@@ -17434,6 +17434,8 @@ var LemmaClient = (() => {
      * `ready` it is running; `downloading` it is fetching its image, which the
      * first start after an update does; `starting` it is coming up; `asleep` it
      * is not running and starts on first use; `unavailable` it could not be asked.
+     * While `downloading`, `done_mb` and `total_mb` say how far it has got, once
+     * that can be measured.
      */
     status() {
       return this.http.request("GET", "/workspace/status");

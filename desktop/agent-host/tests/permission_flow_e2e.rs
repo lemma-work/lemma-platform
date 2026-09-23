@@ -322,7 +322,7 @@ fn scripted_adapter(log: &std::path::Path) -> ResolvedAdapter {
             upstream_command: "python3".into(),
             upstream_version_args: vec!["--version".into()],
             upstream_path_env: None,
-            environment: Default::default(),
+            environment: std::collections::BTreeMap::default(),
             omit_optional_dependencies: false,
             minimum_upstream_version: None,
             distribution: "native".into(),

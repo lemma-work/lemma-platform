@@ -537,5 +537,8 @@ fn a_codex_run_cannot_reach_for_the_persons_own_browser() {
             "{plugin} stays off in a Lemma run"
         );
     }
-    assert!(environment.contains_key("PATH"), "the adapter's own variables still apply");
+    assert!(
+        environment.contains_key("PATH"),
+        "the adapter's own variables still apply"
+    );
 }
