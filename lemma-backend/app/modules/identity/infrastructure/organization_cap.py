@@ -1,9 +1,16 @@
-"""Whether a person may own another organization.
+"""Whether a person may make another organization.
 
-Called when an organization is made for someone, which is the one moment they
-become an owner of something they did not have. Counted as every organization
-they own, with no exceptions, under a lock on the person so that two made at
-once cannot both be the last one allowed.
+The limit is on *making* organizations, so it is checked in one place:
+`OrganizationService.create_organization`. What it counts is every
+organization the person owns -- every ORG_OWNER membership, co-ownership
+included -- under a lock on the person, so two made at once cannot both be
+the last one allowed.
+
+Being made an owner of somebody else's organization -- invited as one, or
+promoted -- is deliberately not refused. That is the other organization
+deciding, often one on a team plan, and refusing it would stop a team adding a
+co-owner because of the co-owner's own plan. It does count against what they
+may make afterwards.
 """
 
 from __future__ import annotations
