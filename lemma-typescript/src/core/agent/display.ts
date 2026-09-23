@@ -4,7 +4,7 @@
 // genuinely intricate: deduping tool invocations, merging tool results back into
 // their calls, folding a turn's intermediate "thinking" into collapsible trace
 // notes, clustering tool-only messages, and segmenting each turn into "worked
-// for X" runs. lemma-frontend grew this engine; it's pure (no React/JSX/DOM), so
+// for X" runs. lemma-harness grew this engine; it's pure (no React/JSX/DOM), so
 // it lives in the core now and the product consumes it — one normalization for
 // the hooks, web components, and the app. Formatting/labels and JSX stay in the
 // caller.

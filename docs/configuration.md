@@ -842,7 +842,7 @@ MICROSOFT_BOT_APP_ID=
 ## Frontend
 
 The frontend reads `NEXT_PUBLIC_*` variables, which are applied at runtime.
-`lemma-frontend/.env.example` is the working list.
+`lemma-harness/.env.example` is the working list.
 
 ```dotenv
 NEXT_PUBLIC_API_URL=https://api.example.com

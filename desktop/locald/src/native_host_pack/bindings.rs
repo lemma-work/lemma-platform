@@ -52,6 +52,7 @@ pub(crate) fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
         &[
             "frontend/server.js",
             "frontend/app/server.js",
+            "frontend/lemma-harness/server.js",
             "frontend/lemma-frontend/server.js",
         ],
     )?;
@@ -84,7 +85,7 @@ pub(crate) fn source_bindings(root: &Path) -> io::Result<Bindings> {
 /// where secrets live should not need them.
 pub(crate) fn source_bindings_with(root: &Path, uv: &Path, node: &Path) -> io::Result<Bindings> {
     let backend_dir = required_dir(root, "the backend project", "lemma-backend")?;
-    let frontend_dir = required_dir(root, "the frontend project", "lemma-frontend")?;
+    let frontend_dir = required_dir(root, "the frontend project", "lemma-harness")?;
     // The backend owns sandbox provisioning, so one interpreter runs every
     // migration; only the working directory and config name differ.
     let launcher = required_file(

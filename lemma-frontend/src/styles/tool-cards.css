@@ -1,0 +1,490 @@
+/* The tools this app reads instead of summarising.
+ *
+ *  One shell, six tools. The head is the whole design: a glyph, what happened,
+ *  and a status on the right — and closed, that head IS the card, one line
+ *  tall. That constraint is not decoration. A run that greps a repository forty
+ *  times is ordinary, and forty open blocks would bury the answer the reader
+ *  actually came for, which is the exact failure the collapsed trace was built
+ *  to avoid in the first place.
+ *
+ *  So: a terminal run reads at the weight of a line in a log, and only the two
+ *  cards a person has to *act* on — a sign-in the run is stopped at, and the
+ *  sources behind a claim — open themselves. */
+
+.toolcard {
+    margin: 6px 0;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    /* One width, not one per card. These sit in a column under a reply, and
+       shrink-to-fit made a stack of them ragged — three boxes of three
+       different lengths read as three unrelated objects rather than as the
+       run's own working. */
+    width: 100%;
+    max-width: 640px;
+    overflow: hidden;
+}
+/* Consecutive commands stack as one block rather than drifting apart into
+   separate objects: a sequence of them is one session, read downwards. */
+.toolcard--term + .toolcard--term {
+    margin-top: 3px;
+}
+
+.toolcard__head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 8px 12px;
+    text-align: left;
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: 0;
+}
+.toolcard__head--act {
+    cursor: pointer;
+}
+.toolcard__head--act:hover {
+    background: var(--chrome);
+}
+.toolcard__glyph {
+    flex: none;
+    display: grid;
+    place-items: center;
+    color: var(--ink-3);
+}
+.toolcard__what {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.toolcard__cmd {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink);
+}
+.toolcard__meta {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.toolcard__status {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 10px;
+    border-radius: 9999px;
+    padding: 2px 8px;
+    background: var(--chrome);
+    color: var(--ink-2);
+    white-space: nowrap;
+}
+/* Three tones, and no more. A status is worth colouring only when a reader
+   scanning the transcript would want to stop on it. */
+.toolcard__status[data-tone="bad"] {
+    background: color-mix(in srgb, var(--bad) 13%, transparent);
+    color: var(--bad);
+}
+.toolcard__status[data-tone="wait"] {
+    background: color-mix(in srgb, var(--wait) 14%, transparent);
+    color: var(--wait);
+}
+.toolcard__status[data-tone="ok"] {
+    background: color-mix(in srgb, var(--ok) 13%, transparent);
+    color: var(--ok);
+}
+.toolcard__chev {
+    flex: none;
+    display: grid;
+    place-items: center;
+    color: var(--ink-3);
+}
+
+.toolcard__body {
+    padding: 10px 12px 11px;
+    border-top: 1px solid var(--line);
+}
+.toolcard__note {
+    margin: 0 0 8px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--ink-2);
+}
+.toolcard__note[data-tone="bad"] {
+    color: var(--bad);
+}
+.toolcard__note:last-child {
+    margin-bottom: 0;
+}
+.toolcard__where {
+    margin: 0 0 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    overflow-wrap: anywhere;
+}
+.toolcard__fine {
+    margin: 8px 0 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--ink-3);
+}
+
+/* Output is already tail-truncated server side, and the tail is the half worth
+   keeping — a build's errors are at the bottom. What is bounded here is the
+   height on screen: a log that scrolls inside its own box cannot push the
+   reply off the page. */
+.toolcard__out {
+    margin: 0 0 8px;
+    padding: 10px 12px;
+    border-radius: var(--r-sm);
+    background: var(--chrome);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 340px;
+    overflow: auto;
+}
+.toolcard__out[data-stream="err"] {
+    color: var(--bad);
+}
+/* The last expression's value, which `execute_python` hands back beside the
+   streams. It is the answer, so it is not greyed down like the printing. */
+.toolcard__out[data-stream="value"] {
+    color: var(--ink);
+    box-shadow: inset 2px 0 0 var(--accent-line);
+}
+
+.toolcard__args {
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+    gap: 4px 14px;
+    margin: 0 0 8px;
+}
+.toolcard__args > div {
+    display: contents;
+}
+.toolcard__args dt {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding-top: 2px;
+}
+.toolcard__args dd {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+
+.toolcard__more {
+    font: inherit;
+    font-size: 12px;
+    color: var(--accent);
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+}
+
+/* ── the browser ─────────────────────────────────────────────────────── */
+
+/* A site, said the way a browser says it: the host at full weight, the path
+   after it at the weight of a detail. An address rendered as one string
+   truncates from the right, which is how a head ended up reading
+   `https://app.northfield.co/billing/pl…` — every character of which the
+   reader already knew except the ones it cut. */
+.toolcard__host {
+    color: var(--ink);
+}
+.toolcard__trail {
+    margin-left: 5px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+}
+
+/* The address whole, under the head, with the site's mark beside it. */
+.toolcard__page {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 8px;
+    min-width: 0;
+}
+.toolcard__page span {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ink-3);
+    overflow-wrap: anywhere;
+}
+
+/* ── sources ─────────────────────────────────────────────────────────── */
+
+/* A citation is followed or it is nothing, so the title is the link and the
+   host sits under it — a reader deciding whether to click is asking "who says
+   so", and that question is answered by the domain, not by the headline. */
+.sources {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+}
+/* The mark on the left, the citation beside it. A wrapper rather than a grid
+   span: the rows have between two and five children depending on what came
+   back, so any rule that places the text by row number is a rule that breaks
+   on the result that carries a snippet and a saved path.
+ *
+ * Qualified by `.sources` to outrank `.steps__list li` in `shell.css`, which
+ * styles *every* descendant `li` of the fold and so reaches inside a card that
+ * happens to contain a list. It sets `flex-direction: column`, which was
+ * harmless while these rows were a column and silently stacked the mark on top
+ * of its own citation the moment they became a row. */
+.sources .sources__row {
+    display: flex;
+    /* Stated rather than left to the default: `display: flex` alone is a row,
+       but the rule above is still in the cascade and would keep setting
+       `column` over the top of it. */
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 9px;
+    min-width: 0;
+}
+.sources__of {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+/* The mark's box is 16px against an 18px first line; a pixel down puts its
+   centre on the text's. */
+.sources__row > .mark,
+.sources__row > .being {
+    margin-top: 1px;
+}
+.sources__row[data-failed] {
+    opacity: 0.6;
+}
+/* Inline rather than a flex row: a title long enough to wrap left the little
+   arrow stranded on a line of its own, halfway down the side of the link. It
+   belongs after the last word, which is where reading stops. */
+.sources__link {
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--accent);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+}
+.sources__link svg {
+    margin-left: 4px;
+    vertical-align: -1px;
+}
+.sources__link:hover {
+    text-decoration: underline;
+}
+.sources__from {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    overflow-wrap: anywhere;
+}
+.sources__snip {
+    margin: 2px 0 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--ink-2);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.sources__saved {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    overflow-wrap: anywhere;
+}
+.sources__err {
+    font-size: 11.5px;
+    color: var(--bad);
+}
+
+/* ── a picture the teammate stopped to look at ───────────────────────── */
+
+/* The image, at the width it is given and no taller than a card should be.
+   `view_image` is pointed at whatever the agent made — a full-page capture is
+   several thousand pixels of scroll, and one of those at its natural height
+   would be a card the reader has to scroll past rather than a card they can
+   see. Bounded by height with the aspect ratio kept, so a wide chart still
+   fills the column and a tall screenshot is legible at the top and cropped by
+   nothing. */
+.toolcard__shot {
+    display: block;
+    max-width: 100%;
+    max-height: 420px;
+    width: auto;
+    border-radius: var(--r-sm);
+    /* Under the image rather than behind it: a PNG with transparency read as a
+       hole in the card until this was here, and a slow one had no shape at
+       all while it arrived. */
+    background: var(--chrome);
+}
+
+/* The one control on this card, and it is a click that costs something — it
+   reads a file, which starts the sandbox. So it is a stated action on its own
+   line rather than a link buried in the sentence above it. */
+.toolcard__show {
+    display: block;
+    margin-top: 2px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--accent);
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+}
+.toolcard__show:hover {
+    text-decoration: underline;
+}
+/* The line above the button says what pressing it does, so it needs the gap
+   the shared rule leaves off its bottom — but only when something follows it.
+   The same class also carries this card's dead ends ("that path could not be
+   resolved"), and those sit last with nothing to be spaced from. */
+.toolcard--look .toolcard__fine:not(:last-child) {
+    margin-bottom: 6px;
+}
+
+/* ── the sign-in the run is stopped at ───────────────────────────────── */
+
+/* Carries the waiting border the approval card carries, for the same reason:
+   it is the one thing on screen that nothing else will move past. Only while
+   it is waiting, though — an answered sign-in wearing the amber edge goes on
+   claiming the run is stopped long after it started again. */
+.toolcard--signin[data-waiting] {
+    border-color: color-mix(in srgb, var(--wait) 32%, var(--line));
+    margin: 18px 0 4px;
+}
+
+/* The transcript's text column, which this card was the only thing not
+   standing on.
+ *
+ * Measured at 1150px: message prose and the approval card's detail, args and
+ * buttons all land on one column 19px inside a card's own border. This card's
+ * box was already correct — the same edge as the approval card's — but its
+ * 12px padding put everything inside it 6px to the left of that column, so it
+ * read as a card sitting slightly wrong in a stack that otherwise lines up.
+ *
+ * 18px, the approval card's own value, is therefore what both the head and the
+ * body take. The title still sits right of the mark, as the approval card's
+ * title sits right of its icon: what the eye follows down the card is the
+ * mark, the paragraph and the control, and those three now agree. */
+.toolcard--signin .toolcard__head,
+.toolcard--signin .toolcard__body {
+    padding-left: 18px;
+    padding-right: 18px;
+}
+
+/* The note about the link goes above it, not under it.
+ *
+ * Under it, a bordered control sat between two paragraphs and broke the column
+ * the eye was following down — and the note read as the bottom half of the
+ * button rather than as something the card was saying. Above it, the card is
+ * the shape the approval card already is: prose, then the one control, at the
+ * bottom, with nothing after it to knock out of line. It also reads in the
+ * right order, since it says what pressing the thing will do. */
+.toolcard--signin .toolcard__fine {
+    margin: 0 0 10px;
+}
+
+/* Block-level rather than inline, and that is a bug fix rather than a tidy.
+   As an inline-flex the link sat in a line box taller than itself, and a
+   following paragraph's own top margin vanished into the descender space
+   underneath: measured, the gap between the button and the caption below it
+   was 0.0px, so the caption read as the button's own small print. The caption
+   has since moved above the link, but the trap is still there for whatever is
+   put after it next. */
+.toolcard__go {
+    display: flex;
+    width: fit-content;
+    align-items: center;
+    gap: 7px;
+    text-decoration: none;
+}
+
+/* Tinted rather than filled. A solid accent button is this app's weight for
+   committing to something, and this commits to nothing: it opens the site in
+   the teammate's browser, where the person decides. Sitting a few rows from
+   the approval card's real Approve, it was the loudest control on the page for
+   the least consequential act on it.
+ *
+ * The label is ink, not accent, and that is measured rather than taste. Accent
+ * text on `--accent-soft` is the pairing `.pill--teammate` uses, and across the
+ * eight accents in both themes it ranges from 12.67 down to **3.51** — coral
+ * and amber in light both fail AA for text this size. Ink on the same tint
+ * clears it under every one of the sixteen. The accent still does its work in
+ * the fill and the border, where nothing has to be read through it. */
+.toolcard--signin .toolcard__go.btn--primary {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--ink);
+    font-weight: 500;
+}
+.toolcard--signin .toolcard__go.btn--primary:hover {
+    filter: none;
+    border-color: var(--accent);
+}
+
+@media (max-width: 640px) {
+    /* At this width a head with two right-hand labels truncates *both* of
+       them — "google_d… GOOGLEDRIVE_FIND…" names neither. The left one is the
+       identity, so it keeps the line; a connector's operation is repeated
+       inside the body, where it has the space to be read whole. */
+    .toolcard__meta {
+        display: none;
+    }
+}
+
+/* ── a card as a step ───────────────────────────────────────────────
+   These belong inside the fold, not out in the transcript. A run makes dozens
+   of tool calls, and a card in the conversation for every one of them buries
+   the two sentences the teammate actually said under terminal output and
+   search results — the fold exists precisely so that does not happen.
+
+   So the card is what a step *becomes when you open it*, and the row it sits
+   in gets a little more air than a one-line step needs. Everything else about
+   the list is unchanged: same rule down the left, same order, same count on
+   the button. */
+.steps__list li[data-card] { gap:0; }
+.steps__list { gap:8px; }
+.steps__list li[data-card] + li[data-card] { margin-top:2px; }
+/* Full width of the fold rather than shrink-to-fit: a terminal card that
+   hugged its longest line jittered as output arrived. */
+.steps__list li[data-card] > * { width:100%; }
+
+/* The agent's own line, against this app's summary of the same call. One is
+   somebody talking and the other is a description of an argument list, so they
+   do not get the same voice. */
+.steps__detail--said { color:var(--ink-2); }
+.steps__peek { font-style:normal; }

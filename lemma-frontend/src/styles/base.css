@@ -1,0 +1,176 @@
+@import "./tokens.css";
+@import "./accents.css";
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+strong,
+b {
+    font-weight: 500;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation: none !important;
+    }
+}
+
+/* Shared primitives -------------------------------------------------- */
+
+.face {
+    width: 30px;
+    height: 30px;
+    border-radius: 9999px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    letter-spacing: 0.01em;
+    background: var(--chrome);
+    color: var(--ink-2);
+}
+.face--teammate {
+    background: var(--accent-soft);
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+.pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--mono);
+    font-size: 10px;
+    border-radius: 9999px;
+    padding: 2px 8px;
+    background: var(--chrome);
+    color: var(--ink-2);
+}
+.pill--teammate {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.btn {
+    font-size: 12.5px;
+    border-radius: 9px;
+    padding: 8px 14px;
+    cursor: pointer;
+    border: 1px solid var(--line-2);
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: var(--depth-rest), var(--edge-lit);
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+.btn:hover {
+    border-color: var(--ink-3);
+    box-shadow: var(--depth-raise), var(--edge-lit);
+}
+/* Pressed means pressed: it goes down and loses its shadow. */
+.btn:active {
+    transform: translateY(1px);
+    box-shadow: var(--depth-well);
+}
+/* Inside a pod the primary action is printed in that teammate's own field, so
+   the button, the header band and the badge are one colour. Outside one — org
+   settings, the hiring floor before a pick, any dialog that belongs to the app
+   rather than to somebody — `--field` is the press tone and `.screen` sets
+   aubergine.
+
+   **`--field` and `--field-ink` are a pair and are always set together.**
+   `tokens.css` defines both on `:root`; every override — `.screen`,
+   `.newface`, the rail and profile styles in `shell.tsx`, `hiring.tsx` and
+   `profile.tsx` — sets both. Nothing here falls back to `var(--accent)` with
+   white on it, and that is not tidiness: white on `--accent` measures 2.7:1
+   on violet in dark and 1.21:1 on ink, so a fallback that fired would be an
+   invisible button rather than an off-brand one. Filling with an accent means
+   taking its paired ink with it. */
+.btn--primary {
+    background: var(--field);
+    border-color: var(--field);
+    color: var(--field-ink);
+    box-shadow: var(--depth-rest), var(--edge-dark);
+}
+.btn--primary:hover:not(:disabled) {
+    filter: brightness(1.06);
+    box-shadow: var(--depth-raise), var(--edge-dark);
+}
+/* The only irreversible act in the app so far. It is filled rather than
+   outlined because it is the confirming button in a pair, and an outlined one
+   beside "Keep it" leaves the pair with no answer to which is which. */
+.btn--danger {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--on-bad);
+}
+.btn--danger:hover {
+    filter: brightness(1.06);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+}
+thead th {
+    text-align: left;
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: 10px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 0 10px 8px 0;
+    border-bottom: 1px solid var(--line);
+}
+tbody td {
+    padding: 9px 10px 9px 0;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-2);
+    vertical-align: baseline;
+}
+tbody tr:last-child td {
+    border-bottom: 0;
+}
+td.k {
+    color: var(--ink);
+}
+td.num {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    text-align: right;
+    padding-right: 0;
+}

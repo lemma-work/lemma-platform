@@ -211,7 +211,7 @@ operating use the same CLI.
     <td align="center" width="112"><img src="docs/Assets/Logos/codex.svg" height="36" alt="Codex"><br><sub>Codex</sub></td>
     <td align="center" width="112"><img src="docs/Assets/Logos/opencode-logo-light.svg" height="36" alt="OpenCode"><br><sub>OpenCode</sub></td>
     <td align="center" width="112"><img src="docs/Assets/Logos/cursor.svg" height="36" alt="Cursor"><br><sub>Cursor</sub></td>
-    <td align="center" width="112"><img src="lemma-frontend/public/harnesslogos/antigravity.png" height="36" alt="Antigravity"><br><sub>Antigravity</sub></td>
+    <td align="center" width="112"><img src="lemma-harness/public/harnesslogos/antigravity.png" height="36" alt="Antigravity"><br><sub>Antigravity</sub></td>
   </tr>
 </table>
 
@@ -410,7 +410,8 @@ some provider validates.
 | Path | Package | License |
 |------|---------|---------|
 | `lemma-backend/` | FastAPI backend, sandbox images and runtime, migrations, and infra Docker Compose | AGPLv3 |
-| `lemma-frontend/` | Next.js frontend | AGPLv3 |
+| `lemma-frontend/` | User-facing workspace | AGPLv3 |
+| `lemma-harness/` | Operator tools and desktop web runtime | AGPLv3 |
 | `lemma-stack/` | `lemma-stack`, installer and manager for a self-contained local stack | Apache-2.0 |
 | `desktop/` | Tauri macOS desktop app (thin shell around the `lemma-stack` supervisor) | AGPLv3 |
 | `lemma-cli/` | `lemma-terminal`, the `lemma` CLI and terminal UI | Apache-2.0 |
@@ -464,7 +465,7 @@ entries: [installation](docs/installation.md) for the full setup guide,
 [ARCHITECTURE.md](ARCHITECTURE.md) for how the components fit together,
 [CONTRIBUTING.md](CONTRIBUTING.md) for what a pull request needs, and
 [`lemma-backend/README.md`](lemma-backend/README.md) /
-[`lemma-frontend/README.md`](lemma-frontend/README.md) for per-component detail.
+[`lemma-harness/README.md`](lemma-harness/README.md) for per-component detail.
 
 ## Licensing
 
@@ -474,7 +475,8 @@ The Lemma platform uses a dual-licensing model:
 
 - `lemma-backend/`: the FastAPI backend, including the sandbox images and the
   runtime that ships inside them
-- `lemma-frontend/`: the Next.js frontend and operator UI
+- `lemma-frontend/`: the user-facing workspace (`make dev-frontend`)
+- `lemma-harness/`: operator tools, auth portal and desktop web runtime
 
 These are licensed under the [GNU Affero General Public License v3](LICENSE).
 If you modify and offer the software over a network (e.g. a hosted SaaS), you

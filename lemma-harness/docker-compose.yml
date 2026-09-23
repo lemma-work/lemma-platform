@@ -1,0 +1,11 @@
+services:
+  lemma-harness:
+    image: lemma-harness:local
+    build:
+      context: ..
+      dockerfile: lemma-harness/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

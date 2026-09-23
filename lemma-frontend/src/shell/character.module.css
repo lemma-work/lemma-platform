@@ -1,0 +1,14 @@
+.character { display:inline-block; position:relative; flex-shrink:0; vertical-align:middle; isolation:isolate; }
+.character img { display:block; width:100%; height:100%; max-width:none; object-fit:contain; transition:transform 220ms ease; transform-origin:50% 85%; }
+/* No tile behind the character. A pale rounded square inside the circular
+   avatar frame read as a square in a circle, and the sculptures carry
+   themselves on either ground. Percentage padding would resolve against the
+   PARENT's width, so this is in the mark's own units. */
+.portrait { padding:calc(var(--character-size,40px) * .04); box-sizing:border-box; }
+.character:hover img, button:focus-visible .character img, a:focus-visible .character img { transform:rotate(-4deg) translateY(-2%); }
+@media(prefers-reduced-motion:reduce) { .character img { transition:none; } .character:hover img, button:focus-visible .character img, a:focus-visible .character img { transform:none; } }
+
+/* The animated rig. Its scene fills the box; the rigs draw on a 1254 viewBox
+   with their own margins, so no padding here. */
+.puppet { display:inline-block; position:relative; flex-shrink:0; vertical-align:middle; isolation:isolate; }
+.puppet > div { position:absolute; inset:0; }

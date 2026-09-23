@@ -1,101 +1,61 @@
-# Lemma Frontend
+# lemma-frontend
 
-The Next.js web application for Lemma: authentication, the pod workspace, agents,
-workflows, desks, data and files, integrations, and product docs.
+Lemma’s user-facing Next.js app: conversations, teammate apps, files, workflows,
+and voice calls. Uses `lemma-sdk` to connect to the platform API.
 
-Built with Next.js 16 (App Router), React 19, TypeScript, and Tailwind CSS.
+## Development
 
-## Prerequisites
+Requires Node.js 24 (see the root `.nvmrc`).
 
-- **Node.js 20+** and npm.
-- The **`lemma-sdk` package**, which is built from the sibling
-  [`lemma-typescript`](../lemma-typescript) directory of this monorepo. The build
-  scripts compile it automatically (see [Project layout](#project-layout)), so
-  you need that directory checked out at `../lemma-typescript`.
-- A running **Lemma backend** to talk to. By default the app targets a local
-  backend (see [Configuration](#configuration)).
-
-## Quick start
-
-```bash
-npm install
-cp .env.example .env.local   # then edit values as needed
+```sh
+npm --prefix ../lemma-typescript ci
+npm ci
+cp .env.example .env.local
 npm run dev
 ```
 
-The app starts on http://localhost:3000.
+Open http://localhost:3000. Set `NEXT_PUBLIC_API_URL` for live data, or
+`NEXT_PUBLIC_DATA=sample` for a local demo without a backend.
+The sibling `lemma-harness` provides operator tools and the desktop web runtime.
 
-`predev` builds the local SDK and regenerates `public/runtime-config.js` from your
-`.env.local`, so the browser and server agree on configuration.
+See [.env.example](.env.example) for configuration. Voice calls require
+server-only `GEMINI_API_KEY` and `TYPESAFE_API_KEY`; never expose secrets through
+`NEXT_PUBLIC_*` variables. `/auth` provides sign-in; `/connect` supports manual token sign-in.
 
-## Configuration
+## Checks
 
-All runtime configuration is provided via `NEXT_PUBLIC_*` environment variables.
-Copy `.env.example` to `.env.local` and adjust. Leave a value unset to use its
-default.
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `NEXT_PUBLIC_API_URL` | `https://api.localhost` | Base URL of the Lemma backend API. |
-| `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000` | Public URL this frontend is served from. |
-| `NEXT_PUBLIC_AUTH_URL` | = `SITE_URL` | URL handling auth flows (usually the same as the site). |
-| `NEXT_PUBLIC_SESSION_TOKEN_DOMAIN` | _(empty)_ | Cookie domain for the session. Set to your apex domain (e.g. `.example.com`) only when serving from that domain; leave empty on `localhost`. |
-| `NEXT_PUBLIC_SHARED_SESSION_DOMAIN` | _(unset)_ | Apex domain to share a login across sibling subdomains (e.g. desk apps). Leave unset for single-host cookies. |
-| `NEXT_PUBLIC_APPS_DOMAIN_SUFFIX` | _(unset)_ | Domain suffix under which pod desk apps are served (e.g. `apps.example.com`). Optional. |
-| `NEXT_PUBLIC_SUPPORT_EMAIL` | `deepak@lemma.work` | Contact address shown on legal pages and support links. |
-| `NEXT_PUBLIC_APP_NAME` | `Lemma Auth` | Display name used by the auth portal. |
-
-These values are read at runtime (not baked in at build time), so the same build
-can be deployed to multiple environments. In production they are injected into
-`public/runtime-config.js` by `docker-entrypoint.sh`; in development by the
-`gen:runtime-config` script. If you change `.env.local` while `npm run dev` is
-running, re-run `npm run gen:runtime-config` and hard-refresh the browser.
-
-## Project layout
-
-```
-app/         Next.js App Router routes (auth, pod workspace, docs, legal, …)
-components/  React components, grouped by feature area
-lib/         Data hooks, auth/config, SDK glue, utilities, types
-styles/      Global and shared CSS
-scripts/     Build and CI helpers (runtime config, design-system audit, …)
-public/      Static assets
+```sh
+npm run typecheck
+npm test
+npm run build
 ```
 
-The app depends on the local `lemma-sdk` package (`lemma-sdk: file:../lemma-typescript`
-in `package.json`). The `predev`, `prebuild`, `prelint`, and `pretypecheck`
-scripts run `npm --prefix ../lemma-typescript run build` to compile it first, so a
-full monorepo checkout is required to build this package.
+Build runs lint, naming and design checks before compiling. Some tests bind
+local WebSocket ports. Design conventions are in [DESIGN.md](DESIGN.md).
 
-## Verification
+## Structure
 
-```bash
-npm run check   # design-system audit + ESLint + TypeScript + edu-anchor checks
-npm test        # Vitest unit tests
-npm run build   # production build (builds the local SDK first)
+- `src/app/`: Next.js routes and API handlers.
+- `src/data/`, `src/session/`: sample/live data and authentication.
+- `src/shell/`, `src/stage/`, `src/thread/`: workspace and conversations.
+- `src/call/`, `server/`: voice routing and WebSocket gateways.
+- `src/marketing/`: landing previews and sample apps.
+- `src/styles/`: shared tokens and feature styles.
+
+Keep the conversation mounted while changing stage tabs; open apps stay alive
+when hidden. Use `pod` for API entities and “teammate” in the interface.
+
+## Deployment
+
+Run `npm run build`, then `npm start` (the custom `server.mjs`, not
+`next start`). Hosting needs a persistent Node process, WebSocket upgrades,
+and proxy timeouts of at least 15 minutes. `PORT` controls the listening port.
+`NEXT_PUBLIC_*` values are fixed at build time; server keys are runtime settings.
+
+Build the container from the repository root:
+
+```sh
+docker build -f lemma-frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=<api-origin> .
 ```
-
-`npm run check` is what CI runs; run it before opening a pull request.
-Vitest discovers test and spec files in `app/`, `components/`, and `lib/`,
-including TypeScript JSX. Tests run in Node by default; component interaction
-tests opt into jsdom with a per-file environment directive.
-
-## Production / Docker
-
-A `Dockerfile`, `docker-compose.yml`, and `docker-entrypoint.sh` are provided. The
-build produces a Next.js standalone output (`output: "standalone"`). At container
-start, `docker-entrypoint.sh` generates `public/runtime-config.js` from the
-container's `NEXT_PUBLIC_*` environment variables and launches the server, so you
-configure a deployment purely through environment variables.
-
-```bash
-docker compose up --build
-```
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-Apache License 2.0. See [LICENSE](LICENSE).
+Release builds use the `FRONTEND_API_URL`, `FRONTEND_AUTH_URL` and
+`FRONTEND_APPS_DOMAIN_SUFFIX` repository variables.

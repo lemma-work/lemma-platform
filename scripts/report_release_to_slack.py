@@ -17,7 +17,7 @@ So a component that has not landed is named as missing, and the message says so
 in its first line. The announcement is the check.
 
 The prose comes from the changelog entry the release already has, in
-``lemma-frontend/content/changelog/``, rather than from generated commit notes:
+``lemma-harness/content/changelog/``, rather than from generated commit notes:
 it is the one description of the release written for a person to read.
 
 Usage::
@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CHANGELOG_DIR = REPO_ROOT / "lemma-frontend/content/changelog"
+CHANGELOG_DIR = REPO_ROOT / "lemma-harness/content/changelog"
 REPOSITORY = "lemma-work/lemma-platform"
 
 #: Slack renders a `text` payload well past this, but stops being read long

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 
-const frontend = fileURLToPath(new URL('../../../lemma-frontend/', import.meta.url));
+const frontend = fileURLToPath(new URL('../../../lemma-harness/', import.meta.url));
 const require = createRequire(`${frontend}/package.json`);
 const { createServer } = await import(require.resolve('vite'));
 const React = require('react');

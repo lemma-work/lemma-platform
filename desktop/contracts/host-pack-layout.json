@@ -76,6 +76,7 @@
       "candidates": [
         "frontend/server.js",
         "frontend/app/server.js",
+        "frontend/lemma-harness/server.js",
         "frontend/lemma-frontend/server.js"
       ],
       "producer_writes": null

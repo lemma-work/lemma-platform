@@ -51,6 +51,7 @@ updates:
   - package-ecosystem: npm
     directories:
       - /lemma-typescript
+      - /lemma-harness
       - /lemma-frontend
       # The desktop UI tests have their own lock. It carried no advisory when it
       # was added here, which is the only time a directory is cheap to add.
@@ -97,6 +98,7 @@ updates:
   - package-ecosystem: docker
     directories:
       - /lemma-backend
+      - /lemma-harness
       - /lemma-frontend
       # The desktop guest image. `FROM ubuntu:24.04`, and nothing was watching
       # it: the backend image has Trivy in security.yml as a second line, and

@@ -1,0 +1,1780 @@
+/* Two things in one file, and the name is a historical accident rather than a
+   description. Worth knowing before editing it.
+ *
+ *  The first fifty lines are an OVERRIDE LAYER over `shell.css`: `.shell`,
+ *  `.side` and `.icon-button` are all defined there and redefined here, so
+ *  this file's position in `app/layout.tsx` — third, immediately after
+ *  `shell.css` — is load-bearing. Move the import and the shell changes shape.
+ *
+ *  Everything below the overrides is a series of SURFACES that happen to have
+ *  been written after it: the hiring floor, sharing a document, the shared
+ *  reader, the shelf, reaching a teammate, connected accounts, models, the
+ *  picker, the door, the catalogue. Those are domains, and every other
+ *  stylesheet in this directory is named for one.
+ *
+ *  Splitting it is worth doing and is not a rename: the override preamble has
+ *  to keep its place in the cascade while each surface moves out to a file of
+ *  its own. Until then, add a new surface to its own stylesheet rather than to
+ *  the end of this one.
+ */
+/* Lemma navigation: quiet, recognizable, and consistently operable. */
+:root { --side-w: 232px; --ease-out: cubic-bezier(.2,.8,.2,1); --gutter: clamp(24px, 3.5vw, 52px); }
+.sr-only { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
+button, a, input { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+button, .btn, .reach { transition:background 160ms ease, color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms var(--ease-out); }
+button:active:not(:disabled), .btn:active { transform:translateY(1px); }
+button:disabled { cursor:not-allowed; }
+button svg, a svg { flex-shrink:0; }
+.icon-button { display:grid;place-items:center;width:36px;height:36px;flex:none;border:0;background:transparent;border-radius:var(--r-sm);color:var(--ink-2);cursor:pointer; }
+.icon-button:hover { background:var(--chrome);color:var(--ink); }
+.shell { grid-template-columns:var(--side-w) minmax(0,1fr);transition:grid-template-columns 240ms var(--ease-out);overflow:hidden; }
+.shell--collapsed { --side-w:64px; }
+.side { padding:18px 10px 10px;gap:16px; }
+.side__brand { display:flex;align-items:center;justify-content:space-between;height:36px;padding:0 6px;flex:none; }
+.lemma-logo { display:inline-flex;align-items:center;gap:10px;flex:none; }
+.lemma-brand-mark { display:inline-flex;align-items:flex-end;gap:3px;height:24px; }
+.lemma-brand-mark i { display:block;width:4px;border-radius:2px;background:var(--brand); }
+.lemma-brand-mark i:nth-child(1) { height:9px; }.lemma-brand-mark i:nth-child(2) { height:15px; }.lemma-brand-mark i:nth-child(3) { height:22px; }
+/* The same mark at a row's size rather than the brand's. The bar heights are
+   fractions of whatever height it is handed, so it keeps its shape at 14px as
+   at 24, and the bars keep the brand's purple while the icons around them
+   take the row's ink. */
+.lemma-brand-mark--inline { gap:2px; }
+.lemma-brand-mark--inline i { width:3px;border-radius:1.5px; }
+.lemma-brand-mark--inline i:nth-child(1) { height:38%; }
+.lemma-brand-mark--inline i:nth-child(2) { height:63%; }
+.lemma-brand-mark--inline i:nth-child(3) { height:92%; }
+.lemma-wordmark { font-size:21px;letter-spacing:-.06em;color:var(--ink);font-weight:500; }
+/* The mark keeps its own brand rules above: the rail is paper, which is
+   the ground they were chosen for. */
+.org { padding:0; }
+.org__button { width:100%;max-width:none;display:flex;gap:9px;padding:8px;border:1px solid var(--line);background:var(--paper);color:var(--ink-2);font-size:13px;border-radius:var(--r-md);min-height:44px; }
+.org__button:hover { background:var(--chrome); }
+.org__avatar { width:26px;height:26px;border-radius:6px;display:grid;place-items:center;background:var(--chrome);color:var(--ink-2);font-size:12px;flex:none; }
+.org__chev { margin-left:auto; }.org__menu { top:calc(100% + 6px);left:0;min-width:220px;animation:menu-in 160ms var(--ease-out); }
+.rail { margin:0;padding:0;overflow:visible;gap:12px; }
+.rail__search { display:flex;align-items:center;gap:8px;min-height:36px;padding:0 9px;color:var(--ink-3);border:1px solid transparent;border-radius:var(--r-sm);flex:none; }
+.rail__search:focus-within { border-color:var(--accent-line);background:var(--paper);color:var(--accent); }
+.rail__search input { width:100%;min-width:0;font-size:12px;border:0;background:transparent;outline:0;color:var(--ink);padding:8px 0; }
+.rail__search input::placeholder { color:var(--ink-3); }.rail__search button { border:0;background:none;display:grid;place-items:center;color:var(--ink-2);padding:4px; }
+.rail__section { display:flex;align-items:center;justify-content:space-between;padding:0 10px; }
+.rail__label { padding:0;font-size:10px;letter-spacing:.08em;color:var(--ink-2); }.rail__count { font:10px var(--mono);color:var(--ink-3); }
+.rail__list { min-height:0;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent;display:flex;flex-direction:column;gap:3px;flex:1; }
+.rail__pod { min-height:44px;padding:7px 9px;gap:11px;color:var(--ink-2);border:1px solid transparent;flex-shrink:0; }
+.rail__pod:hover { background:var(--chrome); }.rail__pod[aria-current="page"] { background:var(--paper);border-color:var(--line);box-shadow:0 2px 5px rgb(0 0 0 / .03);color:var(--ink); }
+.rail__pod[aria-current="page"]::before { content:"";position:absolute;left:-1px;top:14px;bottom:14px;width:3px;border-radius:4px;background:var(--accent); }
+.rail__name { font-size:13px; }.rail__empty { padding:20px 10px;font-size:12px;color:var(--ink-2); }
+.rail__add { min-height:42px;margin-top:0;padding:6px 10px;flex:none;border:1px dashed var(--line-2);border-radius:var(--r-md);color:var(--ink-2);gap:10px; }
+.rail__add span { border:0;width:24px;height:24px;border-radius:0; }.rail__add-label { font-size:12px;font-weight:400;white-space:nowrap; }
+.side__foot { margin-top:0;padding:10px 0 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:7px;flex:none; }
+.side__settings { display:flex;align-items:center;gap:12px;border:0;border-radius:var(--r-md);padding:10px 13px;min-height:40px;text-align:left;background:transparent;color:var(--ink-2);font-size:13px;cursor:pointer; }
+.side__settings:hover,.side__settings[aria-current="true"] { background:var(--chrome);color:var(--ink); }
+.human-profile { min-height:58px;display:flex;align-items:center;gap:10px;padding:9px 8px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);text-align:left;color:var(--ink);cursor:pointer; }
+.human-profile:hover { box-shadow:var(--shadow-soft);border-color:var(--line-2); }
+.human-avatar { width:32px;height:32px;border:1px solid var(--line-2);border-radius:50%;display:grid;place-items:center;background:var(--chrome);color:var(--ink-2);font-size:11px;flex:none; }
+.human-profile__text { display:flex;flex-direction:column;gap:3px;min-width:0;flex:1;font-size:12px; }
+.human-profile__text > * { white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }.human-profile__text small { color:var(--ink-3);font-size:10px; }.human-profile__chevron { color:var(--ink-3); }
+.shell--collapsed .side { padding-inline:7px;gap:15px; }.shell--collapsed .side__brand { justify-content:center;position:relative;height:58px;padding:0;align-items:flex-start; }
+.shell--collapsed .sidebar-toggle { position:absolute;bottom:-10px;width:28px;height:27px; }.shell--collapsed .org__button { padding:7px;justify-content:center; }
+.shell--collapsed .rail__section,.shell--collapsed .rail__name,.shell--collapsed .rail__add-label,.shell--collapsed .side__settings span,.shell--collapsed .human-profile__text,.shell--collapsed .human-profile__chevron { display:none; }
+.shell--collapsed .rail__pod { justify-content:center;padding:7px 4px; }.shell--collapsed .rail__add { justify-content:center;padding:7px 3px; }
+.shell--collapsed .side__settings { justify-content:center;padding:10px 0; }.shell--collapsed .human-profile { justify-content:center;padding:7px 0;min-height:48px;border-color:transparent;background:transparent; }
+.shell--collapsed .org__menu { left:52px;top:0; }
+.mobile-nav-toggle,.sidebar-backdrop { display:none; }
+.main { position:relative; }.head { min-height:80px;padding:18px var(--gutter) 12px;gap:12px; }
+.head__title { flex-wrap:wrap;gap:2px 10px; }.head__title h1 { max-width:280px;overflow:hidden;text-overflow:ellipsis;font-size:20px; }
+.head__title p { width:100%;font-size:12px;order:2; }.head__title .reaches { margin-left:8px; }
+.head__gear { width:34px;height:34px;display:grid;place-items:center;border-radius:var(--r-sm);color:var(--ink-2);flex:none;text-decoration:none; }
+.head__gear:hover { color:var(--ink);background:var(--chrome); }.head__faces { flex:none; }.head__addface { display:grid;place-items:center; }
+.tabs { padding-inline:var(--gutter);gap:14px;min-height:44px;flex:none;overflow-x:auto;scrollbar-width:none; }.tab { display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-size:12px;min-height:44px; }
+/* A closing tab collapses its own column, so the strip closes up underneath it
+   rather than in one frame. `0fr` against `1fr` is the same trick the header
+   uses: no guessed width, and none of the dead travel a `max-width` would spend
+   getting down to the real one. 180ms here is the same 180ms the shell waits
+   before removing the node — see TAB_CLOSE_MS. */
+.tab__slot { flex:none;display:grid;grid-template-columns:1fr;transition:grid-template-columns 180ms var(--ease-out),opacity 140ms ease; }
+.tab__slot-inner { display:inline-flex;align-items:center;min-width:0;overflow:hidden; }
+.tab__slot--closing { grid-template-columns:0fr;opacity:0;pointer-events:none; }.tab__out,.tab__close { display:inline-flex;align-items:center;justify-content:center; }.tab__plus { display:grid;place-items:center; }
+.reaches { display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;max-width:none;vertical-align:middle; }
+.reach { display:inline-flex;align-items:center;gap:8px;padding:7px 9px;min-height:34px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--paper);color:var(--ink-2);cursor:pointer;max-width:100%; }
+.reach__mark { display:grid;place-items:center;width:20px;height:20px;background:none;color:inherit;flex:none;border-radius:0; }.channel-icon { object-fit:contain;display:block;flex:none; }
+.reach__handle { font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.reach__copy { opacity:.45; }
+.reach:hover { border-color:var(--line-2);background:var(--chrome); }.reach--compact { width:34px;height:34px;padding:6px;justify-content:center;position:relative; }.reach--compact .reach__handle { display:none; }
+.reach--compact::after { content:"";position:absolute;width:5px;height:5px;border-radius:50%;background:var(--ok);right:3px;bottom:3px;box-shadow:0 0 0 2px var(--paper); }
+/* One way in, rather than a grey icon per platform. The strip shows what is
+   true; the sheet is where connecting happens. */
+.reach--add { background:transparent;border-style:dashed;color:var(--ink-3);min-width:34px;justify-content:center;padding:6px;font-size:12px; }
+.reach--add:hover { color:var(--ink-2);border-style:solid; }
+.reaches--expanded { width:100%;margin-top:7px;gap:8px; }
+.reaches--expanded .reach--add { justify-content:flex-start;padding:7px 10px;gap:8px; }
+.channel-skeleton { width:34px;height:34px;border-radius:var(--r-sm);background:var(--chrome);animation:skeleton-pulse 1.6s ease-in-out infinite; }
+.account-card .btn { display:inline-flex;align-items:center;justify-content:center;gap:9px;text-decoration:none;min-height:42px; }
+.linkish { display:inline-flex;align-items:center;gap:6px; }
+.account-card { display:flex;flex-direction:column;align-items:center;gap:14px;padding:8px 0; }.human-avatar--large { width:64px;height:64px;font-size:22px; }.account-card h3 { margin:0;font-size:22px; }.account-tag { font:10px var(--mono);color:var(--ink-3);border:1px solid var(--line);padding:4px 8px;border-radius:5px; }
+.account-details { width:100%;margin:10px 0; }.account-details > div { display:flex;justify-content:space-between;gap:20px;padding:13px 0;border-bottom:1px solid var(--line);font-size:12px; }.account-details dt { display:flex;align-items:center;gap:7px;color:var(--ink-2); }.account-details dd { margin:0;text-align:right;overflow-wrap:anywhere; }.account-disconnect { border:0;background:none;display:flex;align-items:center;gap:7px;font-size:12px;padding:10px;color:var(--ink-2);cursor:pointer; }.account-disconnect[disabled] { opacity:.6;cursor:default; }.account-aside { font-size:11.5px;color:var(--ink-3);text-decoration:none; }.account-aside:hover { color:var(--ink-2); }.account-error { text-align:center; }
+.modal { z-index:1000;animation:backdrop-in 160ms ease;backdrop-filter:blur(5px); }.modal__panel { animation:panel-in 200ms var(--ease-out); }.modal__close { display:grid;place-items:center; }.theme__menu { animation:menu-in 150ms var(--ease-out); }
+.hero__acts { flex-wrap:wrap; }.hero__oncall { letter-spacing:.05em; }.project__status,.resource__go { display:inline-flex;align-items:center;gap:5px; }
+.history__new,.history__more,.callbar__mute,.callbar__end { display:flex;align-items:center;gap:8px; }.history__item { min-height:36px; }.steps__chev { display:inline-flex;align-items:center; }.composer__input { padding-left:8px; }.composer__send,.composer__stop { display:grid;place-items:center; }.composer__box:focus-within { border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow-soft); }.composer__wave { display:grid;place-items:center; }
+.pane--profile .profile { animation:panel-in 180ms var(--ease-out); }
+@keyframes menu-in { from {opacity:0;transform:translateY(-4px);} to {opacity:1;transform:none;} }
+@keyframes panel-in { from {opacity:0;transform:translateY(7px);} to {opacity:1;transform:none;} }
+@keyframes backdrop-in { from {opacity:0;} to {opacity:1;} }
+@keyframes skeleton-pulse { 50% {opacity:.4;} }
+@media(max-width:1150px) { .head__faces { display:none; }.head { gap:9px; }.head__title h1 { max-width:190px; }.head__title .reaches { gap:4px;margin-left:0; }.history { width:190px; }.head__flag { display:none; } }
+@media(min-width:768px) and (max-width:1024px) { :root { --side-w:200px;--gutter:24px; }.shell--collapsed { --side-w:64px; }.head__title { gap:6px; }.head__title .reaches { order:3;width:100%; }.head { min-height:98px;align-items:flex-start; }.head > .mark { margin-top:3px; } }
+@media(max-width:767px) {
+    :root { --gutter:18px; }.shell,.shell--collapsed { grid-template-columns:minmax(0,1fr); }
+    .side,.shell--collapsed .side { position:fixed;inset:0 auto 0 0;width:min(290px,85vw);z-index:100;transform:translateX(-100%);visibility:hidden;transition:transform 240ms var(--ease-out),visibility 240ms;box-shadow:var(--depth-raise);padding:18px 12px 12px;gap:16px; }
+    .shell--mobile-open .side { transform:none;visibility:visible; }.sidebar-backdrop { display:block;position:fixed;inset:0;z-index:99;background:rgb(10 8 20 / .35);border:0;backdrop-filter:blur(2px); }
+    .shell--mobile-open .side__brand { justify-content:space-between;align-items:center;height:36px; }.shell--mobile-open .sidebar-toggle { position:static;width:36px;height:36px; }.shell--mobile-open .rail__section { display:flex; }.shell--mobile-open .rail__name,.shell--mobile-open .rail__add-label,.shell--mobile-open .side__settings span { display:block; }.shell--mobile-open .rail__pod,.shell--mobile-open .rail__add,.shell--mobile-open .side__settings { justify-content:flex-start; }.shell--mobile-open .human-profile__text { display:flex; }.shell--mobile-open .human-profile__chevron { display:block; }.shell--mobile-open .human-profile { justify-content:flex-start;padding:9px; }.shell--mobile-open .org__menu { left:0;top:calc(100% + 6px); }
+    .mobile-nav-toggle { display:grid;position:absolute;left:10px;top:17px;z-index:10;width:40px;height:40px; }.head { padding:18px 12px 10px 58px;align-items:flex-start;gap:8px;min-height:120px; }.head > .mark,.head > .being { display:none; }.head__title h1 { font-size:19px;max-width:calc(100vw - 164px); }.head__title p { max-width:calc(100vw - 96px);font-size:11px; }.head__title .reaches { order:3;margin:10px 0 0;width:100%;gap:6px; }.head__spacer { display:none; }.head .theme { margin-left:auto; }.head > .head__gear { display:none; }.reach--compact,.reach--add { min-height:38px;min-width:38px; }.head__gear { width:38px;height:38px; }.head__flag { display:none; }
+    .tabs { padding-inline:18px;gap:14px; }.tab { min-height:44px; }.convo-host { min-width:0; }.convo-host .history { display:none; }.convo-host { grid-template-columns:minmax(0,1fr); }.pane__inner { padding-inline:18px; }.composer { padding:12px 14px 18px; }.composer__row { gap:8px;flex-wrap:wrap; }.composer__box { min-width:0; }.composer__note { font-size:10px; }.composer__send,.composer__wave { min-width:40px;min-height:40px; }.profile { padding:18px!important;gap:24px; }.profile__aside { min-width:0; }.idwrap { max-width:300px;margin-inline:auto; }.hero__name { font-size:30px; }.hero__acts .reaches { display:flex; }.reaches--expanded .reach { min-height:44px; }.reach__handle { max-width:190px; }.modal { padding:14px; }.modal__panel { max-height:calc(100dvh - 28px);width:100%; }.modal__head { padding:20px; }.modal__body { padding:20px; }.modal__close { min-width:44px;min-height:44px; }.rail__pod,.rail__add,.side__settings { min-height:44px; }.theme__menu { right:0;max-width:calc(100vw - 24px); }
+}
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important; } }
+.workspace { display:flex;flex-direction:column;min-height:0;flex:1; }.workspace[hidden] { display:none; }.settings-view { display:flex;flex-direction:column;min-height:0;flex:1; }
+.settings-view .org-settings { flex:1;min-height:0; }.split { grid-template-columns:minmax(0,1fr) 220px; }
+@media(max-width:1024px) { .split { grid-template-columns:minmax(0,1fr) 180px; } }
+@media(max-width:767px) { .split { grid-template-columns:minmax(0,1fr); }.split > .history { display:none; }.workspace,.settings-view { min-width:0; }.org-settings .head { min-height:88px; }.shell--mobile-open .org__button { justify-content:flex-start; }.shell--mobile-open .side__settings { padding:10px 13px; } }
+.split[hidden] { display:none; }
+@media(max-width:767px) { .profile__aside { order:1; }.profile__main { order:0; } }
+@media(max-width:767px) {
+    .composer__row { width:100%; }.composer__box { flex:1 0 100%;width:100%; }.composer__note { width:100%;justify-content:flex-start;padding-left:8px; }
+    .head .reach--compact,.head .reach--add { width:44px;height:44px; }
+    .account-card .btn,.linkish { min-height:44px; }
+}
+.desktop-nav-toggle { display:none; }
+@media(min-width:768px) {
+    .shell--hidden { --side-w:0px; }.shell--hidden .side { width:64px;visibility:hidden;opacity:0;pointer-events:none; }
+    .desktop-nav-toggle { display:grid;position:absolute;top:21px;left:12px;z-index:15; }
+    .shell--hidden .head { padding-left:64px; }
+}
+@media(max-width:1000px) { .split { grid-template-columns:minmax(0,1fr); }.split > .history { display:none; }.composer__row { flex-wrap:wrap; }.composer__box { flex:1 0 100%; }.composer__note { font-size:10px; } }
+.reach__feedback { position:absolute;top:calc(100% + 7px);left:50%;transform:translateX(-50%);z-index:50;white-space:nowrap;background:var(--ink);color:var(--paper);padding:6px 9px;border-radius:6px;box-shadow:var(--shadow-soft);font-size:10px;pointer-events:none; }
+/* Live-content correction: readable history, a single channel group, usable embeds. */
+.head { min-height:74px;padding-top:14px;padding-bottom:10px; }
+.head__title { display:flex;flex-direction:column;align-items:flex-start;gap:5px;flex-wrap:nowrap; }
+.head__title h1 { max-width:300px; }.head__title p { order:initial;width:auto;max-width:320px; }
+.head__channels { border-left:1px solid var(--line);padding-left:16px;margin-left:5px;flex:none; }
+.head__channels .reaches { gap:5px; }
+.head__channels .reach { border:0;background:transparent;border-radius:8px;box-shadow:none;min-width:34px;width:34px;height:34px; }
+.head__channels .reach:hover { background:var(--chrome); }
+.head__channels .reach--disconnected { width:40px;border:1px dashed var(--line-2);margin-left:2px; }
+.head__channels .reach--disconnected .reach__mark { opacity:.5;filter:grayscale(1) blur(.3px); }
+.head__channels .reaches .reach__connect { right:auto;bottom:auto;position:static;background:transparent; }
+.head__channels .reach--disconnected { gap:0; }
+.head__channels .reach--compact::after { width:4px;height:4px;right:4px;bottom:4px;box-shadow:none; }
+.split { grid-template-columns:minmax(0,1fr) 264px; }
+.history { width:auto;min-width:0;padding:16px 12px; }
+.history__item { display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:10px 11px;min-height:57px; }
+/* A call is one compact line against the conversation's two — indented, and
+   led by a rule so it reads as something that happened inside the thread above
+   rather than as another thread beside it. Row direction has to be re-stated
+   here rather than in pod.css: `.history__item` is made a column two lines up,
+   same specificity, and this file is imported last. */
+.history__item--call { flex-direction:row;align-items:center;gap:7px;margin-left:10px;padding:7px 10px 7px 9px;min-height:32px;border-left:1px solid var(--line-2);border-radius:0 var(--r-sm) var(--r-sm) 0; }
+.history__item--call svg { flex:none;opacity:.7; }
+.history__item--call .history__name { -webkit-line-clamp:1;flex:1;min-width:0;width:auto; }
+.history__item--call .history__at { flex:none; }
+.history__name { flex:none;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4;width:100%;color:var(--ink-2); }
+.history__item[aria-current="true"] .history__name { color:var(--accent); }
+.history__at { font-size:9px;opacity:.8; }.history__new { min-height:40px; }
+/* Two rows of the same list were running into each other. An item stacks its
+   title over its time with a 5px gap, and the list stacked the items 1px
+   apart — so the space *inside* a conversation was five times the space
+   *between* two of them, and five conversations read as one paragraph.
+   Between must beat within, or proximity groups the wrong lines. */
+.history__item { gap:3px; }
+.history__list { gap:7px; }
+/* And the label needs to clear the first row, which is filled when it is the
+   open conversation and so has a visible edge to collide with. */
+.history__label { padding:24px 10px 11px; }
+.resource--widget,.filecard { max-width:100%;box-shadow:none; }
+/* Inside the call's shared screen the frame is already drawn, and drawn
+   round. A card that brings its own border, radius, shadow and top margin
+   nests one rounded box inside another and leaks past the outer corner.
+   Flush, full-bleed, and let the screen be the screen. Last file in the
+   cascade, because `.filecard` and `.resource` are single classes too and
+   source order is what decides. */
+.call-deck__screen :is(.filecard,.resource,.resource--widget,.embed) {
+    margin:0;max-width:none;border:0;border-radius:0;box-shadow:none;background:none;
+}
+.call-deck__screen .filecard__head { border-radius:0; }
+/* A table on the shared screen is laid out like a screen: the header and the
+   footnote pinned, the rows scrolling between them. Sticky could not do it —
+   `.filecard` carries `overflow:hidden`, which makes it the sticky element's
+   scroll container and leaves it nowhere to stick — and the one line that
+   says a result was cut short was the line falling off the bottom. */
+.call-deck__screen .call-deck__slide:has(.dataview) { height:100%; }
+.call-deck__screen .dataview { display:flex;flex-direction:column;height:100%;overflow:hidden; }
+.call-deck__screen .dataview .dataview__grid { flex:1;min-height:0;max-height:none; }
+.call-deck__screen .dataview .filecard__head,
+.call-deck__screen .dataview .dataview__sql,
+.call-deck__screen .dataview .dataview__note { flex:none; }
+/* A widget is the thing, not a thing in a box: the frame keeps its own corners
+   and drops everything else. The controls arrive with the pointer, in the
+   corner of the content, rather than sitting in a permanent bar naming a widget
+   that the message above it already named. */
+.embed { position:relative;width:100%;min-width:0;border-radius:var(--r-lg);overflow:hidden; }
+/* Transparent, not paper. A frame that paints its own white is a card whether
+   or not anything filled it, which is what made a short widget look like it was
+   sitting in a box. Whatever the widget paints is the widget. */
+.embed__frame { width:100%;border:0;display:block;background:transparent;opacity:0;transition:opacity .18s ease,height .24s var(--ease-out); }
+.embed[data-ready] .embed__frame { opacity:1; }
+/* What sits in the reserved space while the frame has nothing to show. */
+.embed__waiting { position:absolute;inset:0;display:grid;place-items:center;font-size:12.5px;color:var(--ink-3);pointer-events:none;text-align:center;padding:0 16px; }
+/* Not a wait any more, so it stops looking like one: a statement on a surface,
+   in a box that has stopped holding space for something that is not coming. */
+.embed__waiting--stalled { position:static;min-height:0;padding:14px 16px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--chrome); }
+@media(prefers-reduced-motion:reduce) { .embed__frame { transition:none; } }
+/* Only when there is genuinely more below: the fade says the cap is a cap. */
+.embed[data-overflows]::after { content:"";position:absolute;left:0;right:0;bottom:0;height:64px;pointer-events:none;background:linear-gradient(to bottom,transparent,var(--canvas)); }
+.embed__acts { position:absolute;top:8px;right:8px;display:flex;gap:6px;opacity:0;transition:opacity .14s ease; }
+.embed:hover .embed__acts,.embed:focus-within .embed__acts { opacity:1; }
+.embed__acts button,.embed__acts a { display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;border:1px solid var(--line);border-radius:var(--r-sm);color:var(--ink-2);background:var(--paper);cursor:pointer;text-decoration:none;box-shadow:var(--shadow-soft); }
+.embed__acts button:hover,.embed__acts a:hover { color:var(--ink);border-color:var(--line-2); }
+@media(hover:none) { .embed__acts { opacity:1; } }
+/* A card around an embed is a frame around a frame. */
+/* An iframe's intrinsic width is 300px, and `width:100%` inside a card that is
+   itself sized by its contents resolves against that — so a page framed in the
+   transcript came out 300px wide whatever the column could afford. The reply
+   body is a flex column that hugs its children on purpose (a short sentence is
+   a short card), so the card carrying a frame has to opt out of the hug. The
+   widget card never hit this: `.resource` already carries `width:100%`. */
+.filecard:has(.embed) { border:0;background:none;box-shadow:none;padding:0;overflow:visible;width:100%;align-self:stretch; }
+.filecard:has(.embed) > .filecard__head { display:none; }
+.resource__caption { font-size:11px; }.resource__warn { display:block;font-size:10px; }
+@media(min-width:768px) and (max-width:1150px) { .head__title h1 { max-width:190px; }.head__title p { max-width:180px; }.head__channels { padding-left:10px;margin-left:0; }.split { grid-template-columns:minmax(0,1fr) 220px; } }
+@media(max-width:1000px) { .split { grid-template-columns:minmax(0,1fr); }.split > .history { display:none; } }
+@media(max-width:767px) {
+    .head { display:grid;grid-template-columns:minmax(0,1fr) 38px;gap:8px;min-height:118px;padding:18px 16px 10px 58px; }
+    .head__title { grid-column:1;grid-row:1; }.head__title h1 { max-width:100%; }.head__title p { max-width:100%;font-size:11px; }
+    .head__channels { grid-column:1 / -1;grid-row:2;margin:0;padding:0;border:0; }.head__channels .reach { min-width:40px;width:40px;height:40px; }.head__channels .reach--disconnected { width:46px; }
+    .head .theme { grid-column:2;grid-row:1; }.embed__acts button,.embed__acts a { width:36px;height:36px; }
+}
+
+/* Profile columns share the header gutters and consistent control baselines. */
+.pane--profile .profile { column-gap:24px; }
+.profile__main,.profile__aside { min-width:0; }
+.profile__aside { order:0; }
+.profile__aside .idwrap { position:relative;padding-top:0;width:100%;max-width:none; }
+.hero__acts > .btn { display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px; }
+.hero__acts .reaches--expanded { margin-top:4px;align-items:stretch; }
+.hero__acts .reach { min-height:38px; }
+.hero__meta,.hero__stats { display:block;line-height:1.65; }
+.pcard__head { flex-wrap:wrap;gap:6px 16px; }
+@media(max-width:1080px) {
+    .pane--profile .profile { padding-inline:var(--gutter); }
+    .profile__aside { display:grid;grid-template-columns:minmax(0,268px) minmax(0,1fr);gap:24px;align-items:start; }
+    .profile__aside .pcard { margin-top:0; }
+}
+@media(max-width:767px) {
+    .profile__aside { display:flex;flex-direction:column;gap:20px; }
+    .profile__aside .idwrap { max-width:300px;margin-inline:auto; }
+    .profile__aside .pcard { width:100%; }
+    .hero__body { padding-inline:18px; }.pcard:not(.pcard--hero) { padding:18px; }
+}
+/* Two independent columns, not a shared row grid.
+   As subgrids sharing rows, every row is as tall as the taller of its two
+   cards — and the badge is 443px against a 294px header, which opens a 163px
+   hole under the header before "About" can start. `align-self:start` does not
+   fix that: it stops the *card* stretching while the *row* stays tall, which
+   moves the emptiness outside the card and makes it more obvious, not less.
+   Nothing actually needed cross-column alignment; the cards on the two
+   sides are unrelated. Each column flows on its own now. */
+@media(min-width:1081px) {
+    .pane--profile .profile { row-gap:14px;align-items:start; }
+    .profile__main,.profile__aside { display:flex;flex-direction:column;gap:14px;min-width:0; }
+    .profile__main > .pcard,.profile__aside > .pcard { margin-top:0; }
+}
+
+.hero__message { line-height:1; }
+.hero__message > svg { display:block;align-self:center; }
+.hero__message > span { display:block;line-height:16px; }
+
+.head__mobile-channels { display:none; }
+@media(max-width:767px) {
+    /* One row: the name, then every control as a square of the same size.
+     *
+     *  Explicitly not a two-column grid with a fixed `height`. The header holds
+     *  a pod name and five controls, and a grid with columns for two of them
+     *  auto-places the rest into rows of their own — 46px of controls hanging
+     *  below a header that has been told it is 66px tall, over a tab strip that
+     *  starts exactly there. A lone magnifier under the pod name is what that
+     *  looks like from the outside.
+     *
+     *  The arithmetic is the whole design. 375 less the 54px the menu button
+     *  needs and 10px at the far side leaves 311. Five 36px controls and the
+     *  gaps between them take 200, so the name gets 111 — enough for the names
+     *  pods actually have, and an ellipsis for the rest. That is also why the
+     *  mark goes: it was 34 more, and the name is the thing that says which pod
+     *  this is. It comes back in the toolbar the moment the header is folded.
+     *
+     *  Nothing here may be taken out of flow to make it fit, which is the trap
+     *  the channels line was already in: `.head-slot > .head` carries
+     *  `overflow:hidden` so the header can collapse to its real height, and a
+     *  child out of flow contributes no height to collapse to. */
+    .workspace .head { position:relative;display:grid;grid-template-columns:minmax(0,1fr) repeat(5,auto);grid-template-rows:auto;align-items:center;gap:0 4px;height:auto;padding:8px 10px 8px 54px; }
+    .workspace .head > .head__mark { display:none; }
+    .workspace .head__title { grid-column:1;min-width:0;overflow:hidden; }
+    .workspace .head__title h1 { font-size:17px;line-height:24px;flex:1 1 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis; }
+    .workspace .head__title p,.workspace .head__channels { display:none; }
+    .workspace .head > .icon-button { grid-column:3; }
+    .workspace .head > .notify { grid-column:4; }
+    .workspace .head > .wf-inbox { grid-column:5; }
+    /* Folding was possible on every screen except the one where the header
+       costs the most. The control was hidden here and its way back — the pod
+       name in the toolbar — was not, so a phone could restore a header it had
+       no way to put away. */
+    .workspace .head > .head__gear { display:grid;grid-column:6; }
+    .mobile-nav-toggle { top:12px;left:8px; }
+    .head__mobile-channels { display:block;position:static;grid-column:2; }
+    /* The header stops clipping while the list is open. The clip is for the
+       collapse, and nothing is collapsing at that moment — but it was cutting
+       the list off all the same: a 122px popover inside a 78px header, which is
+       why this control had never once opened on a phone. Scoped here rather
+       than beside the clip itself, because a `details` left open stays open
+       across a resize and a wide header has no list to make space for.
+     *
+     *  The z-index goes with it: the toolbar below carries 20 and the header
+       carried none, so an uncut list still came out underneath the tab strip. */
+    .head-slot:has(.head__mobile-channels[open]) > .head { overflow:visible;z-index:30; }
+    .head__mobile-channels summary { display:grid;place-items:center;width:36px;height:36px;border-radius:var(--r-sm);list-style:none;color:var(--ink-2);cursor:pointer; }
+    .head__mobile-channels summary:hover,.head__mobile-channels[open] summary { color:var(--ink);background:var(--chrome); }
+    .head__mobile-channels summary::-webkit-details-marker { display:none; }
+    /* Measured off the header rather than off the button, because the button is
+       36px wide and in the middle of a row: anything hung from it either runs
+       off one edge of the screen or the other. The header's own padding is the
+       content column, so the list takes exactly that. */
+    .head__channel-popover { position:absolute;top:46px;left:54px;right:10px;width:auto;padding:12px;background:var(--paper);border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-lift); }
+    .head__channel-popover .reaches { margin:0;display:flex;flex-direction:column;align-items:stretch; }
+    .head .head__channel-popover .reach { width:100%;height:auto;min-height:44px;justify-content:flex-start; }
+    .head__channel-popover .reach__handle { max-width:220px; }
+    .workspace .tabs { min-height:40px; }.workspace .tab { min-height:40px; }
+    .pane__inner { padding-top:18px;padding-bottom:24px; }
+    .convo { gap:22px; }.day { margin-bottom:16px; }.msg { gap:10px;grid-template-columns:26px minmax(0,1fr); }
+    .msg + .msg--reply { margin-top:12px; }
+    /* The avatar's gutter narrows with the avatar, and the surfaces need
+       their padding back before the measure suffers. */
+    .convo-host { --turn-indent:36px; }
+    .msg--you .msg__body { padding:9px 13px 10px; }
+    .said { padding:11px 14px 12px; }
+    .steps__peek { display:none; }
+    .composer { padding:8px 12px 12px; }
+}
+/* The view toolbar owns navigation and actions; tools get the full canvas. */
+/* Collapsing to the content's real height, rather than to a guess about it.
+   `max-height:180px` had to be bigger than any header it might have to hide, so
+   a 74px header spent the first 60% of its animation moving through numbers
+   nobody could see and then covered the visible part in what was left. And
+   `height:auto -> 0` does not interpolate at all, so that half simply jumped.
+   A grid row measures itself: `1fr` is exactly as tall as the header is. */
+.head-slot { display:grid;grid-template-rows:1fr;transition:grid-template-rows 240ms var(--ease-out),opacity 160ms ease; }
+/* `overflow:hidden` zeroes what the content contributes to the row, and not
+   what the padding does — so a fully collapsed header still left its 14px top
+   and 10px bottom on screen as a 24px strip. The padding has to go with it, on
+   the same curve, or the last 24px arrive as a step. */
+.head-slot > .head { min-height:0;overflow:hidden;transition:padding-block 240ms var(--ease-out); }
+.head-slot--collapsed { grid-template-rows:0fr;opacity:0;pointer-events:none; }
+.head-slot--collapsed > .head { padding-block:0; }
+.workspace-toolbar { display:flex;align-items:center;gap:12px;min-width:0;min-height:48px;padding:0 var(--gutter);border-bottom:1px solid var(--line);flex:none;position:relative;z-index:20;background:var(--canvas); }
+.workspace-toolbar .tabs { flex:1;min-width:0;min-height:48px;padding:0;border:0;gap:16px; }
+.workspace-toolbar .tab { min-height:48px; }
+.toolbar-identity { display:flex;align-items:center;gap:8px;flex:none;max-width:170px;background:none;border:0;border-right:1px solid var(--line);padding:0 16px 0 0;color:var(--ink);font-size:12px;cursor:pointer; }
+.toolbar-identity > span:last-child { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.view-actions { display:flex;align-items:center;gap:6px;flex:none;margin-left:14px;position:relative; }
+.view-actions button,.view-actions a,.view-actions summary { display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;background:transparent;color:var(--ink-2);font-size:11px;min-height:34px;padding:6px 8px;border-radius:6px;text-decoration:none;cursor:pointer;white-space:nowrap; }
+.view-actions button:hover,.view-actions a:hover,.view-actions summary:hover { background:var(--chrome);color:var(--ink); }
+.view-actions button:disabled { opacity:.4;cursor:not-allowed; }
+.view-actions__secondary { display:flex;gap:4px; }.view-actions__more { display:none; }
+.view-actions__more summary { list-style:none; }.view-actions__more summary::-webkit-details-marker { display:none; }
+.view-actions__more > div { position:absolute;top:calc(100% + 8px);right:0;min-width:170px;padding:6px;background:var(--paper);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-lift);display:flex;flex-direction:column; }
+.view-actions__more > div > * { justify-content:flex-start; }
+.view-actions .view-actions__feedback { position:absolute;top:calc(100% + 8px);right:0;background:var(--paper);border:1px solid var(--line);box-shadow:var(--shadow-soft); }
+.file-tab-pane[hidden] { display:none; }
+.shell--hidden .workspace--headless .workspace-toolbar { padding-left:64px; }
+.main:has(.workspace--headless) > .desktop-nav-toggle { top:6px; }
+@media(max-width:1100px) { .view-actions__secondary { display:none; }.view-actions__more { display:block; } }
+@media(max-width:767px) {
+    .workspace-toolbar { padding-inline:14px;gap:8px;min-height:44px; }
+    .workspace-toolbar .tabs,.workspace-toolbar .tab { min-height:44px; }
+    .workspace-toolbar .tabs { gap:14px; }
+    .view-actions { padding-left:6px;gap:0; }.view-actions > button > span,.view-actions > a > span { display:none; }
+    .view-actions button,.view-actions a,.view-actions summary { min-width:36px;min-height:44px;padding:6px; }
+    .workspace--focused .workspace-toolbar,.shell--hidden .workspace--focused .workspace-toolbar { padding-left:50px;min-height:52px; }
+    .toolbar-identity { max-width:32px;padding:0;border:0; }.toolbar-identity > span:last-child { display:none; }
+    .main:has(.workspace--focused) > .mobile-nav-toggle { top:6px; }
+}
+.main:has(.workspace--focused) > .mobile-nav-toggle,
+.main:has(.workspace--headless) > .desktop-nav-toggle { z-index:30; }
+/* New conversation belongs to the toolbar, not a second button in the rail. */
+.workspace .history__new { display:none; }
+
+/* Cancel legacy tab offsets inside the shared toolbar. */
+.workspace-toolbar .tabs { margin-top:0;align-self:stretch; }
+.workspace-toolbar .tab { margin-block:0;padding-block:0;position:relative;border-bottom:0; }
+.workspace-toolbar .tab[aria-selected="true"]::after { content:"";position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--accent); }
+.toolbar-identity { line-height:1; }
+
+/* The header's own hide control. It sits last, past the settings gear, so
+   the row reads left to right as identity → channels → people → appearance
+   → settings → put it away. */
+.head__collapse { margin-left:2px; }
+.head__collapse:hover { color:var(--accent); }
+/* Nothing should animate its way out from under the reader's cursor, but a
+   header that vanishes instantly reads as a glitch, so it folds. */
+
+
+/* No `border-left` on the toolbar's actions, though the history panel below
+   carries one. Stacked, the two read as a single vertical rule down the page
+   — except they cannot be in the same place. The panel's edge sits at
+   `width - 220px`; the actions' edge sits at `width - gutter - (however wide
+   the buttons happen to be)`, and the gutter is fluid, so the offset drifts
+   with the window and the "line" has a kink in it at every size.
+
+   Aligning them would mean pinning the actions to `220px - gutter`, in three
+   breakpoints, and hoping the buttons never outgrow it. So the toolbar's rule
+   goes instead: one line, unbroken, and the gap already separates the tabs
+   from the actions. */
+.workspace-toolbar > .view-actions { border-left:0; }
+
+/* ── The hiring floor ─────────────────────────────────────────────────
+   A page, because a candidate gets the same profile a hired teammate
+   gets and that does not fit in a dialog. It borrows the pane, so the
+   profile inside it lays out exactly as it will once they are yours. */
+.hiring { display:flex;flex-direction:column;min-height:0;flex:1;position:relative; }
+.hiring__bar {
+    display:flex;align-items:center;gap:14px;flex:none;min-height:48px;
+    padding:0 var(--gutter);border-bottom:1px solid var(--line);background:var(--canvas);
+}
+.hiring__back {
+    display:inline-flex;align-items:center;gap:7px;border:0;background:none;cursor:pointer;
+    font-size:12px;color:var(--ink-2);padding:6px 8px;border-radius:6px;margin-left:-8px;
+}
+.hiring__back:hover { background:var(--chrome);color:var(--ink); }
+.hiring__where { font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3); }
+.hiring .pane { position:relative;inset:auto;flex:1;min-height:0; }
+
+.shelf { width:min(100%, 1120px);margin-inline:auto;padding:34px var(--gutter) 56px;display:flex;flex-direction:column;gap:20px; }
+.shelf__head { display:flex;flex-direction:column;gap:7px; }
+.shelf__head h1 { margin:0;font-size:29px;letter-spacing:-.02em;font-weight:500; }
+.shelf__head p { margin:0;font-size:14px;color:var(--ink-2);max-width:52ch; }
+
+.shelf__ask { display:flex;gap:9px;align-items:center;max-width:640px; }
+.shelf__ask input {
+    flex:1;min-width:0;font:inherit;font-size:var(--t-ui);color:var(--ink);
+    background:var(--paper);border:1px solid var(--line-2);border-radius:999px;padding:12px 18px;
+}
+.shelf__ask input:focus { outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft); }
+.shelf__ask .btn { flex:none;border-radius:999px;display:inline-flex;align-items:center;gap:6px; }
+
+.shelf__or { display:flex;align-items:center;gap:14px;font-size:11.5px;color:var(--ink-3);margin-top:6px; }
+.shelf__or::before,.shelf__or::after { content:"";flex:1;height:1px;background:var(--line); }
+
+.shelf__grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:12px; }
+.hirecard {
+    display:flex;flex-direction:column;align-items:flex-start;gap:7px;
+    padding:18px;border:1px solid var(--line);border-radius:var(--r-xl);
+    background:var(--paper);cursor:pointer;text-align:left;font:inherit;color:inherit;
+    transition:border-color .14s ease,transform .14s ease,box-shadow .14s ease;
+}
+.hirecard:hover { border-color:var(--accent-line);transform:translateY(-2px);box-shadow:var(--shadow-soft); }
+.hirecard__face { display:grid;place-items:center;width:52px;height:52px;margin-bottom:3px;color:var(--ink-3); }
+.hirecard__name { font-size:16px; }
+.hirecard__role { font-size:13px;color:var(--ink-2);line-height:1.45; }
+/* What arrives is the persuading part, so it is on the card rather than
+   summarised as a count somebody has to open the page to expand. */
+.hirecard__brings { display:flex;flex-direction:column;gap:3px;margin-top:5px; }
+.hirecard__brings span { position:relative;padding-left:13px;font-size:12px;color:var(--ink-3);line-height:1.4; }
+.hirecard__brings span::before { content:"";position:absolute;left:2px;top:7px;width:4px;height:4px;border-radius:999px;background:var(--accent);opacity:.65; }
+.hirecard__go { display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-size:12px;color:var(--accent); }
+.hirecard--blank { background:var(--canvas);border-style:dashed; }
+.hirecard--blank .hirecard__brings span::before { background:var(--ink-3); }
+
+/* Taking one on. The hero's action slot, which on a hired teammate holds
+   Message, holds the name and the offer here. */
+.takeon { display:flex;flex-direction:column;gap:10px;align-items:flex-start;width:100%;max-width:24rem; }
+.takeon__name { display:flex;flex-direction:column;gap:5px;width:100%; }
+.takeon__name span { font-size:12px;color:var(--ink-3); }
+.takeon__name input {
+    font:inherit;font-size:var(--t-ui);color:var(--ink);background:var(--paper);
+    border:1px solid var(--line-2);border-radius:var(--r-md);padding:10px 13px;width:100%;
+}
+.takeon__name input:focus { outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft); }
+.takeon__go { margin-top:2px; }
+
+.offer__brings { list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px; }
+.offer__brings li { display:flex;align-items:flex-start;gap:9px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px;color:var(--ink-2);line-height:1.45; }
+.offer__brings li:last-child { border-bottom:0; }
+.offer__brings svg { flex:none;margin-top:2px;color:var(--accent); }
+
+/* Making, and meeting ------------------------------------------------ */
+.making,.met { display:flex;flex-direction:column;align-items:center;gap:20px;padding:min(12vh,110px) var(--gutter) 40px;text-align:center; }
+.making__face { animation:being-wait 2.4s ease-in-out infinite; }
+@keyframes being-wait { 0%,100% { transform:translateY(0);} 50% { transform:translateY(-6px);} }
+.making__steps { list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;text-align:left; }
+.making__steps li { display:flex;align-items:center;gap:11px;font-size:14px;color:var(--ink-3);transition:color .2s ease; }
+.making__steps li[data-state="running"] { color:var(--ink-2); }
+.making__steps li[data-state="done"] { color:var(--ink); }
+.making__dot { display:grid;place-items:center;width:20px;height:20px;flex:none;border-radius:999px;background:var(--chrome);color:var(--paper); }
+.making__steps li[data-state="running"] .making__dot { background:var(--accent-soft);animation:skeleton-pulse 1.1s ease-in-out infinite; }
+.making__steps li[data-state="done"] .making__dot { background:var(--accent); }
+
+/* The reveal carries more than a face and a door, so it starts high up the
+   page. `min(12vh,110px)` is the padding for a screen with four things on
+   it; this one has more. */
+.met { padding-block:min(4vh,40px) 56px;gap:16px; }
+.met__face { animation:panel-in 460ms cubic-bezier(.2,1.4,.4,1) both;outline:none; }
+.met__name { margin:0;font-size:30px;font-weight:500;letter-spacing:-.02em; }
+.met__line { margin:0;font-size:var(--t-ui);color:var(--ink-2);max-width:40ch; }
+
+/* The first morning. Everything below the face is left-aligned against a
+   column of its own — three centred cards read as a poster, and these are
+   things to do. */
+.met__moves { display:flex;flex-direction:column;gap:12px;width:100%;max-width:33rem;margin-top:12px;text-align:left; }
+
+.met__move, .met__side {
+    background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-lg);
+    box-shadow:var(--depth-rest),var(--edge-lit);
+}
+.met__move { padding:16px 4px 4px; }
+.met__move h3 {
+    display:flex;align-items:center;gap:9px;margin:0 0 4px;padding-inline:16px;
+    font-size:var(--t-ui);font-weight:500;color:var(--ink);
+}
+/* The two marks that carry the teammate's colour carry it the way the
+   credential layer does — as a field with its own paired ink, never as an ink
+   on paper. `--field` deliberately does not move with the theme, so a klein
+   blue glyph that measures 8:1 on the warm white measures 2.1:1 on the dark
+   one; filled, the pairing holds in both. */
+.met__move h3 svg, .met__side svg {
+    background:var(--field);color:var(--field-ink);
+    border-radius:8px;padding:5px;box-sizing:content-box;
+}
+.met__move > p { margin:0;padding:0 16px 14px;font-size:12.5px;color:var(--ink-3);line-height:1.5; }
+
+.met__openers { list-style:none;margin:0;padding:0; }
+.met__openers li + li { border-top:1px solid var(--line-2); }
+.met__openers button {
+    display:flex;align-items:center;gap:12px;width:100%;
+    font:inherit;font-size:13.5px;text-align:left;color:var(--ink);line-height:1.45;
+    background:none;border:0;border-radius:var(--r-md);padding:12px 14px;cursor:pointer;
+    transition:background-color .14s ease,color .14s ease;
+}
+.met__openers button span { flex:1; }
+/* The arrow is the affordance, so it stays out of the way until the row is
+   the one being read. */
+.met__openers button svg { flex:none;color:var(--ink-3);opacity:0;transform:translateX(-4px);transition:opacity .14s ease,transform .14s ease; }
+.met__openers button:hover, .met__openers button:focus-visible { background:var(--accent-soft);outline:none; }
+.met__openers button:hover svg, .met__openers button:focus-visible svg { opacity:1;transform:none; }
+
+.met__pair { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
+.met__side {
+    display:flex;flex-direction:column;align-items:flex-start;gap:5px;
+    padding:15px 16px 16px;font:inherit;text-align:left;cursor:pointer;
+    transition:border-color .14s ease,box-shadow .14s ease,transform .14s ease;
+}
+.met__side:hover { border-color:var(--ink-3);box-shadow:var(--depth-raise),var(--edge-lit); }
+.met__side:active { transform:translateY(1px);box-shadow:var(--depth-well); }
+.met__side svg { margin-bottom:4px; }
+.met__side b { font-size:13.5px;font-weight:500;color:var(--ink);line-height:1.35; }
+.met__side span { font-size:12.5px;color:var(--ink-3);line-height:1.5; }
+
+.met__door { margin-top:8px; }
+
+@media(max-width:767px) {
+    .met__pair { grid-template-columns:minmax(0,1fr); }
+}
+
+@media(max-width:767px) {
+    .shelf { padding-inline:18px; }
+    .shelf__ask { flex-wrap:wrap; }.shelf__ask input { flex:1 0 100%; }.shelf__ask .btn { width:100%;justify-content:center; }
+    .shelf__grid { grid-template-columns:minmax(0,1fr); }
+    .hiring__bar { padding-inline:18px; }
+}
+
+/* Somebody new, inside a dialog. Deliberately small — a blank hire on the
+   full profile is a page of things they lack, which is a strange thing to
+   read about someone you are about to take on.
+
+   It was a card on a page first, and that was the wrong container twice
+   over: two fields and a button stranded in the middle of an empty pane,
+   and the reader lost sight of the floor they were browsing. A dialog is
+   the shape this always was. */
+.newface { display:flex;flex-direction:column;gap:14px; }
+/* No disc behind it. The ring and the fill made a fixed avatar slot, which is
+   the one thing this face is not — it is drifting because nobody has been made
+   yet, and a character cycling inside a settled frame reads as an avatar
+   failing to load. Standing on the page, it reads as what it is. */
+.newface__face {
+    align-self:center;display:grid;place-items:center;width:88px;height:88px;flex:none;
+    margin-bottom:2px;
+}
+.newface__face .being { animation:newface-in .34s ease both; }
+/* Nothing here is anybody's yet, so the primary is not printed in a teammate's
+   field — which out here is `--press-0`, and "Hire Blogger" in signal red
+   reads as the button that deletes them. Same call as `.screen`. */
+.newface { --field:var(--press-4);--field-ink:var(--press-ink); }
+@keyframes newface-in { from { opacity:.25;transform:translateY(3px);} }
+.newface .takeon__name { max-width:none; }
+.newface__foot { display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:2px; }
+.newface__note { font-size:11.5px;color:var(--ink-3); }
+
+/* The show-sidebar button is absolutely placed in `.main` at the height the
+   pod header occupies. With no header it lands inside the toolbar instead —
+   which is opaque and sits a stacking level above it, so the button was there
+   the whole time, painted over.
+
+   The rules that lift it clear key off whether there is a header, not off
+   `--focused` — the flag for a view that wants the whole pane. `--focused`
+   answers the right question only while apps and files are the only things
+   that hide the header, and the conversation can hide it by hand. So they ask
+   the question they mean. */
+
+/* ── Sharing a document ───────────────────────────────────────────────
+   The dialog asks who, not how. Two link types live underneath and they
+   are not interchangeable, but nobody opens a share dialog wanting to
+   pick a mechanism — they want to send a document to a person, and the
+   only question that matters is whether that person is in the pod. */
+.share { display:flex;flex-direction:column;gap:14px; }
+.share__who { display:flex;flex-direction:column;gap:8px; }
+.share__opt {
+    display:flex;flex-direction:column;gap:3px;text-align:left;font:inherit;color:inherit;cursor:pointer;
+    padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--paper);
+    transition:border-color .14s ease,background .14s ease;
+}
+.share__opt:hover { border-color:var(--line-2); }
+.share__opt[aria-pressed="true"] { border-color:var(--accent);background:var(--accent-soft); }
+.share__opt b { font-weight:500;font-size:var(--t-ui); }
+.share__opt span { font-size:12.5px;color:var(--ink-2);line-height:1.45; }
+
+.sharelink { display:flex;gap:8px;align-items:center; }
+.sharelink input {
+    flex:1;min-width:0;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);
+    background:var(--chrome);border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px;
+}
+.sharelink input:focus { outline:none;border-color:var(--accent-line); }
+.sharelink .btn { flex:none;display:inline-flex;align-items:center;gap:6px; }
+
+.share__bounds { display:flex;gap:10px;flex-wrap:wrap; }
+.share__bounds label { display:flex;flex-direction:column;gap:5px;flex:1;min-width:8rem; }
+.share__bounds span { font-size:12px;color:var(--ink-3); }
+.share__bounds select {
+    font:inherit;font-size:13.5px;color:var(--ink);background:var(--paper);
+    border:1px solid var(--line-2);border-radius:var(--r-md);padding:9px 10px;
+}
+/* The bounds are the headline, not the small print: they are the reason
+   this is safe to offer at all. */
+.share__bounded { margin:0;font-size:12.5px;color:var(--ink-2);line-height:1.5; }
+.share__bounded b { font-weight:500;color:var(--ink); }
+
+/* ── A shared document, read by somebody with no account ──────────────
+   No rail, no tabs, nothing shaped like navigation — every door here is
+   one the reader cannot open. The filename lives in the bar rather than
+   above the content, because a document arrives with a heading of its
+   own and two stacked titles read as a mistake. */
+.shared { min-height:100dvh;background:var(--canvas);display:flex;flex-direction:column; }
+.shared__bar {
+    display:flex;align-items:center;gap:12px;padding:12px var(--gutter);flex:none;
+    border-bottom:1px solid var(--line);background:var(--paper);position:sticky;top:0;z-index:5;
+}
+.shared__bar .lemma-logo { flex:none;gap:9px; }
+.shared__bar .lemma-brand-mark { height:20px; }
+.shared__bar .lemma-brand-mark i:nth-child(1) { height:8px; }
+.shared__bar .lemma-brand-mark i:nth-child(2) { height:13px; }
+.shared__bar .lemma-brand-mark i:nth-child(3) { height:19px; }
+.shared__bar .lemma-wordmark { font-size:18px; }
+.shared__name {
+    font-family:var(--mono);font-size:11px;color:var(--ink-3);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:min(46vw,28rem);
+}
+.shared__spacer { flex:1; }
+.shared__get {
+    display:inline-flex;align-items:center;gap:7px;flex:none;text-decoration:none;
+    font-size:12.5px;color:var(--ink-2);border:1px solid var(--line-2);
+    border-radius:999px;padding:7px 13px;transition:border-color .14s ease,color .14s ease;
+}
+.shared__get:hover { border-color:var(--ink-3);color:var(--ink); }
+
+.shared__sheet {
+    width:min(100% - 2.5rem, 46rem);margin:32px auto 8px;padding:30px 34px 36px;
+    background:var(--paper);border:1px solid var(--line);border-radius:var(--r-xl);box-shadow:var(--shadow-soft);
+}
+.shared__sheet--wide { width:min(100% - 2.5rem, 68rem); }
+.shared__sheet h1 { margin:0 0 14px;font-size:22px;font-weight:500;letter-spacing:-.02em; }
+.shared__note { margin:0 0 14px;font-size:14px;color:var(--ink-2);line-height:1.6;max-width:60ch; }
+.shared__fine { margin:14px 0 0;font-size:11.5px;color:var(--ink-3); }
+.shared__pre { margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;color:var(--ink-2);line-height:1.6; }
+.shared__image { display:block;max-width:100%;height:auto;margin-inline:auto;border-radius:var(--r-md); }
+.shared__pdf { display:block;width:100%;height:min(78vh,900px);border:0;border-radius:var(--r-md);background:var(--chrome); }
+/* The one place a true white is right, and the three frames below share the
+   reason: what is inside them is somebody else's document, authored against a
+   white page. Tinting the backdrop with `--paper` tints their document, and a
+   PDF on cream reads as a scan rather than as a file. This is the backdrop for
+   foreign content, not one of this app's own surfaces. */
+.shared__frame { display:block;width:100%;height:min(74vh,820px);border:0;border-radius:var(--r-md);background:#fff; }
+.shared__scroll { overflow-x:auto;margin:0 -6px; }
+.shared__table { width:100%;border-collapse:collapse;font-size:12.5px; }
+.shared__table th {
+    text-align:left;font-family:var(--mono);font-weight:400;font-size:10px;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--ink-3);padding:0 12px 9px 6px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+.shared__table td { padding:9px 12px 9px 6px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top; }
+.shared__table tbody tr:last-child td { border-bottom:0; }
+
+.shared__foot {
+    margin:0 auto;padding:18px var(--gutter) 40px;
+    width:min(100% - 2.5rem, 46rem);font-size:11.5px;color:var(--ink-3);
+}
+@media(max-width:600px) {
+    .shared__sheet { padding:20px;margin-top:16px; }
+    .shared__get span { display:none; }
+    .shared__get { padding:8px; }
+}
+
+/* Reading size, not chat size.
+   `.md` is tuned for the transcript, where a reply is a message in a
+   column beside a composer. This page is a document somebody sat down
+   with, so the type gets the pod a document expects — a couple of
+   points larger, more leading, and headings that carry a scale rather
+   than a nudge. Scoped to `.shared` so the transcript is untouched. */
+.shared .md { font-size:16.5px;line-height:1.72;color:var(--ink-2); }
+.shared .md p { margin:0 0 16px; }
+.shared .md h1,.shared .md h2,.shared .md h3,.shared .md h4 { margin:30px 0 10px;line-height:1.25; }
+.shared .md h1 { font-size:27px; }
+.shared .md h2 { font-size:21px; }
+.shared .md h3,.shared .md h4 { font-size:17px; }
+.shared .md ul,.shared .md ol { margin:0 0 16px;padding-left:24px; }
+.shared .md li { margin:0 0 7px; }
+.shared .md li::marker { color:var(--ink-3); }
+.shared .md blockquote { margin:0 0 16px;padding-left:16px;border-left:2px solid var(--line-2);color:var(--ink-3); }
+.shared .md code { font-size:14px; }
+.shared .md pre { font-size:13.5px;line-height:1.6; }
+.shared .md table { font-size:14px; }
+.shared__pre { font-size:13.5px; }
+
+/* The bar, aligned.
+   The wordmark and the filename were centred as boxes while their line
+   boxes were very different heights — the wordmark inherits the body's
+   1.55, so its box stands well above and below the letters and centring
+   it centres the space rather than the glyphs. Both get `line-height:1`,
+   which makes the box the letters, and a hairline sits between the two
+   so they read as two things in a row rather than a title with a
+   subtitle that has slipped. */
+.shared__bar .lemma-wordmark { line-height:1; }
+.shared__name { line-height:1; }
+.shared__rule { flex:none;width:1px;height:17px;background:var(--line-2);opacity:.8; }
+
+.sharedtheme { display:inline-flex;align-items:center;gap:2px;flex:none;padding:2px;border-radius:999px;background:var(--chrome); }
+.sharedtheme button {
+    display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:999px;
+    background:none;color:var(--ink-3);cursor:pointer;transition:background .14s ease,color .14s ease;
+}
+.sharedtheme button:hover { color:var(--ink-2); }
+.sharedtheme button[aria-pressed="true"] { background:var(--paper);color:var(--ink);box-shadow:var(--shadow-soft); }
+@media(max-width:600px) { .shared__rule,.shared__name { display:none; } }
+
+/* The mark goes to the app's own front door. Same tab: the page is cached
+   for a minute and the browser keeps it besides, so coming back costs the
+   reader nothing. */
+.shared__home { text-decoration:none;border-radius:var(--r-sm);transition:opacity .14s ease; }
+.shared__home:hover { opacity:.72; }
+
+/* ── A document that is already a page ────────────────────────────────
+   HTML, a PDF, a picture. Each of those arrives with its own margins,
+   its own type and its own idea of a page, so putting one inside a card
+   is a frame around a frame — and the reader spends the screen they have
+   on padding. These take the viewport instead, with the bar above and
+   one line beneath, and everything the page cannot fit goes in that
+   line rather than under content that now reaches the bottom. */
+.shared--bleed { height:100dvh;overflow:hidden; }
+.shared__bleed { flex:1;min-height:0;display:flex;background:var(--sunk, var(--chrome)); }
+.shared__bleed > * { flex:1;min-width:0;min-height:0;width:100%;border:0;border-radius:0; }
+.shared--bleed .shared__frame,
+.shared--bleed .shared__pdf { height:100%;background:#fff; }
+/* Contain rather than cover: a screenshot cropped to fill the window is a
+   screenshot with its edges cut off, which is the one thing a shared
+   picture must not be. */
+.shared--bleed .shared__image { max-width:100%;height:100%;object-fit:contain;margin:0;border-radius:0;background:var(--chrome); }
+.shared--bleed .shared__foot {
+    flex:none;width:100%;max-width:none;display:flex;gap:14px;flex-wrap:wrap;
+    padding:9px var(--gutter);border-top:1px solid var(--line);background:var(--paper);
+}
+
+/* ── A file tab that is already a page ────────────────────────────────
+   Same argument as the shared page, one screen inward. An HTML file or
+   an image opened onto the stage arrives with its own margins and its
+   own header; `.pane__inner` then adds a reading measure and 28px of
+   padding around it, and the preview toolbar repeats the filename the
+   tab strip is already showing and the actions the toolbar already has.
+   Three frames, and the page gets what is left.
+
+   In the transcript it stays a preview — there it really is one thing
+   among many in a column, and the toolbar earns its place. */
+.file-tab-pane:has(.fileview--bleed) .pane__inner { width:100%;max-width:none;padding:0;height:100%; }
+.fileview--bleed { display:flex;height:100%;min-height:0;width:100%; }
+.fileview__frame { flex:1;width:100%;min-width:0;border:0;background:#fff; }
+/* Contained, not cropped: a screenshot cut to fill the pane is a
+   screenshot with its edges missing. */
+.fileview--image,.fileview--video { align-items:center;justify-content:center;padding:20px;background:var(--chrome); }
+.fileview--audio { align-items:center;justify-content:center;padding:24px; }
+/* A video has no intrinsic size until its metadata lands, so it is laid out at
+   the 300x150 default and `max-height` has nothing to cap — it collapsed to its
+   own control bar. Filling the pane and letting object-fit keep the aspect is
+   the one form that does not depend on when the file answers. */
+.fileview--video video { width:100%;height:100%;object-fit:contain;border-radius:var(--r-md); }
+.fileview--audio audio { width:min(480px,100%); }
+.fileview--image img { max-width:100%;max-height:100%;object-fit:contain;border-radius:var(--r-md); }
+/* The PDF already breaks out; it kept 12px of margin that nothing needs
+   now that the frame reaches the edges everywhere else. */
+.file-tab-pane:has(.pdf-preview) .pane__inner { padding:0; }
+
+/* ── The pause, and following the tail ───────────────────────────────
+   An approval card is the one place in the app where a person is asked
+   to take responsibility for something a machine is about to do. It
+   gets the arguments of the real call, the reason in prose, and three
+   answers rather than two — "once" and "for this conversation" are
+   genuinely different grants and collapsing them into "Approve" makes
+   the reader guess which one they just gave.
+
+   It lives INSIDE the reply, at the tool call that raised it, which is
+   why it is sized like a message and not like a dialog. The old card
+   floated at the bottom of the pane: detached from the work, below
+   anything that arrived after it, and gone the instant it was clicked. */
+.approval { border-color:var(--wait);box-shadow:0 0 0 3px rgb(181 129 31 / .08);max-width:none;margin:14px 0 4px; }
+.approval__top { margin-bottom:8px; }
+.approval__icon { display:inline-flex;align-items:center;color:var(--wait);margin-right:-6px; }
+.approval__title { flex:1;min-width:0;font-size:13.5px;line-height:1.45; }
+.approval__detail { font-family:inherit;font-size:13px;line-height:1.55;color:var(--ink-2); }
+.pill--wait { background:color-mix(in srgb,var(--wait) 14%,transparent);color:var(--wait);white-space:nowrap; }
+.pill--done { white-space:nowrap; }
+
+.approval__args {
+    margin:12px 0 0;display:grid;grid-template-columns:minmax(5rem,auto) minmax(0,1fr);
+    gap:7px 16px;font-size:12.5px;
+}
+.approval__args > div { display:contents; }
+.approval__args dt { font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding-top:2px; }
+.approval__args dd { margin:0;color:var(--ink);word-break:break-word;font-family:var(--mono);font-size:12px;line-height:1.5; }
+.approval__acts { display:flex;flex-wrap:wrap;gap:8px;margin-top:16px; }
+.approval__deny { border-color:transparent;color:var(--ink-3); }
+/* `--bad`, not a literal red. A fixed `#c22f15` measures 5.61:1 on the light
+   paper and 3.11:1 on the dark one, so refusing something is legible in one
+   appearance and nearly not in the other; the token is 6.48:1 and 7.23:1. */
+.approval__deny:hover:not(:disabled) { color:var(--bad);border-color:color-mix(in srgb, var(--bad) 30%, transparent); }
+.approval__acts .btn:disabled { opacity:.55;cursor:default; }
+
+/* The decision landed; the work it unblocked has not. Said out loud,
+   because the alternative is a card that goes quiet for two minutes. */
+.approval__after {
+    margin:14px 0 0;display:flex;align-items:center;gap:8px;
+    font-size:12.5px;color:var(--ink-3);
+}
+.approval__after::before {
+    content:"";width:6px;height:6px;border-radius:999px;background:var(--wait);
+    animation:pulse 1.4s ease-in-out infinite;
+}
+.approval__error { margin:10px 0 0;font-size:12.5px;color:var(--bad); }
+
+/* Answered. It stays in the transcript: what you agreed to, at the
+   point you agreed to it, is worth being able to scroll back to. */
+.approval[data-state="done"],
+.approval[data-state="denied"] {
+    border-color:var(--line);box-shadow:none;background:var(--chrome);
+}
+.approval[data-state="done"] .approval__icon { color:var(--accent); }
+.approval[data-state="denied"] .approval__icon { color:var(--ink-3); }
+.approval[data-state="done"] .approval__title,
+.approval[data-state="denied"] .approval__title { color:var(--ink-2); }
+.approval[data-kind="question"] .approval__icon { color:var(--accent); }
+.approval[data-kind="question"][data-state="open"] { border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft); }
+
+/* ── the shelf ──────────────────────────────────────────────────────
+   A blocked run gets one thing on screen, above the box you would
+   otherwise be typing into. See `interaction-dock.tsx` for why this is
+   not the floating card the in-transcript one replaced.
+ *
+ *  No rule across the top. It was there to say "the transcript ends
+ *  here", which the layout already says on its own: the transcript is
+ *  its own scroll pane and this is a sibling beneath it, so nothing ever
+ *  passes under the line for the line to cut off. What it actually drew
+ *  was a third full-width edge in a column that has two, above a card
+ *  whose own shadow already puts it in front. */
+.dock { flex:none;background:var(--canvas);animation:dock-in .2s var(--ease-out) both; }
+.dock__row {
+    width:min(100%, calc(var(--reading-w) + var(--gutter) * 2));
+    padding:14px var(--gutter) 2px;
+    /* The options lay themselves out against this, not the window: the
+       pane loses 232px to the rail and 248px to the history beside it,
+       and a viewport breakpoint would put two columns in a 480px pane. */
+    container-type:inline-size;
+}
+@keyframes dock-in { from { opacity:0;transform:translateY(12px); } }
+
+/* Lifted rather than ringed, and capped so a four-argument approval cannot eat
+   the transcript it is standing on.
+ *
+ *  In the transcript a coloured ring is how an open pause gets found at all.
+ *  On the shelf it has already been found — it is the one thing between the
+ *  conversation and the box you type into — so the ring was a raised voice
+ *  aimed at somebody already looking. The state still reads: a coloured glyph
+ *  and a chip that says which kind of waiting this is. */
+.approval[data-docked] { margin:0;max-height:min(52vh,560px);overflow-y:auto;overscroll-behavior:contain;padding-bottom:0; }
+.approval[data-docked][data-state="open"],
+.approval[data-docked][data-kind="question"][data-state="open"] {
+    border-color:var(--line-2);box-shadow:var(--depth-raise),var(--edge-lit);
+}
+
+/* The buttons do not scroll away with the options. On a phone the card is
+   taller than the shelf the moment a question has four of them, and a Next you
+   have to scroll inside a card to find is a Next nobody finds.
+ *
+ *  The negative margins are the whole trick, and leaving them out is what made
+ *  the first version leak: a sticky row only spans the *content* box, so every
+ *  option scrolling under it stayed visible in the card's 18px side gutters and
+ *  its 16px bottom gutter — a text field sliced in half around the buttons. It
+ *  bleeds to the card's padding edges instead and takes the padding back as its
+ *  own, so there is no gutter left for anything to show through. */
+.approval[data-docked] .approval__acts {
+    position:sticky;bottom:0;margin:0 -18px;
+    /* The card gives up its bottom padding and this row carries it instead —
+       sticky will not push a box past where it naturally sits, so a negative
+       margin cannot reach into a gutter the card is still reserving. Owning it
+       is the only way the bar actually ends where the card does. */
+    padding:13px 18px 16px;background:var(--paper);
+    border-top:1px solid var(--line);
+}
+
+/* A question is a set of choices, not a form. Options are the control. */
+.ask__q { margin-top:14px; }
+.ask__step { margin:0 0 6px;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3); }
+.ask__ask { margin:0 0 10px;font-size:13px;line-height:1.5;color:var(--ink); }
+.ask__opts { display:grid;grid-template-columns:minmax(0,1fr);gap:6px; }
+/* Wide enough for two, so four options are two rows instead of a column
+   taller than the shelf. Only ever two: an option carries a sentence of
+   description, and three columns of that is a paragraph read sideways. */
+@container (min-width:600px) { .ask__opts { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.ask__opt {
+    display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;
+    border:1px solid var(--line);border-radius:var(--r-md);padding:9px 12px;
+    background:var(--paper);cursor:pointer;
+}
+/* Not one of the choices — the way out of them. It keeps the full width so
+   it never reads as the fifth option. */
+.ask__opt--other { grid-column:1 / -1;color:var(--ink-3); }
+.ask__opt--other b { font-weight:400;color:var(--ink-3); }
+.ask__opt b { font-weight:500;font-size:13px;color:var(--ink); }
+.ask__opt span { font-size:12px;line-height:1.45;color:var(--ink-3); }
+.ask__opt:hover { border-color:var(--line-2); }
+.ask__opt[aria-pressed="true"] { border-color:var(--accent);background:var(--accent-soft); }
+.ask__opt[aria-pressed="true"] b { color:var(--accent);font-weight:500; }
+
+/* Answered — a question behind you on a live card, or every question on a
+   card that is now a record. What was asked, what you said, and nothing
+   about the options you did not take: a greyed-out form is not a record of
+   a decision, it is the decision being asked again with the buttons off. */
+.ask__list { margin-top:12px; }
+.ask__was {
+    display:grid;grid-template-columns:minmax(0,1fr) auto;
+    gap:2px 14px;padding:9px 0;border-bottom:1px solid var(--line);
+}
+.ask__was:last-child { border-bottom:0;padding-bottom:0; }
+.ask__was-q { grid-column:1;margin:0;font-size:12px;line-height:1.45;color:var(--ink-3); }
+.ask__was-a { grid-column:1;margin:0;font-size:13px;line-height:1.5;color:var(--ink); }
+.ask__was-a span, .ask__was-a i { color:var(--ink-3);font-style:normal; }
+.ask__change {
+    grid-column:2;grid-row:1 / span 2;align-self:center;
+    border:0;background:transparent;padding:0;cursor:pointer;font:inherit;font-size:12px;color:var(--accent);
+}
+.ask__change:hover { text-decoration:underline; }
+
+.ask__other {
+    margin-top:8px;width:100%;border:1px solid var(--line-2);border-radius:var(--r-md);
+    padding:8px 11px;font:inherit;font-size:13px;background:var(--paper);color:var(--ink);
+}
+.ask__other:focus { outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
+
+/* Thinking and tool calls read differently, so they look different —
+   a thought is prose, a call is a command. */
+.steps__list li[data-kind="thought"] .steps__label { color:var(--ink-3);font-family:inherit;font-size:12px;font-style:italic; }
+.steps__list li[data-kind="thought"] .steps__detail { color:var(--ink-2); }
+.steps[data-live] .steps__toggle { color:var(--ink-2); }
+
+/* Chrome anchors scrolling content by itself, which fights a transcript
+   that is deliberately choosing where to sit. */
+.convo-scroll { overflow-anchor:none;scroll-behavior:auto; }
+
+.convo-jump {
+    position:absolute;right:22px;bottom:18px;z-index:6;
+    display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--line);
+    border-radius:999px;background:var(--paper);color:var(--ink-2);cursor:pointer;
+    box-shadow:var(--shadow-lift);animation:panel-in 160ms var(--ease-out);
+}
+.convo-jump:hover { color:var(--ink);border-color:var(--line-2); }
+
+/* Smoothness: a reply should arrive rather than appear. Short, and only
+   on the way in — anything longer reads as lag on a surface that is
+   already waiting on a model. */
+.convo > * { animation:turn-in 220ms var(--ease-out) both; }
+@keyframes turn-in { from { opacity:0;transform:translateY(6px); } }
+.steps__list { animation:turn-in 160ms var(--ease-out) both; }
+
+
+/* ── Reaching a teammate ──────────────────────────────────────────────
+   Connecting is sorted by what it costs and says so before the click.
+   Three amounts of work should not look identical, which is what a row
+   of equal grey icons said for as long as this strip existed. */
+.reachsheet { display:flex;flex-direction:column;gap:18px; }
+.reachsheet__who { display:flex;align-items:center;gap:13px; }
+.reachsheet__who p { margin:0;font-size:13.5px;line-height:1.5;color:var(--ink-2); }
+.reachsheet__more { margin:4px 0 -6px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:500; }
+
+.reachrows { list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px; }
+.reachrow {
+    display:flex;align-items:center;gap:13px;
+    border:1px solid var(--line);border-radius:var(--r-md);
+    padding:12px 14px;background:var(--paper);
+}
+.reachrow__mark { display:grid;place-items:center;width:34px;height:34px;border-radius:var(--r-sm);background:var(--chrome);flex:none; }
+.reachrow__body { display:flex;flex-direction:column;gap:2px;min-width:0;flex:1; }
+.reachrow__body b { font-weight:500;font-size:13.5px;color:var(--ink); }
+.reachrow__note { font-size:12px;line-height:1.45;color:var(--ink-3); }
+.reachrow__acts { display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;justify-content:flex-end; }
+.reachrow__acts .btn { display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap; }
+
+/* The address is the point of the whole exercise, so it is the thing that
+   looks like a value rather than a caption. */
+.reachrow__handle {
+    display:inline-flex;align-items:center;gap:7px;padding:0;border:0;background:none;cursor:pointer;
+    font-family:var(--mono);font-size:12.5px;color:var(--ink-2);max-width:100%;
+}
+.reachrow__handle span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.reachrow__handle:hover { color:var(--ink); }
+.reachrow--on { border-color:color-mix(in srgb,var(--accent) 22%,var(--line)); }
+.reachrow__error { font-size:11.5px;color:var(--bad);max-width:220px;text-align:right; }
+.reachrow__alt { align-self:flex-start;font-size:11.5px;color:var(--ink-3);margin-top:2px; }
+.reachrow__alt:hover { color:var(--accent); }
+.reachrow__quiet { color:var(--ink-3);font-size:12px; }
+.reachrow__quiet:hover { color:var(--bad); }
+.reachrow__drop { border-color:color-mix(in srgb, var(--bad) 35%, transparent);color:var(--bad); }
+
+/* What it costs, said in the row rather than discovered by clicking. */
+.reachrow__cost { font-size:11px;letter-spacing:.04em;color:var(--ink-3);white-space:nowrap; }
+.reachrow__cost[data-effort="instant"] { color:var(--accent); }
+.reachrow[data-effort="unavailable"] { opacity:.65; }
+.reachrow[data-effort="instant"] { border-color:var(--accent-line); }
+
+/* A row mid-flow stops competing for horizontal space.
+   The panel that explains what is happening is wider than a button, and
+   letting it fight the description collapsed "In the channels your team
+   already works in." into a one-word-per-line column. */
+.reachrow:has(.guided),
+.reachrow:has(.guided__wait) { flex-wrap:wrap; }
+.reachrow:has(.guided) .reachrow__cost,
+.reachrow:has(.guided__wait) .reachrow__cost { display:none; }
+.reachrow:has(.guided) .reachrow__acts,
+.reachrow:has(.guided__wait) .reachrow__acts {
+    width:100%;justify-content:flex-start;padding-left:47px;margin-top:4px;
+}
+.reachrow:has(.guided) .reachrow__alt { display:none; }
+
+.guided { display:flex;flex-direction:column;align-items:flex-start;gap:7px;max-width:34rem;text-align:left; }
+.guided p { margin:0;font-size:11.5px;line-height:1.5;color:var(--ink-3); }
+.guided__wait { display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-3); }
+.guided__wait svg { animation:spin 1.6s linear infinite; }
+.guided--done { flex-direction:row;align-items:center;color:var(--accent);font-size:12.5px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+@media(max-width:620px) {
+    .reachrow { flex-wrap:wrap; }
+    .reachrow__acts { width:100%;justify-content:flex-start;padding-left:47px; }
+}
+
+/* ── Connected accounts ───────────────────────────────────────────────
+   A connector matters to an organization when it has an account on it
+   and that account works. So the grid gives way to a list: connected
+   ones first, each naming its accounts and saying what is wrong with
+   them, and the rest of a long catalog behind a search. */
+.connectors { grid-template-columns:minmax(0,1fr);gap:8px; }
+.connector { align-items:flex-start;padding:12px 14px;background:var(--paper); }
+.connector[data-on] { border-color:color-mix(in srgb,var(--accent) 22%,var(--line)); }
+.connector__logo { width:26px;height:26px;margin-top:1px; }
+.connector__logo--blank {
+    display:grid;place-items:center;font-size:12px;color:var(--ink-3);
+    text-transform:uppercase;background:var(--chrome);
+}
+.connector__body { display:flex;flex-direction:column;gap:3px;flex:1;min-width:0; }
+.connector__name { flex:none;font-size:13.5px;color:var(--ink); }
+.connector__blurb { font-size:12px;line-height:1.45;color:var(--ink-3); }
+.connector__acts { display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;justify-content:flex-end; }
+.connector__acts .btn { display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap; }
+
+.accts { list-style:none;margin:8px 0 2px;padding:0;display:flex;flex-direction:column;gap:6px; }
+.acct { display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-2); }
+.acct__dot {
+    width:6px;height:6px;border-radius:999px;flex:none;
+    background:var(--ink-3);box-shadow:0 0 0 3px color-mix(in srgb,var(--ink-3) 14%,transparent);
+}
+.acct__dot--ok { background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
+.acct__who { display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;min-width:0;max-width:100%;flex:1 1 auto; }
+.acct__who .pill { font-size:9px;padding:1px 6px; }
+/* An account reference is an opaque id of unpredictable length. Left to size itself it pushed the whole card past the edge of a phone. */
+.acct__ref { font-family:var(--mono);font-size:10.5px;color:var(--ink-3);opacity:.75;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.acct__trouble { display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--wait); }
+.acct__confirm { display:inline-flex;align-items:center;gap:8px;margin-left:auto; }
+.acct > .linkish { margin-left:auto; }
+
+.connectors__find {
+    display:flex;align-items:center;gap:9px;margin-top:14px;
+    border:1px solid var(--line-2);border-radius:var(--r-md);padding:9px 12px;color:var(--ink-3);
+}
+.connectors__find input { flex:1;border:0;background:none;font:inherit;font-size:13px;color:var(--ink);outline:none; }
+.connectors__find:focus-within { border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
+.connectors__note {
+    display:flex;align-items:center;gap:7px;margin:14px 0 0;
+    font-size:11.5px;color:var(--ink-3);
+}
+
+@media(max-width:620px) {
+    .connector { flex-wrap:wrap; }
+    .connector__acts { width:100%;justify-content:flex-start;padding-left:35px; }
+}
+
+/* ── One channel, focused ─────────────────────────────────────────────
+   The list answers "where could this teammate be?" and is the wrong
+   shape for "how do I set this one up", which is a few sentences and a
+   single action. Picking a channel that needs work replaces the list
+   rather than nesting a dialog: the original connect modal's focused
+   treatment, which read better than a row ever will, without its habit
+   of sending you elsewhere to do the work. */
+.focused { display:flex;flex-direction:column;align-items:center;text-align:center;gap:14px;padding:4px 0 2px; }
+.focused__back {
+    align-self:flex-start;display:inline-flex;align-items:center;gap:6px;
+    border:0;background:none;padding:0;cursor:pointer;font-size:12.5px;color:var(--ink-3);
+}
+.focused__back:hover { color:var(--ink-2); }
+.focused__logo {
+    width:72px;height:72px;background:var(--chrome);border:1px solid var(--line);
+    border-radius:20px;display:grid;place-items:center;
+}
+.focused h3 { margin:0;font-size:20px;letter-spacing:-.025em;line-height:1.3; }
+.focused > p { margin:0;max-width:34rem;font-size:14px;line-height:1.6;color:var(--ink-2); }
+.focused .guided { align-items:center;text-align:center;max-width:32rem; }
+.focused__alt { font-size:12.5px;color:var(--ink-3); }
+.focused__alt:hover { color:var(--accent); }
+
+/* Four steps, and the one you are on is the only one with controls. */
+.ownbot { width:100%;text-align:left;margin-top:4px; }
+.ownbot__steps { list-style:none;margin:0;padding:0;counter-reset:step;display:flex;flex-direction:column;gap:2px; }
+.ownbot__steps li {
+    position:relative;padding:12px 0 14px 38px;counter-increment:step;
+    border-left:1px solid var(--line);margin-left:13px;
+}
+.ownbot__steps li:last-child { border-left-color:transparent; }
+.ownbot__steps li::before {
+    content:counter(step);position:absolute;left:-13px;top:11px;
+    width:26px;height:26px;border-radius:999px;display:grid;place-items:center;
+    background:var(--paper);border:1px solid var(--line);
+    font-size:11px;font-family:var(--mono);color:var(--ink-3);
+}
+.ownbot__steps li[data-now]::before { border-color:var(--accent);color:var(--accent); }
+.ownbot__steps li[data-done]::before { content:"✓";border-color:var(--accent-line);color:var(--accent); }
+.ownbot__steps li[data-done] { opacity:.6; }
+.ownbot__steps li:not([data-now]):not([data-done]) { opacity:.45; }
+.ownbot__steps b { display:block;font-weight:500;font-size:13.5px;color:var(--ink); }
+.ownbot__steps p { margin:3px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-3); }
+.ownbot__acts { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px; }
+.ownbot__acts .btn { display:inline-flex;align-items:center;gap:7px;text-decoration:none; }
+.ownbot__fields { display:flex;flex-direction:column;gap:9px;margin-top:10px;max-width:24rem; }
+.ownbot__fields label { display:flex;flex-direction:column;gap:4px; }
+.ownbot__fields span { font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3); }
+.ownbot__fields input {
+    border:1px solid var(--line-2);border-radius:var(--r-md);padding:8px 11px;
+    font:inherit;font-family:var(--mono);font-size:12.5px;background:var(--paper);color:var(--ink);
+}
+.ownbot__fields input:focus { outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
+
+/* ── Models ───────────────────────────────────────────────────────────
+   One ledger. A bought key and Claude Code on a laptop are the same kind
+   of object to whoever picks one, so they are the same row — and a
+   computer is a band inside the list rather than a second list under it,
+   which is the whole of what says "these came from here". */
+.models__lead { margin:0 0 14px;font-size:12.5px;line-height:1.55;color:var(--ink-3);max-width:62ch; }
+
+.mlist { list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden; }
+.mgroup + .mgroup .mlist,.mgroup .mlist { border-radius:0 0 var(--r-md) var(--r-md);border-top:0; }
+.mlist + .mgroup { margin-top:14px; }
+
+.mrow { display:flex;align-items:center;gap:11px;padding:10px 13px;background:var(--paper); }
+.mrow + .mrow { border-top:1px solid var(--line); }
+.mrow--quiet { opacity:.62; }
+.mrow__logo { width:20px;height:20px;flex:none;object-fit:contain;border-radius:4px; }
+.mrow__mark {
+    width:24px;height:24px;flex:none;display:grid;place-items:center;
+    border-radius:7px;background:var(--chrome);color:var(--ink-3);
+}
+.mrow__body { flex:1;min-width:0;display:flex;flex-direction:column;gap:2px; }
+.mrow__line { display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0; }
+.mrow__name { font-size:13.5px;color:var(--ink); }
+.mrow__detail { font-size:11.5px;color:var(--ink-3); }
+/* The fix travels with the state. An unusable agent that reads as an
+   opaque code is a dead end on a page whose whole job is to be acted on. */
+.mrow__note { font-size:11.5px;line-height:1.45;color:var(--ink-3); }
+.mrow__state { display:inline-flex;align-items:center;gap:6px;flex:none;font-size:11.5px;color:var(--ink-3);white-space:nowrap; }
+.mrow__state i { width:6px;height:6px;border-radius:999px;background:currentColor;flex:none; }
+.mrow__state--ok { color:var(--accent); }
+.mrow__state--warn { color:var(--wait); }
+.mrow__add { display:inline-flex;align-items:center;gap:5px;padding:5px 10px;flex:none; }
+.mrow__confirm { display:inline-flex;align-items:center;gap:8px;flex:none; }
+/* Quiet until wanted, like every other row in this app that can destroy
+   something. It stays reachable by keyboard the whole time. */
+.mrow__quiet { opacity:0;transition:opacity 140ms ease; }
+.mrow:hover .mrow__quiet,.mrow:focus-within .mrow__quiet { opacity:1; }
+
+.mgroup { margin-top:14px; }
+.mgroup__head {
+    display:flex;align-items:center;gap:8px;padding:8px 13px;color:var(--ink-3);
+    background:var(--chrome);border:1px solid var(--line);border-radius:var(--r-md) var(--r-md) 0 0;
+}
+.mgroup__name { font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-family:var(--mono);color:var(--ink-2); }
+.mgroup__meta { flex:1;min-width:0;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.mgroup__empty {
+    margin:0;padding:11px 13px;font-size:12px;line-height:1.5;color:var(--ink-3);
+    background:var(--paper);border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-md) var(--r-md);
+}
+.mgroup__empty svg { vertical-align:-2px;margin-right:6px; }
+
+.getapp {
+    display:flex;align-items:flex-start;gap:12px;margin-top:14px;padding:14px;
+    border:1px dashed var(--line-2);border-radius:var(--r-md);
+}
+.getapp__mark { width:32px;height:32px;flex:none;display:grid;place-items:center;border-radius:9px;background:var(--chrome);color:var(--ink-2); }
+.getapp__body { flex:1;min-width:0;display:flex;flex-direction:column;gap:4px; }
+.getapp__body b { font-weight:500;font-size:13.5px;color:var(--ink); }
+.getapp__body span { font-size:12px;line-height:1.5;color:var(--ink-3); }
+.getapp .btn { flex:none;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap; }
+
+.models__acts { display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px; }
+.models__acts .btn { display:inline-flex;align-items:center;gap:6px; }
+.spin { animation:spin 1.1s linear infinite; }
+
+/* One key at a time, and the route is prefilled rather than looked up —
+   every one of these is the same two protocols with a different URL. */
+.presets { display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px; }
+.preset {
+    font:inherit;font-size:12px;padding:6px 11px;border-radius:999px;cursor:pointer;
+    border:1px solid var(--line-2);background:var(--paper);color:var(--ink-2);
+}
+.preset:hover { border-color:var(--ink-3); }
+.preset--on { border-color:var(--accent);background:var(--accent-soft);color:var(--accent); }
+
+.field select {
+    font:inherit;font-size:13.5px;color:var(--ink);background:var(--paper);
+    border:1px solid var(--line-2);border-radius:var(--r-md);padding:10px 11px;
+}
+.check { display:flex;align-items:flex-start;gap:10px;margin-bottom:16px;cursor:pointer; }
+.check input { margin-top:2px;flex:none;accent-color:var(--accent);width:15px;height:15px; }
+.check span { font-size:13px;line-height:1.5;color:var(--ink-2);display:flex;flex-direction:column;gap:3px; }
+.check em { font-style:normal;font-size:11.5px;color:var(--ink-3); }
+.modal__acts { display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:4px; }
+
+@media(max-width:620px) {
+    .mrow { flex-wrap:wrap; }
+    .mrow__body { flex:1 0 60%; }
+    .getapp { flex-wrap:wrap; }
+    .getapp .btn { margin-left:44px; }
+    /* Touch targets, same 44px floor the rest of the app keeps. */
+    .mrow__add,.preset { min-height:44px; }
+}
+
+/* ── The picker ───────────────────────────────────────────────────────
+   A control on a page of facts, so it reads as a fact with a caret
+   rather than as a form: the current answer, in words, and the list
+   behind it.
+
+   Shared, because the profile now has two of them — what a teammate runs
+   on, and who may join it — and two copies of this block would have
+   drifted the first time either was touched. What stays `runson__` below
+   is the part only that one has: a provider logo, and rows gathered under
+   a heading. */
+.pick { position:relative; }
+.pick__face {
+    display:inline-flex;align-items:center;gap:9px;max-width:100%;
+    font:inherit;font-size:13.5px;color:var(--ink);cursor:pointer;
+    background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-md);padding:9px 12px;
+}
+.pick__face:hover:not(:disabled) { border-color:var(--ink-3); }
+.pick__face:disabled { cursor:default;color:var(--ink-3); }
+.pick__face > svg:last-child { flex:none;color:var(--ink-3); }
+.pick__mark { display:grid;place-items:center;flex:none;color:var(--ink-3); }
+.runson__logo { width:18px;height:18px;object-fit:contain;border-radius:4px; }
+.pick__said { flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left; }
+/* A refusal from the platform is a sentence, sometimes two, so the note wraps
+   and the mark stays on the first line rather than floating to the middle of
+   a paragraph. */
+.pick__note {
+    display:flex;align-items:flex-start;gap:6px;margin:8px 0 0;max-width:58ch;
+    font-size:11.5px;line-height:1.5;color:var(--wait);
+}
+.pick__note > svg { flex:none;margin-top:2px; }
+
+.pick__menu {
+    position:absolute;top:calc(100% + 6px);left:0;z-index:60;
+    min-width:min(300px,calc(100vw - 48px));max-height:52vh;overflow-y:auto;
+    background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);
+    box-shadow:var(--shadow-lift);padding:6px;
+    animation:menu-in 150ms var(--ease-out);
+}
+/* Upward, where a menu below would open into the bottom of a scrolling pane
+   and lose its last row. It rises from below for the same reason the downward
+   one falls from above: the motion comes from the control. */
+.pick__menu--up { top:auto;bottom:calc(100% + 6px);animation-name:menu-up; }
+@keyframes menu-up { from {opacity:0;transform:translateY(4px);} to {opacity:1;transform:none;} }
+.runson__group + .runson__group,.pick__row + .runson__group { margin-top:4px;padding-top:4px;border-top:1px solid var(--line); }
+.runson__label {
+    display:flex;align-items:center;gap:7px;padding:7px 9px 4px;color:var(--ink-3);
+    font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+}
+.runson__label img { width:14px;height:14px;object-fit:contain;border-radius:3px; }
+.runson__label span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.runson__label em { font-style:normal;margin-left:auto;color:var(--wait);letter-spacing:0;text-transform:none; }
+.pick__row {
+    display:flex;align-items:flex-start;gap:8px;width:100%;
+    font:inherit;font-size:13px;color:var(--ink);text-align:left;cursor:pointer;
+    background:none;border:0;border-radius:var(--r-sm);padding:8px 9px;
+}
+.pick__row:hover,.pick__row:focus-visible { background:var(--chrome); }
+.pick__tick { width:14px;flex:none;display:grid;place-items:center;color:var(--accent);padding-top:2px; }
+.pick__body { display:flex;flex-direction:column;gap:2px;min-width:0; }
+.pick__body em { font-style:normal;font-size:11px;color:var(--ink-3);font-family:var(--mono); }
+/* The same slot in prose rather than in metadata. A model id is a string to
+   be recognised, so it is set in mono; "they add themselves, without asking"
+   is a sentence, and mono makes a sentence look like a value. */
+.pick__body small { font-size:11.5px;line-height:1.45;color:var(--ink-3); }
+.pick__empty { margin:0;padding:8px 9px;font-size:12px;line-height:1.5;color:var(--ink-3); }
+
+@media(max-width:620px) {
+    .pick__face,.pick__row { min-height:44px; }
+    .pick__row { align-items:center; }
+}
+
+/* ── The door ─────────────────────────────────────────────────────────
+   Under the roster, separated by the same rule the roster's own rows use,
+   so it reads as the last line of that list rather than as a second
+   section wearing no heading. The rule this pod is under is printed
+   underneath in prose: the control says who, and the line says what
+   happens when they do. */
+/* Who is waiting, between the roster and the door. It borrows the door's own
+   divider and micro-heading rather than inventing a second treatment: the two
+   are the same question a beat apart, and drawing them differently would make
+   the queue look like it belongs to something else. */
+.knocking { margin-top:14px;padding-top:14px;border-top:1px solid var(--line); }
+.knocking__ask {
+    margin:0 0 8px;color:var(--ink-3);
+    font-family:var(--mono);font-size:var(--t-micro);letter-spacing:var(--track-micro);text-transform:uppercase;
+}
+.knocking__list { list-style:none;margin:0;padding:0; }
+.knocking__list li {
+    display:grid;grid-template-columns:minmax(0,1fr) auto;gap:11px;align-items:center;
+    padding:9px 0;border-bottom:1px solid var(--line);
+}
+.knocking__list li:last-child { border-bottom:0; }
+.knocking__body { display:flex;flex-direction:column;min-width:0; }
+.knocking__who { font-size:var(--t-ui); }
+.knocking__mail { font-size:11.5px;color:var(--ink-3); }
+.knocking__note { margin:8px 0 0;font-size:12px;line-height:1.5;color:var(--ink-3);max-width:58ch; }
+
+.joins { margin-top:14px;padding-top:14px;border-top:1px solid var(--line); }
+.joins__ask {
+    margin:0 0 8px;color:var(--ink-3);
+    font-family:var(--mono);font-size:var(--t-micro);letter-spacing:var(--track-micro);text-transform:uppercase;
+}
+.joins__who { display:flex;align-items:center;gap:7px; }
+.joins__who > svg { flex:none;color:var(--ink-3); }
+.joins__then { margin:8px 0 0;font-size:12px;line-height:1.5;color:var(--ink-3);max-width:58ch;min-height:1.5em; }
+.joins__unreadable { margin:14px 0 0;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3); }
+
+/* The rule, to somebody who may not move it. Set as a fact rather than as a
+   disabled control: a greyed-out picker invites a click that will never do
+   anything, and this reads the same thing in a form nobody tries. */
+.joins__fixed { display:flex;align-items:center;gap:8px;margin:0;font-size:13.5px;color:var(--ink); }
+.joins__fixed > svg { flex:none;color:var(--ink-3); }
+
+/* The domain the middle rule is about. Under the sentence rather than inside
+   the control, because it is not what the rule *is* — it is the one blank the
+   rule leaves, and only that rule leaves it. */
+.joins__domain { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 0;font-size:12.5px;color:var(--ink-2); }
+.joins__domain b { font-family:var(--mono);font-size:12px;font-weight:500;color:var(--ink); }
+.joins__domain input {
+    flex:1;min-width:150px;max-width:260px;
+    font:inherit;font-family:var(--mono);font-size:12.5px;color:var(--ink);
+    background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-md);padding:8px 10px;
+}
+.joins__domain input:focus { outline:none;border-color:var(--accent); }
+.joins__domain .btn { padding:7px 12px;font-size:12.5px; }
+.joins__at { font-family:var(--mono);font-size:13px;color:var(--ink-3); }
+.joins__change {
+    display:inline-flex;align-items:center;gap:5px;
+    font:inherit;font-size:12px;color:var(--ink-3);cursor:pointer;
+    background:none;border:0;border-radius:var(--r-sm);padding:2px 4px;
+}
+.joins__change:hover,.joins__change:focus-visible { color:var(--ink); }
+
+/* Why the rule above matters somewhere else. Quiet, and last. */
+.joins__aside { margin:10px 0 0;font-size:11.5px;line-height:1.5;color:var(--ink-3);max-width:58ch; }
+
+@media(max-width:620px) {
+    .joins__domain input,.joins__domain .btn,.joins__change { min-height:44px; }
+}
+
+/* A view arriving on the stage settles in rather than appearing mid-frame.
+   Switching tabs swapped `display:none` for `display:block`, which is the one
+   change CSS cannot ease — the new pane was simply there, fully drawn, in the
+   frame after the click.
+
+   Opacity only, and deliberately: a `transform` here would make every pane a
+   containing block for the app iframes and widget previews inside it, so
+   anything positioned `fixed` in somebody's app would jump for the length of
+   the animation. A rise looks nicer and is not worth that.
+
+   The app frames get it too. The animation replays when you come back to an
+   app, but it does not remount it — the page behind it has been running the
+   whole time, which is the rule this app is built around. */
+@keyframes view-in { from { opacity:0; } to { opacity:1; } }
+.pane:not([hidden]),
+.split:not([hidden]),
+.frame:not([hidden]) { animation:view-in 150ms var(--ease-out); }
+
+/* Small cards, and small on purpose: these are who the teammate hands work to,
+   not a roster to browse. Two across where the width allows, one where it does
+   not, and never tall enough to push what the page is actually about off the
+   screen. */
+.colleagues { display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px; }
+.colleague { display:flex;align-items:center;gap:10px;text-align:left;padding:10px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);cursor:pointer;min-width:0; }
+.colleague:hover:not(:disabled) { border-color:var(--ink-3); }
+.colleague:disabled { cursor:default; }
+.colleague__text { min-width:0;display:flex;flex-direction:column;gap:2px; }
+.colleague__text strong { font-size:13px;font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.colleague__text small { font-size:11.5px;color:var(--ink-3);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+
+/* ── the catalogue is a list, not eighty-three cards ─────────────────
+   Every row was a bordered box with a gap under it, so a scroll through
+   "Available" was a column of boxes with a truncated marketing sentence in
+   each — and the eye had to cross a border to get from one name to the next.
+   Every other list in this app is flat rows on a divider: the library, the
+   people, the accounts inside these very cards. This is that.
+
+   The blurb is the other half of it. Two lines of vendor copy per row made
+   each one twice as tall as the name it was there to explain, and cut off
+   mid-sentence besides. Beside the name, on one line, it is a gloss; above the
+   fold on its own line it was the row. */
+.connectors { display:flex;flex-direction:column;gap:0;grid-template-columns:none; }
+.connector {
+    /* A grid, so the accounts can be a row of the connector rather than a
+       child of its middle column. Nested in the body they inherited its right
+       edge, which stops short of the action column — so every account's
+       actions hung a couple of hundred pixels left of the button above them.
+       Three columns: the logo, everything it labels, and what you can do. */
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr) auto;
+    column-gap:12px;
+    border:0;border-bottom:1px solid var(--line);border-radius:0;
+    padding:14px 8px;background:none;
+    /* Top, not centre. A connected row carries its accounts underneath, and a
+       logo centred against that floats halfway down the row beside a list it
+       is supposed to be labelling. The brief rows are one line tall and centre
+       for real. */
+    align-items:start;
+    transition:background .12s ease;
+}
+.connector__logo { grid-column:1;grid-row:1; }
+.connector__body { grid-column:2;grid-row:1; }
+.connector__acts { grid-column:3;grid-row:1;justify-self:end; }
+/* From the name across to the far edge: an account's actions line up with the
+   button they sit beneath, because now they end in the same place. */
+.connector .accts { grid-column:2 / -1;grid-row:2; }
+.connector:last-child { border-bottom:0; }
+.connector:hover { background:var(--chrome); }
+/* The accent outline said "connected" on a row that is only ever shown under
+   the Connected pill. The accounts listed inside it say it better. */
+.connector[data-on] { border-color:var(--line); }
+.connector__logo { width:24px;height:24px;margin-top:1px; }
+
+.connector--brief { align-items:center;padding:11px 8px; }
+.connector--brief .connector__logo { margin-top:0; }
+/* The accounts are the row's content, not a footnote to it. */
+.connector .accts { margin-top:9px;display:flex;flex-direction:column;gap:8px; }
+.connector--brief .connector__body { flex-direction:row;align-items:baseline;gap:9px; }
+.connector--brief .connector__name { flex:none; }
+.connector--brief .connector__blurb {
+    display:block;flex:1;min-width:0;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    -webkit-line-clamp:none;line-clamp:none;
+}
+/* Eighty-three outlined buttons in a column is eighty-three things shouting
+   the same word. Quiet until the row is under the pointer, and never hidden —
+   a control that needs a pointer to exist does not exist on a phone. */
+.connector--brief .connector__acts .btn {
+    border-color:transparent;background:none;color:var(--ink-3);
+}
+.connector--brief:hover .connector__acts .btn,
+.connector--brief .connector__acts .btn:focus-visible {
+    border-color:var(--line-2);background:var(--paper);color:var(--ink);
+}
+@media(hover:none) {
+    .connector--brief .connector__acts .btn { border-color:var(--line-2);background:var(--paper);color:var(--ink); }
+}
+@media(max-width:600px) {
+    .connector--brief .connector__body { flex-direction:column;align-items:flex-start;gap:3px; }
+    .connector--brief .connector__blurb { white-space:normal;display:-webkit-box;-webkit-line-clamp:1;line-clamp:1;-webkit-box-orient:vertical; }
+}
+
+/* An account's line reads as one line.
+   `.linkish` carries `margin-top:6px` from the places it sits *under*
+   something; inside this flex row that margin drops it below everything
+   beside it, and the two sizes (11.5px against 12.5px) put the baselines out
+   even once the boxes are centred. Measured, not guessed: the warning and the
+   Remove beside it were seven pixels apart. */
+.acct__trouble, .acct__acts .linkish, .acct > .linkish { font-size:12px; }
+.acct__acts { align-items:center; }
+
+/* The account line was not the only row this happened in. Every one of these
+   centres its items, so the `margin-top:6px` lands inside the centring and
+   the link rides three pixels below the button next to it: measured at 1280px,
+   Cancel sat at mid 783.6 against Add's 780.6, Keep at 647.2 against Retire's
+   644.2, and the same three pixels in all six. The base margin stays, because
+   the "…see more" under a teammate's About has nothing but that margin holding
+   it off the paragraph. */
+.acct .linkish,
+.connector__acts .linkish,
+.mrow .linkish,
+.modal__acts .linkish,
+.models__acts .linkish,
+.ownbot__acts .linkish,
+.reachrow__acts .linkish { margin-top:0; }
+
+/* ── who reports to a teammate ──────────────────────────────────────
+   The section called itself "Who it works with", which is what you call a
+   peer, so a list of subordinates read as a list of collaborators to choose
+   between. The heading says the relationship now; these say what each one is
+   allowed to do, which is the thing that tells you which of them a job is
+   for — a name and a sentence did not. */
+.colleague__can { display:flex;flex-wrap:wrap;gap:4px;margin-top:5px; }
+.colleague__can span, .colleague__can em {
+    font-size:10px;line-height:1.5;padding:1px 6px;border-radius:999px;
+    border:1px solid var(--line);color:var(--ink-3);white-space:nowrap;font-style:normal;
+}
+.colleague__can em { border-style:dashed; }
+/* The card grew a third line, so it stops pretending to be one. */
+.colleague { align-items:flex-start; }
+.colleague .mark { margin-top:1px; }
+
+/* The first morning ---------------------------------------------------
+   Wider than the other screens, because this one carries rows rather than a
+   paragraph and a button, and 480px puts an organization's name on one line
+   and its reason on three. */
+/* A screen is what the app shows when there is no teammate to show one: the
+   door, the connection settings, the failure, the empty organization, the
+   first morning. None of them belong to anybody, so none should be printed in
+   somebody's field — and `--field` is not merely unset out here, it is
+   `--press-0`, which put a signal-red primary a shade from `--bad` on every
+   one of them. Aubergine is the press tone nearest the brand, and the press
+   pairs its own ink: white on `--accent` measures 2.7:1 in dark, which is the
+   trap the `var(--accent)` fallback in `.btn--primary` has never been made to
+   spring because this variable is never actually unset. */
+.screen { --field:var(--press-4);--field-ink:var(--press-ink); }
+/* A page rather than a centred card. The mark sits top left where a product's
+   mark goes; the content holds a reading column and stays put rather than
+   sliding up the screen as rows are added and taken away. */
+.arrival-page {
+    height:100%;display:flex;flex-direction:column;overflow-y:auto;
+    --field:var(--press-4);--field-ink:var(--press-ink);
+}
+.arrival-page__bar { flex:none;padding:26px 32px;color:var(--ink-3); }
+.arrival {
+    flex:1;width:min(100%,600px);
+    margin:0 auto;padding:24px 32px 64px;
+    display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
+}
+/* Centred, but never so centred that the top of the content leaves the
+   screen: opening the make-one panel roughly doubles the height, and a column
+   that is only ever centred pushes its own heading off the top of a laptop. */
+@media(min-height:720px) { .arrival { padding-bottom:104px; } }
+.arrival h1 { margin:0 0 10px;font-size:30px;font-weight:500;letter-spacing:-.025em;line-height:1.15; }
+.arrival__lede { margin:0 0 26px;color:var(--ink-2);font-size:var(--t-body);line-height:1.6;max-width:44ch; }
+.arrival [role="status"] { color:var(--ink-3);font-size:var(--t-ui); }
+.arrival code {
+    font-family:var(--mono);font-size:12px;
+    background:var(--chrome);border-radius:var(--r-sm);padding:2px 6px;
+}
+
+.arrival__row {
+    display:flex;align-items:center;gap:14px;width:100%;
+    background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-lg);
+    box-shadow:var(--depth-rest),var(--edge-lit);padding:14px 15px;margin-bottom:10px;
+}
+/* The same filled tile the reveal uses, and for the same reason: a glyph in
+   an accent on paper is a contrast problem in one of the two themes, and a
+   glyph on its own field is not. */
+.arrival__mark-tile {
+    display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:9px;
+    background:var(--field);color:var(--field-ink);
+}
+.arrival__said { display:flex;flex-direction:column;gap:2px;min-width:0;flex:1; }
+.arrival__said b { font-size:14px;font-weight:500;color:var(--ink);line-height:1.35; }
+.arrival__said span { font-size:12.5px;color:var(--ink-2);line-height:1.45; }
+.arrival__said em { font-style:normal;font-size:12px;color:var(--ink-3);line-height:1.45;margin-top:2px; }
+.arrival__row .btn { flex:none;display:inline-flex;align-items:center;gap:6px; }
+
+/* Folded away when something better is on the page. */
+.arrival__instead {
+    font:inherit;font-size:13px;color:var(--ink-2);background:none;border:0;cursor:pointer;
+    margin-top:4px;padding:8px 0;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line-2);
+}
+.arrival__instead:hover { color:var(--ink); }
+
+.arrival__make { width:100%;text-align:left; }
+.arrival__make h3 { margin:22px 0 12px;font-size:14px;font-weight:500;color:var(--ink); }
+
+.arrival__kinds { display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px; }
+.arrival__kind {
+    display:flex;flex-direction:column;align-items:flex-start;gap:4px;
+    font:inherit;text-align:left;cursor:pointer;padding:13px 14px;
+    background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-lg);
+    box-shadow:var(--depth-rest),var(--edge-lit);
+    transition:border-color .14s ease,box-shadow .14s ease;
+}
+.arrival__kind svg { color:var(--ink-3);margin-bottom:2px; }
+.arrival__kind b { font-size:13.5px;font-weight:500;color:var(--ink); }
+.arrival__kind span { font-size:12px;color:var(--ink-3);line-height:1.45; }
+.arrival__kind:hover { border-color:var(--ink-3); }
+/* Chosen, not merely hovered: the border carries the accent and the mark goes
+   with it, so which one is selected survives the pointer leaving. */
+/* The accent, not the field, and the distinction is the same one the reveal
+   page ran into from the other side. A field is a colour to fill with — it is
+   fixed across themes because it is somebody's identity — and `--press-4` as a
+   line on the dark paper measures 1.84:1, which is a selected state you cannot
+   see. `--accent` moves with the theme and clears 5:1 in both. */
+.arrival__kind[aria-pressed="true"] { border-color:var(--accent);box-shadow:var(--depth-rest),var(--edge-lit),0 0 0 1px var(--accent); }
+.arrival__kind[aria-pressed="true"] svg { color:var(--accent); }
+
+.arrival__field { display:flex;flex-direction:column;gap:5px;margin-bottom:12px; }
+.arrival__field span { font-size:12px;color:var(--ink-3); }
+.arrival__field input {
+    font:inherit;font-size:var(--t-ui);color:var(--ink);background:var(--paper);
+    border:1px solid var(--line-2);border-radius:var(--r-md);padding:10px 13px;width:100%;
+}
+.arrival__field input:focus { outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft); }
+
+.arrival__note {
+    display:flex;align-items:flex-start;gap:8px;
+    font-size:12.5px;color:var(--ink-3);line-height:1.5;margin:0 0 18px;
+}
+.arrival__note svg { flex:none;margin-top:2px; }
+.arrival__note b { font-weight:500;color:var(--ink-2); }
+.arrival__note code { font-size:12px; }
+
+.arrival__problem { color:var(--bad);font-size:13px;margin:14px 0 0; }
+
+@media(max-width:600px) {
+    .arrival-page__bar { padding:20px 18px; }
+    .arrival { padding-inline:18px; }
+    .arrival h1 { font-size:26px; }
+    .arrival__row { flex-wrap:wrap; }
+    .arrival__row .btn { width:100%;justify-content:center; }
+    .arrival__kinds { grid-template-columns:minmax(0,1fr); }
+}
+
+/* ---------------------------------------------------------------- *
+ * Proving a mobile number is yours.
+ *
+ * Two shapes for one transaction. The panel is account settings, where
+ * somebody came deliberately and a QR fits. The strip is the reach sheet,
+ * under an address, where a second QR would read as the same code twice.
+ * ---------------------------------------------------------------- */
+
+.verify__start { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 14px; }
+.verify__start .btn { display:inline-flex;align-items:center;gap:7px; }
+.verify__start .btn:disabled { opacity:.55;cursor:not-allowed;box-shadow:none; }
+.verify__hint { font-size:11.5px;color:var(--ink-3); }
+
+.verify {
+    display:flex;flex-direction:column;gap:14px;
+    border:1px solid var(--line-2);border-radius:var(--r-md);
+    background:var(--chrome);padding:14px 15px;margin:0 0 14px;
+}
+.verify__head { display:flex;align-items:flex-start;gap:10px; }
+.verify__head > div { flex:1;min-width:0;display:flex;flex-direction:column;gap:2px; }
+.verify__head b { font-weight:500;font-size:13.5px;color:var(--ink); }
+.verify__head small { font-size:11.5px;line-height:1.5;color:var(--ink-3); }
+.verify__head .channel-icon { margin-top:1px; }
+
+/* The clock is a value being counted down, so it is tabular: digits that
+   change width make a countdown look like it is twitching. */
+.verify__clock {
+    display:inline-flex;align-items:center;gap:5px;flex:none;
+    font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;
+    color:var(--ink-2);background:var(--paper);
+    border:1px solid var(--line-2);border-radius:999px;padding:3px 9px;
+}
+
+.verify__grid { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:start; }
+.verify__lines { display:flex;flex-direction:column;gap:10px;min-width:0; }
+.verify__line {
+    display:flex;flex-direction:column;gap:5px;align-items:flex-start;
+    background:var(--paper);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;
+}
+.verify__line small { font-size:11px;color:var(--ink-3);line-height:1.45; }
+.verify__label { font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3); }
+.verify__number {
+    font-family:var(--mono);font-size:15px;font-variant-numeric:tabular-nums;
+    color:var(--ink);text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:4px;
+}
+.verify__number:hover { text-decoration-color:var(--ink-3); }
+/* Selectable in one gesture: the whole value or nothing, because half a
+   verification code is worse than none. */
+.verify__code {
+    font-family:var(--mono);font-size:13px;color:var(--ink);
+    user-select:all;overflow-wrap:anywhere;line-height:1.5;
+}
+.verify__copy { display:inline-flex;align-items:center;gap:6px;padding:6px 11px;font-size:11.5px; }
+
+.verify__qr { display:flex;flex-direction:column;align-items:center;gap:6px;flex:none; }
+/* Fixed paper under fixed ink, in both themes — see the note on `Code`. */
+.verify__qr-paper { background:#fffefa;border:1px solid var(--line-2);border-radius:var(--r-sm);padding:8px;line-height:0; }
+.verify__qr small { font-size:11px;color:var(--ink-3); }
+
+.verify__acts { display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+.verify__acts .btn { display:inline-flex;align-items:center;gap:6px;text-decoration:none; }
+.verify__quiet { color:var(--ink-3);font-size:12px;background:none;border:0;padding:0;cursor:pointer; }
+.verify__quiet:hover { color:var(--ink); }
+
+.verify--waiting { background:var(--chrome);max-width:none;gap:8px;padding:13px 15px; }
+
+@media(max-width:560px) {
+    .verify__grid { grid-template-columns:minmax(0,1fr); }
+    .verify__qr { align-items:flex-start; }
+}
+
+/* A phone is not shown a code to scan with a phone.
+   The QR exists for the case where the screen and the handset are two
+   different objects; on a touch device they are one, "Open WhatsApp" opens the
+   app installed on it, and the code underneath is a square of noise asking to
+   be photographed by itself. Keyed on the pointer rather than the width,
+   because a narrow window on a desktop is still a desktop. */
+@media (hover:none) and (pointer:coarse) {
+    .verify__qr { display:none; }
+}
+
+/* The strip, in the reach sheet. It is a row's worth of width under the
+   address, so the row has to be allowed to wrap around it. */
+.reachrow:has(.verify__strip) { flex-wrap:wrap; }
+.verify__strip {
+    width:100%;margin-top:10px;padding:11px 12px;
+    display:flex;flex-direction:column;align-items:flex-start;gap:7px;
+    background:var(--chrome);border:1px solid var(--line-2);border-radius:var(--r-sm);
+}
+.verify__strip b { font-weight:500;font-size:12.5px;color:var(--ink); }
+.verify__strip p { margin:0;font-size:11.5px;line-height:1.5;color:var(--ink-3); }
+.verify__strip-head { display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%; }
+.verify__strip-error { color:var(--bad); }

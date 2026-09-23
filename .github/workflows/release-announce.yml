@@ -81,7 +81,7 @@ jobs:
       # chosen by whatever that tag holds, rather than the reviewed one.
       #
       # Nothing is lost, because changelog entries accumulate here and are
-      # never removed: `lemma-frontend/content/changelog/` on the default
+      # never removed: `lemma-harness/content/changelog/` on the default
       # branch holds every past release, including the one being announced --
       # the release commit is what adds it. A version with no entry at all is
       # already reported as having none.

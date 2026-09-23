@@ -9,4 +9,4 @@
 # broke, when it was measured, or when it was fixed, it belongs in the pull
 # request instead.
 
-lemma-frontend/lib/company.ts  # incorporation date; a public filing, printed in the footer
+lemma-harness/lib/company.ts  # incorporation date; a public filing, printed in the footer

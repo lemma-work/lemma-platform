@@ -1,0 +1,399 @@
+/* Standing work: what a teammate does without being asked.
+   ──────────────────────────────────────────────────────────────────────
+   Its own file because the section sits inside `.pcard` on the profile, and
+   `.pcard` already owns the horizontal padding. Nothing here carries a side
+   margin: the last three alignment faults in this app were an element keeping
+   a margin set for a context it no longer sat in, and the fix each time was to
+   let the container do the insetting. Measured rather than assumed — every
+   row's title starts at the same x as `.skills__name` two sections up.
+
+   Rows on a divider, not cards. A standing job is a line in a CV. */
+
+.sched {
+    display: flex;
+    flex-direction: column;
+}
+
+.sched-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.sched-row {
+    display: grid;
+    /* The body takes the width; the control column is only as wide as its
+       button. Two columns rather than a flex row so the disclosure and the
+       pause button cannot shuffle when one row's health line wraps. */
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 12px;
+    padding: 13px 0;
+    border-bottom: 1px solid var(--line);
+}
+.sched-row:last-child {
+    border-bottom: 0;
+}
+
+.sched-row__open {
+    display: grid;
+    grid-template-columns: 8px minmax(0, 1fr) auto auto;
+    gap: 12px;
+    align-items: start;
+    width: 100%;
+    padding: 0;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+.sched-row__open:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: var(--r-sm);
+}
+
+/* The dot is the first thing read and the only colour in the row, so it
+   carries the whole health verdict. `--ok` and `--bad` are the shared tokens
+   and are contrast-checked in both themes; a paused row is deliberately grey
+   rather than red — off is not broken. */
+.sched-row__dot {
+    width: 7px;
+    height: 7px;
+    margin-top: 6px;
+    border-radius: 9999px;
+    background: var(--ok);
+}
+.sched-row[data-tone="warn"] .sched-row__dot { background: var(--warn); }
+.sched-row[data-tone="bad"] .sched-row__dot { background: var(--bad); }
+.sched-row[data-tone="off"] .sched-row__dot { background: var(--ink-3); }
+
+.sched-row__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.sched-row__title {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 7px;
+    font-size: var(--t-ui);
+}
+.sched-row__title strong {
+    font-weight: 500;
+}
+
+.sched-tag {
+    font-style: normal;
+    font-size: var(--t-micro);
+    letter-spacing: var(--track-micro);
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--chrome);
+    border-radius: var(--r-sm);
+    padding: 2px 6px;
+}
+
+.sched-row__when,
+.sched-row__target {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--ink-2);
+}
+/* The cron, the connector trigger id, the match condition: the literal the
+   sentence beside it was read off. Shown rather than hidden, because a
+   paraphrase of a cron is a reading and the cron is the fact. */
+.sched-row__when code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+}
+.sched-row__detail {
+    font-size: 12.5px;
+    color: var(--ink-3);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* Whether the schedule is still working. It is the point of the row, so it is
+   the same size as the trigger rather than a footnote under it. */
+.sched-row__health {
+    font-size: 12px;
+    margin-top: 2px;
+}
+.sched-row[data-tone="bad"] .sched-row__health { color: var(--bad); }
+.sched-row[data-tone="warn"] .sched-row__health { color: var(--warn); }
+.sched-row[data-tone="off"] .sched-row__health { color: var(--ink-3); }
+
+.sched-row__error {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.sched-row__last {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    margin-top: 3px;
+}
+
+.sched-row__open svg {
+    color: var(--ink-3);
+    margin-top: 2px;
+}
+
+.sched-row__acts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sched-row__unreadable {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--bad);
+}
+
+.sched-row__problem {
+    grid-column: 1 / -1;
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--bad);
+}
+
+/* ── the buttons ────────────────────────────────────────────────────
+   `.btn` is defined in the shell for the page's own furniture, and inside a
+   profile card it comes out the size of a hero action. These are row
+   controls: same shape, quieter. */
+.sched .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.sched .btn:hover:not(:disabled) { border-color: var(--ink-3); }
+.sched .btn:disabled { opacity: .45; cursor: default; }
+.sched .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The pair, not the accent with white on it — see `base.css`. */
+.sched .btn--primary { background: var(--field); border-color: var(--field); color: var(--field-ink); }
+.sched .btn--primary:hover:not(:disabled) { filter: brightness(1.06); }
+.sched .btn--small { font-size: 11.5px; padding: 4px 9px; }
+
+.sched-add {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+    padding: 0;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--accent);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+.sched-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* ── its firings ────────────────────────────────────────────────────
+   Inset from the row above by exactly the dot column plus its gap (8 + 12), so
+   a run lines up under the schedule's title rather than under its dot. */
+.sched-runs {
+    grid-column: 1 / -1;
+    margin: 10px 0 2px 20px;
+    padding-left: 12px;
+    border-left: 1px solid var(--line-2);
+    display: flex;
+    flex-direction: column;
+}
+
+.sched-run {
+    display: grid;
+    grid-template-columns: 7px minmax(0, auto) minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 0;
+    font-size: 12px;
+}
+.sched-run + .sched-run { border-top: 1px solid var(--line); }
+
+.sched-run__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: var(--ok);
+}
+.sched-run[data-tone="warn"] .sched-run__dot { background: var(--warn); }
+.sched-run[data-tone="bad"] .sched-run__dot { background: var(--bad); }
+.sched-run[data-tone="off"] .sched-run__dot { background: var(--ink-3); }
+
+.sched-run__what {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    color: var(--ink);
+    white-space: nowrap;
+}
+.sched-run[data-tone="bad"] .sched-run__what { color: var(--bad); }
+
+.sched-run__error {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sched-run__at {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    white-space: nowrap;
+}
+
+.sched-runs__note {
+    margin: 6px 0;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+
+/* ── the form ───────────────────────────────────────────────────────── */
+
+.sched-new {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line-2);
+}
+
+.sched-field {
+    display: grid;
+    grid-template-columns: 78px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    font-size: 12.5px;
+}
+.sched-field--tall { align-items: start; }
+.sched-field > span { color: var(--ink-2); }
+.sched-field input,
+.sched-field select,
+.sched-field textarea {
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    padding: 7px 10px;
+    width: 100%;
+}
+.sched-field textarea { resize: vertical; }
+.sched-field__mono { font-family: var(--mono); }
+.sched-field input:focus-visible,
+.sched-field select:focus-visible,
+.sched-field textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.sched-field__problem {
+    /* Aligned with the inputs rather than the labels, so a refusal sits under
+       the box it is about. */
+    margin: -4px 0 0 90px;
+    font-size: 12px;
+    color: var(--bad);
+}
+
+.sched-new__note {
+    margin: 2px 0 0 90px;
+    font-size: 11.5px;
+    color: var(--ink-3);
+}
+
+.sched-new__acts {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+/* ── narrow ─────────────────────────────────────────────────────────
+   At 375px the label column and the control column both have to go: a
+   78px label beside an input leaves 140px for a cron expression, and a
+   Pause button in its own column pushes the health line into four lines of
+   wrap. Both stack instead. */
+@media (max-width: 560px) {
+    .sched-row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+    }
+    .sched-row__open {
+        grid-template-columns: 8px minmax(0, 1fr) auto;
+    }
+    /* "fired 6h ago" moves under the body, where it reads as part of the
+       health rather than as a column heading with nothing above it. */
+    .sched-row__last {
+        grid-column: 2;
+        margin-top: 0;
+    }
+    .sched-row__acts {
+        padding-left: 20px;
+    }
+    .sched-field,
+    .sched-field--tall {
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+        gap: 4px;
+    }
+    .sched-field__problem,
+    .sched-new__note {
+        margin-left: 0;
+    }
+    .sched-runs {
+        margin-left: 0;
+    }
+    /* Five things will not sit in a row 340px wide, and leaving them in a grid
+       let auto-placement put the Retry button across two columns with the
+       timestamp jammed against it. Wrapping is explicit instead: the outcome,
+       then the error on its own line, then the time and the button. */
+    .sched-run {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 9px;
+    }
+    .sched-run__error {
+        flex-basis: 100%;
+        white-space: normal;
+    }
+    .sched-run .btn {
+        margin-left: auto;
+    }
+}
