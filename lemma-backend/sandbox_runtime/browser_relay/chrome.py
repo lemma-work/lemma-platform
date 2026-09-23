@@ -780,12 +780,24 @@ async def keepalive(*, session: str | None = None) -> bool:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "browser keepalive for session %s did not run: %r", session, exc
+        )
+        return False
+    try:
         _, stderr = await asyncio.wait_for(
             process.communicate(), timeout=_REAP_TIMEOUT_SECONDS
         )
-    except (OSError, asyncio.TimeoutError) as exc:
+    except asyncio.TimeoutError:
+        # Killed and reaped, or every later touch would add another stuck CLI.
+        with suppress(ProcessLookupError):
+            process.kill()
+        await process.communicate()
         logging.getLogger(__name__).warning(
-            "browser keepalive for session %s did not run: %r", session, exc
+            "browser keepalive for session %s timed out after %ss",
+            session,
+            _REAP_TIMEOUT_SECONDS,
         )
         return False
     if process.returncode != 0:

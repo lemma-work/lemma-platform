@@ -47,6 +47,8 @@ class WorkspaceStatusResponse(BaseModel):
 @router.get(
     "/status",
     response_model=WorkspaceStatusResponse,
+    # Absent, not null, while a download cannot be measured -- as documented.
+    response_model_exclude_none=True,
     operation_id="workspace.status",
     summary="Whether your computer is ready",
 )

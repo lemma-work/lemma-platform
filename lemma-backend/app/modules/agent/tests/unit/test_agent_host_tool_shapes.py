@@ -177,3 +177,10 @@ def test_a_command_that_never_ran_says_so_rather_than_failed():
     payload = {"rawOutput": {"formatted_output": "", "exit_code": None}}
     result = tool_result("exec_command", "FAILED", payload)
     assert result["error"] == "did not run to completion (declined or stopped)"
+
+
+def test_a_malformed_exit_code_is_ignored_not_raised():
+    payload = {"rawOutput": {"exit_code": "--1", "formatted_output": "x"}}
+    assert tool_result("exec_command", "COMPLETED", payload) == {"stdout": "x"}
+    payload = {"rawOutput": {"exit_code": "-2", "formatted_output": "x"}}
+    assert tool_result("exec_command", "COMPLETED", payload)["exit_code"] == -2

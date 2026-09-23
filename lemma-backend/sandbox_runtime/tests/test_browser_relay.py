@@ -1262,3 +1262,22 @@ async def test_a_keepalive_that_misses_says_so(monkeypatch, caplog) -> None:
         assert await chrome.keepalive(session="workspace") is False
     assert "exited 3" in caplog.text
     assert "no browser" in caplog.text
+
+
+async def test_a_keepalive_that_hangs_is_killed_not_left_behind(
+    monkeypatch, caplog
+) -> None:
+    real_exec = asyncio.create_subprocess_exec
+    started = []
+
+    async def hanging_cli(*_argv, **kwargs):
+        process = await real_exec("sleep", "30", **kwargs)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", hanging_cli)
+    monkeypatch.setattr(chrome, "_REAP_TIMEOUT_SECONDS", 0.1)
+    with caplog.at_level("WARNING"):
+        assert await chrome.keepalive(session="workspace") is False
+    assert started[0].returncode is not None, "the stuck CLI was reaped"
+    assert "timed out" in caplog.text

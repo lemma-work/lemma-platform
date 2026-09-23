@@ -8,11 +8,12 @@
 //! offset. Reading those three gives a real `done of total`.
 
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
+use std::io::{Read, Seek, SeekFrom};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -101,13 +102,41 @@ impl Drop for Sampler {
 const CTR: &str = "/usr/bin/ctr";
 const CONTAINERD_SOCKET: &str = "/run/containerd/containerd.sock";
 
+/// Longest a single `ctr` query may take. The sampler checks for its stop only
+/// between queries, so an unbounded one could hold the pull's return behind it.
+const CTR_TIMEOUT: Duration = Duration::from_secs(3);
+
 fn ctr(arguments: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new(CTR)
+    // A file, not a pipe: `content ls` can outgrow a pipe's buffer, and a child
+    // blocked writing to a pipe nobody reads until it exits never exits.
+    let mut stdout = tempfile::tempfile().ok()?;
+    let mut child = Command::new(CTR)
         .args(["--address", CONTAINERD_SOCKET, "--namespace", "lemma"])
         .args(arguments)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout.try_clone().ok()?))
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    output.status.success().then_some(output.stdout)
+    let deadline = Instant::now() + CTR_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    let mut output = Vec::new();
+    stdout.seek(SeekFrom::Start(0)).ok()?;
+    stdout.read_to_end(&mut output).ok()?;
+    Some(output)
 }
 
 fn sample(image: &str) -> Option<PullProgress> {

@@ -272,8 +272,9 @@ def _command_result(raw: object, payload: JsonObject) -> JsonObject:
 
 def _exit_code(fields: JsonObject) -> int | None:
     value = first_present(fields, "exit_code", "exitCode")
-    if isinstance(value, str) and value.lstrip("-").isdigit():
-        return int(value)
+    if isinstance(value, str):
+        digits = value.removeprefix("-")
+        return int(value) if digits.isascii() and digits.isdecimal() else None
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     return None
