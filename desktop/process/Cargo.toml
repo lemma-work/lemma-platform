@@ -7,7 +7,7 @@ license = "AGPL-3.0-or-later"
 description = "Bounded process supervision for Lemma Desktop setup and recovery"
 
 [dependencies]
-process-wrap = { version = "=9.1.0", default-features = false, features = ["tokio1", "process-group", "job-object", "creation-flags", "kill-on-drop"] }
+process-wrap = { version = "=10.0.0", default-features = false, features = ["tokio1", "process-group", "job-object", "creation-flags", "kill-on-drop"] }
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 
