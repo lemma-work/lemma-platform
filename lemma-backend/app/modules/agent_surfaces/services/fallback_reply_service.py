@@ -18,9 +18,11 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceReplyContext,
     SurfaceReplyKind,
 )
+from app.modules.agent_surfaces.domain.adapter_port import (
+    SurfacePlatformAdapterPort,
+)
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
-    SurfacePlatformAdapterPort,
 )
 from app.modules.agent_surfaces.platforms.email_authentication import (
     EmailAuthenticationVerdict,
@@ -329,11 +331,23 @@ async def deliver_fallback_reply(
     event_dedup_store: SurfaceEventDedupStorePort,
 ) -> None:
     # Every fallback reply on every platform passes here, which makes it the one
-    # place the window can be held for all four reply kinds at once.
-    if not await event_dedup_store.claim_stranger_reply(
-        platform=str(context.platform),
-        surface_installation_id=context.surface_id,
-        sender_external_user_id=context.event.sender_external_user_id,
+    # place the window can be held.
+    #
+    # Except for a turn in a conversation. The window stops us repeating an
+    # unprompted nudge at somebody who is not engaging; onboarding is three
+    # replies in a row, each one answering a message the person just sent, and
+    # capping those the same way strands everybody after the first -- asked a
+    # question that could never be answered. Onboarding is bounded by its own
+    # turn limit instead, which is the right place for it: that budget knows
+    # when the exchange is going nowhere, and this one only knows how long ago
+    # somebody last heard from us.
+    if (
+        context.reply_kind != "identity_link"
+        and not await event_dedup_store.claim_stranger_reply(
+            platform=str(context.platform),
+            surface_installation_id=context.surface_id,
+            sender_external_user_id=context.event.sender_external_user_id,
+        )
     ):
         logger.debug(
             "agent_surfaces.fallback_reply.surface_fallback_within_window.observed",
@@ -364,6 +378,25 @@ async def deliver_fallback_reply(
             },
         )
     except Exception as exc:
+        # The incident counter and the error are two different jobs, and this
+        # used to do only the first. `record_failure` takes a class name, so
+        # everything the platform actually said was discarded: a
+        # `WhatsAppApiError` carries Meta's own body excerpt -- an invalid
+        # token, a number not registered on the app, a recipient outside the
+        # tester allow-list -- and what reached the log was the string
+        # "WhatsAppApiError", once, after the third failure. A person asking
+        # why nobody was answered had nothing to read.
+        #
+        # Logged per failure rather than per incident because the incident is a
+        # rate and this is a cause; the first one is the one worth having, and
+        # the third is the one that used to be the first.
+        logger.warning(
+            "agent_surfaces.fallback_reply.surface_fallback_send_failed.degraded",
+            platform=str(context.platform),
+            surface_id=str(context.surface_id) if context.surface_id else None,
+            reply_kind=context.reply_kind,
+            exc_info=True,
+        )
         _fallback_incident.record_failure(error_type=type(exc).__name__)
     else:
         _fallback_incident.record_success()

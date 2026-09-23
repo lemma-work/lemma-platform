@@ -18,12 +18,18 @@ notion of native storage that outlived the sandbox.
 
 *The sandbox is the disk.* Verified against the real service: write a file,
 pause, reconnect, and it is still there. That is how production stores every
-workspace today -- the account holds no volumes at all, and volumes are not a
-public E2B feature. So `storage_kind` is SANDBOX_NATIVE, and adoption is not
-an optimisation but the only safe behaviour: creating a second sandbox for an
-existing identity would leave the user's files in the first with nothing
-pointing at it. Adoption therefore ignores the epoch, and the fence becomes the
-E2B sandbox id, which only changes when the sandbox genuinely is new.
+workspace -- the account holds no volumes. E2B does have volumes now, and they
+are in the pinned SDK, but they were considered and rejected: they are network
+storage, which is what pod files already are, so mounting one here would add a
+second remote filesystem to hold what this one already holds. So `storage_kind`
+is SANDBOX_NATIVE, and adoption is not an optimisation but the only safe
+behaviour: creating a second sandbox for an existing identity would leave the
+user's files in the first with nothing pointing at it. Adoption therefore
+ignores the epoch, and the fence becomes the E2B sandbox id, which only changes
+when the sandbox genuinely is new.
+
+Because the sandbox is the disk, *nothing here replaces a workspace*. Drift is
+recorded and adopted; see `create`.
 
 What is deliberately *not* carried over: layered retry loops around every call.
 A provider's job is to report what happened; deciding whether to wait and try
@@ -34,7 +40,6 @@ deadline. Errors here are classified and raised, not absorbed.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
@@ -49,8 +54,10 @@ from app.modules.workspace.providers.base import (
     ProviderRejected,
     ProviderStorageKind,
 )
+from app.modules.workspace.providers.e2b_connections import SandboxConnections
 from app.modules.workspace.providers.e2b_common import (
     budget_until,
+    close_browser,
     ensure_serving,
     meta_epoch,
     meta_profile_digest,
@@ -61,30 +68,16 @@ from app.modules.workspace.providers.e2b_common import (
     every_page as _every_page,
 )
 from app.modules.workspace.providers.profiles import profile_for
+from app.modules.workspace.providers.e2b_config import (
+    template_for,
+    CLOSED_TO_THE_INTERNET,
+    E2BProviderConfig,
+    lifecycle_for,
+)
 from app.modules.workspace.providers.e2b_ops import E2BOpsMixin
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
 logger = get_logger(__name__)
-
-WORKSPACE_MOUNT = "/workspace"
-
-
-@dataclass(frozen=True, slots=True)
-class E2BProviderConfig:
-    api_key: str
-    workspace_template: str
-    function_template: str
-    # Namespaces every metadata key this provider writes and queries, making a
-    # provider blind to sandboxes labelled by another namespace. Required, not
-    # defaulted: a shared default is what let two deployments on one E2B team
-    # read each other's sandboxes as unowned orphans and destroy them. See
-    # `provider_factory.resolve_metadata_namespace`.
-    metadata_namespace: str
-    # How long E2B keeps a sandbox alive without contact. The service touches
-    # activity on use, so this is a backstop against leaking compute when the
-    # backend dies, not the primary idle policy.
-    sandbox_timeout_seconds: int = 60 * 30
-    domain: str | None = None
 
 
 class E2BSandboxProvider(E2BOpsMixin):
@@ -99,6 +92,8 @@ class E2BSandboxProvider(E2BOpsMixin):
         self._config = config
         self._output = output or E2BOutputBuffer()
         self._watchers: set[asyncio.Task[None]] = set()
+        #: One live connection per sandbox. See `e2b_connections`.
+        self._connections = SandboxConnections()
 
     # ------------------------------------------------------------------
     # SDK access, imported lazily so a Docker-only deployment never loads it
@@ -156,46 +151,11 @@ class E2BSandboxProvider(E2BOpsMixin):
             meta_sandbox_kind(namespace): spec.kind.value,
             meta_epoch(namespace): str(spec.epoch),
             meta_profile_digest(namespace): spec.profile_digest,
-            meta_template(namespace): self._template(spec.kind),
+            meta_template(namespace): self._template(spec),
         }
 
-    def _template(self, kind: SandboxKind) -> str:
-        return (
-            self._config.function_template
-            if kind is SandboxKind.FUNCTION
-            else self._config.workspace_template
-        )
-
-    def _lifecycle(self, kind: SandboxKind) -> dict[str, object]:
-        """What E2B does to this sandbox when its timeout runs out.
-
-        The SDK defaults `on_timeout` to `"kill"`, and this call used to pass no
-        lifecycle at all -- so every workspace was created already scheduled for
-        deletion, thirty minutes out, and on this provider deleting the sandbox
-        deletes the user's files. Nothing in the row recorded it and nothing told
-        the user; the only reason it was not a daily event is that the idle sweep
-        usually paused the sandbox first, which stops the clock. A five-minute
-        cron was the only thing standing between a long session and data loss.
-
-        `keep_memory=False` matches what `release` already does, and for the same
-        reason: a memory-preserving snapshot restores whatever was running,
-        including a browser that had exhausted the sandbox, so the exhaustion
-        became permanent across every later resume. It also rules out
-        `auto_resume`, which E2B can only offer by restoring a memory snapshot in
-        place. That trade is worth revisiting once a leak is impossible, and not
-        before.
-
-        Functions invert this: the leak was a *workspace* browser, while
-        `lemma-function` runs function code and nothing else. Filesystem-only
-        resumes a function sandbox *without* its runtime -- nothing re-runs the
-        image CMD -- so it comes back answering 502, which is the P0.
-        `test_e2b_function_liveness_real` measures both modes.
-        """
-        keep_memory = kind is SandboxKind.FUNCTION
-        return {
-            "on_timeout": {"action": "pause", "keep_memory": keep_memory},
-            **({"auto_resume": True} if keep_memory else {}),
-        }
+    def _template(self, spec: ProviderCreateSpec) -> str:
+        return template_for(self._config, spec)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -217,62 +177,50 @@ class E2BSandboxProvider(E2BOpsMixin):
         fence is the E2B sandbox id -- a genuinely new sandbox has a new id, so
         a stale operation fails rather than landing on it.
 
-        It does not ignore the template. Adopting a sandbox adopts the code
-        inside it, so a workspace that is never replaced is a workspace that can
-        never be fixed -- which is what happened, and is documented on the
-        branch below.
+        It does not ignore what the sandbox was built from, but what it *does*
+        about it depends entirely on whether the sandbox owns a disk. See
+        `_drift` and the branch below.
         """
         existing = await self._find_any(spec.sandbox_id)
-        if existing is not None and self._template_is_stale(existing, spec.kind):
-            # The sandbox is running an image we no longer publish, and on this
-            # provider the image cannot be changed underneath it: the sandbox is
-            # the disk, so adopting it means adopting its code too. Tolerating
-            # that is what pinned every workspace in the fleet to whatever
-            # template it was first created on -- 249 sandboxes across four
-            # older templates, and zero on the configured one -- so every fix
-            # shipped in the image reached nobody who already had a workspace.
-            # The workspaces that were failing were exactly the ones the fixes
-            # could never reach.
+        drift = () if existing is None else self._drift(existing, spec)
+        if drift and spec.kind is SandboxKind.FUNCTION:
+            # A function sandbox owns no durable disk -- it refetches an
+            # immutable artifact from the gateway -- so replacing it to adopt
+            # what is configured now costs a cold start and nothing else. It is
+            # also the kind where staleness has already caused a P0: a runtime
+            # the backend could no longer talk to answered 502 for 100 minutes.
+            await self._kill_quietly(existing.provider_id)
+            existing = None
+        elif drift:
+            # A workspace is adopted instead, and this asymmetry is the entire
+            # policy: here the sandbox *is* the disk, so replacing it to adopt a
+            # newer artifact deletes the user's files.
             #
-            # Replacing costs the disk, which is why this is deliberately
-            # narrow: it fires on the template, the identity of the artifact
-            # that is running, and not on `profile_digest`, a hand-maintained
-            # environment variable whose drift is still tolerated below.
+            # This branch used to fire on the template and kill. The reasoning
+            # was sound -- a workspace that is never replaced is a workspace
+            # that can never be fixed, and the fleet was pinned to whatever
+            # template each sandbox was first created on, so every fix shipped
+            # in an image reached nobody who already had a workspace. But the
+            # remedy cost the disk, which made publishing a template and
+            # destroying the fleet the same act, and the first-party code that
+            # forced most of those publications is now delivered into a running
+            # sandbox instead (`services/workspace_runtime_bundle`). Repairing
+            # a workspace no longer requires replacing it, so this no longer
+            # does.
+            #
+            # `Sandbox fabric` README §6 is what this restores: "While a
+            # workspace owns a disk it keeps running the profile it was created
+            # with, no generation fence is raised, and nothing is replaced."
+            # The accepted cost, stated there too, is that a workspace may run
+            # an N-1 *base image* until it is naturally recreated. Closing that
+            # gap without destroying anything is a separate mechanism -- copy
+            # the disk to a sandbox on the new template -- not a kill here.
             logger.info(
-                "workspace.e2b.template_drift_replacing",
+                "workspace.e2b.drift_tolerated",
                 sandbox_id=str(spec.sandbox_id),
-                kind=spec.kind.value,
+                drifted=",".join(drift),
                 recorded=existing.template or "<unstamped>",
-                configured=self._template(spec.kind),
-            )
-            await self._kill_quietly(existing.provider_id)
-            existing = None
-        drifted = (
-            existing is not None and existing.profile_digest != spec.profile_digest
-        )
-        if drifted and spec.kind is SandboxKind.FUNCTION:
-            # A function sandbox owns no durable disk, so replacing it to adopt
-            # a new digest costs a cold start and nothing else.
-            await self._kill_quietly(existing.provider_id)
-            existing = None
-        elif drifted:
-            # A workspace tolerates drift, and this is the whole reason the
-            # policy exists: here the sandbox *is* the disk, so killing it to
-            # adopt a new digest deletes the user's files. The digest is set by
-            # `WORKSPACE_PROFILE_DIGEST`, an environment variable -- so this
-            # branch used to mean that editing one env var and deploying wiped
-            # every workspace in the fleet, on the first ensure after rollout,
-            # with no confirmation and nothing to restore from.
-            #
-            # `Sandbox fabric` README §6 already states the intended behaviour:
-            # "While a workspace owns a disk it keeps running the profile it
-            # was created with, no generation fence is raised, and nothing is
-            # replaced", adopting the new profile only when it is next created
-            # from scratch. The accepted cost, stated there too, is that a
-            # workspace may run an N-1 template until then.
-            logger.info(
-                "workspace.e2b.profile_drift_tolerated",
-                sandbox_id=str(spec.sandbox_id),
+                configured=self._template(spec),
             )
         if existing is not None:
             # Nothing is re-stamped onto the adopted sandbox. The metadata E2B
@@ -280,21 +228,27 @@ class E2BSandboxProvider(E2BOpsMixin):
             # the SDK has no way to update it. So every reader must treat those
             # values as "what this sandbox was created as", never as "what its
             # row says now", and the epoch in particular is not a fence here.
+            #
+            # `template` is carried up rather than dropped: now that drift is
+            # tolerated it is the only honest answer to "what is this workspace
+            # actually running", and that question has to stay answerable.
             return ProviderInstance(
                 provider_id=existing.provider_id,
                 name=spec.name,
                 running=existing.running,
                 storage_adopted=True,
                 profile_digest=spec.profile_digest,
+                template=existing.template,
             )
 
         with sdk_errors():
             sandbox = await self._sdk.create(
-                template=self._template(spec.kind),
+                template=self._template(spec),
                 timeout=self._config.sandbox_timeout_seconds,
-                lifecycle=self._lifecycle(spec.kind),
+                lifecycle=lifecycle_for(spec.kind),
                 metadata=self._identity_metadata(spec),
                 envs=dict(spec.env),
+                network=CLOSED_TO_THE_INTERNET,
                 **self._api(),
             )
 
@@ -305,16 +259,31 @@ class E2BSandboxProvider(E2BOpsMixin):
             storage_adopted=False,
         )
 
-    def _template_is_stale(self, existing: ProviderInstance, kind: SandboxKind) -> bool:
-        """Is this sandbox running something other than what we publish now?
+    def _drift(
+        self, existing: ProviderInstance, spec: ProviderCreateSpec
+    ) -> tuple[str, ...]:
+        """What this sandbox was built from that is no longer configured.
 
-        An unstamped sandbox counts as stale. It was created before this fence
-        existed, which means it is at least one template behind by construction
-        -- and reading "unknown" as "fine" is the exact shape of the bug this
-        replaces, where the fleet's staleness was invisible because nothing
-        recorded what it was running.
+        Two facts, reported separately because they are not equally trustworthy.
+        `template` is the identity of the artifact actually running, and an
+        unstamped sandbox counts as drifted: it predates the stamp, so it is at
+        least one template behind by construction, and reading "unknown" as
+        "fine" is how the fleet's staleness became invisible in the first place.
+        `profile_digest` is a hand-maintained environment variable, so it says
+        rather less -- which is why the caller must never let it decide anything
+        a mistyped deploy could not survive.
+
+        Returning which ones drifted rather than a bare bool so the log can say.
+        Once the answer stopped being "replace it", the answer became "record
+        it", and a record that cannot tell a republished base image from a
+        fat-fingered env var is not worth keeping.
         """
-        return existing.template != self._template(kind)
+        drifted = []
+        if existing.template != self._template(spec):
+            drifted.append("template")
+        if existing.profile_digest != spec.profile_digest:
+            drifted.append("profile_digest")
+        return tuple(drifted)
 
     async def _kill_quietly(self, provider_id: str) -> None:
         """Kill a sandbox we have decided to replace.
@@ -400,12 +369,32 @@ class E2BSandboxProvider(E2BOpsMixin):
         sandbox, restored rather than respawned. Reading the docs told you it
         could not happen.
 
+        A filesystem-only pause is also why the browser is closed first. It
+        freezes a running Chrome the way pulling the power would, and a frozen
+        Chrome has written nothing back: `agent-browser` runs it on a
+        throwaway profile under `/tmp` and copies that to the durable one only
+        when it is closed cleanly. So somebody who signed in to a site and had
+        their sandbox released a moment later lost the login. Measured on a
+        real E2B sandbox: sign in, pause immediately, resume, and the cookie is
+        gone; close the browser first and it is there. Docker gets this from
+        quiesce, which the E2B path has no equivalent of.
         """
         # Functions keep memory -- same rule as `_lifecycle` uses for timeouts.
         keep_memory = kind is SandboxKind.FUNCTION
         sandbox = await self._connect(instance.provider_id)
-        with sdk_errors():
-            await sandbox.pause(keep_memory=keep_memory, **self._api())
+        if kind is SandboxKind.WORKSPACE:
+            await close_browser(sandbox, instance.provider_id, **self._api())
+        try:
+            with sdk_errors():
+                await sandbox.pause(keep_memory=keep_memory, **self._api())
+        finally:
+            # A held connection to a sandbox this process has just paused is a
+            # connection to something that is no longer running, and connecting
+            # is what resumes it. Keeping it would make the next operation act
+            # as though the sandbox were up and fail -- which is exactly what
+            # `test_a_paused_sandbox_is_found_and_resumed` caught when the hold
+            # was first added.
+            self._forget(instance.provider_id)
 
     async def destroy(self, name: str, *, deadline_at: datetime) -> None:
         """Kill a sandbox, addressed either by container name or by E2B id.
@@ -433,8 +422,14 @@ class E2BSandboxProvider(E2BOpsMixin):
             # that is the outcome destroy was asking for.
             return
         sandbox = await self._connect(provider_id)
-        with sdk_errors():
-            await sandbox.kill(**self._api())
+        try:
+            with sdk_errors():
+                await sandbox.kill(**self._api())
+        finally:
+            # Whether or not the kill succeeded, this process must stop handing
+            # out a connection to it. In the failure case the next caller
+            # re-connects and finds out honestly.
+            self._forget(provider_id)
 
     # ------------------------------------------------------------------
     # Storage
@@ -576,20 +571,20 @@ class E2BSandboxProvider(E2BOpsMixin):
     async def _connect(self, provider_id: str):
         """Reach a sandbox, resuming it if it is paused.
 
-        The timeout is not optional. Connecting is what re-arms the lease, and
-        the SDK's own rule is that "the timeout will update only if the new
-        timeout is longer than the existing one" -- so passing nothing does not
-        mean "leave it alone", it means "five minutes", the SDK's default. A
-        workspace resumed after days therefore came back with a five-minute
-        lease, and every process inside it died together when that elapsed. That
-        is what a caller sees as three tool calls returning 502 at the same
-        instant, several minutes into a turn that was working.
+        The timeout is not optional, and is held rather than re-sent per call:
+        `e2b_connections` owns both rules and the reasons for them.
         """
-        # Both arms of the old branch raised the same thing; sdk_errors is
-        # what that code was spelling out by hand.
-        with sdk_errors():
-            return await self._sdk.connect(
-                provider_id,
-                timeout=self._config.sandbox_timeout_seconds,
-                **self._api(),
-            )
+
+        async def open() -> object:
+            with sdk_errors():
+                return await self._sdk.connect(
+                    provider_id,
+                    timeout=self._config.sandbox_timeout_seconds,
+                    **self._api(),
+                )
+
+        return await self._connections.get(provider_id, open)
+
+    def _forget(self, provider_id: str) -> None:
+        """Drop a held connection, for a sandbox this process has just ended."""
+        self._connections.forget(provider_id)

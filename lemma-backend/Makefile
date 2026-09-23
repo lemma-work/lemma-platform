@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-public-prose lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -100,11 +100,14 @@ help:
 	@echo "  make lint-session-scope # DB connection held across non-DB work"
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
 	@echo "  make lint-unbounded    # unbounded queues/caches, CPU on the loop"
+	@echo "  make lint-unbounded-reads # collection reads with no ceiling"
 	@echo "  make lint-import-bound-defaults  # defaults a test cannot replace"
 	@echo "  make lint-controller-types  # new basedpyright errors in the typed surfaces"
 	@echo "  make test-e2e-shard-ci SHARD=sandbox   # one CI shard, exactly as CI runs it"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
+	@echo "  make lint-public-prose   # internal hosts or dates in comments"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
+	@echo "  make lint-migration-order  # one alembic head, numbers matching apply order"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
 	@echo "  make test-connection-scope # runtime: no connection held across non-DB work"
 	@echo "  make typecheck-critical # strict reliability/domain type gate"
@@ -439,7 +442,9 @@ typecheck-critical:
 		app/modules/workspace/services/local_sandbox_client.py \
 		app/modules/workspace/services/port_access.py \
 		app/modules/workspace/services/sandbox_service.py \
-		app/modules/workspace/services/sandbox_sweeper.py
+		app/modules/workspace/services/sandbox_sweeper.py \
+		app/modules/workspace/services/workspace_runtime_bundle.py \
+		app/modules/workspace/infrastructure/runtime_bundle.py
 
 architecture:
 	uv run python scripts/check_architecture.py
@@ -478,6 +483,13 @@ lint-io-hygiene:
 lint-unbounded:
 	uv run python scripts/check_unbounded.py
 
+# Queries that read a collection with no limit, no in_() and no aggregate --
+# the shape behind twenty-five reads whose cost followed a tenant's data
+# rather than the caller's request. Ratcheted against
+# unbounded-reads-baseline.json.
+lint-unbounded-reads:
+	uv run python scripts/check_unbounded_reads.py
+
 # A default argument naming something tests replace by patching a module
 # attribute. Defaults bind at import, so the patch never reaches them -- and
 # the test usually still passes. No baseline: the rule is quiet by
@@ -502,6 +514,28 @@ lint-controller-types:
 # Ratcheted against swallowed-errors-baseline.json.
 lint-swallowed-errors:
 	uv run python scripts/check_swallowed_errors.py
+
+# Public-prose gate (enforced in CI). This repository is public, and
+# CONTRIBUTING's "Code and comments" already forbids internal hostnames,
+# incident timestamps and "what I tried" narratives in comments, docstrings
+# and test names. That rule was written down and then broken anyway, by a
+# docstring that named an internal cluster host and dated the incident it
+# came from -- prose is the part of a diff a reviewer skims, and no other
+# gate reads it. Hostnames are refused anywhere in a file (a deployment name
+# leaks from a fixture exactly as well as from a sentence); dates only in
+# comments and docstrings, with an allowlist for genuinely public ones.
+lint-public-prose:
+	uv run python scripts/check_public_prose.py
+
+# Migration order gate (enforced in CI). One head — a second one makes
+# `alembic upgrade head` refuse to run at all — and filename numbers that match
+# apply order, so the directory still reads as a history. A long-lived branch
+# authored at position 21 and merged at 30 left two 0021s and two 0022s behind,
+# and a chain that read 22 -> 30 with no file missing.
+# Ratcheted by LEGACY_ID_POSITION_MISMATCH in the script: filenames are free to
+# rename, revision ids are not, because databases are stamped with them.
+lint-migration-order:
+	uv run python scripts/check_migration_order.py
 
 # In-subject test doubles (enforced in CI). A double in front of a collaborator
 # isolates the unit; one *inside* it certifies the half you did not write, so a
@@ -722,10 +756,28 @@ docker-reap:
 
 SANDBOX_REGISTRY  ?= ghcr.io/lemma-work
 SANDBOX_TAG       ?= dev
-SANDBOX_PLATFORM  ?= linux/amd64
+# A locally built workspace image targets the machine that will run it, which is
+# what `{{.Server.Arch}}` reports -- the *daemon's* architecture, not the CLI's.
+# Published images still cover both (`SANDBOX_PLATFORMS`), so this changes what a
+# developer builds, never what ships.
+#
+# It used to be pinned to linux/amd64, which on an Apple Silicon machine means
+# every process in the sandbox is emulated. That is not a small tax on a browser:
+# measured in an idle container on the same host, Chromium's cold launch is 4.4s
+# emulated against 0.33s native, `start-browser` 9.1s against 1.8s, and a cold
+# `open` 14.6s against 2.2s. Under the load of a sandbox that has just been
+# provisioned those multiply, which is how a browser tool with a 90s budget
+# timed out and fell back to fetching the page without a browser at all.
+# Evaluated lazily, so `make` targets that build nothing never shell out to
+# docker, and falling back to amd64 keeps a machine with no daemon running
+# building the same image it built before.
+SANDBOX_PLATFORM  ?= linux/$(or $(shell docker version --format '{{.Server.Arch}}' 2>/dev/null),amd64)
 SANDBOX_PLATFORMS ?= linux/amd64,linux/arm64
 # Function artifacts target the canonical x86-64 runtime ABI. Do not publish an
-# arm64 function image until the artifact builder emits an arm64 ABI.
+# arm64 function image until the artifact builder emits an arm64 ABI -- and for
+# the same reason do not build a local one either, so this keeps its own pin
+# rather than following the host the way the workspace image now does.
+SANDBOX_FUNCTION_PLATFORM  ?= linux/amd64
 SANDBOX_FUNCTION_PLATFORMS ?= linux/amd64
 SANDBOX_PYTHON_IMAGE ?= python:3.14.6-slim
 SANDBOX_NODE_IMAGE   ?= node:24.18.0-slim
@@ -739,7 +791,20 @@ IMAGES_DIR := sandbox-images
 
 .PHONY: sandbox-images sandbox-image-workspace sandbox-image-function \
         push-sandbox-images push-sandbox-workspace push-sandbox-function \
-        print-sandbox-images
+        print-sandbox-images runtime-bundle
+
+RUNTIME_BUNDLE_DIR ?= dist/runtime-bundle
+
+# The first-party Python the backend installs into a workspace sandbox. Built
+# into the backend image for real deployments; built here, explicitly, for
+# development. Deliberately not discovered automatically -- a loader that built
+# from the checkout whenever it could made a unit test shell out to `uv build`,
+# so the system behaved differently on a developer's machine than anywhere else.
+runtime-bundle:
+	uv run python scripts/build_runtime_bundle.py --out-dir $(RUNTIME_BUNDLE_DIR)
+	@echo
+	@echo "Point the backend at it with:"
+	@echo "  export WORKSPACE_RUNTIME_BUNDLE_DIR=$(CURDIR)/$(RUNTIME_BUNDLE_DIR)"
 
 print-sandbox-images:
 	@echo "workspace: $(WORKSPACE_IMAGE):$(SANDBOX_TAG)"
@@ -758,7 +823,7 @@ sandbox-image-workspace:
 
 sandbox-image-function:
 	docker build \
-		--platform $(SANDBOX_PLATFORM) \
+		--platform $(SANDBOX_FUNCTION_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.function \
 		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
 		-t $(FUNCTION_IMAGE):$(SANDBOX_TAG) \

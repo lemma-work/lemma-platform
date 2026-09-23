@@ -52,12 +52,55 @@ class _JobQueue:
         return object()
 
 
+class _EmptyResult:
+    """A query that found nothing, in the shapes the repositories ask for."""
+
+    def scalars(self):
+        return self
+
+    def unique(self):
+        return self
+
+    def first(self):
+        return None
+
+    def all(self):
+        return []
+
+    def scalar_one_or_none(self):
+        return None
+
+
+class _EmptySession:
+    """Answers every query with "nothing", rather than not answering at all.
+
+    The fake used to have no `session`, so both paths that open a unit of work
+    off this event -- queued follow-ups, and resolving a parent's wait on the
+    finished child -- raised inside their own degradation handlers. The test
+    passed while exercising neither, which is the failure mode where a double
+    certifies the half you did not write.
+    """
+
+    async def execute(self, *_args, **_kwargs):
+        return _EmptyResult()
+
+    async def get(self, *_args, **_kwargs):
+        return None
+
+    async def flush(self):
+        return None
+
+
 class _UowFactory:
     def __init__(self) -> None:
         self.events: list[object] = []
+        self.session = _EmptySession()
 
     def __call__(self):
         return self
+
+    async def commit(self) -> None:
+        return None
 
     async def __aenter__(self):
         return self

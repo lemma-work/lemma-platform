@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 import logging
+import time
 from typing import Any
 from pydantic import BaseModel
 from faststream.redis import RedisBroker
@@ -116,6 +117,54 @@ async def _group_holding_back_trim(
     return None
 
 
+#: One line a minute per condition is enough to see a stream sitting at its
+#: hard ceiling and enough to date it, while a burst collapses to one line.
+TRIM_REPORT_INTERVAL_SECONDS = 60
+
+
+class _KeyedReportThrottle:
+    """Lets one observation per key through per interval, counting the rest.
+
+    Keyed because the conditions are not one signal: throttling on the stream
+    alone would let a lagging group hide behind a pending one that happened to
+    warn first, silencing the more serious of the two. Counting because a
+    suppressed line is still evidence -- without the tally, a stream pinned at
+    its hard ceiling and one that touched it once look identical.
+
+    An object rather than a module-level dict and a `global`, following
+    `app.core.security._ReportThrottle`: the decision is then something a test
+    can drive directly, and the state has an owner.
+    """
+
+    __slots__ = ("_interval_seconds", "_seen")
+
+    def __init__(self, interval_seconds: float) -> None:
+        self._interval_seconds = interval_seconds
+        self._seen: dict[tuple[str, str, str | None], tuple[float, int]] = {}
+
+    def should_report(
+        self, key: tuple[str, str, str | None], now: float
+    ) -> tuple[bool, int]:
+        """Whether to report `key` now, and how many were swallowed since.
+
+        `now` is monotonic, so a corrected wall clock cannot push the next
+        report into the far future.
+        """
+        last_at, suppressed = self._seen.get(key, (None, 0))
+        if last_at is not None and now - last_at < self._interval_seconds:
+            self._seen[key] = (last_at, suppressed + 1)
+            return False, suppressed + 1
+        self._seen[key] = (now, 0)
+        return True, suppressed
+
+    def reset(self) -> None:
+        self._seen.clear()
+
+
+#: Process-local by design: this describes this process's view of the stream.
+_trim_reports = _KeyedReportThrottle(TRIM_REPORT_INTERVAL_SECONDS)
+
+
 class FastStreamRedisMessageBus:
     """Message bus implementation backed by FastStream Redis broker."""
 
@@ -176,21 +225,55 @@ class FastStreamRedisMessageBus:
 
     @staticmethod
     def _relaxed_maxlen(
-        stream: str, *, reason: str, group: str | None = None
+        stream: str,
+        *,
+        reason: str,
+        group: str | None = None,
+        group_declared: bool | None = None,
     ) -> int | None:
         """The ceiling to publish at when consumer progress forbids the normal cap.
 
-        Reported every time rather than once: the condition is per-publish, and a
-        stream sitting here is one whose retention has silently changed.
+        Reported once per interval per condition rather than once per publish.
+        The condition is genuinely per-publish, but `reason="pending"` is
+        reached by any group holding in-flight unacked work -- which is what a
+        healthy group under load looks like at every instant. Warning on each
+        one reports health as a fault: a single signup burst produced 2123
+        identical lines in two minutes, 99% of the worker's entire output, and
+        a real fault would have been invisible inside it.
+
+        The same reasoning `_pending_is_stale` already states for a Redis blip:
+        something that runs on every publish must not log on every publish, or
+        it is a line per message rather than a signal.
+
+        Suppressed publishes are counted and carried on the next line, so a
+        stream that really is sitting at its hard ceiling still says so -- and
+        says how hard.
+
+        ``group_declared`` is the field that says which problem this is. A group
+        that is lagging and *declared* is a consumer falling behind, and the
+        answer is to make it keep up. A group that is lagging and declared by
+        nobody is a group whose subscriber was deleted, and the answer is the
+        reaper -- a completely different action, from a line that otherwise
+        reads identically. Production spent three weeks publishing
+        ``schedule_events`` at its hard ceiling because a group abandoned in
+        August still pinned the watermark, and the hourly warning naming it did
+        not connect the two.
         """
         hard = event_transport_settings.stream_hard_maxlen_for(stream)
+        allowed, suppressed = _trim_reports.should_report(
+            (stream, reason, group), time.monotonic()
+        )
+        if not allowed:
+            return hard
         logger.warning(
             "redis.stream.trim_degraded.degraded",
             stream_name=stream,
             reason=reason,
             group=group,
+            group_declared=group_declared,
             maxlen=event_transport_settings.stream_maxlen_for(stream),
             hard_maxlen=hard,
+            suppressed_since_last=suppressed,
         )
         return hard
 
@@ -236,7 +319,12 @@ class FastStreamRedisMessageBus:
         if blocked is None:
             return maxlen
         group_name, reason = blocked
-        return self._relaxed_maxlen(stream, reason=reason, group=group_name)
+        return self._relaxed_maxlen(
+            stream,
+            reason=reason,
+            group=group_name,
+            group_declared=group_name in declared_groups,
+        )
 
     async def publish(self, stream: str, event: BaseModel | Mapping[str, Any]) -> None:
         broker = await self._get_broker()

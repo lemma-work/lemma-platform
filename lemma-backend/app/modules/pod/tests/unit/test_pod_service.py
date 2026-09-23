@@ -728,7 +728,7 @@ async def test_delete_pod_frees_its_inbound_addresses_in_the_same_request(
     release = AsyncMock(return_value=1)
     monkeypatch.setattr(
         "app.modules.agent_surfaces.contracts.email_surfaces."
-        "release_pod_inbound_addresses",
+        "release_pod_scarce_identities",
         release,
     )
     uow = SimpleNamespace(after_commit=lambda _hook: None)

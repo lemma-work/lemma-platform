@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import base64
 import binascii
 import json
@@ -13,6 +15,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     user_prompt_text,
 )
@@ -23,9 +26,9 @@ from app.modules.agent.services.runtime_model_factory import provider_model_sett
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     ConversationType,
-    HarnessOptions,
     JsonObject,
     MessageKind,
     MessageRole,
@@ -38,6 +41,58 @@ from app.modules.agent.infrastructure.mcp import (
 from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
 )
+
+
+from app.modules.agent.tools.skills.pydantic_adapter import (
+    LOCAL_WORKSPACE_SKILL_OVERRIDE,
+    LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
+)
+
+#: What a host agent is given of the user's Lemma identity. An allowlist rather
+#: than "whatever `get_env_vars` returned", so a sandbox-only variable added
+#: later does not silently start leaving the sandbox.
+_HOST_AGENT_ENVIRONMENT = frozenset(
+    {
+        "LEMMA_TOKEN",
+        "LEMMA_BASE_URL",
+        "LEMMA_AUTH_URL",
+        "LEMMA_HOST_ORIGIN",
+        "LEMMA_USER_ID",
+        "LEMMA_POD_ID",
+        "LEMMA_ORG_ID",
+    }
+)
+
+
+def host_agent_environment(workspace_env: Mapping[str, str]) -> dict[str, str]:
+    """The identity a host agent is given, out of a sandbox's environment.
+
+    The same delegated session the sandbox gets, for an agent that runs on the
+    user's own machine instead. `LEMMA_WORKSPACE_URL` is deliberately not among
+    them: it addresses the cloud sandbox, and a host agent that believed it
+    would be pointed at a filesystem that is not the folder it was bound to.
+
+    The addresses are replaced, not copied. A sandbox's are chosen for the
+    sandbox's network -- on Desktop `host.lemma.internal`, which only the
+    guest's containers can resolve -- and a host agent needs the ones this
+    machine can reach, the same perspective the MCP URL is built from.
+    """
+    identity = {
+        name: value
+        for name, value in workspace_env.items()
+        if name in _HOST_AGENT_ENVIRONMENT
+    }
+    return identity | _host_addresses()
+
+
+def _host_addresses() -> dict[str, str]:
+    """Where the backend is reachable from the machine the host agent runs on."""
+    addresses = {
+        "LEMMA_BASE_URL": settings.cli_api_url or settings.api_url,
+        "LEMMA_AUTH_URL": settings.cli_auth_frontend_url or settings.auth_frontend_url,
+        "LEMMA_HOST_ORIGIN": settings.frontend_url,
+    }
+    return {name: value for name, value in addresses.items() if value}
 
 
 def run_start_payload(
@@ -116,9 +171,11 @@ async def mcp_payload[DepsT: AgentContext](
             session_id=str(agent_run_id),
         )
         token = workspace_env["LEMMA_TOKEN"]
+        agent_environment = host_agent_environment(workspace_env)
     finally:
         await workspace_service.close()
     return {
+        "environment": agent_environment,
         "server_name": LEMMA_MCP_SERVER_NAME,
         "url": (
             f"{settings.api_url.rstrip('/')}/agent-runtime/conversations/"
@@ -263,7 +320,7 @@ def _turn_messages(
     would only duplicate the conversation in its context.
 
     A run that resumes a pause is the same rule with a different answer. Waking
-    from a ``snooze`` adds no user message, so "the latest user message" is the
+    from a ``wait_for`` adds no user message, so "the latest user message" is the
     request that started the task — and re-sending that to an agent whose
     session already contains it does not read as "carry on", it reads as the
     person asking again, so the agent does the work twice. What the session has
@@ -308,7 +365,11 @@ def _workspace_cwd(ctx: AgentContext) -> str:
         value = get_workspace_cwd()
         if value:
             return str(value)
-    return f"/workspace/conversations/{ctx.conversation_id}"
+    # The project root, not a directory named after the conversation id: that
+    # shape is not what `resolve_workspace_location` produces, so a payload
+    # carrying it would send a remote harness somewhere the conversation's own
+    # metadata does not name.
+    return WORKSPACE_ROOT
 
 
 def _output_contract(*, agent: Agent, conversation: Conversation) -> str:
@@ -369,6 +430,44 @@ def _user_turn_text(message: Message) -> str:
     return body
 
 
+def _history_tool_result(result: object) -> str:
+    """One tool return, as it appears in a replayed transcript.
+
+    Everything `_render_history` produces ends up concatenated into a single
+    user turn -- the ACP layer merges system framing, history and the new
+    message into one text block -- so a tool result is not on a tool channel by
+    the time a model reads it. It reads as something the user typed.
+
+    That is tolerable for data. It is not tolerable for Lemma's own
+    instructions to the agent: `load_skill` appends a "Local Lemma Workspace
+    Override" paragraph addressed to the reader, and replaying it inside a user
+    turn on every non-resuming turn is why agents echoed it back into their
+    replies. The agent already acted on it when the tool returned; it does not
+    need it again, and it must not receive it as the user's words.
+    """
+    rendered = json.dumps(to_json_value(result), indent=2)
+    if LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER not in rendered:
+        return rendered
+    # Every depth it can be stored at. A result `unwrap_mcp_content` could not
+    # unwrap -- more than one content block, say -- keeps the skill as JSON text
+    # inside a text block, so the paragraph is escaped once by the tool and
+    # again by the `json.dumps` above. Matching only the single-escaped form
+    # left it in, on exactly the path it most needed removing from.
+    for encoded in _encodings_of(LOCAL_WORKSPACE_SKILL_OVERRIDE, depth=3):
+        rendered = rendered.replace(encoded, "")
+    return rendered
+
+
+def _encodings_of(text: str, *, depth: int) -> list[str]:
+    """`text` as it reads after 1..depth rounds of JSON string escaping."""
+    forms = []
+    for _ in range(depth):
+        text = json.dumps(text)[1:-1]
+        forms.append(text)
+    # Deepest first, so a shallower form cannot match inside a deeper one.
+    return forms[::-1]
+
+
 def _message_text(message: Message) -> str:
     if message.kind == MessageKind.TOOL_CALL:
         body = (
@@ -379,7 +478,7 @@ def _message_text(message: Message) -> str:
         body = (
             f"Tool result {message.tool_name or 'unknown_tool'}"
             f"({message.tool_call_id}):\n"
-            f"{json.dumps(to_json_value(message.tool_result), indent=2)}"
+            f"{_history_tool_result(message.tool_result)}"
         )
     elif message.role == MessageRole.USER:
         return _user_turn_text(message)

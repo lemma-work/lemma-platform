@@ -344,3 +344,65 @@ def test_widget_contract_requires_api_url_identifier():
         """
     )
     assert any("apiUrl" in issue for issue in issues)
+
+
+def test_widget_contract_quotes_back_what_arrived_instead_of_markup():
+    """The error has to name the mistake that was actually made.
+
+    Regression: an agent sent ``content="false"``, read "no element tag found —
+    pass raw markup, not base64", and sent ``content="not used"``, then
+    ``"real"``, then ``"short check"`` — fifteen calls, the same message every
+    time, five of the junk values that happened to carry a tag rendering into
+    the person's conversation. It was never encoding anything; it was writing
+    its reply into the argument. A message that names a cause the author knows
+    it did not have leaves it nothing to change.
+    """
+    errors = validate_widget_html("false")
+    assert len(errors) == 1
+    assert "5 characters received" in errors[0]
+    assert "'false'" in errors[0]
+    # And the belief that kept the loop going: that the markup could follow.
+    assert "no later call can complete this one" in errors[0]
+    assert "public_url" in errors[0]
+
+
+def test_widget_contract_rejects_one_stray_character_before_the_first_tag():
+    """`<` is not a tag, and the difference is a line of junk above the view.
+
+    Regression, and a hole in the rule below rather than a gap between rules:
+    the check was `startswith("<")`, which `<<style>` satisfies. It passed, the
+    widget rendered with a bare "<" on the line above it, the agent noticed,
+    tried to correct it, and displayed a *second* widget with the same "<" —
+    because a display cannot be taken back. Two junk widgets from one typo.
+    """
+    for opening in ("<<style>", "< style>", "<3 style>", "<-style>"):
+        errors = validate_widget_html(
+            opening + ".a{color:red}</style><div class='a'>7 open</div>"
+        )
+        assert any("must begin with a tag" in e for e in errors), opening
+
+
+def test_widget_contract_accepts_every_real_way_to_open_a_fragment():
+    # An element and a comment are the two things that open a tag; the rule has
+    # to admit both or it rejects the shipped starters.
+    assert validate_widget_html("<div class='card'>7 open</div>") == []
+    assert validate_widget_html("<!-- v1 --><div class='card'>7 open</div>") == []
+    assert validate_widget_html("<style>.a{color:red}</style><p class='a'>7</p>") == []
+
+
+def test_widget_contract_rejects_narration_before_the_fragment():
+    """The half-measure of the same slip: the reply lands on top of the view."""
+    errors = validate_widget_html(
+        "Ignore that stray line — clean version below.\n\n"
+        "<style>.uw{color:var(--lemma-widget-text,#141414)}</style>"
+        '<section class="uw"><div>7 open</div></section>'
+    )
+    assert any("must begin with a tag" in e for e in errors)
+    assert any("Ignore that stray line" in e for e in errors)
+
+
+def test_widget_contract_accepts_a_fragment_opening_with_a_comment():
+    """The shipped starters open with a comment, which is markup."""
+    assert (
+        validate_widget_html("<!-- metrics v1 --><div class='card'>7 open</div>") == []
+    )

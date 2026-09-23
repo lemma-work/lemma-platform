@@ -64,6 +64,26 @@ def ok(result):
     print(json.dumps({"ok": True, "result": result}))
     sys.exit(0)
 
+# The guest reports the ports it was *given*, not a list of its own.
+#
+# This used to answer with two apps spelled out here -- runtime and browser --
+# which happened to be the same two the guest had compiled in, and the two of
+# them agreed with each other and with nothing else. The backend had been
+# declaring a third (the browser relay, 4850) since the relay existed, the
+# container really did publish it, and `reach_port` refused it on every desktop
+# install. A double that answers from the request cannot take that shape.
+def _apps(declared):
+    declared = declared or []
+    return {
+        app["name"]: {
+            "port": app["port"],
+            "private_url": "http://127.0.0.1:9999"
+            if app["port"] == 8080
+            else "http://127.0.0.1:%d" % app["port"],
+        }
+        for app in declared
+    }
+
 def fail(code, message, retryable=True):
     json.dump(state, open(state_path, "w"))
     print(json.dumps({"ok": False, "error": {"code": code, "message": message, "retryable": retryable}}))
@@ -75,18 +95,17 @@ if op == "sandbox.ensure":
         "metadata": params.get("metadata", {}),
         "state": "running",
         "created": (existing or {}).get("created", 0) + 1,
+        "apps": params.get("apps"),
     }
     ok({"status": {"state": "running", "runtime_url": "http://127.0.0.1:9999",
-                   "apps": {"runtime": {"port": 8080, "private_url": "http://127.0.0.1:9999"},
-                            "browser": {"port": 4848, "private_url": "http://127.0.0.1:4848"}}},
+                   "apps": _apps(params.get("apps"))},
         "provider_id": sandbox_id})
 if op == "sandbox.status":
     entry = state["sandboxes"].get(sandbox_id)
     if entry is None:
         fail("not_found", "no such sandbox", retryable=False)
     ok({"status": {"state": entry["state"], "runtime_url": "http://127.0.0.1:9999",
-                   "apps": {"runtime": {"port": 8080, "private_url": "http://127.0.0.1:9999"},
-                            "browser": {"port": 4848, "private_url": "http://127.0.0.1:4848"}}},
+                   "apps": _apps(entry.get("apps"))},
         "provider_id": sandbox_id})
 if op == "sandbox.release":
     entry = state["sandboxes"].get(sandbox_id)
@@ -273,7 +292,7 @@ async def test_an_operation_against_a_deleted_sandbox_is_definitively_gone(
     )
 
     with pytest.raises(ProviderGone):
-        await provider.port_base_url(instance, port=8080, deadline_at=_deadline())
+        await provider.reach_port(instance, port=8080, deadline_at=_deadline())
 
 
 # ---------------------------------------------------------------------------
@@ -395,10 +414,12 @@ async def test_a_port_resolves_to_the_guest_endpoint(
     provider: LemmaLocalSandboxProvider,
 ) -> None:
     instance = await provider.create(_spec(uuid4()))
-    assert (
-        await provider.port_base_url(instance, port=4848, deadline_at=_deadline())
-        == "http://127.0.0.1:4848"
-    )
+    endpoint = await provider.reach_port(instance, port=4848, deadline_at=_deadline())
+    assert endpoint.url == "http://127.0.0.1:4848"
+    # Loopback inside the person's own machine: nothing opens it, and nothing
+    # outside the guest can reach it.
+    assert endpoint.headers == {}
+    assert endpoint.public is False
 
 
 async def test_an_unexposed_port_is_refused(
@@ -406,4 +427,35 @@ async def test_an_unexposed_port_is_refused(
 ) -> None:
     instance = await provider.create(_spec(uuid4()))
     with pytest.raises(ProviderRejected, match="does not expose"):
-        await provider.port_base_url(instance, port=1234, deadline_at=_deadline())
+        await provider.reach_port(instance, port=1234, deadline_at=_deadline())
+
+
+async def test_a_refused_filesystem_operation_is_definitive_not_retryable(
+    provider: LemmaLocalSandboxProvider,
+) -> None:
+    """413, 422 and 507 are answers, not outages.
+
+    Docker has mapped `WorkspaceRuntimeFileRejected` to `SandboxRejected` since
+    the type existed (`docker_ops._ops_client`); this provider did not, so on
+    Desktop alone the same three status codes fell through to
+    `SandboxUnavailable` -- which `session_support.with_backpressure` retries
+    until the operation's deadline. A file that is too large, a path the
+    runtime will not take, or a guest whose disk is full became a retry loop on
+    the machine's single vsock control channel, reported as "Workspace
+    unavailable ... retry" rather than as the one sentence that was true.
+    """
+    from sandbox_runtime.errors import SandboxRejected, SandboxUnavailable
+    from app.modules.workspace.providers.runtime_client import (
+        WorkspaceRuntimeFileRejected,
+    )
+
+    instance = await provider.create(_spec(uuid4()))
+    for status_code in (413, 422, 507):
+        with pytest.raises(SandboxRejected) as raised:
+            async with provider._ops(instance, _deadline()):
+                raise WorkspaceRuntimeFileRejected(
+                    "the runtime refused it", status_code=status_code
+                )
+        assert not isinstance(raised.value, SandboxUnavailable), (
+            f"{status_code} reads as retryable, so the caller loops on it"
+        )

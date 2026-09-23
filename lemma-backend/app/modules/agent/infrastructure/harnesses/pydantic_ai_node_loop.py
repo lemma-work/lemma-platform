@@ -27,6 +27,7 @@ crashes the worker.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Protocol
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -39,13 +40,27 @@ from uuid import UUID
 
 from pydantic_ai import Agent as PydanticAIAgent
 
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+
 from app.core.log.log import get_logger
+from app.modules.agent.domain.run_budget_pause import (
+    budget_pause_events,
+    budget_pause_tool_call_id,
+)
+from app.modules.agent.tools.tool_errors import (
+    AgentInputRequired,
+    result_is_failure,
+)
+
+from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     AgentRunUsage,
-    HarnessOptions,
     MessageDraft,
+    MessageKind,
     to_json_value,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
@@ -98,6 +113,9 @@ class NodeLoop[DepsT]:
         self._run: AgentRun[DepsT, object] | None = None
         self._carried_usage: dict[str, int] = {}
         self._usage_emitted = False
+        # The run's own clock, not the attempt's: a retry that re-enters the
+        # graph is the same run to the person waiting for it.
+        self._started_at = time.monotonic()
 
     async def drive_once(
         self,
@@ -111,22 +129,91 @@ class NodeLoop[DepsT]:
             state["run"] = run
             self._run, self._carried_usage = run, carried_usage
             self._usage_emitted = False
-            async for node in run:
-                if PydanticAIAgent.is_model_request_node(node):
-                    if await self._pump_model_request(node, run, state):
-                        return
-                elif PydanticAIAgent.is_call_tools_node(node):
-                    if await self._pump_tool_calls(node, run):
-                        return
-                elif PydanticAIAgent.is_end_node(node):
-                    if await self._pump_end_node(node):
-                        return
+            try:
+                async for node in run:
+                    if PydanticAIAgent.is_model_request_node(node):
+                        # Counted before the request, not after: the ceiling is
+                        # on what the run is about to spend, and a check that
+                        # only ran afterwards would always allow one call past
+                        # it.
+                        await self._spend_a_model_request()
+                        if await self._pump_model_request(node, run, state):
+                            return
+                    elif PydanticAIAgent.is_call_tools_node(node):
+                        if await self._pump_tool_calls(node, run):
+                            return
+                    elif PydanticAIAgent.is_end_node(node):
+                        if await self._pump_end_node(node):
+                            return
+            except AgentInputRequired:
+                # A pause, not a failure, and this is the last place that can
+                # say so. The span pydantic-ai opened for the whole run is the
+                # current one here; by the time the harness catches this
+                # outside the graph, that span has already closed ERROR.
+                # `StatusCode.OK` is final in the SDK, so setting it now
+                # survives the unwind.
+                #
+                # Deliberately narrower than the tool-level set. A tool that
+                # raises `ModelRetry` has not failed, but a run that ends on
+                # `UnexpectedModelBehavior` has -- that is the token-limit
+                # failure -- so only the pause is excused here.
+                trace.get_current_span().set_status(Status(StatusCode.OK))
+                raise
 
             # The run finished on its own. The other exits bill for themselves:
             # a terminal event bills before queueing it (the pump finalizes on
             # sight of one and drops whatever follows), and a fatal exception
             # bills in `drive_with_retry` before it re-raises.
             self.emit_usage()
+
+    async def _spend_a_model_request(self) -> None:
+        """Count this step, and stop the run if it has spent its allowance.
+
+        Raised rather than returned so it leaves by the path a pause already
+        takes: `reraise_driver_failure` passes control-flow exceptions through
+        untouched, `pydantic_ai.py` catches `AgentInputRequired` and emits
+        WAITING, and `OutstandingToolCalls.closing_events` leaves the call this
+        queues open for its real return. No new terminal path, and nothing
+        downstream needs to learn what a budget is.
+        """
+        spend = self.options.spend
+        if spend is None:
+            return
+        spend.record_model_request()
+        elapsed_seconds = time.monotonic() - self._started_at
+        exhausted = spend.exhausted(elapsed_seconds=elapsed_seconds)
+        if exhausted is None:
+            # Not there yet, but possibly close enough to say so. Posted to
+            # the run's mailbox and delivered into the very request this step
+            # is about to make, so the run hears it while it still has room to
+            # act on it.
+            warning = spend.approaching(
+                elapsed_seconds=elapsed_seconds,
+                at=agent_settings.agent_run_warn_at,
+            )
+            if warning is not None:
+                self.options.notices.post(warning.notice)
+                logger.info(
+                    "agent.run_budget.approaching.observed",
+                    agent_run_id=str(self.agent_run_id),
+                    dimension=warning.dimension.value,
+                )
+            return
+
+        tool_call_id = budget_pause_tool_call_id()
+        for event in budget_pause_events(
+            agent_run_id=self.agent_run_id,
+            tool_call_id=tool_call_id,
+            exhausted=exhausted,
+            sequence=0,
+        ):
+            await self.queue.put(("event", event))
+        logger.info(
+            "agent.run_budget.exhausted.observed",
+            agent_run_id=str(self.agent_run_id),
+            dimension=exhausted.dimension.value,
+        )
+        raise AgentInputRequired(tool_call_id, "request_approval")
 
     def emit_usage(self) -> None:
         """Report what this attempt spent, including attempts already abandoned.
@@ -243,6 +330,7 @@ class NodeLoop[DepsT]:
             malformed_tool_call_ids=self.malformed_tool_call_ids,
             emitted_tool_response_ids=self.emitted_tool_response_ids,
         ):
+            self._record_tool_outcome(event)
             terminal = event.type in {
                 AgentEventType.ERROR,
                 AgentEventType.STOPPED,
@@ -253,6 +341,27 @@ class NodeLoop[DepsT]:
             if terminal:
                 return True
         return False
+
+    def _record_tool_outcome(self, event: AgentEvent) -> None:
+        """Track the failing streak, from the returns the run is already emitting.
+
+        Read here rather than counted inside `GracefulToolset`, which is where
+        the verdict is computed: that object is built per toolset by the
+        capability assembler, nowhere near the run, and threading a per-run
+        counter down to it would mean every toolset construction learning about
+        budgets. The returns pass through here anyway.
+        """
+        spend = self.options.spend
+        if spend is None:
+            return
+        draft = event.data
+        if event.type is not AgentEventType.MESSAGE:
+            return
+        if getattr(draft, "kind", None) is not MessageKind.TOOL_RETURN:
+            return
+        spend.record_tool_outcome(
+            failed=result_is_failure(getattr(draft, "tool_result", None))
+        )
 
     async def _pump_end_node(self, node: End[FinalResult[object]]) -> bool:
         """Emit whatever the run ended with."""

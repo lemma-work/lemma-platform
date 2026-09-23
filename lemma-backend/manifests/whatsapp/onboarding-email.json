@@ -1,0 +1,12 @@
+{
+  "version": "3.1",
+  "screens": [{
+    "id": "ONBOARDING", "title": "Continue with Lemma", "terminal": true, "data": {},
+    "layout": {"type": "SingleColumnLayout", "children": [{
+      "type": "Form", "name": "form", "children": [
+        {"type": "TextInput", "name": "answer", "label": "Email address", "input-type": "email", "required": true},
+        {"type": "Footer", "label": "Send code", "on-click-action": {"name": "complete", "payload": {"answer": "${form.answer}"}}}
+      ]
+    }]}
+  }]
+}

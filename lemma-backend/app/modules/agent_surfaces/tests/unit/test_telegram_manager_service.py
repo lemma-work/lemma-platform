@@ -826,6 +826,10 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     )
     surface_repository = SimpleNamespace(
         get_by_pod_and_name=AsyncMock(return_value=None),
+        # Nothing under that name, and nothing this agent already holds on
+        # Telegram either -- the second question the setup now asks before it
+        # decides this is a fresh surface rather than a rerun.
+        list_by_pod=AsyncMock(return_value=([], None)),
     )
     surface_service = SimpleNamespace(
         surface_repository=surface_repository,
@@ -848,7 +852,7 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
         lambda **_: accounts,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
+        "app.modules.agent_surfaces.composition.build_surface_service",
         lambda _: surface_service,
     )
     monkeypatch.setattr(
@@ -947,7 +951,7 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         lambda **_: accounts,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
+        "app.modules.agent_surfaces.composition.build_surface_service",
         lambda _: surface_service,
     )
     monkeypatch.setattr(

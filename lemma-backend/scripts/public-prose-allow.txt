@@ -1,0 +1,12 @@
+# Paths whose dates are genuinely public, one per line, each with its reason.
+#
+# `check_public_prose.py` refuses a date written into a comment or docstring,
+# because in this repository that has meant an incident timestamp or a note
+# that was already stale. A date that is a published fact about the company
+# or the product is different, and goes here rather than being worked around.
+#
+# This is not for "the date seemed useful". If it records when something
+# broke, when it was measured, or when it was fixed, it belongs in the pull
+# request instead.
+
+lemma-frontend/lib/company.ts  # incorporation date; a public filing, printed in the footer

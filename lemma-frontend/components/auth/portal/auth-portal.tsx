@@ -63,6 +63,15 @@ import {
 } from "@/components/auth/portal/auth/session-recovery";
 import { VerificationScreen } from "@/components/auth/portal/auth/verification-screen";
 import { PasswordResetScreen } from "@/components/auth/portal/auth/password-reset-screen";
+import { EmailCodeLogin } from "@/components/auth/portal/auth/email-code-login";
+import { SignInScreen } from "@/components/auth/portal/auth/sign-in-screen";
+import {
+  appendSignUpMarker,
+  resolveAuthMode,
+  shouldRenderIdentifierFirst,
+} from "@/components/auth/portal/auth/sign-in-controller";
+import { thirdPartyProviders } from "@/components/auth/portal/auth/supertokens";
+import { Button } from "@/components/ui/button";
 import { AuthProtectionNotice } from "@/components/auth/portal/auth/auth-protection-notice";
 import {
   getDestinationLabel,
@@ -121,7 +130,6 @@ type CliSessionResponse = {
   token_type: string;
 };
 
-type AuthMode = "signin" | "signup";
 
 const preBuiltUiList = [
   EmailPasswordPreBuiltUI,
@@ -164,68 +172,8 @@ function TelegramLoginButton({ visible }: { visible: boolean }) {
   );
 }
 
-function resolveAuthMode(
-  pathname: string,
-  search: string,
-  hash: string,
-): AuthMode {
-  const lowerPath = pathname.toLowerCase();
-  if (lowerPath.includes("signup")) {
-    return "signup";
-  }
-  if (lowerPath.includes("signin") || lowerPath.includes("login")) {
-    return "signin";
-  }
-
-  const params = new URLSearchParams(search);
-  const hashQueryIndex = hash.indexOf("?");
-  const hashParams =
-    hashQueryIndex >= 0
-      ? new URLSearchParams(hash.slice(hashQueryIndex + 1))
-      : new URLSearchParams();
-  const lowerHash = hash.toLowerCase();
-  const hashPath = lowerHash.split("?")[0];
-
-  if (hashPath.includes("signup")) {
-    return "signup";
-  }
-  if (hashPath.includes("signin") || hashPath.includes("login")) {
-    return "signin";
-  }
-
-  const pageMarker = (
-    params.get("page") || hashParams.get("page")
-  )?.toLowerCase();
-
-  if (pageMarker?.includes("up")) {
-    return "signup";
-  }
-  if (pageMarker?.includes("in") || pageMarker?.includes("log")) {
-    return "signin";
-  }
-
-  const modeMarker = (
-    params.get("show") ||
-    hashParams.get("show") ||
-    params.get("mode") ||
-    hashParams.get("mode") ||
-    params.get("authMode") ||
-    hashParams.get("authMode") ||
-    params.get("auth") ||
-    hashParams.get("auth")
-  )?.toLowerCase();
-
-  if (modeMarker?.includes("up")) {
-    return "signup";
-  }
-  if (modeMarker?.includes("in")) {
-    return "signin";
-  }
-
-  return "signin";
-}
-
 function AuthLanding() {
+  const [emailCodeLogin, setEmailCodeLogin] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const session = useSessionContext();
@@ -275,8 +223,6 @@ function AuthLanding() {
     location.search || urlSnapshot.search || liveUrlSnapshot.search;
   const effectivePathname =
     location.pathname || urlSnapshot.pathname || liveUrlSnapshot.pathname;
-  const effectiveHash =
-    location.hash || urlSnapshot.hash || liveUrlSnapshot.hash;
   const rawRedirectUri = readRawRedirectUriFromSearch(effectiveSearch);
   const queryDesktopRequestId = readDesktopRequestIdFromSearch(effectiveSearch);
   const desktopRequestId =
@@ -293,11 +239,26 @@ function AuthLanding() {
   const destination = acceptedDestination || rejectedDestination;
   const destinationLabel =
     destination?.name || getDestinationLabel(redirectUri);
+  // Read from `urlSnapshot`, deliberately not from the `effective*` values.
+  // Those start with React Router's `location`, which the prebuilt UI never
+  // updates -- it flips between sign-in and sign-up with its own `pushState`.
+  // On any URL that already carries a query (every `redirect_uri`,
+  // `desktop_request` and OAuth return) `location.search` is non-empty, the
+  // `||` short-circuits, and a pushed `show=signup` is never seen. That was
+  // harmless while this only picked hero copy; now that it decides whether the
+  // identifier screen is mounted, it would strand anyone who clicked "Sign up".
   const authMode = resolveAuthMode(
-    effectivePathname,
-    effectiveSearch,
-    effectiveHash,
+    urlSnapshot.pathname,
+    urlSnapshot.search,
+    urlSnapshot.hash,
   );
+  // `resolveAuthMode` answers "signin" for `/callback/google`: nothing in that
+  // path matches signup|signin|login, so it falls through to the default.
+  // Mounting our screen there would swallow the OAuth callback and leave the
+  // authorization code unexchanged.
+  const isThirdPartyCallbackRoute = effectivePathname
+    .toLowerCase()
+    .includes("/callback/");
   const isEmailVerificationRoute = effectivePathname
     .toLowerCase()
     .endsWith("/verify-email");
@@ -715,12 +676,50 @@ function AuthLanding() {
     return <LoadingState message="Preparing sign-in…" />;
   }
 
+  // A state, not a route. The URL only ever changes to the same pathname with
+  // `show=signup` appended, which `canHandleRoute` still accepts -- so the
+  // redirect effect above, which bounces signed-out visitors off any path the
+  // prebuilt list cannot handle, never fires for this screen. Sitting below
+  // that guard also means it can only appear where the route is already one
+  // SuperTokens owns.
+  if (
+    !emailCodeLogin &&
+    shouldRenderIdentifierFirst({
+      authMode,
+      isThirdPartyCallbackRoute,
+      routeIsHandledByPreBuiltUi: true,
+    })
+  ) {
+    return (
+      <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
+        <div className="auth-form-stack">
+          <AuthProtectionNotice />
+          <SignInScreen
+            providers={thirdPartyProviders()}
+            telegram={<TelegramLoginButton visible />}
+            onSignUp={() =>
+              navigate({
+                pathname: location.pathname,
+                search: appendSignUpMarker(urlSnapshot.search),
+              })
+            }
+          />
+        </div>
+      </AuthScreenLayout>
+    );
+  }
+
   return (
     <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
       <div className="auth-form-stack">
+        {emailCodeLogin ? <EmailCodeLogin onBack={() => setEmailCodeLogin(false)} /> : <>
+        <Button type="button" variant="secondary" onClick={() => setEmailCodeLogin(true)}>
+          Continue with email code
+        </Button>
         <TelegramLoginButton visible={authMode === "signin"} />
         <AuthProtectionNotice />
         {getRoutingComponent([...preBuiltUiList])}
+        </>}
       </div>
     </AuthScreenLayout>
   );

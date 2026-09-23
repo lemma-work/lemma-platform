@@ -150,7 +150,7 @@ class TestCeilingGuard:
 
 def test_the_ceiling_guard_is_wired_after_the_summarizer() -> None:
     """Order matters: the guard exists to catch what the summarizer misses."""
-    from app.modules.agent.domain.value_objects import HarnessOptions
+    from app.modules.agent.domain.harness_options import HarnessOptions
     from app.modules.agent.infrastructure.harnesses.history import (
         build_history_processors,
     )
@@ -174,7 +174,7 @@ async def test_the_guard_trims_when_summarization_returned_oversized_history() -
     """`pydantic_ai_summarization` catches its own LLM failures and returns the
     ORIGINAL messages with skip_reason="failed" — safe for the data, fatal for
     the next request. This is the only thing standing between that and a 400."""
-    from app.modules.agent.domain.value_objects import HarnessOptions
+    from app.modules.agent.domain.harness_options import HarnessOptions
     from app.modules.agent.infrastructure.harnesses.history import (
         build_history_processors,
     )

@@ -19,7 +19,10 @@ from typing import Any
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic_ai import ToolReturn
 
-from app.modules.agent.tools.tool_errors import format_tool_error
+from app.modules.agent.tools.tool_errors import (
+    format_tool_error,
+    result_is_failure,
+)
 
 from app.modules.agent.domain.value_objects import to_json_value
 
@@ -109,12 +112,18 @@ def text_content(payload: Any) -> TextContent:
 
 
 def tool_call_result(result: object) -> CallToolResult:
-    """A successful tool result as MCP content.
+    """A returned tool result as MCP content, flagged if it reports a failure.
 
     Images ride alongside the text. Remote harnesses (Codex, Claude Code) are
     vision-capable, but every result used to be flattened to text, so
     `view_image` and `pod_view_document_pages` reached them as JSON describing a
     picture they never received.
+
+    ``is_error`` is set from the payload rather than from whether something was
+    raised, because almost nothing here raises -- see ``result_is_failure``. It
+    only marks the result; ``structured_content`` is unchanged either way, so a
+    harness still hands the model the whole payload and the model can still
+    adapt. Making a failure visible is not the same as making it fatal.
     """
     images = image_contents(result)
     payload = result_payload(result)
@@ -122,6 +131,7 @@ def tool_call_result(result: object) -> CallToolResult:
         return CallToolResult(
             content=[text_content(payload), *images],
             structured_content=payload,
+            is_error=result_is_failure(payload),
         )
     return CallToolResult(content=[text_content(payload), *images])
 

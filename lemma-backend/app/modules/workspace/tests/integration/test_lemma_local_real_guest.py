@@ -68,6 +68,10 @@ from sandbox_runtime.protocol import (
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.profiles import (
+    WORKSPACE_BROWSER_RELAY_PORT,
+    WORKSPACE_RUNTIME_PORT,
+)
 from app.modules.workspace.providers.base import ProviderCreateSpec, ProviderGone
 from app.modules.workspace.providers.docker import RuntimeCredentialSigner
 from app.modules.workspace.providers.lemma_local import (
@@ -320,12 +324,41 @@ async def test_a_workspace_sandbox_reaches_ready_in_the_real_guest(workspace) ->
 async def test_the_runtime_port_resolves_to_something_the_backend_can_call(
     workspace,
 ) -> None:
-    """Every tool call goes to this URL. Without it the sandbox is unreachable."""
-    url = await workspace.provider.port_base_url(
-        workspace.instance, port=8080, deadline_at=_deadline(120)
+    """Every tool call goes to this URL. Without it the sandbox is unreachable.
+
+    `reach_port` answers with a `SandboxEndpoint`, not a bare string -- it has
+    since a fabric needed somewhere to put its own header. This test still read
+    it as a string, so the one command that exercises the real guest
+    (`make desktop-verify-guest`) failed here with an `AttributeError` before
+    reaching anything it was written to check.
+    """
+    endpoint = await workspace.provider.reach_port(
+        workspace.instance, port=WORKSPACE_RUNTIME_PORT, deadline_at=_deadline(120)
     )
 
-    assert url.startswith("http://"), url
+    assert endpoint.url.startswith("http://"), endpoint.url
+
+
+async def test_the_browser_relays_port_resolves_in_the_real_guest(workspace) -> None:
+    """The port the whole browser surface hangs off.
+
+    The guest rebuilt a sandbox's app list from one compiled into `spec.rs`
+    rather than from what it was asked for, and that list named the runtime and
+    the dashboard and not the relay. So `reach_port` refused 4850 on every
+    desktop install -- the VNC pane, `browser_sign_in` and saved logins all
+    unreachable -- while the container listened on it the whole time. Nothing
+    in this suite asked, because the one port it checked was the one the two
+    lists agreed about.
+    """
+    endpoint = await workspace.provider.reach_port(
+        workspace.instance,
+        port=WORKSPACE_BROWSER_RELAY_PORT,
+        deadline_at=_deadline(120),
+    )
+
+    assert endpoint.url.startswith("http://"), endpoint.url
+    # Loopback inside the person's own machine, so nothing in front of it.
+    assert endpoint.public is False
 
 
 # ---------------------------------------------------------------------------

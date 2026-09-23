@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -209,7 +212,7 @@ async def test_resend_falls_back_to_surface_email(monkeypatch):
         surface_type=SurfacePlatform.RESEND,
         account_id=None,
         surface_identity_id=None,
-        surface_identity_email="pod-abc@ops.asur.work",
+        surface_identity_email="pod-abc@ops.lemma.work",
     )
 
     reach = await SurfaceReachResolver().resolve(
@@ -219,8 +222,8 @@ async def test_resend_falls_back_to_surface_email(monkeypatch):
         surface_repository=FakeSurfaceRepository(),
     )
 
-    assert reach.handle == "pod-abc@ops.asur.work"
-    assert reach.email == "pod-abc@ops.asur.work"
+    assert reach.handle == "pod-abc@ops.lemma.work"
+    assert reach.email == "pod-abc@ops.lemma.work"
 
 
 # ---------------------------------------------------------------------------
@@ -383,3 +386,147 @@ async def test_response_schema_includes_surface_identity_email_and_reach():
     assert response.reach is not None
     assert response.reach.handle == "lemma-bot"
     assert response.reach.email == "bot@example.com"
+
+
+# ---------------------------------------------------------------------------
+# 6. A page of surfaces: what may overlap and what may not
+# ---------------------------------------------------------------------------
+
+
+class _Overlap:
+    """Notices when two calls are in flight at once."""
+
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.peak = 0
+
+    async def run(self, value=None):
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        # A real suspension point, so an overlapping caller can be seen. Without
+        # one the coroutine runs straight through and every shape looks serial.
+        await asyncio.sleep(0)
+        self.in_flight -= 1
+        return value
+
+
+async def test_a_page_resolves_its_reaches_without_two_at_once_on_the_session(
+    monkeypatch,
+):
+    """The database work is serial; only the platform calls overlap.
+
+    A listing used to `asyncio.gather` the whole of `resolve` once per surface,
+    over the request's single unit of work. Resolving one surface reads
+    credentials through that unit of work and writes the handle back through
+    it, and an `AsyncSession` serves one operation at a time -- so a page with
+    two unresolved surfaces was two concurrent operations on one session. What
+    hid it is that a surface with a stored handle does no database work at all,
+    so a page had to contain two *unresolved* surfaces to fail.
+
+    Both halves are asserted, because either alone is satisfiable by the wrong
+    fix: making everything serial is safe and gives back the eight sequential
+    round trips the gather was added to remove.
+    """
+    database = _Overlap()
+    platform = _Overlap()
+
+    async def fake_display_name(self, user_id):
+        return await platform.run("lemma-bot")
+
+    monkeypatch.setattr(
+        SlackPlatformService, "get_user_display_name", fake_display_name
+    )
+
+    class _SerialCredentialResolver:
+        async def for_surface(self, surface, **kwargs):
+            return await database.run({"bot_token": "xoxb-test"})
+
+    class _SerialRepository:
+        def __init__(self) -> None:
+            self.updated: list[AgentSurfaceEntity] = []
+
+        async def update(self, surface):
+            self.updated.append(surface)
+            return await database.run(surface)
+
+    surfaces = [_surface(surface_type=SurfacePlatform.SLACK) for _ in range(4)]
+    repo = _SerialRepository()
+
+    reaches = await SurfaceReachResolver().resolve_many(
+        surfaces,
+        credential_resolver=_SerialCredentialResolver(),
+        find_account=_account_named(),
+        surface_repository=repo,
+    )
+
+    assert [reach.handle for reach in reaches] == ["lemma-bot"] * 4
+    assert len(repo.updated) == 4, "the write-through did not run for every surface"
+    assert database.peak == 1, (
+        f"{database.peak} operations were in flight on the unit of work at "
+        "once; a session cannot serve two"
+    )
+    assert platform.peak == len(surfaces), (
+        f"only {platform.peak} of {len(surfaces)} platform calls overlapped -- "
+        "the round trips are the reason this is concurrent at all"
+    )
+
+
+async def test_a_stored_handle_still_costs_no_call_inside_a_page():
+    """The cache hit has to survive the batching, not just the single path."""
+    stored = _surface(surface_identity_username="@already-known")
+    pending = _surface(surface_type=SurfacePlatform.RESEND, account_id=None)
+
+    reaches = await SurfaceReachResolver().resolve_many([stored, pending])
+
+    assert [reach.handle for reach in reaches] == ["@already-known", None], (
+        "the answers came back in a different order than the surfaces went in"
+    )
+
+
+async def test_one_bad_credential_does_not_take_the_page_with_it():
+    """A listing shows the other surfaces, and the bad one without a handle.
+
+    Credential resolution briefly had no guard at all: an undecryptable secret
+    or a malformed provider config raised out of the list comprehension and the
+    whole surfaces page answered 500. One bot's credentials going bad is not a
+    reason to stop showing a pod its other bots.
+    """
+    good = _surface(surface_identity_username="@already-known")
+    bad = _surface(surface_type=SurfacePlatform.SLACK)
+
+    class _BrokenCredentials:
+        async def for_surface(self, surface, **kwargs):
+            raise ValueError("secret did not decrypt")
+
+    reaches = await SurfaceReachResolver().resolve_many(
+        [good, bad],
+        credential_resolver=_BrokenCredentials(),
+        find_account=_account_named("Fallback Account"),
+    )
+
+    assert [reach.handle for reach in reaches] == [
+        "@already-known",
+        "Fallback Account",
+    ], "a surface whose credentials failed should fall back, not raise"
+
+
+async def test_a_database_failure_is_not_swallowed_into_a_blank_handle():
+    """The other half: a broken session must not read as "no handle".
+
+    A failed statement leaves the session unusable for everything after it, so
+    degrading past one turns a single failure into a page of them -- every
+    later surface falling back for a reason nothing records. It propagates, and
+    the request fails while there is still something to say about why.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    class _BrokenSession:
+        async def for_surface(self, surface, **kwargs):
+            raise OperationalError("SELECT 1", {}, Exception("connection gone"))
+
+    with pytest.raises(OperationalError):
+        await SurfaceReachResolver().resolve_many(
+            [_surface(surface_type=SurfacePlatform.SLACK)],
+            credential_resolver=_BrokenSession(),
+            find_account=_account_named(),
+        )

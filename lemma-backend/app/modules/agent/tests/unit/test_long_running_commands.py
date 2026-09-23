@@ -33,8 +33,10 @@ def test_timeout_seconds_no_longer_promises_completion() -> None:
     assert "completed: false" in description
     assert "keeps running" in description
     # The recovery path has to be in the schema, not just the prompt: a deferred
-    # or trimmed prompt still leaves the model holding a process_id.
-    assert "manage_process" in description
+    # or trimmed prompt still leaves the model holding a process_id. It names
+    # `wait_for` now — the answer to a slow command is to wait for it, not to
+    # ask about it repeatedly.
+    assert "wait_for" in description
     assert "never re-run" in description.lower()
 
 
@@ -47,30 +49,34 @@ def test_completed_is_not_described_as_a_tty_quirk() -> None:
     assert "not cancelled" in description
 
 
-def test_process_id_explains_how_to_poll() -> None:
-    """It must still say how to poll -- just not with an empty string.
+def test_process_id_explains_how_to_wait_for_it() -> None:
+    """It must say what to do with the handle — and that is now to wait.
 
-    This used to assert the description contained `chars=''`, pinning an idiom
-    that reaches exactly the same code as omitting the argument while inviting
-    the model to emit an empty-string value. The pin moves to the replacement
-    rather than being dropped: an agent still has to learn how to poll.
+    The pin has moved twice, and both times for the same reason: an agent left
+    holding a `process_id` with no instruction invents one. It used to be
+    `chars=''`, which reaches the same code as omitting the argument while
+    inviting an empty-string value; then a `manage_process` loop, which cost a
+    model round trip per check. The instruction is `wait_for`, and it belongs in
+    the schema rather than only the prompt, which may be deferred or trimmed.
     """
     description = _describe(ExecCommandResult, "process_id")
 
-    assert "manage_process" in description
-    assert "process_id=..." in description
+    assert "wait_for(process_id=...)" in description
     assert "chars=''" not in description and 'chars=""' not in description
 
 
-def test_exec_command_docstring_teaches_the_poll_loop() -> None:
+def test_exec_command_docstring_teaches_waiting_not_looping() -> None:
     """This docstring is the model's primary instruction for long commands."""
     from app.modules.agent.tools.workspace_cli.pydantic_adapter import exec_command
 
     doc = exec_command.__doc__ or ""
     assert "completed: false" in doc
-    assert "manage_process" in doc
+    assert "wait_for" in doc
     assert "Never re-run" in doc
     assert 'action="list"' in doc
+    # `manage_process` is still named, for input and for recovery — it just is
+    # not the answer to "it has not finished yet".
+    assert "manage_process" in doc
 
 
 def test_workspace_prompt_covers_long_commands() -> None:
@@ -79,7 +85,7 @@ def test_workspace_prompt_covers_long_commands() -> None:
     prompt = load_workspace_cli_prompt()
     assert "Long-running commands" in prompt
     assert "exit_code" in prompt
-    assert "manage_process" in prompt
+    assert "wait_for(" in prompt
 
 
 @pytest.mark.asyncio

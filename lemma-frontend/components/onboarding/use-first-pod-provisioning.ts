@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { useUpdateProfile } from "@/lib/hooks/use-user";
 import { trackPodReady } from "@/lib/analytics/onboarding";
 import { buildNewPodWelcomeHref } from "@/lib/pods/new-pod-conversation";
@@ -13,7 +12,6 @@ import { type Organization } from "@/lib/types";
 import { normalizeEmailDomain, workDomainFromEmail } from "@/lib/utils/organization-slugs";
 
 import {
-  firstPodName,
   hasUsableProfileName,
   inferFullName,
   splitName,
@@ -132,9 +130,8 @@ export function useFirstPodProvisioning({
         const workDomain = normalizeEmailDomain(workDomainFromEmail(email));
 
         const ensured = await ensureOrganization({
-          email,
           organizationIds: organizations.map((org) => org.id),
-          suggestedOrganizationId: suggestedOrganization?.id ?? null,
+          withPod: true,
         });
 
         if (!ensured) {
@@ -142,19 +139,7 @@ export function useFirstPodProvisioning({
           return;
         }
 
-        const { organizationId, entryKind } = ensured;
-
-        // Joining an existing organization still earns a pod of your own:
-        // otherwise you land in a workspace where everything belongs to someone
-        // else, which is a worse first screen than an empty one. `create_pod`
-        // asks only for organization membership, so a domain-joined member may
-        // do this — there is no extra permission to clear.
-        const pod = await getLemmaClient().pods.create({
-          name: firstPodName(profile),
-          description:
-            "A private workspace for apps, surface agents, knowledge, and operating loops.",
-          organization_id: organizationId,
-        });
+        const { podId, entryKind } = ensured;
 
         trackPodReady(entryKind, profile?.created_at ?? null);
         // Into the conversation, not onto pod home: nobody answered a question

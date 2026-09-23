@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
+from sandbox_runtime.paths import WORKSPACE_ROOT as _WORKSPACE_ROOT
 
 
 class SandboxKind(StrEnum):
@@ -89,7 +90,10 @@ def capabilities_for(kind: SandboxKind) -> frozenset[SandboxCapability]:
 
 
 DEFAULT_SLUG = "default"
-WORKSPACE_ROOT = "/workspace"
+#: Re-exported so callers inside this module keep importing from the
+#: domain, while the value itself is stated once, where both the backend
+#: and the code running inside a sandbox can reach it.
+WORKSPACE_ROOT = _WORKSPACE_ROOT
 
 
 @dataclass(frozen=True, slots=True)

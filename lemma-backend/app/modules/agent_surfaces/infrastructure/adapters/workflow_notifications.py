@@ -45,7 +45,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.api.dependencies import get_notification_service
+from app.modules.agent_surfaces.composition import build_notification_service
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.notification import NotificationOriginKind
 
@@ -117,7 +117,7 @@ class WorkflowNotificationAdapter:
         # directly is how the other contracts here build the same service
         # outside a request. It no longer takes a `ConversationService` -- see
         # `agent/contracts/conversations_for_surfaces.py`.
-        return get_notification_service(self._uow)
+        return build_notification_service(self._uow)
 
     async def notify_form_assignee(
         self,

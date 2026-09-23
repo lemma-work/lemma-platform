@@ -23,6 +23,20 @@ from app.modules.agent_surfaces.services.identity_resolution_service import (
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize(
+    "platform", [SurfacePlatform.SLACK, SurfacePlatform.TEAMS, SurfacePlatform.TELEGRAM]
+)
+async def test_unknown_onboarding_sender_cannot_use_profile_email_or_username(platform):
+    existing_user = uuid4()
+    users = _FakeUsers(by_email=existing_user, by_telegram=existing_user)
+    resolved = await _service(users, _FakeExternalRepo()).resolve(
+        event=_event(platform=platform, email="person@example.com", username="person"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id is None
+    assert users.telegram_lookups == []
+
+
 class _FakeExternalRepo:
     """Returns the resolved_user_id passed on write, else a preset cached id."""
 
@@ -70,17 +84,37 @@ class _FakeUsers:
         return list(self._by_phone_ids if verified else self._by_unverified_phone_ids)
 
 
-def _service(users: _FakeUsers, external: _FakeExternalRepo):
+def _service(
+    users: _FakeUsers,
+    external: _FakeExternalRepo,
+    *,
+    departed: set | None = None,
+):
     """The service with identity's directory port answered by a fake.
 
     Injected rather than patched: which live person a sender resolves to is the
     decision this service exists to make, so the directory is a collaborator the
     test hands over -- and no real database is touched.
+
+    ``departed`` names the ids whose accounts are gone. The live-user check is
+    injected for the same reason the directory is: re-validating a cached
+    ``resolved_user_id`` is part of that same decision, and a test of it has to
+    be able to say who is still here.
     """
+    gone = departed or set()
+
+    async def no_verified_identity(event: ParsedInboundSurfaceEvent) -> None:
+        return None
+
+    async def live_user(user_id):
+        return None if user_id in gone else user_id
+
     return SurfaceIdentityResolutionService(
         uow=SimpleNamespace(session=object()),
         external_user_repository=external,
         user_directory=users,
+        verified_identity_lookup=no_verified_identity,
+        live_user_lookup=live_user,
     )
 
 
@@ -234,6 +268,78 @@ async def test_verified_phone_match_rejects_and_logs_ambiguous_legacy_data():
     )
 
 
+async def test_a_cached_sender_whose_account_is_gone_no_longer_resolves():
+    """Deactivating somebody has to take their chat access with it.
+
+    The cache is the one path into a run that nothing re-derives: every fresh
+    lookup below it excludes deactivated and deleted rows, and a cache hit used
+    to skip all of them. Without the liveness re-check this returns `departed`
+    and the agent goes on to run as them, holding their pod's tools.
+    """
+    departed = uuid4()
+    users = _FakeUsers()  # nothing matches them any more either
+    external = _FakeExternalRepo(cached_user_id=departed)
+
+    resolved = await _service(users, external, departed={departed}).resolve(
+        event=_event()
+    )
+
+    assert resolved.internal_user_id is None
+    assert resolved.external_user_id == "ext-1"
+
+
+async def test_a_cached_sender_who_is_still_here_is_still_a_cache_hit():
+    """The re-check must not cost the match lookups it exists to skip."""
+    cached = uuid4()
+    users = _FakeUsers()
+    external = _FakeExternalRepo(cached_user_id=cached)
+
+    resolved = await _service(users, external).resolve(event=_event(username="asha"))
+
+    assert resolved.internal_user_id == cached
+    assert users.telegram_lookups == []
+
+
+async def test_a_proven_read_does_not_consume_an_unproven_cached_match():
+    """A self-asserted handle must not become a proven identity by being cached.
+
+    A Telegram `@username` is a free-text profile field. An ordinary group
+    message resolves by it and writes the answer to the cache; the proven path
+    then wrote a permanent `VerifiedSurfaceIdentity` from that same row. The
+    row does not record what matched it, so the proven path may not read it at
+    all -- without the skip this resolves to `claimed_by_handle`.
+    """
+    claimed_by_handle = uuid4()
+    users = _FakeUsers(by_telegram=claimed_by_handle)
+    external = _FakeExternalRepo()
+
+    unproven = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.TELEGRAM, username="asha")
+    )
+    assert unproven.internal_user_id == claimed_by_handle  # now cached
+
+    proven = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.TELEGRAM, username="asha"),
+        require_proven_identity=True,
+    )
+
+    assert proven.internal_user_id is None
+
+
+async def test_a_proven_sender_is_still_recognised_by_their_verified_phone():
+    """Skipping the cache must not cost the proven path its one real match."""
+    owner = uuid4()
+    users = _FakeUsers(by_phone_ids=[owner])
+    external = _FakeExternalRepo(cached_user_id=uuid4())  # an unproven cached id
+
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100"),
+        require_proven_identity=True,
+    )
+
+    assert resolved.internal_user_id == owner
+
+
 async def test_phone_candidates_handle_provider_and_profile_formatting():
     assert _phone_lookup_candidates("919876543210") == [
         "+919876543210",
@@ -243,3 +349,73 @@ async def test_phone_candidates_handle_provider_and_profile_formatting():
         "+919876543210",
         "919876543210",
     ]
+
+
+async def test_proven_path_accepts_a_cache_the_profile_email_still_names():
+    """A known Slack sender stays known when the binding path asks.
+
+    `_match_proven_sender` answers WhatsApp and nothing else, so on Slack and
+    Teams this cache entry is the only thing standing between an already-known
+    person and being sent back through signup. Refusing every cache hit on this
+    path did exactly that, to everybody, on their next message.
+    """
+    cached = uuid4()
+    users = _FakeUsers(by_email=cached)
+    external = _FakeExternalRepo(cached_user_id=cached)
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.SLACK, email="known@example.com"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id == cached
+
+
+async def test_proven_path_refuses_a_cache_only_a_telegram_handle_supports():
+    """The case the re-derivation exists for.
+
+    `telegram_username` is free text on a Lemma profile that nobody confirms.
+    An ordinary message resolves by it and writes the cache; without this, the
+    next message on the binding path would read that back as proof and hand the
+    handle's current owner a permanent claim on the profile that named it.
+    """
+    cached = uuid4()
+    users = _FakeUsers(by_telegram=cached)  # no email, no verified phone
+    external = _FakeExternalRepo(cached_user_id=cached)
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.TELEGRAM, username="@asha"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id is None
+
+
+async def test_proven_path_refuses_a_cache_the_email_now_names_somebody_else():
+    """Re-derivation has to agree, not merely find somebody.
+
+    The address moved to another account between the cached write and this read.
+    Returning the stale id here would bind the platform account to a person the
+    attested field no longer points at.
+    """
+    cached = uuid4()
+    users = _FakeUsers(by_email=uuid4())
+    external = _FakeExternalRepo(cached_user_id=cached)
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.SLACK, email="moved@example.com"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id is None
+
+
+async def test_proven_path_refuses_a_cache_supported_only_by_an_unverified_phone():
+    """Routing a message and binding an account are not the same permission.
+
+    `_match_user_by_phone` falls back to an unverified number so an ordinary
+    message can still reach somebody. `_cache_is_attested` reads only the
+    verified half, so that fallback cannot become a binding.
+    """
+    cached = uuid4()
+    users = _FakeUsers(by_unverified_phone_ids=[cached])
+    external = _FakeExternalRepo(cached_user_id=cached)
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+15551230000"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id is None

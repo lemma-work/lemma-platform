@@ -13,6 +13,12 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.core.authorization.context import Context, ResourceType
+from app.core.authorization.permissions import Permissions
+from app.core.authorization.sql_actions import (
+    allowed_actions_contains,
+    allowed_actions_expr,
+)
 from app.modules.apps.domain.entities import public_app_url
 from app.modules.apps.infrastructure.models import AppModel
 
@@ -68,3 +74,60 @@ async def list_app_summaries_by_pod(
             )
         )
     return dict(summaries)
+
+
+async def list_readable_app_summaries(
+    *,
+    session,
+    pod_id: UUID,
+    ctx: Context,
+    limit: int,
+) -> list[PodAppSummary]:
+    """One pod's apps, filtered to what this context may actually read.
+
+    Separate from the bulk listing above rather than an optional argument on
+    it. The bulk one answers for the organization landing page, which does its
+    own authorization upstream and wants every pod at once; this one answers for
+    an agent's runtime brief, where the reader is one user and an app carries
+    its own visibility and owner. An optional ``ctx`` would be the version a
+    caller forgets to pass.
+
+    ``limit`` is required for the same reason. The brief caps what it renders,
+    but capping the render is not capping the read -- the first version of this
+    fetched every app in the pod and then showed twelve.
+    """
+    actions = allowed_actions_expr(
+        ctx=ctx,
+        resource_type=ResourceType.APP,
+        resource_id_col=AppModel.id,
+        pod_id_col=AppModel.pod_id,
+        owner_user_id_col=AppModel.user_id,
+        visibility_col=AppModel.visibility,
+    )
+    rows = (
+        await session.execute(
+            select(
+                AppModel.id,
+                AppModel.name,
+                AppModel.description,
+                AppModel.public_slug,
+                AppModel.status,
+            )
+            .where(
+                AppModel.pod_id == pod_id,
+                allowed_actions_contains(actions, Permissions.APP_READ),
+            )
+            .order_by(AppModel.name)
+            .limit(limit)
+        )
+    ).all()
+    return [
+        PodAppSummary(
+            id=app_id,
+            name=name,
+            description=description,
+            url=public_app_url(public_slug),
+            status=str(app_status),
+        )
+        for app_id, name, description, public_slug, app_status in rows
+    ]

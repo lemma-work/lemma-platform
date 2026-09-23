@@ -326,7 +326,7 @@ class TestARunRefusedBeforeItStarted:
 
 
 class TestATurnEndedForASleepingAgent:
-    """A remote `snooze` ends its turn from the outside, so the state lies.
+    """A remote `wait_for` ends its turn from the outside, so the state lies.
 
     Lemma asks the host to stop, and the host reports what it saw — CANCELLED
     when the stop landed first, SUCCEEDED when the agent finished talking before
@@ -360,7 +360,7 @@ class TestATurnEndedForASleepingAgent:
         assert events[-1].type is AgentEventType.WAITING
         # The shape the in-process pause yields, so one reader serves both.
         assert events[-1].data["tool_call_id"] == "lemma-mcp-1"
-        assert events[-1].data["kind"] == "snooze"
+        assert events[-1].data["kind"] == "wait_for"
 
     async def test_a_turn_that_simply_ended_is_untouched(
         self, monkeypatch: pytest.MonkeyPatch

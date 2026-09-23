@@ -24,6 +24,9 @@ from app.modules.identity.domain.organization_identity import (
     assign_organization_identity,
     resolve_email_domain_for_policy,
 )
+from app.modules.identity.services.invitation_display import (
+    enrich_invitation_display_fields,
+)
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -67,29 +70,16 @@ class OrganizationService:
     async def _enrich_invitation_display_fields(
         self, invitation: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:
-        organization = await self.organization_repository.get(
-            invitation.organization_id
-        )
-        if organization:
-            invitation.organization_name = organization.name
-
-        if invitation.pod_id is not None and self.pod_membership_port is not None:
-            pod_details = await self.pod_membership_port.get_pod_invitation_details(
-                invitation.pod_id
-            )
-            if pod_details:
-                invitation.pod_name = pod_details[0]
-                invitation.pod_description = pod_details[1]
-
-        return invitation
+        return (await self._enrich_invitation_list_display_fields([invitation]))[0]
 
     async def _enrich_invitation_list_display_fields(
         self, invitations: Sequence[OrganizationInvitationEntity]
     ) -> list[OrganizationInvitationEntity]:
-        return [
-            await self._enrich_invitation_display_fields(invitation)
-            for invitation in invitations
-        ]
+        return await enrich_invitation_display_fields(
+            invitations,
+            organization_repository=self.organization_repository,
+            pod_membership_port=self.pod_membership_port,
+        )
 
     async def _require_member(
         self,
@@ -115,13 +105,12 @@ class OrganizationService:
     ) -> OrganizationEntity:
         """Create an organization owned by ``owner_user_id``.
 
-        See :func:`assign_organization_identity` for what
-        ``resolve_name_conflicts`` settles.
+        See :func:`assign_organization_identity` for ``resolve_name_conflicts``.
         """
         owner = await self.user_repository.get(owner_user_id)
         if not owner:
             raise UserNotFoundError()
-
+        await self.organization_repository.refuse_if_at_organization_limit(owner.id)
         await assign_organization_identity(
             entity,
             get_by_slug=self.organization_repository.get_by_slug,
@@ -540,8 +529,9 @@ class OrganizationService:
             organization_name=organization.name,
         )
 
-        persisted_member = await self.organization_repository.add_member(member)
+        await self.organization_repository.lock_seats(invitation.organization_id)
         await self.organization_repository.update_invitation(invitation)
+        persisted_member = await self.organization_repository.add_member(member)
 
         if pod_grant is not None:
             user_name_parts = [

@@ -60,10 +60,35 @@ def interaction_sender_matches(link, parsed) -> bool:
     return bool(link_id) and bool(sender_id) and link_id == sender_id
 
 
+def _within_authorized_scope(link, authorized_surface_ids) -> bool:
+    """Was this request allowed to act on the surface holding that conversation?
+
+    `None` means "no receiver list", which happens only where the payload was
+    verified with a secret of *ours* -- the shared Telegram bot, the shared
+    WhatsApp number. Those serve every pod, so the delivering receiver names no
+    subset and the sender match is the control.
+
+    A list means the opposite, and is the case that matters: Slack and Teams
+    tenants hold their own signing secrets, so anybody running their own app can
+    mint a correctly-signed payload with whatever `callback_id` and `user.id`
+    they like. The button's value is an unsigned `conversation_id|tool_call_id`,
+    so without this the id alone decided whose conversation was resolved -- and
+    an approval taken on it runs the paused tool call as that person, in their
+    pod. The receiver list is derived from the workspace the signature actually
+    proved (`slack_webhook_verification`), which is the boundary the payload
+    could not forge.
+    """
+    if authorized_surface_ids is None:
+        return True
+    return link.surface_id in set(authorized_surface_ids)
+
+
 async def resolve_interaction_delivery(
     ingress,
     parsed,
     conversation_id: UUID,
+    *,
+    authorized_surface_ids=None,
 ):
     link = await ingress.conversation_link_repository.get_by_conversation_id(
         conversation_id
@@ -75,19 +100,33 @@ async def resolve_interaction_delivery(
             conversation_id=conversation_id,
         )
         return None
+    if not _within_authorized_scope(link, authorized_surface_ids):
+        logger.warning(
+            "agent_surfaces.ingress_service.surface_interaction_out_of_scope.degraded",
+            conversation_id=conversation_id,
+            surface_id=link.surface_id,
+        )
+        return None
     return await _resolve_link_delivery(ingress, parsed, link)
 
 
-async def resolve_current_interaction_delivery(ingress, parsed):
+async def resolve_current_interaction_delivery(
+    ingress, parsed, *, authorized_surface_ids=None
+):
     external_thread_id = str(parsed.external_thread_id or "").strip()
     if not external_thread_id:
         return None
+    # Narrowed at the read, not only checked after it: the continuity lookup is
+    # the one link read not scoped to a surface, so an unnarrowed answer here
+    # could name a thread in another tenant and be discarded a step later --
+    # correct, but it makes the scope check look optional when it is the point.
     surface_id = (
         await ingress.conversation_link_repository.find_surface_id_for_external_thread(
             platform=parsed.platform.value,
             external_channel_id=parsed.external_channel_id,
             external_thread_id=external_thread_id,
             external_user_id=parsed.external_user_id,
+            surface_ids=authorized_surface_ids,
         )
     )
     if surface_id is None:
@@ -100,6 +139,13 @@ async def resolve_current_interaction_delivery(ingress, parsed):
         external_user_id=parsed.external_user_id,
     )
     if link is None:
+        return None
+    if not _within_authorized_scope(link, authorized_surface_ids):
+        logger.warning(
+            "agent_surfaces.ingress_service.surface_interaction_out_of_scope.degraded",
+            conversation_id=link.conversation_id,
+            surface_id=link.surface_id,
+        )
         return None
     return await _resolve_link_delivery(ingress, parsed, link)
 
@@ -117,5 +163,5 @@ async def _resolve_link_delivery(ingress, parsed, link):
     adapter = ingress.adapter_registry.get(surface.surface_type)
     if adapter is None:
         return None
-    credentials = await ingress._resolve_credentials(surface)
+    credentials = await ingress.credential_resolver.for_surface(surface)
     return link, surface, adapter, credentials

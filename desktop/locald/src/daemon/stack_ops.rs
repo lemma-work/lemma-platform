@@ -130,10 +130,15 @@ impl Daemon {
 
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            // Released however this thread ends -- see `lifecycle::Finish`.
+            let _finish = daemon.lifecycle.finish_on_drop();
+            // Only reached from dispatch's `if let Some(manager)` arm, so the
+            // manager exists; and with the lifecycle guard above, a panic here
+            // would no longer leave admission held.
             let manager = daemon
                 .host_processes
                 .as_ref()
-                .expect("host operation requires manager");
+                .expect("dispatch routes host operations only when a manager exists");
             let result = match command.as_str() {
                 "start" => daemon.start_host_packs(manager, id.as_ref()),
                 "stop" => {
@@ -192,7 +197,6 @@ impl Daemon {
                     }));
                 }
             }
-            daemon.lifecycle.finish();
         });
     }
 
@@ -232,6 +236,8 @@ impl Daemon {
 
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            // Released however this thread ends -- see `lifecycle::Finish`.
+            let _finish = daemon.lifecycle.finish_on_drop();
             match runtime.prepare_host() {
                 Ok(result) => {
                     let mut prepared = json!({
@@ -269,7 +275,6 @@ impl Daemon {
                     }));
                 }
             }
-            daemon.lifecycle.finish();
         });
     }
 

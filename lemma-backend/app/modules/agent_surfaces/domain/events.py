@@ -12,6 +12,15 @@ class SurfaceEvents:
     STREAM = "surface_events"
 
 
+class SurfaceOnboardingReadyEvent(DomainEvent):
+    event_type: str = "surface.onboarding.ready"
+    pending_id: UUID
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return SurfaceEvents.STREAM
+
+
 class SurfaceConnectedEvent(DomainEvent):
     """A surface was created for a pod.
 

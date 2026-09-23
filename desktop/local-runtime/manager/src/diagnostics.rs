@@ -13,6 +13,17 @@ pub(crate) fn is_boot_retry(line: &str) -> bool {
     line.contains("guest connect failed")
 }
 
+/// Lines about one caller, not about the runtime.
+///
+/// A bridge caller that times out and closes its socket is logged, because
+/// that is how a slow guest operation is noticed -- but it is the caller
+/// leaving, and quoting it as the reason the runtime later exited would blame
+/// the one party that did nothing wrong.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn is_client_event(line: &str) -> bool {
+    line.contains("went away before the guest answered") || line.contains("client write failed")
+}
+
 pub(crate) fn first_diagnostic(value: &[u8], fallback: &str) -> String {
     let value = String::from_utf8_lossy(value);
     let diagnostic = value
@@ -37,7 +48,7 @@ pub(crate) fn last_diagnostic(value: &[u8], fallback: &str) -> String {
     let diagnostic = value
         .lines()
         .map(str::trim)
-        .rfind(|line| !line.is_empty() && !is_boot_retry(line))
+        .rfind(|line| !line.is_empty() && !is_boot_retry(line) && !is_client_event(line))
         .unwrap_or(fallback);
     diagnostic
         .strip_prefix("lemma-runtime: ")

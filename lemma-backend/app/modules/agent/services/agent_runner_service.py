@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-import time
-from typing import Awaitable, Callable, Protocol
+from typing import Protocol
 from uuid import UUID
 from pydantic_ai.output import OutputSpec
 from pydantic_ai.capabilities import AgentCapability
@@ -23,20 +22,23 @@ from app.core.observability.telemetry import (
     record_span_output,
 )
 from app.modules.agent.config import agent_settings
-from app.modules.agent.services.context_budget import context_budget_for
+from app.modules.agent.services.context_budget import (
+    ContextBudget,
+    context_budget_for,
+)
 from app.modules.agent.services.conversation_access import (
     resolve_agent,
     validate_conversation_access,
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import ConversationNotFoundError
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRuntimeConfig,
     AgentRunStatus,
     ConversationType,
     HarnessKind,
-    HarnessOptions,
     JsonObject,
     MessageKind,
     MessageRole,
@@ -53,6 +55,7 @@ from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
 )
+from app.modules.agent.services.run_limits import budget_for_run, make_stop_checker
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import (
     observe_first_output,
@@ -60,6 +63,7 @@ from app.modules.agent.services.run_phase_spans import (
     run_phase,
 )
 from app.modules.agent.services.runtime_history import (
+    MAX_HISTORY_AGENT_RUNS,
     bound_runtime_history,
     runtime_full_run_ids,
     select_runtime_history,
@@ -132,6 +136,38 @@ def _profile_model_settings(
     return (
         model_settings if isinstance(model_settings, dict) and model_settings else None
     )
+
+
+def _with_reply_budget(
+    model_settings: JsonObject | None, budget: ContextBudget
+) -> JsonObject | None:
+    """Tell the model how much room it has to answer in.
+
+    Nothing set `max_tokens`, so every request used whatever the provider
+    defaults to. That is survivable on a model that answers in prose and fatal
+    on one that thinks first: thinking tokens are output tokens, a small
+    default is spent on them before any content exists, and the provider stops
+    the response at the cap. pydantic-ai treats a length-stopped response with
+    no actionable part as `UnexpectedModelBehavior` and ends the run, so the
+    work is lost rather than shortened.
+
+    The number is the window minus the ceiling everything else is held under,
+    which is the room the budget had already set aside for exactly this and
+    never spent.
+
+    An operator who set `max_tokens` on the runtime profile outranks this: they
+    know something about their model that a fraction of a window does not. Any
+    value they set counts, including a zero -- a provider will reject that and
+    say so, which is a better answer than quietly substituting a number they
+    did not choose and leaving them to wonder why their setting did nothing.
+    Absent and explicitly null both mean unset, and are filled.
+    """
+    if model_settings and model_settings.get("max_tokens") is not None:
+        return model_settings
+    reply = budget.reply_token_budget
+    if reply <= 0:
+        return model_settings
+    return {**(model_settings or {}), "max_tokens": reply}
 
 
 class AgentRunObserver(Protocol):
@@ -234,7 +270,7 @@ class AgentRunnerService:
                 uow_factory=self.uow_factory,
                 conversation=conversation,
                 agent=agent,
-                agent_run_id=agent_run_id,
+                agent_run=agent_run,
                 user_id=user_id,
                 resolved_runtime=resolved_runtime,
                 runtime_profile_snapshot=runtime_profile_snapshot,
@@ -296,10 +332,15 @@ class AgentRunnerService:
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
                 capabilities=harness_capabilities,
-                model_settings=harness_model_settings,
+                model_settings=_with_reply_budget(
+                    harness_model_settings, context_budget
+                ),
                 usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
-                should_stop=self._make_stop_checker(agent_run_id),
+                should_stop=make_stop_checker(
+                    agent_run_id, uow_factory=self.uow_factory
+                ),
+                spend=budget_for_run(run_with_usage),
                 history_summarization_token_limit=(
                     context_budget.summarization_token_limit
                 ),
@@ -477,45 +518,6 @@ class AgentRunnerService:
         del resolved_runtime
         return agent
 
-    async def _should_stop_run(self, agent_run_id: UUID) -> bool:
-        async with self.uow_factory() as uow:
-            agent_run = await ConversationRepository(uow).get_agent_run(agent_run_id)
-        return agent_run is not None and agent_run.status in {
-            AgentRunStatus.STOP_REQUESTED,
-            AgentRunStatus.STOPPED,
-        }
-
-    def _make_stop_checker(self, agent_run_id: UUID) -> Callable[[], Awaitable[bool]]:
-        """Build a throttled, sticky stop checker for the harness.
-
-        The harness polls ``should_stop`` at every streaming checkpoint (per
-        token delta, part, and tool call). Querying the DB on every checkpoint
-        issues one ``SELECT`` per token across every concurrent run, churning the
-        connection pool — the dominant per-token DB load under streaming. Cache
-        the answer and re-query at most once per
-        ``agent_run_stop_poll_interval_seconds``; once a stop is observed it
-        sticks (no further queries). A stop request is still honored within the
-        poll interval. Interval ``0`` disables throttling (every call queries).
-        """
-        interval = agent_settings.agent_run_stop_poll_interval_seconds
-        stopped = False
-        last_checked: float | None = None
-
-        async def _check() -> bool:
-            nonlocal stopped, last_checked
-            if stopped:
-                return True
-            now = time.monotonic()
-            if last_checked is not None and (now - last_checked) < interval:
-                return False
-            last_checked = now
-            if await self._should_stop_run(agent_run_id):
-                stopped = True
-                return True
-            return False
-
-        return _check
-
     async def _load_run_context(
         self,
         *,
@@ -527,8 +529,14 @@ class AgentRunnerService:
         with run_phase("load_context") as span:
             async with self.uow_factory() as uow:
                 repo = ConversationRepository(uow)
-                runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
-                agent_run = self._find_agent_run(runs, agent_run_id)
+                window = await repo.load_runtime_history_digests_by_run_id(
+                    agent_run_id, limit=MAX_HISTORY_AGENT_RUNS
+                )
+                runs = window.runs
+                # In the window or not -- see `RuntimeHistoryWindow`.
+                agent_run = window.current_run
+                if agent_run is None:
+                    raise ConversationNotFoundError()
                 conversation = validate_conversation_access(
                     await repo.get_conversation(agent_run.conversation_id),
                     user_id=user_id,
@@ -545,22 +553,17 @@ class AgentRunnerService:
                 # runs before the messages are asked for, and only what survives
                 # it gets them. Attaching to the untrimmed list meant a long
                 # conversation read hundreds of runs it then discarded.
-                bounded, dropped_runs = bound_runtime_history(runs, conversation)
+                bounded, dropped_runs = bound_runtime_history(
+                    runs, conversation, total_runs=window.total_runs
+                )
                 await repo.attach_runtime_history_messages(
                     bounded, full_run_ids=runtime_full_run_ids(bounded, conversation)
                 )
-                agent_run = self._find_agent_run(runs, agent_run_id)
                 messages = self._select_runtime_history(
                     bounded, conversation, already_dropped=dropped_runs
                 )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
-
-    def _find_agent_run(self, runs: list[AgentRun], agent_run_id: UUID) -> AgentRun:
-        for run in runs:
-            if run.id == agent_run_id:
-                return run
-        raise ConversationNotFoundError()
 
     def _select_runtime_history(
         self,

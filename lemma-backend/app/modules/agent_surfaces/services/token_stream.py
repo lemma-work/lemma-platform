@@ -35,8 +35,8 @@ class TokenStreamMixin:
             return
         try:
             async with self.uow_factory() as uow:
-                service = self.service_factory(uow)
-                result = await service.append_stream_text_for_conversation(
+                service = self.egress_factory(uow)
+                result = await service.progress.append_streamed_text(
                     conversation_id=conversation.id,
                     progress_handle=None,
                     text="",
@@ -88,8 +88,8 @@ class TokenStreamMixin:
         self._last_token_flush = time.monotonic()
         try:
             async with self.uow_factory() as uow:
-                service = self.service_factory(uow)
-                result = await service.append_stream_text_for_conversation(
+                service = self.egress_factory(uow)
+                result = await service.progress.append_streamed_text(
                     conversation_id=conversation.id,
                     progress_handle=self._progress_handle,
                     text=pending,

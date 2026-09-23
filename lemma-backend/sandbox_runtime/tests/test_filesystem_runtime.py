@@ -74,7 +74,11 @@ async def test_binary_file_crud_range_digest_and_listing(tmp_path: Path) -> None
     assert stat.json()["path"] == destination
     assert conflict.status_code == 409
     assert preserved.content == payload
-    assert deleted.status_code == 204
+    # 200 because something was there to remove. The endpoint used to answer
+    # 204 either way and throw the answer away, which is why both
+    # runtime-backed providers hard-coded "yes, deleted" for a path that had
+    # never existed.
+    assert deleted.status_code == 200
     assert not (tmp_path / "moved.bin").exists()
 
 
@@ -248,3 +252,119 @@ async def test_filesystem_rejects_relative_and_symlink_escape(tmp_path: Path) ->
     assert symlink_stat.json()["kind"] == "symlink"
     assert write_through_symlink.status_code == 422
     assert not (outside / "stolen").exists()
+
+
+async def test_a_delivered_secret_is_not_readable_by_the_rest_of_the_sandbox(
+    tmp_path: Path,
+) -> None:
+    """`mode` restricts the written file, and does so before it is visible.
+
+    Docker delivers a secret as a 0600 tar entry and E2B chmods after writing;
+    Desktop delivers through this endpoint, which took the runtime's umask and
+    produced 0644. The browser relay token is delivered this way, so on Desktop
+    alone every process in the sandbox could read it.
+    """
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    secret = str(tmp_path / "relay.token")
+    ordinary = str(tmp_path / "ordinary.txt")
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        restricted = await client.put(
+            "/files:content",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+            params={"path": secret, "mode": "600"},
+            content=b"a-relay-token",
+        )
+        plain = await client.put(
+            "/files:content",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+            params={"path": ordinary},
+            content=b"not a secret",
+        )
+
+    assert restricted.status_code == 200
+    assert plain.status_code == 200
+    assert Path(secret).read_bytes() == b"a-relay-token"
+    assert Path(secret).stat().st_mode & 0o777 == 0o600
+    # Unrestricted writes are untouched by this: the parameter narrows a file,
+    # it does not become a new default.
+    assert Path(ordinary).stat().st_mode & 0o777 != 0o600
+
+
+async def test_a_mode_that_is_not_three_octal_digits_is_refused(tmp_path: Path) -> None:
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        for rejected in ("4755", "abc", "8", "-600"):
+            response = await client.put(
+                "/files:content",
+                headers={**HEADERS, "Content-Type": "application/octet-stream"},
+                params={"path": str(tmp_path / "x.bin"), "mode": rejected},
+                content=b"x",
+            )
+            assert response.status_code == 422, rejected
+
+
+async def test_deleting_nothing_is_distinguishable_from_deleting_something(
+    tmp_path: Path,
+) -> None:
+    """The contract is "whether anything was there to remove".
+
+    The manager computed it and the endpoint discarded it, so `docker` and
+    `lemma_local` both returned a hard-coded `True` and told callers a file had
+    been deleted when there had never been one. E2B answered truthfully, so the
+    same call meant different things on different fabrics.
+    """
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    present = str(tmp_path / "present.txt")
+    absent = str(tmp_path / "absent.txt")
+    Path(present).write_text("x", encoding="utf-8")
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        removed = await client.delete(
+            "/files", headers=HEADERS, params={"path": present}
+        )
+        nothing = await client.delete(
+            "/files", headers=HEADERS, params={"path": absent}
+        )
+
+    assert removed.status_code == 200, "a file that was there reports as removed"
+    assert nothing.status_code == 204, (
+        "a file that was not there reports as not removed"
+    )
+
+
+async def test_absence_reads_the_same_however_deep_it_goes(tmp_path: Path) -> None:
+    """A missing parent and a missing leaf are both "nothing was there".
+
+    `_existing_path` resolves the parent strictly, so a missing directory
+    raised `FileNotFoundError` and became a 404 while a missing file under a
+    real directory returned 204. Same question, two answers, and E2B gave a
+    third by returning False for both.
+    """
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        missing_leaf = await client.delete(
+            "/files", headers=HEADERS, params={"path": str(tmp_path / "absent.txt")}
+        )
+        missing_parent = await client.delete(
+            "/files",
+            headers=HEADERS,
+            params={"path": str(tmp_path / "no-such-dir" / "absent.txt")},
+        )
+
+    assert missing_leaf.status_code == 204
+    assert missing_parent.status_code == 204

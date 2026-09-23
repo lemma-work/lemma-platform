@@ -16,6 +16,10 @@ the caller is about to do with the agent.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from uuid import UUID
 
 from sqlalchemy import select
@@ -55,4 +59,23 @@ async def agent_name_for_id(session, agent_id: UUID) -> str | None:
     ).scalar_one_or_none()
 
 
-__all__ = ["agent_id_for_name", "agent_name_for_id"]
+async def agent_names_for_ids(
+    session: AsyncSession, agent_ids: Iterable[UUID | None]
+) -> dict[UUID, str]:
+    """Display names for many agents at once, keyed by id.
+
+    A listing labels every row with its agent's name, and asking per row is one
+    statement per row for a column that is almost always the same handful of
+    agents. Ids with no agent are simply absent from the mapping, the same
+    "unlabelled row rather than a 500" the singular above chose.
+    """
+    ids = {agent_id for agent_id in agent_ids if agent_id is not None}
+    if not ids:
+        return {}
+    rows = await session.execute(
+        select(AgentModel.id, AgentModel.name).where(AgentModel.id.in_(ids))
+    )
+    return dict(rows.all())
+
+
+__all__ = ["agent_id_for_name", "agent_name_for_id", "agent_names_for_ids"]

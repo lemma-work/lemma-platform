@@ -1,0 +1,22 @@
+{
+  "$comment": [
+    "The backend's own addresses, as the Desktop host pack emits them.",
+    "",
+    "Written by nothing: asserted equal to the manifest by",
+    "desktop/locald/src/native_host_pack/tests/domain.rs, and read by the",
+    "backend's host-agent environment test. Two network perspectives share one",
+    "backend. WORKSPACE_CALLBACK_* is what a sandbox dials -- host.lemma.internal",
+    "resolves only inside guestd's containers. API_URL and its siblings are what",
+    "this Mac dials. A host agent given the first cannot resolve its server.",
+    "",
+    "{base} is the install's base domain and {port} any port."
+  ],
+  "backend_env": {
+    "API_URL": "http://app.{base}:{port}",
+    "AUTH_FRONTEND_URL": "http://app.{base}:{port}/auth",
+    "FRONTEND_URL": "http://app.{base}:{port}",
+    "WORKSPACE_CALLBACK_API_URL": "http://host.lemma.internal:{port}",
+    "WORKSPACE_CALLBACK_AUTH_URL": "http://host.lemma.internal:{port}/auth",
+    "WORKSPACE_CALLBACK_FRONTEND_URL": "http://host.lemma.internal:{port}"
+  }
+}

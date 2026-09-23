@@ -1,4 +1,11 @@
-"""Delivering a pod file to a chat surface, and what the card says when it cannot."""
+"""Delivering a pod file to a chat surface, and what the card says when it cannot.
+
+Which pod, first. For a channel or a shared bot the surface and the conversation
+live in the same one, so the question never arises. A personal DM is where it
+does: the installation belongs to the company that installed the app, the
+conversation belongs to the person. Egress read the pod off the installation, so
+a person's files and table rows were looked for in the company's pod.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +15,18 @@ from uuid import uuid4
 
 import pytest
 
+from datetime import datetime, timezone
+
 from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceConversationLink,
+    AgentSurfaceEntity,
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+    SurfaceConfig,
+    SurfacePlatform,
+)
+from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
 from app.modules.datastore.contracts.surfaces import TableRows
 from app.modules.agent_surfaces.services import display_resource_content
@@ -26,7 +44,12 @@ CONVERSATION_ID = uuid4()
 
 
 def _target(adapter, platform: str = "TELEGRAM"):
+    # `pod_id` sits on the target, not on the surface: the surface is the
+    # installation the reply goes out through, and for a personal DM the
+    # conversation lives in a different pod. Reading it off the surface is the
+    # bug this shape prevents.
     return SimpleNamespace(
+        pod_id=POD_ID,
         surface=SimpleNamespace(
             pod_id=POD_ID, surface_type=SimpleNamespace(value=platform)
         ),
@@ -287,3 +310,94 @@ async def test_a_displayed_table_arrives_with_its_own_first_rows(monkeypatch):
     # The displayed filters are the ones the rows were read under.
     assert read_table_preview.await_args.kwargs["filters"] == [("stage", "eq", "won")]
     assert read_table_preview.await_args.kwargs["table_name"] == "deals"
+
+
+def _installation(pod_id) -> AgentSurfaceEntity:
+    """The company's Slack app: one surface, in the company's own pod."""
+    return AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=pod_id,
+        name="slack",
+        agent_id=pod_id,
+        surface_type=SurfacePlatform.SLACK,
+        account_id=uuid4(),
+        config=SurfaceConfig(),
+    )
+
+
+def _inbound() -> ParsedInboundSurfaceEvent:
+    return ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.SLACK,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="D1",
+        external_thread_id="D1",
+        sender_external_user_id="U1",
+        external_message_id="1700000000.1",
+        message_text="show me the report",
+        is_dm=True,
+    )
+
+
+def _delivery(installation: AgentSurfaceEntity, conversation_id):
+    surfaces = AsyncMock()
+    surfaces.get.return_value = installation
+    links = AsyncMock()
+    links.get_by_conversation_id.return_value = AgentSurfaceConversationLink(
+        id=uuid4(),
+        surface_id=installation.id,
+        conversation_id=conversation_id,
+        platform=installation.surface_type.value,
+        external_channel_id="D1",
+        external_thread_id="D1",
+        external_user_id="U1",
+        last_event=_inbound().model_dump(mode="json"),
+        last_message_id="1700000000.1",
+        last_inbound_at=datetime.now(timezone.utc),
+    )
+    return SurfaceDelivery(
+        uow=SimpleNamespace(session=None),
+        surface_repository=surfaces,
+        conversation_link_repository=links,
+        adapter_registry=SimpleNamespace(get=lambda platform: AsyncMock()),
+        # The real resolver reaches a database. This is the same collaborator,
+        # answering the one call target resolution makes of it -- given to the
+        # constructor now rather than assigned over one the object built for
+        # itself.
+        credential_resolver=SimpleNamespace(
+            for_surface=AsyncMock(return_value={"access_token": "xoxb-company"})
+        ),
+    )
+
+
+async def test_a_personal_dm_resolves_against_the_conversations_pod(
+    conversation_owner,
+):
+    """The installation is the transport; the conversation is the destination."""
+    company_pod, personal_pod = uuid4(), uuid4()
+    installation = _installation(company_pod)
+    conversation_owner.return_value = SimpleNamespace(
+        id=CONVERSATION_ID, user_id=uuid4(), pod_id=personal_pod
+    )
+
+    target = await _delivery(installation, CONVERSATION_ID).resolve_egress_target(
+        CONVERSATION_ID
+    )
+
+    assert target is not None
+    assert target.pod_id == personal_pod, "egress resolved the wrong pod's data"
+    # The surface stays the company's, because that is what the reply goes out
+    # through. Both facts at once is the whole point.
+    assert target.surface.pod_id == company_pod
+
+
+async def test_there_is_no_target_without_a_conversation_to_answer_in(
+    conversation_owner,
+):
+    """No conversation, no pod -- and guessing one is what this replaced."""
+    conversation_owner.return_value = None
+
+    target = await _delivery(
+        _installation(uuid4()), CONVERSATION_ID
+    ).resolve_egress_target(CONVERSATION_ID)
+
+    assert target is None

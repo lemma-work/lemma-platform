@@ -37,4 +37,326 @@ the thing that is wrong — resolve it with a product decision before writing co
 
 ## Open
 
-_Nothing open._
+### DEV-SURF-001 — A disabled surface drops every message to it, in silence
+**Violates:** nothing — and that is the finding. No statement defines what a
+*disabled* surface does with an inbound message.
+**Severity:** question
+**Where:** `lemma-backend/app/modules/agent_surfaces/infrastructure/repositories/surface_repository.py:121`
+and `:174`
+**Required:** Unwritten. The nearest principle in the specification is the one
+PS-SURF-012 applies to a person the system will not answer: tell them how to get
+access "rather than failing silently". Whether that principle should extend to a
+surface somebody switched off has never been decided.
+**Actual:** `AgentSurfaceStatus.INACTIVE` is reachable from three write paths —
+`surface_controller.py:287` (creating with `is_enabled: false`),
+`surface_controller.py:405` (patching `is_enabled`), and
+`managed_bot_persistence.py:149` (a managed bot whose setup is not enabled).
+
+*Messages* are dropped on both inbound routes. The shared platform endpoint goes
+through `surface_repository.py:121` and `:174`, which filter
+`status == AgentSurfaceStatus.ACTIVE`, so a disabled surface is never a
+candidate; the surface-addressed endpoint reaches
+`surface_inbound.py:352`, which returns `None` on `not surface.is_active`
+before the payload is even parsed. Either way ingress yields no context, the
+worker enqueues nothing, and no reply, conversation or message row is produced.
+
+*Slack lifecycle events are not.* `webhook_ingest.py:300` calls
+`AppEventHandler.try_handle_channel_setup` **in the HTTP request, before
+anything is published** — because a `trigger_id` expires in about three seconds
+— and `app_event_handler.py` consults `status` nowhere. So a disabled Slack
+surface still opens its channel-setup modal.
+
+Nothing in `lemma-frontend/src` mentions the status, so there is no way to see or
+unset it from the product.
+**Why it matters:** the platform side keeps working — the bot is still in the
+channel, the number still receives — so a person messaging a disabled surface
+sees their message delivered and simply never answered, indistinguishable from
+the agent ignoring them, with no signal on either side. On Slack it is stranger
+than that: the surface still opens configuration modals, so it answers clicks
+and not words. Whatever `INACTIVE` is supposed to mean, it does not currently
+mean one thing.
+**Fix:** unknown, and that is the point of the entry. Three shapes are possible
+and they are product decisions, not code ones: (a) `INACTIVE` should not exist —
+deleting a surface is the way to stop it, and the flag is a half-built feature
+worth removing; (b) it should exist and a disabled surface should *answer*, saying
+it is switched off; (c) it should exist, stay silent, and gain UI so somebody can
+see why nothing is happening. Decide before writing code.
+**How it was found:** tracing `AgentSurfaceStatus.INACTIVE` from
+`domain/entities.py:248` to its readers during the surfaces schema rework, then
+grepping `lemma-frontend/src` for any reference to it and finding none.
+
+### DEV-SURF-002 — A reassigned phone number signs in as the person who had it
+**Violates:** nothing. Decided: a number belongs to one person until somebody
+takes it off the account, and nothing expires on a clock.
+**Severity:** accepted
+**Where:** `lemma-backend/app/modules/agent_surfaces/services/onboarding_transport.py:73`
+(`platform_binding_key`) and
+`lemma-backend/app/modules/agent_surfaces/services/onboarding_sender.py:195`
+(`verified_sender`)
+**Required:** PS-SURF-012 says the system "shall give a resolved person exactly
+the access their Lemma identity has, and no more". It also says a message from
+an external identity "shall resolve to a Lemma user where one exists" and that
+the resolution "shall keep stable across later messages" — and those two
+sentences are in tension the moment an identifier changes hands. Nothing in the
+specification says an external identifier names one person for all time; it is
+assumed, and this is the case where the assumption is wrong. Whether the second
+bullet should be read as broken here is a product decision, which is why the
+`Violates:` line above names nothing: marking PS-SURF-012 `gap` would say in
+`coverage.md` that Lemma does not resolve people correctly, which overstates a
+failure confined to a reassigned number.
+**Actual:** `platform_binding_key` hashes `(platform, tenant, installation,
+sender_external_user_id)`, and on WhatsApp the sender's external id *is* their
+phone number. A recycled number therefore produces the same `binding_key` as the
+previous holder's, so `verified_sender` finds their `VerifiedSurfaceIdentity`,
+and the new holder is signed in as them.
+
+The guard already there does not catch it. It revokes when
+`identity.verified_phone` no longer matches the resolved user's
+`mobile_number`, or when that number is no longer verified — which covers the
+previous holder *changing* their number. It does not cover them keeping it in
+their profile while the carrier gives it to somebody else, and there is no
+inbound signal that says so: Meta's Cloud API reports no reassignment.
+
+Telegram is not exposed the same way (the sender id is an account id, not a
+reassignable identifier), and neither is Slack or Teams. The
+`telegram_username` path is a different shape of the same problem and is
+already refused for binding by `_cache_is_attested`.
+**Why it matters:** the new holder of the number reaches the previous holder's
+workspaces, conversations and pod content, having proved nothing. It needs no
+attacker — carriers reassign numbers routinely, and in several countries within
+months. The blast radius is whatever that account could reach.
+
+**What already bounds it**, and it is worth knowing before choosing a fix: one
+revocation trigger exists and fires on exactly the right event.
+`UserEntity.update` clears `mobile_verified_at` and raises
+`UserMobileChangedEvent` whenever the digits change, and
+`agent_surfaces/events/handlers.py:375` revokes every phone-bound
+`VerifiedSurfaceIdentity` that is no longer the account's number — the whole lot
+when the account has no verified number left. So the window closes by itself the
+moment the previous holder puts their new number in Lemma, which somebody who
+has moved on to a new number usually does.
+
+It stays open indefinitely for the case where they never come back: an abandoned
+account keeps the old number in its profile, and nothing else revokes. That is
+the population the fix is actually for, and it is smaller than the entry first
+implied.
+**Not introduced here.** `onboarding_sender.py` -- which holds `verified_sender`
+and its guards -- is byte-identical to `origin/main`, and `platform_binding_key`
+is unchanged too. This is a property of the shipped product that an adversarial
+pass over the WhatsApp pool work happened to surface, not a regression the pool
+brought with it. It is recorded here because it was found here.
+
+**Decided:** no expiry. A number belongs to one person, and a binding stays until
+the number is explicitly removed from the account. Re-verifying on a clock would
+put friction on every daily user to close a window that only stays open for an
+account nobody comes back to, and there is no house convention to borrow a period
+from either: every TTL here -- `PendingChatOnboarding.expires_at`, the email
+challenges -- is on a *pending* artifact, something waiting to be completed.
+Nothing expires a proof that already succeeded, and nothing will.
+
+So the whole of the recovery rests on removal working, and `removal` means the
+number coming off the account rather than a row being deleted.
+`test_removing_the_number_hands_it_back_as_a_stranger` pins it end to end:
+signing up binds the number, taking it off the account revokes the binding *and*
+clears the cached resolution, and the next message from that number opens a
+fresh signup carrying none of the previous holder's account.
+
+Both halves matter and only one is obvious. Deleting the `VerifiedSurfaceIdentity`
+row by hand is *not* enough: the old account still holds the number in its
+profile, so `_match_user_by_phone` resolves the next message to them through
+`AgentSurfaceExternalUser.resolved_user_id` -- the binding is gone and the sender
+is signed in as its owner anyway. `UserMobileChangedEvent` is what clears both,
+and it fires on the profile edit, not on the delete. (a) Expire a verified identity after a period of
+inactivity and make the next message re-verify — needs a number, and the number
+is the whole trade. (b) Re-verify on a change of some observable the platform
+does give us, if one can be found that moves on reassignment. (c) Accept it,
+write it down as accepted, and give an owner a way to revoke a binding when
+somebody reports it -- the cheapest of the three, because the revocation itself
+already exists and only a trigger is missing: nothing but a profile edit by the
+previous holder can fire it today. Decide before writing code.
+**How it was found:** an adversarial pass over chat signup during the WhatsApp
+number-pool work, tracing what `binding_key` is actually made of and then
+checking each guard in `verified_sender` against a number that changes hands
+rather than a person who changes number.
+
+### DEV-SURF-003 — A hand-written bundle cannot name an agent's mailbox
+**Violates:** nothing written down. No statement says what a bundle's named
+mailbox means for an agent that already has one.
+**Severity:** question
+**Where:** `lemma-backend/app/modules/pod_bundle/infrastructure/surface_apply.py:123`
+and `lemma-backend/app/modules/agent_surfaces/services/credential_uniqueness.py:127`
+**Required:** unwritten, and that is the finding. `PS-PACK-012` says an import
+"either finishes or can be safely retried"; it does not say what happens when
+the bundle declares a thing the schema forbids a second of.
+**Actual:** every agent is given a mailbox as it is created, `agent_id` is
+`NOT NULL`, and `uq_agent_surface_agent_type` is unique on
+`(agent_id, surface_type)` — so an agent holds at most one Resend surface. The
+applier looks for an existing surface *by name*
+(`surface_apply.py:113`), and a bundle naming its mailbox anything other than
+the auto-minted `surface_name_for(agent_name)` finds none, takes the create
+path, and reaches `ensure_one_surface_per_agent`, which raises
+`AgentSurfaceAgentPlatformConflictError` — a 409 naming a surface whoever ran
+the import never created.
+
+Measured through the real applier, and the first version of this entry was
+wrong about the scope. `test_what_the_bundle_applier_does_with_an_email_surface`
+builds a `BundleApplier` the way `pod_bundle/events/handlers.py` does and calls
+`apply_step` against a real schema on a deployment where email is configured:
+
+* **A round trip lands.** `surface_name_for` is `resend-{slugify(agent_name)}`
+  with nothing random in it, and the exporter writes a surface under the name it
+  actually has — so a bundle exported from a pod carries `resend-reporter`, the
+  imported agent `Reporter` is given a mailbox of exactly that name, and the
+  applier's lookup finds it and updates. "A bundle with an email surface cannot
+  be imported" was the claim, and it is false.
+* **Any other name is refused**, with
+  `AGENT_SURFACE_AGENT_PLATFORM_CONFLICT` naming the auto-minted surface. So the
+  real population is a hand-written bundle, or one whose agent was renamed
+  between export and import.
+
+That claim was wrong because it was read rather than run, twice over. The call
+chain was traced correctly and the applier's own name lookup was missed; then a
+first test posted to `/pods/{id}/surfaces`, which has no such lookup, and drew a
+bundle conclusion from a controller's 409. The controller's behaviour is real
+and pinned separately by
+`test_a_named_mailbox_for_an_agent_that_has_one_is_refused` — a named connect
+there always loses, even when the name it asks for is the one the mailbox
+already has.
+
+The reason none of this was known is the rest of the finding:
+`test_importing_a_named_surface_leaves_the_agent_s_mailbox_alone` drives a
+`FakeSurfaceService` that enforces no unique index, no bundle fixture declared a
+`RESEND` surface, and no scenario imports one — both verified by grep.
+**Why it matters:** not for round trips, which work. For anyone writing a bundle
+by hand, or re-importing one after renaming its agent: the failure arrives as a
+409 about a surface they did not write and cannot see in the bundle, and the
+message tells them to "pick another agent" when what they need to do is name the
+mailbox `resend-{agent}`.
+**Fix:** three shapes, all product decisions. (a) The applier adopts the agent's
+mailbox and renames it to the bundle's name — needs `update_surface` to accept a
+name, which it does not today. (b) The exporter writes the mailbox under the
+name it actually has, so a round-trip matches and a hand-written bundle is told
+to do the same. (c) It is refused, but with an error that says an agent has one
+mailbox and names the bundle's own surface rather than the auto-minted one.
+Whichever is chosen, the test needs to run against a real schema.
+**How it was found:** widening the Resend adoption to named requests to fix four
+failing scenarios, having reasoned that the unique index left only one candidate
+a name could mean. CI's unit lane — wider than the local `-m unit` lane —
+failed on the bundle test, which is what made the bundle path visible at all.
+The widening was reverted; this is what it had walked into.
+
+### DEV-DESK-001 — The viewer's VNC server polls the whole screen, by a flag nobody explained
+**Violates:** nothing written down. No statement bounds what a sandbox may spend
+while somebody watches it.
+**Severity:** question
+**Where:** `lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh:103`
+**Required:** unwritten, and that is the finding. `PS-BROWSER-030` says a person
+can watch and drive their own browser; it says nothing about what watching costs
+the sandbox they are watching.
+**Actual:** `x11vnc` is started with `-noshm -forever -shared -nopw -noxdamage
+-quiet -xrandr resize`. Every flag there carries a comment saying why —
+`-noshm` because MIT-SHM attach takes x11vnc down under this container's X
+server, `-xrandr resize` so the picture follows a `/display:resize` — except
+`-noxdamage`, which has none. Without the X DAMAGE extension x11vnc cannot be
+told which tiles changed, so while a client is attached it polls the framebuffer
+instead. The display starts at `WORKSPACE_XVFB_SCREEN=1440x960x24` and may be
+resized up to `1920x1200x24`.
+
+The file it was extracted from (`lemma-ensure-display.sh`, before #751 split the
+viewing half out) does not explain it either, and the squash of #751 is the only
+commit that has ever touched it, so there is no history to read.
+
+It may well be deliberate: Xvfb carries DAMAGE, but DAMAGE reports are a hint
+and dropping one shows as a stale region rather than as an error, which is
+exactly the kind of bug a `-noxdamage` gets added for and then never removed.
+**Why it matters:** on Desktop the sandbox has 2 vCPUs
+(`lemma-backend/app/modules/workspace/providers/lemma_local.py`,
+`workspace_cpus`) inside a guest with at most 4
+(`desktop/local-runtime/macos-vz/Sources/LemmaVZ/main.swift:104`), shared with
+Postgres, Redis, SuperTokens and containerd. Chromium there renders in software,
+and the person watching is on a laptop — so anything continuous is worth
+knowing the size of. The measurement below is what that turned out to be, and
+it is smaller than this paragraph originally assumed.
+**Measured**, since the first version of this entry asked for exactly that.
+Two `x11vnc` processes on one `:99` at the same moment — same image, same page,
+same encoding, one with the flag and one without — with a viewer attached to
+each and CPU read from `/proc/<pid>/stat`. Docker on Apple silicon, a 2 GiB /
+2 CPU container, 30-second samples:
+
+| screen | with DAMAGE | `-noxdamage` | |
+|---|---|---|---|
+| still (`about:blank`) | 54 ticks, 1.8% of one core | 86 ticks, 2.9% | 1.6x |
+| repainting canvas | 527 ticks, 17.6% | 529 ticks, 17.6% | 1.0x |
+
+So the flag costs about **one point of one core** while somebody watches a
+still screen, and nothing at all while the screen is busy — which is what the
+extension is for and the shape the theory predicted, at a size the theory did
+not. It is a real cost and a small one.
+
+Both viewers saw an identical picture on the still screen (3 rectangles,
+5,531,908 bytes each) and DAMAGE sent *fewer* rectangles on the repainting one
+(2,545 against 2,950), so nothing here suggests DAMAGE drops updates on this
+image. Thirty seconds on two pages is not enough to conclude that it does not.
+
+The comparison used raw encoding rather than the Tight/ZRLE noVNC negotiates,
+deliberately: the question is the cost of *finding* what changed, and asking
+for an encoding the measuring client cannot decode would have measured
+x11vnc's compressor as well. Both arms asked for the same thing, so the
+difference is the scan; the absolute percentages are lower than a real
+viewer's.
+**Fix:** leave the flag alone. The cost is one point of a core and the reason
+nobody wrote down is more likely to be a dropped update than an oversight —
+that is what `-noxdamage` is normally added for. Removing it needs a soak long
+enough to trust DAMAGE on this image, and the prize is 1% of one core.
+**How it was found:** reading the file during a desktop parity review, because
+it is the one line in it that does not say why.
+
+### DEV-DESK-002 — The guest was sized before a browser lived in it
+**Violates:** nothing written down.
+**Severity:** question
+**Where:** `desktop/local-runtime/macos-vz/Sources/LemmaVZ/main.swift:104` and
+`:108`; `desktop/local-runtime/guestd/src/lib.rs:153` and `:159`
+**Required:** unwritten. The nearest thing is the comment at `main.swift:105`,
+which says changing guest memory needs "lifecycle and workload qualification,
+not a guess" — a rule about *how* to move the number, not about what it should
+be.
+**Actual:** the VZ guest gets a fixed 4 GiB and `min(4, max(2, processors / 2))`
+vCPUs, and inside it run PostgreSQL, Redis, SuperTokens, containerd and every
+sandbox. A workspace sandbox is capped at 2 GiB / 2 CPUs and, since #622, its
+image runs Xvfb, a *headed* Chromium, matchbox, x11vnc, websockify and ffmpeg.
+Admission asks only that 640 MiB be free
+(`SANDBOX_MEMORY_REQUEST_BYTES` + `GUEST_MEMORY_HEADROOM_BYTES`), deliberately,
+because a ceiling is not a reservation — which is right, and says nothing about
+whether the ceiling fits.
+
+`lemma-backend/sandbox_runtime/sandbox_memory.py` records the other half from
+measurement: `/proc/meminfo` is not namespaced, so Chrome sizes its renderer
+limit and its V8 heaps off the *host's* `MemTotal`, and a 2 GB sandbox was
+measured running 34 renderers.
+**Why it matters:** the failure is an OOM kill inside the sandbox while somebody
+is watching their own browser, which reads as the browser crashing rather than
+as the machine being too small. Two conversations with panes open is two
+workspace sandboxes.
+**Measured**, for the first half of the qualification. A workspace container at
+the shipped 2 GiB / 2 CPU limits, display up, headed Chromium (9 processes) on
+a canvas repainting 40 rectangles every 33 ms, viewers attached:
+
+    memory.current   603 MiB      anon  292 MiB    file  306 MiB
+    memory.peak      736 MiB
+
+So one workspace with an open browser sits comfortably inside its own 2 GiB
+ceiling — the ceiling is not the problem. The guest is: 736 MiB peak against a
+**4 GiB** guest already holding PostgreSQL, Redis, SuperTokens and containerd
+means the tight case is *concurrency*, not a single sandbox. Two conversations
+with panes open is two of these.
+
+Measured on Docker on Apple silicon rather than in the VZ guest, so the number
+is the image's and not the guest's: the guest's own kernel, page cache and
+data services are the other half and are what is still missing.
+**Fix:** the rest of the qualification — the same browser held open in one
+workspace and then two, inside the real guest, watching `memory.events`'
+`oom_kill` and the guest's own `MemAvailable` with the data services running.
+Then either the guest's allocation moves or the concurrent-workspace count
+does, with the measurement written down beside whichever moved.
+**How it was found:** a desktop parity review, tracing what the browser surface
+added to a sandbox after the guest's size was last set.

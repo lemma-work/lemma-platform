@@ -89,7 +89,7 @@ pub(crate) fn choose_connection_mode_impl(app: AppHandle) -> Result<String, Stri
 
 pub(crate) fn current_mode(app: &AppHandle) -> String {
     let shell: State<Shell> = app.state();
-    let ui = shell.ui.lock().unwrap();
+    let ui = shell.ui.lock_or_recover();
     ui.mode.clone()
 }
 
@@ -106,7 +106,7 @@ pub(crate) fn set_mode(app: &AppHandle, mode: &str) -> Result<(), String> {
     refresh_menus_for_connection_mode(app);
     let changed = {
         let shell: State<Shell> = app.state();
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         let changed = ui.mode != mode;
         if changed && mode == "local" {
             ui.url.clear();
@@ -162,7 +162,7 @@ pub(crate) fn confirm_then_switch_connection(app: AppHandle) {
     }
     let running = {
         let shell: State<Shell> = app.state();
-        let ui = shell.ui.lock().unwrap();
+        let ui = shell.ui.lock_or_recover();
         ui.running
     };
     let (title, body, confirm) = connection_switch_prompt(&current, running);
@@ -185,7 +185,7 @@ pub(crate) fn confirm_then_switch_connection(app: AppHandle) {
 pub(crate) fn app_base_url(app: &AppHandle) -> Result<String, String> {
     let (mode, url, api_url) = {
         let shell: State<Shell> = app.state();
-        let ui = shell.ui.lock().unwrap();
+        let ui = shell.ui.lock_or_recover();
         (ui.mode.clone(), ui.url.clone(), ui.api_url.clone())
     };
     if mode == "hosted" {

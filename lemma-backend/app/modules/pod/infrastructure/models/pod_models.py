@@ -2,7 +2,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 from uuid import UUID
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.infrastructure.db.base import UUIDAuditBase
@@ -50,6 +58,13 @@ class Pod(UUIDAuditBase):
         passive_deletes=True,
     )
     __table_args__ = (
+        # Redundant against the primary key on its own, and that is the point:
+        # a composite foreign key needs a unique on exactly the columns it
+        # references, and `agent_surfaces (pod_id, organization_id) -> pods (id,
+        # organization_id)` is what keeps a surface's carried organisation from
+        # going stale when a pod moves. Without this declared here, a schema
+        # built from metadata cannot create that foreign key at all.
+        UniqueConstraint("id", "organization_id", name="uq_pod_id_organization"),
         Index("ix_pod_user_name", "user_id", "name"),
         Index("ix_pod_org_name", "organization_id", "name"),
         Index(

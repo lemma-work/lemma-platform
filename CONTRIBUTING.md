@@ -155,6 +155,31 @@ incident write-ups and "what I tried" narratives belong in the pull request that
 does the work, not in the file it touches. What survives into the comment is the
 conclusion and the reason it holds.
 
+Concretely, when a comment explains a fix, three things get written by accident
+and none of them is load-bearing:
+
+- **the date** — "On <the day it happened> an agent asked…". A date in a
+  comment is an incident timestamp or a note that is already stale. The
+  failure is what matters, not when it happened;
+- **the host** — the deployment, cluster or tenant it was observed on. Use
+  `lemma.work` for the product and `example.com` / `example.test` for a
+  stand-in. This applies to fixtures too: a deployment name leaks from test
+  data exactly as well as from a sentence;
+- **the play-by-play** — "it answered X, then five minutes later called back
+  with Y". State the shape of the failure; the sequence belongs in the PR.
+
+A useful test: rewrite the paragraph with the date, the host and the sequence
+removed. If it still tells the next reader why the code is the way it is, that
+shorter version was always the comment. It usually does — those details feel
+like evidence while you are writing and read as noise a month later.
+
+`make lint-public-prose` enforces the first two (`scripts/check_public_prose.py`,
+run by `make quality`). Hostnames are refused anywhere in a file; dates only in
+comments and docstrings, so sample content in a string or a fenced block is left
+alone. A date that is genuinely public — an incorporation date in a footer — goes
+in `lemma-backend/scripts/public-prose-allow.txt` with its reason. The
+play-by-play is not machine-checkable and is on the reviewer.
+
 ## Configuration
 
 Every setting is an environment variable declared on a `pydantic-settings`

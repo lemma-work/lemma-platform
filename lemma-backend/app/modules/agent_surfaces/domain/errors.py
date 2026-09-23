@@ -67,14 +67,44 @@ class AgentSurfaceCredentialConflictError(AgentSurfaceError):
             status_code=409,
         )
         self.details = {
-            # "SYSTEM" (the shared Lemma bot/number) or "ACCOUNT" (a connected
-            # account already bound elsewhere) — they read differently in the UI.
+            # "SYSTEM" (the shared Lemma bot/number), "ACCOUNT" (a connected
+            # account already bound elsewhere), or "IDENTITY" (the bot itself is
+            # already somebody's) — they read differently in the UI, and only
+            # the last is answered by adding a second bot rather than by
+            # releasing something.
             "kind": kind,
             "conflicting_surface": {
                 "pod_id": str(pod_id),
                 "name": surface_name,
             },
         }
+
+
+class AgentSurfaceNumberPoolExhaustedError(AgentSurfaceError):
+    """Every WhatsApp number the deployment owns is already held.
+
+    **503 and not 409**, which is the whole point of giving it its own class.
+    A conflict says "somebody else has the thing you asked for, take it up with
+    them" -- that is `AgentSurfaceCredentialConflictError`, and it names the pod
+    holding it so the UI can link there. This organisation conflicts with
+    nobody: it asked for *a* number and the deployment has none left to give.
+    There is no other party and nothing the caller can do differently, so the
+    honest answer is that the service cannot serve the request right now and
+    somebody has to buy more numbers.
+
+    Exhaustion is a steady state rather than a failure. A pool is bought a
+    number at a time and can sit fully allocated for weeks, reached entirely
+    through ordinary success -- so it is not logged as degraded where it is
+    detected. Only the caller knows whether it is failing a person's request,
+    which is this, or quietly falling back to the shared line, which is not.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            code="AGENT_SURFACE_NUMBER_POOL_EXHAUSTED",
+            status_code=503,
+        )
 
 
 class AgentSurfaceNotFoundError(AgentSurfaceError):
@@ -95,6 +125,52 @@ class AgentSurfaceAlreadyExistsError(AgentSurfaceError):
             code="AGENT_SURFACE_ALREADY_EXISTS",
             status_code=409,
         )
+
+
+class AgentSurfaceAgentPlatformConflictError(AgentSurfaceError):
+    """This agent already reaches this platform somewhere else.
+
+    The database says the same thing through ``uq_agent_surface_agent_type``.
+    Without this the constraint was the only thing saying it, and an
+    IntegrityError arrives after the transaction is already unusable -- so a
+    person creating a second Slack surface for one agent got a 500 instead of
+    being told what the rule is.
+    """
+
+    def __init__(self, *, platform: str, pod_id: UUID, surface_name: str):
+        # Resend gets its own sentence. "Pick another agent" is advice for
+        # somebody choosing where to install a Slack app; for a mailbox it is
+        # close to nonsense, because the agent did not choose to have one -- it
+        # was given one when it was created, under a name derived from its own.
+        # The commonest way to meet this error is a hand-written pod bundle
+        # naming an agent's mailbox something else, and the thing that person
+        # needs to know is the name to use. See `DEV-SURF-003`.
+        advice = (
+            f"Every agent is given a mailbox when it is created, named "
+            f"'{surface_name}'. Use that name to refer to it -- in a pod bundle, "
+            "name the surface '" + surface_name + "' -- or connect email without "
+            "a name to be handed the address it already has."
+            if platform.upper() == "RESEND"
+            else (
+                "An agent reaches a platform in one place: one Slack app, one "
+                "WhatsApp number, one Telegram bot. Pick another agent, or "
+                "change the surface it already has."
+            )
+        )
+        super().__init__(
+            message=(
+                f"This agent already has a {platform.title()} surface "
+                f"('{surface_name}'). {advice}"
+            ),
+            code="AGENT_SURFACE_AGENT_PLATFORM_CONFLICT",
+            status_code=409,
+        )
+        self.details = {
+            "conflicting_surface": {
+                "pod_id": str(pod_id),
+                "name": surface_name,
+            },
+        }
 
 
 class AgentSurfacePlatformError(AgentSurfaceError):

@@ -336,3 +336,132 @@ async def test_the_whatsapp_handshake_reads_the_same_answer(monkeypatch):
             },
             whatsapp_verify_token="the-token",
         )
+
+
+async def test_an_unconfigured_verify_token_answers_nobody(monkeypatch):
+    """No configured token is not a token everybody knows.
+
+    The comparison used to be `verify_token == whatsapp_verify_token`, and a
+    deployment that had never set one compared `None` with a missing query
+    parameter -- which is `None == None`, so the handshake succeeded and handed
+    its challenge to whoever asked. That is the shape of the bug where the
+    absence of a secret behaves like knowing it.
+
+    Both spellings of "absent" are checked, because a platform sends the
+    parameter empty as readily as it omits it.
+    """
+    from app.modules.agent_surfaces.api.controllers.webhook_controller import (
+        _webhook_verification_response,
+    )
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    monkeypatch.setattr(core_settings, "environment", "production")
+
+    for absent in (None, ""):
+        params = {"hub.mode": "subscribe", "hub.challenge": "1234"}
+        if absent is not None:
+            params["hub.verify_token"] = absent
+        with pytest.raises(HTTPException):
+            _webhook_verification_response(
+                "whatsapp", params, whatsapp_verify_token=None
+            )
+
+
+async def test_the_right_verify_token_still_gets_its_challenge(monkeypatch):
+    """The constant-time comparison did not break the case it exists to allow.
+
+    A check that refuses everything passes every test written about refusals,
+    so the accepting path is asserted beside them.
+    """
+    from app.modules.agent_surfaces.api.controllers.webhook_controller import (
+        _webhook_verification_response,
+    )
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    monkeypatch.setattr(core_settings, "environment", "production")
+
+    answer = _webhook_verification_response(
+        "whatsapp",
+        {
+            "hub.mode": "subscribe",
+            "hub.challenge": "1234",
+            "hub.verify_token": "the-token",
+        },
+        whatsapp_verify_token="the-token",
+    )
+
+    assert answer.body == b"1234"
+
+
+async def test_a_non_ascii_app_id_is_refused_rather_than_raising(monkeypatch):
+    """A field lifted out of an unverified body must not be able to 500 us.
+
+    `api_app_id` is read from the JSON before anything has been authenticated,
+    so it is whatever the sender wrote. Compared as two `str`s it reached
+    `hmac.compare_digest`, which refuses non-ASCII with a `TypeError` -- an
+    unauthenticated 500 on the Slack ingress, from one byte, with no signature
+    check ever run.
+    """
+    from app.modules.agent_surfaces.services.webhook_security_service import (
+        SlackWebhookVerificationCandidate,
+    )
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    service = SurfaceWebhookSecurityService()
+    candidate = SlackWebhookVerificationCandidate(
+        app_id="A123",
+        signing_secret="s3cret",
+        receiver_surface_ids=(uuid4(),),
+    )
+
+    with pytest.raises(SurfaceWebhookAuthenticationError):
+        service.verify_slack_request(
+            headers={},
+            raw_body=b"{}",
+            api_app_id="Ä123",
+            candidates=[candidate],
+        )
+
+
+async def test_a_matching_app_id_still_narrows_to_its_candidate(monkeypatch):
+    """The byte comparison must not have cost the narrowing it replaces."""
+    from app.modules.agent_surfaces.services.webhook_security_service import (
+        SlackWebhookVerificationCandidate,
+    )
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    service = SurfaceWebhookSecurityService()
+    wanted = uuid4()
+    timestamp = str(int(time.time()))
+    body = b'{"type":"event_callback"}'
+    signature = (
+        "v0="
+        + hmac.new(
+            b"right-secret",
+            f"v0:{timestamp}:".encode() + body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+
+    verified = service.verify_slack_request(
+        headers={
+            "x-slack-request-timestamp": timestamp,
+            "x-slack-signature": signature,
+        },
+        raw_body=body,
+        api_app_id="A123",
+        candidates=[
+            SlackWebhookVerificationCandidate(
+                app_id="A999", signing_secret="wrong", receiver_surface_ids=(uuid4(),)
+            ),
+            SlackWebhookVerificationCandidate(
+                app_id="A123",
+                signing_secret="right-secret",
+                receiver_surface_ids=(wanted,),
+            ),
+        ],
+    )
+
+    assert verified.app_id == "A123"
+    assert verified.receiver_surface_ids == (wanted,)

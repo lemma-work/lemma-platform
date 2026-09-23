@@ -147,18 +147,34 @@ async def build_object_url(
     content_sha256: str | None = None,
 ) -> tuple[str, datetime]:
     """Build a short-lived URL for an arbitrary datastore object key."""
-    expires_seconds = (
-        expires_seconds or datastore_settings.datastore_file_url_expiry_seconds
+    # Clamped, not just defaulted. The only bound on this used to be the
+    # Pydantic `le=` on the agent tool's argument, which every direct caller of
+    # `POST .../files/url` bypassed — so an API client could mint a URL with an
+    # arbitrarily distant expiry. The ceiling is shared with the short link.
+    expires_seconds = min(
+        max(1, expires_seconds or datastore_settings.datastore_file_url_expiry_seconds),
+        datastore_settings.datastore_signed_url_max_expiry_seconds,
     )
     cache = _get_url_cache()
-    cache_key = f"{object_key}:{content_sha256 or ''}"
+    # The lifetime is part of the identity of the thing being cached. Without it
+    # a caller asking for 30 seconds could be handed a cached one-hour URL that
+    # someone else had minted for the same object, and vice versa.
+    cache_key = f"{object_key}:{content_sha256 or ''}:{expires_seconds}"
 
     if cache is not None:
         with suppress(Exception):
             cached = await cache.get_raw(cache_key)
             if cached:
                 payload = json.loads(cached)
-                return payload["url"], datetime.fromisoformat(payload["expires_at"])
+                cached_expires_at = datetime.fromisoformat(payload["expires_at"])
+                # Checked, not assumed. The cache entry's TTL comes from the
+                # *default* lifetime, so a URL minted with a shorter one stays
+                # cached long after it stops working — and every later caller
+                # asking for that same short lifetime would be handed the dead
+                # one. Minting a fresh URL is cheap; serving an expired one is a
+                # failure the caller cannot diagnose.
+                if cached_expires_at > datetime.now(timezone.utc):
+                    return payload["url"], cached_expires_at
 
     now = int(time.time())
     expires_at_epoch = now + expires_seconds

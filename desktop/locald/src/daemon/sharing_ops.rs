@@ -14,6 +14,8 @@ impl Daemon {
         let daemon = Arc::clone(self);
         let sharing = Arc::clone(sharing);
         thread::spawn(move || {
+            // Released however this thread ends -- see `lifecycle::Finish`.
+            let _finish = daemon.lifecycle.finish_on_drop();
             let result = daemon.disable_sharing_transaction(&sharing);
             match result {
                 Ok(()) => {
@@ -34,7 +36,6 @@ impl Daemon {
                     None,
                 )),
             }
-            daemon.lifecycle.finish();
         });
     }
 
@@ -173,6 +174,8 @@ impl Daemon {
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            // Released however this thread ends -- see `lifecycle::Finish`.
+            let _finish = daemon.lifecycle.finish_on_drop();
             let (progress_stop, progress_receive) = mpsc::channel::<()>();
             let progress_daemon = Arc::clone(&daemon);
             let progress_sharing = Arc::clone(&sharing);
@@ -213,7 +216,6 @@ impl Daemon {
                     id.as_ref(),
                 )),
             }
-            daemon.lifecycle.finish();
         });
     }
 
@@ -316,6 +318,8 @@ impl Daemon {
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            // Released however this thread ends -- see `lifecycle::Finish`.
+            let _finish = daemon.lifecycle.finish_on_drop();
             let result = daemon.disable_sharing_transaction(&sharing);
             match result {
                 Ok(()) => {
@@ -337,7 +341,6 @@ impl Daemon {
                     id.as_ref(),
                 )),
             }
-            daemon.lifecycle.finish();
         });
     }
 

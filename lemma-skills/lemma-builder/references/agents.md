@@ -84,12 +84,12 @@ Optional fields: `input_schema` (typed input when other systems invoke the agent
 
 ## Toolsets
 
-The field is `toolsets` (13 values, `agent/domain/value_objects.py` → `AgentToolset`).
-Only five of them are a decision. Set those on the agent; the rest arrive on their own.
+The field is `toolsets` (14 values, `agent/domain/value_objects.py` → `AgentToolset`).
+Only six of them are a decision. Set those on the agent; the rest arrive on their own.
 
-- **Declared** — `WORKSPACE_CLI`, `WEB_SEARCH`, `SUBAGENTS`, `SPEECH`, `MEMORY`.
-  These are the five `toolsets` accepts as a real choice. Grant only what the job needs.
-- **Always on** — `USER_INTERACTION`, `SKILLS`, `SNOOZE`, `MESSAGING`, `TODO`.
+- **Declared** — `WORKSPACE_CLI`, `WEB_SEARCH`, `SUBAGENTS`, `SPEECH`, `MEMORY`, `BROWSER`.
+  These are the six `toolsets` accepts as a real choice. Grant only what the job needs.
+- **Always on** — `USER_INTERACTION`, `SKILLS`, `WAIT`, `MESSAGING`, `TODO`.
   Every agent has them; listing them changes nothing.
 - **Derived** — `POD` follows any folder or table grant, `CONNECTORS` follows any
   connector grant. Grant the resource and the tools appear. Do **not** also list
@@ -107,7 +107,7 @@ A stale `POD` or `CONNECTORS` in an older agent's `toolsets` is harmless — the
 effective set is the union — but do not write new ones.
 
 Sub-agents are the one subtraction: a spawned child loses `SUBAGENTS` (the depth rule),
-`SNOOZE` (a sleeping child would block its parent's tool call) and `MESSAGING` (a
+`WAIT` (a waiting child would block its parent's tool call) and `MESSAGING` (a
 colleague hearing from an implementation detail of somebody's turn cannot place it).
 
 | Toolset | Enables |
@@ -116,13 +116,14 @@ colleague hearing from an implementation detail of somebody's turn cannot place 
 | `WORKSPACE_CLI` | **Declared.**  a sandbox shell with the `lemma` CLI — the most powerful and broadest toolset. Includes `view_image` (vision-gated: silently withheld if the active model has no vision capability) |
 | `SKILLS` | **Always on.**  loading skills available in the workspace; also added automatically at runtime when `USER_INTERACTION` is configured so widget-capable agents can load `lemma-widget` |
 | `WEB_SEARCH` | **Declared.**  web search |
+| `BROWSER` | **Declared.** One tool, `browser_sign_in`: it gets past a login wall by loading a login the person saved earlier, or by pausing the run and asking them to sign in themselves in the agent's browser. The agent never sees or asks for a password. **Deferred**: not in the prompt prefix, so an agent that never meets a login wall never carries it. **Pair it with `WORKSPACE_CLI`** — the browsing itself is the `agent-browser` command line in the sandbox, so `BROWSER` on its own can ask for a login and then do nothing with it. Add `view_image` to let the agent look at what it captures |
 | `USER_INTERACTION` | **Always on.**  ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
 | `SPEECH` | **Declared.**  speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
 | `SUBAGENTS` | **Declared.**  async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
 | `CONNECTORS` | **Derived — any connector grant.**  call third-party APIs through the org's connector installs, without a sandbox. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `search_connector_operations` (leave `auth_config` unset to search **every** install — each hit names the one to run it against) and `run_connector_operation`; `describe_connector_operation` only if you want the full input schema up front, `list_connectors` only to see what is installed. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
 | `TODO` | **Always on.**  a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
 | `MEMORY` | **Declared.**  durable facts kept between conversations, in ordinary pod files: `/memory` for what the whole pod should know, `/me` for what is true of one person only. `AGENTS.md` in each scope is read into every run automatically, so it must stay a short index of pointers — it is capped, and the overflow is truncated with a marker. It carries **no tools of its own**, but it does not need pairing: turning it on **derives a `folder.write` grant on `/memory`** (write implies read), which in turn derives `POD` — so the agent gets the file tools that make the instruction actionable. Turning it off takes the grant back, and it is re-derived on every write, so a `permissions` replace cannot strip it |
-| `SNOOZE` | **Always on.**  suspend the current turn and resume it later after a delay (`snooze`), capped at 24h. Every wake replays the whole conversation, so it is for work with a genuine gap in the middle (a build, a batch job) — **not** for waiting on a person, and **not** for waiting on a `message_user` answer |
+| `WAIT` | **Always on.**  suspend the current turn and resume it when there is a reason to (`wait_for`): a time, a sandbox process exiting, or a sub-agent run finishing. Capped at 24h. Every wake replays the whole conversation, so one real wait beats a loop of short ones — and it is **not** for waiting on a person, nor on a `message_user` answer |
 | `MESSAGING` | **Always on.**  the way an agent reaches a person *unprompted*: `message_user` contacts a **pod member who is not in this conversation** on whichever surface they last used — or by email, cold, if they have never messaged the bot — with a copy always landing in their Lemma inbox; `list_pod_members` looks people up (and reports each member's `reachable_on`); `check_messages` reads the answers. See the pattern below — it is the one people get wrong |
 
 For pod files and data you grant the folder or table and `POD` follows — typed,
@@ -132,9 +133,9 @@ broader than anything a grant describes. There is no separate file-system
 toolset: file access is part of `POD`, scoped by the folder grants that produced
 it.
 
-**Five toolsets are *deferred*, whether declared, derived or always-on.** `POD`,
-`CONNECTORS`, `SUBAGENTS`, `MESSAGING` and `SNOOZE` are not in the model's prompt
-prefix — it has to find them with `search_tools` first. That keeps a chat agent from
+**Six toolsets are *deferred*, whether declared, derived or always-on.** `POD`,
+`CONNECTORS`, `SUBAGENTS`, `MESSAGING`, `WAIT` and `BROWSER` are not in the model's
+prompt prefix — it has to find them with `search_tools` first. That keeps a chat agent from
 reaching for "message a colleague" unprompted, and it is also why **an agent that
 should chase people has to be told so in its instruction**. "You have a tool for it" is
 not enough when the tool is behind a search.
@@ -161,7 +162,7 @@ The loop, in full:
    `channel` unset unless you have a reason — a channel you *do* name is used or refused,
    never silently swapped, and a chat app they have never messaged this agent on cannot
    be used at all.
-3. **Then finish the turn and stop.** Do **not** snooze on it, and do not poll. When the
+3. **Then finish the turn and stop.** Do **not** `wait_for` it, and do not poll. When the
    **last** outstanding answer lands, the backend starts a fresh turn in your
    conversation on its own; you read what everyone said with `check_messages` there.
    Say who you are waiting on before you stop — that sentence is the last thing the
@@ -373,13 +374,13 @@ Or directly: `lemma agents permissions add coordinator agent:researcher:execute`
 agent's `toolsets` to give it control tools for running child conversations
 concurrently:
 
+There are **three** tools, not one per verb — the actions are parameters:
+
 | Tool | Does |
 | --- | --- |
-| `spawn_subagent` | Start a child conversation and return its `conversation_id`/`run_id` immediately (non-blocking). Omit `agent_name` to spawn **another instance of yourself**; pass a name (requires `agent.execute` on it) to spawn a different agent. |
-| `await_subagent` | Block (bounded) on a spawned child until it finishes; returns its output. |
-| `get_subagent_messages` / `send_subagent_message` | Read a child's transcript / send it a follow-up. |
-| `list_subagents` | List the children this conversation spawned, with status. |
-| `stop_subagent` | Cancel a running child. |
+| `spawn_subagent` | Start a child conversation and return `{conversation_id, run_id, status}` immediately (non-blocking). Omit `agent_name` to spawn **another instance of yourself**; pass a name (requires `agent.execute` on it) to spawn a different agent. |
+| `interact_subagent` | Drive one you spawned. `action='send'` posts a follow-up (needs `content`); `action='await'` blocks until a run finishes (needs `run_id`, bounded by `timeout_seconds`); `action='stop'` asks it to stop gracefully. |
+| `query_subagents` | Inspect them. `mode='list'` gives child conversations with latest run status (`status='ACTIVE'` filters to running); `mode='messages'` gives the latest messages from one child (needs `conversation_id`). |
 
 - **Self-spawn** needs no grant (running another copy of yourself is no privilege
   escalation); spawning a *named other* agent is grant-gated exactly like

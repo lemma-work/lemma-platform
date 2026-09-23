@@ -108,20 +108,25 @@ def build_progress_observer(
 ) -> SurfaceAgentRunProgressObserver:
     """An observer that streams a run's progress to the surface watching it.
 
-    Builds its own ingress service rather than taking one. The caller is
-    `agent`, which has no business knowing how a surfaces service is wired --
-    and the wiring it used to pass lived on `AppWorkerContext`, so `app/core`
-    had to know too. Both copies had already drifted from
-    `api/dependencies.get_surface_event_handler`, which is the one this uses.
+    Builds its own egress objects rather than taking them. The caller is
+    `agent`, which has no business knowing how a surfaces object is wired -- and
+    the wiring it used to pass lived on `AppWorkerContext`, so `app/core` had to
+    know too. Both copies had already drifted from `composition`, which is what
+    this uses.
+
+    It takes `SurfaceEgress`, not the ingress service. An observer watching a
+    run has nothing to say about inbound webhooks, routing or configuration; it
+    only got them because all thirteen outbound verbs were mixed onto the one
+    object that handled those too.
     """
-    from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
+    from app.modules.agent_surfaces.composition import build_surface_egress
     from app.modules.agent_surfaces.services.progress_observer import (
         SurfaceAgentRunProgressObserver,
     )
 
     return SurfaceAgentRunProgressObserver(
         uow_factory=uow_factory,
-        service_factory=get_surface_event_handler,
+        egress_factory=build_surface_egress,
     )
 
 

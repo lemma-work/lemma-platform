@@ -58,11 +58,28 @@ def configure_pod_liveness(modules: Sequence[LemmaModule]) -> None:
         declare_pod_liveness_reader(module.pod_liveness())
 
 
+def configure_plan_limits(modules: Sequence[LemmaModule]) -> None:
+    """Register the one module that says what plans allow, if there is one.
+
+    Two would be a composition mistake with no right answer -- which plan wins
+    -- so it stops the process rather than letting list order decide.
+    """
+    from app.core.plan_limits import declare_plan_limits
+
+    declared = [module for module in modules if module.plan_limits is not None]
+    if len(declared) > 1:
+        names = ", ".join(module.name for module in declared)
+        raise RuntimeError(f"more than one module declares plan_limits: {names}")
+    provider = declared[0].plan_limits if declared else None
+    declare_plan_limits(provider() if provider is not None else None)
+
+
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
     """Include every module's API routers, in module-list then thunk order."""
     configure_stream_topology(modules)
     configure_resource_names(modules)
     configure_pod_liveness(modules)
+    configure_plan_limits(modules)
     for module in modules:
         if module.routers is None:
             continue
@@ -104,6 +121,7 @@ def wire_module_events(modules: Sequence[LemmaModule], broker: "RedisBroker") ->
     configure_stream_topology(modules)
     configure_resource_names(modules)
     configure_pod_liveness(modules)
+    configure_plan_limits(modules)
     register_streaq_tasks(modules)
     for module in modules:
         if module.event_routers is None:

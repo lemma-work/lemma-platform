@@ -9095,13 +9095,17 @@ var LemmaClient = (() => {
     ApiError: () => ApiError,
     AuthManager: () => AuthManager,
     LEMMA_APP_THEME_MESSAGE_TYPE: () => LEMMA_APP_THEME_MESSAGE_TYPE,
+    LEMMA_COMPOSE_MESSAGE_TYPE: () => LEMMA_COMPOSE_MESSAGE_TYPE,
+    LEMMA_COMPOSE_RESULT_MESSAGE_TYPE: () => LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
     LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
     POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
     applyLemmaHostTheme: () => applyLemmaHostTheme,
     buildAuthUrl: () => buildAuthUrl,
     buildFederatedLogoutUrl: () => buildFederatedLogoutUrl,
+    canComposeInConversation: () => canComposeInConversation,
     clearTestingToken: () => clearTestingToken,
+    composeInConversation: () => composeInConversation,
     getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
@@ -10219,9 +10223,20 @@ var LemmaClient = (() => {
       }
       return response.body;
     }
-    async requestBytes(method, path) {
+    /**
+     * A binary response, optionally only part of one.
+     *
+     * `headers` exists for `Range`. Without it a file past the server's
+     * single-read ceiling was simply unreachable through this client: the read
+     * was capped and there was no way to ask for the rest.
+     */
+    async requestBytes(method, path, options = {}) {
       const url = `${this.apiUrl}${path}`;
-      const response = await this.fetchWithTimeout(url, this.auth.getRequestInit({ method }));
+      const init = this.auth.getRequestInit({ method });
+      if (options.headers) {
+        init.headers = { ...init.headers, ...options.headers };
+      }
+      const response = await this.fetchWithTimeout(url, init);
       if (response.status === 401) {
         this.auth.markUnauthenticated();
       }
@@ -11849,16 +11864,22 @@ var LemmaClient = (() => {
      * List App Releases
      * @param podId
      * @param appName
+     * @param limit Max releases to return, up to 200. Page beyond that with `page_token`.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns AppReleaseListResponse Successful Response
      * @throws ApiError
      */
-    static appReleaseList(podId, appName) {
+    static appReleaseList(podId, appName, limit = 50, pageToken) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/apps/{app_name}/releases",
         path: {
           "pod_id": podId,
           "app_name": appName
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
         },
         errors: {
           422: `Validation Error`
@@ -11953,9 +11974,30 @@ var LemmaClient = (() => {
         body: payload
       });
     }
-    /** This app's release history, newest first. */
-    releases(name) {
-      return this.client.request(() => AppsService.appReleaseList(this.podId(), name));
+    /** One page of this app's release history, newest first. */
+    releases(name, options) {
+      return this.client.request(
+        () => AppsService.appReleaseList(this.podId(), name, options == null ? void 0 : options.limit, options == null ? void 0 : options.pageToken)
+      );
+    }
+    /**
+     * Every release this app has had, newest first, paged to exhaustion.
+     *
+     * The endpoint answers a page now, and retention keeps a pruned release's row
+     * -- so an app deployed daily has history past the first page, and a live
+     * release can itself be on a later one. Anything that has to be complete
+     * wants this rather than `releases`.
+     */
+    async allReleases(name, pageSize = 200) {
+      var _a;
+      const items = [];
+      let pageToken;
+      for (; ; ) {
+        const page = await this.releases(name, { limit: pageSize, pageToken });
+        items.push(...(_a = page.items) != null ? _a : []);
+        pageToken = page.next_page_token;
+        if (typeof pageToken !== "string" || !pageToken) return items;
+      }
     }
     /**
      * Make an existing release the one this app serves. `releaseRef` is the
@@ -12266,6 +12308,57 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List this pod's public signed URLs
+     * @param podId
+     * @param includeDead Also list links that have expired or been revoked.
+     * @param limit Links per page.
+     * @param pageToken `next_page_token` from the previous page.
+     * @returns SignedUrlListResponse Successful Response
+     * @throws ApiError
+     */
+    static fileSignedUrlList(podId, includeDead = false, limit = 100, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/files/signed-urls",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "include_dead": includeDead,
+          "limit": limit,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Revoke a public signed URL
+     * Kill a link now rather than waiting out its expiry.
+     *
+     * Answers 200 either way: a code that is already dead, or was never this
+     * pod's, is reported as ``revoked: false`` rather than 404, so that a caller
+     * cleaning up cannot use this endpoint to discover which codes exist.
+     * @param podId
+     * @param code
+     * @returns SignedUrlRevokeResponse Successful Response
+     * @throws ApiError
+     */
+    static fileSignedUrlRevoke(podId, code) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/datastore/files/signed-urls/{code}",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Directory Tree
      * @param podId
      * @param rootPath
@@ -12471,9 +12564,10 @@ var LemmaClient = (() => {
     }
     /**
      * Mint a public, hit-capped short signed URL (no login needed to open).
-     * Expires after `expiresSeconds` (default 3h, max 24h) and serves the file
-     * at most `maxHits` times (default 50, max 100); both bounds are clamped
-     * server-side. Use it to share a file outside the pod without unbounded egress.
+     * Expires after `expiresSeconds` (default 24h, max 7d) and serves the file
+     * at most `maxHits` times (default 200, max 1000); a value outside either
+     * range is rejected with a 422. Use it to share a file outside the pod
+     * without unbounded egress.
      */
     createSignedUrl(path, options = {}) {
       const body = {
@@ -12481,6 +12575,37 @@ var LemmaClient = (() => {
         max_hits: options.maxHits
       };
       return this.client.request(() => FilesService.fileSignedUrl(this.podId(), path, body));
+    }
+    /**
+     * The public signed URLs *you* minted and may still read, newest first —
+     * scoped to the caller rather than the pod, because each row carries the
+     * `code`, which is the whole capability.
+     *
+     * Paged: a response with `next_cursor` set has more, so pass it back as
+     * `cursor` and keep going until it is null. A link you do not list is one you
+     * cannot revoke. `includeDead` also returns expired, revoked and spent links,
+     * which are kept for a grace period.
+     */
+    listSignedUrls(options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b, _c;
+          return FilesService.fileSignedUrlList(
+            this.podId(),
+            (_a = options.includeDead) != null ? _a : false,
+            (_b = options.limit) != null ? _b : 100,
+            (_c = options.cursor) != null ? _c : null
+          );
+        }
+      );
+    }
+    /**
+     * Kill a public signed URL now rather than waiting out its expiry. `revoked`
+     * is false when the code was already dead or was never this pod's — reported
+     * rather than thrown, so a cleanup pass cannot use this to discover codes.
+     */
+    revokeSignedUrl(code) {
+      return this.client.request(() => FilesService.fileSignedUrlRevoke(this.podId(), code));
     }
     delete(path) {
       return this.client.request(() => FilesService.fileDelete(this.podId(), path));
@@ -12710,16 +12835,22 @@ var LemmaClient = (() => {
      * List the built revisions of a function, newest first.
      * @param podId
      * @param functionName
+     * @param limit Max revisions to return, up to 200. Page beyond that with `page_token`.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns FunctionRevisionListResponse Successful Response
      * @throws ApiError
      */
-    static functionRevisionList(podId, functionName) {
+    static functionRevisionList(podId, functionName, limit = 50, pageToken) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/functions/{function_name}/revisions",
         path: {
           "pod_id": podId,
           "function_name": functionName
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
         },
         errors: {
           422: `Validation Error`
@@ -12858,8 +12989,27 @@ var LemmaClient = (() => {
         replace: (name, payload) => this.client.request(() => FunctionsService.functionPermissionsReplace(this.podId(), name, payload))
       });
       __publicField(this, "revisions", {
-        /** This function's built revisions, newest first. */
-        list: (name) => this.client.request(() => FunctionsService.functionRevisionList(this.podId(), name)),
+        /** One page of this function's built revisions, newest first. */
+        list: (name, options) => this.client.request(
+          () => FunctionsService.functionRevisionList(
+            this.podId(),
+            name,
+            options == null ? void 0 : options.limit,
+            options == null ? void 0 : options.pageToken
+          )
+        ),
+        /** Every revision, newest first, paged to exhaustion. See `apps.allReleases`. */
+        listAll: async (name, pageSize = 200) => {
+          var _a;
+          const items = [];
+          let pageToken;
+          for (; ; ) {
+            const page = await this.revisions.list(name, { limit: pageSize, pageToken });
+            items.push(...(_a = page.items) != null ? _a : []);
+            pageToken = page.next_page_token;
+            if (typeof pageToken !== "string" || !pageToken) return items;
+          }
+        },
         /** One revision, with its source and the schemas its code implements. */
         get: (name, revisionRef) => this.client.request(() => FunctionsService.functionRevisionGet(this.podId(), name, revisionRef)),
         /**
@@ -15105,9 +15255,10 @@ var LemmaClient = (() => {
     }
     /**
      * Create Surface
-     * Create a surface. ``name`` defaults to the lowercased platform — pass an
-     * explicit name to create a second surface of the same platform (e.g. a
-     * second bot routed to a different agent).
+     * Create a surface. ``name`` defaults to the lowercased platform and is the
+     * pod-unique handle the API addresses it by. A second surface of the same
+     * platform has to belong to a different agent: one agent reaches a platform in
+     * one place — one Slack app, one WhatsApp number, one Telegram bot.
      * @param podId
      * @param requestBody
      * @returns AgentSurfaceResponse Successful Response
@@ -16674,6 +16825,24 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Ensure The Current User Has A Workspace
+     * Select an eligible organization and idempotently ensure the current user has a private pod and assistant.
+     * @param requestBody
+     * @returns FirstWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static usersEnsureFirstWorkspace(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/users/me/first-workspace",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get User Profile
      * Get the current user's profile
      * @returns UserResponse Successful Response
@@ -16712,6 +16881,9 @@ var LemmaClient = (() => {
     }
     current() {
       return this.client.request(() => UsersService.userCurrentGet());
+    }
+    ensureFirstWorkspace(payload = {}) {
+      return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));
     }
     getProfile() {
       return this.client.request(() => UsersService.userProfileGet());
@@ -17168,6 +17340,222 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/namespaces/workspace.ts
+  var MAX_READ_BYTES = 8 * 1024 * 1024;
+  var WebLoginsNamespace = class {
+    constructor(http) {
+      __publicField(this, "http", http);
+    }
+    /**
+     * Every site the browser is signed in to.
+     *
+     * Not paged: this is what one browser is holding, not a table that grows.
+     * `wake` is off by default so that rendering the list is never what starts
+     * somebody's computer — a paused one answers `sleeping`.
+     */
+    list(options = {}) {
+      const params = {};
+      if (options.wake) params.wake = "true";
+      return this.http.request("GET", "/web-logins", { params });
+    }
+    /**
+     * Sign the browser out of a site.
+     *
+     * Really signs it out, which its predecessor did not: that removed Lemma's
+     * encrypted copy and left the browser as it was. Needs the computer
+     * running, and says so rather than reporting a success it did not achieve.
+     */
+    remove(origin) {
+      return this.http.request("DELETE", "/web-logins", {
+        params: { origin }
+      });
+    }
+    /** What a sign-in link is asking for, addressed by the pause it is for.
+     *
+     * The conversation and tool call are a lookup, not a credential: the server
+     * resolves both against the caller's own session, so a forwarded link answers
+     * exactly as an invented one does.
+     */
+    pendingSignIn(conversationId, toolCallId) {
+      return this.http.request(
+        "GET",
+        `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}`
+      );
+    }
+    /**
+     * Say whether you signed in, so the waiting run can carry on.
+     *
+     * One call for both answers because it is one answer. Nothing is stored:
+     * the browser holds the session, so finishing is the person finishing. The
+     * reply says whether the site stopped asking, which the agent is told.
+     */
+    answerSignIn(conversationId, toolCallId, options) {
+      return this.http.request(
+        "POST",
+        `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
+        { body: { signed_in: options.signedIn } }
+      );
+    }
+  };
+  var WorkspaceNamespace = class {
+    constructor(http) {
+      __publicField(this, "http", http);
+    }
+    listFiles(options = {}) {
+      return this.http.request("GET", "/workspace/files", {
+        params: {
+          ...options.path ? { path: options.path } : {},
+          ...options.wake ? { wake: true } : {},
+          // From a previous response's `nextAfter`. A directory bigger than one
+          // page was otherwise a dead end.
+          ...options.after ? { after: options.after } : {}
+        }
+      });
+    }
+    statFile(path) {
+      return this.http.request("GET", "/workspace/files:stat", {
+        params: { path }
+      });
+    }
+    /**
+     * A signed, short-lived URL for the live browser view.
+     *
+     * Minting one starts the workspace if it is paused, so ask whether it is
+     * awake before calling this rather than after.
+     */
+    browserAccess(ttlSeconds = 1800) {
+      return this.http.request("POST", "/workspace/apps/browser/access", {
+        body: { ttl_seconds: ttlSeconds }
+      });
+    }
+    /**
+     * Whether this person's computer is ready, without starting anything.
+     *
+     * `ready` it is running; `downloading` it is fetching its image, which the
+     * first start after an update does; `starting` it is coming up; `asleep` it
+     * is not running and starts on first use; `unavailable` it could not be asked.
+     */
+    status() {
+      return this.http.request("GET", "/workspace/status");
+    }
+    /**
+     * Whether the browser can be watched, without starting anything.
+     *
+     * `asleep` the computer is paused; `stopped` it is up but the browser is not
+     * (its resting state after two idle minutes); `running` there is one now;
+     * `unavailable` the relay did not answer, which on an older image stays true
+     * until it is replaced; `unsupported` this kind of computer cannot do it.
+     */
+    browserStatus() {
+      return this.http.request("GET", "/workspace/browser/status");
+    }
+    /**
+     * What page the browser signing in to `origin` is actually showing.
+     *
+     * Polled by the sign-in page's anti-phishing host display while its VNC
+     * pane is open: VNC is pixels, not events, so there is nothing on the wire
+     * to react to the way the JSON stream this replaced had with its `url`
+     * message on every navigation. `null` when nothing can be read.
+     */
+    browserCurrentPageUrl(origin) {
+      return this.http.request("GET", "/workspace/browser/current-page-url", {
+        params: { origin }
+      });
+    }
+    /**
+     * Fit the workspace display to the pane showing it.
+     *
+     * The pane is a box of an arbitrary shape and the display is a real screen
+     * with a fixed size, so one of them has to move. Scaling the picture is
+     * what made the browser a small letterboxed rectangle; resizing the display
+     * means the pixels sent are the pixels shown, and a narrow pane gets a
+     * narrow *viewport* — so sites serve their mobile layout on a phone.
+     *
+     * `size` is what the display actually became, which may be smaller than
+     * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
+     * could be resized (a sleeping computer, an older image), which is not an
+     * error — the pane keeps the picture it had.
+     */
+    browserResizeDisplay(width, height) {
+      return this.http.request("POST", "/workspace/browser/display-size", {
+        body: { width, height }
+      });
+    }
+    /**
+     * Raw bytes of one file, from `offset`, at most `length` bytes.
+     *
+     * The query is built into the path because `requestBytes` takes no options —
+     * it is the byte-returning sibling of `request`, not a full request builder.
+     */
+    /**
+     * A file, or a slice of one.
+     *
+     * `range` sends an HTTP `Range` header and gets a 206 back. That is how a
+     * file larger than the server's single-read ceiling is reachable at all:
+     * ask for it a piece at a time. See `readWholeFile`, which does that for
+     * you.
+     */
+    readFile(path, options = {}) {
+      const query = new URLSearchParams({ path });
+      if (options.offset) query.set("offset", String(options.offset));
+      if (options.length) query.set("length", String(options.length));
+      return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`, {
+        headers: options.range ? { Range: `bytes=${options.range.start}-${options.range.end}` } : void 0
+      });
+    }
+    /**
+     * A whole file, however big, in as many requests as that takes.
+     *
+     * The server caps one read at 8 MiB, which used to mean a larger file
+     * could be listed and never opened — the pane offered a download that
+     * silently returned the first 8 MiB under the full name. Ranges are
+     * requested in order and stitched, so what a person saves is the file.
+     *
+     * **The size is discovered, not trusted.** This took a `sizeBytes` and
+     * stopped there, which made the caller's bookkeeping load-bearing for
+     * whether a download was complete. The explorer's was wrong on the case
+     * that matters: the open file lives in the URL and its size lived in React
+     * state, so a reload restored the path with a size of 0 and every download
+     * after it truncated at 8 MiB, under the whole file's name. Reading until
+     * the server returns a short slice needs nobody to have remembered
+     * anything. `sizeBytes` survives only as a hint that lets a small file skip
+     * straight to a single unranged read; passing 0 or nothing is correct.
+     *
+     * `chunk` is clamped to the server's ceiling rather than trusted either.
+     * Asking for 64 MiB got 8 MiB back and advanced the cursor by 64, so seven
+     * eighths of the file was skipped and the result was a corrupt download of
+     * roughly the right length — the same failure, reintroduced by the
+     * parameter meant to tune it.
+     */
+    async readWholeFile(path, sizeBytes = 0, chunk = MAX_READ_BYTES) {
+      const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
+      const parts = [];
+      let start = 0;
+      if (sizeBytes > 0 && sizeBytes <= step) {
+        const only = await this.readFile(path);
+        if (only.size < MAX_READ_BYTES) return only;
+        parts.push(only);
+        start = only.size;
+      }
+      for (; ; ) {
+        let part;
+        try {
+          part = await this.readFile(path, {
+            range: { start, end: start + step - 1 }
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.statusCode === 416) break;
+          throw error;
+        }
+        if (part.size === 0) break;
+        parts.push(part);
+        start += part.size;
+        if (part.size < step) break;
+      }
+      return new Blob(parts);
+    }
+  };
+
   // src/openapi_client/services/QueryService.ts
   var QueryService = class {
     /**
@@ -17375,6 +17763,8 @@ var LemmaClient = (() => {
       __publicField(this, "workflows");
       __publicField(this, "apps");
       __publicField(this, "widgets");
+      __publicField(this, "workspace");
+      __publicField(this, "webLogins");
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
       __publicField(this, "schedules");
@@ -17429,6 +17819,8 @@ var LemmaClient = (() => {
       this.notifications = new NotificationsNamespace(this._generated, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
+      this.workspace = new WorkspaceNamespace(this._http);
+      this.webLogins = new WebLoginsNamespace(this._http);
       this.connectors = new ConnectorsNamespace(this._generated, this._http);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
       this.schedules = new SchedulesNamespace(this._generated, podIdFn);
@@ -17534,6 +17926,51 @@ var LemmaClient = (() => {
     });
   }
 
+  // src/browser-compose.ts
+  var LEMMA_COMPOSE_MESSAGE_TYPE = "lemma-compose";
+  var LEMMA_COMPOSE_RESULT_MESSAGE_TYPE = "lemma-compose-result";
+  var ACKNOWLEDGEMENT_TIMEOUT_MS = 1500;
+  function isAcknowledgement(value, id) {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value;
+    return candidate.type === LEMMA_COMPOSE_RESULT_MESSAGE_TYPE && candidate.id === id;
+  }
+  function canComposeInConversation() {
+    return typeof window !== "undefined" && window.parent !== window;
+  }
+  function composeInConversation(text, options = {}) {
+    const body = typeof text === "string" ? text.trim() : "";
+    if (!body || !canComposeInConversation()) return Promise.resolve(false);
+    const id = `compose-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const message = {
+      type: LEMMA_COMPOSE_MESSAGE_TYPE,
+      id,
+      text: body,
+      newConversation: options.newConversation === true
+    };
+    return new Promise((resolve2) => {
+      let settled = false;
+      const finish = (took) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        window.removeEventListener("message", hear);
+        resolve2(took);
+      };
+      const hear = (event) => {
+        if (event.source !== window.parent || !isAcknowledgement(event.data, id)) return;
+        finish(true);
+      };
+      const timer = window.setTimeout(() => finish(false), ACKNOWLEDGEMENT_TIMEOUT_MS);
+      window.addEventListener("message", hear);
+      try {
+        window.parent.postMessage(message, "*");
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
   // src/browser.ts
   if (typeof globalThis !== "undefined") {
     const scope = globalThis;
@@ -17552,7 +17989,11 @@ var LemmaClient = (() => {
       LEMMA_THEME_EVENT,
       applyLemmaHostTheme,
       getLemmaHostTheme,
-      subscribeLemmaHostTheme
+      subscribeLemmaHostTheme,
+      LEMMA_COMPOSE_MESSAGE_TYPE,
+      LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
+      canComposeInConversation,
+      composeInConversation
     };
     if (!scope.LemmaClient) {
       scope.LemmaClient = surface;

@@ -250,7 +250,7 @@ pub(crate) fn workspace_capability_for(configured: impl Iterator<Item = String>)
 /// window and must not pull a working workspace out from under the user.
 pub(crate) fn resume_still_serving(app: &AppHandle, resumed_url: &str) -> bool {
     let shell: State<Shell> = app.state();
-    let ui = shell.ui.lock().unwrap();
+    let ui = shell.ui.lock_or_recover();
     ui.url.is_empty() || ui.url == resumed_url
 }
 

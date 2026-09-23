@@ -15,8 +15,9 @@ and the storage phase can share them without an import cycle.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 from uuid import UUID
 
@@ -41,6 +42,9 @@ from app.modules.datastore.domain.ports import (
     DatastoreStoragePort,
 )
 from app.modules.datastore.services.files.path_resolver import PathResolver
+from app.modules.datastore.infrastructure.storage_paths import (
+    build_datastore_child_container_prefix,
+)
 from app.modules.datastore.services.files.projection import FileProjection
 
 logger = get_logger(__name__)
@@ -63,6 +67,101 @@ class _PathDeletionCleanup:
 class _StorageMove:
     source_key: str
     destination_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ArtifactPlan:
+    """What a rename can carry across, and what it destroys.
+
+    Separate fields because they are separate decisions with separate
+    consequences: one is bytes to copy, the other is rows to mark. Collapsing
+    them -- an empty move list standing for "nothing to do" -- is how a renamed
+    document lost its converted output and kept a COMPLETED status.
+    """
+
+    moves: tuple["_ArtifactMove", ...]
+    #: File ids whose artifacts the new name invalidates, so they must be
+    #: regenerated rather than carried.
+    invalidated: frozenset[UUID]
+
+
+@dataclass(frozen=True, slots=True)
+class _ArtifactMove:
+    """A file's derived artifacts following its bytes to a new path.
+
+    Converted markdown, extracted figures, the manifest and any cached page
+    renders live in a hidden container beside the file, keyed by its path. A
+    rename used to delete that container and mark the row for reprocessing, so
+    renaming a folder re-extracted every document under it -- OCR included --
+    to arrive at artifacts identical to the ones just deleted.
+
+    They are a pure function of the bytes, and the bytes are being moved. So
+    they move too, and nothing is re-extracted.
+    """
+
+    file_id: UUID
+    source_prefix: str
+    destination_prefix: str
+
+
+def plan_artifact_moves(
+    *,
+    file_entity: DatastoreFileEntity,
+    descendants: list[DatastoreFileEntity],
+    previous_path: str,
+    has_content: bool,
+) -> _ArtifactPlan:
+    """Which derived containers a rename can carry across, and which it voids.
+
+    The rule is the file's **name**, not its path. Artifacts describe the bytes
+    as read through a particular filename -- `report.pdf` extracts differently
+    from `report.docx` -- so a rename that changes the name invalidates them. A
+    rename that only moves a file, or renames the folder above it, leaves every
+    name intact, which is precisely the case that used to cost the most.
+
+    Both halves come back, and that is the correction: refusing the move is only
+    half an answer, because the old container is swept after the commit either
+    way. A file whose artifacts are void has to be *said* to be void, or it
+    keeps a COMPLETED status with no converted output at either path and nothing
+    has any reason to produce it again.
+
+    A content update plans nothing either way: new bytes need new artifacts, and
+    `should_sync` already says so.
+    """
+    if has_content or previous_path == file_entity.path:
+        return _ArtifactPlan(moves=(), invalidated=frozenset())
+
+    moves: list[_ArtifactMove] = []
+    invalidated: set[UUID] = set()
+
+    def carry(entity: DatastoreFileEntity, was_at: str, now_at: str) -> None:
+        if not entity.is_file:
+            return
+        if _file_name(was_at) != _file_name(now_at):
+            invalidated.add(entity.id)
+            return
+        moves.append(
+            _ArtifactMove(
+                file_id=entity.id,
+                source_prefix=build_datastore_child_container_prefix(
+                    entity.pod_id, was_at
+                ),
+                destination_prefix=build_datastore_child_container_prefix(
+                    entity.pod_id, now_at
+                ),
+            )
+        )
+
+    carry(file_entity, previous_path, file_entity.path)
+    if file_entity.is_folder:
+        for descendant in descendants:
+            suffix = descendant.path.removeprefix(previous_path)
+            carry(descendant, descendant.path, f"{file_entity.path}{suffix}")
+    return _ArtifactPlan(moves=tuple(moves), invalidated=frozenset(invalidated))
+
+
+def _file_name(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
 
 
 def plan_storage_moves(
@@ -117,8 +216,18 @@ class _UpdatePlan:
     has_content: bool
     rename_moved: bool
     storage_moves: tuple[_StorageMove, ...]
+    artifact_moves: tuple[_ArtifactMove, ...]
+    #: The folder's descendants as they were *before* the rename. Carried so the
+    #: index can be told each one's new path without reading them back, and
+    #: empty for anything that is not a folder rename.
+    renamed_descendants: tuple[DatastoreFileEntity, ...]
     should_sync: bool
     requester_user_id: UUID
+    #: File ids whose derived artifacts will not survive this update, so the
+    #: rows have to be marked for reprocessing. Seeded by the planner with the
+    #: files a name change voids, and added to by the storage phase when a copy
+    #: fails. Mutable on a frozen dataclass the way `file_entity` already is.
+    artifacts_to_regenerate: set[UUID] = field(default_factory=set)
 
 
 class FileStoragePhase:
@@ -189,6 +298,41 @@ class FileStoragePhase:
                     "Failed to move file content after rename"
                 ) from exc
 
+        # Outside both branches rather than inside the rename one: the planner
+        # already returns nothing for a content update or a non-rename, and
+        # tying this to `storage_moves` being non-empty would silently skip a
+        # folder whose files all sit deeper than one level.
+        await self._carry_artifacts(plan)
+
+    async def _carry_artifacts(self, plan: _UpdatePlan) -> None:
+        """Copy each file's derived container, noting the ones that would not go.
+
+        Copies, and leaves the source alone. The old location is dropped in
+        `finalize_update`, after the row naming the new one has been committed --
+        the same order the file's own bytes already follow, and for the same
+        reason: a persistence failure after a *move* rolled the path back and
+        left the file readable with its converted output gone.
+
+        Best-effort, and deliberately not part of the rollback above: a derived
+        artifact is regenerable and the file's own bytes are not, so a figure
+        that failed to copy must not cost somebody their rename. What it costs
+        instead is one reprocess.
+
+        Before the DB phase, because that phase is where the mark has to land.
+        """
+        for move in plan.artifact_moves:
+            try:
+                await self.storage.copy_prefix(
+                    move.source_prefix, move.destination_prefix
+                )
+            except DatastoreDomainError:
+                plan.artifacts_to_regenerate.add(move.file_id)
+                logger.debug(
+                    "datastore.storage_phase.carrying_child_artifacts_s.diagnostic",
+                    file_id=str(move.file_id),
+                    exc_info=True,
+                )
+
     async def finalize_update(
         self, plan: _UpdatePlan, updated_entity: DatastoreFileEntity
     ) -> None:
@@ -236,18 +380,79 @@ class FileStoragePhase:
             )
 
         if plan.previous_path != updated_entity.path:
-            if updated_entity.is_file and updated_entity.search_enabled:
-                update_file_path = getattr(search_service, "update_file_path", None)
-                if update_file_path is not None:
-                    with suppress(Exception):
-                        await update_file_path(
-                            updated_entity.id,
-                            updated_entity.path,
-                            self.paths._parent_path(updated_entity.path),
-                        )
-            await self.projection.delete_child_artifacts(
-                updated_entity.pod_id,
-                plan.previous_path,
+            await self._sync_renamed_paths(plan, updated_entity, search_service)
+
+    async def _sync_renamed_paths(
+        self,
+        plan: _UpdatePlan,
+        updated_entity: DatastoreFileEntity,
+        search_service,
+    ) -> None:
+        """Tell the index where things are now, and drop what is behind them.
+
+        The index keys chunks by file id, so a rename is a metadata correction
+        rather than a reindex -- which is the whole reason a rename no longer
+        needs to re-extract anything. The renamed file already got this; its
+        descendants did not, so a renamed folder left every file beneath it
+        claiming its old path in search results.
+
+        The old container goes for **every** renamed file, and it goes here
+        rather than in the storage phase. A carried file's artifacts were
+        *copied* to the new path, so the old copy is a duplicate the moment the
+        row is committed; an invalidated one's are stale by definition. Doing it
+        before the commit is what left a rolled-back rename without its
+        converted output.
+        """
+        update_file_path = getattr(search_service, "update_file_path", None)
+
+        # `(entity, where it is now, where it was)`. The descendants in the plan
+        # were read before the rename and still carry their old paths, so the
+        # new one is derived rather than read back.
+        renamed = [(updated_entity, updated_entity.path, plan.previous_path)]
+        for descendant in plan.renamed_descendants:
+            suffix = descendant.path.removeprefix(plan.previous_path)
+            renamed.append(
+                (descendant, f"{updated_entity.path}{suffix}", descendant.path)
+            )
+
+        for entity, now_at, was_at in renamed:
+            if (
+                entity.is_file
+                and entity.search_enabled
+                and update_file_path is not None
+            ):
+                with suppress(Exception):
+                    await update_file_path(
+                        entity.id, now_at, self.paths._parent_path(now_at)
+                    )
+            # Folders have no derived container, so there was never anything at
+            # their old path to sweep.
+            if entity.is_file:
+                await self.projection.delete_child_artifacts(entity.pod_id, was_at)
+
+    async def _purge_search_entries(self, search_service, files: Sequence) -> None:
+        """Drop a deleted folder's chunks, in one transaction rather than N.
+
+        Per-file removal opens its own session and commits, so deleting five
+        hundred files opened five hundred sessions -- on the path that runs
+        *after* the rows are gone, where a failure means deleted content stays
+        searchable and retrievable by an agent. One statement also means the
+        folder's chunks go together or not at all.
+
+        `remove_files` is on the port, so a search backend either has it or is
+        not one. The single handler below is the same one the per-file loop had:
+        this is a data-deletion failure, not a cost, and it is logged as one.
+        """
+        file_ids = [UUID(item["file_id"]) for item in files]
+        if not file_ids:
+            return
+        try:
+            await search_service.remove_files(file_ids)
+        except Exception:
+            logger.error(
+                "datastore.storage_phase.deleted_file_search_purge.failed",
+                file_count=len(file_ids),
+                exc_info=True,
             )
 
     async def _delete_move_sources(
@@ -314,28 +519,13 @@ class FileStoragePhase:
             for item in files:
                 with suppress(Exception):
                     await self.storage.delete_file(item["storage_key"])
-                try:
-                    await search_service.remove_file(UUID(item["file_id"]))
-                except Exception:
-                    # Chunks of a DELETED file left in the index means deleted
-                    # content stays searchable and retrievable by an agent.
-                    # The loop keeps going so one bad file does not strand the
-                    # batch, but this is a data-deletion failure, not a cost.
-                    logger.error(
-                        "datastore.storage_phase.deleted_file_search_purge.failed",
-                        file_id=item["file_id"],
-                        exc_info=True,
-                    )
+            await self._purge_search_entries(search_service, files)
             return
         for item in files:
             with suppress(Exception):
                 await self.storage.delete_file(item["storage_key"])
             await self.projection.delete_child_artifacts(pod_id, item["path"])
-            try:
-                await search_service.remove_file(UUID(item["file_id"]))
-            except Exception:
-                logger.error(
-                    "datastore.storage_phase.deleted_file_search_purge.failed",
-                    file_id=item["file_id"],
-                    exc_info=True,
-                )
+        # Through the same helper as the folder branch: one file is the batch of
+        # one, and having a single place that can fail to purge a deleted file's
+        # chunks is worth more here than saving a list.
+        await self._purge_search_entries(search_service, files)

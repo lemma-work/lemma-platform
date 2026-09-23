@@ -15,6 +15,7 @@ import {
     hasSystemDefault,
     isTenantConfigured,
     installUsesOAuth,
+    isUnmanagedComposio,
     requiresInstallConfig,
     supportsCustomConfig,
 } from './connector-utils';
@@ -211,6 +212,28 @@ const composioOAuthKind = {
     supports_org_custom_oauth: false,
 } satisfies Partial<KindSpec> as Partial<KindSpec>;
 
+/**
+ * A toolkit Composio brokers but holds no credentials for — Shopify, Meta Ads.
+ *
+ * `install_config_schema` is the org's own form, derived from Composio's
+ * auth-config-creation fields, and is deliberately a different field from
+ * `config_schema`, which on a Composio kind is the end user's credential form.
+ */
+const composioUnmanagedKind = {
+    kind: ConnectorKind.COMPOSIO,
+    auth_scheme: AuthScheme.OAUTH2,
+    system_default_available: false,
+    supports_org_custom_oauth: true,
+    install_config_schema: {
+        type: 'object',
+        required: ['client_id', 'client_secret'],
+        properties: {
+            client_id: { type: 'string' },
+            client_secret: { type: 'string', format: 'password' },
+        },
+    },
+} satisfies Partial<KindSpec> as Partial<KindSpec>;
+
 describe('a Composio toolkit', () => {
     it('goes straight to the credential form instead of Advanced setup', () => {
         // The regression this guards: the API-key form's required fields read
@@ -238,6 +261,46 @@ describe('a Composio toolkit', () => {
     it('leaves the OAuth toolkit connecting in one click, as before', () => {
         expect(requiresInstallConfig(composioOAuthKind as KindSpec)).toBe(false);
         expect(canConnectWithDefaults(composioOAuthKind as KindSpec)).toBe(true);
+    });
+});
+
+describe('a Composio toolkit Composio has no credentials for', () => {
+    it('asks the org to set it up instead of offering a one-click connect', () => {
+        // The bug in full: the catalog said `system_default_available` for
+        // every Composio toolkit, so the row offered Connect, the click enabled
+        // a SYSTEM_DEFAULT install, and the connect asked Composio for managed
+        // credentials that do not exist. Composio answered "Composio does not
+        // have managed credentials for this toolkit" and the user saw a 500.
+        expect(isUnmanagedComposio(composioUnmanagedKind as KindSpec)).toBe(true);
+        expect(canConnectWithDefaults(composioUnmanagedKind as KindSpec)).toBe(false);
+        expect(requiresInstallConfig(composioUnmanagedKind as KindSpec)).toBe(true);
+    });
+
+    it('offers the org its own credentials, which a managed toolkit must not', () => {
+        expect(supportsCustomConfig(composioUnmanagedKind as KindSpec)).toBe(true);
+        // "Use my own" on a managed toolkit is a button whose only outcome is a
+        // 400: there is no per-org Composio account to point it at.
+        expect(supportsCustomConfig(composioOAuthKind as KindSpec)).toBe(false);
+        expect(supportsCustomConfig(composioApiKeyKind as KindSpec)).toBe(false);
+    });
+
+    it('leaves every managed toolkit exactly as it was', () => {
+        expect(isUnmanagedComposio(composioOAuthKind as KindSpec)).toBe(false);
+        expect(isUnmanagedComposio(composioApiKeyKind as KindSpec)).toBe(false);
+        expect(canConnectWithDefaults(composioOAuthKind as KindSpec)).toBe(true);
+        expect(canConnectWithDefaults(composioApiKeyKind as KindSpec)).toBe(true);
+        expect(requiresInstallConfig(composioApiKeyKind as KindSpec)).toBe(false);
+    });
+
+    it('keeps the org form and the end user form apart', () => {
+        // These are two forms for two different people. Reading the org's here
+        // would ask whoever is connecting an account for a client id and
+        // secret; reading the user's as an install config would ask the org for
+        // an API key it does not have.
+        expect(getCredentialSchema(composioUnmanagedKind as KindSpec)).toBeNull();
+        expect(
+            getCredentialSchema(composioApiKeyKind as KindSpec)?.required,
+        ).toEqual(['generic_api_key']);
     });
 });
 

@@ -2,7 +2,7 @@
 
 use super::*;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AppSpec {
     pub(crate) name: String,
@@ -122,6 +122,19 @@ pub(crate) enum CoreStage {
     SuperTokens,
 }
 
+/// What a workspace sandbox serves, for a container that did not record it.
+///
+/// The list a sandbox is actually run with arrives in `sandbox.ensure` and is
+/// written to `lemma.work/apps`, which is what `snapshot_from_inspect` reads.
+/// This is the fallback for containers created before that label existed, and
+/// it is the reason for the note: it is a *copy* of a list the backend owns
+/// (`workspace/providers/lemma_local.py`), and a copy is how the two came to
+/// disagree. The browser relay was declared there, published here, and missing
+/// from this list -- so every snapshot omitted port 4850, `reach_port` refused
+/// it, and the whole browser surface (the VNC pane, `browser_sign_in`, saved
+/// logins) was unreachable on Desktop while the container was listening the
+/// entire time. Anything added on the Python side belongs here too, until
+/// every sandbox in the field carries the label and this can go.
 pub(crate) fn workspace_apps() -> Vec<AppSpec> {
     vec![
         AppSpec {
@@ -141,6 +154,17 @@ pub(crate) fn workspace_apps() -> Vec<AppSpec> {
             startup: "lazy".into(),
             exposure: "workspace_user".into(),
             auth_mode: "workspace_access_token".into(),
+        },
+        AppSpec {
+            name: "relay".into(),
+            public_slug: "relay".into(),
+            port: 4850,
+            health_path: "/health".into(),
+            startup: "lazy".into(),
+            // Private: only the backend dials this, holding the token it
+            // delivered. The dashboard on 4848 is the one a person reaches.
+            exposure: "private".into(),
+            auth_mode: "manager_api_key".into(),
         },
     ]
 }

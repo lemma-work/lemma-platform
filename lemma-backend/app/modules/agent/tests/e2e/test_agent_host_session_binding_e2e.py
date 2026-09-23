@@ -71,6 +71,8 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     await remember_provider_session(
         uow, old.model_copy(update={"state": AgentHostRunState.RUNNING})
     )
+    # Deliberately the legacy root: a conversation recorded before the move
+    # keeps the cwd it was stamped with, and rebinding must not re-home it.
     await ConversationRepository(uow).set_conversation_metadata_key(
         conversation_id, "cwd", "/workspace/c/test/sandbox"
     )

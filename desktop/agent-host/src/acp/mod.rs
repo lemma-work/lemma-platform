@@ -35,6 +35,7 @@ mod options;
 mod outcome;
 mod permission;
 mod prompt;
+mod session_setup;
 mod supervision;
 
 pub use driver::*;
@@ -42,6 +43,7 @@ pub(crate) use options::*;
 pub use outcome::*;
 pub(crate) use permission::*;
 pub use prompt::*;
+pub(crate) use session_setup::*;
 pub(crate) use supervision::*;
 
 #[cfg(test)]
@@ -52,6 +54,10 @@ pub struct AcpRunRequest {
     pub adapter: ResolvedAdapter,
     pub run_spec: RunSpec,
     pub scratch_directory: PathBuf,
+    /// The Lemma identity this run gives its agent. Resolved by the runtime
+    /// rather than here, because writing the token file needs the Agent Host's
+    /// private directory and the ACP layer has no business knowing that path.
+    pub agent_environment: std::collections::BTreeMap<String, String>,
     pub mcp_server: Option<McpServer>,
     /// Whether this harness advertised `loadSession` at probe time. A run only
     /// tries to resume `run_spec.resume_session_id` when it did.

@@ -314,6 +314,7 @@ class ApprovalCoordinator:
                     decision=decision,
                     response=response,
                     paused_agent_run_id=paused_run_id,
+                    tool_call_id=approval_id,
                 )
                 await self.pauses.append_pause_tool_return(
                     conversation=conversation,

@@ -124,7 +124,35 @@ pub(crate) fn max_sandboxes() -> usize {
         .min(MAX_SANDBOX_CEILING)
 }
 
+/// How long a running-sandbox count is reused for the health answer.
+///
+/// Shorter than the host's five-second probe interval would defeat the point;
+/// much longer would make `active_sandboxes` visibly stale in a status pane.
+const SANDBOX_COUNT_TTL: std::time::Duration = std::time::Duration::from_secs(15);
+
 impl<E: Engine + 'static> GuestService<E> {
+    /// The count, reused if it was taken recently.
+    ///
+    /// For the health answer only. Counting forks `nerdctl ps`, and the host
+    /// asks every five seconds for as long as the app is open, so an idle
+    /// machine spent a containerd CLI process 17,280 times a day being told
+    /// the same number. Admission calls the uncached version deliberately: a
+    /// stale count there would let a sandbox start that should not.
+    pub(crate) fn cached_running_sandbox_count(&self) -> Result<usize, GuestError> {
+        if let Ok(cache) = self.sandbox_count_cache.lock() {
+            if let Some((taken_at, count)) = *cache {
+                if taken_at.elapsed() < SANDBOX_COUNT_TTL {
+                    return Ok(count);
+                }
+            }
+        }
+        let count = self.running_sandbox_count()?;
+        if let Ok(mut cache) = self.sandbox_count_cache.lock() {
+            *cache = Some((Instant::now(), count));
+        }
+        Ok(count)
+    }
+
     pub(crate) fn running_sandbox_count(&self) -> Result<usize, GuestError> {
         let output = self.run_checked(&[
             "ps".into(),

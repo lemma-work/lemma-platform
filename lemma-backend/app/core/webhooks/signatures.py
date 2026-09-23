@@ -75,11 +75,47 @@ def timestamp_within_skew(
     return abs(current - signed_at) <= max_skew_seconds
 
 
+def _comparable(value: str) -> bytes:
+    """The bytes to compare a presented secret or digest as.
+
+    `hmac.compare_digest` raises `TypeError` on two `str`s unless both are pure
+    ASCII, and everything compared here is attacker-supplied: a header, a query
+    parameter, a field lifted out of an unverified JSON body. Starlette decodes
+    headers as latin-1, so any byte from 0x80 up arrives as a non-ASCII `str`
+    and the comparison that was meant to reject the request raised instead --
+    an unauthenticated 500 on every webhook route, from one byte.
+
+    `surrogatepass` because a JSON body may decode to a lone surrogate, which
+    plain UTF-8 encoding refuses. A comparison is not the place to discover
+    that: an input that cannot be encoded is still an input that does not
+    match, and it must say so rather than raise.
+    """
+    return value.encode("utf-8", "surrogatepass")
+
+
+def constant_time_equals(presented: str | None, expected: str | None) -> bool:
+    """Whether two secrets are the same, without leaking where they diverge.
+
+    Public because the schemes below are not the only constant-time comparison
+    on a webhook path -- a verify-token handshake and a Slack app id are
+    compared by their callers, and those callers were the ones raising on
+    non-ASCII input. Absent on either side is never a match: an unconfigured
+    deployment must not accept "no token" as equal to "no token".
+    """
+    if not presented or not expected:
+        return False
+    return hmac.compare_digest(_comparable(expected), _comparable(presented))
+
+
 def _matches_any(expected: Iterable[str], presented: str) -> bool:
     # `any()` over compare_digest rather than a set membership test: the point
     # of compare_digest is that it does not return early on the first differing
     # byte, and `in` does.
-    return any(hmac.compare_digest(candidate, presented) for candidate in expected)
+    presented_bytes = _comparable(presented)
+    return any(
+        hmac.compare_digest(_comparable(candidate), presented_bytes)
+        for candidate in expected
+    )
 
 
 def hex_digest_signature_matches(

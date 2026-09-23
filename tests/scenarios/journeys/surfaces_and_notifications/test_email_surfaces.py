@@ -84,8 +84,16 @@ async def mailbox(world, run):
         # deployment's own Resend key and gets its own address under the
         # inbound domain. Sharing one key across pods is the design, not a
         # shortcut — see `PlatformCapabilities["RESEND"]`.
+        #
+        # Unnamed, which is the "connect email" the UI sends and the only one
+        # that can succeed for an agent that exists. Every agent is given a
+        # mailbox as it is created, and `uq_agent_surface_agent_type` allows one
+        # Resend surface per agent — so a *named* request asks for a second one
+        # and is refused with `AGENT_SURFACE_AGENT_PLATFORM_CONFLICT`. This
+        # fixture asked for a name and spent four scenarios erroring on that 409
+        # before anybody read it.
         surface = await alice.connects_a_surface(
-            in_pod=pod, platform="RESEND", named="inbox", agent=agent["name"]
+            in_pod=pod, platform="RESEND", agent=agent["name"], unnamed=True
         )
         yield alice, pod, surface
     finally:

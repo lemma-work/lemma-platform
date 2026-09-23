@@ -11,6 +11,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.subscription_models import SubscriptionModels
 from app.modules.agent.domain.vision import AgentVisionMode
@@ -22,6 +23,9 @@ from app.modules.agent.services.workspace_location import (
     pod_cwd_from_workspace_cwd,
 )
 from app.modules.workspace.contracts.tooling import WorkspaceFileManager
+
+
+TOOL_COMMENT_DESC = "One-line statement of intent, shown to the user."
 
 
 class BaseAgentContext(AgentContext):
@@ -71,16 +75,31 @@ class BaseAgentContext(AgentContext):
 
     @property
     def file_manager(self) -> WorkspaceFileManager:
-        return WorkspaceFileManager(
-            self.user_id,
-            cwd=self.get_workspace_cwd().removeprefix("/workspace/"),
-        )
+        # Passed as stored, absolute. The manager splits it and keeps the root
+        # it was written under -- a `removeprefix` of the *current* root did
+        # nothing for a cwd under the previous one, leaving an absolute string
+        # where a relative one was required.
+        return WorkspaceFileManager(self.user_id, cwd=self.get_workspace_cwd())
 
     async def get_subscription_models(self) -> SubscriptionModels:
         return await resolve_subscription_models(self.user_id)
 
     def get_workspace_cwd(self) -> str:
-        return self.workspace_cwd or f"/workspace/conversations/{self.conversation_id}"
+        """This conversation's directory, or the project root when there is none.
+
+        The root, not a directory named after the conversation id. A cwd of that
+        shape is not what `resolve_workspace_location` produces -- conversations
+        live at `c/{date}/{slug}` -- so inventing one here put the agent
+        somewhere its own metadata did not name, which is the disagreement
+        between the prompt and the tools that this path has already caused once.
+
+        Every caller that *has* a conversation resolves the real cwd and passes
+        it. The one that does not is the pod MCP bridge, which serves a client
+        holding a pod token and carries a nil conversation id -- so the fallback
+        it used to take named a directory after all-zeroes. The project root is
+        the honest answer for "no conversation".
+        """
+        return self.workspace_cwd or WORKSPACE_ROOT
 
     def get_pod_cwd(self) -> str:
         # Callers on the main run path always set `pod_cwd` explicitly (see

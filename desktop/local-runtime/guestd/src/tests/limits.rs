@@ -192,3 +192,62 @@ fn only_real_container_ids_reach_the_stop_command() {
         assert!(parse_container_ids(hostile).is_err(), "{hostile}");
     }
 }
+
+/// Counting running sandboxes forks `nerdctl ps`, and the host asks for guest
+/// health every five seconds for as long as the app is open. An idle machine
+/// was spending a containerd CLI process 17,280 times a day to be told the
+/// same number.
+#[test]
+fn health_reuses_a_recent_sandbox_count_instead_of_forking_again() {
+    let root = tempdir().unwrap();
+    let service = GuestService::new(
+        FakeEngine::new(vec![output(true, "one-container-id\n")]),
+        root.path().into(),
+        Some("127.0.0.1".into()),
+        "192.168.64.1".into(),
+        None,
+    )
+    .unwrap();
+
+    let first = service.cached_running_sandbox_count().unwrap();
+    let second = service.cached_running_sandbox_count().unwrap();
+    let third = service.cached_running_sandbox_count().unwrap();
+
+    assert_eq!((first, second, third), (1, 1, 1));
+    let counted = service
+        .engine
+        .commands()
+        .into_iter()
+        .filter(|argv| argv.first().map(String::as_str) == Some("ps"))
+        .count();
+    assert_eq!(counted, 1, "each call forked the container CLI again");
+}
+
+/// Admission is not allowed to use it: a stale count there would let a sandbox
+/// start that the machine has no room for.
+#[test]
+fn admission_counts_for_itself_every_time() {
+    let root = tempdir().unwrap();
+    let service = GuestService::new(
+        FakeEngine::new(vec![
+            output(true, "one-container-id\n"),
+            output(true, "one-container-id\n"),
+        ]),
+        root.path().into(),
+        Some("127.0.0.1".into()),
+        "192.168.64.1".into(),
+        None,
+    )
+    .unwrap();
+
+    let _ = service.running_sandbox_count().unwrap();
+    let _ = service.running_sandbox_count().unwrap();
+
+    let counted = service
+        .engine
+        .commands()
+        .into_iter()
+        .filter(|argv| argv.first().map(String::as_str) == Some("ps"))
+        .count();
+    assert_eq!(counted, 2);
+}

@@ -41,6 +41,23 @@ export interface ParsedAssistantStreamEvent {
    */
   conversationId?: string;
   /**
+   * Something the agent's runtime wants a person to read.
+   *
+   * Distinct from `status`, which is where a run *is*. This is a sentence
+   * about something that happened to it: a model the harness no longer offers,
+   * a provider session that was lost and restarted, an image that could not be
+   * saved. The host writes these, the backend forwards them as status frames,
+   * and until now they stopped here -- `normalizeStatus` only recognises the
+   * twelve run-lifecycle words, so every one of these normalised to
+   * `undefined` and the sentence was never read by anything.
+   */
+  notice?: string;
+  /**
+   * What kind of notice it is, for a consumer that wants to treat some of them
+   * differently. The raw status string the runtime sent, lowercased.
+   */
+  noticeKind?: string;
+  /**
    * The transport gave up, not the run. Carries no status on purpose: the run
    * is still going, and a consumer that treats this as an ending stops reading
    * a conversation the server is still writing to.
@@ -100,6 +117,18 @@ function extractStatus(payload: unknown): string | undefined {
   }
 
   return normalizeStatus(payload);
+}
+
+function extractNotice(
+  payload: unknown,
+): { notice: string; noticeKind?: string } | undefined {
+  if (!isRecord(payload)) return undefined;
+  const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+  if (!detail) return undefined;
+  const kind = typeof payload.status === "string"
+    ? payload.status.trim().toLowerCase()
+    : undefined;
+  return kind ? { notice: detail, noticeKind: kind } : { notice: detail };
 }
 
 function extractTitle(payload: unknown): string | undefined {
@@ -175,7 +204,11 @@ export function parseAssistantStreamEvent(value: unknown): ParsedAssistantStream
     || eventType === "run_status"
   ) {
     const status = extractStatus(payload);
-    return status ? { status } : {};
+    if (status) return { status };
+    // Not a lifecycle status, so it is a notice: the runtime is telling the
+    // person something rather than reporting where the run is.
+    const notice = extractNotice(payload);
+    return notice ?? {};
   }
 
   if (eventType === "completed") {

@@ -24,15 +24,22 @@ from sandbox_runtime.protocol import (
 
 from typing import Any
 
+from app.modules.workspace.providers.desktop_tunnel import remember_guest_address
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
+    ProviderCapability,
     ProviderInstance,
     ProviderRejected,
+    SandboxEndpoint,
 )
 
 
 class LemmaLocalOpsMixin:
     """The `SandboxOpsProvider` half of the Desktop provider."""
+
+    capabilities = frozenset(
+        {ProviderCapability.PORT_REACH, ProviderCapability.SECRET_DELIVERY}
+    )
 
     # ------------------------------------------------------------------
     # Operations, over the same runtime protocol Docker uses
@@ -184,8 +191,9 @@ class LemmaLocalOpsMixin:
         deadline_at: datetime,
     ) -> bool:
         async with self._ops(instance, deadline_at) as client:
-            await client.delete_file(path, recursive=recursive, deadline_at=deadline_at)
-            return True
+            return await client.delete_file(
+                path, recursive=recursive, deadline_at=deadline_at
+            )
 
     async def ensure_python_session(
         self, instance: ProviderInstance, request: CreatePythonSessionRequest
@@ -208,9 +216,16 @@ class LemmaLocalOpsMixin:
         async with self._ops(instance, deadline_at) as client:
             await client.delete_python_session(session_id, deadline_at=deadline_at)
 
-    async def port_base_url(
+    async def reach_port(
         self, instance: ProviderInstance, *, port: int, deadline_at: datetime
-    ) -> str:
+    ) -> SandboxEndpoint:
+        """The guest's own address for a port it was asked to publish.
+
+        The guest publishes only the ports declared as apps when the sandbox was
+        created, so a port nobody declared is refused here rather than dialled
+        and timed out. The address is loopback inside the user's own machine:
+        no header opens it and nothing else can reach it.
+        """
         snapshot = await self._status(instance.provider_id, deadline_at=deadline_at)
         apps = _status_object(snapshot).get("apps")
         if not isinstance(apps, dict):
@@ -219,12 +234,49 @@ class LemmaLocalOpsMixin:
             if isinstance(value, dict) and value.get("port") == port:
                 url = value.get("private_url")
                 if isinstance(url, str) and url:
-                    return url
+                    return SandboxEndpoint(url=url)
         raise ProviderRejected(f"managed runtime does not expose sandbox port {port}")
+
+    async def deliver_secret(
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        value: bytes,
+        deadline_at: datetime,
+    ) -> None:
+        """Write it through the guest runtime, which is the same protocol Docker uses."""
+        _, _, name = path.rpartition("/")
+        if not name:
+            raise ProviderRejected(f"{path!r} does not name a file")
+
+        async def _one_chunk() -> AsyncIterator[bytes]:
+            yield value
+
+        async with self._ops(instance, deadline_at) as client:
+            # 0600, like Docker's tar entry and E2B's chmod. Delivered through
+            # the ordinary file API, this took the runtime's umask and landed
+            # 0644 -- so on Desktop alone the browser relay token was readable
+            # by every process in the sandbox, and on no other fabric was it.
+            await client.write_file(
+                path,
+                _one_chunk(),
+                expected_sha256=None,
+                deadline_at=deadline_at,
+                mode=0o600,
+            )
 
 
 def _status_object(snapshot: dict[str, Any]) -> dict[str, Any]:
     status = snapshot.get("status")
     if not isinstance(status, dict):
         raise ProviderRejected("managed runtime status is invalid")
+    # Every address the guest reports for a sandbox is one it can tunnel to,
+    # and this is where every such address passes through.
+    remember_guest_address(status.get("runtime_url"))
+    apps = status.get("apps")
+    if isinstance(apps, dict):
+        for app in apps.values():
+            if isinstance(app, dict):
+                remember_guest_address(app.get("private_url"))
     return status

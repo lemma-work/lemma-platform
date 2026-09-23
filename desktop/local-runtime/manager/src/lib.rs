@@ -81,6 +81,10 @@ impl NoConsoleWindow for Command {
 /// overwriting the other's, one install's stop terminating the other's runtime,
 /// and the second install's pods running against the first install's data disk.
 pub const DEFAULT_WSL_DISTRIBUTION: &str = "LemmaRuntime";
+
+/// guestd's sandbox tunnel vsock port, bridged by `lemma-vz` like the core
+/// services. Must equal `lemma_guestd::TUNNEL_VSOCK_PORT`.
+pub const SANDBOX_TUNNEL_PORT: u16 = 42_412;
 /// The phrase that turns a runtime failure into an offer to reset local data.
 ///
 /// Duplicated from `lemma_locald::paths::DATA_RESET_MARKER` and pinned by a

@@ -22,8 +22,30 @@ from uuid import uuid7
 
 import pytest
 
-from app.modules.datastore.domain.file_entities import SearchMethod
+from app.modules.datastore.domain.file_entities import (
+    DatastoreFileSearchResult,
+    SearchMethod,
+)
+from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.services.files.searcher import FileSearcher
+
+
+class _Paths:
+    """Only the `/me` translation the searcher applies to a returned row."""
+
+    def _to_api_path(self, path: str, *, requester_user_id: object) -> str:
+        return path
+
+
+def _make_result(file_id):
+    return DatastoreFileSearchResult(
+        file_id=file_id,
+        path="/notes.md",
+        chunk_index=0,
+        content="anything",
+        metadata={},
+        score=1.0,
+    )
 
 
 class _Session:
@@ -43,47 +65,73 @@ class _Session:
         self.commits += 1
 
 
-class _Visibility:
-    matches_nothing = False
-
-    def allows(self, _file_id: object) -> bool:
-        return True
-
-
 class _Authorizer:
     """Carries the repository the searcher takes its platform session from.
 
     Production wires it the same way: `FileAuthorizer` is built with the
     `DatastoreFileRepository`, whose `session` is the platform session.
+
+    `enumerated` picks which of the two branches the searcher takes, because
+    they hold the connection differently: an enumerated scope does all its
+    platform reads before the search, and a post-filtered one has to do one
+    afterwards.
     """
 
-    def __init__(self, session: "_Session | None" = None) -> None:
+    def __init__(
+        self,
+        session: "_Session | None" = None,
+        *,
+        enumerated: bool = True,
+    ) -> None:
+        self._session = session
+        self._enumerated = enumerated
+        self.authorized: set | None = None
         self.file_repository = (
             None if session is None else type("_Repo", (), {"session": session})()
         )
 
-    async def visibility_filter(self, *, pod_id: object, ctx: object) -> _Visibility:
-        return _Visibility()
+    async def search_file_scope(
+        self, *, pod_id: object, ctx: object
+    ) -> SearchFileScope:
+        return (
+            SearchFileScope.only([uuid7()])
+            if self._enumerated
+            else SearchFileScope.post_filtered()
+        )
+
+    async def readable_among(
+        self, *, pod_id: object, ctx: object, file_ids: object
+    ) -> set:
+        self.authorized = set(file_ids)
+        return self.authorized
 
 
 class _SearchService:
     """Stands in for the embedding + vector query, recording what it saw."""
 
-    def __init__(self, session: _Session) -> None:
+    def __init__(
+        self, session: _Session, results: "list[object] | None" = None
+    ) -> None:
         self._session = session
+        self._results = results or []
         self.held_a_connection: bool | None = None
 
     async def search(self, **_kwargs: object) -> list[object]:
         self.held_a_connection = self._session.in_transaction()
-        return []
+        return list(self._results)
 
 
-def _searcher(session: "_Session | None", service: _SearchService) -> FileSearcher:
+def _searcher(
+    session: "_Session | None",
+    service: _SearchService,
+    *,
+    authorizer: _Authorizer | None = None,
+) -> FileSearcher:
     return FileSearcher(
         lambda: lambda _pod_id: service,
         authz=None,
-        authorizer=_Authorizer(session),
-        path_resolver=None,
+        authorizer=authorizer or _Authorizer(session),
+        path_resolver=_Paths(),
         lookup=None,
     )
 
@@ -147,3 +195,33 @@ async def test_no_session_is_a_no_op() -> None:
     )
 
     assert session.commits == 0
+
+
+async def test_an_unnarrowed_search_authorizes_the_rows_it_got_back() -> None:
+    """The post-filter branch still releases, and still authorizes.
+
+    An unnarrowed chunk query returns rows without asking whether the caller
+    may read them, so the authorization is not an extra check here -- it is
+    the only one. It reads the platform database, which is why it is placed
+    after the released block and not inside it: `connection_released` releases
+    once, on entry, so a read inside re-acquires the connection and holds it
+    for the rest of the block while the static gate goes quiet.
+    """
+    session = _Session()
+    seen = _make_result(uuid7())
+    service = _SearchService(session, [seen])
+    authorizer = _Authorizer(session, enumerated=False)
+
+    await _searcher(session, service, authorizer=authorizer).search_files(
+        pod_id=uuid7(),
+        requester_user_id=uuid7(),
+        query="anything",
+        ctx=object(),
+    )
+
+    assert service.held_a_connection is False, (
+        "the search ran while the platform transaction was still open"
+    )
+    assert authorizer.authorized == {seen.file_id}, (
+        "an unnarrowed search returned rows nobody asked the platform database about"
+    )

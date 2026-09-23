@@ -119,8 +119,8 @@ jobs:
             path: journeys/surfaces_and_notifications
           - name: packaging and reuse
             path: journeys/packaging_and_reuse
-          - name: connectors and usage
-            path: journeys/connectors_and_accounts journeys/operating_a_deployment
+          - name: connectors, logins and usage
+            path: journeys/connectors_and_accounts journeys/signing_in_to_sites journeys/operating_a_deployment
           - name: platform services
             path: journeys/platform
     steps:

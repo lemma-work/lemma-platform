@@ -43,13 +43,6 @@ class SurfaceAccountBindingResolver(SurfaceAccountBindingPort):
                     expected_connector_id=surface_connector_id(platform),
                 )
             return None, None, None
-        if platform.is_email:
-            await self._require_account_app(
-                account_id,
-                label=platform.value.title(),
-                expected_connector_id=surface_connector_id(platform),
-            )
-            return None, None, None
         if account_id is not None:
             # WhatsApp/Telegram accept either a connected account or system creds.
             await self._require_account_app(

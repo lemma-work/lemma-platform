@@ -192,6 +192,41 @@ class ConnectorOperationRepository(
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
 
+    async def list_by_connector_and_names(
+        self,
+        connector_id: str,
+        names: Sequence[str],
+        *,
+        kind: str | None = None,
+    ) -> list[ConnectorOperationEntity]:
+        """The named operations, matched the way the singular lookup matches.
+
+        A batch of names used to be answered by reading the connector's whole
+        catalog -- every operation with its input and output schemas -- and
+        picking out of a Python dict. On a connector the size of Jira that is
+        tens of megabytes built in memory to return one schema.
+
+        Both spellings are accepted, as above: an operation is addressable by
+        the name Lemma gives it or the one its provider does, compared trimmed
+        and lowercased.
+        """
+        normalized = {name.strip().lower() for name in names if name and name.strip()}
+        if not normalized:
+            return []
+        statement = select(ConnectorOperation).where(
+            ConnectorOperation.connector_id == connector_id,
+            or_(
+                func.lower(ConnectorOperation.name).in_(normalized),
+                func.lower(
+                    func.coalesce(ConnectorOperation.provider_operation_name, "")
+                ).in_(normalized),
+            ),
+        )
+        if kind is not None:
+            statement = statement.where(ConnectorOperation.kind == kind)
+        result = await self.session.execute(statement)
+        return [instance.to_entity() for instance in result.scalars().all()]
+
     async def get_by_connector_kind_and_name(
         self,
         connector_id: str,

@@ -361,8 +361,8 @@ pub(crate) fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>
     )?;
     {
         let shell: State<Shell> = app.state();
-        *shell.tray_agent_host.lock().unwrap() = Some(agent_host_state_item.clone());
-        *shell.tray_status.lock().unwrap() = Some(status_item.clone());
+        *shell.tray_agent_host.lock_or_recover() = Some(agent_host_state_item.clone());
+        *shell.tray_status.lock_or_recover() = Some(status_item.clone());
     }
 
     let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
@@ -441,7 +441,7 @@ pub(crate) fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>
 pub(crate) fn refresh_tray_status(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     let label = {
-        let ui = shell.ui.lock().unwrap();
+        let ui = shell.ui.lock_or_recover();
         if ui.mode != "local" {
             "Lemma Cloud".to_string()
         } else if ui.error {
@@ -454,7 +454,7 @@ pub(crate) fn refresh_tray_status(app: &AppHandle) {
             "Lemma: stopped".to_string()
         }
     };
-    let item = shell.tray_status.lock().unwrap().clone();
+    let item = shell.tray_status.lock_or_recover().clone();
     if let Some(item) = item {
         let _ = item.set_text(label);
     }

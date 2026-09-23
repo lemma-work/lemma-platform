@@ -67,3 +67,34 @@ def test_a_mapping_without_a_code_is_left_alone(client):
     body = client.get("/other-mapping").json()
 
     assert body["code"] == "HTTP_400"
+
+
+def test_headers_on_an_http_exception_reach_the_caller() -> None:
+    """Some statuses are not answerable without them.
+
+    A 416 has to carry `Content-Range` or a resuming download cannot learn
+    the real size, and a 401 without `WWW-Authenticate` is not a challenge.
+    The handler built its own `JSONResponse` and dropped `exc.headers`, so
+    raising one with headers looked like it worked: the status was right and
+    the headers went nowhere.
+    """
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+
+    from app.core.api.exception_handlers import register_exception_handlers
+
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/ranged")
+    async def ranged():
+        raise HTTPException(
+            status_code=416,
+            detail="out of range",
+            headers={"Content-Range": "bytes */1234"},
+        )
+
+    response = TestClient(app, raise_server_exceptions=False).get("/ranged")
+
+    assert response.status_code == 416
+    assert response.headers["content-range"] == "bytes */1234"

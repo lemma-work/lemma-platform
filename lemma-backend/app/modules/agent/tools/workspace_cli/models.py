@@ -4,17 +4,14 @@ from typing import Literal, Optional, List
 
 from pydantic import BaseModel, Field
 
-from app.modules.agent.tools.context import BaseToolResponse
-
-
-WORKSPACE_TOOL_COMMENT_DESC = "One-line statement of intent, shown to the user."
+from app.modules.agent.tools.context import TOOL_COMMENT_DESC, BaseToolResponse
 
 
 class ExecCommandRequest(BaseModel):
     cmd: str = Field(description="Shell command to run, exactly as in a terminal.")
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     max_output_tokens: int = Field(
         default=10000,
@@ -57,9 +54,9 @@ class ExecCommandRequest(BaseModel):
             "default 30s. This is THIS CALL'S patience, not a limit on the "
             "command: if the command is still running when the wait is up you "
             "get `completed: false` and a `process_id`, and the command keeps "
-            "running in the background. Poll it with "
-            "`manage_process(action='input', process_id=...)` until "
-            "`completed: true` — never re-run the command."
+            "running in the background. Hand that id to `wait_for` rather than "
+            "raising this — waiting there costs nothing and costs no model "
+            "calls. Never re-run the command."
         ),
     )
 
@@ -67,7 +64,7 @@ class ExecCommandRequest(BaseModel):
 class WriteStdinRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     process_id: str = Field(
         description=(
@@ -105,7 +102,7 @@ class WriteStdinRequest(BaseModel):
 class TerminateProcessRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     process_id: str = Field(
         description="Process ID returned by `exec_command` for the process to stop."
@@ -115,7 +112,7 @@ class TerminateProcessRequest(BaseModel):
 class ListProcessesRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
 
 
@@ -149,21 +146,28 @@ class ManageProcessRequest(BaseModel):
     )
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
 
 
 class ExecutePythonRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     code: str = Field(
         description="Python code to execute in the shared task kernel. The final expression value is returned separately when available."
     )
     timeout_seconds: int = Field(
         default=60,
-        description="Maximum execution time in seconds before timing out.",
+        ge=1,
+        le=300,
+        description=(
+            "How long to wait before giving up, up to 300s. Unlike "
+            "`exec_command` there is no handle to come back to: this runs in "
+            "the shared kernel and a timeout ends it. For work that may take "
+            "longer, run it with `exec_command` and wait for the process."
+        ),
     )
 
 
@@ -220,13 +224,21 @@ class ExecCommandResult(BaseToolResponse):
             "it was not cancelled."
         ),
     )
+    notice: Optional[str] = Field(
+        default=None,
+        description=(
+            "Something about this call that is not about the command itself — "
+            "most often that a wait you asked for was longer than one call can "
+            "give. Read it: it usually explains an empty result."
+        ),
+    )
     process_id: Optional[str] = Field(
         default=None,
         description=(
-            "Handle for a process that is still running. Poll it with "
-            "`manage_process(action='input', process_id=...)` to "
-            "collect more output, or send input the same way. Present whenever "
-            "`completed` is false."
+            "Handle for a process that is still running. Wait for it with "
+            "`wait_for(process_id=...)`; read its output so far or send it input "
+            "with `manage_process(action='input', process_id=...)`. Present "
+            "whenever `completed` is false."
         ),
     )
 
@@ -234,7 +246,7 @@ class ExecCommandResult(BaseToolResponse):
 class ResizeTerminalRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     process_id: str = Field(
         description="Interactive process ID returned by `exec_command`."
@@ -257,10 +269,11 @@ class ProcessInfo(BaseModel):
     # going. Everything below is descriptive.
     completed: bool = False
     exit_code: Optional[int] = None
-    # Blank because the sandbox runtime is the only thing that knows what is
-    # running, and it does not report a process's command line or working
-    # directory. Inventing them would tell an agent a process is somewhere it
-    # is not.
+    # Populated when the provider's own process index has them (it records the
+    # command and cwd at start), and blank when the in-sandbox runtime is the
+    # source, because that tracks what is running rather than how it was asked
+    # for. Blank means "not recorded", never "no command" -- inventing one
+    # would tell an agent a process is somewhere it is not.
     cmd: str = ""
     cwd: str = ""
     tty: bool = False
@@ -270,7 +283,15 @@ class ProcessInfo(BaseModel):
 class ListProcessesResult(BaseToolResponse):
     processes: List[ProcessInfo] = Field(
         default_factory=list,
-        description="Tracked shell processes in the conversation workspace.",
+        description=(
+            "Processes this conversation started, plus any unowned one running "
+            "under its working directory. A sandbox belongs to a person, not a "
+            "conversation, so this is deliberately not every process in it."
+        ),
+    )
+    note: Optional[str] = Field(
+        default=None,
+        description="Present when processes were filtered out of this listing.",
     )
 
 

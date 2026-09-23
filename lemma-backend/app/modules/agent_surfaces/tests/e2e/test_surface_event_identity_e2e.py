@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.events.handlers import _process_surface_webhook
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
+    _create_agent,
     _create_surface,
     _ensure_connector_account,
     _seed_external_user,
@@ -103,11 +104,17 @@ async def _a_telegram_bot(
         await db_session.commit()
         await db_session.refresh(connected)
 
+    # A bot of its own means an agent of its own: an agent reaches a platform in
+    # exactly one place, so two Telegram bots in one pod are two agents. That is
+    # beside the point being tested -- update numbers colliding across bots --
+    # but it is what "its own bot" now entails.
+    owner = await _create_agent(authenticated_client, pod_id)
     surface = await _create_surface(
         authenticated_client,
         pod_id,
         config={"type": "TELEGRAM", "account_id": str(connected.id)},
         name=surface_name,
+        agent_name=owner["name"],
     )
     row = await db_session.get(AgentSurface, UUID(surface["id"]))
     assert row is not None and row.webhook_secret

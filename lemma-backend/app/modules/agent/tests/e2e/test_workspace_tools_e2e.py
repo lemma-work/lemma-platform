@@ -51,6 +51,7 @@ from app.modules.workspace.services.workspace_sandbox_service import (
 )
 from app.modules.test_support.e2e.worker_process import production_worker_process
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 
 pytestmark = [
@@ -636,12 +637,55 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     assert pod_response.status_code == status.HTTP_201_CREATED, pod_response.text
     pod = pod_response.json()
 
+    # A real conversation, because the cwd assertion below is about where a
+    # sandbox actually runs and a fabricated id has no directory to run in.
+    #
+    # It used to build a context with `conversation_id=uuid4()` and no
+    # `workspace_cwd`, which is the "no conversation" case: `get_workspace_cwd`
+    # answers `WORKSPACE_ROOT` for it, deliberately and with a unit test of its
+    # own (`test_workspace_location.py`, which asserts `/conversations/` is
+    # *not* in the answer). So the assertion here was checking a shape the code
+    # had stopped producing, and the two tests contradicted each other -- this
+    # one only ever passed while conversations still lived at
+    # `conversations/{id}`.
+    #
+    # Every production dispatch path resolves the location and passes it
+    # (`run_context_builder`, `conversation_resume_return`,
+    # `conversation_mcp_service`, the Agent Host `dispatch`), so this is what a
+    # tool call actually carries. The sibling test that checks the same thing
+    # is `provider`-marked and the protected lane excludes it, which is how
+    # this went unnoticed.
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod['id']}/agents",
+        json={
+            "name": f"Workspace Tools Agent {uuid4().hex[:8]}",
+            "instruction": "You run workspace tools.",
+            "toolsets": ["WORKSPACE_CLI"],
+        },
+    )
+    assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+
+    create_conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": create_agent.json()["name"],
+            "title": "workspace cli tools acceptance",
+            "type": "CHAT",
+        },
+    )
+    assert create_conversation.status_code == status.HTTP_201_CREATED, (
+        create_conversation.text
+    )
+    conversation = create_conversation.json()
+    conversation_cwd = conversation["metadata"]["cwd"]
+
     ctx = BaseAgentContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),
-        conversation_id=uuid4(),
+        conversation_id=UUID(conversation["id"]),
         agent_name="workspace_tools_e2e",
+        workspace_cwd=conversation_cwd,
     )
 
     python_set = await execute_python_internal(
@@ -685,7 +729,12 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     )
     assert shell.success is True, shell.stdout or shell
     assert shell.completed is True
-    assert f"/workspace/conversations/{ctx.conversation_id}" in (shell.stdout or "")
+    # The directory the conversation's metadata names, which is what a tool
+    # call carries -- `{root}/c/{date}/{slug}`, not a directory named after the
+    # conversation id. That the sandbox honours it is provider behaviour, and
+    # is the whole reason this assertion is in a real-sandbox test.
+    assert conversation_cwd.startswith(f"{WORKSPACE_ROOT}/"), conversation_cwd
+    assert conversation_cwd in (shell.stdout or ""), shell.stdout
     assert f"pod={pod['id']}" in (shell.stdout or "")
     assert f"user={fixed_test_user['id']}" in (shell.stdout or "")
     if _SANDBOX_CAN_REACH_TEST_BACKEND:

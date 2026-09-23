@@ -1,6 +1,6 @@
 //! Closing admission before draining prevents startup and recovery racing cleanup.
 use std::io;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, PoisonError};
 
 #[derive(Default)]
 struct State {
@@ -25,9 +25,26 @@ impl Lifecycle {
     }
 
     pub fn finish(&self) {
-        let mut state = self.state.lock().expect("lifecycle lock poisoned");
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.active = false;
         self.idle.notify_all();
+    }
+
+    /// Take the lifecycle for the life of the returned guard.
+    ///
+    /// `None` when another operation already owns it, exactly as `begin` fails.
+    pub fn enter(&self) -> Option<Finish<'_>> {
+        self.begin().ok().map(|()| Finish(self))
+    }
+
+    /// Release a lifecycle that was begun elsewhere, when this guard drops.
+    ///
+    /// For the common shape where admission is decided on the request thread
+    /// -- so a busy caller is told so immediately -- and the work runs on a
+    /// spawned one. Taken as the first line of that thread, so the release
+    /// happens however the thread ends.
+    pub fn finish_on_drop(&self) -> Finish<'_> {
+        Finish(self)
     }
 
     pub fn busy(&self) -> bool {
@@ -69,12 +86,23 @@ impl Lifecycle {
 /// The caller decides what to do instead; there is no waiting here, because
 /// every caller so far is on an exit path where waiting is the wrong answer.
 pub(crate) fn guarded<T>(lifecycle: &Lifecycle, work: impl FnOnce() -> T) -> Option<T> {
-    if lifecycle.begin().is_err() {
-        return None;
+    let _finish = lifecycle.enter()?;
+    Some(work())
+}
+
+/// Releases the lifecycle when dropped, including while unwinding.
+///
+/// A `finish()` paired by hand is skipped by a panic or an early return, which
+/// leaves `active` set for the rest of the process: every later operation is
+/// refused as "already working", and `wait_idle` on the quit path never
+/// returns. Holding this instead releases it on every exit.
+#[must_use = "the lifecycle is released when this guard is dropped"]
+pub(crate) struct Finish<'a>(&'a Lifecycle);
+
+impl Drop for Finish<'_> {
+    fn drop(&mut self) {
+        self.0.finish();
     }
-    let result = work();
-    lifecycle.finish();
-    Some(result)
 }
 
 #[cfg(test)]
@@ -140,6 +168,49 @@ mod tests {
 
         lifecycle.finish();
         assert_eq!(guarded(&lifecycle, || 7), Some(7), "and it recovers after");
+    }
+
+    /// The case the old test's own comment claimed and never exercised.
+    ///
+    /// "The guard must be released however the work ended" -- and then it only
+    /// ever ended the work normally. A panic inside `guarded` left the
+    /// lifecycle taken for the life of the process.
+    #[test]
+    fn work_that_panics_still_releases_the_lifecycle() {
+        let lifecycle = Lifecycle::default();
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guarded(&lifecycle, || panic!("the work failed"))
+        }));
+
+        assert!(outcome.is_err(), "the panic still reaches the caller");
+        assert!(!lifecycle.busy(), "and the lifecycle is free again");
+        assert!(
+            lifecycle.enter().is_some(),
+            "so the next operation is admitted"
+        );
+    }
+
+    /// A thread that was admitted elsewhere releases on the way out, whatever
+    /// the way out is.
+    #[test]
+    fn a_thread_that_panics_after_admission_releases_the_lifecycle() {
+        let lifecycle = Arc::new(Lifecycle::default());
+        lifecycle.begin().expect("admitted on the request thread");
+
+        let worker = Arc::clone(&lifecycle);
+        let joined = std::thread::spawn(move || {
+            let _finish = worker.finish_on_drop();
+            panic!("host operation requires manager");
+        })
+        .join();
+
+        assert!(joined.is_err());
+        assert!(
+            !lifecycle.busy(),
+            "a panicking operation wedged every later one"
+        );
+        lifecycle.wait_idle();
     }
 
     #[test]

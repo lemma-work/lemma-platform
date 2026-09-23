@@ -21,6 +21,10 @@ export type ConnectorKindResponseSchema = {
     config_schema?: (Record<string, any> | null);
     credential_schema?: (Record<string, any> | null);
     discovery?: string;
+    /**
+     * JSON Schema for the organization-supplied install config, when the connector cannot be installed with the platform's own credentials.
+     */
+    install_config_schema?: (Record<string, any> | null);
     kind: ConnectorKind;
     oauth2_defaults?: (OAuth2DefaultsResponseSchema | null);
     supports_org_custom_oauth?: boolean;

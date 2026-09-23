@@ -33,6 +33,9 @@ mod readiness;
 mod sandbox;
 mod sandbox_inspect;
 mod sandbox_run;
+// Served only on Linux, over vsock; the protocol is tested everywhere.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod sandbox_tunnel;
 mod serve;
 mod service;
 mod spec;
@@ -51,6 +54,7 @@ pub(crate) use readiness::*;
 pub(crate) use sandbox::*;
 pub(crate) use sandbox_inspect::*;
 pub(crate) use sandbox_run::*;
+pub use sandbox_tunnel::TUNNEL_VSOCK_PORT;
 pub use serve::serve_vsock;
 pub use service::GuestService;
 pub(crate) use spec::*;

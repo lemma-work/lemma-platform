@@ -40,6 +40,7 @@ from app.modules.workspace.providers.e2b import (
     E2BSandboxProvider,
 )
 from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.integration, pytest.mark.provider, pytest.mark.asyncio]
 
@@ -114,7 +115,7 @@ async def test_a_real_sandbox_runs_a_command(provider: E2BSandboxProvider) -> No
             operation_id=uuid4(),
             shell_command="echo hello-from-e2b",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(EnvironmentVariable(name="LEMMA_TEST", value="1"),),
             tty=None,
             output_limit_bytes=64 * 1024,
@@ -146,7 +147,7 @@ async def test_real_files_round_trip(provider: E2BSandboxProvider) -> None:
 
     stat = await provider.write_file(
         instance,
-        path="/workspace/conformance.txt",
+        path=f"{WORKSPACE_ROOT}/conformance.txt",
         data=payload(),
         expected_sha256=None,
         deadline_at=_deadline(),
@@ -157,7 +158,7 @@ async def test_real_files_round_trip(provider: E2BSandboxProvider) -> None:
         chunk
         async for chunk in provider.open_file(
             instance,
-            path="/workspace/conformance.txt",
+            path=f"{WORKSPACE_ROOT}/conformance.txt",
             byte_range=ByteRange(offset=0, length=None),
             deadline_at=_deadline(),
         )
@@ -165,7 +166,7 @@ async def test_real_files_round_trip(provider: E2BSandboxProvider) -> None:
     assert b"".join(chunks) == b"written-by-conformance"
 
     listed = await provider.list_files(
-        instance, path="/workspace", deadline_at=_deadline()
+        instance, path=WORKSPACE_ROOT, deadline_at=_deadline()
     )
     assert any(entry.path.endswith("conformance.txt") for entry in listed)
 
@@ -191,7 +192,7 @@ async def test_a_real_paused_sandbox_keeps_its_files_and_is_adopted(
 
     await provider.write_file(
         first,
-        path="/workspace/keep.txt",
+        path=f"{WORKSPACE_ROOT}/keep.txt",
         data=payload(),
         expected_sha256=None,
         deadline_at=_deadline(),
@@ -211,7 +212,7 @@ async def test_a_real_paused_sandbox_keeps_its_files_and_is_adopted(
         chunk
         async for chunk in provider.open_file(
             resumed,
-            path="/workspace/keep.txt",
+            path=f"{WORKSPACE_ROOT}/keep.txt",
             byte_range=ByteRange(offset=0, length=None),
             deadline_at=_deadline(),
         )
@@ -278,7 +279,7 @@ async def test_a_first_contact_herd_all_get_served(
         async def payload():
             yield marker
 
-        path = f"/workspace/herd-{marker.decode()}.txt"
+        path = f"{WORKSPACE_ROOT}/herd-{marker.decode()}.txt"
         await provider.write_file(
             instance,
             path=path,
@@ -328,7 +329,7 @@ async def test_files_survive_a_pause_and_a_herd_after_resume(
 
     await provider.write_file(
         first,
-        path="/workspace/before.txt",
+        path=f"{WORKSPACE_ROOT}/before.txt",
         data=payload(),
         expected_sha256=None,
         deadline_at=_deadline(),
@@ -347,7 +348,7 @@ async def test_files_survive_a_pause_and_a_herd_after_resume(
             chunk
             async for chunk in provider.open_file(
                 resumed,
-                path="/workspace/before.txt",
+                path=f"{WORKSPACE_ROOT}/before.txt",
                 byte_range=ByteRange(offset=0, length=None),
                 deadline_at=_deadline(),
             )
@@ -387,9 +388,30 @@ async def test_the_sweep_reads_real_metadata_without_claiming_strangers(
 
 
 async def test_a_real_published_port_resolves(provider: E2BSandboxProvider) -> None:
+    """`reach_port` answers with an endpoint, not a bare URL.
+
+    It used to return the string, and this asserted on it directly. Nothing
+    in CI runs this lane -- the provider tests need live credentials -- so the
+    test kept asserting `.startswith` on a dataclass long after the signature
+    moved, and said `AttributeError` the first time anybody ran it.
+
+    What the endpoint carries is worth pinning beyond the URL, because
+    `_require_private` reads it before letting anybody's session into this
+    browser.
+
+    `public` is False for a sandbox created *now*, and that is the safe
+    answer rather than a missing one: E2B publishes every port under a public
+    name, but new sandboxes are created with public traffic disabled and
+    answer 403 without the per-sandbox token. `True` means a sandbox made
+    before that flag existed, which stays open for its whole life and is what
+    the guard refuses. So this asserts the token is there and that we are not
+    the open kind.
+    """
     instance = await _create(provider, uuid4())
-    url = await provider.port_base_url(instance, port=8080, deadline_at=_deadline())
-    assert url.startswith("https://8080-")
+    endpoint = await provider.reach_port(instance, port=8080, deadline_at=_deadline())
+    assert endpoint.url.startswith("https://8080-")
+    assert endpoint.public is False, "a newly created sandbox must not be open"
+    assert endpoint.headers, "without the traffic token the URL answers 403"
 
 
 async def test_real_python_keeps_state_across_executions(
@@ -432,7 +454,7 @@ async def test_real_python_keeps_state_across_executions(
     assert "42" in second.stdout, (second.stdout, second.stderr)
 
 
-def _session_ref(session_id, *, cwd: str = "/workspace"):
+def _session_ref(session_id, *, cwd: str = WORKSPACE_ROOT):
     """The reference production hands the provider, not a stand-in for it.
 
     It used to be a local dataclass carrying only `session_id` -- which is
@@ -453,7 +475,7 @@ async def test_real_python_runs_where_the_shell_runs(
 
     E2B starts a fresh `python3` per execution, so it can only be in the
     session's directory if that directory is passed on the execution itself.
-    It was not, and `execute_python` reported `/workspace` while the shell
+    It was not, and `execute_python` reported the sandbox root while the shell
     reported the conversation's own directory -- so a relative path meant two
     different files. The cross-read below is the assertion that matters: it
     fails for the reason an agent actually experiences.
@@ -464,7 +486,7 @@ async def test_real_python_runs_where_the_shell_runs(
     await provider.wait_ready(
         instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
     )
-    cwd = f"/workspace/c/conformance-{uuid4().hex[:8]}"
+    cwd = f"{WORKSPACE_ROOT}/c/conformance-{uuid4().hex[:8]}"
     await provider.create_directory(instance, path=cwd, deadline_at=_deadline())
     session = _session_ref(uuid4(), cwd=cwd)
 

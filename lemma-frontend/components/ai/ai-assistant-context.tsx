@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { AgentRuntimeConfig, AvailableModelInfo } from 'lemma-sdk';
+import { toast } from 'sonner';
 import {
     useAssistantController,
     type AssistantMessagePart as SdkAssistantMessagePart,
@@ -309,6 +310,19 @@ export function AIAssistantProvider({
         autoLoadMessages: isControllerEnabled,
     });
 
+    // A runtime notice is a sentence about the run, not part of the agent's
+    // reply, so it is shown beside the conversation rather than inside it. The
+    // host has always written these -- a model a harness no longer offers, a
+    // provider session that was lost and restarted -- and until the SDK
+    // carried them they were dropped without ever being seen.
+    const lastNoticeAtRef = useRef(0);
+    useEffect(() => {
+        const notice = controller.notice;
+        if (!notice || notice.at === lastNoticeAtRef.current) return;
+        lastNoticeAtRef.current = notice.at;
+        toast(notice.text);
+    }, [controller.notice]);
+
     const controllerRef = useRef(controller);
 
     useEffect(() => {
@@ -472,6 +486,39 @@ export function AIAssistantProvider({
             return;
         }
 
+        if (resourceType === 'sign_in') {
+            // Opens the computer panel on its browser tab, pointed at the
+            // pause named by `resourceId` (the tool call id) -- rather than
+            // navigating to `/sign-in-to-site/...` and taking the whole page
+            // away from a person who is mid-conversation. That page stays as
+            // it is: it is the right destination for a link sent to Slack or
+            // email, where there is no conversation around it.
+            //
+            // The tool call id travels, never the origin. An origin in the URL
+            // survives reload and back, and re-steers the shared sandbox
+            // browser at a site the person may have finished with; the panel
+            // resolves it from the pause instead, the same way the standalone
+            // page does.
+            const signInConversationId = typeof meta?.conversationId === 'string'
+                ? meta.conversationId
+                : controllerRef.current.openedConversationId || urlAssistantConversationId;
+            if (!signInConversationId) return;
+            const params = new URLSearchParams(searchParamsString);
+            params.set('computer', '1');
+            params.set('computerTab', 'browser');
+            params.set('signInCall', resourceId);
+            // The stage holds one thing at a time, and a presented resource
+            // would win over the panel we are opening.
+            params.delete('presented');
+            // `replace`, not `push`: this is panel state on the page already
+            // open, which is how `setComputerOpen` treats it too.
+            router.replace(
+                `/pod/${podId}/conversations/${encodeURIComponent(signInConversationId)}?${params.toString()}`,
+                { scroll: false },
+            );
+            return;
+        }
+
         const [a, b] = resourceId.split('/');
         const encodedResourceId = encodeURIComponent(resourceId);
 
@@ -497,7 +544,7 @@ export function AIAssistantProvider({
                 routeConversationId,
             ));
         }
-    }, [navigateToResolvedResource, pathname, podContext?.pod?.id, router, urlAssistantConversationId]);
+    }, [navigateToResolvedResource, pathname, podContext?.pod?.id, router, searchParamsString, urlAssistantConversationId]);
 
     // The controller's messages are the transcript. There is no second copy to
     // merge and nothing to refetch when a run ends: the stream already delivered

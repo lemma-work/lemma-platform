@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from sandbox_runtime.errors import SandboxProcessNotFound
 from sandbox_runtime.protocol import (
     ProcessOutputChannel,
     ProcessOutputChunk,
@@ -142,13 +143,34 @@ class E2BOutputBuffer:
         """
         redis = self._redis
         key = self._chunks_key(process_id)
+        state_key = self._state_key(process_id)
         total = await redis.llen(key)
+        raw_state = await redis.get(state_key)
+
+        if total == 0 and raw_state is None:
+            # Nothing was ever recorded under this id. The default below is
+            # `RUNNING`, which is right for a process that has started and not
+            # yet written anything -- and wrong for one that does not exist,
+            # which it reported as running, with no output, forever. A caller
+            # polling a bad id never learned anything was wrong.
+            raise SandboxProcessNotFound(f"no process {process_id} in this sandbox")
+
+        # Being read is being wanted. The retention window is otherwise renewed
+        # only when output arrives or the state changes, so a process that ran
+        # for over an hour without printing lost both keys and read as never
+        # having existed -- a live background server reported as unknown.
+        # Renewed here, a polled process stays known for as long as someone is
+        # still asking about it.
+        pipe = redis.pipeline()
+        pipe.expire(state_key, _RETENTION_SECONDS)
+        pipe.expire(key, _RETENTION_SECONDS)
+        pipe.expire(self._sequence_key(process_id), _RETENTION_SECONDS)
+        await pipe.execute()
 
         # The list is trimmed from the left, so the absolute sequence of the
         # oldest retained chunk is however many were dropped. Tracking total
         # appends separately would be more precise; this errs toward telling
         # the reader that truncation happened.
-        raw_state = await redis.get(self._state_key(process_id))
         state, exit_code = ProcessState.RUNNING, None
         if raw_state:
             try:

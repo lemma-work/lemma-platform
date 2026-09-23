@@ -25,11 +25,25 @@ const WIDGET_THEME_TOKEN_SOURCES = {
     '--lemma-widget-duration-data': '--dur-data',
     '--lemma-widget-ease-standard': '--ease-standard',
     '--lemma-widget-ease-emphasized': '--ease-emphasized',
-    '--lemma-widget-chart-1': '--brand-coral',
-    '--lemma-widget-chart-2': '--brand-lilac',
-    '--lemma-widget-chart-3': '--state-success',
-    '--lemma-widget-chart-4': '--brand-accent',
-    '--lemma-widget-chart-5': '--text-tertiary',
+    // The real chart ramp, not brand hues and a status colour standing in for
+    // one. `--state-success` as "series 3" both steals a meaning — a green bar
+    // that encodes nothing still reads as "good" — and leaves the categorical
+    // set without a step chosen to separate from its neighbours.
+    '--lemma-widget-chart-1': '--chart-1',
+    '--lemma-widget-chart-2': '--chart-2',
+    '--lemma-widget-chart-3': '--chart-3',
+    '--lemma-widget-chart-4': '--chart-4',
+    '--lemma-widget-chart-5': '--chart-5',
+    // Figures and ids want the mono face; without this they fall back to the UI
+    // face and a column of numbers stops lining up.
+    '--lemma-widget-font-mono': '--font-mono',
+    // A card with the host's own depth instead of a 1px outline.
+    '--lemma-widget-shadow-rest': '--shadow-md',
+    '--lemma-widget-shadow-raise': '--shadow-lg',
+    // No `on-accent` / `on-success` / `on-danger` here: this frontend has no
+    // token for the ink that goes on a fill, and a guessed one is worse than
+    // none — the widget's own fallback is at least known to pair. Anything
+    // without an answer is left out rather than invented.
 } as const;
 
 export interface WidgetThemeMessage {

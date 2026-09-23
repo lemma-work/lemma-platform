@@ -104,6 +104,13 @@ async def _surface_event_receiver(context):
     )
 
     receiver = SurfaceEventReceiverService(uow_factory=context.uow_factory)
+    from app.modules.agent_surfaces.services.onboarding_cleanup import (
+        run_onboarding_cleanup,
+    )
+
+    cleanup_task = create_background_task(
+        run_onboarding_cleanup(context.uow_factory), name="surface-onboarding-cleanup"
+    )
     manager_receiver = TelegramManagerPollingReceiver(uow_factory=context.uow_factory)
     task = (
         create_background_task(receiver.run(), name="surface-event-receiver")
@@ -121,7 +128,9 @@ async def _surface_event_receiver(context):
     try:
         yield
     finally:
-        tasks = [candidate for candidate in (task, manager_task) if candidate]
+        tasks = [
+            candidate for candidate in (task, manager_task, cleanup_task) if candidate
+        ]
         for candidate in tasks:
             candidate.cancel()
         if tasks:
@@ -140,6 +149,7 @@ module = LemmaModule(
     worker_lifespans=(_surface_event_receiver,),
     stream_groups=(
         ("surface_events", "surface-webhook-events"),
+        ("surface_events", "agent-surfaces.onboarding"),
         ("pod_events", "surface-pod-deletion-events"),
         ("identity_events", "surface-identity-events"),
     ),

@@ -114,9 +114,10 @@ export class FilesNamespace {
 
   /**
    * Mint a public, hit-capped short signed URL (no login needed to open).
-   * Expires after `expiresSeconds` (default 3h, max 24h) and serves the file
-   * at most `maxHits` times (default 50, max 100); both bounds are clamped
-   * server-side. Use it to share a file outside the pod without unbounded egress.
+   * Expires after `expiresSeconds` (default 24h, max 7d) and serves the file
+   * at most `maxHits` times (default 200, max 1000); a value outside either
+   * range is rejected with a 422. Use it to share a file outside the pod
+   * without unbounded egress.
    */
   createSignedUrl(
     path: string,
@@ -127,6 +128,38 @@ export class FilesNamespace {
       max_hits: options.maxHits,
     };
     return this.client.request(() => FilesService.fileSignedUrl(this.podId(), path, body));
+  }
+
+  /**
+   * The public signed URLs *you* minted and may still read, newest first —
+   * scoped to the caller rather than the pod, because each row carries the
+   * `code`, which is the whole capability.
+   *
+   * Paged: a response with `next_cursor` set has more, so pass it back as
+   * `cursor` and keep going until it is null. A link you do not list is one you
+   * cannot revoke. `includeDead` also returns expired, revoked and spent links,
+   * which are kept for a grace period.
+   */
+  listSignedUrls(
+    options: { includeDead?: boolean; limit?: number; cursor?: string } = {},
+  ) {
+    return this.client.request(() =>
+      FilesService.fileSignedUrlList(
+        this.podId(),
+        options.includeDead ?? false,
+        options.limit ?? 100,
+        options.cursor ?? null,
+      ),
+    );
+  }
+
+  /**
+   * Kill a public signed URL now rather than waiting out its expiry. `revoked`
+   * is false when the code was already dead or was never this pod's — reported
+   * rather than thrown, so a cleanup pass cannot use this to discover codes.
+   */
+  revokeSignedUrl(code: string) {
+    return this.client.request(() => FilesService.fileSignedUrlRevoke(this.podId(), code));
   }
 
   delete(path: string) {

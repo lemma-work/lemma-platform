@@ -3,21 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
 
-from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
-from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.image_payload import downscale_for_vision
-from app.modules.agent.tools.vision_delegation import describe_single_image
-from app.modules.agent.tools.file_access import (
-    read_pod_file_bytes,
-    read_workspace_file_bytes,
-)
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.tool_errors import (
-    approval_error_result,
     safe_described_error,
-    safe_error_text,
 )
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
@@ -28,8 +18,6 @@ from app.modules.agent.tools.workspace_cli.models import (
     ProcessInfo,
     ResizeTerminalRequest,
     TerminateProcessRequest,
-    ViewImageRequest,
-    ViewImageResponse,
     WriteStdinRequest,
 )
 from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
@@ -44,15 +32,13 @@ from app.modules.agent.tools.workspace_cli.helper import (
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
-from app.modules.workspace.session_support import retry_advice
 from app.modules.agent.tools.workspace_cli.process_visibility import (
     visible_processes,
 )
 from app.modules.workspace.contracts.tooling import (
+    retry_advice,
     get_workspace_tool_runtime,
 )
-from pydantic_ai import ToolReturn, BinaryContent
-import mimetypes
 
 logger = get_logger(__name__)
 _DEFAULT_EXEC_YIELD_TIME_MS = 30000
@@ -60,7 +46,6 @@ _DEFAULT_EXEC_TIMEOUT_S = 60
 # Conservative per-image ceiling: Anthropic caps an image source at ~5 MB, and
 # other providers are similar. Over this, ask the agent to downscale first rather
 # than letting the provider reject the request mid-run.
-MAX_VIEW_IMAGE_BYTES = 5 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -146,6 +131,11 @@ async def get_workspace_session(
     runtime_context = workspace_runtime_context(ctx)
     if runtime is None:
         runtime = get_workspace_tool_runtime()
+    # Nothing names a browser session here any more. The image's
+    # `AGENT_BROWSER_SESSION` is the only browser there is, so a shell that
+    # inherits it, the relay, and the pane the person watches are all looking
+    # at the same Chrome -- which is what this used to have to arrange by
+    # overriding the name per conversation.
     return await runtime.get_session(
         user_id=ctx.user_id,
         pod_id=ctx.pod_id,
@@ -251,6 +241,26 @@ async def resize_terminal_internal(
     )
 
 
+def exec_clocks(request: ExecCommandRequest) -> tuple[int, int | None]:
+    """This call's patience, and when it may return early. They are independent.
+
+    `sandbox_session.exec_command` keeps them apart all the way down --
+    `wait_until` is how long *this call* waits, and it is not the process's
+    lifetime. The tool used to conflate them: `tty=true` overwrote an explicit
+    `timeout_seconds` with the default, and an explicit `timeout_seconds` threw
+    away an explicit `yield_time_ms`. Both silently, so a caller that set two
+    parameters had one honoured and no way to learn which.
+    """
+    timeout = request.timeout_seconds or _DEFAULT_EXEC_TIMEOUT_S
+    if request.yield_time_ms is not None:
+        return timeout, request.yield_time_ms
+    if request.timeout_seconds is not None:
+        # A stated patience and no yield means "wait it out": returning early on
+        # a quiet moment is the thing the caller opted out of.
+        return timeout, None
+    return timeout, _DEFAULT_EXEC_YIELD_TIME_MS
+
+
 async def exec_command_internal(
     ctx: BaseAgentContext,
     request: ExecCommandRequest,
@@ -290,20 +300,7 @@ async def exec_command_internal(
                 wanted=ctx.workspace_repo is not None
                 or looks_like_git_command(request.cmd),
             )
-            if request.tty:
-                effective_yield_time_ms = request.yield_time_ms
-                effective_timeout = _DEFAULT_EXEC_TIMEOUT_S
-            elif request.timeout_seconds is not None:
-                # Explicit blocking: no yield window, wait until done
-                effective_yield_time_ms = None
-                effective_timeout = request.timeout_seconds
-            else:
-                effective_yield_time_ms = (
-                    request.yield_time_ms
-                    if request.yield_time_ms is not None
-                    else _DEFAULT_EXEC_YIELD_TIME_MS
-                )
-                effective_timeout = _DEFAULT_EXEC_TIMEOUT_S
+            effective_timeout, effective_yield_time_ms = exec_clocks(request)
             with run_phase("tool.workspace.exec"):
                 result = await workspace_session.exec_command(
                     cmd=request.cmd,
@@ -322,7 +319,9 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
-        stdout, stderr = render_terminal_result(result, tty=request.tty)
+        stdout, stderr = render_terminal_result(
+            result, tty=request.tty, max_output_tokens=request.max_output_tokens
+        )
         stdout = _with_recreation_notice(
             stdout, recreated=workspace_session.workspace_recreated
         )
@@ -376,7 +375,9 @@ async def write_stdin_internal(
             )
         # write_stdin only ever targets an interactive process, so its output is
         # terminal output and is rendered as such.
-        stdout, stderr = render_terminal_result(result, tty=True)
+        stdout, stderr = render_terminal_result(
+            result, tty=True, max_output_tokens=request.max_output_tokens
+        )
         return ExecCommandResult(
             success=bool(result.get("success")),
             stdout=stdout,
@@ -385,6 +386,7 @@ async def write_stdin_internal(
             completed=completed,
             process_id=result.get("process_id"),
             error=result.get("error"),
+            notice=result.get("notice"),
         )
     except Exception as exc:
         # Session setup failed before write_stdin established whether the
@@ -478,114 +480,9 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
         return _python_workspace_tool_failure(exc, operation="execute_python")
 
 
-async def view_image_internal(
-    ctx: BaseAgentContext,
-    request: ViewImageRequest,
-):
-    # Require exactly one store path, returning a structured error (never raising)
-    # so a wrong call surfaces success=False to the model instead of aborting the
-    # run or burning the retry budget. Pick the store the agent explicitly
-    # addressed — no path-shape inference.
-    pod_path = (request.pod_file_path or "").strip()
-    workspace_path = (request.workspace_file_path or "").strip()
-    if bool(pod_path) == bool(workspace_path):
-        return ViewImageResponse(
-            success=False,
-            error=(
-                "Provide exactly one of `pod_file_path` (datastore) or "
-                "`workspace_file_path` (sandbox)."
-            ),
-        )
-    if pod_path:
-        file_path = pod_path
-        source = "datastore"
-    else:
-        file_path = workspace_path
-        source = "workspace"
-
-    try:
-        if source == "datastore":
-            content, detected_mime = await read_pod_file_bytes(ctx, file_path)
-        else:
-            content, detected_mime = await read_workspace_file_bytes(ctx, file_path)
-    except DomainError as exc:
-        # Datastore reads are grant-checked; surface a missing grant as
-        # needs_approval so the agent can request access, like the pod tools.
-        return approval_error_result(
-            exc, tool_name="view_image", args=request.model_dump()
-        )
-    except Exception as exc:
-        return ExecCommandResult(success=False, error=safe_error_text(exc))
-
-    media_type = detected_mime or mimetypes.guess_type(file_path)[0]
-    if not media_type or not media_type.startswith("image/"):
-        if media_type == "application/pdf" or file_path.lower().endswith(".pdf"):
-            hint = (
-                "This is a PDF, not an image. Use `pod_view_document_pages` to see "
-                "pages (layout, tables, figures), or `pod_read_file` to read "
-                "the text."
-            )
-        else:
-            hint = (
-                f"This file is not an image (detected type: {media_type or 'unknown'}). "
-                "`view_image` only handles image files. For documents, use "
-                "`pod_read_file`; for PDFs, `pod_view_document_pages`."
-            )
-        return ViewImageResponse(
-            success=False,
-            error=hint,
-            file_path=file_path,
-            media_type=media_type,
-            source=source,
-        )
-
-    # Sized for the model before it is measured against the limit. A phone
-    # photo is several megabytes of pixels the model shrinks on arrival and
-    # never looks at — so refusing it and telling the agent to go and compress
-    # it was work nobody needed to do, on an image we were about to shrink
-    # ourselves. What is left after this is what a limit should be judging.
-    payload, payload_media_type = downscale_for_vision(content, media_type)
-    if len(payload) > MAX_VIEW_IMAGE_BYTES:
-        return ViewImageResponse(
-            success=False,
-            error=(
-                f"Image is {len(payload) // 1024} KB even after downscaling, "
-                f"over the {MAX_VIEW_IMAGE_BYTES // (1024 * 1024)} MB limit. "
-                "Crop it or split it up before viewing."
-            ),
-            file_path=file_path,
-            media_type=media_type,
-            source=source,
-            size_bytes=len(content),
-        )
-
-    # Only a model that can actually accept image parts is given them. Handing
-    # BinaryContent to a text-only model poisons the whole request, and the
-    # provider rejects the turn rather than the tool call.
-    if getattr(ctx, "vision_mode", AgentVisionMode.UNAVAILABLE) is not (
-        AgentVisionMode.DIRECT
-    ):
-        # The delegate is a vision model too, and pays the same way for pixels
-        # past its own ceiling.
-        return await describe_single_image(
-            ctx,
-            data=payload,
-            media_type=payload_media_type,
-            file_path=file_path,
-            source=source,
-            instructions=request.instructions,
-        )
-
-    return ToolReturn(
-        return_value=ViewImageResponse(
-            success=True,
-            message=f"Successfully read image {file_path}",
-            file_path=file_path,
-            media_type=media_type,
-            source=source,
-            size_bytes=len(content),
-        ),
-        content=[
-            BinaryContent(data=payload, media_type=payload_media_type),
-        ],
-    )
+# Re-exported: `view_image` lives in its own module for size, and every caller
+# — the adapter, the tests — reaches it through this one.
+from app.modules.agent.tools.workspace_cli.view_image import (  # noqa: E402
+    MAX_VIEW_IMAGE_BYTES as MAX_VIEW_IMAGE_BYTES,
+    view_image_internal as view_image_internal,
+)

@@ -123,7 +123,7 @@ pub(crate) fn reset_full_reinstall_impl(app: AppHandle) -> Result<RecoveryOutcom
 
     let snapshot = {
         let shell: State<Shell> = app.state();
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         ui.mode = "undecided".into();
         ui.running = false;
         ui.ready = false;

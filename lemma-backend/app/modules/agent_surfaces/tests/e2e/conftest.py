@@ -8,6 +8,7 @@ import pytest
 import pytest_asyncio
 from fastapi import status
 
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     fake_composio_email,
     fake_resend,
@@ -27,6 +28,28 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
 )
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.worker_process import production_worker_process
+
+
+@pytest.fixture
+def platform_fake(fake_slack, fake_teams, fake_telegram, fake_whatsapp):
+    """The fake server standing in for each chat platform.
+
+    One mapping, here, rather than one per matrix module. Six copies of it had
+    accumulated across the five matrices and the streaming suite, and they had
+    already drifted: the streaming copy listed three platforms because its own
+    tests do not parametrize over WhatsApp. That is the test's parametrization
+    leaking into the fixture -- what belongs here is which fake answers for a
+    platform, and which platforms a test runs on belongs to the test.
+
+    Adding a chat platform is now one edit rather than six.
+    """
+    return {
+        SurfacePlatform.SLACK: fake_slack,
+        SurfacePlatform.TEAMS: fake_teams,
+        SurfacePlatform.TELEGRAM: fake_telegram,
+        SurfacePlatform.WHATSAPP: fake_whatsapp,
+    }
+
 
 # Re-export shared E2E fixtures so this module can run with --confcutdir.
 sandbox_reachable_backend = e2e_fixtures.sandbox_reachable_backend
@@ -67,6 +90,32 @@ def public_surface_api_url(monkeypatch):
 # why this suite is entitled to it.
 os.environ.setdefault("CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS", "true")
 
+# Read by the worker subprocess, which inherits this environment. It is too
+# late for *this* process — the imports above have already built
+# `agent_settings` — so the fixture below covers the in-process half. Both are
+# needed, and for the same reason the comment above gives.
+os.environ.setdefault("AGENT_RUN_BUDGET_TOOL_FAILURES", "0")
+
+
+@pytest.fixture(autouse=True)
+def scripted_runs_spend_no_failure_budget(monkeypatch):
+    """A scripted run has no model, so a failure streak means nothing here.
+
+    These suites drive the run from a fixed list of turns, and a matrix test
+    walks every invalid-input branch in one run, back to back. That is exactly
+    the shape the consecutive-failure budget exists to stop — a run that has
+    stopped converging — except there is nothing converging to begin with: the
+    streak measures the size of the matrix, not the state of the run. Left on,
+    it truncates the matrix partway and the assertion counts come up short.
+
+    Only this dimension is switched off. The step and clock ceilings stay, and
+    what the budget does when it does trip is asserted in
+    `agent/tests/unit/test_run_limits.py`.
+    """
+    from app.modules.agent.config import agent_settings
+
+    monkeypatch.setattr(agent_settings, "agent_run_budget_tool_failures", 0)
+
 
 @pytest.fixture(autouse=True)
 def reachable_fake_providers(monkeypatch):
@@ -106,7 +155,7 @@ def configured_email_domain(monkeypatch):
     """
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
 
 
 @pytest_asyncio.fixture
@@ -127,7 +176,7 @@ async def pod_with_a_mailbox(authenticated_client, fixed_test_org, monkeypatch):
     from app.core.config import settings as core_settings
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
 
     response = await authenticated_client.post(
@@ -261,6 +310,7 @@ __all__ = [
     "supertokens_container",
     "test_app",
     "test_database_url",
+    "platform_fake",
     "test_pod",
     "test_redis_url",
     "sandbox_reachable_backend",

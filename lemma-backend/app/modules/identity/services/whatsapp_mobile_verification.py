@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.modules.agent_surfaces.contracts.whatsapp import (
     GlobalWhatsAppDeliveryError,
+    deployment_owns_whatsapp_number,
     global_whatsapp_configuration,
     send_global_whatsapp_text,
 )
@@ -141,8 +142,15 @@ class _ClaimedVerification:
     user_id: UUID
 
 
-def is_whatsapp_verification_configured() -> bool:
-    whatsapp = global_whatsapp_configuration()
+async def is_whatsapp_verification_configured() -> bool:
+    """Async because the shared line may live in the pool rather than settings.
+
+    A deployment that put all of its numbers in `surface_whatsapp_numbers` and
+    set no `WHATSAPP_*` variables still owns a shared line, and answering
+    `False` for it would leave mobile verification switched off with working
+    credentials sitting in a table.
+    """
+    whatsapp = await global_whatsapp_configuration()
     return bool(
         identity_settings.auth_whatsapp_mobile_verification_enabled
         and whatsapp.access_token
@@ -249,11 +257,11 @@ class WhatsAppMobileVerificationService:
         return f"{_PREFIX}:phone:{phone_hash}"
 
     async def config(self) -> WhatsAppVerificationConfig:
-        if not is_whatsapp_verification_configured():
+        if not await is_whatsapp_verification_configured():
             return WhatsAppVerificationConfig(available=False)
         if self._display_number is None:
             configured = str(
-                global_whatsapp_configuration().display_phone_number or ""
+                (await global_whatsapp_configuration()).display_phone_number or ""
             ).strip()
             if configured:
                 self._display_number = configured
@@ -264,7 +272,7 @@ class WhatsAppMobileVerificationService:
         )
 
     async def _lookup_display_number(self) -> str | None:
-        whatsapp = global_whatsapp_configuration()
+        whatsapp = await global_whatsapp_configuration()
         access_token = whatsapp.access_token
         phone_number_id = whatsapp.phone_number_id
         if not access_token or not phone_number_id:
@@ -469,10 +477,12 @@ class WhatsAppMobileVerificationService:
         destination_phone_number_id: str,
         whatsapp_message_id: str,
     ) -> bool:
-        whatsapp = global_whatsapp_configuration()
-        if (
-            not is_whatsapp_verification_configured()
-            or destination_phone_number_id != whatsapp.phone_number_id
+        # The same question ingress asked, and that is the point: when the two
+        # disagreed, a code sent to a pooled number was accepted there -- so the
+        # webhook returned early and it never became an ordinary message -- and
+        # rejected here, so it was never a verification either. It vanished.
+        if not await is_whatsapp_verification_configured() or not (
+            await deployment_owns_whatsapp_number(destination_phone_number_id)
         ):
             return False
         try:
