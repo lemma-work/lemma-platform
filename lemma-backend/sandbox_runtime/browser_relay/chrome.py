@@ -760,7 +760,7 @@ async def set_display_size(width: int, height: int) -> str | None:
     return stdout.decode("utf-8", "replace").strip() or None
 
 
-async def keepalive(*, session: str | None = None) -> None:
+async def keepalive(*, session: str | None = None) -> bool:
     """Touch the browser so its idle timer does not retire it.
 
     `agent-browser` closes Chrome after five minutes without a *command*, and
@@ -768,12 +768,32 @@ async def keepalive(*, session: str | None = None) -> None:
     slowly, is idle by that measure and would have the browser shut under them.
     Any command resets the timer; asking for the URL is the cheapest one that
     does not change what is on screen.
+
+    Returns whether the touch landed. A miss used to be silent, and a browser
+    that then retired under a watcher looked like the page reloading itself
+    every five minutes, with nothing anywhere saying why.
     """
-    with suppress(OSError, asyncio.TimeoutError):
+    try:
         process = await asyncio.create_subprocess_exec(
             *agent_browser_argv("get", "url", session=session),
             env=agent_browser_env(session),
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
-        await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_SECONDS)
+        _, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=_REAP_TIMEOUT_SECONDS
+        )
+    except (OSError, asyncio.TimeoutError) as exc:
+        logging.getLogger(__name__).warning(
+            "browser keepalive for session %s did not run: %r", session, exc
+        )
+        return False
+    if process.returncode != 0:
+        logging.getLogger(__name__).warning(
+            "browser keepalive for session %s exited %s: %s",
+            session,
+            process.returncode,
+            stderr.decode("utf-8", "replace").strip()[:200],
+        )
+        return False
+    return True
