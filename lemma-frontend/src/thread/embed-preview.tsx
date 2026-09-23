@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ExternalIcon, PlusIcon, CloseIcon } from "@/ui/icons";
-import { appThemeMessage, onAppearanceChange, widgetThemeMessage, widgetThemeStyle } from "./widget-theme";
+import { appThemeMessage, onAppearanceChange, widgetThemeMessage } from "./widget-theme";
 import { registerFrame } from "./compose-bridge";
 import { frameState } from "./frame-state";
+import { framedDocument } from "./framed-document";
 
 /** A widget, drawn as the thing it is.
  *
@@ -36,24 +37,6 @@ const LOAD_DEADLINE_MS = 12_000;
 /** The cap on an unexpanded widget: most of the viewport, never less than this. */
 const CEILING_MIN = 480;
 const CEILING_SHARE = 0.85;
-
-/** Markup this app did not write, wrapped so it can live in a frame here.
- *
- *  Three things go in with it, and the file view on the stage needs the same
- *  three: the theme as a stylesheet for the first paint, a listener so a theme
- *  changed later reaches it without reloading the frame and throwing away
- *  whatever it was showing, and `window.lemma.compose` so inline content can
- *  ask the pod something without an SDK to call.
- *
- *  Exported because there are two frames, not one. The stage drew its own with
- *  the raw markup and none of this, so a generated page sat glowing white on a
- *  dark shell — the exact failure `widget-theme.ts` exists to fix, in the one
- *  place the fix had not reached. */
-export function framedDocument(html: string | undefined, id: string): string | undefined {
-    if (html === undefined) return undefined;
-    const bridge = `<script>(()=>{let last=0;const send=()=>{const h=Math.ceil(Math.max(document.body?.scrollHeight||0,document.documentElement.scrollHeight));if(h!==last){last=h;parent.postMessage({type:'lemma:preview-height',id:${JSON.stringify(id)},height:h},'*')}};new ResizeObserver(send).observe(document.documentElement);addEventListener('load',send);send();addEventListener('message',e=>{if(e.source!==parent)return;const d=e.data;if(!d||d.type!=='lemma-widget-theme'||!d.tokens)return;const r=document.documentElement;for(const k in d.tokens){if(k.indexOf('--lemma-widget-')===0)r.style.setProperty(k,d.tokens[k])}r.dataset.lemmaTheme=d.theme;r.style.colorScheme=d.theme});window.lemma={compose:(text,options)=>{parent.postMessage({type:'lemma-compose',id:String(Date.now())+Math.random(),text:String(text),newConversation:!!(options&&options.newConversation)},'*')}}})()<\/script>`;
-    return `<style>${widgetThemeStyle()}</style>` + html + bridge;
-}
 
 export function EmbedPreview({ title, html, src, sandbox = "allow-scripts", full = false, onOpen }: {
     title: string; html?: string; src?: string; sandbox?: string; full?: boolean; onOpen?: () => void;

@@ -108,3 +108,10 @@ test("a file with Windows line endings keeps them in the block it did not edit",
     assert.equal(split.front, "---\r\nname: x\r\n---\r");
     assert.equal(split.body, "Body.\r\n");
 });
+
+
+test("autolinks cannot join separate text into an HTML tag", () => {
+    assert.equal(holdsMarkup("<scr<https://example.com>ipt>"), false);
+    assert.equal(holdsMarkup("See <sam@example.com> and <script>alert(1)</script>"), true);
+    assert.equal(holdsMarkup("`<div>` and <https://example.com> then <details>notes</details>"), true);
+});

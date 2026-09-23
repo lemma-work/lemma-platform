@@ -1,5 +1,6 @@
 import { PdfPreview } from "./pdf-preview";
-import { EmbedPreview, framedDocument } from "./embed-preview";
+import { EmbedPreview } from "./embed-preview";
+import { framedDocument } from "./framed-document";
 import { ExternalIcon, FileIcon } from "@/ui/icons";
 import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";

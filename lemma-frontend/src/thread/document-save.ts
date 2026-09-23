@@ -80,9 +80,7 @@ export function holdsMarkup(text: string): boolean {
     const prose = text
         .replace(/^ {0,3}(```|~~~)[\s\S]*?^ {0,3}\1[^\n]*$/gm, "")
         .replace(/`[^`\n]*`/g, "");
-    /* `<https://example.com>` and `<sam@example.com>` are autolinks, which are
-       markdown rather than markup and survive the round trip. */
-    return /<\/?[a-zA-Z][a-zA-Z0-9-]*(\s[^<>]*)?\/?>/.test(prose.replace(/<[a-z]+:[^>\s]*>|<[^>\s@]+@[^>\s]+>/gi, ""));
+    return /<\/?[a-zA-Z][a-zA-Z0-9-]*(\s[^<>]*)?\/?>/.test(prose);
 }
 
 /** Why a markdown document is being shown rather than offered to write in.
