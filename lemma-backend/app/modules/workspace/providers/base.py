@@ -40,6 +40,7 @@ from sandbox_runtime.protocol import (
     TerminalSize,
 )
 
+from app.core.ports.plan_limits import SandboxSize
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxMount
 
 
@@ -89,6 +90,9 @@ class ProviderCreateSpec:
     volume_name: str | None = None
     mounts: tuple[SandboxMount, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
+    # What the owner's plan pays for. None is the provider's configured default.
+    # Only a workspace is sized by plan; a function sandbox keeps its own.
+    size: SandboxSize | None = None
 
 
 class ProviderStorageKind(StrEnum):

@@ -35,6 +35,7 @@ use crate::protocol::{
 mod artifacts;
 mod callbacks;
 mod commands;
+pub(crate) mod credentials;
 mod events;
 mod failures;
 mod harnesses;

@@ -14,6 +14,9 @@ import pytest
 
 
 from app.modules.workspace.api.controllers import browser_view_controller as view
+from app.modules.workspace.api.controllers.browser_view_session import (
+    user_id_resolver,
+)
 from app.modules.workspace.services.ws_bridge import (
     origins_from,
     MAX_FRAME_BYTES,
@@ -298,8 +301,9 @@ def test_the_close_codes_are_distinct() -> None:
         view.CLOSE_NO_BROWSER,
         view.CLOSE_UNSUPPORTED,
         view.CLOSE_RELAY_ABSENT,
+        view.CLOSE_SANDBOX_UNAVAILABLE,
     }
-    assert len(codes) == 5
+    assert len(codes) == 6
     assert all(4000 <= code < 5000 for code in codes)
 
 
@@ -712,3 +716,163 @@ async def test_an_image_that_cannot_count_falls_back_to_the_local_view(
     await _settle()
 
     assert service.resets == 1
+
+
+# ---------------------------------------------------------------------------
+# A fabric that refuses the relay's port
+# ---------------------------------------------------------------------------
+
+
+class _PortRefusedService(_FakeService):
+    """The desktop guest saying it does not serve 4850.
+
+    `reach_port` raises `ProviderRejected` for a port the fabric does not
+    publish, and the relay client turns that into `BrowserRelayNotServed`.
+    Before it had a type, it reached this handler as a `ProviderRejected`
+    nothing caught, and an unhandled exception in a socket handler arrives at
+    the pane as an ordinary drop -- which it retried for ever, each attempt a
+    round trip on the guest's single control channel.
+    """
+
+    def __init__(self) -> None:
+        from app.modules.workspace.services.browser_relay_client import (
+            BrowserRelayNotServed,
+        )
+
+        super().__init__(
+            fail=BrowserRelayNotServed("this sandbox does not serve the browser relay")
+        )
+
+
+def test_a_fabric_that_refuses_the_relays_port_is_a_terminal_close() -> None:
+    service = _PortRefusedService()
+
+    async def _signed_in(_websocket):
+        return str(uuid4())
+
+    client = _client(service)
+    client.app.dependency_overrides[user_id_resolver] = lambda: _signed_in
+    with client.websocket_connect(
+        "/workspace/browser/view", headers={"Origin": "https://app.lemma.test"}
+    ) as socket:
+        refusal = socket.receive()
+
+    assert refusal["type"] == "websocket.close"
+    assert refusal["code"] == view.CLOSE_RELAY_ABSENT, (
+        "a refused port must be a code the pane stops retrying on"
+    )
+    assert service.closed, "the service was left open on the way out"
+
+
+async def test_a_refused_port_renders_a_state_rather_than_a_traceback() -> None:
+    """`/workspace/browser/status` exists to render a panel.
+
+    It answered every other "not right now" with a state and this one with a
+    500, because the fabric's refusal had no type anything here caught — so the
+    status route failed on exactly the installs where the pane did not work.
+    "unavailable", not "asleep": waking a sandbox that does not publish the
+    relay's port changes nothing about whether it publishes it.
+    """
+    from app.modules.workspace.services import browser_view_service as service_module
+    from app.modules.workspace.services.browser_relay_client import (
+        BrowserRelayNotServed,
+    )
+
+    class _RefusedRelay:
+        """The sandbox, standing in for the one the fabric will not reach."""
+
+        async def health(self, *, start: bool = False) -> str:
+            raise BrowserRelayNotServed("this sandbox does not serve the browser relay")
+
+    class _Refusing(service_module.BrowserViewService):
+        async def _relay(self, user_id, *, start, deliver=True):
+            return _RefusedRelay()
+
+    found = await _Refusing().status(uuid4())
+
+    assert found["state"] == "unavailable"
+
+
+async def test_a_poll_for_the_current_page_writes_nothing_into_the_sandbox() -> None:
+    """Reading where the browser is must not cost two writes into it.
+
+    `_relay` delivers the relay token and the browser-proxy decision on every
+    call, which is right for somebody arriving and wrong for a poll: the
+    sign-in pane asks this every 1.5 seconds for as long as it is open. On
+    Desktop each write is a round trip through the guest's one vsock control
+    channel, so an idle pane took that channel four times every other second --
+    the same channel every other sandbox operation on the machine waits for.
+    """
+    from app.modules.workspace.services import browser_view_service as service_module
+
+    delivered: list[str] = []
+
+    class _CountingRelay:
+        async def deliver_token(self) -> None:
+            delivered.append("token")
+
+        async def deliver_browser_proxy(self, sandbox_id, kind) -> None:
+            delivered.append("proxy")
+
+        async def targets(self, *, domain=None):
+            return [{"url": "https://example.test/account"}]
+
+    class _Reading(service_module.BrowserViewService):
+        async def _relay(self, user_id, *, start, deliver=True):
+            relay = _CountingRelay()
+            if deliver:
+                await relay.deliver_token()
+                await relay.deliver_browser_proxy(None, None)
+            return relay
+
+    service = _Reading()
+    url = await service.current_page_url(uuid4(), origin="https://example.test")
+
+    assert url == "https://example.test/account"
+    assert delivered == [], f"a read wrote {delivered} into the sandbox"
+
+    # And the flag is a choice rather than a removal: the default still writes,
+    # which is what an arriving viewer depends on.
+    await service._relay(uuid4(), start=True)
+    assert delivered == ["token", "proxy"]
+
+
+def _close_code_for(failure: Exception) -> tuple[int, bool]:
+    """What the viewer socket answers when opening the session raises `failure`."""
+    service = _FakeService(fail=failure)
+
+    async def _signed_in(_websocket):
+        return str(uuid4())
+
+    client = _client(service)
+    client.app.dependency_overrides[user_id_resolver] = lambda: _signed_in
+    with client.websocket_connect(
+        "/workspace/browser/view", headers={"Origin": "https://app.lemma.test"}
+    ) as socket:
+        refusal = socket.receive()
+    assert refusal["type"] == "websocket.close"
+    return refusal["code"], service.closed
+
+
+def test_a_computer_that_is_still_starting_is_a_close_the_pane_retries() -> None:
+    """`SandboxUnavailable` used to escape the handler.
+
+    An unhandled exception in a socket handler reaches the pane as an ordinary
+    drop, so a workspace whose new image was still downloading read as "the
+    connection dropped" -- and nothing in the log said why.
+    """
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    code, closed = _close_code_for(
+        SandboxUnavailable("workspace runtime transport failed: ConnectError")
+    )
+    assert code == view.CLOSE_SANDBOX_UNAVAILABLE
+    assert closed, "the service was left open on the way out"
+
+
+def test_a_definitive_sandbox_refusal_is_a_close_the_pane_stops_on() -> None:
+    from sandbox_runtime.errors import SandboxRejected
+
+    code, closed = _close_code_for(SandboxRejected("no such port"))
+    assert code == view.CLOSE_RELAY_ABSENT
+    assert closed

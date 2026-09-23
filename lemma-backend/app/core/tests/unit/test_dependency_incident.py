@@ -72,13 +72,16 @@ def test_db_pool_pressure_emits_one_transition_pair(monkeypatch) -> None:
         def checkedout(self) -> int:
             return self._checked_out
 
-    class _ConnectionRecord:
-        def __init__(self, checked_out: int) -> None:
-            self.pool = _Pool(checked_out)
+    # The pool is passed at registration, which is where the real listener gets
+    # it. A connection record carrying a `.pool` is not a shape SQLAlchemy
+    # produces -- `_ConnectionRecord` name-mangles that attribute -- so only the
+    # counters are stood in for here, not the argument shape.
+    pressured = session_module._pool_utilization_listener(_Pool(4))
+    relieved = session_module._pool_utilization_listener(_Pool(1))
 
     for _ in range(4):
-        session_module._log_pool_utilization(None, _ConnectionRecord(4))
-    session_module._log_pool_utilization(None, _ConnectionRecord(1))
+        pressured(None, None)
+    relieved(None, None)
 
     assert [record[:2] for record in logger.records] == [
         ("warning", "dependency.degraded"),

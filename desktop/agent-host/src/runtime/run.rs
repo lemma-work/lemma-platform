@@ -27,6 +27,8 @@ impl TargetWorker {
         let events_ready = Arc::clone(&self.events_ready);
         let reprobe_requested = Arc::clone(&self.reprobe_requested);
         let run_id = spec.agent_run_id;
+        let credential = crate::runtime::credentials::RunCredential::new(&paths.root, run_id);
+        let retire_credential = crate::runtime::credentials::RetireOnDrop(Arc::clone(&credential));
         // Captured before the task takes ownership of `adapter`, so a failure
         // can name the agent rather than describing it as an internal error.
         let adapter_name = adapter.spec.display_name.clone();
@@ -130,10 +132,16 @@ impl TargetWorker {
             // Kept behind, so the failure path below can still ask whether the
             // user pressed Stop.
             let asked_to_stop = cancel_rx.clone();
+            let agent_environment = crate::runtime::credentials::agent_environment(
+                &retire_credential.0,
+                &spec.mcp,
+                crate::acp::run_environment(&spec.mcp),
+            );
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
                 scratch_directory: scratch.clone(),
+                agent_environment,
                 mcp_server: Some(mcp_server),
                 can_load_session,
                 published_config_options,
@@ -263,6 +271,7 @@ impl TargetWorker {
                 handle: OwnedTask(handle),
                 cancel: cancel_tx,
                 kill_at: None,
+                credential,
             },
         );
     }

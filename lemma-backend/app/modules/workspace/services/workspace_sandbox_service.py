@@ -16,6 +16,7 @@ from opentelemetry import trace
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.config import settings
+from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.protocol import (
     PortAccessGrant,
@@ -23,7 +24,6 @@ from sandbox_runtime.protocol import (
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
-from sandbox_runtime.errors import SandboxUnavailable
 from app.modules.workspace.sandbox_session import (
     SandboxWorkspaceSession,
     canonical_workspace_cwd,
@@ -31,6 +31,9 @@ from app.modules.workspace.sandbox_session import (
 )
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
+from app.modules.workspace.services.workspace_directory_ensure import (
+    WorkspaceDirectoryEnsureMixin,
+)
 from app.modules.workspace.services.workspace_process_store import WorkspaceProcessStore
 from app.modules.workspace.services.workspace_runtime_bundle import (
     WorkspaceRuntimeBundleMixin,
@@ -39,14 +42,12 @@ from app.modules.workspace.services.workspace_storage_generation_store import (
     WorkspaceStorageGenerationStore,
 )
 from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.services.workspace_directory_ensure import ReadyBudget
+
+logger = get_logger(__name__)
 
 _storage_generation_store: WorkspaceStorageGenerationStore | None = None
 _process_store: WorkspaceProcessStore | None = None
-_SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
-# How long a created workspace directory is believed without re-checking. Long
-# enough that a run's tool calls stop paying for it, short enough that an agent
-# which deleted its own working directory recovers on its own.
-_DIRECTORY_READY_SECONDS = 60.0
 
 # Own tracer rather than the agent module's run_phase helper: a workspace
 # session is acquired again for every single shell tool call, and the split
@@ -81,7 +82,9 @@ async def reset_workspace_store_state() -> None:
         _process_store = None
 
 
-class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
+class WorkspaceSandboxService(
+    WorkspaceRuntimeBundleMixin, WorkspaceDirectoryEnsureMixin
+):
     """Service for user-scoped workspace sandbox lifecycle and sessions."""
 
     _inflight_ensures: dict[tuple[int, UUID], asyncio.Task[SandboxInfo]] = {}
@@ -102,8 +105,10 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
         sandbox: Optional[ISandbox] = None,
         storage_generation_store: Optional[WorkspaceStorageGenerationStore] = None,
         process_store: Optional[WorkspaceProcessStore] = None,
+        manager_client: Optional[LocalSandboxClient] = None,
     ):
         self._sandbox = sandbox
+        self._manager_client = manager_client
         self.storage_generation_store = (
             storage_generation_store or get_workspace_storage_generation_store()
         )
@@ -372,29 +377,42 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
         organization_id: UUID | None = None,
         scope: list[str] | None = None,
         env_vars: dict[str, str] | None = None,
+        ready_timeout_seconds: float | None = None,
     ) -> IWorkspaceSession:
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
+        budget = ReadyBudget(ready_timeout_seconds)
         with _tracer.start_as_current_span("lemma.workspace.ensure_dir"):
             sandbox_info = await self._ensure_workspace_directory(
-                user_id,
-                resolved_cwd,
+                user_id, resolved_cwd, budget=budget
             )
         with _tracer.start_as_current_span("lemma.workspace.runtime_bundle"):
-            await self._ensure_runtime_bundle(user_id, sandbox_info)
-            await self._ensure_browser_proxy(user_id, sandbox_info)
+            # The install is a shielded shared task: running out of budget
+            # abandons this caller's wait and leaves it running for the next.
+            await self._await_shared(
+                self._ensure_runtime_bundle(user_id, sandbox_info),
+                budget.remaining(),
+            )
+            await self._ensure_browser_proxy(
+                user_id, sandbox_info, wait_seconds=budget.remaining()
+            )
 
         if env_vars is None:
             with _tracer.start_as_current_span("lemma.workspace.env_vars"):
-                env_vars = await self.get_env_vars(
-                    user_id,
-                    pod_id,
-                    workspace_url=sandbox_info.endpoint,
-                    organization_id=organization_id,
-                    workload_type=workload_type,
-                    workload_id=workload_id,
-                    workload_name=workload_name,
-                    scope=scope,
-                    session_id=session_id,
+                # Minting the token and resolving the organization are reads
+                # like any other; a stalled one must not outlast the ceiling.
+                env_vars = await self._await_shared(
+                    self.get_env_vars(
+                        user_id,
+                        pod_id,
+                        workspace_url=sandbox_info.endpoint,
+                        organization_id=organization_id,
+                        workload_type=workload_type,
+                        workload_id=workload_id,
+                        workload_name=workload_name,
+                        scope=scope,
+                        session_id=session_id,
+                    ),
+                    budget.remaining(),
                 )
 
         # Tell this session, once, if the disk it is about to use is not the one
@@ -406,11 +424,14 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
                 with _tracer.start_as_current_span(
                     "lemma.workspace.storage_generation"
                 ):
-                    workspace_recreated = (
-                        await self.storage_generation_store.observe_storage_generation(
+                    # Best effort, and bounded like the rest: the handler
+                    # below turns a timeout into "no notice".
+                    workspace_recreated = await asyncio.wait_for(
+                        self.storage_generation_store.observe_storage_generation(
                             session_id=session_id,
                             generation=sandbox_info.storage_generation,
-                        )
+                        ),
+                        timeout=budget.remaining(),
                     )
             except Exception:
                 # A missing notice is far better than a failed tool call.
@@ -431,135 +452,16 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
             allocation_epoch=sandbox_info.allocation_epoch,
         )
 
-    async def _ensure_workspace_directory(
-        self,
-        user_id: UUID,
-        path: str,
-    ) -> SandboxInfo:
-        deadline_at = datetime.now(timezone.utc) + timedelta(
-            seconds=_SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS
-        )
-        sandbox_info = await self.get_or_create_sandbox(user_id)
-        cache_key = self._directory_cache_key(user_id, path, sandbox_info)
-        if cache_key is None:
-            return await self._create_workspace_directory_until_ready(
-                user_id,
-                path,
-                sandbox_info=sandbox_info,
-                deadline_at=deadline_at,
-            )
-
-        ready_at = self._ready_directories.get(cache_key)
-        if ready_at is not None:
-            if (
-                asyncio.get_running_loop().time() - ready_at
-            ) < _DIRECTORY_READY_SECONDS:
-                # The freshly resolved info, never the one cached alongside the
-                # readiness. Its storage generation is what tells a conversation
-                # its workspace was recreated, the generation is not in the key,
-                # and it is bumped in a different transaction from the epoch --
-                # so returning a remembered copy can swallow the one notice that
-                # stops an agent reading an empty workspace as "nothing was ever
-                # here".
-                return sandbox_info
-            self._ready_directories.pop(cache_key, None)
-
-        task = self._inflight_directories.get(cache_key)
-        if task is None:
-            task = create_inherited_task(
-                self._create_workspace_directory_until_ready(
-                    user_id,
-                    path,
-                    sandbox_info=sandbox_info,
-                    deadline_at=deadline_at,
-                ),
-                name=f"workspace-directory-ensure:{user_id}:{path}",
-            )
-            self._inflight_directories[cache_key] = task
-
-            def clear(completed: asyncio.Task[SandboxInfo]) -> None:
-                if self._inflight_directories.get(cache_key) is completed:
-                    self._inflight_directories.pop(cache_key, None)
-
-            task.add_done_callback(clear)
-
-        info = await asyncio.shield(task)
-        self._ready_directories[cache_key] = asyncio.get_running_loop().time()
-        return info
-
-    async def _create_workspace_directory_until_ready(
-        self,
-        user_id: UUID,
-        path: str,
-        *,
-        sandbox_info: SandboxInfo,
-        deadline_at: datetime,
-    ) -> SandboxInfo:
-        force_reconcile = False
-        while datetime.now(timezone.utc) < deadline_at:
-            if force_reconcile:
-                sandbox_info = await self.get_or_create_sandbox(
-                    user_id,
-                    force_reconcile=True,
-                )
-            try:
-                await self._get_manager_client().create_directory(
-                    user_id,
-                    path,
-                    deadline_at=deadline_at,
-                )
-            except SandboxUnavailable as exc:
-                remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
-                if remaining <= 0:
-                    break
-                delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
-                await asyncio.sleep(min(delay, remaining))
-                force_reconcile = True
-                continue
-            return sandbox_info
-        raise TimeoutError(f"workspace sandbox {user_id} did not become usable")
-
-    def _directory_cache_key(
-        self,
-        user_id: UUID,
-        path: str,
-        sandbox_info: SandboxInfo,
-    ) -> tuple[int, UUID, str, int, str] | None:
-        """Identity for "this directory exists", which is the disk's, not the
-        container's.
-
-        ``/workspace`` is the mounted volume, so whether the directory is there
-        is a property of the storage rather than of whichever container is
-        currently attached to it. Keyed by the allocation epoch, a container
-        recreate invalidated a directory that had never gone away -- paying a
-        round trip to make a directory that was already present -- while a
-        storage generation moving underneath the same epoch, which is the case
-        where the files really are gone, did not invalidate anything.
-
-        Keyed by the storage generation both come out right: a recreate keeps
-        the entry, and a reset drops it.
-        """
-        if (
-            sandbox_info.allocation_id is None
-            or sandbox_info.storage_generation is None
-        ):
-            return None
-        # The leading (loop id, user id) must stay a prefix of the ensure key:
-        # stop_sandbox cancels directory tasks by matching that prefix.
-        return (
-            id(asyncio.get_running_loop()),
-            user_id,
-            sandbox_info.allocation_id,
-            sandbox_info.storage_generation,
-            path,
-        )
-
     def _get_manager_client(self) -> LocalSandboxClient:
         """The client the session and file operations run through.
 
         In-process, with the surface the sandbox HTTP client had -- which is
-        why the session above it never needed to know the difference.
+        why the session above it never needed to know the difference. A client
+        passed to the constructor is used instead, which is how a test gives
+        the service a fabric without replacing part of the service itself.
         """
+        if self._manager_client is not None:
+            return self._manager_client
         from app.modules.workspace.services.sandbox_composition import (
             build_local_client,
         )

@@ -61,6 +61,8 @@ impl Daemon {
 
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            // Released however this thread ends -- see `lifecycle::Finish`.
+            let _finish = daemon.lifecycle.finish_on_drop();
             let outcome = daemon.perform_local_data_reset(&manager, id.as_ref());
             match outcome {
                 Ok(summary) => {
@@ -93,7 +95,6 @@ impl Daemon {
                     }));
                 }
             }
-            daemon.lifecycle.finish();
         });
     }
 

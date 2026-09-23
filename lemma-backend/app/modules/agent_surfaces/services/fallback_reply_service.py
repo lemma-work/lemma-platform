@@ -378,6 +378,25 @@ async def deliver_fallback_reply(
             },
         )
     except Exception as exc:
+        # The incident counter and the error are two different jobs, and this
+        # used to do only the first. `record_failure` takes a class name, so
+        # everything the platform actually said was discarded: a
+        # `WhatsAppApiError` carries Meta's own body excerpt -- an invalid
+        # token, a number not registered on the app, a recipient outside the
+        # tester allow-list -- and what reached the log was the string
+        # "WhatsAppApiError", once, after the third failure. A person asking
+        # why nobody was answered had nothing to read.
+        #
+        # Logged per failure rather than per incident because the incident is a
+        # rate and this is a cause; the first one is the one worth having, and
+        # the third is the one that used to be the first.
+        logger.warning(
+            "agent_surfaces.fallback_reply.surface_fallback_send_failed.degraded",
+            platform=str(context.platform),
+            surface_id=str(context.surface_id) if context.surface_id else None,
+            reply_kind=context.reply_kind,
+            exc_info=True,
+        )
         _fallback_incident.record_failure(error_type=type(exc).__name__)
     else:
         _fallback_incident.record_success()

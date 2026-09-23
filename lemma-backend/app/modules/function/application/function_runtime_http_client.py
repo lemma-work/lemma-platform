@@ -7,6 +7,8 @@ from collections.abc import Callable
 
 import httpx
 
+from app.modules.workspace.contracts.sandbox_network import sandbox_transport
+
 
 HttpClientFactory = Callable[[], httpx.AsyncClient]
 
@@ -14,6 +16,8 @@ HttpClientFactory = Callable[[], httpx.AsyncClient]
 def _build_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         follow_redirects=False,
+        # A function sandbox on Desktop is reached over vsock, like a workspace.
+        transport=sandbox_transport(),
         limits=httpx.Limits(
             max_connections=100,
             max_keepalive_connections=64,

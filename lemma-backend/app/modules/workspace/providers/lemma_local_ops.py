@@ -24,6 +24,7 @@ from sandbox_runtime.protocol import (
 
 from typing import Any
 
+from app.modules.workspace.providers.desktop_tunnel import remember_guest_address
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     ProviderCapability,
@@ -190,8 +191,9 @@ class LemmaLocalOpsMixin:
         deadline_at: datetime,
     ) -> bool:
         async with self._ops(instance, deadline_at) as client:
-            await client.delete_file(path, recursive=recursive, deadline_at=deadline_at)
-            return True
+            return await client.delete_file(
+                path, recursive=recursive, deadline_at=deadline_at
+            )
 
     async def ensure_python_session(
         self, instance: ProviderInstance, request: CreatePythonSessionRequest
@@ -244,16 +246,24 @@ class LemmaLocalOpsMixin:
         deadline_at: datetime,
     ) -> None:
         """Write it through the guest runtime, which is the same protocol Docker uses."""
+        _, _, name = path.rpartition("/")
+        if not name:
+            raise ProviderRejected(f"{path!r} does not name a file")
 
         async def _one_chunk() -> AsyncIterator[bytes]:
             yield value
 
         async with self._ops(instance, deadline_at) as client:
+            # 0600, like Docker's tar entry and E2B's chmod. Delivered through
+            # the ordinary file API, this took the runtime's umask and landed
+            # 0644 -- so on Desktop alone the browser relay token was readable
+            # by every process in the sandbox, and on no other fabric was it.
             await client.write_file(
                 path,
                 _one_chunk(),
                 expected_sha256=None,
                 deadline_at=deadline_at,
+                mode=0o600,
             )
 
 
@@ -261,4 +271,12 @@ def _status_object(snapshot: dict[str, Any]) -> dict[str, Any]:
     status = snapshot.get("status")
     if not isinstance(status, dict):
         raise ProviderRejected("managed runtime status is invalid")
+    # Every address the guest reports for a sandbox is one it can tunnel to,
+    # and this is where every such address passes through.
+    remember_guest_address(status.get("runtime_url"))
+    apps = status.get("apps")
+    if isinstance(apps, dict):
+        for app in apps.values():
+            if isinstance(app, dict):
+                remember_guest_address(app.get("private_url"))
     return status

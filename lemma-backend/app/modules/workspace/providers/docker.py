@@ -31,6 +31,7 @@ from uuid import UUID
 from sandbox_runtime.paths import HOME_ROOT
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxMount
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.docker_sizing import memory_bytes, nano_cpus
 from app.modules.workspace.providers.base import (
     LABEL_EPOCH,
     LABEL_MANAGED_BY,
@@ -63,10 +64,8 @@ from app.modules.workspace.providers.docker_engine import (
     DockerVolumeCreateRequest,
 )
 from app.modules.workspace.providers.profiles import SandboxProfile, profile_for
-from app.modules.workspace.providers.runtime_client import (
-    WorkspaceRuntimeClient,
-    WorkspaceRuntimeError,
-)
+from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeClient
+from app.modules.workspace.providers.runtime_errors import WorkspaceRuntimeError
 
 
 def owner_label_for(tag: str | None) -> dict[str, str]:
@@ -235,16 +234,8 @@ class DockerSandboxProvider(DockerOpsMixin):
                     for port in profile.published_ports
                 }
             ),
-            memory=(
-                self._config.function_memory_bytes
-                if is_function
-                else self._config.memory_bytes
-            ),
-            nano_cpus=(
-                self._config.function_nano_cpus
-                if is_function
-                else self._config.nano_cpus
-            ),
+            memory=memory_bytes(self._config, spec, is_function=is_function),
+            nano_cpus=nano_cpus(self._config, spec, is_function=is_function),
             pids_limit=self._config.pids_limit,
             # Function control state lives entirely in /tmp, so a read-only
             # root enforces the stateless contract instead of trusting it.

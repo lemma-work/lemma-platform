@@ -66,7 +66,7 @@ pub(crate) fn is_desktop_browser_auth_url(url: &tauri::Url) -> bool {
 
 pub(crate) fn navigation_context(app: &AppHandle) -> (String, String, String) {
     let shell: State<Shell> = app.state();
-    let ui = shell.ui.lock().unwrap();
+    let ui = shell.ui.lock_or_recover();
     (ui.mode.clone(), ui.url.clone(), ui.api_url.clone())
 }
 

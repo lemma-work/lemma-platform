@@ -29,7 +29,7 @@ impl<E: Engine + 'static> GuestService<E> {
         // report the VM healthy with a fabricated zero count when nerdctl
         // cannot access its writable state; doing so only defers an appliance
         // layout failure until the first image pull.
-        let active_sandboxes = self.running_sandbox_count()?;
+        let active_sandboxes = self.cached_running_sandbox_count()?;
         let endpoint_host = self.current_endpoint_host();
         Ok(json!({
             "status": "ready", "engine": "containerd",

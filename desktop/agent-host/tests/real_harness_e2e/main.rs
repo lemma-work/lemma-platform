@@ -153,6 +153,7 @@ pub(crate) async fn one_turn(
     let outcome = run_with_deadline(
         AcpRunRequest {
             adapter: manifest.resolve(agent).unwrap(),
+            agent_environment: std::collections::BTreeMap::default(),
             run_spec: RunSpec {
                 agent_run_id: run_id,
                 conversation_id,

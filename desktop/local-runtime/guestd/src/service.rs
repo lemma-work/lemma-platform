@@ -23,6 +23,14 @@ pub struct GuestService<E: Engine> {
     pub(crate) capability: Option<String>,
     pub(crate) kernel_taint_path: Option<PathBuf>,
     pub(crate) image_warmups: Arc<Mutex<HashMap<SandboxImageSet, ImageWarmupState>>>,
+    /// The last answer `running_sandbox_count` gave, and when.
+    ///
+    /// Counting running sandboxes forks `nerdctl ps`. The host polls guest
+    /// health every five seconds forever, so an idle machine spawned a
+    /// containerd CLI process 17,280 times a day to be told the same number.
+    /// Admission does not read this -- deciding whether another sandbox may
+    /// start has to see the present, not a cached past.
+    pub(crate) sandbox_count_cache: Arc<Mutex<Option<(Instant, usize)>>>,
     /// Held for the duration of every mutating operation. See `handle`.
     pub(crate) mutations: Arc<Mutex<()>>,
     /// Whether this process exits as soon as it has answered.
@@ -55,6 +63,7 @@ impl<E: Engine> Clone for GuestService<E> {
             kernel_taint_path: self.kernel_taint_path.clone(),
             mutations: Arc::clone(&self.mutations),
             image_warmups: Arc::clone(&self.image_warmups),
+            sandbox_count_cache: Arc::clone(&self.sandbox_count_cache),
             per_request_process: self.per_request_process,
         }
     }
@@ -130,6 +139,7 @@ impl<E: Engine + 'static> GuestService<E> {
             capability,
             kernel_taint_path: None,
             image_warmups: Arc::new(Mutex::new(HashMap::new())),
+            sandbox_count_cache: Arc::new(Mutex::new(None)),
             mutations: Arc::new(Mutex::new(())),
             per_request_process: false,
         })

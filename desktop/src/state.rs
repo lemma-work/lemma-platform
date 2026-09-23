@@ -1,5 +1,25 @@
 use super::*;
 
+/// Take a lock without letting one panic take the whole app down with it.
+///
+/// A poisoned mutex means some thread panicked while holding it. With
+/// `lock().unwrap()` -- the shell's idiom at fifty-one sites -- every later
+/// lock of the same mutex panics too, so one fault on a background thread
+/// became a crash on the next menu refresh, tray update or quit. Everything
+/// behind these locks is display state or a `Mutex<()>` used for exclusion;
+/// continuing with the last value written is always better than closing the
+/// window on the user. The agent-host has recovered this way throughout.
+pub(crate) trait LockOrRecover<T> {
+    fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> LockOrRecover<T> for std::sync::Mutex<T> {
+    fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 #[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UiState {
@@ -192,12 +212,34 @@ pub(crate) struct ResumeTarget {
 }
 
 /// What the caller must do once the state has been folded.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct EventOutcome {
     /// A terminal error just appeared, and recovery options should be fetched.
     pub(crate) schedule_terminal_recovery: bool,
     /// The runtime finished preparing, so the stack should be started.
     pub(crate) start_after_prepare: bool,
+    /// This launch just became usable, so its time-to-ready is recorded.
+    pub(crate) became_ready: Option<ReadyReached>,
+    /// What is serving now, for the next launch to resume straight into.
+    pub(crate) resume_write: Option<ResumeWrite>,
+}
+
+/// How long a launch took to become usable, and whether it installed anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReadyReached {
+    pub(crate) cached: bool,
+    pub(crate) duration_ms: u64,
+}
+
+/// A resume target to record: what is serving now, and under which generation.
+///
+/// Not [`ResumeTarget`], which is the stored shape and carries the release and
+/// route that `write_resume_target` fills in itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResumeWrite {
+    pub(crate) url: String,
+    pub(crate) api_url: String,
+    pub(crate) generation: String,
 }
 
 /// What the app knows about a newer version, if anything.
@@ -207,8 +249,10 @@ pub(crate) struct AppUpdateStatus {
     pub(crate) channel: &'static str,
     pub(crate) current_version: &'static str,
     pub(crate) build_commit: Option<&'static str>,
-    /// False for a nightly or a development build. The UI explains why rather
-    /// than silently omitting the control.
+    /// False for a development build, or one with no updater key. Nightly is
+    /// *not* excluded -- it updates to nightly on its own feed, which is what
+    /// keeps the mechanism exercised between releases. The UI explains why
+    /// rather than silently omitting the control.
     pub(crate) updates_supported: bool,
     pub(crate) available_version: Option<String>,
     /// Bytes of runtime the *next* launch downloads after an app update, read
@@ -217,8 +261,13 @@ pub(crate) struct AppUpdateStatus {
     /// user commits is the difference between a considered choice and a
     /// surprise.
     pub(crate) runtime_download_bytes: Option<u64>,
-    /// Known database compatibility; this alone is not upgrade qualification.
+    /// Whether installing keeps this installation's data usable. See
+    /// `LemmaUpdateMetadata::compatibility_with`.
     pub(crate) data_compatibility: &'static str,
+    /// The Postgres majors behind a `postgres-major-change`, so the UI can say
+    /// which change it is refusing rather than that it is refusing.
+    pub(crate) installed_postgres_major: Option<u64>,
+    pub(crate) candidate_postgres_major: Option<u64>,
 }
 
 /// The `lemma` block a release feed carries alongside the standard fields.
@@ -229,12 +278,21 @@ pub(crate) struct LemmaUpdateMetadata {
 }
 
 impl LemmaUpdateMetadata {
-    /// Unknown compatibility blocks replacement when local runtime data exists.
+    /// Whether this update leaves the installation's data usable.
+    ///
+    /// Everything Lemma keeps is a Postgres data directory and a folder of
+    /// files, and schema changes are migrations that run on the next start.
+    /// The one change a migration cannot carry is a new Postgres *major*: it
+    /// cannot open a data directory another major wrote, and Lemma ships no
+    /// `pg_upgrade` step. So that, and only that, is refused.
+    ///
+    /// Not knowing one side is not evidence of a change, so it does not block.
+    /// Even the refused case destroys nothing: Postgres will not start on a
+    /// foreign data directory, and the previous runtime stays on disk.
     pub(crate) fn compatibility_with(&self, installed: Option<u64>) -> &'static str {
         match (installed, self.postgres_major) {
-            (Some(installed), Some(candidate)) if installed == candidate => "compatible",
-            (Some(_), Some(_)) => "migration-unavailable",
-            _ => "unknown",
+            (Some(installed), Some(candidate)) if installed != candidate => "postgres-major-change",
+            _ => "compatible",
         }
     }
 }
@@ -308,6 +366,6 @@ pub(crate) static REMEMBERED_ACCENT: Mutex<Option<(u8, u8, u8)>> = Mutex::new(No
 #[tauri::command]
 pub(crate) fn get_state(app: AppHandle) -> UiState {
     let shell: State<Shell> = app.state();
-    let snapshot = shell.ui.lock().unwrap().clone();
+    let snapshot = shell.ui.lock_or_recover().clone();
     snapshot
 }

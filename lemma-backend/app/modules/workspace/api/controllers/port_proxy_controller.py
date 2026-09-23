@@ -29,6 +29,7 @@ import httpx
 from fastapi import APIRouter, Request, Response, WebSocket, status
 from fastapi.responses import StreamingResponse
 
+from app.modules.workspace.providers.desktop_tunnel import sandbox_transport
 from app.core.log.log import get_logger
 
 from app.core.config import settings
@@ -37,6 +38,7 @@ from app.modules.workspace.providers.base import (
     ProviderCapability,
     ProviderGone,
     ProviderInstance,
+    ProviderRejected,
     SandboxEndpoint,
     require_capability,
 )
@@ -173,7 +175,14 @@ async def _resolve_target(token: str) -> SandboxEndpoint | None:
             port=grant.port,
             deadline_at=deadline_at,
         )
-    except ProviderGone, SandboxCapabilityUnsupported:
+    # `ProviderRejected` is the fabric saying this sandbox does not publish
+    # that port. `PortAccessSigner` will sign a grant for any port, and Docker
+    # and the desktop guest publish only the ports declared when the sandbox
+    # was created -- so a grant naming any other one is a refusal to deliver,
+    # not an error to raise. Uncaught it left this handler as an unhandled
+    # exception, which the WebSocket half reports as neither a close code nor
+    # a refusal.
+    except ProviderGone, ProviderRejected, SandboxCapabilityUnsupported:
         return None
 
 
@@ -265,7 +274,10 @@ async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Re
             deadline_at=deadline_at,
         )
         base_url = endpoint.url
-    except ProviderGone:
+    # A port this fabric does not publish is the same answer as a sandbox that
+    # is gone: there is nothing at the other end of this grant. See the note on
+    # `_resolve_target`, which is the WebSocket half of the same decision.
+    except ProviderGone, ProviderRejected:
         return Response(status_code=status.HTTP_404_NOT_FOUND)
     except SandboxCapabilityUnsupported:
         return Response(status_code=status.HTTP_409_CONFLICT)
@@ -278,7 +290,9 @@ async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Re
     # makes the host un-influenceable by construction.
     target = httpx.URL(base_url).copy_with(path="/" + quote(path.lstrip("/"), safe="/"))
 
-    upstream = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+    upstream = httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0), transport=sandbox_transport()
+    )
     try:
         proxied = await upstream.request(
             request.method,

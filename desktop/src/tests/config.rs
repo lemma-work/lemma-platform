@@ -224,7 +224,7 @@ fn switching_connection_says_what_it_is_about_to_do() {
 #[test]
 fn local_models_are_reached_through_a_provider_endpoint_not_an_app_owned_server() {
     let html = include_str!("../../ui/control.html").replace("\r\n", "\n");
-    let script = include_str!("../../ui/control.js").replace("\r\n", "\n");
+    let script = CONTROL.replace("\r\n", "\n");
 
     // Ollama and LM Studio are the supported local-model path: they are
     // ordinary OpenAI-compatible endpoints the user already runs, so they
@@ -241,7 +241,7 @@ fn local_models_are_reached_through_a_provider_endpoint_not_an_app_owned_server(
 #[test]
 fn the_default_model_is_chosen_from_the_providers_own_list() {
     let html = include_str!("../../ui/control.html").replace("\r\n", "\n");
-    let script = include_str!("../../ui/control.js").replace("\r\n", "\n");
+    let script = CONTROL.replace("\r\n", "\n");
 
     // Typing a model id from memory was the old contract and the reason a
     // correct provider could still be applied with a model it does not

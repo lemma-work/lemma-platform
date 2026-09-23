@@ -23,6 +23,8 @@ from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderCapability,
     ProviderCreateSpec,
+    ProviderGone,
+    ProviderRejected,
     require_capability,
 )
 from app.modules.workspace.providers.docker import (
@@ -37,6 +39,7 @@ from app.modules.workspace.providers.lemma_local import (
     LemmaLocalSandboxProvider,
 )
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.profiles import WORKSPACE_BROWSER_RELAY_PORT
 from app.modules.workspace.testing.fake_docker_engine import FakeDockerEngine
 from app.modules.workspace.testing.fake_e2b import FakeE2B
 from app.modules.workspace.testing.provider_conformance import (
@@ -192,6 +195,27 @@ async def test_the_desktop_guest_reaches_a_declared_port(local_provider) -> None
     endpoint = await check_reach_port_shape(local_provider, instance, port=4848)
     assert endpoint.url == "http://127.0.0.1:4848"
     assert endpoint.public is False
+
+
+@ALL_PROVIDERS
+async def test_every_fabric_reaches_the_browser_relay(provider) -> None:
+    """The port the whole browser surface hangs off, on every fabric.
+
+    `reach_port` was conformance-checked on 8080 and 4848 -- the two ports the
+    desktop guest happened to have compiled into its own idea of what a
+    workspace serves. The relay's 4850 was declared by the provider, published
+    by the container and missing from that list, so it was refused on Desktop
+    and nowhere else: the VNC pane, `browser_sign_in` and saved logins were all
+    unreachable there while every test passed.
+
+    Asserted for all three rather than for the one that broke, because the next
+    port added is no more likely to be remembered than this one was.
+    """
+    instance = await provider.create(_spec(uuid4()))
+    endpoint = await check_reach_port_shape(
+        provider, instance, port=WORKSPACE_BROWSER_RELAY_PORT
+    )
+    assert endpoint.url
 
 
 async def test_e2b_delivers_a_secret_without_putting_it_in_a_command(
@@ -429,3 +453,44 @@ async def test_the_lease_is_still_re_armed_when_the_hold_lapses(
     assert (
         e2b_world.connect_timeouts[-1] == e2b_provider._config.sandbox_timeout_seconds
     )
+
+
+@ALL_PROVIDERS
+async def test_a_secret_path_that_names_no_file_is_refused_everywhere(provider) -> None:
+    """A trailing slash names a directory, and a secret is not a directory.
+
+    Docker and E2B have refused this by name since they existed. Desktop had no
+    such check and went straight to `write_file`, so the same call was a clean
+    refusal on two fabrics and whatever the runtime happened to do on the third.
+    """
+    instance = await provider.create(_spec(uuid4()))
+    with pytest.raises(ProviderRejected):
+        await provider.deliver_secret(
+            instance,
+            path="/tmp/lemma-conformance/",
+            value=b"anything",
+            deadline_at=_deadline(),
+        )
+
+
+@pytest.mark.parametrize(
+    "provider_name", ["docker_provider", "local_provider"], ids=["docker", "desktop"]
+)
+async def test_an_undeclared_port_is_a_typed_refusal(
+    provider_name: str, request: pytest.FixtureRequest
+) -> None:
+    """Not an unhandled 500.
+
+    Desktop raised `ProviderRejected`, which the port proxy renders as a clean
+    404. Docker's `reach_port` sits outside `_ops_client`, so a port the
+    container never published escaped as a raw `WorkspaceRuntimeError` -- past
+    the proxy's `except (ProviderGone, ProviderRejected)` and out as an
+    unhandled 500 with an unframed WebSocket close.
+
+    E2B is excluded on purpose: its edge resolves any port, so it has no such
+    condition to have an answer for.
+    """
+    provider = request.getfixturevalue(provider_name)
+    instance = await provider.create(_spec(uuid4()))
+    with pytest.raises((ProviderRejected, ProviderGone)):
+        await provider.reach_port(instance, port=59999, deadline_at=_deadline())

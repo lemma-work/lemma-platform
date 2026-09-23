@@ -118,6 +118,8 @@ impl Daemon {
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            // Released however this thread ends -- see `lifecycle::Finish`.
+            let _finish = daemon.agent_lifecycle.finish_on_drop();
             let text = |key: &str| {
                 request
                     .get(key)
@@ -143,7 +145,6 @@ impl Daemon {
                 _ => daemon.agent_host.refresh(),
             };
             let outcome = result.map(|()| daemon.agent_host.detailed_status());
-            daemon.agent_lifecycle.finish();
             match outcome {
                 Ok(status) => {
                     daemon.send_direct(

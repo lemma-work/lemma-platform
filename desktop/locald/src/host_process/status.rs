@@ -2,6 +2,13 @@
 
 use super::*;
 
+/// How long a capabilities answer is reused for.
+///
+/// Long enough that a 1 Hz status loop stops being a 1 Hz HTTP client, short
+/// enough that a capability coming up -- an AI provider configured, the
+/// sandbox fabric becoming usable -- reaches a watching window promptly.
+const CAPABILITIES_TTL: Duration = Duration::from_secs(10);
+
 #[derive(Clone, Debug, Serialize)]
 pub struct HostProcessStatus {
     pub id: String,
@@ -128,7 +135,41 @@ impl HostProcessManager {
     }
 
     pub fn capabilities(&self) -> Option<Value> {
-        self.capabilities_result().ok()
+        self.cached_capabilities().ok()
+    }
+
+    /// The capabilities answer, reused if it was fetched recently.
+    ///
+    /// The status monitor builds a status event every second and the event
+    /// embeds this, so fetching it *is* an HTTP request: a fresh TCP
+    /// connection with `Connection: close`, 86,400 times a day for as long as
+    /// the app is open. What it returns is settings plus two capability
+    /// probes, which do not change second to second.
+    ///
+    /// A failure is not cached. Whatever made the backend unreachable is the
+    /// thing a watcher most wants to see change, so the next tick asks again.
+    pub(crate) fn cached_capabilities(&self) -> io::Result<Value> {
+        // Bound and dropped before the fetch below, which waits on a socket:
+        // holding the cache lock across it would make every other status
+        // reader wait for the backend too.
+        let remembered = self
+            .capabilities_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.clone())
+            .filter(|(fetched_at, _)| fetched_at.elapsed() < CAPABILITIES_TTL)
+            .map(|(_, value)| value);
+        if let Some(value) = remembered {
+            return Ok(value);
+        }
+        let fresh = self.capabilities_result()?;
+        let mut cache = self
+            .capabilities_cache
+            .lock()
+            .expect("capabilities cache lock poisoned");
+        *cache = Some((Instant::now(), fresh.clone()));
+        drop(cache);
+        Ok(fresh)
     }
 
     pub(crate) fn capabilities_result(&self) -> io::Result<Value> {

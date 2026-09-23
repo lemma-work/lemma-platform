@@ -70,6 +70,8 @@ vi.stubGlobal('ResizeObserver', FakeResizeObserver);
  * something rather than merely holding it.
  */
 const resized: string[] = [];
+//: Every time the pane asked the backend where the browser is.
+const pageUrlCalls: number[] = [];
 const rfbInstances = vi.hoisted(() => [] as FakeRfb[]);
 
 class FakeRfb {
@@ -133,7 +135,12 @@ vi.mock('@novnc/novnc', () => ({ default: FakeRfb }));
 
 // Where the fake browser says it is. `vi.hoisted` because `vi.mock` is
 // hoisted above the imports and would otherwise close over an undefined name.
-const page = vi.hoisted(() => ({ url: 'about:blank' }));
+const page = vi.hoisted(() => ({
+    url: 'about:blank',
+    //: Lets a test decide when each call answers, so two polls can be
+    //: made to land out of order on purpose.
+    answer: null as null | ((call: number) => Promise<{ url: string }>),
+}));
 vi.mock('@/lib/sdk/lemma-client', async (importOriginal) => ({
     // Spread the real module: `vncSocketUrl` reaches for `getLemmaApiBaseUrl`
     // from here, and a mock that answers only what this file names breaks
@@ -141,7 +148,12 @@ vi.mock('@/lib/sdk/lemma-client', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/lib/sdk/lemma-client')>()),
     getLemmaClient: () => ({
         workspace: {
-            browserCurrentPageUrl: async () => ({ url: page.url }),
+            browserCurrentPageUrl: async () => {
+                const call = pageUrlCalls.length;
+                pageUrlCalls.push(Date.now());
+                if (page.answer) return page.answer(call);
+                return { url: page.url };
+            },
             // Exercised by the pane's ResizeObserver; the display fitting is
             // not what these tests are about.
             browserResizeDisplay: async (width: number, height: number) => {
@@ -156,6 +168,8 @@ afterEach(() => {
     rfbInstances.length = 0;
     observers.length = 0;
     resized.length = 0;
+    pageUrlCalls.length = 0;
+    page.answer = null;
     page.url = 'about:blank';
     cleanup();
 });
@@ -296,6 +310,23 @@ describe('a disconnect that will not fix itself by retrying', () => {
             first.emit('disconnect');
         });
 
+        await waitFor(() => expect(rfbInstances).toHaveLength(2));
+    });
+
+    // The backend closes with 4503 while the computer is starting -- after an
+    // update the first start downloads a new workspace image -- and used to
+    // leave the socket as an unhandled error instead, which read as "The
+    // connection dropped" for as long as the download took.
+    it('says the computer is starting, and keeps retrying, on an unavailable close', async () => {
+        render(<BrowserPane origin="https://example.com" />);
+        await waitFor(() => expect(rfbInstances).toHaveLength(1));
+        act(() => {
+            rfbInstances[0].socket!.closeWith(4503);
+            rfbInstances[0].emit('disconnect');
+        });
+
+        expect(screen.getByText('Your computer is starting')).toBeTruthy();
+        expect(screen.queryByText('The connection dropped')).toBeNull();
         await waitFor(() => expect(rfbInstances).toHaveLength(2));
     });
 
@@ -590,5 +621,86 @@ describe('keeping the display the shape of the pane', () => {
         await new Promise((resolve) => setTimeout(resolve, 300));
 
         expect(resized).toEqual(['900x700']);
+    });
+});
+
+describe('asking where the browser is', () => {
+    const setHidden = (hidden: boolean) => {
+        Object.defineProperty(document, 'hidden', {
+            configurable: true,
+            get: () => hidden,
+        });
+    };
+
+    afterEach(() => setHidden(false));
+
+    it('stops asking while nothing is on screen to read the answer', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            render(<BrowserPane origin="https://example.com" />);
+            await connect();
+            await waitFor(() => expect(pageUrlCalls.length).toBeGreaterThan(0));
+
+            // A window sent to the tray. The interval keeps firing -- it is
+            // the request that must not, because on Desktop each one takes the
+            // guest's single control channel and every other sandbox operation
+            // on the machine queues behind it.
+            setHidden(true);
+            const asked = pageUrlCalls.length;
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(6000);
+            });
+            expect(pageUrlCalls.length).toBe(asked);
+
+            // And coming back does not wait out an interval: the sign-in
+            // page's anti-phishing host display is what reads this, and a
+            // stale answer there is worse than none.
+            setHidden(false);
+            await act(async () => {
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+            await waitFor(() => expect(pageUrlCalls.length).toBe(asked + 1));
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('ignores an answer that was overtaken while the window was away', async () => {
+        // Two polls can be in flight at once — the interval's and the one
+        // `visibilitychange` starts — and nothing made them land in order. The
+        // older answer passed the same `cancelled` check as the newer one, so
+        // it could overwrite it. On the sign-in page that value is the
+        // anti-phishing host label, which is the worst thing here to show
+        // stale.
+        let releaseFirst: (answer: { url: string }) => void = () => {};
+        const first = new Promise<{ url: string }>((resolve) => {
+            releaseFirst = resolve;
+        });
+        page.answer = (call) =>
+            call === 0 ? first : Promise.resolve({ url: 'https://new.example/after' });
+
+        const navigated: string[] = [];
+        render(
+            <BrowserPane
+                origin="https://example.com"
+                onNavigated={(url) => navigated.push(url)}
+            />,
+        );
+        await connect();
+        await waitFor(() => expect(pageUrlCalls.length).toBe(1));
+
+        // The second poll starts and finishes while the first is still out.
+        setHidden(false);
+        await act(async () => {
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+        await waitFor(() => expect(navigated).toEqual(['https://new.example/after']));
+
+        // Now the overtaken one comes back. It must change nothing.
+        await act(async () => {
+            releaseFirst({ url: 'https://old.example/before' });
+            await first;
+        });
+        expect(navigated).toEqual(['https://new.example/after']);
     });
 });

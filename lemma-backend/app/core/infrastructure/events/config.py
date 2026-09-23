@@ -188,12 +188,29 @@ class EventTransportSettings(BaseSettings):
         ),
     )
     event_dead_letter_retention_days: int = Field(
-        default=90,
+        default=14,
         ge=1,
         description=(
-            "How long a dead-lettered row is kept. Deliberately far longer "
-            "than the completed window -- this set stays small and is the one "
-            "an operator actually needs to read after an incident."
+            "How long a dead-lettered row is kept. Longer than the completed "
+            "window -- this set stays small and is the one an operator "
+            "actually needs to read after an incident -- but no longer than "
+            "two weeks: at 90 days production was still holding dead letters "
+            "from two months earlier, which nobody had read and nobody was "
+            "going to. Env: ``EVENT_DEAD_LETTER_RETENTION_DAYS``, so an "
+            "install that wants a longer forensic window can say so."
+        ),
+    )
+    event_abandoned_retention_days: int = Field(
+        default=14,
+        ge=1,
+        description=(
+            "How long a row stuck in PROCESSING or RETRYING is kept. These "
+            "match neither of the other two windows -- one keys off "
+            "``completed_at`` and the other off ``dead_lettered_at``, and an "
+            "abandoned row has neither -- so nothing ever deleted them and "
+            "they accumulated for as long as the table had existed. A claim "
+            "that has not moved in two weeks is not in flight; it is debris "
+            "from a process that died."
         ),
     )
     event_retention_batch_size: int = Field(default=1_000, ge=1, le=10_000)

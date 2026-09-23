@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { WorkspaceFileEntry } from '../models/WorkspaceFileEntry.js';
 import type { WorkspaceFileListResponse } from '../models/WorkspaceFileListResponse.js';
+import type { WorkspaceStatusResponse } from '../models/WorkspaceStatusResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -86,6 +87,17 @@ export class WorkspaceService {
             errors: {
                 422: `Validation Error`,
             },
+        });
+    }
+    /**
+     * Whether your computer is ready
+     * @returns WorkspaceStatusResponse Successful Response
+     * @throws ApiError
+     */
+    public static workspaceStatus(): CancelablePromise<WorkspaceStatusResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/workspace/status',
         });
     }
 }

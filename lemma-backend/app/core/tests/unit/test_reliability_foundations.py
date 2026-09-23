@@ -28,6 +28,7 @@ from app.core.domain.errors import DomainError, PayloadTooLargeError
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.inbox import (
+    ClaimOutcome,
     InboxConsumer,
     InboxStatus,
     provide_domain_event_inbox,
@@ -320,23 +321,33 @@ async def test_inbox_claim_and_finish_persist_all_state_transitions() -> None:
     assert claimable.last_error_type is None
     assert claimable.last_error is None
 
-    for row in (
-        None,
-        SimpleNamespace(
-            status=InboxStatus.COMPLETED.value,
-            attempts=1,
-            delivery_count=1,
-            last_received_at=now,
+    # These three used to be one answer (``None``), and the caller acknowledged
+    # all of them. Only the settled ones may be acknowledged: acking a delivery
+    # another worker is still holding is how an event disappears when that
+    # worker dies.
+    for row, expected in (
+        (None, ClaimOutcome.ALREADY_SETTLED),
+        (
+            SimpleNamespace(
+                status=InboxStatus.COMPLETED.value,
+                attempts=1,
+                delivery_count=1,
+                last_received_at=now,
+            ),
+            ClaimOutcome.ALREADY_SETTLED,
         ),
-        SimpleNamespace(
-            status=InboxStatus.PROCESSING.value,
-            attempts=1,
-            delivery_count=1,
-            last_received_at=now,
+        (
+            SimpleNamespace(
+                status=InboxStatus.PROCESSING.value,
+                attempts=1,
+                delivery_count=1,
+                last_received_at=now,
+            ),
+            ClaimOutcome.IN_FLIGHT_ELSEWHERE,
         ),
     ):
         candidate = InboxConsumer(_session_maker(_DatabaseSessionDouble(row=row)))
-        assert await candidate._claim("worker", event_id, "test.created") is None
+        assert await candidate._claim("worker", event_id, "test.created") is expected
 
     abandoned = SimpleNamespace(
         status=InboxStatus.PROCESSING.value,

@@ -13,6 +13,8 @@ where there is no history to send.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from uuid import uuid7
 
 import pytest
@@ -207,6 +209,132 @@ class TestCredentials:
         )
 
         assert "runtime_credentials" not in payload
+
+    async def test_the_host_agent_is_given_the_users_lemma_identity(self):
+        """Distinct from the assertion above, and deliberately so.
+
+        `runtime_credentials` are the model provider's keys and have no
+        business on somebody's laptop. The Lemma environment is the opposite
+        case: it is the same run-scoped, pod-scoped delegated session the
+        sandbox agent already receives, and without it every `lemma` command
+        the skills instruct a host agent to run has no credential at all.
+        """
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            host_agent_environment,
+        )
+
+        # The real shape `get_env_vars` returns for a sandbox.
+        delivered = host_agent_environment(
+            {
+                "LEMMA_TOKEN": "a-delegated-session",
+                "LEMMA_BASE_URL": "http://app.127.0.0.1.sslip.io:53664",
+                "LEMMA_AUTH_URL": "http://app.127.0.0.1.sslip.io:53663/auth",
+                "LEMMA_HOST_ORIGIN": "http://app.127.0.0.1.sslip.io:53663",
+                "LEMMA_USER_ID": "user-1",
+                "LEMMA_POD_ID": "pod-1",
+                "LEMMA_ORG_ID": "org-1",
+                "LEMMA_WORKSPACE_URL": "http://sandbox.internal:8080",
+            }
+        )
+
+        assert delivered["LEMMA_TOKEN"] == "a-delegated-session"
+        assert delivered["LEMMA_USER_ID"] == "user-1"
+        assert delivered["LEMMA_POD_ID"] == "pod-1"
+        assert delivered["LEMMA_ORG_ID"] == "org-1"
+        # Addresses the cloud sandbox. A host agent that believed it would be
+        # pointed at a filesystem that is not the folder it was bound to.
+        assert "LEMMA_WORKSPACE_URL" not in delivered
+
+    async def test_a_new_sandbox_variable_does_not_leave_the_sandbox(self):
+        """The allowlist is why this is a decision rather than an accident."""
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            host_agent_environment,
+        )
+
+        delivered = host_agent_environment(
+            {"LEMMA_TOKEN": "t", "LEMMA_SOMETHING_ADDED_LATER": "leaked"}
+        )
+
+        assert delivered["LEMMA_TOKEN"] == "t"
+        assert "LEMMA_SOMETHING_ADDED_LATER" not in delivered
+
+    async def test_a_desktop_host_agent_is_given_addresses_this_machine_resolves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Against the URLs the Desktop host pack really emits.
+
+        A sandbox reaches the backend through `host.lemma.internal`, which only
+        guestd's containers resolve; the host agent runs on the Mac. The
+        earlier test above passes a sandbox environment that happens to work
+        from both, which is how the host agent came to be handed an address
+        its CLI could not resolve. This one reads the host pack's own output,
+        pinned by `desktop/contracts/host-pack-urls.json` and the Rust test
+        that keeps that file equal to the manifest.
+        """
+        from app.core.config import settings
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            host_agent_environment,
+        )
+        from app.modules.workspace.config import workspace_settings
+        from app.modules.workspace.services.workspace_sandbox_service import (
+            WorkspaceSandboxService,
+        )
+
+        emitted = {
+            name: template.replace("{base}", "lemma.localhost").replace(
+                "{port}", "52502"
+            )
+            for name, template in _host_pack_urls().items()
+        }
+        for name, value in emitted.items():
+            target = (
+                workspace_settings
+                if name.startswith("WORKSPACE_CALLBACK_")
+                else settings
+            )
+            monkeypatch.setattr(target, name.lower(), value)
+        monkeypatch.setattr(settings, "cli_api_url", None)
+        monkeypatch.setattr(settings, "cli_auth_frontend_url", None)
+
+        async def mint(**_: object) -> str:
+            return "a-delegated-session"
+
+        monkeypatch.setattr(
+            "app.modules.identity.contracts.delegated_tokens.mint_delegated_token",
+            mint,
+        )
+        service = WorkspaceSandboxService()
+        try:
+            sandbox_env = await service.get_env_vars(
+                user_id=uuid7(), pod_id=uuid7(), organization_id=uuid7()
+            )
+        finally:
+            await service.close()
+        # The premise: the sandbox is given the address only it can resolve.
+        assert "host.lemma.internal" in sandbox_env["LEMMA_BASE_URL"]
+
+        delivered = host_agent_environment(sandbox_env)
+
+        assert delivered["LEMMA_TOKEN"] == "a-delegated-session"
+        assert delivered["LEMMA_BASE_URL"] == emitted["API_URL"]
+        assert delivered["LEMMA_AUTH_URL"] == emitted["AUTH_FRONTEND_URL"]
+        assert delivered["LEMMA_HOST_ORIGIN"] == emitted["FRONTEND_URL"]
+        assert not [
+            name for name, value in delivered.items() if "host.lemma.internal" in value
+        ]
+
+
+def _host_pack_urls() -> dict[str, str]:
+    """The Desktop host pack's URL environment, from the contract Rust pins."""
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "desktop" / "contracts" / "host-pack-urls.json"
+        if candidate.exists():
+            return json.loads(candidate.read_text())["backend_env"]
+    raise AssertionError(
+        "desktop/contracts/host-pack-urls.json was not found; the backend and "
+        "the desktop app must be checked out together to test the host agent's "
+        "addresses against what the host pack emits"
+    )
 
 
 def _system_prompt(*, toolsets: list[AgentToolset] | None = None) -> str:
@@ -427,3 +555,85 @@ class TestExportedToolNames:
         # "lemma_ping_tool" is not repeated: it is already in the list from the
         # toolset itself.
         assert names == ["lemma_ping_tool", "lemma_final_answer"]
+
+
+class TestReplayedHistory:
+    """What a non-resuming turn re-sends, and what it must not."""
+
+    def test_lemmas_own_instructions_are_not_replayed_as_the_users_words(self):
+        """The override paragraph is why agents echoed it back at the user.
+
+        Everything `_render_history` builds is concatenated into one user turn
+        -- the ACP layer merges system framing, history and the new message
+        into a single text block -- so a replayed tool result is not on a tool
+        channel by the time the model reads it. A paragraph of Lemma
+        instructions addressed to the reader, arriving inside a user turn on
+        every non-resuming turn, reads as something the user typed.
+        """
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _history_tool_result,
+        )
+        from app.modules.agent.tools.skills.pydantic_adapter import (
+            LOCAL_WORKSPACE_SKILL_OVERRIDE,
+            LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
+        )
+
+        stored = {
+            "success": True,
+            "name": "lemma-user",
+            "content": "# Lemma User\n\nReal skill body."
+            + LOCAL_WORKSPACE_SKILL_OVERRIDE,
+        }
+
+        replayed = _history_tool_result(stored)
+
+        assert LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER not in replayed
+        assert "lemma_exec_command" not in replayed
+        # The skill itself still has to survive: the agent loaded it for a
+        # reason, and stripping the whole result would lose the reason.
+        assert "Real skill body." in replayed
+        assert "lemma-user" in replayed
+
+    def test_the_override_is_stripped_when_the_skill_stayed_encoded(self):
+        """A result `unwrap_mcp_content` could not unwrap is double-encoded.
+
+        More than one content block keeps the skill as JSON text inside a text
+        block, so the paragraph is escaped by the tool and again on replay. The
+        single-escaped needle missed it, on the path it most needed removing.
+        """
+        import json as _json
+
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _history_tool_result,
+        )
+        from app.modules.agent.tools.skills.pydantic_adapter import (
+            LOCAL_WORKSPACE_SKILL_OVERRIDE,
+            LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
+        )
+
+        skill = {
+            "name": "lemma-user",
+            "content": "Body." + LOCAL_WORKSPACE_SKILL_OVERRIDE,
+        }
+        envelope = {
+            "content": [
+                {"type": "text", "text": _json.dumps(skill)},
+                {"type": "text", "text": "a second block"},
+            ]
+        }
+
+        replayed = _history_tool_result(envelope)
+
+        assert LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER not in replayed
+        assert "Body." in replayed
+
+    def test_an_ordinary_tool_result_is_untouched(self):
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _history_tool_result,
+        )
+
+        stored = {"rows": [{"id": 1, "name": "a"}], "count": 1}
+        replayed = _history_tool_result(stored)
+
+        assert '"count": 1' in replayed
+        assert '"name": "a"' in replayed

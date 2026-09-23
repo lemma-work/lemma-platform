@@ -79,5 +79,48 @@ def record_sandbox_probe() -> None:
     _capability.update(probe_sandbox_provider())
 
 
+_UNREACHABLE = (
+    "Sandboxes are configured but the last attempt to use one did not "
+    "complete. The server log says what failed."
+)
+
+
+def record_sandbox_unreachable() -> None:
+    """A real operation gave up on the fabric.
+
+    The startup probe proves only that a provider object can be *constructed*
+    -- for `lemma_local` that it can find the bridge executable. It never
+    touches the guest. So on a Desktop install whose workspace had stopped
+    answering, `/health/capabilities` went on reporting `ready` while every
+    file listing spun for five minutes and returned a 500; the one signal an
+    operator had said the opposite of what was true.
+
+    Driven by operations rather than by a timer because a synthetic ping proves
+    only that the ping worked. What matters is whether the thing callers
+    actually do is working.
+    """
+    if _capability.get("status") == "needs_setup":
+        # A misconfiguration is more actionable than a symptom of it.
+        return
+    _capability.update({"status": "unavailable", "detail": _UNREACHABLE})
+
+
+def record_sandbox_reachable() -> None:
+    """An operation completed, so whatever was wrong is no longer wrong."""
+    if _capability.get("status") == "unavailable":
+        _capability.update(
+            {
+                "status": "ready",
+                "detail": f"Sandboxes are provisioned by {_configured_provider()}",
+            }
+        )
+
+
+def _configured_provider() -> str:
+    from app.modules.workspace.config import workspace_settings
+
+    return workspace_settings.provider
+
+
 def sandbox_capability() -> dict[str, str]:
     return dict(_capability)

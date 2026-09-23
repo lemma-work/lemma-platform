@@ -24,6 +24,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, FileText, Image as ImageIcon, X, XCircle } from "@/components/ui/icons";
 import { AssistantJsonBlock } from "./assistant-json-block";
+import { AssistantMarkdownLink, AssistantPodImage } from "./assistant-pod-image";
 import { humanizeKey } from "./assistant-format";
 import { suggestionIconForTitle } from "./assistant-parts";
 import type {
@@ -230,13 +231,25 @@ export function markdownComponentsForMessage(isUserMessage: boolean): Components
       <td className={cn("border px-2 py-1.5 align-top", borderClassName, className)} {...stripMarkdownNode(props)} />
     ),
     a: ({ className, target, rel, ...props }) => (
-      <a
+      <AssistantMarkdownLink
         {...stripMarkdownNode(props)}
         className={cn("font-medium underline-offset-4 hover:underline", isUserMessage ? "text-current" : "text-[var(--action-primary)]", className)}
-        target={target || "_blank"}
-        rel={rel || "noreferrer noopener"}
+        target={target}
+        rel={rel}
       />
     ),
+    // Agent-produced images address pod files, which the frontend origin does
+    // not serve. Without this every generated image rendered as a broken icon.
+    img: ({ className, src, alt, ...props }) => {
+      void props;
+      return (
+        <AssistantPodImage
+          src={typeof src === "string" ? src : undefined}
+          alt={typeof alt === "string" ? alt : undefined}
+          className={className}
+        />
+      );
+    },
   };
 }
 

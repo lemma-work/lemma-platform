@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 
+from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -79,6 +80,29 @@ logger = get_logger(__name__)
 #: ignored. The confirmation is cheap and it is sent before the replay, so the
 #: flow is never silent even when the replay is.
 READY_MESSAGE = "You're all set. Picking up your message now."
+
+
+def ready_message() -> str:
+    """The confirmation, plus the one thing it never said.
+
+    An account made here has a single login method and it is passwordless.
+    Everything on the web that a person would reach for first -- a password,
+    "forgot password", Continue with Google -- is refused for exactly that
+    reason, and the only door that opens is a code sent to this same address.
+    Nobody was ever told that, so signing up on WhatsApp and then trying the
+    website looked like an account that did not work.
+
+    Composed rather than folded into `READY_MESSAGE` so the constant stays the
+    literal confirmation sentence that the recovery test matches on, and so the
+    URL is read when the message is sent rather than when the module is
+    imported.
+    """
+    return (
+        f"{READY_MESSAGE}\n\n"
+        f"To use Lemma on the web, go to {settings.frontend_url.rstrip('/')}/login "
+        "and enter this same email address. We'll send you a sign-in code -- "
+        "there's no password to remember."
+    )
 
 
 class ChatOnboardingCoordinator:
@@ -279,7 +303,7 @@ class ChatOnboardingCoordinator:
         await self._reply(
             transport,
             destination,
-            refusal if refusal is not None else READY_MESSAGE,
+            refusal if refusal is not None else ready_message(),
             step=OnboardingStep.AWAITING_POD if refusal is not None else None,
         )
         return OnboardingIngressResult(True)
@@ -371,7 +395,7 @@ class ChatOnboardingCoordinator:
             "Your account is ready. Ask your team admin to add you to this "
             "Lemma organization."
             if waiting_on_an_admin
-            else READY_MESSAGE,
+            else ready_message(),
         )
 
     async def _handoff(

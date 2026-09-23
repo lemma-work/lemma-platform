@@ -22,12 +22,12 @@ pub(crate) fn quit_impact(app: &AppHandle) -> Vec<String> {
     let local = current_mode(app) == "local";
     let shell: State<Shell> = app.state();
     let stack_up = local && {
-        let ui = shell.ui.lock().unwrap();
+        let ui = shell.ui.lock_or_recover();
         ui.ready || ui.running || !ui.active_operation_id.is_empty()
     };
-    let agent_host = shell.agent_host_status.lock().unwrap().clone();
+    let agent_host = shell.agent_host_status.lock_or_recover().clone();
     let sharing = if local {
-        shell.sharing_mode.lock().unwrap().clone()
+        shell.sharing_mode.lock_or_recover().clone()
     } else {
         None
     };
@@ -134,7 +134,7 @@ pub(crate) fn stop_then_quit(app: &AppHandle) {
         let _ = control.close();
     }
     shell.quit_after_stop.store(true, Ordering::Release);
-    if shell.locald_writer.lock().unwrap().is_none() {
+    if shell.locald_writer.lock_or_recover().is_none() {
         match connect_locald() {
             Ok(connection) => install_locald_connection(app, connection),
             Err(_) => {

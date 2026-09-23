@@ -155,7 +155,7 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
                 // had to install anything to get there. The first of those is
                 // the number the whole runtime install exists to keep small,
                 // and nothing was measuring it outside a developer's console.
-                telemetry::note(telemetry::InstallEvent::RuntimeReady {
+                outcome.became_ready = Some(ReadyReached {
                     cached: !ui.installed_this_launch,
                     duration_ms: u64::try_from(
                         LAUNCH_START.get_or_init(Instant::now).elapsed().as_millis(),
@@ -176,28 +176,16 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
                 if trusted_workspace_urls(url, api_url) {
                     ui.url = url.to_string();
                     ui.api_url = api_url.to_string();
-                    // Record what is serving, and under which generation,
-                    // so the next launch can skip straight to it.
-                    //
-                    // On a worker, because this writes the config with two
-                    // fsyncs and we are holding `shell.ui` -- a lock the main
-                    // thread takes in `navigation_context` (on every
-                    // navigation, subframes included), `get_state`,
-                    // `current_mode`, `refresh_tray_status` and
-                    // `quit_impact`. Holding it across a disk sync stalled
-                    // WebKit's navigation delegate, worst exactly when the
-                    // disk is busy unpacking a runtime. The resume target is
-                    // advisory, so late is fine and lost is survivable.
-                    let (url, api_url, generation) = (
-                        url.to_string(),
-                        api_url.to_string(),
-                        event["runtime_generation"]
+                    // Record what is serving, and under which generation, so
+                    // the next launch can skip straight to it. Returned rather
+                    // than written: see `perform_event_side_effects`.
+                    outcome.resume_write = Some(ResumeWrite {
+                        url: url.to_string(),
+                        api_url: api_url.to_string(),
+                        generation: event["runtime_generation"]
                             .as_str()
                             .unwrap_or_default()
                             .to_string(),
-                    );
-                    std::thread::spawn(move || {
-                        write_resume_target(&url, &api_url, &generation);
                     });
                 }
             }
@@ -310,6 +298,35 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
     outcome
 }
 
+/// The disk work an event asked for, done after `shell.ui` is released.
+///
+/// Not in `apply_locald_event`: the main thread takes `shell.ui` on every
+/// navigation, and file writes under it stall WebKit's navigation delegate.
+/// Kept out, `apply_locald_event` stays a pure fold, which is also what lets
+/// the `ready` arm be tested without writing into the real configuration.
+fn perform_event_side_effects(outcome: &mut EventOutcome) {
+    if let Some(ReadyReached {
+        cached,
+        duration_ms,
+    }) = outcome.became_ready.take()
+    {
+        telemetry::note(telemetry::InstallEvent::RuntimeReady {
+            cached,
+            duration_ms,
+        });
+    }
+    if let Some(ResumeWrite {
+        url,
+        api_url,
+        generation,
+    }) = outcome.resume_write.take()
+    {
+        // A worker, because it syncs twice; the target is advisory, so late
+        // is fine and lost is survivable.
+        std::thread::spawn(move || write_resume_target(&url, &api_url, &generation));
+    }
+}
+
 /// What to do with an event that names the operation it belongs to.
 ///
 /// The whole of a decision that decides what somebody watching the splash
@@ -363,7 +380,7 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
     }
     let event_operation_id = locald_event_operation_id(event);
     if let Some(event_operation_id) = event_operation_id {
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         match admit_locald_event(
             &ui.active_operation_id,
             &ui.completed_operation_ids,
@@ -378,7 +395,7 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
     // Every reply that carries Agent Host state refreshes the tray, so a change
     // made in one surface shows in the others without anyone polling.
     if let Some(status) = event.get("agent_host").filter(|value| value.is_object()) {
-        *shell.agent_host_status.lock().unwrap() = Some(status.clone());
+        *shell.agent_host_status.lock_or_recover() = Some(status.clone());
         refresh_agent_host_tray(app, status);
     }
     // Same reason, for sharing: several events carry it, and Quit needs the last
@@ -388,18 +405,19 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
         .and_then(|sharing| sharing.get("mode"))
         .and_then(Value::as_str)
     {
-        *shell.sharing_mode.lock().unwrap() = Some(mode.to_owned());
+        *shell.sharing_mode.lock_or_recover() = Some(mode.to_owned());
     }
 
     if kind == "log" {
         emit_log(app, event["line"].as_str().unwrap_or_default());
         return;
     }
-    let (snapshot, outcome) = {
-        let mut ui = shell.ui.lock().unwrap();
+    let (snapshot, mut outcome) = {
+        let mut ui = shell.ui.lock_or_recover();
         let outcome = apply_locald_event(&mut ui, kind, event);
         (ui.clone(), outcome)
     };
+    perform_event_side_effects(&mut outcome);
     let schedule_terminal_recovery = outcome.schedule_terminal_recovery;
     let start_after_prepare = outcome.start_after_prepare;
 
@@ -447,7 +465,7 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
             std::thread::sleep(Duration::from_secs(8));
             let should_recover = {
                 let shell: State<Shell> = app.state();
-                let ui = shell.ui.lock().unwrap();
+                let ui = shell.ui.lock_or_recover();
                 ui.terminal_recovery_pending && ui.error && !ui.ready && ui.mode == "local"
             };
             if should_recover {

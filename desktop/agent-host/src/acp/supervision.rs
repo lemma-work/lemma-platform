@@ -1,5 +1,7 @@
 //! The agent process: its lifetime, its tree, and its stderr.
 
+use std::collections::BTreeMap;
+
 use super::{AcpAgent, AcpAgentConfig, ByteStreams, Duration, ResolvedAdapter};
 
 /// How long to wait for a finished agent's exit status and stderr tail.
@@ -194,10 +196,49 @@ pub(crate) fn capture_stderr(
     })
 }
 
-pub(crate) fn build_agent(adapter: &ResolvedAdapter) -> AcpAgent {
+/// The Lemma identity a run hands its agent, read out of the run's own MCP
+/// configuration.
+///
+/// The skills a host agent runs tell it to use `lemma` commands, which need the
+/// same `LEMMA_*` environment a sandbox agent gets. The token is the run-scoped,
+/// pod-scoped, short-lived delegated session the sandbox receives; it arrives
+/// inside the run spec, and this is how it reaches the process.
+pub(crate) fn run_environment(mcp: &serde_json::Value) -> BTreeMap<String, String> {
+    let mut environment = BTreeMap::new();
+    let Some(published) = mcp
+        .get("environment")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return environment;
+    };
+    for (name, value) in published {
+        // Only `LEMMA_*`, and only strings. The backend sends an allowlist, but
+        // this process is the one putting values into an environment that runs
+        // the user's own tooling, so it does not take the list on trust.
+        if !name.starts_with("LEMMA_") {
+            continue;
+        }
+        if let Some(text) = value.as_str() {
+            environment.insert(name.clone(), text.to_owned());
+        }
+    }
+    environment
+}
+
+pub(crate) fn build_agent(
+    adapter: &ResolvedAdapter,
+    extra_environment: BTreeMap<String, String>,
+) -> AcpAgent {
+    let mut environment = adapter.environment();
+    // Adapter wiring wins: `PATH` and the upstream-binary variable are how the
+    // agent is reached at all, and a credential payload must not be able to
+    // redirect which binary runs.
+    for (name, value) in extra_environment {
+        environment.entry(name).or_insert(value);
+    }
     let config = AcpAgentConfig::new(&adapter.command)
         .args(adapter.args())
-        .envs(adapter.environment());
+        .envs(environment);
     // No `with_debug`: that callback is only consulted by the library's own
     // transport, and this host supervises the process itself (`SupervisedAgent`).
     // Leaving it attached would be dead code that reads as live logging. The

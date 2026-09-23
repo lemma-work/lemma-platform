@@ -72,7 +72,7 @@ pub(crate) fn agent_host_status_impl(app: AppHandle) -> Result<Value, String> {
         .ok_or("Lemma returned an invalid Agent Host status")?
         .clone();
     let shell: State<Shell> = app.state();
-    *shell.agent_host_status.lock().unwrap() = Some(status.clone());
+    *shell.agent_host_status.lock_or_recover() = Some(status.clone());
     Ok(status)
 }
 
@@ -264,7 +264,7 @@ pub(crate) fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
     // permanently dead-looking splash. `refresh_tray_status` already does this.
     let item = {
         let shell: State<Shell> = app.state();
-        let guard = shell.tray_agent_host.lock().unwrap();
+        let guard = shell.tray_agent_host.lock_or_recover();
         guard.clone()
     };
     let Some(state_item) = item else {
@@ -311,7 +311,7 @@ pub(crate) fn sandbox_image_status(window: Webview, app: AppHandle) -> Result<Va
     // catches a refusal and retries on its next tick.
     require_agent_host_caller(&window, &app)?;
     let shell: State<Shell> = app.state();
-    let ui = shell.ui.lock().unwrap();
+    let ui = shell.ui.lock_or_recover();
     Ok(json!({
         // `pending`, not the empty default, when locald has not said anything
         // yet. The workspace stops asking once the answer can no longer change,

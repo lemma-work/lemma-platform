@@ -225,7 +225,11 @@ class FastStreamRedisMessageBus:
 
     @staticmethod
     def _relaxed_maxlen(
-        stream: str, *, reason: str, group: str | None = None
+        stream: str,
+        *,
+        reason: str,
+        group: str | None = None,
+        group_declared: bool | None = None,
     ) -> int | None:
         """The ceiling to publish at when consumer progress forbids the normal cap.
 
@@ -244,6 +248,16 @@ class FastStreamRedisMessageBus:
         Suppressed publishes are counted and carried on the next line, so a
         stream that really is sitting at its hard ceiling still says so -- and
         says how hard.
+
+        ``group_declared`` is the field that says which problem this is. A group
+        that is lagging and *declared* is a consumer falling behind, and the
+        answer is to make it keep up. A group that is lagging and declared by
+        nobody is a group whose subscriber was deleted, and the answer is the
+        reaper -- a completely different action, from a line that otherwise
+        reads identically. Production spent three weeks publishing
+        ``schedule_events`` at its hard ceiling because a group abandoned in
+        August still pinned the watermark, and the hourly warning naming it did
+        not connect the two.
         """
         hard = event_transport_settings.stream_hard_maxlen_for(stream)
         allowed, suppressed = _trim_reports.should_report(
@@ -256,6 +270,7 @@ class FastStreamRedisMessageBus:
             stream_name=stream,
             reason=reason,
             group=group,
+            group_declared=group_declared,
             maxlen=event_transport_settings.stream_maxlen_for(stream),
             hard_maxlen=hard,
             suppressed_since_last=suppressed,
@@ -304,7 +319,12 @@ class FastStreamRedisMessageBus:
         if blocked is None:
             return maxlen
         group_name, reason = blocked
-        return self._relaxed_maxlen(stream, reason=reason, group=group_name)
+        return self._relaxed_maxlen(
+            stream,
+            reason=reason,
+            group=group_name,
+            group_declared=group_name in declared_groups,
+        )
 
     async def publish(self, stream: str, event: BaseModel | Mapping[str, Any]) -> None:
         broker = await self._get_broker()

@@ -443,12 +443,17 @@ def create_app(
         expected_sha256: str | None = Query(
             default=None, pattern=r"^sha256:[0-9a-f]{64}$"
         ),
+        # Permission bits for the written file, as an octal string. Only used
+        # to deliver a secret, which is why the range is narrow: a caller may
+        # restrict a file, never widen one beyond what a umask would give.
+        mode: str | None = Query(default=None, pattern=r"^0?[0-7]{3}$"),
         _auth: None = Depends(authenticate),
     ) -> RuntimeFileStatResponse:
         stat = await filesystem.write_stream(
             path,
             request.stream(),
             expected_sha256=expected_sha256,
+            mode=int(mode, 8) if mode is not None else None,
         )
         return RuntimeFileStatResponse.from_domain(stat)
 
@@ -460,14 +465,26 @@ def create_app(
         await filesystem.move(request.source, request.destination)
         return Response(status_code=204)
 
-    @app.delete("/files", status_code=204)
+    @app.delete("/files")
     async def delete_file(
         path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
         recursive: bool = Query(default=False),
         _auth: None = Depends(authenticate),
     ) -> Response:
-        await filesystem.delete(path, recursive=recursive)
-        return Response(status_code=204)
+        # 204 when there was nothing to remove, 200 when there was. The manager
+        # has always computed this and the endpoint always threw it away, so
+        # both runtime-backed fabrics hard-coded `True` and told every caller
+        # something had been deleted -- including when nothing had. E2B has
+        # reported it truthfully since it existed.
+        try:
+            removed = await filesystem.delete(path, recursive=recursive)
+        except FileNotFoundError:
+            # A missing *parent* raises, where a missing leaf under a parent
+            # that exists returns False. Both are "nothing was there", and
+            # answering one 404 and the other 204 made the same question have
+            # two answers depending on how deep the absence went.
+            removed = False
+        return Response(status_code=200 if removed else 204)
 
     return app
 

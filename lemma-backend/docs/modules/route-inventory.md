@@ -339,5 +339,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/workspace/files` | `workspace.files.list` | List workspace files |
 | GET | `/workspace/files:content` | `workspace.files.content` | Read workspace file content |
 | GET | `/workspace/files:stat` | `workspace.files.stat` | Stat one workspace file |
+| GET | `/workspace/status` | `workspace.status` | Whether your computer is ready |
 | POST | `/workspace/apps/browser/access` | `workspace.browser.access` | Create workspace browser access URL |
 | POST | `/workspace/browser/display-size` | `workspace.browser.resize_display` | Fit the workspace display to the pane showing it |

@@ -40,11 +40,37 @@ class _CliRuntimeSettings:
         return cls(
             base_url=os.getenv("LEMMA_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
             auth_url=os.getenv("LEMMA_AUTH_URL", DEFAULT_AUTH_URL).rstrip("/"),
-            token=os.getenv("LEMMA_TOKEN") or None,
+            token=_token_from_env(),
             refresh_token=os.getenv("LEMMA_REFRESH_TOKEN") or None,
             verify_ssl=verify_ssl,
             config_file=env_config_file,
         )
+
+
+def _token_from_env() -> str | None:
+    """The current Lemma token, from a file when one is named.
+
+    `LEMMA_TOKEN_FILE` wins over `LEMMA_TOKEN` because a process's environment
+    cannot be rewritten after it is spawned. An Agent Host run is given a
+    delegated session that lives about an hour, and Lemma refreshes it for runs
+    that outlast it -- a refresh reaches a process that is already running only
+    by way of the file. The variable stays as the fallback, for every caller
+    that is not an Agent Host run and for a run whose file could not be
+    written.
+    """
+    path = os.getenv("LEMMA_TOKEN_FILE")
+    if path:
+        try:
+            token = Path(path).read_text(encoding="utf-8").strip()
+        # `UnicodeError` as well as `OSError`: a file that is not UTF-8 raises
+        # `UnicodeDecodeError`, which is not an `OSError`, so an unreadable
+        # token file raised out of here instead of falling back to the
+        # variable -- which is exactly the case the fallback exists for.
+        except OSError, UnicodeError:
+            token = ""
+        if token:
+            return token
+    return os.getenv("LEMMA_TOKEN") or None
 
 
 def _load_json(raw: str) -> Any:
@@ -136,7 +162,11 @@ def normalize_server_name(name: str | None) -> str:
 def should_use_env_server(selected_server: str | None = None) -> bool:
     if selected_server:
         return normalize_server_name(selected_server) == ENV_SERVER_NAME
-    return bool(os.getenv("LEMMA_TOKEN"))
+    # Either spelling means "a token was supplied by the environment". An
+    # Agent Host run sets both, but a caller that sets only the file would
+    # otherwise fall through to the stored session and ignore the credential it
+    # was handed.
+    return bool(_token_from_env())
 
 
 def build_env_server_config() -> dict[str, Any]:

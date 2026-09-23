@@ -31,6 +31,14 @@ class FakeContainer:
     running: bool = False
     status: str = "created"
     exit_code: int = 0
+    #: Container port -> host port, for whatever create asked to publish.
+    #:
+    #: Answered from the request rather than spelled out, because a fixed map
+    #: is how a double comes to certify half a system. This one used to report
+    #: `8080/tcp` and nothing else, so `reach_port` could only ever be checked
+    #: on the runtime -- and the browser relay's 4850, which the whole VNC
+    #: pane and every saved login hang off, had no covering test on any fabric.
+    published: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -99,6 +107,10 @@ class FakeDockerEngine:
             name=name,
             image=request.image,
             labels=dict(request.labels),
+            published={
+                port: 34567 + offset
+                for offset, port in enumerate(sorted(request.host_config.port_bindings))
+            },
         )
         return DockerContainerCreateResponse.model_validate(
             {"Id": container_id, "Warnings": []}
@@ -191,7 +203,10 @@ def _inspect_payload(container: FakeContainer) -> Any:
             },
             "Config": {"Image": container.image, "Labels": dict(container.labels)},
             "NetworkSettings": {
-                "Ports": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "34567"}]},
+                "Ports": {
+                    port: [{"HostIp": "127.0.0.1", "HostPort": str(host_port)}]
+                    for port, host_port in container.published.items()
+                },
                 "Networks": {},
             },
         }

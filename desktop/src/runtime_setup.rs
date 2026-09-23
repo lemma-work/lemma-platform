@@ -94,13 +94,13 @@ pub(crate) fn ensure_runtime_artifacts_inner(
     let install_operation_id = operation_id("runtime-install");
     {
         let shell: State<Shell> = app.state();
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         ui.active_operation_id = install_operation_id.clone();
     }
     telemetry::note(telemetry::InstallEvent::RuntimeInstallStarted);
     {
         let shell: State<Shell> = app.state();
-        shell.ui.lock().unwrap().installed_this_launch = true;
+        shell.ui.lock_or_recover().installed_this_launch = true;
     }
     // Where the install got to, for the failure event. A install that dies is
     // only useful to hear about if we know which step died, and the progress
@@ -207,7 +207,7 @@ pub(crate) fn ensure_runtime_artifacts_inner(
     );
     {
         let shell: State<Shell> = app.state();
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         if ui.active_operation_id == install_operation_id {
             ui.active_operation_id.clear();
         }
@@ -326,7 +326,14 @@ pub(crate) fn activate_installed_runtime(
         .ok_or("installed runtime has no release root")?
         .to_string_lossy()
         .into_owned();
-    let next = json!({"release": installed.release, "root": root});
+    // The Postgres major goes on the record at activation, so the compatibility
+    // answer does not depend on a manifest staying readable for the life of the
+    // installation. Derived, not assumed: an activation that cannot read it
+    // records nothing and `installed_postgres_major` falls back to the disk.
+    let mut next = json!({"release": installed.release, "root": root});
+    if let Some(major) = runtime_postgres_major(&installed.host_pack_root) {
+        next["dataCompatibility"] = json!({"postgres_major": major});
+    }
     write_config(|config| {
         let current = config
             .get("installedRuntime")
@@ -383,7 +390,7 @@ pub(crate) fn emit_runtime_install_progress(
     emit_log(app, &detail);
     let shell: State<Shell> = app.state();
     let snapshot = {
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         ui.setup = true;
         ui.phase = label.to_owned();
         ui.phase_key = stage.to_owned();
@@ -402,7 +409,7 @@ pub(crate) fn emit_runtime_install_progress(
 pub(crate) fn emit_runtime_install_error(app: &AppHandle, message: &str) {
     let shell: State<Shell> = app.state();
     let snapshot = {
-        let mut ui = shell.ui.lock().unwrap();
+        let mut ui = shell.ui.lock_or_recover();
         ui.setup = true;
         ui.phase = "Local runtime setup".into();
         ui.phase_key = "runtime-install".into();
@@ -432,13 +439,6 @@ pub(crate) fn prepare_runtime_impl(app: AppHandle) -> Result<(), String> {
     )
 }
 
-/// The Postgres major this installation's data was created with, if recorded.
-pub(crate) fn installed_postgres_major() -> Option<u64> {
-    read_config()
-        .pointer("/installedRuntime/dataCompatibility/postgres_major")
-        .and_then(Value::as_u64)
-}
-
 /// Where each platform keeps the disk holding this installation's databases.
 ///
 /// macOS has a sparse `data.raw`; Windows has the WSL distribution's
@@ -461,16 +461,31 @@ pub(crate) fn has_local_runtime_data() -> bool {
 pub(crate) fn ensure_update_preserves_data(
     reset_requested: bool,
     has_runtime: bool,
-    compatibility: &str,
-    windows: bool,
+    installed_postgres_major: Option<u64>,
+    candidate_postgres_major: Option<u64>,
 ) -> Result<(), String> {
     if reset_requested {
         return Err("Updates never reset local data. Factory reset is a separate destructive action in recovery.".into());
     }
-    if has_runtime && (windows || compatibility != "compatible") {
-        return Err("This update has no supported data-preserving migration for this installation. Your current version and data have been kept. Wait for a compatible update.".into());
+    match (
+        has_runtime,
+        installed_postgres_major,
+        candidate_postgres_major,
+    ) {
+        (true, Some(installed), Some(candidate)) if installed != candidate => {
+            Err(postgres_major_change_message(installed, candidate))
+        }
+        _ => Ok(()),
     }
-    Ok(())
+}
+
+/// Why an update was refused, in the terms of the one change that refuses it.
+pub(crate) fn postgres_major_change_message(installed: u64, candidate: u64) -> String {
+    format!(
+        "This update moves Lemma's database from Postgres {installed} to Postgres \
+         {candidate}, which Lemma can't migrate automatically yet. Nothing was \
+         changed: your current version, pods, files and accounts are as they were."
+    )
 }
 
 pub(crate) fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {
@@ -478,7 +493,7 @@ pub(crate) fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {
         return Err("runtime repair is available only for a local workspace".into());
     }
     let shell: State<Shell> = app.state();
-    let _install_guard = shell.runtime_install.lock().unwrap();
+    let _install_guard = shell.runtime_install.lock_or_recover();
     require_no_recovery(&shell)?;
     let config = read_config();
     if config

@@ -25,18 +25,24 @@ same runtime on the same contract, so none of that code is duplicated here.
 from __future__ import annotations
 
 import asyncio
-import json
 import shutil
-import subprocess
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
+from time import monotonic
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.lemma_local_bridge import (
+    BridgeResult,
+    call_bridge,
+)
+from app.modules.workspace.providers.lemma_local_config import (
+    LemmaLocalProviderConfig,
+    LocalBridgeError,
+    LocalBridgeNotFound,
+)
 from app.modules.workspace.providers.lemma_local_snapshot import (
     guest_id_of as _guest_id_of,
     is_running as _is_running,
@@ -55,57 +61,22 @@ from app.modules.workspace.providers.base import (
 )
 from app.modules.workspace.providers.docker import RuntimeCredentialSigner
 from app.modules.workspace.providers.profiles import profile_for
-from app.core.concurrency.offload import run_blocking
 from app.modules.workspace.providers.lemma_local_ops import (
     LemmaLocalOpsMixin,
     _status_object,
 )
 from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeClient,
+)
+from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeError,
 )
 
-# The bridge is a local process, so these bound a malfunctioning one rather
-# than a hostile one.
-_MAX_REQUEST_BYTES = 1024 * 1024
-_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
-
-class LocalBridgeError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str = "local_runtime_failed",
-        retryable: bool = True,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.retryable = retryable
-
-
-class LocalBridgeNotFound(LocalBridgeError):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class LemmaLocalProviderConfig:
-    executable: str
-    request_timeout_seconds: float = 600
-    workspace_memory: str = "2g"
-    workspace_cpus: str = "2"
-    function_memory: str = "2g"
-    function_cpus: str = "4"
-    callback_required: bool = False
-    callback_url: str | None = None
-    callback_health_path: str = "/health"
-    callback_timeout_seconds: float = 30
-
-    def __post_init__(self) -> None:
-        if not self.executable:
-            raise ValueError("managed runtime bridge executable is required")
-        if self.request_timeout_seconds <= 0:
-            raise ValueError("managed runtime timeout must be positive")
+#: How long a sandbox's runtime address is believed without asking the guest
+#: again. Seconds, not minutes: the win is collapsing the several round-trips a
+#: single file operation makes, not remembering anything across a user's pause.
+_RUNTIME_URL_TTL_SECONDS = 5.0
 
 
 class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
@@ -138,6 +109,8 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         self._config = config
         self._executable = resolved
         self._runtime_credentials = runtime_credentials
+        # guest id -> (runtime url, monotonic expiry)
+        self._runtime_urls: dict[str, tuple[str, float]] = {}
 
     # ------------------------------------------------------------------
     # Identity
@@ -192,7 +165,9 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             else [_app("function", profile.runtime_port, "eager", "private")]
         )
         try:
-            snapshot = await self._request(
+            snapshot = await call_bridge(
+                self._executable,
+                self._config.request_timeout_seconds,
                 "sandbox.ensure",
                 {
                     "sandbox_id": guest_id,
@@ -203,6 +178,14 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                         "lemma-sandbox-kind": spec.kind.value,
                         "lemma-epoch": str(spec.epoch),
                     },
+                    # The caller's environment, which Docker and E2B both
+                    # forward and this fabric used to drop. No caller sets one
+                    # today -- `SandboxService` builds the spec without `env` --
+                    # so this closes a contract gap rather than changing any
+                    # running sandbox. The guest validates every entry and
+                    # rejects the whole ensure on a bad one, which is the
+                    # behaviour a caller that starts setting it will want.
+                    "env": dict(spec.env),
                     "runtime_token": (
                         self._runtime_credentials.token(guest_id) if workspace else None
                     ),
@@ -374,7 +357,13 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         self, *, deadline_at: datetime
     ) -> tuple[ProviderObject, ...]:
         try:
-            listing = await self._request("sandbox.list", {}, deadline_at=deadline_at)
+            listing = await call_bridge(
+                self._executable,
+                self._config.request_timeout_seconds,
+                "sandbox.list",
+                {},
+                deadline_at=deadline_at,
+            )
         except LocalBridgeError as exc:
             raise ProviderRejected(str(exc)) from exc
 
@@ -432,11 +421,17 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         from sandbox_runtime.errors import (
             SandboxPathConflict,
             SandboxPathNotFound,
+            SandboxProcessNotFound,
+            SandboxRejected,
+            SandboxUnauthorized,
             SandboxUnavailable,
         )
-        from app.modules.workspace.providers.runtime_client import (
+        from app.modules.workspace.providers.runtime_errors import (
             WorkspaceRuntimeFileConflict,
             WorkspaceRuntimeFileNotFound,
+            WorkspaceRuntimeFileRejected,
+            WorkspaceRuntimeProcessGone,
+            WorkspaceRuntimeUnauthorized,
         )
 
         @asynccontextmanager
@@ -451,9 +446,42 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                 raise SandboxPathNotFound(str(exc)) from exc
             except WorkspaceRuntimeFileConflict as exc:
                 raise SandboxPathConflict(str(exc)) from exc
+            except WorkspaceRuntimeFileRejected as exc:
+                # 413, 422 and 507: too big, not a path this runtime will take,
+                # no room. Docker has mapped these to a refusal since they
+                # existed and this did not, so on Desktop alone they fell
+                # through to `SandboxUnavailable` below -- which
+                # `with_backpressure` retries until the deadline. A file that
+                # is too large, or a guest whose disk is full, became a retry
+                # loop on the machine's single vsock control channel instead of
+                # one sentence saying what was wrong.
+                raise SandboxRejected(str(exc)) from exc
+            except WorkspaceRuntimeProcessGone as exc:
+                # Definitive, and about the process rather than the sandbox.
+                # `ProviderGone` would make the client forget its handle to a
+                # workspace that is fine; `SandboxUnavailable` would retry a
+                # process that will never exist until the deadline.
+                raise SandboxProcessNotFound(str(exc)) from exc
+            except WorkspaceRuntimeUnauthorized as exc:
+                # Definitive: this credential will not become valid by waiting.
+                raise SandboxUnauthorized(str(exc)) from exc
             except ProviderGone:
                 raise
+            except asyncio.TimeoutError as exc:
+                # The bridge stopped answering within the deadline. Retryable,
+                # but it has to arrive as a sandbox error with a sentence in it:
+                # uncaught, it left this scope as a bare `TimeoutError` and
+                # every caller rendered it as `500 INTERNAL_ERROR` with a null
+                # message, which is what a five-minute file listing looked like.
+                self._forget_runtime_url(instance.provider_id)
+                raise SandboxUnavailable(
+                    "managed runtime did not answer before the deadline"
+                ) from exc
             except (WorkspaceRuntimeError, LocalBridgeError) as exc:
+                # Anything that failed at the transport may mean the sandbox
+                # moved. Cheaper to ask the guest again next time than to keep
+                # dialling an address that has stopped answering.
+                self._forget_runtime_url(instance.provider_id)
                 raise SandboxUnavailable(str(exc)) from exc
             finally:
                 if client is not None:
@@ -464,19 +492,53 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
     async def _runtime_client(
         self, guest_id: str, *, deadline_at: datetime
     ) -> WorkspaceRuntimeClient:
-        snapshot = await self._status(guest_id, deadline_at=deadline_at)
-        runtime_url = _status_object(snapshot).get("runtime_url")
-        if not isinstance(runtime_url, str) or not runtime_url:
-            raise WorkspaceRuntimeError(
-                "managed workspace runtime endpoint is unavailable"
+        runtime_url = self._remembered_runtime_url(guest_id)
+        if runtime_url is None:
+            snapshot = await self._status(guest_id, deadline_at=deadline_at)
+            runtime_url = _status_object(snapshot).get("runtime_url")
+            if not isinstance(runtime_url, str) or not runtime_url:
+                raise WorkspaceRuntimeError(
+                    "managed workspace runtime endpoint is unavailable"
+                )
+            self._runtime_urls[guest_id] = (
+                runtime_url,
+                monotonic() + _RUNTIME_URL_TTL_SECONDS,
             )
         return WorkspaceRuntimeClient(
             runtime_url, self._runtime_credentials.token(guest_id)
         )
 
+    def _remembered_runtime_url(self, guest_id: str) -> str | None:
+        """Where this sandbox's runtime was, if that was true a moment ago.
+
+        Every workspace operation entered `_ops`, and `_ops` asked the guest
+        where the runtime is before doing anything -- a `hostctl` fork on the
+        host, a vsock round-trip, and a `nerdctl inspect` fork inside the VM,
+        all to recover a URL that had not changed. `_ops` has seventeen call
+        sites, so a multi-step file operation paid that once per step.
+
+        In-process rather than Redis, which is the rule for cached *data*: this
+        is the address of a container on this machine, it is worthless to any
+        other process, and a Redis round-trip to avoid a local one would cost
+        more than it saved. The window is seconds, and a stale entry is dropped
+        the moment an operation fails against it, so a recreated sandbox costs
+        one retry rather than a wrong answer.
+        """
+        remembered = self._runtime_urls.get(guest_id)
+        if remembered is None:
+            return None
+        url, expires_at = remembered
+        if monotonic() >= expires_at:
+            self._runtime_urls.pop(guest_id, None)
+            return None
+        return url
+
+    def _forget_runtime_url(self, guest_id: str) -> None:
+        self._runtime_urls.pop(guest_id, None)
+
     async def _find(
         self, guest_id: str, *, deadline_at: datetime
-    ) -> dict[str, Any] | None:
+    ) -> BridgeResult | None:
         """Absence, reported as absence.
 
         ``_status`` turns not-found into ``ProviderGone`` because a caller
@@ -491,10 +553,14 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         except LocalBridgeError:
             return None
 
-    async def _status(self, guest_id: str, *, deadline_at: datetime) -> dict[str, Any]:
+    async def _status(self, guest_id: str, *, deadline_at: datetime) -> BridgeResult:
         try:
-            return await self._request(
-                "sandbox.status", {"sandbox_id": guest_id}, deadline_at=deadline_at
+            return await call_bridge(
+                self._executable,
+                self._config.request_timeout_seconds,
+                "sandbox.status",
+                {"sandbox_id": guest_id},
+                deadline_at=deadline_at,
             )
         except LocalBridgeNotFound as exc:
             raise ProviderGone(str(exc)) from exc
@@ -503,83 +569,18 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         self, operation: str, guest_id: str, *, deadline_at: datetime
     ) -> None:
         try:
-            await self._request(
-                operation, {"sandbox_id": guest_id}, deadline_at=deadline_at
+            await call_bridge(
+                self._executable,
+                self._config.request_timeout_seconds,
+                operation,
+                {"sandbox_id": guest_id},
+                deadline_at=deadline_at,
             )
         except LocalBridgeNotFound:
             # Already absent is the outcome these operations were asking for.
             return
         except LocalBridgeError as exc:
             raise ProviderRejected(str(exc)) from exc
-
-    async def _request(
-        self,
-        operation: str,
-        parameters: dict[str, object],
-        *,
-        deadline_at: datetime,
-    ) -> dict[str, Any]:
-        encoded = json.dumps(
-            {"version": 1, "operation": operation, "parameters": parameters},
-            separators=(",", ":"),
-        )
-        if len(encoded.encode()) > _MAX_REQUEST_BYTES:
-            raise LocalBridgeError(
-                "managed runtime request exceeds 1 MiB", retryable=False
-            )
-        remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
-        if remaining <= 0:
-            raise asyncio.TimeoutError
-        timeout = min(remaining, self._config.request_timeout_seconds)
-
-        def invoke() -> subprocess.CompletedProcess[str]:
-            return subprocess.run(
-                [self._executable, "request"],
-                input=f"{encoded}\n",
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-
-        try:
-            # The bridge is a blocking subprocess, so it is run off the event
-            # loop; leaving it inline would stall every other request. Its own
-            # limiter rather than ``external_http``: this call is bounded by the
-            # request deadline, not an HTTP timeout, so a burst of long sandbox
-            # operations would otherwise hold every slot the connector SDKs use.
-            process = await run_blocking(invoke, limiter="local_bridge")
-        except subprocess.TimeoutExpired as exc:
-            raise asyncio.TimeoutError from exc
-
-        if len(process.stdout.encode()) > _MAX_RESPONSE_BYTES:
-            raise LocalBridgeError("managed runtime response exceeds 4 MiB")
-        try:
-            response = json.loads(process.stdout)
-        except json.JSONDecodeError as exc:
-            diagnostic = process.stderr.splitlines()[:1]
-            suffix = f": {diagnostic[0]}" if diagnostic else ""
-            raise LocalBridgeError(
-                f"managed runtime response was not JSON{suffix}"
-            ) from exc
-        if not isinstance(response, dict):
-            raise LocalBridgeError("managed runtime response was not an object")
-
-        if process.returncode != 0 or response.get("ok") is not True:
-            error = response.get("error")
-            details = error if isinstance(error, dict) else {}
-            code = str(details.get("code") or "local_runtime_failed")
-            failure = LocalBridgeNotFound if code == "not_found" else LocalBridgeError
-            raise failure(
-                str(details.get("message") or "managed runtime request failed"),
-                code=code,
-                retryable=bool(details.get("retryable", True)),
-            )
-
-        result = response.get("result")
-        if not isinstance(result, dict):
-            raise LocalBridgeError("managed runtime response omitted its result")
-        return result
 
 
 def _app(name: str, port: int, startup: str, exposure: str) -> dict[str, object]:

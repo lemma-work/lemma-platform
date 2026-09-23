@@ -1,9 +1,12 @@
+from collections.abc import Awaitable, Callable
 from typing import Any, Dict, List, Union
 
 from supertokens_python.recipe.emailpassword.interfaces import (
     APIInterface,
     APIOptions,
     EmailAlreadyExistsError,
+    GeneratePasswordResetTokenPostNotAllowedResponse,
+    GeneratePasswordResetTokenPostOkResult,
     SignInPostNotAllowedResponse,
     SignInPostOkResult,
     SignUpPostNotAllowedResponse,
@@ -13,6 +16,10 @@ from supertokens_python.recipe.emailpassword.interfaces import (
 from supertokens_python.types.response import GeneralErrorResponse
 from supertokens_python.recipe.emailpassword.types import FormField
 from supertokens_python.recipe.session.interfaces import SessionContainer
+
+# Aliased: `User` in this module is the local ORM row, and the lookup below
+# returns SuperTokens' own user, which is a different thing entirely.
+from supertokens_python.types import User as AuthUser
 
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.infrastructure.identity_lease import (
@@ -36,9 +43,24 @@ from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import func, select
 
 
-def override_emailpassword_apis(original_implementation: APIInterface) -> APIInterface:
+#: How this override finds out which login methods an address already has.
+#: A named collaborator with a production default rather than a module global,
+#: so a test can stand something in *front* of it. Reaching into this module to
+#: patch the name would certify the half the test did not write, and would
+#: survive a rename that ought to have failed.
+UserLookup = Callable[..., Awaitable[List[AuthUser]]]
+
+
+def override_emailpassword_apis(
+    original_implementation: APIInterface,
+    *,
+    find_users: UserLookup = list_users_by_email,
+) -> APIInterface:
     original_sign_in_post = original_implementation.sign_in_post
     original_sign_up_post = original_implementation.sign_up_post
+    original_generate_password_reset_token_post = (
+        original_implementation.generate_password_reset_token_post
+    )
 
     async def sign_in_post(
         form_fields: List[FormField],
@@ -71,7 +93,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             return SignInPostNotAllowedResponse(
                 "Unable to sign in with these credentials"
             )
-        users = await list_users_by_email(
+        users = await find_users(
             tenant_id=tenant_id,
             email=email,
             user_context=user_context,
@@ -141,7 +163,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             if field.id == "email":
                 field.value = email
                 break
-        users = await list_users_by_email(
+        users = await find_users(
             tenant_id=tenant_id,
             email=email,
             user_context=user_context,
@@ -168,8 +190,58 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             user_context,
         )
 
+    async def generate_password_reset_token_post(
+        form_fields: List[FormField],
+        tenant_id: str,
+        api_options: APIOptions,
+        # `dict[str, object]`, where the recipe's own signature says
+        # `Dict[str, Any]`. Nothing here reads inside it -- it is carried from
+        # the caller to the original implementation untouched -- so `Any` would
+        # be giving up a check this function never needed.
+        user_context: dict[str, object],
+    ) -> Union[
+        GeneratePasswordResetTokenPostOkResult,
+        GeneratePasswordResetTokenPostNotAllowedResponse,
+        GeneralErrorResponse,
+    ]:
+        """Say so, rather than promising mail that cannot be sent.
+
+        An account created through chat has one login method and it is
+        passwordless. There is no password to reset, so Core mints no token and
+        sends nothing -- while the page, which cannot tell that apart from a
+        successful send, says to go and check an inbox that will stay empty.
+        That was the likeliest way for somebody who signed up on WhatsApp to
+        get permanently stuck: the door they were told to use does not exist.
+
+        A `GeneralErrorResponse` rather than the shapelier
+        `PASSWORD_RESET_NOT_ALLOWED`, because the page collapses that status
+        into "sent" on purpose -- it is how a reset request avoids disclosing
+        whether an account exists -- and the reason would be swallowed with it.
+        This one is disclosure we have already chosen to make everywhere else,
+        so it has to arrive as something the person actually reads.
+        """
+        try:
+            email = _normalize_form_email(form_fields)
+        except ValueError:
+            return await original_generate_password_reset_token_post(
+                form_fields, tenant_id, api_options, user_context
+            )
+        users = await find_users(
+            tenant_id=tenant_id,
+            email=email,
+            user_context=user_context,
+        )
+        if has_passwordless_login_method(users, email):
+            return GeneralErrorResponse(get_passwordless_conflict_reason())
+        return await original_generate_password_reset_token_post(
+            form_fields, tenant_id, api_options, user_context
+        )
+
     original_implementation.sign_in_post = sign_in_post
     original_implementation.sign_up_post = sign_up_post
+    original_implementation.generate_password_reset_token_post = (
+        generate_password_reset_token_post
+    )
 
     return original_implementation
 

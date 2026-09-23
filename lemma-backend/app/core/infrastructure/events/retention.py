@@ -70,6 +70,9 @@ async def prune_event_delivery_records(
     dead_cutoff = now - timedelta(
         days=event_transport_settings.event_dead_letter_retention_days
     )
+    abandoned_cutoff = now - timedelta(
+        days=event_transport_settings.event_abandoned_retention_days
+    )
     batch_size = event_transport_settings.event_retention_batch_size
     categories: tuple[tuple[str, Any, tuple[Any, ...]], ...] = (
         (
@@ -104,6 +107,24 @@ async def prune_event_delivery_records(
             (
                 DomainEventInbox.status == InboxStatus.DEAD_LETTER.value,
                 DomainEventInbox.dead_lettered_at < dead_cutoff,
+            ),
+        ),
+        # The category that did not exist, and so never ran. Every filter above
+        # keys off a completion timestamp; a row abandoned mid-flight has none
+        # of them, matched nothing, and was therefore immortal. Production held
+        # rows in PROCESSING and RETRYING dating back to the table's own
+        # beginning -- a slow leak rather than a flood, but one with no upper
+        # bound at all. `last_received_at` is the right clock here because it
+        # is the one thing every delivery stamps, so "has not moved since"
+        # covers both a claim whose worker died and a retry nothing redelivered.
+        (
+            "inbox_abandoned",
+            DomainEventInbox,
+            (
+                DomainEventInbox.status.in_(
+                    (InboxStatus.PROCESSING.value, InboxStatus.RETRYING.value)
+                ),
+                DomainEventInbox.last_received_at < abandoned_cutoff,
             ),
         ),
     )

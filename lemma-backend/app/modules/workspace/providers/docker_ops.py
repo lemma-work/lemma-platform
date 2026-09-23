@@ -49,10 +49,14 @@ from app.modules.workspace.providers.docker_engine import (
 from app.modules.workspace.providers.profiles import SandboxProfile, profile_for
 from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeClient,
+)
+from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeError,
     WorkspaceRuntimeFileConflict,
     WorkspaceRuntimeFileNotFound,
     WorkspaceRuntimeFileRejected,
+    WorkspaceRuntimeProcessGone,
+    WorkspaceRuntimeUnauthorized,
 )
 
 # The runtime reads this path once on start and unlinks it, so delivering a
@@ -221,8 +225,9 @@ class DockerOpsMixin:
         deadline_at: datetime,
     ) -> bool:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            await client.delete_file(path, recursive=recursive, deadline_at=deadline_at)
-            return True
+            return await client.delete_file(
+                path, recursive=recursive, deadline_at=deadline_at
+            )
 
     async def ensure_python_session(
         self,
@@ -262,7 +267,9 @@ class DockerOpsMixin:
         from sandbox_runtime.errors import (
             SandboxPathConflict,
             SandboxPathNotFound,
+            SandboxProcessNotFound,
             SandboxRejected,
+            SandboxUnauthorized,
             SandboxUnavailable,
         )
 
@@ -278,8 +285,21 @@ class DockerOpsMixin:
             raise SandboxPathConflict(str(exc)) from exc
         except WorkspaceRuntimeFileRejected as exc:
             raise SandboxRejected(str(exc)) from exc
+        except WorkspaceRuntimeProcessGone as exc:
+            # Definitive, and about the process rather than the sandbox.
+            # `ProviderGone` would make the client forget its handle to a
+            # workspace that is fine; `SandboxUnavailable` would retry a
+            # process that will never exist until the deadline.
+            raise SandboxProcessNotFound(str(exc)) from exc
+        except WorkspaceRuntimeUnauthorized as exc:
+            # Definitive: this credential will not become valid by waiting.
+            raise SandboxUnauthorized(str(exc)) from exc
         except ProviderGone:
             raise
+        except asyncio.TimeoutError as exc:
+            raise SandboxUnavailable(
+                "workspace runtime did not answer before the deadline"
+            ) from exc
         except (WorkspaceRuntimeError, DockerEngineError) as exc:
             raise SandboxUnavailable(str(exc)) from exc
         finally:
@@ -417,7 +437,18 @@ class DockerOpsMixin:
         )
         if inspected is None:
             raise ProviderGone(f"sandbox container {instance.provider_id} is gone")
-        return SandboxEndpoint(url=self._base_url(inspected, runtime_port=port))
+        try:
+            url = self._base_url(inspected, runtime_port=port)
+        except WorkspaceRuntimeError as exc:
+            # `reach_port` sits outside `_ops_client`, so nothing mapped this.
+            # A port the container never published raised a raw
+            # `WorkspaceRuntimeError` straight through the provider: the port
+            # proxy catches `ProviderGone`/`ProviderRejected` and turns them
+            # into a 404, and caught neither of these -- so Docker answered an
+            # undeclared port with an unhandled 500 and an unframed WebSocket
+            # close, where Desktop answers a clean 404.
+            raise ProviderRejected(str(exc)) from exc
+        return SandboxEndpoint(url=url)
 
     async def deliver_secret(
         self,

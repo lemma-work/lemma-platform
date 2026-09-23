@@ -517,6 +517,69 @@
   line-height: 1.45;
 }
 
+/* The sign-in screen this app owns, matched to the sign-up screen SuperTokens
+   still draws. The two are one click apart -- "Create an account" and "Sign in"
+   link straight at each other -- so a smaller heading, a missing divider or a
+   call to action that reads as secondary makes one product look like two. Every
+   value below is the one `authSurfaceStyle` already sets on the prebuilt
+   equivalent, and the tokens are the same: `--ink` is `--text-primary`,
+   `--line` is `--border-subtle`. */
+.auth-owned-heading {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.auth-owned-title {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-display-family);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.auth-owned-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.auth-owned-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--subtle);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.auth-owned-divider::before,
+.auth-owned-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  border-top: 1px solid var(--line);
+}
+
+.auth-provider-button {
+  min-height: 3.05rem;
+  gap: var(--space-2-5);
+}
+
+.auth-provider-mark {
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+/* Visible, and deliberately so: a password manager fills a password by finding
+   the username beside it, and hidden fields are widely ignored. Muted rather
+   than removed, because it is context here, not an input. */
+.auth-identity-chip input {
+  color: var(--muted);
+  cursor: default;
+}
+
 .password-reset-icon-sending svg,
 .password-reset-icon-submitting svg {
   animation: spin 1.15s linear infinite;

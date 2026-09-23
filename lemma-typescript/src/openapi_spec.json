@@ -18941,6 +18941,39 @@
         "title": "WorkspaceFileListResponse",
         "type": "object"
       },
+      "WorkspaceStatusResponse": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A sentence for a person.",
+            "title": "Detail"
+          },
+          "state": {
+            "description": "`ready`: running. `downloading`: fetching its image, which the first start after an update does. `starting`: coming up. `asleep`: not running, and starts on first use. `unavailable`: could not be asked.",
+            "enum": [
+              "ready",
+              "downloading",
+              "starting",
+              "asleep",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "WorkspaceStatusResponse",
+        "type": "object"
+      },
       "attach": {
         "properties": {
           "data": {
@@ -37754,6 +37787,34 @@
           "resource": "workspace.files",
           "result": "entity",
           "verb": "stat"
+        }
+      }
+    },
+    "/workspace/status": {
+      "get": {
+        "operationId": "workspace.status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whether your computer is ready",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace",
+          "result": "entity",
+          "verb": "status"
         }
       }
     }

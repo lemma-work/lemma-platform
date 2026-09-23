@@ -44,11 +44,10 @@ from app.modules.agent.infrastructure.harnesses.agent_host.tool_calls import (
     ToolCallLedger,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
-    bounded_tool_value,
     first_present,
     tool_metadata,
     tool_name_from_payload,
-    unwrap_mcp_content,
+    tool_result,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.final_answer_stream import (
     final_answer_metadata,
@@ -435,12 +434,7 @@ class AgentHostEventNormalizer:
                 record = final_answer_record(event_text(payload))
             if record is not None:
                 self.adopt_final_answer(record, tool_call_id=object_id)
-        result = bounded_tool_value(unwrap_mcp_content(raw_result))
-        if status != "COMPLETED":
-            result = {
-                "success": False,
-                "error": str(payload.get("error") or status.lower()),
-            }
+        result = tool_result(tool_name, status, payload)
         if tool_name in PAUSING_TOOL_NAMES:
             # The other half of the drop above: with no call on the record under
             # this id, a return under it pairs with nothing. What the model was
