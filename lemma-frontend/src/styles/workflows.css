@@ -1,0 +1,523 @@
+/* Workflows: the queue of what is stuck on you, and the record of what ran.
+ *
+ *  Two surfaces, one vocabulary. `wf-dot` means the same thing in the header
+ *  panel and on the profile, and the four tones are the run state machine's
+ *  own (domain/run.py:39) collapsed to what a person needs at a glance.
+ *
+ *  Flat rows on a divider throughout, matching the agents list and the
+ *  connector catalogue. No bordered cards: a pod has a handful of workflows,
+ *  and a box round each one makes the eye cross a border to get from one name
+ *  to the next.
+ */
+
+/* ── the header queue ──────────────────────────────────────────────── */
+
+.wf-inbox { position: relative; }
+.wf-inbox__open { position: relative; }
+
+/* Same size and shape as the notification badge, and next to it. Two counts
+   side by side that disagree about their own dimensions read as two unrelated
+   widgets rather than as two numbers about the same person. */
+.wf-inbox__badge {
+    position: absolute;
+    top: 2px;
+    right: 1px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 9999px;
+    /* Not the accent. The bell already owns it, and a second accent pip beside
+       the first makes neither mean anything. This is work that is overdue, and
+       amber is what the rest of the app already uses to say so.
+     *
+     *  `--warn` rather than `--wait`, and `--on-bad` rather than white, because
+     *  both were measured. `--wait` is a light amber in dark mode (#dcb06a) and
+     *  white on it is 2.01:1 — the digit all but disappears. `--warn` is the
+     *  darker amber in light mode and the same light one in dark, and `--on-bad`
+     *  is the app's existing "ink for a filled status swatch": white in light,
+     *  near-black in dark. The pair measures 5.61:1 light and 8.61:1 dark.
+     *  (The bell's own badge is white on `--accent`, which is 2.73:1 in dark —
+     *  the same bug, older, and not mine to fix in this pass.) */
+    background: var(--warn);
+    color: var(--on-bad);
+    font-size: 9.5px;
+    line-height: 15px;
+    text-align: center;
+    font-family: var(--mono);
+}
+
+/* Fixed and in a portal: anchored to the button by measurement rather than by
+   being inside it. `.head` sets `overflow: hidden` so its collapse animates to
+   a real height, which clips any absolutely positioned child — the panel is
+   not painted at all, so no z-index would have saved it. */
+.wf-inbox__panel {
+    position: fixed;
+    z-index: 800;
+    width: min(400px, calc(100vw - 32px));
+    max-height: min(480px, calc(100dvh - 140px));
+    overflow: auto;
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-lift);
+    animation: menu-in 150ms var(--ease-out);
+}
+.wf-inbox__head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 13px 14px 11px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+}
+.wf-inbox__head h2 { margin: 0; font-size: 13px; letter-spacing: 0.01em; }
+
+.wf-inbox__partial {
+    margin: 0;
+    padding: 9px 14px;
+    font-size: 11.5px;
+    color: var(--warn);
+    background: var(--chrome);
+    border-bottom: 1px solid var(--line);
+}
+
+.wf-inbox__list { display: flex; flex-direction: column; }
+
+.wf-wait { border-bottom: 1px solid var(--line); }
+.wf-wait:last-child { border-bottom: 0; }
+.wf-wait__open {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    column-gap: 12px;
+    text-align: left;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: background .14s ease;
+}
+.wf-wait__open:hover { background: var(--chrome); }
+.wf-wait__open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wf-wait__body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.wf-wait__body strong { font-size: 13px; font-weight: 500; color: var(--ink); }
+/* `--ink-2` rather than `--ink-3`: this line sits on `--chrome` on hover,
+   where the lighter ink measures 4.28:1 in light mode — under AA at this
+   size. The same swap the accent pass had to make across sixteen palettes. */
+.wf-wait__body small {
+    font-size: 11.5px;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The age is the whole point of the queue, so it is set in the tone that means
+   overdue and it is never allowed to wrap away from its row.
+ *
+ *  `--warn`, not `--wait`, and the difference is measured: `--wait` is 3.40:1
+ *  on `--paper` and 3.20:1 on the `--wash-b` an open row sits on, both under AA
+ *  for text this small. `--warn` is the amber that was picked to pass — its own
+ *  token comment records 5.64:1 on `--paper` — and it is 8.46:1 in dark. The
+ *  dots below stay `--wait`: a 7px fill is a non-text graphic and needs 3:1,
+ *  which it clears, and it is the hue the shell and the tool cards already use
+ *  for something that is waiting. */
+.wf-wait__age {
+    font-size: 11px;
+    color: var(--warn);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.wf-wait[data-open] { background: var(--wash-b); }
+.wf-wait__form { padding: 0 14px 14px; }
+
+/* ── the form a wait is asking for ─────────────────────────────────── */
+
+/* Denser than a page form on purpose: it sits in a 400px panel, and a form
+   there that breathes like a page turns three fields into a scroll. */
+.wf-form { display: flex; flex-direction: column; gap: 10px; }
+.wf-field { display: flex; flex-direction: column; gap: 4px; }
+.wf-field label { font-size: 11.5px; color: var(--ink-2); }
+.wf-field label i { font-style: normal; color: var(--bad); }
+.wf-field small { font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+.wf-field em { font-style: normal; font-size: 11px; color: var(--bad); }
+.wf-field input,
+.wf-field select,
+.wf-field textarea {
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    padding: 7px 9px;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--ink);
+    width: 100%;
+    min-width: 0;
+}
+.wf-field textarea { resize: vertical; line-height: 1.5; }
+/* Monospace is for the field nobody has designed a control for yet, which
+   arrives as raw JSON. Prose typed into a "Notes" box is not that. */
+.wf-field[data-kind="json"] textarea { font-family: var(--mono); font-size: 11.5px; }
+.wf-field input:focus,
+.wf-field select:focus,
+.wf-field textarea:focus { outline: none; border-color: var(--accent); }
+/* A checkbox reads left to right, unlike every other field here. */
+.wf-field--check { flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wf-field--check input { width: auto; flex: none; }
+.wf-field--check span { font-size: 12px; color: var(--ink-2); }
+.wf-field--check small, .wf-field--check em { flex-basis: 100%; }
+.wf-form__actions { display: flex; gap: 8px; }
+
+.wf-quiet { margin: 0; padding: 22px 14px; color: var(--ink-3); font-size: 12.5px; text-align: center; }
+.wf-quiet button { border: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; }
+.wf-problem { margin: 8px 0 0; font-size: 11.5px; color: var(--bad); }
+.wf-note { margin: 0; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+
+/* ── the read-only view on a profile ───────────────────────────────── */
+
+.wf-view { display: flex; flex-direction: column; }
+/* No padding and no max-width of its own: it is handed a `.pcard` that already
+   sets both. Three bugs this quarter were an element carrying a margin set for
+   a context it no longer sits in, and a section that pads itself inside a card
+   that pads it is the same mistake wearing a different name. */
+
+.wf-list { display: flex; flex-direction: column; }
+
+.wf-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    column-gap: 14px;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: none;
+    font: inherit;
+    color: inherit;
+    padding: 14px 8px;
+    cursor: pointer;
+    transition: background .14s ease;
+}
+.wf-row--run { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.wf-row:last-child { border-bottom: 0; }
+.wf-row:hover { background: var(--chrome); }
+.wf-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The hover fill takes the second line with it — a step darker on hover holds
+   4.5:1 and is invisible at this size. */
+.wf-row:hover .wf-row__body small, .wf-row:hover .wf-row__meta { color: var(--ink-2); }
+.wf-row__body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wf-row__title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.wf-row__title strong { font-size: 14px; font-weight: 500; color: var(--ink); }
+.wf-row__body small {
+    font-size: 12px;
+    color: var(--ink-3);
+    line-height: 1.45;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wf-row__meta {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.wf-row__meta i { font-style: normal; }
+.wf-row svg:last-child { color: var(--ink-3); }
+
+.wf-tag {
+    font-style: normal;
+    font-size: 10px;
+    letter-spacing: .02em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--chrome);
+    /* `--ink-2`, not `--ink-3`: on `--chrome` the lighter ink is 4.28:1 in
+       light mode, under AA for text this small. */
+    color: var(--ink-2);
+}
+
+/* One mark, four states. A dot rather than a coloured word, because the status
+   is already spelled out beside it and saying it twice in two encodings makes
+   the row read as a warning when it is a fact. */
+.wf-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    flex: none;
+    background: var(--ink-3);
+}
+.wf-dot[data-tone="good"] { background: var(--ok); }
+.wf-dot[data-tone="bad"] { background: var(--bad); }
+.wf-dot[data-tone="waiting"] { background: var(--wait); }
+.wf-dot[data-tone="going"] { background: var(--accent); }
+.wf-dot[data-tone="gone"] { background: var(--ink-3); }
+
+.wf-crumb {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding-bottom: 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+}
+.wf-crumb__back {
+    display: inline-flex;
+    /* Baseline, and the icon taken out of it. The row asks its children to
+       align on their baselines, but an inline-flex box borrows its baseline
+       from the first item that has one — which here was the arrow, so "Back"
+       rode 3.3px above the title it sits beside (measured: text bottom 56.0
+       against 59.3). Centring the icon leaves the word as the only thing with
+       a baseline to lend, which is the one the row wanted all along. */
+    align-items: baseline;
+    gap: 5px;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 12px;
+    color: var(--accent);
+    padding: 0;
+    cursor: pointer;
+}
+.wf-crumb__back svg { align-self: center; }
+.wf-crumb__title { font-size: 13px; font-weight: 500; color: var(--ink); }
+.wf-crumb__note { font-size: 11.5px; color: var(--ink-3); }
+
+.wf-run__facts {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 12px 0;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.wf-run__facts b { font-size: 13px; font-weight: 500; color: var(--ink); }
+.wf-run__cancel { margin-left: auto; font-size: 12px; padding: 5px 11px; }
+
+.wf-run__failure {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-radius: var(--r-sm);
+    background: var(--chrome);
+    box-shadow: inset 2px 0 0 var(--bad);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.wf-run__failure svg { color: var(--bad); flex: none; margin-top: 1px; }
+.wf-run__failure b { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+
+/* The history reads as a sequence, so it is drawn as one: a spine with marks
+   on it, the way the transcript stacks a reply. The rule is on the list rather
+   than on each row, so it does not start above the first mark or run past the
+   last. */
+.wf-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 4px;
+}
+.wf-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 12px;
+    padding: 0 0 16px 0;
+}
+.wf-step:last-child { padding-bottom: 0; }
+/* The spine, drawn from each mark down to the next one — so the last step has
+   no tail hanging off it. */
+.wf-step:not(:last-child)::before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 14px;
+    bottom: 0;
+    width: 1px;
+    background: var(--line-2);
+}
+.wf-step__mark {
+    width: 7px;
+    height: 7px;
+    margin-top: 5px;
+    border-radius: 999px;
+    background: var(--ink-3);
+}
+.wf-step[data-tone="good"] .wf-step__mark { background: var(--ok); }
+.wf-step[data-tone="bad"] .wf-step__mark { background: var(--bad); }
+.wf-step[data-tone="waiting"] .wf-step__mark { background: var(--wait); }
+.wf-step[data-tone="going"] .wf-step__mark { background: var(--accent); }
+.wf-step__body { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.wf-step__title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wf-step__title b { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink); }
+.wf-step__title i { font-style: normal; font-size: 11px; color: var(--ink-3); }
+.wf-step__title em {
+    font-style: normal;
+    font-size: 11px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+.wf-step__error { font-size: 12px; color: var(--bad); line-height: 1.5; }
+.wf-step__out {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: var(--r-sm);
+    background: var(--chrome);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 180px;
+    overflow: auto;
+}
+
+/* ── how it runs ────────────────────────────────────────────────────
+   The shape of a workflow, above the record of it running.
+
+   The same spine the history is drawn on, down to the pixel — 4px of list
+   padding, a 7px mark 5px down, a rule at left 3px — because the two lists sit
+   one above the other in the same column and any disagreement about where the
+   line goes reads as a mistake rather than as a distinction.
+
+   The distinction they do carry is the fill. A step in the history happened
+   and has a status, so its mark is solid in the tone of that status. A step
+   here is something that *can* happen and has no status at all, so its mark is
+   hollow: colouring it would be inventing a state the payload never had. */
+
+.wf-shape { display: contents; }
+
+.wf-heading {
+    margin: 18px 0 10px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    /* `--ink-3` is 4.28:1 on `--chrome` and passes on `--paper`, but this is
+       11px and uppercase, which is the size the accent pass measured as the
+       one that fails first. `--ink-2` throughout. */
+    color: var(--ink-2);
+}
+/* The first heading in the pane has the crumb's own rule above it already. */
+.wf-view > .wf-heading:first-of-type { margin-top: 14px; }
+.wf-heading--sub { margin: 16px 0 8px; text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+.wf-spine { list-style: none; margin: 0; padding: 0 0 0 4px; }
+
+.wf-spine__row {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 12px;
+    padding: 0 0 13px 0;
+}
+.wf-spine__row:last-child { padding-bottom: 0; }
+.wf-spine--loose .wf-spine__row { padding-bottom: 13px; }
+.wf-spine__row:not(:last-child)::before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 14px;
+    bottom: 0;
+    width: 1px;
+    background: var(--line-2);
+}
+/* Nothing reaches an orphan, so nothing joins it to what is above it. The rule
+   would be drawing a connection the graph does not have. */
+.wf-spine--loose .wf-spine__row::before { display: none; }
+
+.wf-spine__mark {
+    width: 7px;
+    height: 7px;
+    margin-top: 5px;
+    border-radius: 999px;
+    border: 1px solid var(--ink-3);
+    background: var(--paper);
+}
+/* The trigger is the one thing on this list that is not a step, so it is the
+   one mark that is filled — it gives the column a head, and it is the answer
+   to "when", which is a different question from "what". */
+.wf-spine__row--start .wf-spine__mark { background: var(--ink-3); }
+.wf-spine__row[data-kind="END"] .wf-spine__mark { background: var(--ink-3); border-color: var(--ink-3); }
+.wf-spine__row[data-broken] .wf-spine__mark { border-color: var(--bad); }
+
+.wf-spine__body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wf-spine__title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+/* Mono, matching the step ids in the run history: this is the string
+   `failed_node_id` names, and the two lists have to be readable against each
+   other by eye. */
+.wf-spine__title b { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink); }
+.wf-spine__title i { font-style: normal; font-size: 12.5px; color: var(--ink); }
+.wf-spine__row--start .wf-spine__title b { font-family: inherit; font-size: 13px; }
+.wf-spine__row[data-broken] .wf-spine__title i { color: var(--bad); }
+.wf-spine__title em { font-style: normal; font-size: 11px; color: var(--ink-3); }
+.wf-spine__note {
+    font-size: 11.5px;
+    color: var(--ink-2);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+/* A graph the engine will refuse to start. Said in the same furniture a failed
+   run says its failure in, because it is the same kind of news. */
+.wf-shape__trouble {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    border-radius: var(--r-sm);
+    background: var(--chrome);
+    box-shadow: inset 2px 0 0 var(--warn);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.wf-shape__trouble svg { color: var(--warn); flex: none; margin-top: 1px; }
+
+.wf-shape__ask { margin: 16px 0 0; }
+/* Inline-flex and centred, not baseline. The `.wf-crumb__back` bug was an
+   inline-flex box borrowing its baseline from an icon; here there is no
+   neighbouring text to align to, so the pair is centred on the button's own
+   box and the icon's optical centre meets the word's. Measured: icon centre
+   and label centre both 17.5px from the button's top. */
+.wf-ask { display: inline-flex; align-items: center; gap: 7px; }
+.wf-ask svg { flex: none; }
+
+.wf-aside { margin: 22px 0 0; font-size: 11.5px; color: var(--ink-3); }
+
+/* On a phone the header's controls sit near the left, so a panel anchored to
+   one of them and grown leftwards runs off the edge — no page scroll, which is
+   what an overflow check would report, and the first character of every line
+   cut off, which is what a person would see. Anchor it to the viewport. */
+@media (max-width: 600px) {
+    .wf-inbox__panel {
+        left: 12px;
+        right: 12px;
+        top: 64px;
+        width: auto;
+        max-height: calc(100dvh - 140px);
+    }
+    .wf-row { column-gap: 10px; padding: 13px 4px; }
+    /* The chevron is the first thing to go: it says "this opens" on a row that
+       is already obviously a button, and it costs 16px of a 375px line. */
+    .wf-row > svg:last-child { display: none; }
+    .wf-run__cancel { margin-left: 0; }
+    /* A step id and its sentence on one 375px line leaves about nine
+       characters for the sentence. Stacked, each gets the width. */
+    .wf-spine__title { gap: 2px 8px; }
+    .wf-spine__title i { flex-basis: 100%; }
+    .wf-ask { width: 100%; justify-content: center; }
+}

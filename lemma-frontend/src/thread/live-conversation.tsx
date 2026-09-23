@@ -1,0 +1,511 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAssistantSession } from "lemma-sdk/react";
+import { useQueryClient } from "@tanstack/react-query";
+import { lemma } from "@/session/client";
+import { NEW_CONVERSATION } from "@/data";
+import type { ApprovalDecision } from "./approval";
+import type { Pod } from "@/data";
+import { buildTurns, openInteraction, openSignIn } from "./turns";
+import { InteractionDock } from "./interaction-dock";
+import { ConversationTitle } from "./conversation-title";
+import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
+import { applyTitle } from "./conversation-list";
+import type { ConversationRef } from "@/data";
+import { Transcript } from "./transcript";
+import type { Streaming } from "./turns";
+import { Composer } from "./composer";
+import { sendToConversation } from "./send-message";
+
+/** The conversation, on the SDK's own session.
+ *
+ *  Streaming, reattaching to a run that is already going, stop, retry and the
+ *  queued-follow-up rule all live in `useAssistantSession` — reimplementing
+ *  them here is how the two frontends would start disagreeing about what a
+ *  run is. This file only decides what to render and what a click means. */
+function stateOf(status?: string): "idle" | "running" | "waiting" | "failed" {
+    if (status === "RUNNING" || status === "STOP_REQUESTED") return "running";
+    if (status === "WAITING") return "waiting";
+    if (status === "FAILED") return "failed";
+    return "idle";
+}
+
+export function LiveConversation({
+    pod,
+    conversationId,
+    fill,
+    onFilled,
+    onCreated,
+    onOpenApp,
+    onOpenFile,
+    onOpenTable,
+    onVoice,
+    callError,
+    callRefresh,
+}: {
+    pod: Pod;
+    conversationId: string | null;
+    /** Text a framed widget or app asked the app to put in the composer.
+     *  Arrives as a prop rather than through a ref because opening a new
+     *  conversation remounts this component, and the ask has to survive that
+     *  to reach the composer it was meant for. */
+    fill?: { text: string; id: number } | null;
+    onFilled?: () => void;
+    onCreated?: (id: string) => void;
+    onOpenApp?: (name: string) => void;
+    onOpenFile?: (path: string) => void;
+    onOpenTable?: (name: string) => void;
+    /** Start a call. Owned by the shell, because a call outlives this
+     *  component — it is keyed by conversation, and a call should not end
+     *  because someone opened a new one. */
+    onVoice?: () => void;
+    callError?: string | null;
+    callRefresh?: string;
+}) {
+    const client = useMemo(() => lemma(pod.id), [pod.id]);
+    const queryClient = useQueryClient();
+    const [sending, setSending] = useState(false);
+    const sendingRef = useRef(false);
+    const createdHere = useRef<string | null>(null);
+    const mounted = useRef(true);
+    useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+    const [sendError, setSendError] = useState<string | null>(null);
+
+    /* What the teammate last said out loud, captured as it arrives. Reading
+       it from a derived selector after the fact did not work: the backend
+       marks `is_final_answer` on every assistant message, so "the final
+       answer" is not a thing the flags can identify. The last TEXT to land
+       is. */
+    /* The title the server generated for this conversation, as it arrived.
+       Held here as well as patched into the list because the two can race: a
+       conversation created a moment ago is titled after its first run, which
+       can finish before the list that was invalidated on create has come back
+       — and a patch against a list that does not contain it yet is a patch
+       that lands nowhere. */
+    const [streamedTitle, setStreamedTitle] = useState<{ id: string; title: string } | null>(null);
+    /* Which conversation the stream belongs to, readable from a callback the
+       session owns. A ref rather than the session's own field, which cannot be
+       read from inside the options that construct it. */
+    const streamingIn = useRef<string | null>(null);
+
+    const session = useAssistantSession({
+        client,
+        podId: pod.id,
+        /* The backend titles a conversation once its first run completes, and
+           says so on the conversation's own stream. Before this the name simply
+           appeared the next time something refetched the list — usually when
+           the person navigated away and back, which reads as the app having
+           renamed something behind them. */
+        onTitle: (title, id) => {
+            const target = id ?? streamingIn.current;
+            if (!target) return;
+            setStreamedTitle({ id: target, title });
+            queryClient.setQueryData<ConversationRef[]>(
+                ["conversations", pod.id],
+                previous => applyTitle(previous, target, title),
+            );
+        },
+        // Omit agentName: creation uses the pod default when no named agent is supplied.
+        conversationId: conversationId === NEW_CONVERSATION ? null : conversationId,
+        /* The hook's own bootstrap refreshes the conversation and then loads
+           its messages, and something between those two steps was cancelling
+           the load — the session ended up holding a status and no messages
+           for a conversation the API happily returns 100 for. The load is
+           driven from here instead, where the sequence is visible. */
+        autoLoad: false,
+        autoResume: false,
+    });
+
+    const [loadError, setLoadError] = useState<string | null>(null);
+    /* The cursor onto everything older than what is on screen. `loadMessages`
+       has always returned it and this file has always dropped it, which is why
+       a conversation longer than a page simply stopped at its hundredth
+       message with nothing saying so. Null means the top is the top. */
+    const [olderToken, setOlderToken] = useState<string | null>(null);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    /* The scroll hook calls onReachTop on every scroll event under its
+       threshold, so the guard has to be a ref: a state flag set in the same
+       tick is still false for the next ten of them. */
+    const olderInFlight = useRef(false);
+    const { loadMessages, refreshConversation, resumeIfRunning } = session;
+    const openId = conversationId === NEW_CONVERSATION ? null : conversationId;
+
+    useEffect(() => {
+        if (!openId || (createdHere.current === openId && !callRefresh)) return;
+        let cancelled = false;
+        setLoadError(null);
+        setOlderToken(null);
+        (async () => {
+            try {
+                const record = await refreshConversation(openId);
+                if (cancelled) return;
+                const page = await loadMessages({ conversationId: openId, limit: 100 });
+                if (cancelled) return;
+                setOlderToken(page.next_page_token ?? null);
+                if (page.items.length === 0) {
+                    setLoadError(null);
+                }
+                /* Only after the transcript is on screen: reattaching first
+                   means a live run writes into a view that has no history. */
+                await resumeIfRunning(openId, { knownConversation: record ?? undefined });
+            } catch (problem) {
+                if (!cancelled) {
+                    setLoadError(problem instanceof Error ? problem.message : "Could not read this conversation.");
+                }
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [openId, loadMessages, refreshConversation, resumeIfRunning, callRefresh]);
+
+    /* Older messages are merged into the session's own list by the controller,
+       so there is nothing to stitch here: ask for the next page and the turns
+       rebuild with it. The transcript's anchor keeps the reader's line where
+       it was while the content grows above them. */
+    const loadOlder = useCallback(async () => {
+        if (!openId || !olderToken || olderInFlight.current) return false;
+        olderInFlight.current = true;
+        setLoadingOlder(true);
+        try {
+            const page = await loadMessages({ conversationId: openId, limit: 100, pageToken: olderToken });
+            setOlderToken(page.next_page_token ?? null);
+            return page.items.length > 0;
+        } catch {
+            /* Keep the cursor: the next scroll to the top tries again, which is
+               better than a transcript that silently decides it has reached the
+               beginning because one request failed. */
+            return false;
+        } finally {
+            olderInFlight.current = false;
+            setLoadingOlder(false);
+        }
+    }, [openId, olderToken, loadMessages]);
+
+    useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
+
+    const state = stateOf(session.status);
+    const turns = useMemo(() => buildTurns(session.messages), [session.messages]);
+
+    /* What the run is blocked on, read straight out of the transcript.
+       An approval IS a tool call: `request_approval` streams in like any
+       other, and its id is the approval id. The old code fetched the
+       approvals list instead, gated on the conversation reaching WAITING —
+       which is both a round trip late and sometimes never, because an agent
+       host permission wait never leaves RUNNING. The card is in the messages
+       the moment the call arrives. */
+    const waitingOn = useMemo(() => openInteraction(turns), [turns]);
+    const signingIn = useMemo(() => openSignIn(turns), [turns]);
+
+    /* Held here rather than in the composer because this is what uploads them,
+       clears them on success and leaves them alone on failure — a send that
+       did not go through has to leave the files where they were, or the retry
+       sends a message that references nothing. */
+    const [attachments, setAttachments] = useState<Attachment[]>([]);
+    const attachmentsRef = useRef<Attachment[]>([]);
+    useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+
+    const attach = useCallback((files: File[]) => {
+        setAttachments(was => [...was, ...toAttachments(files)]);
+    }, []);
+    const unattach = useCallback((key: string) => {
+        setAttachments(was => was.filter(one => one.key !== key));
+    }, []);
+
+    /** Put the attached files where the agent will find them, and name them in
+     *  the message.
+     *
+     *  The directory is read off the conversation, never rebuilt: `pod_cwd` is
+     *  what the agent's own tools resolve a relative path against, the slug in
+     *  it is random, and a second implementation of that rule drifting from the
+     *  first is exactly how uploads once landed somewhere the agent never
+     *  looked.
+     *
+     *  This runs after the conversation exists and before the message goes,
+     *  which is forced rather than chosen: there is no `pod_cwd` until there is
+     *  a conversation, and the references it produces change the message. */
+    const putFiles = useCallback(
+        async (conversationId: string, content: string, known?: { pod_cwd?: string }) => {
+            const pending = attachmentsRef.current;
+            if (pending.length === 0) return { content, settled: [] as Attachment[] };
+
+            let directory = known?.pod_cwd;
+            if (!directory) {
+                const fetched = await client.conversations.get(conversationId, { pod_id: pod.id });
+                directory = (fetched as { pod_cwd?: string })?.pod_cwd;
+            }
+            if (!directory) throw new Error("This conversation has no working directory to attach files to.");
+
+            const landed: { name?: string | null; path: string }[] = [];
+            /* What to hand back if the send fails: the same files, marked as
+               already in the pod. A retry then references them instead of
+               uploading a second copy of each. */
+            const settled: Attachment[] = [];
+            for (const one of pending) {
+                /* Already up there from a send that failed after the upload.
+                   Uploading it again would leave two copies of one file, and
+                   the second would win the name. */
+                if (isAlreadyUploaded(one)) {
+                    landed.push({ name: one.file.name, path: one.path });
+                    settled.push(one);
+                    continue;
+                }
+                setAttachments(was => markAttachment(was, one.key, { status: "uploading", error: undefined }));
+                try {
+                    /* One at a time, and `searchEnabled` so the agent can find
+                       it by content rather than only by the name in the
+                       message. No folder is made first — the upload endpoint
+                       creates missing parents on the way. */
+                    const written = await client.files.upload(one.file, {
+                        name: one.file.name,
+                        directoryPath: directory,
+                        searchEnabled: true,
+                    });
+                    setAttachments(was => markAttachment(was, one.key, { status: "uploaded", path: written.path, error: undefined }));
+                    landed.push({ name: written.name ?? one.file.name, path: written.path });
+                    settled.push({ ...one, status: "uploaded", path: written.path, error: undefined });
+                } catch (problem) {
+                    setAttachments(was => markAttachment(was, one.key, {
+                        status: "failed",
+                        error: problem instanceof Error ? problem.message : "Upload failed",
+                    }));
+                    throw problem;
+                }
+            }
+            return { content: withReferences(content, landed), settled };
+        },
+        [client, pod.id],
+    );
+
+    const send = useCallback(
+        async (text: string) => {
+            if (sendingRef.current) return;
+            sendingRef.current = true;
+            setSending(true);
+            setSendError(null);
+            try {
+                await sendToConversation(text, {
+                    conversationId: createdHere.current ?? session.conversationId,
+                    /* Created straight off the client, not through the hook.
+                       The hook builds its create payload from the same
+                       `agentName` the session is scoped by, and this session is
+                       scoped by POD_DEFAULT — which the list route understands
+                       as a selector and the create route does not: it looks the
+                       name up literally, finds no agent called that, and
+                       answers 404.
+
+                       Sending the row name instead would create the
+                       conversation and then lose it. A conversation with the
+                       pod's assistant carries `agent_id` NULL, and the list
+                       filters on `COALESCE(agent_id, pod_id) = pod_id`, so
+                       naming the default agent explicitly would stamp an
+                       agent_id that falls outside the filter it was created
+                       for. Omitting the field is the only payload that means
+                       "the pod's own assistant". */
+                    create: () => client.conversations.create({ pod_id: pod.id }),
+                    isActive: () => mounted.current,
+                    /* Because the conversation is created off the client, the
+                       session does not know it exists. Telling the pod first
+                       and the session second is the race: the shell re-renders
+                       with the new id, the session mirrors that prop, sees an
+                       id it has never held, and cancels the stream the send
+                       opened in between — the first message dies with "signal
+                       is aborted" and the retry, which no longer creates
+                       anything, goes through. Handing the session the id here,
+                       in the same tick as the create, leaves the pod's later
+                       prop with nothing to switch away from. */
+                    adopt: made => session.setConversationId(made.id),
+                    onCreated: made => {
+                        createdHere.current = made.id;
+                        onCreated?.(made.id);
+                        void queryClient.invalidateQueries({ queryKey: ["conversations", pod.id] });
+                    },
+                    send: async (content, id, knownConversation) => {
+                        const { content: said, settled } = await putFiles(id, content, knownConversation as { pod_cwd?: string } | undefined);
+                        /* Cleared here, before the stream, and that placement is
+                           the whole fix. `sendMessage` drains the SSE stream
+                           before it resolves, so clearing after it meant the
+                           chips sat in the composer for the entire run — the
+                           message visibly gone, the agent visibly working, and
+                           the files still looking like they were waiting to be
+                           sent. By this line they are in the pod and named in
+                           the message that is going. */
+                        setAttachments([]);
+                        try {
+                            return await session.sendMessage(said, { conversationId: id, knownConversation });
+                        } catch (problem) {
+                            /* Back, but marked as already uploaded: the files
+                               are in the pod whatever happened to the message,
+                               so a retry references them rather than uploading
+                               a second copy of each. Merged rather than
+                               assigned, because a run can take minutes and
+                               anything attached while it was going is somebody
+                               else's work to lose. */
+                            setAttachments(was => [
+                                ...settled,
+                                ...was.filter(one => !settled.some(back => back.key === one.key)),
+                            ]);
+                            throw problem;
+                        }
+                    },
+                });
+                void queryClient.invalidateQueries({ queryKey: ["conversations", pod.id] });
+            } catch (problem) {
+                if (mounted.current) setSendError(problem instanceof Error ? problem.message : "That did not send.");
+                throw problem;
+            } finally {
+                sendingRef.current = false;
+                if (mounted.current) setSending(false);
+            }
+        },
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles],
+    );
+
+    const resolve = useCallback(
+        async (approvalId: string, decision: ApprovalDecision, response?: Record<string, unknown>) => {
+            if (!session.conversationId) throw new Error("This conversation is not open yet.");
+            const conversation = session.conversationId;
+            /* `approvalId` is the tool call id. The card does not clear itself
+               here: it holds a submitted state until the tool return lands,
+               because an approved tool may take minutes and a card that
+               vanishes on click looks like the click was lost. */
+            const resolution = (await client.conversations.approvals.resolve(
+                conversation,
+                approvalId,
+                { decision, response: response ?? {} },
+                { pod_id: pod.id },
+            )) as { status?: string } | undefined;
+
+            /* "queued" means a worker owns everything after the decision,
+               including running the approved tool — so the tool return
+               provably does not exist yet and reading the transcript would
+               only cost a round trip. Anything else finished inline, and the
+               return is already there for the card to find. */
+            const queued = resolution?.status === "queued";
+            if (!queued) {
+                void loadMessages({ conversationId: conversation, limit: 100 }).catch(() => undefined);
+            }
+            /* Forced: an agent host permission wait never leaves RUNNING, so
+               the ordinary dedup key cannot tell a live subscription from a
+               dead one. Right after an explicit decision, reconnecting is
+               always warranted. */
+            void session
+                .resumeIfRunning(conversation, { expectRun: queued ? "queued" : true, force: true })
+                .catch(() => undefined);
+        },
+        [session, client, pod.id, loadMessages],
+    );
+
+    /* ── the call layer ───────────────────────────────────────────────
+       Voice is a transport onto the same turn, never a second brain: the
+       small model holds the floor and hands real work to the teammate, so
+       permissions, RLS and metering stay exactly where they were. */
+    const streaming: Streaming | null = session.isStreaming
+        ? {
+              text: session.streamingText,
+              thinking: session.streamingThinking,
+              /* Arguments too, not just the name: the `comment` inside them
+                 is what lets the closed row say what the step in flight is
+                 for. Dropped here, the row had nothing current to show and
+                 fell back to a sentence from several steps ago. */
+              tool: session.streamingTool
+                  ? { toolName: session.streamingTool.toolName, args: session.streamingTool.args }
+                  : null,
+          }
+        : null;
+
+    const error = sendError ?? loadError ?? (session.error ? session.error.message : null);
+
+    /* Two sources, and the streamed one wins. The list is the durable answer;
+       the stream is the fresher one, and for the seconds between a title being
+       generated and the list being refetched it is the only one that has it. */
+    const listed = queryClient
+        .getQueryData<ConversationRef[]>(["conversations", pod.id])
+        ?.find(entry => entry.id === session.conversationId);
+    const title =
+        streamedTitle && streamedTitle.id === session.conversationId
+            ? streamedTitle.title
+            : listed?.title ?? null;
+
+    return (
+        <>
+            <ConversationTitle
+                podId={pod.id}
+                conversationId={session.conversationId}
+                title={title}
+                busy={state === "running"}
+            />
+            <Transcript
+                turns={turns}
+                teammate={pod.teammate}
+                streaming={streaming}
+                state={state}
+                error={error}
+                emptyTitle={
+                    conversationId === NEW_CONVERSATION || !session.conversationId
+                        ? "New conversation"
+                        : "This conversation is empty"
+                }
+                emptyBody={
+                    conversationId === NEW_CONVERSATION || !session.conversationId
+                        ? pod.teammate.name + " is ready. Send a message to start."
+                        : "No messages were returned for this conversation."
+                }
+                detail={
+                    session.conversationId
+                        ? session.conversationId.slice(0, 8) +
+                          " · " +
+                          session.messages.length +
+                          " messages · " +
+                          (session.status ?? "no status")
+                        : undefined
+                }
+                podId={pod.id}
+                conversationId={session.conversationId}
+                hasMore={Boolean(olderToken)}
+                loadingEarlier={loadingOlder}
+                onEarlier={loadOlder}
+                onOpenApp={onOpenApp}
+                onOpenFile={onOpenFile}
+                onOpenTable={onOpenTable}
+                onResolve={resolve}
+                onRetry={() => void session.retryFailedRun()}
+                dockedId={waitingOn?.id}
+            />
+            <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
+            <Composer
+                placeholder={"Talk to " + pod.name + "…"}
+                note={
+                    callError
+                        ? callError
+                        : /* Nothing, when the pause is on the shelf directly
+                             above this line. The note existed to point at a
+                             card somewhere up the transcript; with the card
+                             here it would be a caption on the thing it is
+                             sitting under. */
+                          waitingOn
+                          ? undefined
+                          : /* A paused sign-in is answered on another page, so
+                               nothing in this pane is going to change until
+                               somebody goes there. Saying only "waiting on
+                               you" left a blocked run reading as an idle
+                               conversation. */
+                            signingIn
+                            ? "waiting on you to sign in to " + signingIn.host
+                            : state === "waiting"
+                              ? "waiting on you"
+                              : pod.waiting || undefined
+                }
+                busy={sending}
+                canStop={state === "running"}
+                fill={fill}
+                onFilled={onFilled}
+                attachments={attachments}
+                onAttach={attach}
+                onRemoveAttachment={unattach}
+                onSend={send}
+                onStop={() => void session.stop()}
+                onVoice={onVoice}
+            />
+        </>
+    );
+}

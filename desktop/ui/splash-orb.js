@@ -1,4 +1,4 @@
-// AnomalousOrb, ported from lemma-frontend/components/ui/anomalous-orb.tsx.
+// AnomalousOrb, ported from lemma-harness/components/ui/anomalous-orb.tsx.
 // Same shaders, geometry, and gold (0x7a5ce0); three.js vendored locally so
 // the splash never depends on the network.
 //

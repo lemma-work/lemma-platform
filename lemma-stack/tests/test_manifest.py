@@ -16,7 +16,7 @@ def sample(**overrides) -> dict:
         "min_admin_version": "0.1.0",
         "images": {
             "backend": {"ref": "ghcr.io/lemma-work/lemma-backend:v1.4.0", "digest": "sha256:aa"},
-            "frontend": {"ref": "ghcr.io/lemma-work/lemma-frontend:v1.4.0"},
+            "frontend": {"ref": "ghcr.io/lemma-work/lemma-harness:v1.4.0"},
             # Retained in published manifests only for old installer versions.
             "workspace": {"ref": "ghcr.io/lemma-work/lemma-workspace:v1.4.0"},
             "function": {"ref": "ghcr.io/lemma-work/lemma-function:v1.4.0"},
@@ -31,7 +31,7 @@ def test_parse_and_pull_refs():
     manifest = m.parse(sample())
     assert manifest.version == "1.4.0"
     assert manifest.image("backend").pull_ref == "ghcr.io/lemma-work/lemma-backend:v1.4.0@sha256:aa"
-    assert manifest.image("frontend").pull_ref == "ghcr.io/lemma-work/lemma-frontend:v1.4.0"
+    assert manifest.image("frontend").pull_ref == "ghcr.io/lemma-work/lemma-harness:v1.4.0"
     # infra falls back to built-in defaults when missing from the manifest
     assert manifest.infra_image("postgres") == "docker.io/pgvector/pgvector:0.8.0-pg18"
     assert manifest.infra_image("redis") == m.DEFAULT_INFRA_IMAGES["redis"]
@@ -77,7 +77,7 @@ def test_native_host_start_pulls_only_infrastructure():
         manifest.infra_image("supertokens"),
     ]
     assert not any("lemma-backend" in ref for ref in refs)
-    assert not any("lemma-frontend" in ref for ref in refs)
+    assert not any("lemma-harness" in ref for ref in refs)
 
 
 def test_missing_image_rejected():

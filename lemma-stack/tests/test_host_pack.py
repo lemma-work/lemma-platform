@@ -154,3 +154,26 @@ def test_manifest_is_private_and_atomic(paths, tmp_path):
     assert json.loads(destination.read_text()) == {"secret": "value"}
     assert destination.stat().st_mode & 0o777 == 0o600
     assert not list(destination.parent.glob("*.tmp-*"))
+
+
+def test_source_mode_selects_harness_with_both_apps_present(paths, tmp_path):
+    for name in ("lemma-backend", "lemma-harness", "lemma-frontend", "desktop/runtime"):
+        (tmp_path / name).mkdir(parents=True)
+    (tmp_path / "desktop/runtime/frontend-launcher.mjs").write_text("")
+    manifest = build_manifest(
+        tmp_path, paths, store.new_document(), _release(), source_root=tmp_path
+    )
+    frontend = next(service for service in manifest["services"] if service["id"] == "frontend")
+    assert frontend["command"][-1] == str(tmp_path / "lemma-harness")
+
+
+@pytest.mark.parametrize("directory", ["lemma-harness", "lemma-frontend"])
+def test_packaged_directory_layouts_remain_launchable(paths, tmp_path, directory):
+    root = _pack(tmp_path)
+    (root / "frontend/app/server.js").unlink()
+    server = root / "frontend" / directory / "server.js"
+    server.parent.mkdir()
+    server.write_text("test")
+    manifest = build_manifest(root, paths, store.new_document(), _release())
+    frontend = next(service for service in manifest["services"] if service["id"] == "frontend")
+    assert frontend["command"][-1] == str(server)

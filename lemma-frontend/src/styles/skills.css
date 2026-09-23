@@ -1,0 +1,612 @@
+/* Skills, as a hand of cards.
+ *
+ *  Its own file because the hand sits inside a `.pcard` on the profile, and
+ *  `.pcard` already owns the horizontal padding — nothing here carries a side
+ *  margin of its own. (A margin set for a context an element no longer sits in
+ *  was three of this week's four alignment bugs; the rule is that a section
+ *  handed a padded box adds nothing to the sides.)
+ *
+ *  The object is a playing card, made of the tells that say so without a
+ *  single illustration: one stock and one size for the whole hand, a rank in
+ *  the top-left corner and the same rank upside down in the opposite one, a
+ *  seeded band of colour, and a back that is patterned rather than blank.
+ *  Everything else is the app's own language — paper stock, a hairline, and
+ *  `--shadow-object`, which the token file describes as "an object resting on
+ *  the page, rather than a panel floating over it". That is the sentence this
+ *  section needed and it was already written.
+ *
+ *  Contrast, measured rather than assumed. Every face is `--paper`, never
+ *  `--chrome`, and the difference is load-bearing: `--ink-3` on `--chrome` is
+ *  4.51:1 in light and 4.29:1 in dark, which fails AA for small text and has
+ *  failed a pass here before. On `--paper` the same ink is 5.35:1 and 4.77:1,
+ *  and both pass. `--ink-2` on paper is 7.36:1 / 7.05:1; `--warn` on paper is
+ *  5.59:1 / 8.48:1.
+ */
+
+/* One size for the hand. Named because the track's scroll step is measured
+   off a card rather than told, and because the two faces are absolutely
+   positioned and therefore need the card to have a height of its own. */
+.skill-hand {
+    --card-w: 176px;
+    --card-h: 212px;
+    --card-gap: 12px;
+}
+
+.skill-track {
+    list-style: none;
+    display: flex;
+    gap: var(--card-gap);
+    margin: 0;
+    padding: 6px 2px 14px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* The one line that guarantees the page never scrolls sideways at 375px:
+       a flex container will otherwise take its automatic minimum size from
+       its content, and five 212px cards in a 339px column is a 1.1k-pixel
+       box. */
+    min-width: 0;
+    scroll-snap-type: x proximity;
+    overscroll-behavior-x: contain;
+    scroll-behavior: smooth;
+}
+.skill-card {
+    /* The shadow belongs to the card, not to its faces. It was on `__face`,
+       and there are two of those — the rear rotated 180deg, so its shadow was
+       the front's mirrored and offset the other way. Two shadows from one
+       object, which is exactly what "a random shadow" looks like. */
+    box-shadow: var(--shadow-soft);
+    border-radius: var(--r-lg);
+    transition: transform 160ms var(--swing), box-shadow 160ms ease;
+    flex: 0 0 var(--card-w);
+    height: var(--card-h);
+    scroll-snap-align: start;
+    perspective: 900px;
+    /* A card is an object you throw, not a paragraph you select. Without this
+       a mouse drag along the track paints a selection across every card it
+       passes. */
+    user-select: none;
+}
+
+.skill-card__inner {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transform: rotateY(var(--turn, 0deg));
+    transform-style: preserve-3d;
+    transition: transform 0.6s var(--swing);
+}
+.skill-card[data-back] .skill-card__inner { --turn: 180deg; }
+
+.skill-card__face {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    backface-visibility: hidden;
+    transition: transform 160ms var(--swing), box-shadow 160ms ease;
+}
+.skill-card__face--rear {
+    transform: rotateY(180deg);
+    padding: 14px 15px 13px;
+    /* Solid, in the seeded hue, with the ink `markTint` pairs to it — the two
+       are generated together against `--mark-bg` and `--mark-fg`, so the
+       contrast holds for every hue and in both themes without a second place
+       deciding it. */
+    background: var(--face);
+    border-color: transparent;
+    /* Content to the bottom: a back with two buttons on it is a back, and
+       floating them in the middle of a colour field made it look unfinished. */
+    justify-content: flex-end;
+    gap: 9px;
+}
+.skill-card__face--rear .skill-card__rearname { margin: 0; }
+.skill-card__face--rear .skill-card__rearname { color: var(--band); }
+/* The pair the tint generates, used the way it is meant to be: the hue's ink
+   as the fill and its pale as the label. `--band` was being set as the *text*
+   colour over `.skill-card__read`'s own `background: var(--ink)`, which put
+   a dark hue on a dark fill — a black pill with a label nobody could read. */
+.skill-card__face--rear .skill-card__read {
+    color: var(--face);
+    background: var(--band);
+    border-color: var(--band);
+}
+.skill-card__face--rear .skill-card__turn {
+    color: var(--band);
+    background: none;
+    border-color: color-mix(in srgb, var(--band) 34%, transparent);
+}
+/* The lift belongs to the face rather than the card, because the card is what
+   carries the perspective — transforming it would move the vanishing point
+   and the flip would swing around the wrong axis. */
+.skill-card:hover,
+.skill-card:focus-within {
+    transform: translateY(-4px);
+    box-shadow: var(--depth-raise);
+}
+
+/* The front is the whole face, so the hit area is the card. */
+.skill-card__line {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--ink-2);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.skill-card__front {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    padding: 15px 15px 12px;
+    /* Nothing escapes the card. The face clips, but the button inside it did
+       not, so an overlong line spilled past the corner radius before the face
+       could cut it. */
+    overflow: hidden;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+/* The seeded band. Four pixels of the same hue `markTint` gives every other
+   mark in the app, from the skill's own folder name — so a skill is the same
+   colour every time anybody opens this, and a set of them reads as a set. Not
+   a full field: the badge beside this page is the one figure printed at full
+   strength, and five more would be five things shouting at it. */
+.skill-card__band {
+    position: absolute;
+    inset: 0 0 auto;
+    /* A hairline, not a header. At 4px it was a coloured bar the eye read as
+       a band of chrome across the top of the card; at 2px it is the edge of a
+       printed card, which is what it is for. */
+    height: 2px;
+    background: var(--band, var(--ink-3));
+}
+
+/* The rank. Printed twice, once each way up, because that is the one thing
+   every playing card does and nothing else in this app does.
+   It is the skill's only honest number — words of instruction under the
+   frontmatter — and it comes off the file the deck already fetched, so it
+   costs no request. A skill whose SKILL.md could not be read prints an em
+   dash: it has no rank, which is exactly true of it. */
+/* The length, and the way through to the back, sharing the last line.
+   Neither belongs anywhere louder. A count set as a pip in two corners, one
+   rotated, is a playing card's rank — the fact that decides the hand — and a
+   word count decides nothing, least of all above the skill's name. And a flip
+   with no tell at all leaves half of every card a back nobody knows is
+   there. */
+.skill-card__foot {
+    margin-top: auto;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: var(--t-micro);
+    letter-spacing: var(--track-micro);
+    color: var(--ink-3);
+}
+.skill-card__foot em { font-style: normal; font-family: var(--mono); }
+.skill-card__turnhint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-style: normal;
+    color: var(--ink-3);
+    /* Quiet until the card is under the pointer or holds focus, and never
+       gone: a tell that only exists on hover does not exist on a phone. */
+    opacity: 0.5;
+    transition: opacity 0.15s ease, color 0.15s ease;
+}
+.skill-card__turnhint svg { align-self: center; }
+.skill-card:hover .skill-card__turnhint,
+.skill-card:focus-within .skill-card__turnhint { opacity: 1; color: var(--ink-2); }
+
+.skill-card__name {
+    /* Leads the card under the eyebrow, and at a size that says so: the name
+       is the only thing identifying a skill, and it was set two points above
+       its own description while a word count had the corner. */
+    margin-top: 14px;
+    font-size: 17px;
+    font-weight: 500;
+    letter-spacing: -0.012em;
+    line-height: 1.25;
+    color: var(--ink);
+    /* A skill name is a slug — `weekly-review`, `lemma-skill-creator` — and a
+       long one has nowhere to break. Breaking anywhere beats overflowing the
+       card, and both beat a name cut with no sign that it was. */
+    overflow-wrap: anywhere;
+}
+
+.skill-card__desc {
+    margin-top: 8px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--ink-2);
+    /* Clamped rather than cut with an ellipsis in script, so the whole
+       sentence is still there for a screen reader and for the file behind the
+       card. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 6;
+    line-clamp: 6;
+    overflow: hidden;
+}
+.skill-card__desc--none { color: var(--ink-3); font-style: italic; }
+
+/* A card the teammate cannot load. It keeps the paper — dimming it is what
+   pushed a chip under AA elsewhere in this app — and says so instead, with a
+   torn edge for the ones who will not read the sentence. */
+.skill-card[data-broken] .skill-card__face {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--warn) 42%, var(--line-2));
+}
+.skill-card[data-broken] .skill-card__name { color: var(--ink-2); }
+/* A flagged card cannot carry a second rank as well, and the flag is the more
+   useful thing to have in that corner. */
+.skill-card[data-broken] .skill-card__rank--flip { display: none; }
+
+.skill-flag {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    /* Not `auto`: on a card this size a three-line failure pushed the footer
+       out through the bottom edge, so the word count and the way to the back
+       were cut off on exactly the cards that most needed explaining. It sits
+       under the name and clamps; the whole sentence is on the back. */
+    margin-top: 10px;
+    min-height: 0;
+    padding-top: 0;
+    font-size: 11.5px;
+    line-height: 1.45;
+    /* 5.59:1 light, 8.48:1 dark on `--paper`. */
+    color: var(--warn);
+}
+.skill-card__front .skill-flag span,
+.skill-card__front .skill-flag {
+    overflow: hidden;
+}
+.skill-card__front .skill-flag {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+}
+.skill-card__front .skill-flag svg { display: none; }
+.skill-flag svg { flex: none; margin-top: 1px; }
+/* The same sentence above the file itself, where there is a full measure to
+   set it on rather than a card's column. */
+.skill-flag--wide { margin: 0 0 12px; padding-top: 0; font-size: 12.5px; }
+
+/* ── the back ───────────────────────────────────────────────────────── */
+
+/* A card back is patterned. Four of them, chosen by the same seed as the
+   band, so turning a card over is recognisably turning over *that* card. */
+.skill-card__weave {
+    position: absolute;
+    inset: 0;
+    opacity: 0.09;
+    background-image: repeating-linear-gradient(
+        var(--weave-angle, 45deg),
+        var(--band) 0 2px,
+        transparent 2px 9px
+    );
+}
+.skill-card__weave[data-weave="1"] { --weave-angle: -45deg; }
+.skill-card__weave[data-weave="2"] { --weave-angle: 90deg; }
+.skill-card__weave[data-weave="3"] { --weave-angle: 0deg; }
+
+.skill-card__rearname {
+    position: relative;
+    margin: 10px 0 0;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: -0.008em;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+.skill-card__where {
+    position: relative;
+    font-family: var(--mono);
+    font-size: var(--t-micro);
+    line-height: 1.5;
+    color: var(--ink-3);
+    overflow-wrap: anywhere;
+}
+.skill-card__facts {
+    position: relative;
+    font-size: 11.5px;
+    color: var(--ink-2);
+}
+.skill-card__acts {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: auto;
+}
+.skill-card__read,
+.skill-card__turn {
+    /* Centred on the cross axis, never on a baseline: an inline-flex control
+       with anything but text in it takes its baseline from that thing, which
+       is the fourth of this week's alignment bugs and the one that is
+       invisible until it is measured. */
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.3;
+    border-radius: 999px;
+    cursor: pointer;
+}
+.skill-card__read {
+    color: var(--field-ink);
+    background: var(--ink);
+    border: 1px solid var(--ink);
+}
+.skill-card__turn {
+    color: var(--ink-2);
+    background: none;
+    border: 1px solid var(--line-2);
+}
+.skill-card__turn:hover { color: var(--ink); border-color: var(--ink-3); }
+
+/* ── moving through the hand ────────────────────────────────────────── */
+
+.skill-oars {
+    display: flex;
+    /* Centre, explicitly. The default is `stretch`, so the count's box grew to
+       the 30px height of the buttons beside it and its text sat at the top of
+       that box — seven pixels above the middle of the circles it is meant to
+       be reading with. A text span between two fixed-size controls is exactly
+       where that default bites. */
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.skill-oars__count {
+    font-family: var(--mono);
+    font-size: var(--t-micro);
+    letter-spacing: var(--track-micro);
+    color: var(--ink-3);
+    padding: 0 4px;
+}
+.skill-oar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: var(--ink-2);
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    cursor: pointer;
+}
+.skill-oar:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-3); }
+.skill-oar:disabled { opacity: 0.35; cursor: default; }
+
+.skill-tally {
+    margin: 10px 0 0;
+    font-size: 12px;
+    color: var(--ink-2);
+}
+
+/* ── one skill, opened ──────────────────────────────────────────────── */
+
+.skill-read__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.skill-read__back {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0;
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--ink-2);
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+.skill-read__back:hover { color: var(--ink); }
+.skill-read__path {
+    font-family: var(--mono);
+    font-size: var(--t-micro);
+    color: var(--ink-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* ── the toolsets, which are not skills ─────────────────────────────── */
+
+/* Their own section, not part of Skills. They are what the teammate is
+   allowed to reach for, and they belong on the page — but as a strip you take
+   in at a glance, not as a paragraph in pill form.
+   One icon and one or two words: the icon does the work and the word
+   disambiguates it. The words are `toolsetWord()` in `stage/colleagues.ts`,
+   the same ones the agent rows print, so shortening them shortens both. */
+.toolline {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+}
+.toolchip {
+    /* `align-items: center`, never a baseline — see `.skill-card__read`. */
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    line-height: 1.3;
+    white-space: nowrap;
+    /* 6.20:1 light, 6.34:1 dark on `--chrome`. (`--ink-3` on the same fill is
+       4.51 / 4.29 and would not pass, which is why this is not that.) */
+    color: var(--ink-2);
+    background: var(--chrome);
+}
+/* The ones every teammate has. `USER_INTERACTION`, `TODO` and `SNOOZE` are in
+   the fixed set the platform gives every pod's own responder and describe how
+   any agent behaves in a conversation rather than what this one can reach —
+   so they are still said, and said last, and said quietly. Hollow rather than
+   faded: dimming the ink is what pushed a chip under AA elsewhere here. */
+.toolchip[data-plain] {
+    color: var(--ink-3);
+    background: none;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+/* The glyph is quieter than its word on purpose — it is a way in, not the
+   information. `--ink-3` on `--chrome` is 4.51:1 light and 4.29:1 dark: short
+   of the 4.5 a small *word* needs, which is why the label is not this colour,
+   and comfortably past the 3:1 a non-text graphic does. */
+.toolchip svg { flex: none; color: var(--ink-3); }
+
+@media (max-width: 560px) {
+    .skill-hand { --card-w: 196px; --card-h: 262px; }
+}
+
+/* Asked for less movement, given less of it — including from the parts that
+   are script rather than stylesheet: `stillnessWanted()` in the view switches
+   the track's own scrolling from smooth to instant, because a media query
+   cannot reach a `scrollBy` call. The hand still works. It just arrives. */
+@media (prefers-reduced-motion: reduce) {
+    .skill-track { scroll-behavior: auto; }
+    .skill-card__inner { transition: none; }
+    .skill-card__face { transition: none; }
+    .skill-card:hover .skill-card__face,
+    .skill-card:focus-within .skill-card__face { transform: none; }
+    .skill-card:hover .skill-card__face--rear,
+    .skill-card:focus-within .skill-card__face--rear { transform: rotateY(180deg); }
+}
+
+/* ── the card, as a card ────────────────────────────────────────────
+   An eyebrow saying what kind of object this is, a mark that says which one,
+   the name at the size a name deserves, then labelled rows. The inner rule is
+   the frame a printed card has: it is what stops the content floating in a
+   rounded rectangle, and it costs one line. Everything takes its colour from
+   the tokens — `--band` is the seeded hue and the rest is ink on paper. */
+.skill-card__eyebrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.skill-card__eyebrow i {
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: var(--t-micro);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+.skill-card__mark { display: inline-flex; color: var(--band); opacity: 0.85; }
+
+/* The frame. Inset from the card's own edge, the way a printed one is. */
+.skill-card__rows {
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    overflow: hidden;
+}
+.skill-card__row { display: flex; flex-direction: column; gap: 3px; min-height: 0; }
+.skill-card__row i {
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: var(--t-micro);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    /* `--ink-3` on `--chrome` measures 4.28:1 and fails AA at this size; on
+       paper the same ink is 5.35:1. The card is paper. */
+    color: var(--ink-3);
+}
+.skill-card__row > span {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--ink-2);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+}
+/* One row gets the space two would have shared. */
+.skill-card__rows:has(.skill-card__row:only-child) .skill-card__row > span {
+    -webkit-line-clamp: 7;
+    line-clamp: 7;
+}
+
+/* ── the card that is not a skill ───────────────────────────────────
+   First in the track, and a card rather than a button beside the heading: it
+   is the same object as the things beside it, it scrolls with them, and on a
+   narrow pane it cannot end up stranded off the side. Dashed, because the
+   deck should read as "five skills and somewhere to put a sixth" rather than
+   as six skills one of which is odd. */
+.skill-card--new { box-shadow: none; }
+.skill-new {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 5px;
+    width: 100%;
+    height: 100%;
+    padding: 15px;
+    text-align: left;
+    font: inherit;
+    color: var(--ink-2);
+    background: none;
+    border: 1px dashed var(--line-2);
+    border-radius: var(--r-lg);
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.skill-new:hover, .skill-new:focus-visible {
+    border-color: var(--accent);
+    color: var(--ink);
+    background: var(--accent-soft);
+}
+.skill-new__plus {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    margin-bottom: 4px;
+    font-size: 17px;
+    line-height: 1;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    opacity: 0.7;
+}
+.skill-new__name { font-size: 15px; font-weight: 500; }
+/* `--ink-3` on `--chrome` is 4.28:1 and fails AA at this size; on paper the
+   same ink is 5.35:1, and the hover tint is lighter still. */
+.skill-new__note { font-size: 11.5px; line-height: 1.4; color: var(--ink-3); }

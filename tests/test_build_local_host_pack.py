@@ -191,14 +191,14 @@ def test_the_browser_bundles_land_where_the_backend_serves_them(
 
 @pytest.mark.parametrize(
     "layout",
-    ["server.js", "app/server.js", "lemma-frontend/server.js"],
+    ["server.js", "app/server.js", "lemma-harness/server.js", "lemma-frontend/server.js"],
 )
 def test_the_server_is_found_wherever_next_decides_to_put_it(
     tmp_path: Path, layout: str
 ) -> None:
     """Next nests its standalone server under a name it chooses itself.
 
-    Which name has changed with Next versions, so both sides probe three
+    Which name has changed with Next versions, so both sides probe the same
     candidates in the same order -- and this is the one part of the contract
     with real behaviour behind it rather than a string, so it gets a real test.
     """
@@ -230,7 +230,7 @@ def test_the_server_candidates_are_tried_in_the_order_both_sides_agree_on(
     the previous layout behind -- the two sides must pick the same file. Picking
     differently means the pack ships one server and the app starts the other.
     """
-    for layout in ("lemma-frontend/server.js", "app/server.js", "server.js"):
+    for layout in ("lemma-harness/server.js", "lemma-frontend/server.js", "app/server.js", "server.js"):
         path = tmp_path / layout
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("// next standalone entrypoint\n")
@@ -251,7 +251,7 @@ def test_a_pack_with_no_server_names_what_it_looked_for(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as raised:
         standalone_server(tmp_path)
     message = str(raised.value)
-    for candidate in ("server.js", "app/server.js", "lemma-frontend/server.js"):
+    for candidate in ("server.js", "app/server.js", "lemma-harness/server.js", "lemma-frontend/server.js"):
         assert candidate in message
 
 

@@ -167,6 +167,7 @@ SOURCES: tuple[Source, ...] = (
         REPO_ROOT / "lemma-pod-bundle/pyproject.toml",
         re.compile(r'(?m)^version = "([^"]+)"'),
     ),
+    Source("lemma-harness package", REPO_ROOT / "lemma-harness/package.json"),
     Source("lemma-frontend package", REPO_ROOT / "lemma-frontend/package.json"),
 )
 

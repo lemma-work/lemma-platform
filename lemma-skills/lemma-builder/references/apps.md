@@ -279,7 +279,7 @@ adopt any one design system.
 
 - **Pick one tone and execute it everywhere.** A support queue and a legal review
   app shouldn't look the same. `--style` presets (soft/neobrutal/editorial/terminal)
-  are starting points. `lemma-frontend/design.md` and the per-app accent helper
+  are starting points. `lemma-harness/design.md` and the per-app accent helper
   (`lib/app/app-accent.ts`) are an *optional* token set to start from, not a mandate.
 - **Tokens before components.** One root variable set: surfaces (≈3 depths),
   borders (subtle/strong), text (primary/secondary/muted), one accent + hover, one

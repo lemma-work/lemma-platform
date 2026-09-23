@@ -44,7 +44,7 @@ POD_DEFAULT_AGENT_SELECTOR_ALIASES = frozenset(
 )
 
 # What the pod's own agent is called wherever a person can read it. See
-# `lemma-frontend/lib/utils/agents.ts` — these two must agree, because someone
+# `lemma-harness/lib/utils/agents.ts` — these two must agree, because someone
 # reading a name in Slack and someone reading it in the app are reading about
 # the same actor.
 DEFAULT_RESPONDER_NAME = "Lem"

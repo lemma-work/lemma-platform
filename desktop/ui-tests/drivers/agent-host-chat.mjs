@@ -22,10 +22,10 @@ await mkdir(config.artifactDirectory, { recursive: true });
 const log = createWriteStream(path.join(config.artifactDirectory, 'frontend.log'));
 const network = createWriteStream(path.join(config.artifactDirectory, 'requests.jsonl'));
 const server = spawn(process.execPath, [
-  path.join(root, 'lemma-frontend/node_modules/next/dist/bin/next'),
+  path.join(root, 'lemma-harness/node_modules/next/dist/bin/next'),
   'dev', '--hostname', '127.0.0.1', '--port', String(port),
 ], {
-  cwd: path.join(root, 'lemma-frontend'),
+  cwd: path.join(root, 'lemma-harness'),
   env: {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: '1',

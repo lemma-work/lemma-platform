@@ -18,8 +18,9 @@ make init        # create .env files with local defaults (idempotent)
 make dev         # infra + backend + frontend
 ```
 
-`make help` lists everything else. The dev stack uses ports 3710 (frontend) and
-8710 (backend).
+`make help` lists everything else. The dev stack uses ports 3710 (harness) and
+8710 (backend). Run `make dev-frontend` alongside it for the user-facing workspace
+on port 3000. `make init` installs and configures both apps.
 
 ### Toolchain versions
 
@@ -56,7 +57,8 @@ Each component has its own setup and its own checks. Run the ones you touched.
 | You changed… | Read | Run before opening a PR |
 |---|---|---|
 | `lemma-backend/` | [backend README](lemma-backend/README.md), [development guidelines](lemma-backend/docs/development.md), [module guide](lemma-backend/docs/modules/README.md) | see below |
-| `lemma-frontend/` | [frontend README](lemma-frontend/README.md), [frontend contributing](lemma-frontend/CONTRIBUTING.md) | `npm run check && npm test` |
+| `lemma-frontend/` | [frontend README](lemma-frontend/README.md) | `npm run check && npm test && npm run build` |
+| `lemma-harness/` | [frontend README](lemma-harness/README.md), [frontend contributing](lemma-harness/CONTRIBUTING.md) | `npm run check && npm test` |
 | `lemma-cli/` | [CLI README](lemma-cli/README.md), [conventions](lemma-cli/CONVENTIONS.md) | `make test && make lint` |
 | `lemma-typescript/` | [SDK README](lemma-typescript/README.md) | `npm run build && npm test` |
 | `lemma-python/` | [SDK README](lemma-python/README.md) | `uv run pytest` |

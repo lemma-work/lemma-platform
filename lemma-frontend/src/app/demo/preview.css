@@ -1,0 +1,23 @@
+/* The actual product styles live in the root layout. Only presentation inside
+   the landing-page frame is adjusted here. */
+.modal { backdrop-filter: blur(5px); background: rgb(32 33 31 / .25) }
+.modal__panel { max-height: calc(100vh - 48px) }
+.shell { border: 0; border-radius: 0; height: 100%; }
+.sample-note { display: none }
+.preview-document { height: 100%; display: flex; flex-direction: column; }
+.preview-document__note { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--paper); font-size: 12px; color: var(--ink-2); }
+.preview-document__note a { white-space: nowrap; color: var(--accent); }
+.preview-document__workspace { flex: 1; min-height: 0; position: relative; }
+.launch-preview { height: 100%; display: flex; flex-direction: column; background: var(--paper); }
+.launch-preview__head { padding: 22px 28px 0; border-bottom: 1px solid var(--line-2); }
+.launch-preview__head > span { font: 11px var(--mono); color: var(--ink-3); letter-spacing: .08em; }
+.launch-preview__tabs { display: flex; gap: 24px; overflow-x: auto; }
+.launch-preview__tabs button { background: none; border: 0; padding: 12px 0; white-space: nowrap; color: var(--ink-2); cursor: pointer; border-bottom: 2px solid transparent; font-size: 13px; }
+.launch-preview__tabs button[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); }
+.launch-preview__body { flex: 1; overflow: auto; min-height: 0; padding: 24px 28px; }
+.launch-preview__body > .library-view { padding: 0; }
+.launch-preview__back { border: 0; background: none; padding: 0 0 18px; cursor: pointer; color: var(--accent); }
+@media (max-width: 560px) {
+    .launch-preview__head { padding: 18px 16px 0 }
+    .launch-preview__body { padding: 20px 16px }
+}

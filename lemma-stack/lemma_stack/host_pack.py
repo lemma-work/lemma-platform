@@ -94,6 +94,7 @@ def _packaged_bindings(root: Path) -> _Bindings:
         (
             "frontend/server.js",
             "frontend/app/server.js",
+            "frontend/lemma-harness/server.js",
             "frontend/lemma-frontend/server.js",
         ),
     )
@@ -120,7 +121,7 @@ def _source_bindings(root: Path) -> _Bindings:
     by exactly one piece of code.
     """
     backend_dir = _required_dir(root, "the backend project", "lemma-backend")
-    frontend_dir = _required_dir(root, "the frontend project", "lemma-frontend")
+    frontend_dir = _required_dir(root, "the frontend project", "lemma-harness")
     launcher = _required_file(
         root,
         "frontend launcher",

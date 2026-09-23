@@ -147,11 +147,11 @@ services:
     envVars: *backend_env
 
   - type: web
-    name: lemma-frontend
+    name: lemma-harness
     runtime: image
     plan: starter
     image:
-      url: ghcr.io/lemma-work/lemma-frontend:v0.8.0
+      url: ghcr.io/lemma-work/lemma-harness:v0.8.0
     envVars:
       - key: NEXT_PUBLIC_API_URL
         sync: false
