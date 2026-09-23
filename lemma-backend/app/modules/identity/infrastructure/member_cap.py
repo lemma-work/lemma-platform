@@ -27,6 +27,23 @@ from app.modules.identity.infrastructure.models.organization_models import (
 )
 
 
+async def lock_organization_seats(
+    uow: SqlAlchemyUnitOfWork, organization_id: UUID
+) -> None:
+    """Hold the organization's headcount until the transaction ends.
+
+    Taken before anything about who is in the organization changes -- an
+    invitation accepted, a member added -- so every change to the count and
+    every read of it happen one at a time. Re-taking it in the same
+    transaction is free.
+    """
+    await uow.session.execute(
+        select(Organization.id)
+        .where(Organization.id == organization_id)
+        .with_for_update()
+    )
+
+
 async def refuse_if_organization_full(
     uow: SqlAlchemyUnitOfWork, organization_id: UUID
 ) -> None:
@@ -34,9 +51,10 @@ async def refuse_if_organization_full(
 
     One more person is one more member or one more invitation. Accepting an
     invitation takes up the seat it already holds, which is why
-    `OrganizationService.accept_invitation` saves the invitation as accepted
-    *before* adding the member: in the other order the count sees the person
-    twice, and an organization at its cap refuses an invitation it sent.
+    `OrganizationService.accept_invitation` locks the seats, then saves the
+    invitation as accepted *before* adding the member: in the other order the
+    count sees the person twice, and an organization at its cap refuses an
+    invitation it sent.
 
     The organization row is locked for the rest of the transaction, so two
     invitations sent at once cannot both take the last seat.
@@ -49,11 +67,7 @@ async def refuse_if_organization_full(
         return
 
     session = uow.session
-    await session.execute(
-        select(Organization.id)
-        .where(Organization.id == organization_id)
-        .with_for_update()
-    )
+    await lock_organization_seats(uow, organization_id)
     members = (
         select(func.count())
         .select_from(OrganizationMember)

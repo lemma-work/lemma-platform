@@ -22,6 +22,7 @@ class SetPlan:
     """Answers with whatever the test last set. ``None`` is unlimited."""
 
     pods: PodAllowance | None = None
+    organizations: int | None = None
     members: int | None = None
     size: SandboxSize | None = None
 
@@ -29,6 +30,9 @@ class SetPlan:
         self, *, user_id: UUID, organization_id: UUID
     ) -> PodAllowance | None:
         return self.pods
+
+    async def organization_limit(self, *, user_id: UUID) -> int | None:
+        return self.organizations
 
     async def member_limit(self, *, organization_id: UUID) -> int | None:
         return self.members

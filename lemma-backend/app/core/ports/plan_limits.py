@@ -1,7 +1,9 @@
-"""What a deployment's plans allow: how many pods, how many members, how big.
+"""What a deployment's plans allow: how many organizations, pods and members,
+and how big a workspace.
 
-Three modules enforce these -- `pod` when a pod is made, `identity` when someone
-joins or is invited, `workspace` when a sandbox is built -- and none of them
+Three modules enforce these -- `pod` when a pod is made, `identity` when an
+organization is made or someone joins or is invited, `workspace` when a sandbox
+is built -- and none of them
 knows what a plan is. The open-source build has no plans, so it declares no
 provider and nothing is limited. A deployment that sells plans (lemma.work)
 declares one through `LemmaModule.plan_limits`, and answers each question from
@@ -64,6 +66,10 @@ class PlanLimits(Protocol):
         self, *, user_id: UUID, organization_id: UUID
     ) -> PodAllowance | None:
         """For ``user_id`` making a pod in ``organization_id``."""
+        ...
+
+    async def organization_limit(self, *, user_id: UUID) -> int | None:
+        """The most organizations ``user_id`` may own, counting every one."""
         ...
 
     async def member_limit(self, *, organization_id: UUID) -> int | None:

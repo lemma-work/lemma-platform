@@ -92,3 +92,16 @@ class OrganizationMemberLimitError(DomainError):
             status_code=403,
             details={"limit": limit, "used": used},
         )
+
+
+class OrganizationLimitError(DomainError):
+    """The person already owns as many organizations as their plan allows."""
+
+    def __init__(self, *, limit: int, used: int):
+        super().__init__(
+            f"Your plan allows {limit} organizations, and you own {used}. "
+            "Upgrade to make more.",
+            code="ORGANIZATION_LIMIT_REACHED",
+            status_code=403,
+            details={"limit": limit, "used": used},
+        )

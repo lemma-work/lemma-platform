@@ -38,7 +38,13 @@ from app.modules.identity.infrastructure.models import (
     OrganizationMember,
     User,
 )
-from app.modules.identity.infrastructure.member_cap import refuse_if_organization_full
+from app.modules.identity.infrastructure.member_cap import (
+    lock_organization_seats,
+    refuse_if_organization_full,
+)
+from app.modules.identity.infrastructure.organization_cap import (
+    refuse_if_at_organization_limit,
+)
 
 
 class OrganizationRepository(OrganizationRepositoryPort):
@@ -284,6 +290,12 @@ class OrganizationRepository(OrganizationRepositoryPort):
             members = members[:limit]
 
         return [m.to_entity() for m in members], next_cursor
+
+    async def lock_seats(self, organization_id: UUID) -> None:
+        await lock_organization_seats(self.uow, organization_id)
+
+    async def refuse_if_at_organization_limit(self, user_id: UUID) -> None:
+        await refuse_if_at_organization_limit(self.uow, user_id)
 
     async def count_members(self, organization_id: UUID) -> int:
         result = await self.session.execute(

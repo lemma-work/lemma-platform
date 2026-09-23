@@ -7,6 +7,7 @@ joined, and an invitation already sent can still be accepted.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID, uuid4
 
 import pytest
@@ -217,3 +218,75 @@ async def test_joining_with_no_room_for_a_pod_still_joins(
     assert workspace.organization_id is not None
     assert workspace.pod_id is None
     assert workspace.pod_created is False
+
+
+async def test_a_person_owns_as_many_organizations_as_their_plan_allows(
+    async_client: AsyncClient, plan: SetPlan
+):
+    founder = await sign_up(async_client, "org-cap-founder")
+    plan.organizations = 2
+    for _ in range(2):
+        await _organization(async_client, founder)
+
+    refused = await async_client.post(
+        "/organizations",
+        json={"name": f"Third {uuid4().hex[:8]}"},
+        headers=auth_headers(founder),
+    )
+
+    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
+    assert refused.json()["code"] == "ORGANIZATION_LIMIT_REACHED"
+    assert refused.json()["details"] == {"limit": 2, "used": 2}
+
+
+async def test_two_organizations_made_at_once_cannot_both_be_the_last(
+    async_client: AsyncClient, plan: SetPlan
+):
+    founder = await sign_up(async_client, "org-cap-founder")
+    plan.organizations = 1
+
+    answers = await asyncio.gather(
+        *(
+            async_client.post(
+                "/organizations",
+                json={"name": f"Race {uuid4().hex[:8]}"},
+                headers=auth_headers(founder),
+            )
+            for _ in range(2)
+        )
+    )
+
+    assert sorted(answer.status_code for answer in answers) == [201, 403], [
+        answer.text for answer in answers
+    ]
+
+
+async def test_accepting_the_last_seat_and_inviting_at_once_cannot_both_win(
+    async_client: AsyncClient, plan: SetPlan
+):
+    """Whichever takes the organization's seat lock first, the other is counted
+    after it. This guards the outcome; it does not single out the lock taken
+    before the invitation is saved, which the lock at `add_member` already
+    makes redundant for this race -- it is there so the headcount only ever
+    changes under the lock."""
+    owner = await sign_up(async_client, "member-cap-owner")
+    organization_id = await _organization(async_client, owner)
+    invitee = await sign_up(async_client, "member-cap-invitee")
+    plan.members = 2
+    sent = await async_client.post(
+        f"/organizations/{organization_id}/invitations",
+        json={"email": invitee["email"], "role": "ORG_MEMBER"},
+        headers=auth_headers(owner),
+    )
+    assert sent.status_code == status.HTTP_201_CREATED, sent.text
+
+    accepted, invited = await asyncio.gather(
+        async_client.post(
+            f"/organizations/invitations/{sent.json()['id']}/accept",
+            headers=auth_headers(invitee),
+        ),
+        _invite(async_client, owner, organization_id),
+    )
+
+    assert accepted.status_code == status.HTTP_200_OK, accepted.text
+    assert invited.status_code == status.HTTP_403_FORBIDDEN, invited.text

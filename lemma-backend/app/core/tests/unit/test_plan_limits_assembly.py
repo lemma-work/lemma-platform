@@ -17,11 +17,15 @@ from app.core.registry.contract import LemmaModule
 @dataclass
 class SetPlan:
     members: int | None = None
+    organizations: int | None = None
 
     async def pod_allowance(
         self, *, user_id: UUID, organization_id: UUID
     ) -> PodAllowance | None:
         return None
+
+    async def organization_limit(self, *, user_id: UUID) -> int | None:
+        return self.organizations
 
     async def member_limit(self, *, organization_id: UUID) -> int | None:
         return self.members
