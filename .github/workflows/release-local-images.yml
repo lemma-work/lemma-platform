@@ -1076,12 +1076,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p desktop/runtime/download
-          gh release download "${TAG}" \
-            --pattern lemma-local.json \
-            --pattern "lemma-host-pack-${TARGET}.zip" \
-            --pattern "lemma-guest-runtime-${GUEST_TARGET}.zip" \
-            --dir desktop/runtime/download \
-            --clobber
+          scripts/download_release_assets.sh "${TAG}" desktop/runtime/download \
+            lemma-local.json \
+            "lemma-host-pack-${TARGET}.zip" \
+            "lemma-guest-runtime-${GUEST_TARGET}.zip"
           python3 - <<'VERIFY'
           import hashlib, json, os
           from pathlib import Path
@@ -1420,12 +1418,10 @@ jobs:
           GUEST_TARGET: windows-x86_64
         run: |
           New-Item -ItemType Directory -Force desktop/runtime/download | Out-Null
-          gh release download "$env:TAG" `
-            --pattern lemma-local.json `
-            --pattern "lemma-host-pack-$env:TARGET.zip" `
-            --pattern "lemma-guest-runtime-$env:GUEST_TARGET.zip" `
-            --dir desktop/runtime/download `
-            --clobber
+          & "$env:ProgramFiles\Git\bin\bash.exe" scripts/download_release_assets.sh "$env:TAG" desktop/runtime/download `
+            lemma-local.json `
+            "lemma-host-pack-$env:TARGET.zip" `
+            "lemma-guest-runtime-$env:GUEST_TARGET.zip"
           if ($LASTEXITCODE -ne 0) { throw "Could not download the nightly runtime for $env:TAG" }
           @'
           import hashlib, json, os
