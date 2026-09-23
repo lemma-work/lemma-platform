@@ -20,7 +20,8 @@ for attempt in 1 2 3 4 5 6; do
     --jq '.[] | select(.state == "uploaded") | "\(.id)\t\(.name)"')"
   missing=()
   for name in "$@"; do
-    grep -q "	${name}\$" <<<"$assets" || missing+=("$name")
+    awk -F'\t' -v n="$name" '$2 == n { found = 1 } END { exit !found }' <<<"$assets" \
+      || missing+=("$name")
   done
   [ "${#missing[@]}" -eq 0 ] && break
   if [ "$attempt" -eq 6 ]; then
