@@ -184,3 +184,8 @@ def test_a_malformed_exit_code_is_ignored_not_raised():
     assert tool_result("exec_command", "COMPLETED", payload) == {"stdout": "x"}
     payload = {"rawOutput": {"exit_code": "-2", "formatted_output": "x"}}
     assert tool_result("exec_command", "COMPLETED", payload)["exit_code"] == -2
+
+
+def test_an_absurdly_long_exit_code_is_ignored_not_raised():
+    payload = {"rawOutput": {"exit_code": "9" * 5000, "formatted_output": "x"}}
+    assert tool_result("exec_command", "COMPLETED", payload) == {"stdout": "x"}
