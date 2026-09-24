@@ -187,10 +187,7 @@ fn every_call_is_announced_once_and_closed_once() {
     }
 }
 
-/// Bumping an adapter in the lock file means recording it again: a normalizer
-/// written against one version's shapes says nothing about the next.
-#[test]
-fn every_pinned_adapter_has_a_transcript_or_says_why_not() {
+fn pinned_adapters() -> Vec<String> {
     let lock: Value = serde_json::from_str(
         &std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("agent-adapters.lock.json"),
@@ -198,20 +195,44 @@ fn every_pinned_adapter_has_a_transcript_or_says_why_not() {
         .unwrap(),
     )
     .unwrap();
-    let unrecorded: Value =
-        serde_json::from_str(&std::fs::read_to_string(fixtures().join("unrecorded.json")).unwrap())
-            .unwrap();
-    for adapter in lock["adapters"].as_array().unwrap() {
-        let key = adapter["key"].as_str().unwrap();
-        let version = adapter["adapter_version"].as_str().unwrap();
-        let directory = fixtures().join(format!("{key}@{version}"));
-        let has_transcript = std::fs::read_dir(&directory).is_ok_and(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
-        });
+    lock["adapters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|adapter| {
+            format!(
+                "{}@{}",
+                adapter["key"].as_str().unwrap(),
+                adapter["adapter_version"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+fn unrecorded() -> Value {
+    serde_json::from_str(&std::fs::read_to_string(fixtures().join("unrecorded.json")).unwrap())
+        .unwrap()
+}
+
+fn has_transcript(pinned: &str) -> bool {
+    std::fs::read_dir(fixtures().join(pinned)).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+    })
+}
+
+/// Bumping an adapter in the lock file means recording it again: a normalizer
+/// written against one version's shapes says nothing about the next.
+#[test]
+fn every_pinned_adapter_has_a_transcript_or_says_why_not() {
+    let unrecorded = unrecorded();
+    for pinned in pinned_adapters() {
+        let (key, version) = pinned.split_once('@').unwrap();
+        let directory = fixtures().join(&pinned);
+        let has_transcript = has_transcript(&pinned);
         let excused = unrecorded
-            .get(format!("{key}@{version}"))
+            .get(&pinned)
             .and_then(Value::as_str)
             .is_some_and(|reason| !reason.trim().is_empty());
         assert!(
@@ -219,6 +240,32 @@ fn every_pinned_adapter_has_a_transcript_or_says_why_not() {
             "{key}@{version} is pinned but has no recorded transcript in {}, and no reason in \
              unrecorded.json; record one with record_transcript.py",
             directory.display()
+        );
+    }
+}
+
+/// An excuse is for the version it names, and only until it is recorded.
+///
+/// Without this the check above has a hole the size of a bump: an entry left
+/// behind for the old version still reads as a reason, a new entry can be
+/// written for a version that is not pinned, and one kept after its recording
+/// landed says the debt is open when it is paid.
+#[test]
+fn every_unrecorded_excuse_names_a_pinned_adapter_still_unrecorded() {
+    let pinned = pinned_adapters();
+    let unrecorded = unrecorded();
+    for (entry, _) in unrecorded.as_object().unwrap() {
+        if entry.starts_with('$') {
+            continue;
+        }
+        assert!(
+            pinned.contains(entry),
+            "unrecorded.json excuses {entry}, which agent-adapters.lock.json does not pin; \
+             delete the entry or name the pinned version"
+        );
+        assert!(
+            !has_transcript(entry),
+            "{entry} has a recorded transcript now; delete its unrecorded.json entry"
         );
     }
 }

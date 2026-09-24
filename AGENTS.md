@@ -53,6 +53,17 @@ wrong interpreter does not fail with "module not found", it reports a
   product is *meant* to do, not what the code currently does.
 - **[docs/testing.md](docs/testing.md)** — the three suites, which one your
   change needs, and what gates what.
+- **Desktop and the Agent Host** — the
+  [Desktop test matrix](CONTRIBUTING.md#desktop-test-matrix) says which lane a
+  change extends and which document it updates. The documents:
+  [desktop.md](docs/architecture/desktop.md) (processes, lifecycle, IPC),
+  [desktop-security.md](docs/architecture/desktop-security.md) (installation
+  owner, sharing, origins),
+  [desktop-host-execution.md](docs/architecture/desktop-host-execution.md)
+  (an owner's commands on their Mac, under Seatbelt),
+  [agent-host.md](docs/architecture/agent-host.md) (supervision, pairing, the
+  link) and [agent-host-events.md](docs/architecture/agent-host-events.md)
+  (normalized run events and golden transcripts).
 
 ## The six that get broken most
 

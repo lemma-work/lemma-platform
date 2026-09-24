@@ -752,3 +752,12 @@ Unit/integration coverage must include:
 Packaged E2Es and the manual PR-DMG checklist remain merge gates because source
 browser tests cannot reproduce WKWebView, Finder installation, code signing,
 Virtualization.framework entitlements, or WSL2 setup.
+
+CI launches the app once per Desktop change: the `Desktop launch smoke` job
+builds the debug bundle and runs `desktop/e2e/launch_smoke.py`, which starts
+it in hosted mode, checks its WebView loads the workspace and that it brings up
+locald and the Agent Host itself, and carries one conversation through a
+scripted agent. GitHub's macOS runners cannot nest a VM, so local mode and the
+guest are not part of it, and nothing clicks inside WKWebView. The
+[Desktop test matrix](../../CONTRIBUTING.md#desktop-test-matrix) says which lane
+each kind of change extends.

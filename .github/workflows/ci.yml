@@ -29,6 +29,7 @@ jobs:
       desktop: ${{ steps.filter.outputs.desktop }}
       desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
       desktop_contract: ${{ steps.filter.outputs.desktop_contract }}
+      desktop_launch: ${{ steps.filter.outputs.desktop_launch }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
       app_template: ${{ steps.filter.outputs.app_template }}
     steps:
@@ -161,6 +162,16 @@ jobs:
               - 'desktop/contracts/**'
               - 'desktop/local-runtime/guest-image/**'
               - '.github/workflows/ci.yml'
+            # What can stop the built app from starting and carrying one
+            # conversation: the app and its sidecars, the workspace it opens,
+            # and the backend half of the Agent Host. Like `desktop`, ci.yml is
+            # left out -- this is a macOS job -- so validate a change to the job
+            # itself with Actions -> CI -> Run workflow.
+            desktop_launch:
+              - 'desktop/**'
+              - 'lemma-frontend/**'
+              - 'lemma-typescript/**'
+              - 'lemma-backend/app/modules/agent/**'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -728,11 +739,17 @@ jobs:
       # `tests/fixtures/wire_contract.json` are assertions over a committed
       # file; only the named suites, because the rest of this crate's tests
       # spawn agents.
-      - name: Agent Host wire contract
+      #
+      # normalize_golden rides along for the same reason: it is assertions over
+      # committed transcripts and agent-adapters.lock.json, and it is what
+      # refuses an adapter bump that has neither a recording for the new
+      # version nor a reason in unrecorded.json.
+      - name: Agent Host wire contract and golden transcripts
         working-directory: desktop
         run: >-
           cargo test -p lemma-agent-host --locked
           --test wire_contract --test control_plane_contract
+          --test normalize_golden
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -1143,6 +1160,158 @@ jobs:
   # "look in the morning", not a blocked PR. It is deliberately absent from the
   # `ci` aggregator for the same reason, and exempted in
   # scripts/check_ci_aggregators.py where that decision is written down.
+  # The only job that opens the built app and watches it run.
+  #
+  # Everything else here builds Desktop, lints it, or drives one half of it in
+  # a browser -- which is how a launch-time failure could ship with CI green.
+  # This builds the debug bundle, launches it, and walks one journey through
+  # it: the stack comes up, an owner signs up, the machine pairs through the
+  # bundle's own locald, the app starts in hosted mode and its WebView loads
+  # the workspace, the app brings up locald and the Agent Host, a scripted ACP
+  # agent answers a conversation, and This Mac reports the workspace connected.
+  # desktop/e2e/launch_smoke.py states each step and what it proves.
+  #
+  # What it cannot do on a GitHub runner, and why:
+  #   - local mode: the private runtime is a Virtualization.framework VM, and
+  #     these runners cannot nest one. So the app runs in hosted mode, against
+  #     this checkout's backend and frontend, with Postgres, Redis and
+  #     SuperTokens as native processes rather than inside the guest;
+  #   - clicks: nothing drives WKWebView from outside on macOS, so the journey
+  #     goes through the HTTP API and the locald messages the page would send.
+  #     The page's own rendering is desktop-contract's Chromium lane.
+  #
+  # Not in "CI passed" yet, on purpose: it is new, and a check earns a place in
+  # the merge gate by being boring for a while. It has a stable name so the
+  # ruleset can require it, or it can join the aggregator's needs, in one line.
+  desktop-launch-smoke:
+    name: Desktop launch smoke
+    timeout-minutes: 30
+    needs: changes
+    if: needs.changes.outputs.desktop_launch == 'true'
+    runs-on: macos-14
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      SUPERTOKENS_CORE: "11.4.5"
+      # Debug symbols are most of a debug target's size and none of this job's
+      # use; dropping them keeps the cache and the link small.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      APPLE_SIGNING_IDENTITY: "-"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            desktop/scripts/tauri-cli-version.txt
+            lemma-typescript/package-lock.json
+            lemma-frontend/package-lock.json
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: desktop-launch
+          cache-on-failure: true
+
+      # Native, because there is no Docker here either: Docker Desktop needs
+      # the same nested virtualization the guest does.
+      - name: Start Postgres and Redis
+        run: |
+          set -euo pipefail
+          brew install postgresql@18 pgvector redis
+          pg="$(brew --prefix postgresql@18)/bin"
+          "$pg/initdb" --username=postgres --auth=trust -D "$RUNNER_TEMP/pg" >/dev/null
+          "$pg/pg_ctl" -D "$RUNNER_TEMP/pg" -o "-p 5432 -k /tmp" -l "$RUNNER_TEMP/pg.log" -w start
+          "$pg/createdb" -h 127.0.0.1 -U postgres lemma
+          "$pg/createdb" -h 127.0.0.1 -U postgres supertokens
+          redis-server --port 6379 --daemonize yes
+
+      # SuperTokens has no macOS package, but its core is a JVM program and the
+      # runner has Java. The download bundles an x86 JRE, which is dropped for
+      # the runner's own; the jars it names come from Maven Central once and
+      # are cached with the core.
+      - name: Cache the SuperTokens core
+        id: supertokens-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/supertokens
+          key: supertokens-${{ runner.os }}-${{ runner.arch }}-${{ env.SUPERTOKENS_CORE }}-postgresql
+
+      - name: Fetch the SuperTokens core
+        if: steps.supertokens-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/supertokens.zip" \
+            "https://api.supertokens.com/0/app/download?pluginName=postgresql&os=mac&mode=DEV&binary=FREE&targetCore=${SUPERTOKENS_CORE}&api-version=0"
+          unzip -q "$RUNNER_TEMP/supertokens.zip" -d "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/supertokens" ~/supertokens
+          rm -rf ~/supertokens/jre
+          cd ~/supertokens
+          "${JAVA_HOME_21_arm64:-$JAVA_HOME}/bin/java" -classpath "./downloader/*" io.supertokens.downloader.Main
+
+      - name: Start SuperTokens
+        run: |
+          set -euo pipefail
+          cd ~/supertokens
+          nohup "${JAVA_HOME_21_arm64:-$JAVA_HOME}/bin/java" \
+            -classpath "./core/*:./plugin-interface/*:./ee/*" io.supertokens.Main ./ DEV \
+            host=127.0.0.1 port=3567 \
+            postgresql_connection_uri=postgresql://postgres@127.0.0.1:5432/supertokens \
+            > "$RUNNER_TEMP/supertokens.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3567/hello >/dev/null && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/supertokens.log"
+          exit 1
+
+      - name: Install the backend and the workspace
+        run: |
+          set -euo pipefail
+          (cd lemma-backend && uv sync --locked --extra local)
+          npm ci --prefix lemma-typescript
+          npm --prefix lemma-typescript run build
+          npm ci --prefix lemma-frontend
+
+      # tauri-build resolves the sidecars at build-script time, so they come
+      # first. The bundle is ad-hoc signed, and debug on purpose: only a debug
+      # build honours LEMMA_DESKTOP_HOSTED_URL, which is how the app is pointed
+      # at this runner's workspace instead of lemma.work.
+      - name: Build the debug app bundle
+        run: |
+          set -euo pipefail
+          desktop/scripts/build-sidecar.sh
+          cd desktop
+          npx -y "@tauri-apps/cli@$(tr -d '[:space:]' < scripts/tauri-cli-version.txt)" \
+            build --debug --bundles app --config tauri.online.conf.json
+
+      - name: Launch the app and walk the journey
+        env:
+          LEMMA_SMOKE_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/lemma
+          LEMMA_SMOKE_REDIS_URL: redis://127.0.0.1:6379
+          LEMMA_SMOKE_SUPERTOKENS_URL: http://127.0.0.1:3567
+        run: >-
+          uv run --project lemma-backend python desktop/e2e/launch_smoke.py
+          --app desktop/target/debug/bundle/macos/Lemma.app
+          --frontend-dev
+
+      - name: Upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-launch-smoke
+          path: output/desktop-launch-smoke/
+          if-no-files-found: ignore
+
   host-pack-macos:
     name: Host pack builds and runs (macOS)
     timeout-minutes: 60
