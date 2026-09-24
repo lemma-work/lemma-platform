@@ -7,6 +7,7 @@ mod core_data;
 mod data_binding;
 mod diagnostics;
 mod engine;
+mod host_loopback;
 mod images;
 mod inspect;
 mod limits;

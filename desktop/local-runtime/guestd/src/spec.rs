@@ -83,17 +83,29 @@ pub(crate) struct EnsureParameters {
     pub(crate) callback: CallbackSpec,
     /// Whether `host.lemma.internal` resolves inside the container.
     ///
-    /// Defaulted to true so every caller that does not send it -- which is
-    /// every caller today -- keeps the reach it has: the workspace runtime's
-    /// callbacks to the backend and the function gateway both go through that
-    /// name. It exists so a later change can withhold it from sandboxes that
-    /// have no business reaching the Mac.
+    /// Defaulted to true because every sandbox needs it: the workspace
+    /// runtime's callbacks to the backend and the function gateway both go
+    /// through that name, to the two callback forwarders locald runs on the
+    /// host gateway. It is *not* a way onto the Mac's own loopback -- that is
+    /// `host_loopback`, below, which only the owner's sandbox is given.
     ///
     /// A name, not a wall. Without the alias a container can still dial the
     /// host gateway by address; closing that needs a per-container firewall
     /// rule, and this flag is what such a rule would key on.
     #[serde(default = "default_host_access")]
     pub(crate) host_access: bool,
+    /// Whether the container gets the loopback relay: a Unix socket through
+    /// which its browser reaches a port on the Mac's `127.0.0.1`. See
+    /// `host_loopback`.
+    ///
+    /// The backend decides, and sends it for exactly one sandbox: the
+    /// installation owner's own workspace, where their browser runs. Nothing
+    /// else can reach the relay, because the socket exists only in the
+    /// containers it is mounted into -- there is no address to dial.
+    /// Defaulted to false, so a caller that does not know about it grants
+    /// nothing.
+    #[serde(default)]
+    pub(crate) host_loopback: bool,
 }
 
 pub(crate) fn default_host_access() -> bool {

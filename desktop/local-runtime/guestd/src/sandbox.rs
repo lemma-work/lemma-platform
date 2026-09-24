@@ -37,6 +37,13 @@ impl<E: Engine + 'static> GuestService<E> {
                 "function sandboxes cannot receive a workspace runtime token",
             ));
         }
+        if parameters.workload_kind == WorkloadKind::Function && parameters.host_loopback {
+            // Only a person's workspace has a browser in it. A function runs an
+            // immutable artifact and has no reason to reach anyone's Mac.
+            return Err(GuestError::invalid(
+                "function sandboxes cannot receive the host loopback relay",
+            ));
+        }
 
         let container = container_name(&parameters.sandbox_id);
         let should_create = match self.snapshot_optional(&parameters.sandbox_id)? {
@@ -75,6 +82,14 @@ impl<E: Engine + 'static> GuestService<E> {
                 Some(token) => Some(self.write_runtime_token(&parameters.sandbox_id, token)?),
                 None => None,
             };
+            // Created whether or not a relay is listening in it: the engine
+            // refuses a bind mount whose source does not exist, and on WSL,
+            // where nothing ever listens, it simply stays empty.
+            let relay_directory = self.host_loopback_directory();
+            if parameters.host_loopback {
+                prepare_relay_directory(&relay_directory)
+                    .map_err(|error| GuestError::engine(error.to_string()))?;
+            }
             let env_file = self.write_env_file(&parameters.sandbox_id, &parameters.env)?;
             let arguments = build_run_arguments(
                 &parameters,
@@ -82,6 +97,7 @@ impl<E: Engine + 'static> GuestService<E> {
                 runtime_token.as_deref(),
                 &env_file,
                 &self.host_gateway,
+                &relay_directory,
             );
             let result = self.run_checked(&arguments);
             let _ = fs::remove_file(&env_file);
