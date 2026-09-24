@@ -24,6 +24,24 @@ export function exposureCopy(mode) {
   return "Not reachable from another device.";
 }
 
+/** Who may create an account once the installation is shared.
+ *
+ *  The sentence locald confirms against is the source of truth (it is what
+ *  `public_confirmation` carries); these are the same sentences for the places
+ *  this page has to say it before a snapshot has arrived. Invite-only is the
+ *  default because an unset preference means exactly that on the daemon side. */
+export function joinPolicyCopy(whoCanJoin, mode) {
+  const open = whoCanJoin === "open";
+  if (mode === "public") {
+    return open
+      ? "Anyone with this link can create an account and use this Lemma installation."
+      : "Anyone with this link can reach this Lemma's sign-in page. Only people you invite can create an account.";
+  }
+  return open
+    ? "Anyone on this network can create an account."
+    : "Only people you invite can create an account.";
+}
+
 export function selectSharingChoice(mode) {
   store.sharingChoice = mode;
   document.querySelectorAll("[data-sharing-mode]").forEach((button) => {
@@ -57,6 +75,11 @@ export function renderSharing(sharing = {}) {
     ? (sharing.warnings || [])
     : ["Start Lemma and wait until the local stack is healthy before enabling sharing.", ...(sharing.warnings || [])];
   $("sharing-warnings").innerHTML = warnings.map((warning) => `<div class="warning-box">${escapeHtml(warning)}</div>`).join("");
+
+  const whoCanJoin = sharing.who_can_join || sharing.preferences?.who_can_join || "invite_only";
+  $("lan-join-copy").textContent = joinPolicyCopy(whoCanJoin, "local_network");
+  $("public-join-title").textContent = whoCanJoin === "open" ? "Open signup is enabled." : "Signup is invite-only.";
+  $("public-join-copy").textContent = sharing.public_confirmation || joinPolicyCopy(whoCanJoin, "public");
 
   const interfaces = sharing.interfaces || [];
   const interfaceSelect = $("sharing-interface");
@@ -162,9 +185,12 @@ export async function enableLanSharing() {
 
 export async function enablePublicSharing() {
   try {
+    const sharing = store.snapshot?.sharing || {};
+    const whoCanJoin = sharing.who_can_join || sharing.preferences?.who_can_join || "invite_only";
+    const joining = sharing.public_confirmation || joinPolicyCopy(whoCanJoin, "public");
     if (await confirmAction(
       "Create a public link?",
-      "Anyone with this link can create an account and use this Lemma installation. The workspace, auth, API, files, chat, tools, streaming, and webhook callbacks will be reachable from the internet.",
+      `${joining} The workspace, auth, API, files, chat, tools, streaming, and webhook callbacks will be reachable from the internet.`,
       "I understand · create link",
     )) await activatePublicSharing();
   } catch (error) {
@@ -207,6 +233,19 @@ async function activatePublicSharing() {
     toast(`Starting ${store.sharingProvider === "cloudflare" ? "Cloudflare" : "ngrok"} and validating the public origin…`);
   } catch (error) {
     store.sharingBusy = false;
+    toast(friendlyError(error), true);
+  }
+}
+
+/** Change who may create an account. Applied immediately if sharing is on. */
+export async function setWhoCanJoin(whoCanJoin) {
+  try {
+    await invoke("sharing_action", {
+      action: "access",
+      id: nextId("sharing-access"),
+      payload: { who_can_join: whoCanJoin },
+    });
+  } catch (error) {
     toast(friendlyError(error), true);
   }
 }

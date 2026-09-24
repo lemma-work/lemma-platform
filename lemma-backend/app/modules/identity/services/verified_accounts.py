@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -26,6 +27,7 @@ from supertokens_python.types.base import AccountInfoInput
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.identity.domain.email_challenge import PENDING_TTL_SECONDS
+from app.modules.identity.domain.errors import SignupNotAllowedError
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.infrastructure.identity_lease import identity_lease
 from app.modules.identity.infrastructure.models.email_challenge_models import (
@@ -40,6 +42,15 @@ from app.modules.identity.services.email_challenges import (
     EmailChallengeService,
     _binding_hash,
 )
+from app.modules.identity.services.installation import get_signup_gate
+
+#: Raises `SignupNotAllowedError` to refuse a new account. Injected so a test
+#: stands a gate in front of this function rather than patching the real one.
+AdmitSignup = Callable[[str], Awaitable[object]]
+
+
+async def _admit_signup(email: str) -> object:
+    return await get_signup_gate().admit(email)
 
 
 async def _auth_users(email: str) -> list[AuthUser]:
@@ -92,6 +103,7 @@ async def complete_verified_account(
     operation_id: UUID,
     binding: str,
     purpose: ChallengePurpose,
+    admit_signup: AdmitSignup = _admit_signup,
 ) -> UUID:
     digest = _binding_hash(binding, purpose)
     async with uow_factory() as uow:
@@ -113,6 +125,15 @@ async def complete_verified_account(
                 raise ChallengeRejected("This account cannot sign in")
             local_id = local.id if local else None
             locally_verified = bool(local and local.is_verified)
+        # A code proves the mailbox, not a right to an account here. With no
+        # local user this completion *creates* one -- it is how an email-code
+        # sign-in and a chat onboarding sign up -- so it answers to the same
+        # signup mode as a password or an OAuth provider does.
+        if local_id is None:
+            try:
+                await admit_signup(email)
+            except SignupNotAllowedError as refused:
+                raise ChallengeRejected(refused.message) from refused
         users = await _auth_users(email)
         await lease.require_ownership()
         _require_canonical_identity(users, local_id)

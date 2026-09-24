@@ -58,10 +58,25 @@ pub(crate) fn build_run_arguments(
         format!("lemma.work/metadata={metadata}"),
         "--label".into(),
         format!("lemma.work/apps={apps}"),
+        "--label".into(),
+        format!("lemma.work/host-access={}", parameters.host_access),
         "--env-file".into(),
         env_file.display().to_string(),
-        "--add-host".into(),
-        format!("host.lemma.internal:{host_gateway}"),
+        // No capabilities, and no way to gain any.
+        //
+        // Both images run as uid 10001 and nothing in them needs one: the
+        // runtime and the browser relay listen above 1024, and Chrome runs
+        // `--no-sandbox` because this container *is* its sandbox. What the
+        // default set bought was for a root process -- `CAP_NET_RAW` to forge
+        // packets on the bridge, `CAP_SETUID` behind any setuid binary an
+        // agent installs -- so dropping all of them costs nothing a sandbox
+        // does and removes what an escape would start from.
+        // `no-new-privileges` closes the setuid route even for a binary that
+        // brings its own file capabilities.
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--security-opt".into(),
+        "no-new-privileges".into(),
         // Bounded, because these write to the guest's data disk and that disk
         // is a fixed size. A sandbox with a chatty loop in it -- an agent
         // retrying, a dependency printing a warning per file -- had nothing
@@ -77,6 +92,12 @@ pub(crate) fn build_run_arguments(
         "--log-opt".into(),
         format!("max-file={SANDBOX_LOG_FILES}"),
     ];
+    if parameters.host_access {
+        arguments.extend([
+            "--add-host".into(),
+            format!("host.lemma.internal:{host_gateway}"),
+        ]);
+    }
     match parameters.workload_kind {
         WorkloadKind::Workspace => {
             let workspace = workspace.expect("workspace workload must have storage");

@@ -86,8 +86,8 @@ shows its stage without invented byte counts. Interrupted downloads resume,
 verified archives are reused, and failed staging directories are never
 activated.
 
-Select **Create account** after Lemma reports Ready. Local signup stays inside
-the Desktop window. Local-only configuration disables email verification and
+Select **Create account** after Lemma reports Ready. The first account becomes
+the installation's owner. Local signup stays inside the Desktop window. Local-only configuration disables email verification and
 internet-facing auth throttles; SMTP is not required. Hosted Lemma sign-in
 continues to use the system browser.
 
@@ -159,9 +159,14 @@ Open **Local settings → Sharing** from the workspace footer or the tray.
   kept in private app storage. Existing named tunnels remain available as an
   advanced option, and Lemma never installs either CLI.
 
-Every public activation repeats this warning: **Anyone with this link can
-create an account and use this Lemma installation.** Public sharing intentionally
-keeps signup open in this release. Cloudflare Quick Tunnels are not available.
+**Who can join** decides who may create an account once the installation is
+shared. It is **invite-only** by default: the first account on the installation
+— its owner — is always admitted, and after that only an address you have
+invited to an organization can sign up; anyone else is told the Lemma is
+invite-only. Set to **open**, it lets anyone who reaches the address make an
+account. Every public activation asks you to confirm what the link will allow.
+Cloudflare Quick Tunnels are not available.
+[Desktop security](architecture/desktop-security.md) has the full model.
 
 The shared URL covers the workspace, auth, API, files, streamed chat/tool
 calls, and webhook callbacks. Published pod apps stay local-only because their

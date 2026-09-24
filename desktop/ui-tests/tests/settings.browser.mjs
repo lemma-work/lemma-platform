@@ -336,6 +336,34 @@ test('public sharing requires an affirmative app-owned confirmation on every act
   assert.equal(enabled[0].args.payload.public_warning_confirmed, true);
 });
 
+// The sentence confirmed before a public link is created has to describe what
+// will actually be true. It used to be fixed copy saying anyone could make an
+// account, which is a false alarm once signup is invite-only -- and a warning
+// that is wrong in the alarming direction teaches people to click through.
+test('the public-link confirmation and the page say who can create an account', async t => {
+  const page = await settings(t);
+  await page.evaluate(() => {
+    window.__fixture.snapshot.sharing.provider_readiness = { ngrok: { installed: true, authenticated: true } };
+    window.__fixture.snapshot.sharing.who_can_join = 'invite_only';
+    window.__fixture.snapshot.sharing.public_confirmation = 'Only people you invite can create an account.';
+    window.__fixture.refresh();
+  });
+  await page.getByRole('button', { name: /^Sharing/ }).click();
+  await page.getByRole('radio', { name: /Public link/ }).check();
+  assert.equal(await page.locator('#public-join-title').textContent(), 'Signup is invite-only.');
+  await page.getByRole('button', { name: 'Create public link', exact: true }).click();
+  const confirmations = await page.evaluate(() => window.__fixture.calls.filter(call => call.command === 'confirm_destructive_action'));
+  assert.match(confirmations[0].args.message, /^Only people you invite can create an account\./);
+
+  await page.evaluate(() => {
+    window.__fixture.snapshot.sharing.who_can_join = 'open';
+    delete window.__fixture.snapshot.sharing.public_confirmation;
+    window.__fixture.refresh();
+  });
+  assert.equal(await page.locator('#public-join-title').textContent(), 'Open signup is enabled.');
+  assert.match(await page.locator('#lan-join-copy').textContent(), /Anyone on this network can create an account/);
+});
+
 // This window can reinstall Lemma and write credentials, and its CSP allows
 // inline script. The QR arrives as markup on the daemon's event stream, so if
 // it ever reaches the DOM as HTML rather than as an image, anything that can

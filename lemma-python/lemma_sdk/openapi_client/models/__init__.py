@@ -261,6 +261,9 @@ _NAME_TO_MODULE = {
     'InstallRequestResponseSchema': 'install_request_response_schema',
     'InstallationBindSchema': 'installation_bind_schema',
     'InstallationChoiceSchema': 'installation_choice_schema',
+    'InstallationResponse': 'installation_response',
+    'InstallationResponseDeployment': 'installation_response_deployment',
+    'InstallationResponseSignupMode': 'installation_response_signup_mode',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
     'LiteralInputBinding': 'literal_input_binding',
@@ -791,6 +794,9 @@ if TYPE_CHECKING:
     from .install_request_response_schema import InstallRequestResponseSchema
     from .installation_bind_schema import InstallationBindSchema
     from .installation_choice_schema import InstallationChoiceSchema
+    from .installation_response import InstallationResponse
+    from .installation_response_deployment import InstallationResponseDeployment
+    from .installation_response_signup_mode import InstallationResponseSignupMode
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
     from .literal_input_binding import LiteralInputBinding
@@ -1334,6 +1340,9 @@ __all__ = [
     'InstallRequestResponseSchema',
     'InstallationBindSchema',
     'InstallationChoiceSchema',
+    'InstallationResponse',
+    'InstallationResponseDeployment',
+    'InstallationResponseSignupMode',
     'InstalledAppSummary',
     'JsonObject',
     'LiteralInputBinding',

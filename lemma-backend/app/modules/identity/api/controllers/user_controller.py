@@ -4,10 +4,12 @@ from fastapi import APIRouter, Request, status
 
 from app.modules.identity.api.dependencies import UserServiceDep
 from app.modules.identity.api.schemas.user_schemas import (
+    InstallationResponse,
     UserProfileRequest,
     UserResponse,
 )
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.services.installation import get_signup_gate
 
 router = APIRouter(
     prefix="/users",
@@ -31,6 +33,27 @@ async def get_current_user(
     user: UserEntity = request.state.user
     user_data = await user_service.get_user(user.id)
     return UserResponse.model_validate(user_data)
+
+
+@router.get(
+    "/me/installation",
+    operation_id="user.installation.get",
+    summary="Get Installation",
+    description=(
+        "What kind of installation this is, whether the current user owns it, "
+        "and who may sign up. On a Desktop installation the owner is the first "
+        "account created, and is the only user granted host-level capabilities."
+    ),
+    response_model=InstallationResponse,
+)
+async def get_installation(request: Request) -> InstallationResponse:
+    user: UserEntity = request.state.user
+    view = await get_signup_gate().view_for(user.id)
+    return InstallationResponse(
+        deployment=view.deployment,
+        is_owner=view.is_owner,
+        signup_mode=view.signup_mode,
+    )
 
 
 @router.get(

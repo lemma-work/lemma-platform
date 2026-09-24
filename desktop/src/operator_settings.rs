@@ -64,7 +64,7 @@ pub(crate) fn sharing_action_impl(
     }
     if !matches!(
         action.as_str(),
-        "snapshot" | "preflight" | "enable" | "disable"
+        "snapshot" | "preflight" | "enable" | "disable" | "access"
     ) {
         return Err(format!("unknown sharing action: {action}"));
     }

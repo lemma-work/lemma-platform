@@ -449,3 +449,127 @@ fn gateway_relays_websocket_upgrades_bidirectionally() {
     gateway.stop();
     crate::join_within(server, "the upstream server");
 }
+
+fn controller_at(root: &Path) -> Arc<SharingController> {
+    SharingController::load(root, "http://app.lemma.localhost:3711".into(), 3711, 8711).unwrap()
+}
+
+/// An installation upgraded from before the setting starts invite-only.
+///
+/// Its `sharing.json` has no `who_can_join`, and the struct is
+/// `deny_unknown_fields` but defaulted -- so the absent key is read as the
+/// default rather than refusing the file and losing the tunnel it names.
+#[test]
+fn preferences_written_before_the_join_policy_read_as_invite_only() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("sharing.json"),
+        serde_json::to_vec(&json!({
+            "schema_version": SHARING_SCHEMA_VERSION,
+            "last_provider": "ngrok",
+            "selected_interface": "en0",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let controller = controller_at(root.path());
+    let snapshot = controller.snapshot(false);
+
+    assert_eq!(snapshot.who_can_join, WhoCanJoin::InviteOnly);
+    assert_eq!(
+        snapshot.preferences.last_provider,
+        Some(TunnelProvider::Ngrok)
+    );
+    assert_eq!(snapshot.public_confirmation, PUBLIC_WARNING_INVITE_ONLY);
+}
+
+#[test]
+fn a_join_policy_change_is_saved_and_survives_a_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = controller_at(root.path());
+
+    let (previous, live) = controller.begin_set_who_can_join(WhoCanJoin::Open).unwrap();
+    assert_eq!(previous, WhoCanJoin::InviteOnly);
+    assert!(
+        live.is_none(),
+        "nothing is shared, so there is nothing to re-apply"
+    );
+    controller.finish_who_can_join(None);
+    assert!(!controller.transition_running.load(Ordering::Acquire));
+    drop(controller);
+
+    let reloaded = controller_at(root.path());
+    let snapshot = reloaded.snapshot(false);
+    assert_eq!(snapshot.who_can_join, WhoCanJoin::Open);
+    assert_eq!(snapshot.public_confirmation, PUBLIC_WARNING_OPEN);
+}
+
+#[test]
+fn a_join_policy_change_that_could_not_be_applied_is_undone() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = controller_at(root.path());
+
+    let (previous, _) = controller.begin_set_who_can_join(WhoCanJoin::Open).unwrap();
+    controller.finish_who_can_join(Some(previous));
+    drop(controller);
+
+    assert_eq!(
+        controller_at(root.path()).who_can_join(),
+        WhoCanJoin::InviteOnly
+    );
+}
+
+/// A policy change cannot land between an enable computing its environment
+/// and committing -- the enable would then save a preference its running
+/// backend does not have.
+#[test]
+fn a_join_policy_change_waits_for_a_sharing_transition() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = controller_at(root.path());
+    controller.begin_transition().unwrap();
+
+    let error = controller
+        .begin_set_who_can_join(WhoCanJoin::Open)
+        .unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(controller.who_can_join(), WhoCanJoin::InviteOnly);
+    controller.fail_transition("test complete".into());
+}
+
+/// The sentence confirmed before a public link is the one that will be true.
+#[test]
+fn the_public_confirmation_describes_the_policy_the_link_will_run_with() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = controller_at(root.path());
+
+    for (who_can_join, expected) in [
+        (None, PUBLIC_WARNING_INVITE_ONLY),
+        (Some(WhoCanJoin::InviteOnly), PUBLIC_WARNING_INVITE_ONLY),
+        (Some(WhoCanJoin::Open), PUBLIC_WARNING_OPEN),
+    ] {
+        let error = controller
+            .prepare_enable(&EnableSharingRequest {
+                mode: SharingMode::Public,
+                provider: Some(TunnelProvider::Ngrok),
+                who_can_join,
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), expected, "{who_can_join:?}");
+    }
+}
+
+#[test]
+fn local_network_warnings_say_who_can_create_an_account() {
+    assert_eq!(
+        local_join_warning(WhoCanJoin::Open),
+        "Anyone on this network can create an account."
+    );
+    assert_eq!(
+        local_join_warning(WhoCanJoin::InviteOnly),
+        "Only people you invite can create an account."
+    );
+}

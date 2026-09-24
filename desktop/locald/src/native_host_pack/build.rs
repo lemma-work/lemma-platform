@@ -140,6 +140,11 @@ pub(crate) fn build(
     let backend_origin = format!("http://{host}:{backend_port}");
     let mut backend_env = BTreeMap::from([
         ("ENVIRONMENT", "local".to_owned()),
+        // `ENVIRONMENT=local` is also every developer's `make dev` stack, so it
+        // cannot be what tells the backend it is somebody's own computer. This
+        // is: the first account becomes the installation owner, and signup
+        // defaults to invite-only.
+        ("DEPLOYMENT_KIND", "desktop".to_owned()),
         ("DEBUG", "true".to_owned()),
         ("LOG_LEVEL", "INFO".to_owned()),
         ("JSON_LOGS_ENABLED", "true".to_owned()),

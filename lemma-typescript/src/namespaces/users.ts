@@ -10,6 +10,11 @@ export class UsersNamespace {
     return this.client.request(() => UsersService.userCurrentGet());
   }
 
+  /** What this installation is, whether the caller owns it, and who may sign up. */
+  installation() {
+    return this.client.request(() => UsersService.userInstallationGet());
+  }
+
   ensureFirstWorkspace(payload: FirstWorkspaceRequest = {}) {
     return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));
   }

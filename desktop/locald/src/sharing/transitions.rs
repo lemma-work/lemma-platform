@@ -7,11 +7,15 @@ impl SharingController {
         self.observe_tunnel_exit();
         let interfaces = private_ipv4_interfaces();
         let state = self.state.lock().expect("sharing state lock poisoned");
+        let who_can_join = state.preferences.who_can_join;
         let mut warnings = Vec::new();
         match state.mode {
             SharingMode::ThisComputer => {}
-            SharingMode::LocalNetwork => warnings.push(LOCAL_WARNING.into()),
-            SharingMode::Public => warnings.push(PUBLIC_WARNING.into()),
+            SharingMode::LocalNetwork => {
+                warnings.push(LOCAL_WARNING.into());
+                warnings.push(local_join_warning(who_can_join).into());
+            }
+            SharingMode::Public => warnings.push(public_warning(who_can_join).into()),
         }
         if state.mode != SharingMode::ThisComputer {
             warnings.push(APPS_LIMITATION.into());
@@ -45,7 +49,8 @@ impl SharingController {
             qr_svg,
             preferences: state.preferences.clone(),
             transition_running: self.transition_running.load(Ordering::Acquire),
-            public_confirmation: PUBLIC_WARNING.into(),
+            who_can_join,
+            public_confirmation: public_warning(who_can_join).into(),
             apps_limitation: APPS_LIMITATION.into(),
         }
     }
@@ -106,7 +111,7 @@ impl SharingController {
         if request.mode == SharingMode::Public && !request.public_warning_confirmed {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                PUBLIC_WARNING,
+                public_warning(self.who_can_join_for(request)),
             ));
         }
         {
@@ -202,6 +207,9 @@ impl SharingController {
             if let Some(provider) = request.provider {
                 state.preferences.last_provider = Some(provider);
             }
+            if let Some(who_can_join) = request.who_can_join {
+                state.preferences.who_can_join = who_can_join;
+            }
             if request.provider == Some(TunnelProvider::Cloudflare) {
                 state.preferences.cloudflare_setup = request.cloudflare_setup;
                 if request.cloudflare_setup == CloudflareSetup::Existing {
@@ -276,6 +284,60 @@ impl SharingController {
             state.canonical_url = self.local_origin.clone();
             state.tunnel_status = "stopped".into();
             state.started_at_ms = None;
+        }
+        self.transition_running.store(false, Ordering::Release);
+    }
+
+    /// The join policy an enable request will run with: its own, or the saved one.
+    pub fn who_can_join_for(&self, request: &EnableSharingRequest) -> WhoCanJoin {
+        request.who_can_join.unwrap_or_else(|| self.who_can_join())
+    }
+
+    pub fn who_can_join(&self) -> WhoCanJoin {
+        self.state
+            .lock()
+            .expect("sharing state lock poisoned")
+            .preferences
+            .who_can_join
+    }
+
+    /// Save a new join policy, and say where sharing is live so it can be applied.
+    ///
+    /// Taken as a transition, so it cannot interleave with an enable that has
+    /// already computed its environment from the old value -- the enable would
+    /// then commit a preference its running backend does not reflect. Returns
+    /// the live origin and mode when sharing is on, `None` when the change only
+    /// needs to be remembered for next time. The caller finishes the transition
+    /// with `finish_who_can_join`, after it has applied the change or failed to.
+    pub fn begin_set_who_can_join(
+        &self,
+        who_can_join: WhoCanJoin,
+    ) -> io::Result<(WhoCanJoin, Option<(String, SharingMode)>)> {
+        self.begin_transition()?;
+        let mut state = self.state.lock().expect("sharing state lock poisoned");
+        let previous = state.preferences.who_can_join;
+        state.preferences.who_can_join = who_can_join;
+        state.preferences.schema_version = SHARING_SCHEMA_VERSION;
+        if let Err(error) = persist_private_json(&self.preferences_path, &state.preferences) {
+            state.preferences.who_can_join = previous;
+            drop(state);
+            self.transition_running.store(false, Ordering::Release);
+            return Err(error);
+        }
+        let live = (state.mode != SharingMode::ThisComputer)
+            .then(|| (state.canonical_url.clone(), state.mode));
+        Ok((previous, live))
+    }
+
+    /// End a join-policy change. On failure the previous value is restored and saved.
+    pub fn finish_who_can_join(&self, restore: Option<WhoCanJoin>) {
+        if let Some(previous) = restore {
+            let mut state = self.state.lock().expect("sharing state lock poisoned");
+            state.preferences.who_can_join = previous;
+            // Best effort: the running backend already has the previous value
+            // back, and a preference file that disagrees with it is corrected
+            // by the next successful change.
+            let _ = persist_private_json(&self.preferences_path, &state.preferences);
         }
         self.transition_running.store(false, Ordering::Release);
     }
