@@ -42,6 +42,10 @@ pub(crate) struct StubState {
     pub(crate) interaction_answer: Mutex<Option<Value>>,
     /// Pushes to deliver to whichever host is connected.
     pushes: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
+    /// Answers the host sent to requests this stand-in made (`op`), by id.
+    pub(crate) answers: Mutex<HashMap<String, Frame>>,
+    /// The `host_execution` each `hello` and `control` carried, in order.
+    pub(crate) host_execution_reports: Mutex<Vec<Value>>,
     /// Close the next `hello` with this code instead of welcoming it.
     pub(crate) refuse_hello_with: Mutex<Option<u16>>,
     harness_ids: Mutex<HashMap<String, Uuid>>,
@@ -60,6 +64,34 @@ impl StubState {
                 })
                 .is_ok()
         })
+    }
+
+    /// Send the connected host a request, as Lemma sends `op`.
+    pub(crate) fn request(&self, kind: &str, id: &str, body: Value) -> bool {
+        self.pushes.lock().unwrap().as_ref().is_some_and(|pushes| {
+            pushes
+                .send(Frame {
+                    kind: kind.to_owned(),
+                    id: Some(id.to_owned()),
+                    re: None,
+                    body,
+                })
+                .is_ok()
+        })
+    }
+
+    /// The host's answer to request `id`, once it has arrived.
+    pub(crate) async fn answer(&self, id: &str) -> Frame {
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if let Some(frame) = self.answers.lock().unwrap().remove(id) {
+                    return frame;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the host must answer")
     }
 
     pub(crate) fn connected(&self) -> bool {
@@ -135,6 +167,15 @@ async fn serve(state: Arc<StubState>, mut socket: WebSocket) {
                 let Some(Ok(message)) = message else { return };
                 let Message::Text(text) = message else { continue };
                 let frame: Frame = serde_json::from_str(&text).unwrap();
+                if let Some(re) = frame.re.clone() {
+                    state.answers.lock().unwrap().insert(re, frame);
+                    continue;
+                }
+                if matches!(frame.kind.as_str(), host::HELLO | host::CONTROL)
+                    && let Some(report) = frame.body.get("host_execution")
+                {
+                    state.host_execution_reports.lock().unwrap().push(report.clone());
+                }
                 let refusal = if frame.kind == host::HELLO {
                     state.refuse_hello_with.lock().unwrap().take()
                 } else {

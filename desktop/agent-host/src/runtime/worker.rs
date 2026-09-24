@@ -1,6 +1,7 @@
 //! One target's worker: its link loop, and the state it carries.
 
-use crate::link::protocol::{ControlBody, close};
+use crate::host_exec::wire::HostExecutionStatus;
+use crate::link::protocol::{ControlBody, HelloBody, close};
 use crate::link::{self, Connected, LinkError, LinkHandle, LinkSlot, LinkSlotOwner, Push};
 use crate::protocol::HostHello;
 
@@ -96,6 +97,13 @@ pub(crate) struct TargetWorker {
     /// The link currently open, for the tasks that run beside this loop.
     pub(crate) slot_owner: LinkSlotOwner,
     pub(crate) link: LinkSlot,
+    /// The owner's host-execution setting, as last read from `config.json`.
+    pub(crate) host_execution: bool,
+    /// Answers Lemma's `op` requests. `None` where host execution cannot
+    /// work at all, in which case every op is answered
+    /// `exec_server_unavailable` by the link itself.
+    #[cfg(unix)]
+    pub(crate) exec_relay: Option<Arc<crate::host_exec::relay::ExecRelay>>,
 }
 
 /// One run in flight, and the two ways it can be stopped.
@@ -196,6 +204,23 @@ impl TargetWorker {
             rejections: HashMap::new(),
         }));
         let (slot_owner, link) = LinkSlotOwner::new();
+        // The exec-server is this same binary, as the MCP bridge is.
+        #[cfg(unix)]
+        let exec_relay = crate::host_exec::relay::RelayPaths::current(paths.folders.clone())
+            .inspect_err(|error| {
+                tracing::warn!(%error, "host execution is unavailable on this computer");
+            })
+            .ok()
+            .map(|relay_paths| {
+                crate::host_exec::relay::ExecRelay::new(
+                    Arc::new(crate::host_exec::relay::ProcessLauncher {
+                        executable: mcp_bridge_executable.clone(),
+                        data_root: paths.root.clone(),
+                        sandboxed: true,
+                    }),
+                    relay_paths,
+                )
+            });
         Ok(Self {
             target,
             installation_id,
@@ -226,6 +251,9 @@ impl TargetWorker {
             force_probe: true,
             slot_owner,
             link,
+            host_execution: false,
+            #[cfg(unix)]
+            exec_relay,
         })
     }
 
@@ -255,6 +283,10 @@ impl TargetWorker {
             tracing::error!(%error, "could not start the MCP relay; runs will have no Lemma tools");
         }
         let outcome = self.link_loop().await;
+        #[cfg(unix)]
+        if let Some(relay) = &self.exec_relay {
+            relay.close_all().await;
+        }
         delivery.abort();
         if let Ok(relay) = relay {
             relay.abort();
@@ -271,6 +303,36 @@ impl TargetWorker {
         }
     }
 
+    /// What Lemma is told about host execution, in `hello` and `control`.
+    pub(crate) fn host_execution_status(&self) -> HostExecutionStatus {
+        let mut status = HostExecutionStatus::current(self.host_execution);
+        #[cfg(unix)]
+        {
+            status.available &= self
+                .exec_relay
+                .as_ref()
+                .is_some_and(|relay| relay.available());
+        }
+        #[cfg(not(unix))]
+        {
+            status.available = false;
+        }
+        status
+    }
+
+    fn op_handler(&self) -> Option<Arc<dyn link::OpHandler>> {
+        #[cfg(unix)]
+        {
+            self.exec_relay
+                .clone()
+                .map(|relay| relay as Arc<dyn link::OpHandler>)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// Stay connected until the host shuts down or the pairing is dropped.
     pub(crate) async fn link_loop(&mut self) -> anyhow::Result<()> {
         let mut retry = RETRY_MIN;
@@ -280,11 +342,15 @@ impl TargetWorker {
             }
             self.housekeeping()?;
             let connected = tokio::select! {
-                connected = link::connect(
+                connected = link::connect_with(
                     &self.target.base_url,
                     &self.target.host_secret,
-                    HostHello::current(&self.installation_id),
-                    self.capacity(),
+                    HelloBody {
+                        hello: HostHello::current(&self.installation_id),
+                        capacity: self.capacity(),
+                        host_execution: Some(self.host_execution_status()),
+                    },
+                    self.op_handler(),
                 ) => connected,
                 _ = self.shutdown.changed() => continue,
             };
@@ -518,6 +584,7 @@ impl TargetWorker {
             acknowledged_command_ids: batch.command_ids.clone(),
             checkpoints: batch.checkpoints.clone(),
             rejections: batch.rejections.clone(),
+            host_execution: Some(self.host_execution_status()),
         };
         let answer = match link.control(&body).await {
             Ok(answer) => answer,
@@ -580,6 +647,20 @@ impl TargetWorker {
 
     pub(crate) fn apply_local_controls(&mut self) -> anyhow::Result<()> {
         let config = HostConfig::load_or_create(&self.paths)?;
+        if config.host_execution != self.host_execution {
+            self.host_execution = config.host_execution;
+            #[cfg(unix)]
+            if let Some(relay) = &self.exec_relay {
+                relay.set_enabled(config.host_execution);
+            }
+            // Lemma routes on this, so it hears now rather than at the next
+            // heartbeat: a `control` carries it.
+            self.events_ready.notify_control();
+            tracing::info!(
+                enabled = config.host_execution,
+                "host execution setting changed"
+            );
+        }
         let Some(current) = config
             .targets
             .iter()

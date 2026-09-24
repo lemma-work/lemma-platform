@@ -21,8 +21,9 @@ use uuid::Uuid;
 use super::protocol::{
     CommandsBody, ControlBody, ControlOkBody, ErrorBody, EventsOkBody, Frame, HarnessesBody,
     HarnessesOkBody, HelloBody, InteractionOkBody, InteractionWaitBody, LINK_PATH, McpBody,
-    McpOkBody, PublishedHarness, ReconnectBody, WelcomeBody, close, host, server,
+    McpOkBody, OpBody, OpOkBody, PublishedHarness, ReconnectBody, WelcomeBody, close, host, server,
 };
+use crate::host_exec::wire::{OP_FAILED, OpFailure, kind};
 use crate::protocol::{Command, EventAck, EventBatch, HarnessSnapshot, HostCapacity, HostHello};
 
 /// How long an ordinary request waits for its answer. Control, events and
@@ -32,6 +33,17 @@ use crate::protocol::{Command, EventAck, EventBatch, HarnessSnapshot, HostCapaci
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long the handshake -- connect plus `hello`/`pair` -- may take.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How many of Lemma's `op` requests run at once. More wait for a slot; the
+/// reader never does, so a burst of ops cannot stall the heartbeat's answer.
+pub const MAX_CONCURRENT_OPS: usize = 32;
+/// How long an op may take when Lemma names no deadline.
+pub const DEFAULT_OP_DEADLINE: Duration = Duration::from_secs(120);
+
+/// What answers Lemma's `op` requests: host execution's relay, on a worker.
+#[async_trait::async_trait]
+pub trait OpHandler: Send + Sync {
+    async fn handle(&self, op: OpBody) -> Result<Value, OpFailure>;
+}
 
 /// Why a request, or the link itself, failed.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -315,6 +327,7 @@ pub async fn open(
     base: &Url,
     authorization: Option<&str>,
     first: (&'static str, Value),
+    ops: Option<Arc<dyn OpHandler>>,
 ) -> Result<(Connected, Frame), LinkError> {
     let url = link_url(base)?;
     let mut request = url
@@ -390,9 +403,11 @@ pub async fn open(
         }
     });
 
-    // The reader. Answers go to whoever asked; pushes go to the worker.
+    // The reader. Answers go to whoever asked; pushes go to the worker; ops
+    // go to a task of their own each, so the reader is never the one waiting.
     let reader_pending = Arc::clone(&pending);
     let reader_outgoing = outgoing.clone();
+    let op_slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_OPS));
     tokio::spawn(async move {
         let error = loop {
             let Some(message) = stream.next().await else {
@@ -431,6 +446,15 @@ pub async fn open(
                     continue;
                 }
             };
+            if frame.kind == server::OP {
+                dispatch_op(
+                    frame,
+                    ops.clone(),
+                    Arc::clone(&op_slots),
+                    reader_outgoing.clone(),
+                );
+                continue;
+            }
             if let Some(re) = frame.re.clone() {
                 let waiter = reader_pending
                     .lock()
@@ -542,17 +566,103 @@ async fn handshake(
     Ok(reply)
 }
 
-/// A paired host's handshake.
+/// A paired host's handshake, for a link that runs nothing on this computer.
 pub async fn connect(
     base: &Url,
     host_secret: &str,
     hello: HostHello,
     capacity: HostCapacity,
 ) -> Result<Connected, LinkError> {
-    let body = serde_json::to_value(HelloBody { hello, capacity })
-        .map_err(|error| LinkError::Protocol(error.to_string()))?;
-    let (connected, _) = open(base, Some(host_secret), (host::HELLO, body)).await?;
+    connect_with(
+        base,
+        host_secret,
+        HelloBody {
+            hello,
+            capacity,
+            host_execution: None,
+        },
+        None,
+    )
+    .await
+}
+
+/// A paired host's handshake. `ops` answers Lemma's `op` requests; a link
+/// without one answers each `exec_server_unavailable`.
+pub async fn connect_with(
+    base: &Url,
+    host_secret: &str,
+    hello: HelloBody,
+    ops: Option<Arc<dyn OpHandler>>,
+) -> Result<Connected, LinkError> {
+    let body =
+        serde_json::to_value(hello).map_err(|error| LinkError::Protocol(error.to_string()))?;
+    let (connected, _) = open(base, Some(host_secret), (host::HELLO, body), ops).await?;
     Ok(connected)
+}
+
+/// Run one `op` and send its answer, off the reader.
+fn dispatch_op(
+    frame: Frame,
+    ops: Option<Arc<dyn OpHandler>>,
+    slots: Arc<tokio::sync::Semaphore>,
+    outgoing: mpsc::UnboundedSender<Outgoing>,
+) {
+    let Some(id) = frame.id else {
+        tracing::warn!("ignored an op with no id; there is nothing to answer it with");
+        return;
+    };
+    tokio::spawn(async move {
+        let outcome = match serde_json::from_value::<OpBody>(frame.body) {
+            Err(error) => Err(OpFailure::invalid(format!("the op did not parse: {error}"))),
+            Ok(op) => match ops {
+                None => Err(OpFailure::unavailable(
+                    "this connection does not run commands on the computer",
+                )),
+                Some(handler) => {
+                    let deadline = op
+                        .deadline_ms
+                        .map_or(DEFAULT_OP_DEADLINE, Duration::from_millis);
+                    // The wait for a slot counts against the deadline: Lemma
+                    // stops listening at the same moment either way.
+                    tokio::time::timeout(deadline, async {
+                        let _slot = slots.acquire_owned().await;
+                        handler.handle(op).await
+                    })
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(OpFailure::new(
+                            kind::TIMEOUT,
+                            format!("the op did not finish within {deadline:?}"),
+                        ))
+                    })
+                }
+            },
+        };
+        let answer = match outcome {
+            Ok(result) => Frame {
+                kind: host::OP_OK.to_owned(),
+                id: None,
+                re: Some(id),
+                body: serde_json::to_value(OpOkBody { result }).unwrap_or_default(),
+            },
+            Err(failure) => Frame {
+                kind: host::ERROR.to_owned(),
+                id: None,
+                re: Some(id),
+                body: serde_json::to_value(ErrorBody {
+                    code: OP_FAILED.to_owned(),
+                    message: failure.message,
+                    retryable: failure.retryable,
+                    detail: Some(serde_json::json!({ "kind": failure.kind })),
+                })
+                .unwrap_or_default(),
+            },
+        };
+        if let Ok(text) = serde_json::to_string(&answer) {
+            // A link that closed meanwhile has nobody to tell.
+            let _ = outgoing.send(Outgoing::Frame(text));
+        }
+    });
 }
 
 fn push_from(frame: Frame) -> Option<Push> {

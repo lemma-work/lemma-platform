@@ -203,3 +203,350 @@ async fn closing_the_link_ends_the_connection_lemma_holds() {
     .await
     .expect("the stand-in must see the host go");
 }
+
+/// A link opened without a handler -- pairing, revocation -- still answers an
+/// `op`, so Lemma is never left waiting on one.
+#[tokio::test]
+async fn an_op_on_a_link_that_runs_nothing_is_answered_unavailable() {
+    let stub = StubLink::start().await;
+    let _link = connected(&stub).await;
+    assert!(stub.state.request(
+        server::OP,
+        "s1",
+        json!({ "workspace": "w", "method": "process.list", "params": {} }),
+    ));
+    let answer = stub.state.answer("s1").await;
+    assert_eq!(answer.kind, super::protocol::host::ERROR);
+    assert_eq!(answer.body["code"], "OP_FAILED");
+    assert_eq!(answer.body["detail"]["kind"], "exec_server_unavailable");
+    assert_eq!(answer.body["retryable"], true);
+}
+
+/// The hello says whether Lemma may route an owner's commands here.
+#[tokio::test]
+async fn the_hello_carries_host_execution() {
+    let stub = StubLink::start().await;
+    let status = crate::host_exec::wire::HostExecutionStatus::current(true);
+    let _link = connect_with(
+        &stub.url,
+        "secret",
+        super::protocol::HelloBody {
+            hello: HostHello::current("installation"),
+            capacity: capacity(),
+            host_execution: Some(status.clone()),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let reports = stub.state.host_execution_reports.lock().unwrap().clone();
+    assert_eq!(reports, [serde_json::to_value(status).unwrap()]);
+}
+
+#[cfg(unix)]
+mod host_execution {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use serde_json::{Value, json};
+
+    use super::super::protocol::{Frame, HelloBody, host, server};
+    use super::super::stub::StubLink;
+    use super::super::{Connected, connect_with};
+    use super::capacity;
+    use crate::host_exec::relay::{ExecRelay, InProcessLauncher, RelayPaths};
+    use crate::protocol::HostHello;
+
+    struct Setup {
+        stub: StubLink,
+        relay: Arc<ExecRelay>,
+        launcher: Arc<InProcessLauncher>,
+        _link: Connected,
+        directory: tempfile::TempDir,
+        next: std::sync::atomic::AtomicU64,
+    }
+
+    async fn setup(enabled: bool) -> Setup {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("home");
+        let tmp = directory.path().join("tmp");
+        std::fs::create_dir_all(home.join("lemma")).unwrap();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let launcher = Arc::new(InProcessLauncher::default());
+        let relay = ExecRelay::new(
+            launcher.clone(),
+            RelayPaths {
+                root_base: home.join("lemma"),
+                home,
+                tmp,
+                folders: directory.path().join("conversation-folders.json"),
+            },
+        );
+        relay.set_enabled(enabled);
+        let stub = StubLink::start().await;
+        let link = connect_with(
+            &stub.url,
+            "secret",
+            HelloBody {
+                hello: HostHello::current("installation"),
+                capacity: capacity(),
+                host_execution: None,
+            },
+            Some(relay.clone()),
+        )
+        .await
+        .unwrap();
+        Setup {
+            stub,
+            relay,
+            launcher,
+            _link: link,
+            directory,
+            next: std::sync::atomic::AtomicU64::new(1),
+        }
+    }
+
+    impl Setup {
+        async fn op(&self, workspace: &str, method: &str, params: Value) -> Frame {
+            let id = format!("s{}", self.next.fetch_add(1, Ordering::SeqCst));
+            assert!(self.stub.state.request(
+                server::OP,
+                &id,
+                json!({
+                    "workspace": workspace,
+                    "method": method,
+                    "params": params,
+                    "deadline_ms": 20_000,
+                }),
+            ));
+            self.stub.state.answer(&id).await
+        }
+
+        async fn ok(&self, method: &str, params: Value) -> Value {
+            let answer = self.op("w", method, params).await;
+            assert_eq!(answer.kind, host::OP_OK, "{method}: {}", answer.body);
+            answer.body["result"].clone()
+        }
+
+        async fn failure_kind(&self, workspace: &str, method: &str, params: Value) -> String {
+            let answer = self.op(workspace, method, params).await;
+            assert_eq!(answer.kind, host::ERROR, "{method}: {}", answer.body);
+            assert_eq!(answer.body["code"], "OP_FAILED");
+            answer.body["detail"]["kind"].as_str().unwrap().to_owned()
+        }
+    }
+
+    fn output(read: &Value) -> String {
+        read["chunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chunk| {
+                String::from_utf8(STANDARD.decode(chunk["data"].as_str().unwrap()).unwrap())
+                    .unwrap()
+            })
+            .collect()
+    }
+
+    /// `op` in, exec-server, `op_ok` out: a command runs in the workspace's
+    /// root and its output comes back through the link.
+    #[tokio::test]
+    async fn an_op_runs_a_command_and_answers_op_ok() {
+        let setup = setup(true).await;
+        let opened = setup
+            .ok(
+                "workspace.open",
+                json!({ "slug": "linked", "date": "2026-09-25" }),
+            )
+            .await;
+        let root = opened["root"].as_str().unwrap().to_owned();
+        assert!(root.ends_with("lemma/c/2026-09-25/linked"), "{root}");
+        let started = setup
+            .ok(
+                "process.start",
+                json!({ "shell_command": "echo from-the-host" }),
+            )
+            .await;
+        let process_id = started["process_id"].clone();
+        let mut text = String::new();
+        for _ in 0..20 {
+            let read = setup
+                .ok(
+                    "process.read",
+                    json!({ "process_id": process_id, "after_sequence": 0, "wait_ms": 1000 }),
+                )
+                .await;
+            text = output(&read);
+            if read["state"] == "exited" {
+                break;
+            }
+        }
+        assert_eq!(text, "from-the-host\n");
+        assert_eq!(setup.relay.open_workspaces().await, 1);
+        setup.ok("workspace.close", json!({})).await;
+        assert_eq!(setup.relay.open_workspaces().await, 0);
+    }
+
+    /// A long-waiting read does not hold up the ops behind it: each op is its
+    /// own task, and the reader never waits on one.
+    #[tokio::test]
+    async fn a_waiting_read_does_not_hold_up_other_ops() {
+        let setup = Arc::new(setup(true).await);
+        setup.ok("workspace.open", json!({ "slug": "busy" })).await;
+        let started = setup
+            .ok("process.start", json!({ "argv": ["/bin/sleep", "30"] }))
+            .await;
+        let waiting = {
+            let setup = Arc::clone(&setup);
+            let process_id = started["process_id"].clone();
+            tokio::spawn(async move {
+                setup
+                    .ok(
+                        "process.read",
+                        json!({ "process_id": process_id, "after_sequence": 0, "wait_ms": 5000 }),
+                    )
+                    .await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let quick = std::time::Instant::now();
+        setup.ok("process.list", json!({})).await;
+        assert!(quick.elapsed() < std::time::Duration::from_secs(2));
+        assert!(!waiting.is_finished());
+        setup
+            .ok(
+                "process.terminate",
+                json!({ "process_id": started["process_id"], "grace_ms": 100 }),
+            )
+            .await;
+        waiting.await.unwrap();
+    }
+
+    /// Turned off, the host refuses to run anything, and says so in a way the
+    /// provider can tell apart from a failed command.
+    #[tokio::test]
+    async fn a_disabled_host_refuses_every_op() {
+        let setup = setup(false).await;
+        let kind = setup
+            .failure_kind("w", "workspace.open", json!({ "slug": "x" }))
+            .await;
+        assert_eq!(kind, "exec_server_unavailable");
+        assert_eq!(setup.launcher.launches.load(Ordering::SeqCst), 0);
+    }
+
+    /// Turning it off stops what is already running.
+    #[tokio::test]
+    async fn turning_it_off_closes_every_workspace() {
+        let setup = setup(true).await;
+        setup.ok("workspace.open", json!({ "slug": "x" })).await;
+        assert_eq!(setup.relay.open_workspaces().await, 1);
+        setup.relay.set_enabled(false);
+        for _ in 0..100 {
+            if setup.relay.open_workspaces().await == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(setup.relay.open_workspaces().await, 0);
+        let kind = setup.failure_kind("w", "process.list", json!({})).await;
+        assert_eq!(kind, "exec_server_unavailable");
+    }
+
+    #[tokio::test]
+    async fn an_op_for_a_workspace_nobody_opened_says_so() {
+        let setup = setup(true).await;
+        let kind = setup.failure_kind("other", "process.list", json!({})).await;
+        assert_eq!(kind, "workspace_not_open");
+    }
+
+    /// An exec-server that dies is restarted and its workspace reopened. The
+    /// commands it ran died with it, and saying `process_not_found` is the
+    /// truth about them.
+    #[tokio::test]
+    async fn an_exec_server_that_exits_is_restarted_with_its_workspace() {
+        let setup = setup(true).await;
+        setup
+            .ok("workspace.open", json!({ "slug": "crashy" }))
+            .await;
+        let started = setup
+            .ok("process.start", json!({ "argv": ["/bin/sleep", "30"] }))
+            .await;
+        assert_eq!(setup.launcher.launches.load(Ordering::SeqCst), 1);
+        setup.launcher.crash_all();
+        let mut listed = None;
+        for _ in 0..100 {
+            let answer = setup.op("w", "process.list", json!({})).await;
+            if answer.kind == host::OP_OK {
+                listed = Some(answer.body["result"].clone());
+                break;
+            }
+            assert_eq!(
+                answer.body["detail"]["kind"], "exec_server_unavailable",
+                "{}",
+                answer.body
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let listed = listed.expect("the exec-server must come back");
+        assert_eq!(listed["processes"], json!([]));
+        assert_eq!(setup.launcher.launches.load(Ordering::SeqCst), 2);
+        let kind = setup
+            .failure_kind(
+                "w",
+                "process.read",
+                json!({ "process_id": started["process_id"] }),
+            )
+            .await;
+        assert_eq!(kind, "process_not_found");
+    }
+
+    /// The backend naming a folder is not the owner choosing it: a root hint
+    /// outside `~/lemma` that no conversation is bound to is not used.
+    #[tokio::test]
+    async fn a_root_the_owner_did_not_choose_is_not_used() {
+        let setup = setup(true).await;
+        let elsewhere = tempfile::tempdir().unwrap();
+        let opened = setup
+            .ok(
+                "workspace.open",
+                json!({ "root_hint": elsewhere.path(), "slug": "fallback", "date": "2026-09-25" }),
+            )
+            .await;
+        assert!(
+            opened["root"]
+                .as_str()
+                .unwrap()
+                .ends_with("lemma/c/2026-09-25/fallback"),
+            "{opened}"
+        );
+    }
+
+    /// A folder the owner bound the conversation to on this machine is the
+    /// root, and the commands run there.
+    #[tokio::test]
+    async fn a_folder_the_owner_bound_is_the_root() {
+        let setup = setup(true).await;
+        let project = tempfile::tempdir().unwrap();
+        let conversation = uuid::Uuid::new_v4();
+        std::fs::write(
+            setup.directory.path().join("conversation-folders.json"),
+            serde_json::to_vec(&json!({ conversation.to_string(): project.path() })).unwrap(),
+        )
+        .unwrap();
+        let opened = setup
+            .ok(
+                "workspace.open",
+                json!({ "root_hint": project.path(), "conversation_id": conversation }),
+            )
+            .await;
+        assert_eq!(
+            opened["root"].as_str().unwrap(),
+            std::fs::canonicalize(project.path())
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+    }
+}
