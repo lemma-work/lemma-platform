@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingIndicator } from "@/ui/loading";
+
 import { useState } from "react";
 import { ExternalIcon, LockIcon, WarningIcon } from "@/ui/icons";
 import { live } from "@/usage/queries";
@@ -132,10 +134,7 @@ export function SignInPane({ conversationId, toolCallId, onDone }: {
                     rather than as an empty browser. */}
                 {picture === "live" && !where.arrived && (
                     <div className="signin__waiting">
-                        <span role="status">
-                            Opening {whereabouts(request.data.origin, null).host}… A browser that has been
-                            idle takes a moment to start.
-                        </span>
+                        <LoadingIndicator label={"Connecting to " + whereabouts(request.data.origin, null).host} />
                         {/* The whole of what somebody can do about a steer
                             that has not landed, and it is worth a control:
                             reconnecting is what sends the browser at the site
@@ -156,7 +155,7 @@ export function SignInPane({ conversationId, toolCallId, onDone }: {
             {(picture === "refused" || picture === "unsupported" || picture === "stale-image") && (
                 <p className="computer-note">
                     <button className="computer-inline" disabled={tab.busy} onClick={tab.open}>
-                        <ExternalIcon size={13} /> {tab.busy ? "Opening…" : "Open the browser in a tab instead"}
+                        <ExternalIcon size={13} /> {tab.busy ? <LoadingIndicator inline label="Loading" /> : "Open the browser in a tab instead"}
                     </button>
                 </p>
             )}

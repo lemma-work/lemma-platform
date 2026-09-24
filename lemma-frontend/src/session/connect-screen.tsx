@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingIndicator } from "@/ui/loading";
+
 import { useState } from "react";
 import { connect, disconnect, hasToken, upstreamUrl, sameSiteWithApi } from "./client";
 
@@ -80,7 +82,7 @@ export function ConnectScreen() {
                         }}
                         disabled={!url.trim() || saved}
                     >
-                        {saved ? "Opening…" : "Save and open"}
+                        {saved ? <LoadingIndicator inline label="Loading" /> : "Save and open"}
                     </button>
                     {holding && (
                         <button

@@ -1,3 +1,4 @@
+import { LoadingRows } from "@/ui/loading";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
@@ -41,7 +42,7 @@ export function AllConversations({
                     />
                 </div>
 
-                {history.isPending && <p className="empty-row">Reading history…</p>}
+                {history.isPending && <LoadingRows label="Loading history" rows={5} />}
                 {history.isError && <p className="empty-row">Couldn’t load conversation history.</p>}
                 {history.isSuccess && entries.length === 0 && (
                     <p className="empty-row">{filter ? "Nothing matches that." : "No conversations yet."}</p>

@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkspaceLoading } from "@/shell/workspace-loading";
+
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AuthState, LemmaClient } from "lemma-sdk";
 import { useQueryClient } from "@tanstack/react-query";
@@ -275,9 +277,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
 
     if (session.status === "loading") {
         return (
-            <Screen>
-                <p role="status">Opening…</p>
-            </Screen>
+            <WorkspaceLoading />
         );
     }
 

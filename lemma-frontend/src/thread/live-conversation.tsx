@@ -85,7 +85,9 @@ export function LiveConversation({
        read from inside the options that construct it. */
     const streamingIn = useRef<string | null>(null);
 
+    const historyRequestFailed = useRef(false);
     const session = useAssistantSession({
+        onError: () => { historyRequestFailed.current = true; },
         client,
         podId: pod.id,
         /* The backend titles a conversation once its first run completes, and
@@ -112,6 +114,8 @@ export function LiveConversation({
         autoResume: false,
     });
 
+    const [historyLoading, setHistoryLoading] = useState(Boolean(conversationId && conversationId !== NEW_CONVERSATION));
+    const [loadAttempt, setLoadAttempt] = useState(0);
     const [loadError, setLoadError] = useState<string | null>(null);
     /* The cursor onto everything older than what is on screen. `loadMessages`
        has always returned it and this file has always dropped it, which is why
@@ -129,31 +133,40 @@ export function LiveConversation({
     useEffect(() => {
         if (!openId || (createdHere.current === openId && !callRefresh)) return;
         let cancelled = false;
+        let historyReady = false;
+        historyRequestFailed.current = false;
         setLoadError(null);
+        setHistoryLoading(true);
         setOlderToken(null);
         (async () => {
             try {
                 const record = await refreshConversation(openId);
                 if (cancelled) return;
+                if (!record || historyRequestFailed.current) throw new Error("History unavailable");
                 const page = await loadMessages({ conversationId: openId, limit: 100 });
                 if (cancelled) return;
+                if (historyRequestFailed.current) throw new Error("History unavailable");
+                historyReady = true;
                 setOlderToken(page.next_page_token ?? null);
+                setHistoryLoading(false);
                 if (page.items.length === 0) {
                     setLoadError(null);
                 }
                 /* Only after the transcript is on screen: reattaching first
                    means a live run writes into a view that has no history. */
                 await resumeIfRunning(openId, { knownConversation: record ?? undefined });
-            } catch (problem) {
-                if (!cancelled) {
-                    setLoadError(problem instanceof Error ? problem.message : "Could not read this conversation.");
+            } catch {
+                if (!cancelled && !historyReady) {
+                    setLoadError("Could not load this conversation. Please try again.");
                 }
+            } finally {
+                if (!cancelled) setHistoryLoading(false);
             }
         })();
         return () => {
             cancelled = true;
         };
-    }, [openId, loadMessages, refreshConversation, resumeIfRunning, callRefresh]);
+    }, [openId, loadMessages, refreshConversation, resumeIfRunning, callRefresh, loadAttempt]);
 
     /* Older messages are merged into the session's own list by the controller,
        so there is nothing to stitch here: ask for the next page and the turns
@@ -420,6 +433,8 @@ export function LiveConversation({
                 streaming={streaming}
                 state={state}
                 error={error}
+                loading={historyLoading}
+                onReload={loadError ? () => setLoadAttempt(attempt => attempt + 1) : undefined}
                 emptyTitle={
                     conversationId === NEW_CONVERSATION || !session.conversationId
                         ? "New conversation"
@@ -428,16 +443,7 @@ export function LiveConversation({
                 emptyBody={
                     conversationId === NEW_CONVERSATION || !session.conversationId
                         ? pod.teammate.name + " is ready. Send a message to start."
-                        : "No messages were returned for this conversation."
-                }
-                detail={
-                    session.conversationId
-                        ? session.conversationId.slice(0, 8) +
-                          " · " +
-                          session.messages.length +
-                          " messages · " +
-                          (session.status ?? "no status")
-                        : undefined
+                        : "Send a message to start the conversation."
                 }
                 podId={pod.id}
                 conversationId={session.conversationId}
@@ -475,7 +481,7 @@ export function LiveConversation({
                               ? "waiting on you"
                               : pod.waiting || undefined
                 }
-                busy={sending}
+                busy={sending || historyLoading || Boolean(loadError)}
                 canStop={state === "running"}
                 fill={fill}
                 onFilled={onFilled}

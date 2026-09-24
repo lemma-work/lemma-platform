@@ -1,3 +1,4 @@
+import { LoadingRows } from "@/ui/loading";
 import { PlusIcon, ArrowRightIcon, VoiceIcon, ArchiveIcon } from "@/ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -88,7 +89,7 @@ export function History({
                 New conversation
             </button>
 
-            {history.isPending && <p className="history__quiet">Reading history…</p>}
+            {history.isPending && <LoadingRows label="Loading history" />}
             {history.isError && <p className="history__quiet">Couldn’t load conversation history.</p>}
 
             {recent.length > 0 && (

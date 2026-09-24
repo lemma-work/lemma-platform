@@ -1,3 +1,4 @@
+import { LoadingIndicator } from "@/ui/loading";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
@@ -324,7 +325,7 @@ function Account({
                 {/* Just "Connect": the row's own heading already says which
                     platform, and "Connect Microsoft Teams" was wide enough to
                     squeeze the description into a three-line column. */}
-                {stage === "starting" ? "Opening…" : "Connect"}
+                {stage === "starting" ? <LoadingIndicator inline label="Loading" /> : "Connect"}
             </button>
             {error && <span className="reachrow__error">{error}</span>}
         </>
