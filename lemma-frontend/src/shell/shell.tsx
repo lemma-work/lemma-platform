@@ -21,6 +21,7 @@ import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
 import { NOWHERE, readAddress, tabFromId, writeAddress } from "./address";
+import { podAccess } from "./pod-access";
 import { NotYours } from "./not-yours";
 import { OrgSwitcher } from "./org-switcher";
 import { Rail } from "./rail";
@@ -228,8 +229,15 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
        in storage that matches nothing, and every `find` against it returns
        undefined, so the app quietly loses its organization without ever
        saying it could not find it. */
+    const linkedPod = useQuery({
+        queryKey: ["pod-access", podId],
+        queryFn: () => source.getPod(podId!),
+        enabled: Boolean(podId),
+        staleTime: 0,
+        retry: false,
+    });
     const remembered = orgs.data?.some((candidate) => candidate.id === orgId) ? orgId : null;
-    const activeOrgId = remembered ?? orgs.data?.[0]?.id ?? null;
+    const activeOrgId = linkedPod.data?.orgId ?? remembered ?? orgs.data?.[0]?.id ?? null;
     useEffect(() => {
         if (source.label === "sample") return;
         let active = true;
@@ -261,16 +269,9 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         setSelection(previous => ({ id: named, generation: previous.generation + 1 }));
     }, [podId]);
 
-    const listedPod = useMemo(
-        () => pods.data?.find((candidate) => candidate.id === podId) ?? pods.data?.[0] ?? null,
-        [pods.data, podId],
-    );
-
-
-    const stranger = useMemo(() => {
-        if (!podId || !pods.isSuccess) return null;
-        return pods.data.some((candidate) => candidate.id === podId) ? null : podId;
-    }, [podId, pods.isSuccess, pods.data]);
+    const access = podAccess(podId, pods.data, linkedPod);
+    const listedPod = access.pod;
+    const stranger = access.state === "denied" ? podId : null;
 
     /* Only the teammate you are looking at pays for its roster. */
     const detail = useQuery({
@@ -575,11 +576,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
      *  screen has its own door. */
     const offered = useRef<Set<string>>(new Set());
     useEffect(() => {
-        if (!activeOrgId || !pods.isSuccess || pods.data.length > 0) return;
+        if (podId || !activeOrgId || !pods.isSuccess || pods.data.length > 0) return;
         if (offered.current.has(activeOrgId)) return;
         offered.current.add(activeOrgId);
         setHiring(true);
-    }, [activeOrgId, pods.isSuccess, pods.data]);
+    }, [podId, activeOrgId, pods.isSuccess, pods.data]);
 
     const pickTab = useCallback(
         (tabId: string) => {
@@ -770,7 +771,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                 {settings && <SettingsModal
                     orgs={orgs.data ?? []}
                     activeOrgId={activeOrgId}
-                    onPickOrg={setOrgId}
+                    onPickOrg={(id) => { setOrgId(id); goToPod(null); setConversationId(null); }}
                     initial={settings}
                     onClose={() => setSettings(null)}
                 />}
@@ -800,7 +801,6 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     <div className="settings-view">
                         <NotYours
                             podId={stranger}
-                            orgName={activeOrg?.name ?? ""}
                             /* Admitted. The pod list is refetching, and when it
                                comes back with this teammate in it `stranger`
                                goes null on its own and the stage takes over —
@@ -809,7 +809,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                because arriving in a teammate for the first time
                                should not inherit whatever was selected in the
                                stand-in behind the door. */
-                            onArrived={() => setConversationId(null)}
+                            onArrived={() => { void linkedPod.refetch(); setConversationId(null); }}
                         />
                     </div>
                 )}
@@ -866,7 +866,14 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     } : undefined}
                     hidden={Boolean(hiring || huddle.expanded || stranger)}
                 >
-                {!pod ? (pods.isPending ? <WorkspaceLoading embedded /> :
+                {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
+                    access.state === "error" || access.state === "missing" ? (
+                        <div className="screen"><div className="screen__inner">
+                            <h2>{access.state === "missing" ? "We couldn’t find this teammate" : "We couldn’t open this teammate"}</h2>
+                            <p>{access.state === "missing" ? "Check the link, or try again." : "Access could not be verified. Check your connection and try again."}</p>
+                            <div className="screen__actions"><button className="btn btn--primary" onClick={() => void linkedPod.refetch()}>Try again</button></div>
+                        </div></div>
+                    ) :
                     <div className="screen">
                         <div className="screen__inner">
                             <h2>Nobody here yet</h2>

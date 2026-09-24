@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { carryStoredPreferences, key, CARRY_SCRIPT, PREFIX } from "../src/session/storage.ts";
+import { sessionStorageChanged, retainWorkspaceOwner, carryStoredPreferences, key, CARRY_SCRIPT, PREFIX } from "../src/session/storage.ts";
 
 function store(initial: Record<string, string> = {}) {
     const values = new Map(Object.entries(initial));
@@ -121,4 +121,46 @@ test("the inline script is a complete statement", () => {
 
     assert.equal(browser.getItem(key("theme")), "dark");
     assert.ok(reachedTheNextScript, "the script after this one never ran");
+});
+
+test("account switches discard workspace locations but preserve appearance", () => {
+    const browser = store();
+    retainWorkspaceOwner(browser, "first");
+    browser.setItem(key("tabs"), "private-file-path");
+    browser.setItem(key("org"), "first-org");
+    browser.setItem("lemma-room:tabs", "old-private-file-path");
+    browser.setItem(key("theme"), "dark");
+    assert.equal(retainWorkspaceOwner(browser, "second"), true);
+    assert.equal(browser.getItem(key("tabs")), null);
+    assert.equal(browser.getItem(key("org")), null);
+    assert.equal(browser.getItem("lemma-room:tabs"), null);
+    assert.equal(browser.getItem(key("theme")), "dark");
+});
+
+test("refreshing the same user's session keeps their workspace", () => {
+    const browser = store();
+    retainWorkspaceOwner(browser, "person");
+    browser.setItem(key("tabs"), "file-path");
+    assert.equal(retainWorkspaceOwner(browser, "person"), false);
+    assert.equal(browser.getItem(key("tabs")), "file-path");
+});
+
+test("sign-out and unowned legacy state discard saved locations", () => {
+    for (const owner of [null, "new-person"]) {
+        const browser = store();
+        browser.setItem(key("tabs"), "private-file-path");
+        retainWorkspaceOwner(browser, owner);
+        assert.equal(browser.getItem(key("tabs")), null);
+    }
+});
+
+
+test("other tabs reload for account or credential changes, not appearance or refresh markers", () => {
+    for (const name of [key("workspace-owner"), "lemma_token", "lemma_api_url", null]) {
+        assert.equal(sessionStorageChanged(name, "before", "after"), true);
+    }
+    for (const name of [key("theme"), key("tabs"), "sFrontToken", "sIRTFrontend"]) {
+        assert.equal(sessionStorageChanged(name, "before", "after"), false);
+    }
+    assert.equal(sessionStorageChanged(key("workspace-owner"), "same", "same"), false);
 });

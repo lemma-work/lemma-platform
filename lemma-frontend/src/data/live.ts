@@ -239,6 +239,14 @@ function humanizeName(raw: string): string {
 }
 
 
+function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null }): Pod {
+    const name = humanizeName(pod.name);
+    return { id: pod.id, orgId: pod.organization_id, name, iconUrl: pod.icon_url ?? null,
+        teammate: { name, initials: initialsOf(name), iconUrl: pod.icon_url ?? null },
+        subtitle: "", members: [], waiting: "" };
+}
+
+
 const INLINE_TEXT_LIMIT = 512 * 1024;
 /** Html gets its own, and a much larger one. The other two are read as prose
  *  and as a `<pre>`, where half a megabyte is already past the point anybody
@@ -412,16 +420,11 @@ export const liveSource: PodSource = {
             .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null } =>
                 Boolean(pod.id && pod.name),
             )
-            .map((pod) => ({
-                id: pod.id,
-                orgId: pod.organization_id ?? orgId,
-                name: humanizeName(pod.name),
-                iconUrl: pod.icon_url ?? null,
-                teammate: { name: humanizeName(pod.name), initials: initialsOf(humanizeName(pod.name)), iconUrl: pod.icon_url ?? null },
-                subtitle: "",
-                members: [],
-                waiting: "",
-            }));
+            .map((pod) => podSummary({ ...pod, organization_id: pod.organization_id ?? orgId }));
+    },
+
+    async getPod(podId: string): Promise<Pod> {
+        return podSummary(await lemma().pods.get(podId));
     },
 
     async getPodDetail(podId: string, podName: string, podIcon?: string | null): Promise<PodDetail> {

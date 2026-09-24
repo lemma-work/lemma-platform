@@ -389,6 +389,8 @@ export class AuthManager {
   private state: AuthState = { status: "loading", user: null };
   private listeners: Set<AuthListener> = new Set();
   private authCheckPromise: Promise<AuthState> | null = null;
+  private authRevision = 0;
+  private readonly onUnauthorised = () => this.markUnauthenticated();
 
   /**
    * @param token A credential to present as `Authorization: Bearer`. Supplying
@@ -403,7 +405,7 @@ export class AuthManager {
     this.injectedToken = token?.trim() || detectInjectedToken();
 
     if (!this.injectedToken) {
-      ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+      ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
     }
   }
 
@@ -565,7 +567,8 @@ export class AuthManager {
       });
       return response.status !== 401;
     } catch {
-      return false;
+      // A failed verification is not proof that the server revoked the session.
+      return true;
     }
   }
 
@@ -579,7 +582,7 @@ export class AuthManager {
     }
 
     this.assertBrowserContext();
-    ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+    ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
 
     const token = await Session.getAccessToken();
     if (!token) {
@@ -597,7 +600,7 @@ export class AuthManager {
     }
 
     this.assertBrowserContext();
-    ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+    ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
 
     const refreshed = await Session.attemptRefreshingSession();
     if (!refreshed) {
@@ -648,13 +651,17 @@ export class AuthManager {
       return this.authCheckPromise;
     }
 
-    this.authCheckPromise = this.performAuthCheck().finally(() => {
-      this.authCheckPromise = null;
+    const checking = this.performAuthCheck(this.authRevision).finally(() => {
+      if (this.authCheckPromise === checking) this.authCheckPromise = null;
     });
-    return this.authCheckPromise;
+    this.authCheckPromise = checking;
+    return checking;
   }
 
-  private async performAuthCheck(): Promise<AuthState> {
+  private async performAuthCheck(revision: number): Promise<AuthState> {
+    const unauthenticated = (): AuthState => revision === this.authRevision
+      ? this.applyUnauthenticatedState()
+      : this.state;
     this.setState({ status: "loading", user: null });
 
     // Cookie mode: short-circuit when no session exists locally instead of
@@ -666,15 +673,17 @@ export class AuthManager {
     // `doesSessionExist()` reads the local front token only (no network) and
     // returns false when there's nothing to refresh, ending the loop at the source.
     if (!this.injectedToken && typeof window !== "undefined") {
-      ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+      ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       try {
         if (!(await Session.doesSessionExist())) {
-          return this.applyUnauthenticatedState();
+          return unauthenticated();
         }
       } catch {
-        return this.applyUnauthenticatedState();
+        return unauthenticated();
       }
     }
+
+    if (revision !== this.authRevision) return this.state;
 
     try {
       const response = await fetch(
@@ -684,20 +693,21 @@ export class AuthManager {
 
       // Only 401 means not authenticated — 403 means authenticated but forbidden
       if (response.status === 401) {
-        return this.applyUnauthenticatedState();
+        return unauthenticated();
       }
 
       if (!response.ok) {
         // For non-401 errors on /users/me, treat as unauthenticated (conservative)
-        return this.applyUnauthenticatedState();
+        return unauthenticated();
       }
 
       const user = (await response.json()) as UserInfo;
+      if (revision !== this.authRevision) return this.state;
       const next: AuthState = { status: "authenticated", user };
       this.setState(next);
       return next;
     } catch {
-      return this.applyUnauthenticatedState();
+      return unauthenticated();
     }
   }
 
@@ -706,6 +716,8 @@ export class AuthManager {
    * Does NOT redirect — call redirectToAuth() explicitly if desired.
    */
   markUnauthenticated(): void {
+    this.authRevision += 1;
+    this.authCheckPromise = null;
     this.applyUnauthenticatedState();
   }
 
@@ -714,6 +726,9 @@ export class AuthManager {
    * Returns true when the session is no longer active.
    */
   async signOut(): Promise<boolean> {
+    // A response started before logout must never restore the departing user.
+    this.authRevision += 1;
+    this.authCheckPromise = null;
     if (this.injectedToken) {
       this.clearInjectedToken();
       this.markUnauthenticated();
@@ -721,7 +736,7 @@ export class AuthManager {
     }
 
     this.assertBrowserContext();
-    ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+    ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
 
     try {
       await Session.signOut();

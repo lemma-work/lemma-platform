@@ -82,6 +82,7 @@ export function SettingsModal({
     const [section, setSection] = useState<SettingsSection>(initial);
     const session = useSession();
     const [leaving, setLeaving] = useState(false);
+    const [signOutError, setSignOutError] = useState<string | null>(null);
     const sample = source.label === "sample";
     const org = orgs.find((candidate) => candidate.id === activeOrgId) ?? null;
 
@@ -209,9 +210,14 @@ export function SettingsModal({
                                                    one click to undo; a dialog in front of it is a dialog
                                                    people learn to click through. */
                                                 setLeaving(true);
-                                                void session.signOut();
+                                                setSignOutError(null);
+                                                void session.signOut().catch(() => {
+                                                    setLeaving(false);
+                                                    setSignOutError("We couldn’t confirm sign-out. Check your connection and try again.");
+                                                });
                                             }}
                                         ><SignOutIcon size={17} />{leaving ? "Signing out…" : "Sign out"}</button>
+                                        {signOutError && <p role="alert">{signOutError}</p>}
                                         {hasToken() && <a className="account-aside" href="/connect">This browser is using a bearer token</a>}
                                     </div>
                                 )}

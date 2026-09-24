@@ -24,11 +24,9 @@ import { isMissing } from "@/session/auth-state";
  */
 export function NotYours({
     podId,
-    orgName,
     onArrived,
 }: {
     podId: string;
-    orgName: string;
     /** Membership was made. The shell refetches and walks in. */
     onArrived: () => void;
 }) {
@@ -114,8 +112,7 @@ export function NotYours({
                     <>
                         <h2>This {MATE} is not one of yours</h2>
                         <p>
-                            It is somewhere in {orgName || "this organization"} and you are not in it, so
-                            there is nothing here to show you. You can ask to be let in.
+                            Your account does not currently have access to this teammate. You can ask to join.
                         </p>
                         {/* Deliberately not a promise about which. The pod's own
                             policy decides whether this admits on the spot or

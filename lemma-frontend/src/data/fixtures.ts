@@ -1965,6 +1965,7 @@ export const fixtureSource: PodSource = {
         stopPretending();
         return made;
     },
+    async getPod(podId: string) { return PODS.find(pod => pod.id === podId) ?? null; },
     async listPods(orgId: string) {
         await wait(60);
         /* A copy, not the array itself. Handing out the internal one meant

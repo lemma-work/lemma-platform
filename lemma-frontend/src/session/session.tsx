@@ -1,13 +1,13 @@
 "use client";
 
-import { WorkspaceLoading } from "@/shell/workspace-loading";
-
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AuthState, LemmaClient } from "lemma-sdk";
 import { useQueryClient } from "@tanstack/react-query";
 import { lemma, hasApiUrl, hasToken } from "./client";
+import { key, retainWorkspaceOwner, sessionStorageChanged } from "./storage";
+import { observeAuth } from "./observe-auth";
+import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { resetAnalyticsIdentity } from '@/site/analytics/client';
-import { key } from "./storage";
 import { askTheApi, type Person } from "./who";
 import { PORTAL_PATH } from "@/auth/config";
 import { MISSING_API_URL } from "./origins";
@@ -59,37 +59,23 @@ function useAuthState(client: LemmaClient | null, enabled: boolean): AuthState {
     /* No client means no API origin to have made one against. The state stays
        `loading` and is never published, because `sessionStatus` answers
        `unconfigured` before it is ever consulted. */
-    const [state, setState] = useState<AuthState>(() => client?.auth.getState() ?? { status: "loading", user: null });
-    /* The direct ask is worth making once per load. Repeating it on every
-       `unauthenticated` would turn a signed-out tab into a poller. */
-    const asked = useRef(false);
-
+    const cache = useQueryClient();
+    const [state, setState] = useState<AuthState>({ status: "loading", user: null });
     useEffect(() => {
         if (!enabled || !client) return;
-        let live = true;
-        const unsubscribe = client.auth.subscribe(next => {
-            if (!live) return;
-            if (next.status !== "unauthenticated" || asked.current) {
-                setState(next);
-                return;
+        let previousUser = client.auth.getState().user?.id;
+        return observeAuth(client.auth, askTheApi, next => {
+            if (next.status !== "loading") {
+                const user = next.user?.id;
+                if (previousUser && previousUser !== user) cache.clear();
+                try {
+                    if (retainWorkspaceOwner(localStorage, user ?? null)) cache.clear();
+                } catch { /* Storage may be unavailable; the in-memory boundary still applies. */ }
+                previousUser = user;
             }
-            asked.current = true;
-            /* Hold the door shut rather than showing it and taking it away: a
-               sign-in screen that flashes for the length of one request is
-               worse than a moment longer on "Opening…". */
-            setState({ status: "loading", user: null });
-            void askTheApi().then(user => {
-                if (!live) return;
-                setState(user ? { status: "authenticated", user } : next);
-            });
+            setState(next);
         });
-        if (client.auth.getState().status === "loading") {
-            /* `checkAuth` records its own failures in the state it publishes;
-               there is nothing here to do with a rejection. */
-            void client.auth.checkAuth().catch(() => undefined);
-        }
-        return () => { live = false; unsubscribe(); };
-    }, [client, enabled]);
+    }, [client, enabled, cache]);
 
     return state;
 }
@@ -108,24 +94,19 @@ export function useSession(): Session {
 
     const signIn = useCallback(() => {
 
+        sent.mark();
         const here = window.location.pathname + window.location.search;
         window.location.assign(PORTAL_PATH + "?redirect_uri=" + encodeURIComponent(here));
     }, []);
 
     const signOut = useCallback(async () => {
-        try {
-            /* Revokes server-side and clears the SuperTokens frontend markers.
-               The markers matter: while `sFrontToken` is present this browser
-               reads itself as signed in, so a sign-out that only reached the
-               network leaves the app bouncing somebody straight back into the
-               workspace they were trying to leave. */
-            await client?.auth.signOut();
-        } catch {
-            /* Best effort. A sign-out that could not reach the server must
-               still put the person on the other side of the door. */
+        if (client && !(await client.auth.signOut())) {
+            throw new Error("We couldn’t confirm sign-out. Check your connection and try again.");
         }
         resetAnalyticsIdentity();
         cache.clear();
+        sent.clear();
+        try { retainWorkspaceOwner(localStorage, null); } catch { /* no storage */ }
         /* A full document load, deliberately: it is the only thing that drops
            every in-memory copy of what the last person could see — the query
            cache, the session hook, the mounted app frames. A soft navigation
@@ -169,7 +150,6 @@ const sent = {
 /** Taken to the door, rather than shown a picture of one. */
 function ToThePortal({ signIn }: { signIn: () => void }) {
     useEffect(() => {
-        sent.mark();
         signIn();
     }, [signIn]);
     /* Named, because this paints for the length of one navigation and an
@@ -184,24 +164,21 @@ function ToThePortal({ signIn }: { signIn: () => void }) {
 
 /** Sent to the portal, came back, still signed out.
  *
- *  The end of the loop guard. Something is wrong that another trip will not
- *  fix — most likely a session this origin cannot see — so it says so and lets
- *  a person choose, instead of setting off again.
+ *  Stop automatic redirects without assuming why session verification failed.
  */
 function StalledScreen({ signIn }: { signIn: () => void }) {
     return (
         <Screen>
             <p className="screen__mark"><LemmaLogo /></p>
-            <h2>You are still signed out</h2>
+            <h2>We couldn’t finish signing you in</h2>
             <p>
-                You have just been to the sign-in page and come back without a session. Trying
-                once more is worth it; if it keeps happening, this browser is not holding on to
-                the session cookie.
+                We couldn’t verify your session. Sign in again to continue, or return to the home page.
             </p>
             <div className="screen__actions">
-                <button className="btn btn--primary" onClick={() => { sent.clear(); signIn(); }}>
-                    Try again
+                <button className="btn btn--primary" onClick={signIn}>
+                    Sign in again
                 </button>
+                <a className="btn" href="/" onClick={() => sent.clear()}>Back to home</a>
             </div>
         </Screen>
     );
@@ -264,6 +241,19 @@ export function SetupScreen() {
  */
 export function SessionGate({ children }: { children: ReactNode }) {
     const session = useSession();
+    const cache = useQueryClient();
+
+    useEffect(() => {
+        if (source.label === "sample") return;
+        const changed = (event: StorageEvent) => {
+            if (event.storageArea !== localStorage) return;
+            if (!sessionStorageChanged(event.key, event.oldValue, event.newValue)) return;
+            cache.clear();
+            window.location.reload();
+        };
+        window.addEventListener("storage", changed);
+        return () => window.removeEventListener("storage", changed);
+    }, [cache]);
 
     /* In an effect, not in the branch below: clearing it is a side effect, and
        a render is not allowed to have one. The next sign-out starts a fresh
@@ -288,5 +278,5 @@ export function SessionGate({ children }: { children: ReactNode }) {
         return <ToThePortal signIn={session.signIn} />;
     }
 
-    return <>{children}</>;
+    return <Fragment key={session.user?.id ?? session.status}>{children}</Fragment>;
 }

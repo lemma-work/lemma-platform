@@ -94,7 +94,7 @@ export function Surfaces({ pod, expanded = false }: { pod: Pod; expanded?: boole
                     <CopyAddress key={surface.id} surface={surface} compact={!expanded} />
                 ))}
                 <button
-                    className="reach reach--add"
+                    className={`reach reach--add${expanded || mine.length === 0 ? " reach--labeled" : ""}`}
                     title={mine.length ? `Reach ${pod.name} somewhere else` : `Give ${pod.name} a way to be reached`}
                     aria-label={mine.length ? `Reach ${pod.name} somewhere else` : `Give ${pod.name} a way to be reached`}
                     onClick={() => setSheet(true)}
