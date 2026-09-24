@@ -197,6 +197,7 @@ export interface SharedLink {
 }
 
 export type Tab =
+    | { id: "apps"; kind: "apps"; label: string }
     | { id: "library"; kind: "library"; label: string }
     | { id: string; kind: "table"; label: string; name: string }
     | { id: "conversation"; kind: "conversation"; label: string }

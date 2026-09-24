@@ -78,6 +78,7 @@ export function readAddress(pathname: string): Address {
             /* A third segment or nothing. `/conversation/a/b` names no
                conversation this app can open, so it names none at all. */
             return rest.length > 2 ? here(null) : here("conversation", { conversationId: at(1) });
+        case "apps":
         case "library":
         case "history":
         case "computer":
@@ -123,6 +124,7 @@ function tailOf(address: Address): string[] {
                 : ["conversation"];
         case "profile":
             return address.agentName ? ["profile", encodeURIComponent(address.agentName)] : ["profile"];
+        case "apps":
         case "library":
         case "history":
         case "computer":

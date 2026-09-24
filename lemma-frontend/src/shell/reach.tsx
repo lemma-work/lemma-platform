@@ -94,7 +94,7 @@ function ConnectedRow({ surface, pod, onDrop }: { surface: Surface; pod: Pod; on
             </div>
             <div className="reachrow__acts">
                 {open && (
-                    <a className="btn" href={open} target="_blank" rel="noreferrer">
+                    <a className="btn" href={open} target={open.startsWith("mailto:") ? undefined : "_blank"} rel="noreferrer">
                         Say hi <ExternalIcon size={13} />
                     </a>
                 )}
