@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from app.core.test_utils import MINIO_IMAGE, ensure_minio_image
+from app.core.minio_test_image import MINIO_IMAGE, ensure_minio_image
 
 
 @dataclass

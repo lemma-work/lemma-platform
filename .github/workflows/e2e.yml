@@ -227,7 +227,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: /tmp/e2e-docker-images.tar
-          key: e2e-docker-images-${{ hashFiles('lemma-backend/app/core/test_utils.py', 'lemma-backend/test-images/minio/Dockerfile') }}
+          key: e2e-docker-images-${{ hashFiles('lemma-backend/app/core/test_utils.py', 'lemma-backend/app/core/minio_test_image.py', 'lemma-backend/test-images/minio/Dockerfile') }}
       - name: Load cached e2e container images
         if: steps.cache-e2e-images.outputs.cache-hit == 'true'
         run: docker load -i /tmp/e2e-docker-images.tar
@@ -238,7 +238,7 @@ jobs:
           docker pull redis:7.4-alpine
           docker pull docker.io/supertokens/supertokens-postgresql:11.4.5
           docker pull ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2
-          uv run python -c 'from app.core.test_utils import ensure_minio_image; ensure_minio_image()'
+          uv run python -c 'from app.core.minio_test_image import ensure_minio_image; ensure_minio_image()'
       - name: Save e2e container images to cache
         if: steps.cache-e2e-images.outputs.cache-hit != 'true'
         run: |
@@ -247,7 +247,7 @@ jobs:
             redis:7.4-alpine \
             docker.io/supertokens/supertokens-postgresql:11.4.5 \
             ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2 \
-            "$(uv run python -c 'from app.core.test_utils import MINIO_IMAGE; print(MINIO_IMAGE)')"
+            "$(uv run python -c 'from app.core.minio_test_image import MINIO_IMAGE; print(MINIO_IMAGE)')"
       # e2e forces embedding_provider=local (e2e_base.py), which is FastEmbed
       # downloading BAAI/bge-base-en-v1.5 -- a few hundred megabytes -- into
       # ~/.cache/lemma/fastembed the first time anything embeds. On a fresh
