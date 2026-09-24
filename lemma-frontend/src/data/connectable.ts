@@ -49,6 +49,8 @@ export interface Connectable {
     hostedOAuth: boolean;
     /** Email surfaces are minted on this domain. */
     emailDomain?: string;
+    credentialSchema?: unknown;
+    kind?: string;
 }
 
 interface RawConnectable {
@@ -61,7 +63,8 @@ interface RawConnectable {
     email_domain?: string | null;
     supported_credential_modes?: string[];
     system_claim?: { available?: boolean; claimed_by_pod_id?: string | null; claimed_by_surface_name?: string | null } | null;
-    connect?: { system_oauth_available?: boolean } | null;
+    kind?: string;
+    connect?: { system_oauth_available?: boolean; credential_schema?: unknown } | null;
 }
 
 /** What the fastest open route actually is.
@@ -107,6 +110,8 @@ export function readConnectable(raw: unknown): Connectable | null {
         account: entry.connector_available === true,
         hostedOAuth: entry.connect?.system_oauth_available === true,
         emailDomain: entry.email_domain ?? undefined,
+        credentialSchema: entry.connect?.credential_schema,
+        kind: entry.kind,
     };
 
     return { ...base, effort: effortOf(base) };

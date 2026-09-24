@@ -1,3 +1,8 @@
+import { fields } from "@/connect/schema";
+import { surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
+import { SurfaceCredentials } from "./surface-credentials";
+import { SurfaceGuide } from "./surface-setup";
+import { SurfaceManage } from "./surface-manage";
 import { LoadingIndicator } from "@/ui/loading";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -77,7 +82,7 @@ const COST: Record<string, string> = {
     unavailable: "Not available",
 };
 
-function ConnectedRow({ surface, pod, onDrop }: { surface: Surface; pod: Pod; onDrop: (name: string) => void }) {
+function ConnectedRow({ surface, pod, onDrop, onManage }: { surface: Surface; pod: Pod; onDrop: (name: string) => void; onManage: () => void }) {
     const [confirming, setConfirming] = useState(false);
     const open = sayHi(surface);
     return (
@@ -85,7 +90,8 @@ function ConnectedRow({ surface, pod, onDrop }: { surface: Surface; pod: Pod; on
             <span className="reachrow__mark"><ChannelIcon platform={surface.platform} size={20} /></span>
             <div className="reachrow__body">
                 <b>{channelName(surface.platform)}</b>
-                <Handle surface={surface} />
+                {surface.handle && <Handle surface={surface} />}
+                <span className="reachrow__note">{surfaceStatus(surface.status, surface.active)}</span>
                 {!surface.mine && (
                     /* A surface on this pod that answers as a different agent.
                        Drawn like the pod's own, it says "Marketing is on
@@ -94,13 +100,13 @@ function ConnectedRow({ surface, pod, onDrop }: { surface: Surface; pod: Pod; on
                 )}
             </div>
             <div className="reachrow__acts">
-                {open && (
+                <button className="btn" onClick={onManage}>Manage</button>
+                {open && surface.active && (
                     <a className="btn" href={open} target={open.startsWith("mailto:") ? undefined : "_blank"} rel="noreferrer">
                         Say hi <ExternalIcon size={13} />
                     </a>
                 )}
-                {surface.mine &&
-                    (confirming ? (
+                {confirming ? (
                         <>
                             <button className="btn reachrow__drop" onClick={() => onDrop(surface.name)}>
                                 Disconnect
@@ -115,7 +121,7 @@ function ConnectedRow({ surface, pod, onDrop }: { surface: Surface; pod: Pod; on
                         >
                             Disconnect
                         </button>
-                    ))}
+                    )}
             </div>
             {/* The address above is only half of a working channel. On
                 WhatsApp the sender's number is the only identity a message
@@ -137,10 +143,11 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
     const [error, setError] = useState<string | null>(null);
     const [starting, setStarting] = useState(false);
 
-    const ready = setup?.status === "READY" || Boolean(setup?.botUsername);
+    const ready = setup?.status === "COMPLETE" || setup?.status === "READY";
+    const failed = setup?.status === "FAILED" || Boolean(setup?.expiresAt && Date.parse(setup.expiresAt) < Date.now());
 
     useEffect(() => {
-        if (!setup || ready) return;
+        if (!setup || ready || failed) return;
         let stop = false;
         const tick = window.setInterval(() => {
             source
@@ -148,15 +155,15 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
                 .then((next) => {
                     if (stop) return;
                     setSetup(next);
-                    if (next.status === "READY" || next.botUsername) onDone();
+                    if (next.status === "READY" || next.status === "COMPLETE") onDone();
                 })
-                .catch(() => undefined);
+                .catch(() => setError("Could not check setup. We will try again."));
         }, 2500);
         return () => {
             stop = true;
             window.clearInterval(tick);
         };
-    }, [setup, ready, pod.id, onDone]);
+    }, [setup, ready, failed, pod.id, onDone]);
 
     if (!setup) {
         return (
@@ -168,7 +175,7 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
                     setError(null);
                     source
                         .startGuided(pod.id, "TELEGRAM")
-                        .then(setSetup)
+                        .then(next => { setSetup(next); if (next.status === "COMPLETE" || next.status === "READY") onDone(); })
                         .catch((problem) =>
                             setError(problem instanceof Error ? problem.message : "That could not be started."),
                         )
@@ -176,10 +183,12 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
                 }}
             >
                 {starting ? "Starting…" : "Make a bot of its own"}
-                {error && <span className="sr-only">{error}</span>}
+                {error && <span role="alert">{error}</span>}
             </button>
         );
     }
+
+    if (failed) return <div role="alert"><p>{setup.error || "This setup expired or failed."}</p><button className="btn" onClick={() => { setSetup(null); setError(null); }}>Start again</button></div>;
 
     if (ready) {
         return (
@@ -198,6 +207,7 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
                 {setup.managerBot} will ask you for a name, then make the bot. This page notices when it is done —
                 you can leave it open.
             </p>
+            {error && <p role="alert">{error}</p>}
             <span className="guided__wait">
                 <RefreshIcon size={13} /> Waiting for Telegram…
             </span>
@@ -236,7 +246,7 @@ function why(entry: Connectable): string {
  *  consent page, and watch for the account that appears. Only the consent page
  *  is somewhere else, and that part genuinely has to be.
  *
- *  The account is recognised by not having existed when we started. There is
+ *  The account is recognised by its authorization request. There is
  *  no callback to this app — the provider redirects to the backend — so a
  *  new row on the connector is the signal. */
 function Account({
@@ -252,6 +262,7 @@ function Account({
     const [stage, setStage] = useState<"idle" | "starting" | "waiting" | "binding">("idle");
     const [error, setError] = useState<string | null>(null);
     const name = entry.title || channelName(entry.platform);
+    const [pendingAccount, setPendingAccount] = useState<string | null>(null);
 
     useEffect(() => {
         if (!link || stage !== "waiting") return;
@@ -264,8 +275,15 @@ function Account({
                     stop = true;
                     window.clearInterval(tick);
                     setStage("binding");
-                    await source.connectAccount(pod.id, entry.platform, accountId);
-                    onDone();
+                    setPendingAccount(accountId);
+                    try {
+                        await source.connectAccount(pod.id, entry.platform, accountId);
+                        onDone();
+                    } catch (problem) {
+                        setStage("idle");
+                        setLink(null);
+                        setError(problem instanceof Error ? problem.message : "That account could not be used.");
+                    }
                 })
                 .catch((problem) => {
                     if (stop) return;
@@ -277,6 +295,15 @@ function Account({
             window.clearInterval(tick);
         };
     }, [link, stage, pod.orgId, pod.id, entry.connectorId, entry.platform, onDone]);
+
+    if (pendingAccount && stage !== "binding") return <div className="guided">
+        <p role="alert">{error}</p>
+        <button className="btn" onClick={async () => {
+            setStage("binding"); setError(null);
+            try { await source.connectAccount(pod.id, entry.platform, pendingAccount); onDone(); }
+            catch (problem) { setStage("idle"); setError(problem instanceof Error ? problem.message : "Could not connect."); }
+        }}>Retry connection</button>
+    </div>;
 
     if (stage === "binding") {
         return (
@@ -394,9 +421,9 @@ function ConnectRow({
                     also the ONLY way for a second teammate, since a connected
                     account is claimable once per organization. */}
                 {/* Not when the row's own button already says exactly this. */}
-                {(entry.guided || OWN_BOT.has(entry.platform)) && !guiding && !(elsewhere && held) && (
+                {(entry.guided || OWN_BOT.has(entry.platform) || fields(entry.credentialSchema).length > 0) && !guiding && !(elsewhere && held) && (
                     <button className="linkish reachrow__alt" onClick={() => onFocus(entry)}>
-                        or give it a bot of its own
+                        Use your own account or bot
                     </button>
                 )}
             </div>
@@ -451,6 +478,8 @@ function Focused({
 }) {
     const name = entry.title || channelName(entry.platform);
     const canOwn = OWN_BOT.has(entry.platform);
+    const [custom, setCustom] = useState(false);
+    const hasCredentials = fields(entry.credentialSchema).length > 0;
     const [ownBot, setOwnBot] = useState(canOwn && (Boolean(taken) || entry.effort === "unavailable"));
 
     return (
@@ -461,7 +490,14 @@ function Focused({
 
             <span className="focused__logo"><ChannelIcon platform={entry.platform} size={38} /></span>
 
-            {ownBot && canOwn ? (
+            <SurfaceGuide podId={pod.id} platform={entry.platform} />
+            {((custom || !entry.guided) && hasCredentials) ? (
+                <>
+                    <h3>Connect your {name} account</h3>
+                    <SurfaceCredentials pod={pod} entry={entry} onDone={onDone} />
+                    {entry.guided && <button className="linkish" onClick={() => setCustom(false)}>Create a new bot instead</button>}
+                </>
+            ) : ownBot && canOwn ? (
                 <>
                     <h3>Give {pod.name} a Slack bot of its own</h3>
                     <p>
@@ -479,6 +515,7 @@ function Focused({
                         to touch BotFather.
                     </p>
                     <Guided pod={pod} onDone={onDone} />
+                    {hasCredentials && <button className="linkish" onClick={() => setCustom(true)}>Use an existing bot</button>}
                 </>
             ) : (
                 <>
@@ -487,7 +524,7 @@ function Focused({
                         {name} will ask whether Lemma may act for you. Nothing is sent anywhere until you say so —
                         this only gives {pod.name} somewhere to answer.
                     </p>
-                    <Account entry={entry} pod={pod} onDone={onDone} />
+                    {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : <p>This platform is not configured on this deployment. Follow the setup instructions or ask your administrator.</p>}
                     {canOwn && (
                         <button className="linkish focused__alt" onClick={() => setOwnBot(true)}>
                             Or give {pod.name} a Slack bot of its own
@@ -501,6 +538,8 @@ function Focused({
 
 export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) {
     const queryClient = useQueryClient();
+    const [managing, setManaging] = useState<Surface | null>(null);
+    const [completionError, setCompletionError] = useState<string | null>(null);
     const [focus, setFocus] = useState<Connectable | null>(null);
     const surfaces = useQuery({
         queryKey: ["surfaces", 2, pod.id],
@@ -530,17 +569,32 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
         void queryClient.invalidateQueries({ queryKey: ["connectable", pod.id] });
         void queryClient.invalidateQueries({ queryKey: ["accounts", pod.orgId] });
         void queryClient.invalidateQueries({ queryKey: ["my-surfaces"] });
+        void queryClient.invalidateQueries({ queryKey: ["surface-detail", pod.id] });
+        void queryClient.invalidateQueries({ queryKey: ["surface-setup", pod.id] });
+        void queryClient.invalidateQueries({ queryKey: ["surface-channels", pod.id] });
+    };
+
+    const finish = async (platform: string) => {
+        refresh();
+        setFocus(null);
+        setTaken(undefined);
+        try {
+            const updated = await source.listSurfaces(pod.id);
+            const made = updated.find(surface => surface.platform === platform && surface.mine);
+            if (made) setManaging(made);
+            else setCompletionError("Connection saved. Refresh channels to finish setup.");
+        } catch { setCompletionError("Connection saved, but setup could not be loaded. Refresh channels to continue."); }
     };
 
     const connect = useMutation({
         mutationFn: (platform: string) => source.connectSystem(pod.id, platform),
-        onSuccess: refresh,
+        onSuccess: (surface) => { refresh(); setManaging(surface); },
     });
     const [taken, setTaken] = useState<string | undefined>(undefined);
     const useAccount = useMutation({
         mutationFn: ({ entry, accountId }: { entry: Connectable; accountId: string }) =>
             source.connectAccount(pod.id, entry.platform, accountId),
-        onSuccess: refresh,
+        onSuccess: (surface) => { refresh(); setManaging(surface); },
         onError: (problem, variables) => {
             /* Not a failure to report and stop at: the account is spoken for,
                and the answer is an identity of this teammate's own. */
@@ -554,15 +608,8 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
         onSuccess: refresh,
     });
 
-    /* Only the surfaces the pod's own responder answers on.
-     *
-     * A pod can carry surfaces bound to other agents — one bot per agent is
-     * the model — and listing those here said "Marketing is on Telegram"
-     * about a bot that is not Marketing. Labelling it "answers as Roaster"
-     * was an improvement on lying and still the wrong list: this sheet is
-     * about reaching THIS teammate. */
     const live = surfaces.data ?? [];
-    const on = live.filter((surface) => surface.mine && surface.active !== false && Boolean(surface.handle));
+    const on = surfacesForAgent(live);
 
     /* A platform already answering for this pod is not something to offer
        again. Keyed on the channel rather than the platform string so Resend
@@ -571,14 +618,15 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
         () => new Set(on.map((surface) => channelKey(surface.platform))),
         [on],
     );
-    const offer = (catalog.data ?? []).filter((entry) => !already.has(channelKey(entry.platform)));
+    const offer = (surfaces.isSuccess ? catalog.data ?? [] : []).filter((entry) => !already.has(channelKey(entry.platform)));
 
     const heldElsewhere = useMemo(
         () =>
             new Set(
                 (mine.data ?? [])
                     .filter((surface) => surface.podId !== pod.id)
-                    .map((surface) => channelKey(surface.platform)),
+                    .map((surface) => channelKey(surface.platform))
+                    .concat(live.filter(surface => !surface.mine).map(surface => channelKey(surface.platform))),
             ),
         [mine.data, pod.id],
     );
@@ -591,7 +639,7 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
             subtitle="Pick a channel and your teammate answers there, under its own name."
             onClose={onClose}
         >
-            {focus ? (
+            {managing ? <SurfaceManage pod={pod} surface={managing} onBack={() => setManaging(null)} onSaved={() => { refresh(); setManaging(null); }} /> : focus ? (
                 <Focused
                     entry={focus}
                     pod={pod}
@@ -600,11 +648,7 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
                         setFocus(null);
                         setTaken(undefined);
                     }}
-                    onDone={() => {
-                        refresh();
-                        setFocus(null);
-                        setTaken(undefined);
-                    }}
+                    onDone={() => { void finish(focus.platform); }}
                 />
             ) : (
             <div className="reachsheet">
@@ -613,14 +657,14 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
                     <p>
                         {on.length === 0
                             ? pod.name + " can only be reached here, in Lemma."
-                            : pod.name + " already answers on " + on.length + (on.length === 1 ? " channel." : " channels.")}
+                            : pod.name + " has " + on.length + (on.length === 1 ? " channel." : " channels.")}
                     </p>
                 </div>
 
                 {on.length > 0 && (
                     <ul className="reachrows">
                         {on.map((surface) => (
-                            <ConnectedRow key={surface.id} surface={surface} pod={pod} onDrop={(name) => drop.mutate(name)} />
+                            <ConnectedRow key={surface.id} surface={surface} pod={pod} onDrop={(name) => drop.mutate(name)} onManage={() => setManaging(surface)} />
                         ))}
                     </ul>
                 )}
@@ -656,6 +700,8 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
                     </>
                 )}
 
+                {completionError && <p role="alert">{completionError} <button className="btn" onClick={() => { refresh(); setCompletionError(null); }}>Refresh channels</button></p>}
+                {surfaces.isError && <p role="alert">Could not read existing channels. <button className="btn" onClick={() => void surfaces.refetch()}>Retry</button></p>}
                 {failed && (
                     <p className="approval__error">
                         {failed instanceof Error ? failed.message : "Couldn’t update this channel."}

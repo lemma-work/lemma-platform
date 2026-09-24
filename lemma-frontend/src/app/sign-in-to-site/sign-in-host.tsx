@@ -1,6 +1,6 @@
 "use client";
 
-import { WorkspaceLoading } from "@/shell/workspace-loading";
+import { PageLoading } from "@/ui/loading";
 
 import dynamic from "next/dynamic";
 
@@ -13,7 +13,7 @@ import dynamic from "next/dynamic";
  */
 const Arrival = dynamic(() => import("@/computer/sign-in-arrival").then((m) => m.SignInArrival), {
     ssr: false,
-    loading: () => <WorkspaceLoading />,
+    loading: () => <PageLoading label="Opening browser sign in" />,
 });
 
 export function SignInHost({ conversationId, toolCallId }: { conversationId: string; toolCallId: string }) {

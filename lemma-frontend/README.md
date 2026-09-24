@@ -140,3 +140,27 @@ names retain enough line height for descenders while long names still truncate.
 Embedded demo documents leave analytics and consent to their containing page.
 Standalone demos show the same analytics choice as other top-level pages.
 Demo teammate access resolves against Acme sample data without authentication.
+
+## Channel setup and management
+
+Open **Manage channels** beside a teammate's contact channels or in its profile.
+The header and its sheet show only the pod responder's channels. Other agents'
+channels appear within their individual profiles. Each keeps one connection per
+platform and lists unfinished and disabled connections so setup can be resumed. **Manage** opens the provider's setup
+checklist, webhook values and administrator consent, plus responder selection,
+Slack/Teams channel selection, email sender filters and the existing-thread send
+policy. Refresh setup after completing steps with the provider.
+
+Custom Telegram and WhatsApp accounts use the deployment's credential schema;
+managed Telegram creation and OAuth remain available where supported. Secrets
+are held only in the current form, and setup secrets are masked until revealed.
+Configuration edits send only the fields the form owns, preserving other
+provider and conversation settings.
+
+Run `npm test` for catalog, configuration and setup rendering regressions.
+Provider consent and message delivery require a connected workspace to verify.
+
+Workspace skeletons are reserved for authenticated workspace data. Auth and demo
+transitions use contextual status messages. Settings omits the Help section and
+clips its sidebar to the panel corners. Message copy controls appear on hover or
+keyboard focus over the bottom-right edge without reserving layout space.

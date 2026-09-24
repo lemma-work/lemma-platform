@@ -2,6 +2,7 @@
 import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
 import { settingsFromQuery } from "@/site/legacy-address";
 
+import { PageLoading } from "@/ui/loading";
 import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { Library, TableView } from "@/library/library";
 import { readableName } from "@/library/reading";
@@ -646,7 +647,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     useEffect(() => { if (pod && activeTab?.kind === "library") setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind]);
 
     if (orgs.isPending) {
-        return <WorkspaceLoading />;
+        return preview ? <PageLoading label="Opening sample workspace" /> : <WorkspaceLoading />;
     }
 
     /* A 401 has already told `SessionGate` to show the door; this component is
@@ -866,7 +867,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     } : undefined}
                     hidden={Boolean(hiring || huddle.expanded || stranger)}
                 >
-                {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
+                {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? (preview ? <PageLoading label="Opening sample workspace" /> : <WorkspaceLoading embedded />) :
                     access.state === "error" || access.state === "missing" ? (
                         <div className="screen"><div className="screen__inner">
                             <h2>{access.state === "missing" ? "We couldn’t find this teammate" : "We couldn’t open this teammate"}</h2>

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
-import type { Connectable, Pod } from "@/data";
+import type { AccountConnect, Connectable, Pod } from "@/data";
 import { CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
 
 /** Giving a teammate a bot of its own.
@@ -54,7 +54,11 @@ export function OwnBot({
     const [step, setStep] = useState(0);
     const [clientId, setClientId] = useState("");
     const [secret, setSecret] = useState("");
-    const [authorizeUrl, setAuthorizeUrl] = useState("");
+    const [signingSecret, setSigningSecret] = useState("");
+    const [authorization, setAuthorization] = useState<AccountConnect | null>(null);
+    const [installId, setInstallId] = useState<string | null>(null);
+    const [accountId, setAccountId] = useState<string | null>(null);
+    const authorizeUrl = authorization?.authorizeUrl;
     const [error, setError] = useState<string | null>(null);
 
     const manifest = useQuery({
@@ -64,19 +68,35 @@ export function OwnBot({
 
     const register = useMutation({
         mutationFn: async () => {
-            const authConfigId = await source.addCustomApp(pod.orgId, entry.connectorId, pod.name + " bot", {
+            const authConfigId = installId ?? await source.addCustomApp(pod.orgId, entry.connectorId, pod.name + " bot", {
                 client_id: clientId.trim(),
                 client_secret: secret.trim(),
-            });
+                signing_secret: signingSecret.trim(),
+            }, entry.kind);
+            setInstallId(authConfigId);
+            setSecret("");
+            setSigningSecret("");
             return source.startAccount(pod.orgId, entry.connectorId, authConfigId);
         },
         onSuccess: (started) => {
-            setAuthorizeUrl(started.authorizeUrl);
+            setAuthorization(started);
             setStep(3);
             if (!started.authorizeUrl) setError("Registered, but this deployment cannot start the authorisation.");
         },
         onError: (problem) =>
             setError(problem instanceof Error ? problem.message : "Those credentials were not accepted."),
+    });
+
+    const finish = useMutation({
+        mutationFn: async () => {
+            if (!authorization) throw new Error("Start authorization first.");
+            const id = accountId ?? await source.findAccount(pod.orgId, entry.connectorId, authorization.before, authorization.authConfigId);
+            if (!id) throw new Error("Authorization is not complete yet. Finish in Slack, then check again.");
+            setAccountId(id);
+            await source.connectAccount(pod.id, entry.platform, id);
+        },
+        onSuccess: onDone,
+        onError: problem => setError(problem.message),
     });
 
     const text = manifest.data ? JSON.stringify(manifest.data, null, 2) : "";
@@ -144,11 +164,15 @@ export function OwnBot({
                                         onChange={(event) => setSecret(event.target.value)}
                                     />
                                 </label>
+                                <label>
+                                    <span>Signing secret</span>
+                                    <input type="password" autoComplete="off" value={signingSecret} onChange={event => setSigningSecret(event.target.value)} />
+                                </label>
                             </div>
                             <div className="ownbot__acts">
                                 <button
                                     className="btn btn--primary"
-                                    disabled={!clientId.trim() || !secret.trim() || register.isPending}
+                                    disabled={(!installId && (!clientId.trim() || !secret.trim() || !signingSecret.trim())) || register.isPending}
                                     onClick={() => {
                                         setError(null);
                                         register.mutate();
@@ -171,12 +195,11 @@ export function OwnBot({
                                 href={authorizeUrl}
                                 target="_blank"
                                 rel="noreferrer"
-                                onClick={() => window.setTimeout(onDone, 4000)}
                             >
                                 Authorise <ExternalIcon size={13} />
                             </a>
-                            <button className="linkish" onClick={onDone}>
-                                <RefreshIcon size={13} /> Check
+                            <button className="btn" disabled={finish.isPending} onClick={() => { setError(null); finish.mutate(); }}>
+                                <RefreshIcon size={13} /> {finish.isPending ? "Connecting…" : "Finish connection"}
                             </button>
                         </div>
                     )}

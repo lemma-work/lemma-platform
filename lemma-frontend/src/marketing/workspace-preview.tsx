@@ -1,13 +1,13 @@
 "use client";
 
-import { WorkspaceLoading } from "@/shell/workspace-loading";
+import { PageLoading } from "@/ui/loading";
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { PreviewProvider } from "./preview-provider";
 import { readTourStep } from "./preview-mode";
 
-const Workspace = dynamic(() => import("@/shell/shell").then(module => module.AppShell), { ssr: false, loading: () => <WorkspaceLoading /> });
+const Workspace = dynamic(() => import("@/shell/shell").then(module => module.AppShell), { ssr: false, loading: () => <PageLoading label="Opening sample workspace" /> });
 
 export function WorkspacePreview() {
     const [step, setStep] = useState(-1);

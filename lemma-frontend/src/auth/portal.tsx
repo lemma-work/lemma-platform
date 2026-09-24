@@ -1,6 +1,6 @@
 "use client";
 
-import { WorkspaceLoading } from "@/shell/workspace-loading";
+import { PageLoading } from "@/ui/loading";
 
 import { useEffect, useState } from "react";
 import { startAuth } from "./supertokens";
@@ -43,7 +43,7 @@ export function Portal({ path }: { path?: string[] }) {
         );
     }
 
-    if (!ready) return <WorkspaceLoading />;
+    if (!ready) return <PageLoading label="Opening sign in" />;
 
     switch (screenFor(path)) {
         case "sign-in": return <SignInUp mode="in" />;

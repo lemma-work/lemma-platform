@@ -1,3 +1,4 @@
+import { AgentChannels } from "@/shell/agent-channels";
 "use client";
 
 import { LoadingRows } from "@/ui/loading";
@@ -253,6 +254,8 @@ function AgentDetailPane({ podId, name, teammate, onBack, onDiscussAgent, onGone
                             onConfirm={() => remove.mutate()}
                         />
                     )}
+
+                    <AgentChannels podId={podId} name={detail.name} label={detail.label} />
 
                     {editing ? (
                         /* Keyed by the agent, so the draft is seeded once per

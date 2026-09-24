@@ -4,6 +4,7 @@ import { TRANSCRIPT_ROW_ATTRIBUTE, useTranscriptScroll } from "./use-transcript-
 import { transcriptState } from "./transcript-state";
 import { ConversationLoading } from "./conversation-loading";
 import { Prose } from "./markdown";
+import { CopyButton } from "./copy-button";
 import { Mark } from "@/shell/mark";
 import { ResourceCard } from "./resource-card";
 import { PlanCard } from "./plan-card";
@@ -236,8 +237,9 @@ export function Transcript({
                                             <span className="msg__at">{turn.human.at}</span>
                                         </div>
                                         <div className="msg__body">
-                                            <Prose text={turn.human.text} copyable />
+                                            <Prose text={turn.human.text} />
                                         </div>
+                                        <div className="message-actions"><CopyButton text={turn.human.text} label="Copy message" /></div>
                                     </div>
                                 )}
 
@@ -268,8 +270,9 @@ export function Transcript({
                                                    block is the same loss as
                                                    hiding them in the trace. */
                                                 return (
-                                                    <div className="said" key={item.id}>
-                                                        <Prose text={item.text} copyable />
+                                                    <div className="message-text" key={item.id}>
+                                                        <div className="said"><Prose text={item.text} /></div>
+                                                        <div className="message-actions"><CopyButton text={item.text} label="Copy message" /></div>
                                                     </div>
                                                 );
                                             }

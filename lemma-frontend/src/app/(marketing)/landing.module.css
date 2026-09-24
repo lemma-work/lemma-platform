@@ -387,7 +387,6 @@
 .productFrame { border: 1px solid rgb(255 254 250 / .3); border-radius: var(--radius-card); overflow: hidden; box-shadow: var(--shadow-float); background: var(--paper); }
 .productViewport { --preview-width: 900px; --preview-scale: 1; position: relative; height: min(calc(62vh + 84px),704px); min-height: 504px; overflow: hidden; background: var(--paper) }
 .productIframe { border: 0; display: block; width: var(--preview-width); height: calc(100% / var(--preview-scale)); transform: scale(var(--preview-scale)); transform-origin: top left }
-.previewLoading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); font-size: 14px }
 .realAppExample { display: flex; flex-direction: column; width: 100%; min-width: 0; gap: 12px }
 .realAppExample iframe { width: 100%; height: 560px; border: 0; border-radius: var(--radius-card); background: var(--paper) }
 .realAppExample > span { color: var(--ink-3); font-size: 12px }

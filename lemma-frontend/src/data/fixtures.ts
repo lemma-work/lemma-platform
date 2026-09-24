@@ -2114,6 +2114,12 @@ export const fixtureSource: PodSource = {
         await wait(40);
         return [...SURFACES];
     },
+    async getSurface() { throw new Error("Channel configuration is available in a connected workspace."); },
+    async surfaceSetup() { throw new Error("Setup status is available in a connected workspace."); },
+    async surfaceGuide() { throw new Error("Setup instructions are available in a connected workspace."); },
+    async surfaceChannels() { return { channels: [] }; },
+    async updateSurface() { throw new Error("Channel configuration is available in a connected workspace."); },
+    async createSurfaceAccount() { throw new Error("Connect accounts in a connected workspace."); },
     async listConnectable() {
         await wait(90);
         return [...CONNECTABLE].map(readConnectable).filter((entry): entry is Connectable => entry !== null).sort(byEffort);
