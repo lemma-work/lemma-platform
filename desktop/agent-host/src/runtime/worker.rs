@@ -320,6 +320,9 @@ impl TargetWorker {
         status
     }
 
+    // The exec relay is built only on Unix; elsewhere there is none to hand
+    // out and `self` goes unread.
+    #[cfg_attr(not(unix), allow(clippy::unused_self))]
     fn op_handler(&self) -> Option<Arc<dyn link::OpHandler>> {
         #[cfg(unix)]
         {
