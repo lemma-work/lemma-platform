@@ -26,6 +26,9 @@ private func vzLog(_ message: String) {
 private let guestPort: UInt32 = 42_411
 /// guestd's sandbox tunnel. See `sandbox_tunnel` in lemma-guestd.
 private let sandboxTunnelPort: UInt32 = 42_412
+/// Where guestd opens loopback relay streams *to* this host. See
+/// `host_loopback` in lemma-guestd and `loopback_relay` in locald.
+private let hostLoopbackPort: UInt32 = 42_413
 private let maxRequestBytes = 1_048_576
 private let maxResponseBytes = 4_194_304
 
@@ -405,9 +408,43 @@ private func argument(_ name: String, in arguments: [String]) throws -> String {
     return arguments[index + 1]
 }
 
+/// Accepts the guest's loopback relay streams and hands them to locald.
+///
+/// Called by the framework on the VM's queue, which is also the bridge's.
+private final class HostLoopbackListener: NSObject, VZVirtioSocketListenerDelegate {
+    let bridge: HostLoopbackBridge
+
+    init(bridge: HostLoopbackBridge) {
+        self.bridge = bridge
+    }
+
+    func listener(
+        _ listener: VZVirtioSocketListener,
+        shouldAcceptNewConnection connection: VZVirtioSocketConnection,
+        from socketDevice: VZVirtioSocketDevice
+    ) -> Bool {
+        let accepted = bridge.accept(GuestStream(descriptor: connection.fileDescriptor) {
+            connection.close()
+        })
+        if !accepted {
+            vzLog("loopback relay stream refused: locald's relay is not reachable or is at capacity")
+        }
+        return accepted
+    }
+}
+
 private final class RuntimeBridges {
     var control: GuestBridge?
     var services: [ServiceBridge] = []
+    var hostLoopback: (VZVirtioSocketListener, HostLoopbackListener)?
+}
+
+/// An optional argument's value, or nil when it was not given.
+private func optionalArgument(_ name: String, in arguments: [String]) -> String? {
+    guard let index = arguments.firstIndex(of: name), index + 1 < arguments.count else {
+        return nil
+    }
+    return arguments[index + 1]
 }
 
 private func serve(arguments: [String]) throws -> Never {
@@ -427,6 +464,10 @@ private func serve(arguments: [String]) throws -> Never {
     guard FileManager.default.fileExists(atPath: controlShare.path) else {
         throw RuntimeError.invalid("Control share is missing: \(controlShare.path)")
     }
+    // Optional, so a runtime manager that predates the relay still starts the
+    // guest; without it guestd's relay streams are simply refused.
+    let hostLoopbackSocket = optionalArgument("--host-loopback-socket", in: arguments)
+        .map { NSString(string: $0).expandingTildeInPath }
     let socketParent = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
     try FileManager.default.createDirectory(
         at: socketParent,
@@ -480,6 +521,15 @@ private func serve(arguments: [String]) throws -> Never {
                     }
                     bridges.services.append(service)
                 }
+                if let hostLoopbackSocket {
+                    let listener = VZVirtioSocketListener()
+                    let delegate = HostLoopbackListener(
+                        bridge: try HostLoopbackBridge(path: hostLoopbackSocket)
+                    )
+                    listener.delegate = delegate
+                    socketDevice.setSocketListener(listener, forPort: hostLoopbackPort)
+                    bridges.hostLoopback = (listener, delegate)
+                }
                 bridges.control = try GuestBridge(
                     socketDevice: socketDevice,
                     socketPath: socketPath
@@ -517,7 +567,7 @@ private func main() throws {
     case "--version", "-V":
         print("lemma-vz \(version)")
     case "--help", "-h", nil:
-        print("lemma-vz \(version)\n\nUSAGE:\n  lemma-vz serve --release <dir> --runtime <state-dir> --control-socket <path> --control-share <dir>\n  lemma-vz validate --release <dir> --runtime <state-dir>")
+        print("lemma-vz \(version)\n\nUSAGE:\n  lemma-vz serve --release <dir> --runtime <state-dir> --control-socket <path> --control-share <dir> [--host-loopback-socket <path>]\n  lemma-vz validate --release <dir> --runtime <state-dir>")
     default:
         throw RuntimeError.invalid("Unknown command \(arguments[0])")
     }

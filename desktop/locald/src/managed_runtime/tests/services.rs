@@ -161,6 +161,7 @@ fn host_processes_use_private_guest_services_without_published_infra_ports() {
         pending_auth: Mutex::new(None),
         pending_images: Mutex::new(None),
         cancellation: lemma_desktop_process::Cancellation::default(),
+        host_loopback: HostLoopbackState::default(),
         status: Mutex::new(Some(ManagedRuntimeStatus {
             endpoint_host: Some("192.168.64.10".into()),
             host_gateway: "192.168.64.1".into(),
@@ -203,4 +204,21 @@ fn host_processes_use_private_guest_services_without_published_infra_ports() {
         environment.values().any(|value| value.contains(":55432")),
         cfg!(target_os = "macos")
     );
+}
+
+/// The loopback relay refuses the runtime's own ports without being told, and
+/// whatever else the daemon names -- read afresh, so a port that became
+/// Lemma's after the relay started (a sharing gateway) is refused too.
+#[test]
+fn the_loopback_relay_refuses_runtime_ports_and_what_the_daemon_adds_later() {
+    let (_root, controller) = super::test_controller();
+    let ports = controller.lemma_ports();
+    let expected: std::collections::BTreeSet<u16> =
+        [8711, 3711, 55432, 56379, 53567].into_iter().collect();
+    assert_eq!(ports(), expected);
+
+    controller.set_lemma_ports(std::sync::Arc::new(|| [61000].into_iter().collect()));
+    let now = ports();
+    assert!(now.contains(&61000), "{now:?}");
+    assert!(expected.is_subset(&now));
 }

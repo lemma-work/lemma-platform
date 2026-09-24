@@ -29,6 +29,7 @@ use crate::tcp_forwarder::TcpForwarder;
 
 mod bootstrap;
 mod clock;
+mod host_loopback;
 mod images;
 mod lifecycle;
 mod probe;
@@ -37,6 +38,7 @@ mod spec;
 
 pub(crate) use bootstrap::*;
 pub(crate) use clock::*;
+pub(crate) use host_loopback::*;
 pub(crate) use images::*;
 pub(crate) use probe::*;
 pub(crate) use services::*;
@@ -64,4 +66,7 @@ pub struct ManagedRuntimeController {
     pending_auth: Mutex<Option<thread::JoinHandle<io::Result<()>>>>,
     pending_images: Mutex<Option<thread::JoinHandle<()>>>,
     cancellation: lemma_desktop_process::Cancellation,
+    /// The owner's loopback relay and the ports it refuses. See
+    /// `host_loopback`.
+    host_loopback: HostLoopbackState,
 }

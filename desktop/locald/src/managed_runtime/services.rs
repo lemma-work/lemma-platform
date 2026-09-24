@@ -223,6 +223,10 @@ impl ManagedRuntimeController {
                 }
             }
         }
+        // The owner's browser in the guest reaching this Mac's loopback. Only
+        // the VM helper connects to it, and only macOS has one.
+        #[cfg(target_os = "macos")]
+        self.ensure_loopback_relay();
         #[cfg(target_os = "macos")]
         for (label, port, guest_port) in [
             ("postgres", self.spec.ports.postgres, 5432),
@@ -295,6 +299,7 @@ impl ManagedRuntimeController {
             .lock()
             .expect("forwarder lock poisoned")
             .clear();
+        self.stop_loopback_relay();
         *self.status.lock().expect("managed runtime status poisoned") = None;
     }
 }
