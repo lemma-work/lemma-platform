@@ -31,6 +31,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Sandbox fabric](architecture/sandbox/README.md) | The provider-neutral sandbox model, and the doc set below it |
 | [Desktop architecture](architecture/desktop.md) | Process ownership, lifecycle protocol, ports, and local state |
 | [Desktop security](architecture/desktop-security.md) | The installation owner, sharing and signup modes, sandbox hardening, and the Tauri origin rule |
+| [Host execution on Desktop](architecture/desktop-host-execution.md) | Running an owner's agent commands on their Mac under Seatbelt: op frames, the exec-server, and how a run chooses it |
 | [Agent Host](architecture/agent-host.md) | Running local coding agents against a pod, how Desktop supervises them, and the link they talk to Lemma over |
 | [Agent Host run events](architecture/agent-host-events.md) | What a local agent run reports: the normalized events, the canonical tool names, and the recorded transcripts they are held to |
 | [Agent memory](architecture/agent-memory.md) | Where an agent's durable facts live, what is loaded into every prompt, and what bounds it |

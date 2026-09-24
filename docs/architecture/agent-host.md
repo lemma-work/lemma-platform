@@ -439,6 +439,10 @@ guarantee:
   only way one is refused. Lemma applies each update separately, so one bad
   update never blocks the rest. The host's old bisection of a refused poll is
   gone with the poll.
+- **The guarantee is tested by breaking it.** `test_agent_host_chaos_e2e.py`
+  kills the backend and closes the link while a batch is appended but not yet
+  acknowledged, and kills the host mid-turn. Every run is held to contiguous
+  sequences, one terminal event, one persisted answer and one provider prompt.
 - **MCP tool calls** are re-authorized on every call against the run's own
   token, exactly as the HTTP endpoint did. A call in flight when the socket
   drops is retried once the link is back. A parked `ask_user` is waited on with
