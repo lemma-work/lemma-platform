@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.modules.workspace.infrastructure.models import (
@@ -22,7 +22,7 @@ from app.modules.workspace.infrastructure.models import (
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 
 
-def _database_url() -> str:
+def _base_database_url() -> str:
     return os.getenv(
         "TEST_DATABASE_URL",
         os.getenv(
@@ -30,6 +30,38 @@ def _database_url() -> str:
             "postgresql+asyncpg://postgres:postgres@localhost:5432/lemma",
         ),
     )
+
+
+_created_worker_databases: set[str] = set()
+
+
+async def _database_url() -> str:
+    """The database for this pytest-xdist worker, created on first use.
+
+    ``sandbox_uow_factory`` truncates the sandbox tables when it finishes, so
+    two workers sharing one database would wipe each other's rows mid-test.
+    Each worker gets ``<db>_<worker id>`` instead; a serial run uses the
+    configured database unchanged.
+    """
+    base = make_url(_base_database_url())
+    worker = os.getenv("PYTEST_XDIST_WORKER")
+    if not worker:
+        return base.render_as_string(hide_password=False)
+    name = f"{base.database}_{worker}"
+    if name not in _created_worker_databases:
+        admin = create_async_engine(base, isolation_level="AUTOCOMMIT")
+        try:
+            async with admin.connect() as connection:
+                exists = await connection.scalar(
+                    text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                    {"name": name},
+                )
+                if not exists:
+                    await connection.execute(text(f'CREATE DATABASE "{name}"'))
+        finally:
+            await admin.dispose()
+        _created_worker_databases.add(name)
+    return base.set(database=name).render_as_string(hide_password=False)
 
 
 @pytest_asyncio.fixture
@@ -42,7 +74,10 @@ async def sandbox_uow_factory() -> AsyncIterator[object]:
     """
     from contextlib import asynccontextmanager
 
-    engine = create_async_engine(_database_url())
+    try:
+        engine = create_async_engine(await _database_url())
+    except Exception as exc:  # pragma: no cover - environment guard
+        pytest.skip(f"postgres not reachable for integration tests: {exc}")
     try:
         async with engine.begin() as connection:
             await connection.run_sync(
@@ -90,7 +125,10 @@ async def sandbox_repository() -> AsyncIterator[SandboxRepository]:
     back afterwards, so this never touches whatever else lives in the database.
     """
 
-    engine = create_async_engine(_database_url(), poolclass=None)
+    try:
+        engine = create_async_engine(await _database_url(), poolclass=None)
+    except Exception as exc:  # pragma: no cover - environment guard
+        pytest.skip(f"postgres not reachable for integration tests: {exc}")
     try:
         async with engine.begin() as connection:
             await connection.run_sync(

@@ -13,7 +13,12 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: security-${{ github.ref }}
+  # Superseded pull request pushes are cancelled; pushes to main never are.
+  # Main's runs are the ones that warm every cache a pull request restores
+  # from, and a burst of merges used to cancel all but the last of them.
+  # On main the group is the commit itself, so no run there is ever queued
+  # behind, or cancelled by, the next merge.
+  group: security-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -180,6 +185,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - run: uv sync --extra local
       - name: Export locked third-party dependency graph
         run: >-

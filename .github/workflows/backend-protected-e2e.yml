@@ -31,6 +31,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - name: Sync protected dependencies
         # `local`, which carries the in-process document processor (xberg).
         # This said `--extra markitdown` until now, and that extra stopped

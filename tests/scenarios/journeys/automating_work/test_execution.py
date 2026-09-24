@@ -91,14 +91,19 @@ async def test_a_mismatched_input_is_refused(pod):
     alice, the_pod = pod
     function = await alice.creates_a_function(in_pod=the_pod)
 
-    run = await alice.runs_function(
+    # Refused when the run is requested, before anything is queued or sent to
+    # a sandbox. This used to be accepted and then recorded as a FAILED run;
+    # the platform now validates the input against the declared contract up
+    # front, which is the stronger form of the same promise.
+    status = await alice.is_refused_running_function(
         function["name"], with_input={"value": "not a number"}, in_pod=the_pod
     )
 
-    assert run["status"] == "FAILED", (
-        f"a function declaring `value: int` must not accept a string: {run}"
+    assert 400 <= status < 500, (
+        f"a function declaring `value: int` must not accept a string: {status}"
     )
-    assert run.get("error"), "a failed run has to say why"
+    runs = await alice.runs_of_function(function["name"], in_pod=the_pod)
+    assert runs == [], f"a refused input must not leave a run behind: {runs}"
 
 
 @scenario("A person changes a function's code and the next run uses it")
