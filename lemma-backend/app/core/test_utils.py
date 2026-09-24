@@ -6,7 +6,8 @@ import subprocess
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Generator, Optional
+from pathlib import Path
+from typing import Generator, Optional, Protocol
 
 import psycopg
 
@@ -23,13 +24,12 @@ SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 # wire schema as 4.9.9, so no client change is needed.
 # The -core image fetches layout/OCR models from HuggingFace on first use.
 KREUZBERG_IMAGE = "ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2"
-# Pinned, like every other image here. `:latest` moved under CI: the tag
-# resolved to a different MinIO release whenever upstream published one,
-# which is both an unreviewed dependency bump and a cache that could not
-# notice -- the e2e image cache is keyed on this file, so the key stayed
-# identical while the image behind the tag changed. Multi-arch (amd64 for
-# CI, arm64 for a developer laptop), so a tag rather than a digest.
-MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+# Source pins live in the Dockerfile; its content also invalidates local images.
+_MINIO_BUILD = Path(__file__).resolve().parents[2] / "test-images" / "minio"
+MINIO_IMAGE = (
+    "lemma-e2e-minio:"
+    + hashlib.sha256((_MINIO_BUILD / "Dockerfile").read_bytes()).hexdigest()[:16]
+)
 # Local-only credentials for a throwaway test container.
 MINIO_ROOT_USER = "minioadmin"
 MINIO_ROOT_PASSWORD = "minioadmin"
@@ -388,6 +388,7 @@ def get_minio_container() -> Generator[LemmaDockerContainer, None, None]:
     datastore file upload over 1 MiB in production. MinIO enforces the same
     minimum, so it reproduces that failure and proves the fix.
     """
+    ensure_minio_image()
     container = (
         LemmaDockerContainer(MINIO_IMAGE, 9000)
         .with_env("MINIO_ROOT_USER", MINIO_ROOT_USER)
@@ -397,6 +398,22 @@ def get_minio_container() -> Generator[LemmaDockerContainer, None, None]:
     with container as minio:
         _wait_for_tcp(minio, 9000, _env_int("MINIO_STARTUP_TIMEOUT_SECONDS", 120))
         yield minio
+
+
+class DockerCommand(Protocol):
+    def __call__(
+        self, args: list[str], *, capture_output: bool = False, check: bool = False
+    ) -> subprocess.CompletedProcess[bytes]: ...
+
+
+def ensure_minio_image(run: DockerCommand = subprocess.run) -> None:
+    """Build the pinned fixture locally when the CI or Docker cache is cold."""
+    existing = run(["docker", "image", "inspect", MINIO_IMAGE], capture_output=True)
+    if existing.returncode != 0:
+        run(
+            ["docker", "build", "--tag", MINIO_IMAGE, str(_MINIO_BUILD)],
+            check=True,
+        )
 
 
 @contextmanager

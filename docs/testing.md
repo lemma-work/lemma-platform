@@ -66,6 +66,12 @@ way a scenario says, do not edit the scenario.
 
 ## The lanes, and what runs when
 
+The S3 multipart fixture builds MinIO and its `mc` client from official source
+commits pinned in `lemma-backend/test-images/minio/Dockerfile`. CI caches the
+built image; local tests build it on first use. Docker must be running, and a
+cold build needs network access to GitHub, the Go module proxy, and the builder
+and runtime images. Changing the Dockerfile invalidates both image caches.
+
 | Lane | Command | Runs |
 |---|---|---|
 | Backend unit | `make test-backend-unit` | Every push that touches the backend. **Required.** |
