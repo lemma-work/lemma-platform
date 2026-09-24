@@ -146,7 +146,9 @@ created. `stat`, `delete` and `move` act on a symbolic link itself; the other
 file ops follow it.
 
 `process.start` is idempotent on `operation_id`: a retry after a lost answer
-returns the process it already started. `shell_command` runs under
+returns the process it already started. When an `operation_id` is given it
+*is* the `process_id`, because Lemma's sandbox protocol addresses every later
+op by the id it chose. `shell_command` runs under
 `/bin/bash -c` (no `-l`: the environment is already the login shell's);
 `argv` runs directly. Each process leads its own process group (a `tty`
 process its own session), so `terminate` sends SIGTERM to the group, then

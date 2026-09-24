@@ -165,6 +165,8 @@ async fn a_retried_start_finds_the_process_it_already_started() {
     let first = start(&fixture.server, params.clone()).await;
     let second = start(&fixture.server, params).await;
     assert_eq!(first, second);
+    // Addressed by the caller's id, which is what every later op names.
+    assert_eq!(first, "op-1");
     let listed = call(&fixture.server, method::PROCESS_LIST, json!({}))
         .await
         .unwrap();

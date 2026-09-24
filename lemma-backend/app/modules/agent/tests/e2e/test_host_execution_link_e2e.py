@@ -8,20 +8,13 @@ replica. What is proved is the hop the unit tests fake: a notice published here
 reaches the session holding the socket, becomes an ``op`` frame, and the
 host's ``op_ok`` comes back on the reply channel.
 
-The half that needs the Rust exec-server -- the real ``lemma-agent-host``
-binary running ``exec_command`` for an owner's run on the Mac, and a
-non-owner's run landing in the VM -- is
-``test_the_real_binary_runs_an_owners_command_on_the_host`` below. It skips
-until the binary on this branch has an ``exec-server`` subcommand; the Rust
-half lands on a parallel branch.
+The real ``lemma-agent-host`` binary and its exec-server under Seatbelt are
+driven in ``test_host_execution_binary_e2e.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
-import subprocess
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -169,32 +162,6 @@ async def test_hello_capabilities_decide_whether_the_host_can_take_commands(
         assert await host_execution_host_id(user_id) is None
     finally:
         await on.aclose()
-
-
-def _binary_with_exec_server() -> str | None:
-    binary = os.environ.get("LEMMA_AGENT_HOST_BIN") or shutil.which("lemma-agent-host")
-    if not binary:
-        return None
-    probe = subprocess.run(
-        [binary, "exec-server", "--help"],
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-    return binary if probe.returncode == 0 else None
-
-
-@pytest.mark.asyncio
-async def test_the_real_binary_runs_an_owners_command_on_the_host():
-    if _binary_with_exec_server() is None:
-        pytest.skip(
-            "lemma-agent-host on this branch has no `exec-server`; the Rust half "
-            "of host execution lands separately (desktop-host-execution.md §8)"
-        )
-    pytest.skip(
-        "wire the real binary through pairing and a Desktop-owner run once the "
-        "exec-server lands; see test_agent_host_process_e2e.py for the harness"
-    )
 
 
 @pytest.mark.asyncio

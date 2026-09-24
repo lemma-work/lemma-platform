@@ -592,6 +592,12 @@ SMOKE_MARKERS = "surface_live"
 # `local_cli` tests live now; the protected lane used to select them and supply
 # none of it, so every one of them asserted "Build lemma-agent-host first".
 DESKTOP_CONTRACT_PATH = "app/modules/agent/tests/e2e/test_agent_host_process_e2e.py"
+# Host execution needs the same built binary, and `make desktop-agent-host-e2e`
+# runs it beside the file above. It runs for real only on macOS, where Seatbelt
+# exists; on the lane's Linux runner it skips.
+HOST_EXECUTION_CONTRACT_PATH = (
+    "app/modules/agent/tests/e2e/test_host_execution_binary_e2e.py"
+)
 DESKTOP_CONTRACT_MARKERS = "local_cli"
 
 # `sandbox-function-benchmark.yml` runs the function benchmark nightly on
@@ -696,6 +702,7 @@ def _lanes_for(
     for lane, owned_path in (
         ("surface-live-smoke", SMOKE_PATH),
         ("desktop-contract", DESKTOP_CONTRACT_PATH),
+        ("desktop-contract", HOST_EXECUTION_CONTRACT_PATH),
         ("sandbox-function-benchmark", BENCHMARK_PATH),
     ):
         if path == owned_path and compiled[lane].evaluate(marks.__contains__):

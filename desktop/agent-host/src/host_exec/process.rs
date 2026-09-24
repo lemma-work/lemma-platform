@@ -257,7 +257,15 @@ impl ProcessTable {
         for entry in request.environment {
             environment.insert(entry.name, entry.value);
         }
-        let id = uuid::Uuid::new_v4().to_string();
+        // The process is addressed by the caller's `operation_id` when it gave
+        // one: Lemma's sandbox protocol keys every process by the id it chose,
+        // and reads, input and termination all name that id, never one this
+        // server invented. A retry with the same id was answered above.
+        let id = request
+            .operation_id
+            .clone()
+            .filter(|operation| !operation.is_empty())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let spawn = Spawn {
             id: id.clone(),
             program,
