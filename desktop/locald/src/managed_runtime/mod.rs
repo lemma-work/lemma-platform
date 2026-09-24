@@ -29,6 +29,9 @@ use crate::tcp_forwarder::TcpForwarder;
 
 mod bootstrap;
 mod clock;
+// The loopback relay runs on macOS only, so off it nothing starts one and the
+// policy it would be handed goes unread. See `crate::loopback_relay`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod host_loopback;
 mod images;
 mod lifecycle;

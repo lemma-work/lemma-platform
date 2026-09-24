@@ -60,6 +60,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Five digits and a newline, with room.
 const MAX_REQUEST_BYTES: usize = 16;
+/// How long, and how much, a refused connection is read after its answer.
+/// See `refuse`.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_DRAIN_BYTES: u64 = 64 * 1024;
 /// The lowest port the relay will connect to.
 pub(crate) const FIRST_UNPRIVILEGED_PORT: u16 = 1024;
 
@@ -143,6 +147,27 @@ async fn read_request<C: AsyncRead + Unpin>(client: &mut C) -> io::Result<Option
     }
 }
 
+/// Answer a connection that will not be relayed, and end it.
+///
+/// Half-closes first, so the client reads the answer and then EOF, and then
+/// reads whatever the client had already sent -- an overlong request, or the
+/// first bytes it sent behind the request line -- until it closes. Dropping a
+/// Unix socket with unread input makes Linux report `ECONNRESET` to the peer
+/// in place of EOF, so without this the answer was followed by a reset.
+/// Bounded in time and bytes, so a client that never stops sending cannot hold
+/// the connection open.
+async fn refuse<C: AsyncRead + AsyncWrite + Unpin>(client: &mut C, answer: &str) -> io::Result<()> {
+    client.write_all(answer.as_bytes()).await?;
+    let _ = client.shutdown().await;
+    let mut unread = client.take(MAX_DRAIN_BYTES);
+    let _ = tokio::time::timeout(
+        DRAIN_TIMEOUT,
+        tokio::io::copy(&mut unread, &mut tokio::io::sink()),
+    )
+    .await;
+    Ok(())
+}
+
 /// The Mac's own server on `port`: IPv4 loopback, then IPv6 loopback.
 pub(crate) async fn connect_loopback(port: u16) -> io::Result<TcpStream> {
     let mut last = io::Error::from(io::ErrorKind::ConnectionRefused);
@@ -190,7 +215,7 @@ where
     let line = match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut client)).await {
         Ok(Ok(Some(line))) => line,
         Ok(Ok(None)) | Err(_) => {
-            let _ = client.write_all(b"error not a port\n").await;
+            let _ = refuse(&mut client, "error not a port\n").await;
             return Ok(Outcome::NoRequest);
         }
         Ok(Err(error)) => return Err(error),
@@ -203,20 +228,18 @@ where
     let port = match admitted {
         Ok(port) => port,
         Err(refusal) => {
-            client
-                .write_all(format!("error {}\n", refusal.reason()).as_bytes())
-                .await?;
-            let _ = client.shutdown().await;
+            refuse(&mut client, &format!("error {}\n", refusal.reason())).await?;
             return Ok(Outcome::Refused(refusal));
         }
     };
     let mut upstream = match connect(port).await {
         Ok(upstream) => upstream,
         Err(_) => {
-            client
-                .write_all(b"error nothing on this Mac is listening on that port\n")
-                .await?;
-            let _ = client.shutdown().await;
+            refuse(
+                &mut client,
+                "error nothing on this Mac is listening on that port\n",
+            )
+            .await?;
             return Ok(Outcome::Unreachable(port));
         }
     };
