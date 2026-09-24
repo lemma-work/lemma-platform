@@ -12,7 +12,10 @@ mod conversation_folders;
 pub mod journal;
 pub mod link;
 pub mod mcp_bridge;
-mod mcp_relay;
+/// The host's end of the MCP bridge. Public for the integration tests, which
+/// drive a real bridge process against it.
+#[doc(hidden)]
+pub mod mcp_relay;
 pub mod normalize;
 pub mod permissions;
 pub mod protocol;

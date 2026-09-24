@@ -52,7 +52,7 @@ pub(crate) struct RelayEndpoint {
 }
 
 /// The endpoint file for one target, under the host's private directory.
-pub(crate) fn endpoint_path(paths: &HostPaths, target_id: Uuid) -> PathBuf {
+pub fn endpoint_path(paths: &HostPaths, target_id: Uuid) -> PathBuf {
     paths.root.join("mcp-relay").join(format!("{target_id}.json"))
 }
 
@@ -78,7 +78,7 @@ pub(crate) struct RelayResponse {
 }
 
 /// Bind the relay and publish its endpoint; the returned future serves it.
-pub(crate) fn serve(
+pub fn serve(
     paths: &HostPaths,
     target_id: Uuid,
     journal: Journal,
