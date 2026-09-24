@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "genai-prices==0.1.6",
+    "genai-prices==0.1.7",
     # The public-suffix list, for deciding which hosts are one site. Used by
     # web_login scoping; see app/modules/web_login/services/scope.py. Already
     # present transitively -- named here because that module imports it.
