@@ -30,7 +30,15 @@ the owner-agnostic VM sandbox, exactly as before.
    a teammate, steered by a teammate, or started by an inbound channel message
    from anyone else never executes on the host, even inside the owner's pod.
 4. The owner has a paired Agent Host that is **online**, with **host execution
-   turned on** (Settings → This Mac → Coding agents).
+   turned on** (Settings → This Mac → Coding agents). The host reports this on
+   `hello` and on every `control` as `host_execution: {enabled, platform,
+   available}`; Lemma routes here only when `enabled` and `available` are both
+   true. `available` is macOS with `/usr/bin/sandbox-exec`. The setting is
+   `host_execution` in the Agent Host's `config.json`, toggled by
+   `lemma-agent-host host-execution enable|disable` or locald's
+   `agent-host.host-execution` (`{"enabled": bool}`); a running host notices
+   within five seconds and says so on its next `control`, without a
+   reconnect.
 
 This check happens once, when a run's sandbox is chosen, and the choice is
 recorded on the sandbox. A run never moves between the two mid-flight. If the
@@ -47,7 +55,8 @@ backend (on the Mac)                      lemma-agent-host (on the Mac)
     │                                                        │ stdio, JSON lines
     │  ◄── Redis reply ◄── link session ◄──ws `op_ok`──      ▼
                                               lemma-agent-host exec-server
-                                              (under sandbox-exec, host-sandbox.sb)
+                                              one per open workspace, each under
+                                              sandbox-exec + host-sandbox.sb
                                                  processes · PTYs · files
 ```
 
@@ -61,11 +70,28 @@ backend (on the Mac)                      lemma-agent-host (on the Mac)
   answer to the reply channel. If no session picks the request up within
   `OP_PICKUP_TIMEOUT` (2 s), the host is treated as offline.
 - **The exec-server** is `lemma-agent-host exec-server`, the same binary,
-  spawned once per host by the link worker under `sandbox-exec -f
-  host-sandbox.sb` with the parameters below. Every process it starts and every
-  file it touches inherits that confinement. It speaks JSON lines on
-  stdin/stdout: one request, one response, correlated by `id`. The link worker
-  restarts it if it exits.
+  spawned by the link worker under `sandbox-exec -p <host-sandbox.sb>` with
+  the parameters below, **one per open workspace**. Every process it starts
+  and every file it touches inherits that confinement. It speaks JSON lines on
+  stdin/stdout: `{id, workspace, method, params, deadline_ms}` in,
+  `{id, result}` or `{id, error: {kind, message, retryable}}` out, answered in
+  whatever order ops finish. When its stdin closes it kills every process
+  group it started and exits.
+- **Why one per workspace.** Seatbelt fixes a process's confinement when it
+  starts, and a workspace's root and granted folders are only known at
+  `workspace.open`. One exec-server per host would have to be confined to the
+  union of every workspace's folders -- so a command in one conversation could
+  write into another's bound project -- or be restarted with wider parameters
+  whenever a workspace opened somewhere new, killing every other workspace's
+  running commands. One per workspace costs a process each and confines each
+  to exactly its own root and grants. A `workspace.open` naming a different
+  root or grants than the running exec-server was started with replaces it.
+- **Restarts.** An exec-server that exits is restarted with backoff (250 ms
+  doubling to 30 s) and its workspace reopened. Its processes died with it, so
+  reads of them answer `process_not_found`. While it is down, ops answer
+  `exec_server_unavailable` (retryable). An Agent Host restart forgets every
+  open workspace: ops then answer `workspace_not_open`, and **the provider
+  reopens the workspace and retries once**.
 
 ## 4. The `op` frames
 
@@ -87,38 +113,62 @@ ranged chunks and no stream frames are needed.
 
 | `method` | `params` | `result` |
 |---|---|---|
-| `workspace.open` | `root_hint` (conversation folder or null), `grants` | `root` (host absolute path), `home`, `platform` |
+| `workspace.open` | `conversation_id` (uuid \| null), `root_hint` (host folder \| null), `slug` \| null, `date` (`yyyy-mm-dd`) \| null, `grants` `[path]` (≤ 8) | `root` (host absolute path), `home`, `platform` |
 | `workspace.close` | — | `{}` |
 | `process.start` | `operation_id`, `shell_command` \| `argv`, `cwd`, `environment` `[{name,value}]`, `tty` `{rows,cols}` \| null, `output_limit_bytes`, `initial_input` (b64) \| null | `process_id` |
-| `process.read` | `process_id`, `after_sequence`, `wait_ms` | `chunks` `[{sequence, stream: stdout\|stderr\|pty, data}]`, `next_sequence`, `truncated_before_sequence`, `state` (`running`\|`exited`\|`killed`), `exit_code` |
+| `process.read` | `process_id`, `after_sequence`, `wait_ms` (≤ 30 000) | `chunks` `[{sequence, stream: stdout\|stderr\|pty, data}]`, `next_sequence`, `truncated_before_sequence`, `state` (`running`\|`exited`\|`killed`), `exit_code` |
 | `process.input` | `process_id`, `data` | `{}` |
 | `process.resize` | `process_id`, `rows`, `cols` | `{}` |
-| `process.terminate` | `process_id`, `grace_ms` | `{}` |
+| `process.terminate` | `process_id`, `grace_ms` (default 2000) | `{}` |
 | `process.list` | — | `processes` `[{process_id, command, state, exit_code, started_at}]` |
-| `file.stat` | `path` | a `FileStat`: `path`, `kind` (`file`\|`directory`\|`symlink`), `size_bytes`, `modified_at`, `mode`, `sha256` |
-| `file.list` | `path` | `entries` `[FileStat]` |
+| `file.stat` | `path` | a `FileStat`: `path`, `kind` (`file`\|`directory`\|`symlink`), `size_bytes`, `modified_at` (RFC 3339), `mode` (permission bits as an integer), `sha256` (`sha256:<hex>`, files ≤ 32 MiB, else null) |
+| `file.list` | `path` | `entries` `[FileStat]`, sorted by path, `sha256` always null |
 | `file.mkdir` | `path` | `{}` |
-| `file.read` | `path`, `offset`, `length` (≤ 1 MiB) | `data`, `eof` |
-| `file.write` | `path`, `upload_id`, `offset`, `data`, `final`, `expected_sha256` (on `final`) | `{}`, or the written `FileStat` on `final` |
+| `file.read` | `path`, `offset`, `length` (≤ 1 MiB, default 1 MiB) | `data`, `eof` |
+| `file.write` | `path`, `upload_id` (`[A-Za-z0-9_-]{1,64}`), `offset`, `data`, `final`, `expected_sha256` (optional, on `final`; `sha256:<hex>` or bare hex) | `{}`, or the written `FileStat` on `final` |
 | `file.move` | `source`, `destination` | `{}` |
 | `file.delete` | `path`, `recursive` | `existed` |
 | `secret.deliver` | `path`, `data` | `{}` (written 0600, parent 0700) |
 
 `file.write` writes each chunk to a temporary sibling. `final` verifies the
 digest, `fsync`s and renames it into place, so a reader never sees a partial
-file. An upload that is not finalized within 5 minutes is removed.
+file; a mismatch removes the temporary and leaves the target untouched. An
+upload not written to for 5 minutes is removed. Missing parent folders are
+created. `stat`, `delete` and `move` act on a symbolic link itself; the other
+file ops follow it.
+
+`process.start` is idempotent on `operation_id`: a retry after a lost answer
+returns the process it already started. `shell_command` runs under
+`/bin/bash -c` (no `-l`: the environment is already the login shell's);
+`argv` runs directly. Each process leads its own process group (a `tty`
+process its own session), so `terminate` sends SIGTERM to the group, then
+SIGKILL to whatever of it is left after `grace_ms`, children that outlived the
+leader included. A process ended by a signal, or by `terminate`, reads as
+`killed`.
 
 Process output is kept in a ring per process, bounded by
-`output_limit_bytes`, with 1-based sequences that are exclusive in `after_sequence`, as
-in `sandbox_runtime`. `process.read` waits up to `wait_ms` for new output. A
-process is tracked until it exits and has been read to the end, or for 10
-minutes after exit.
+`output_limit_bytes` (default 1 MiB, at most 16 MiB), with 1-based sequences
+that are exclusive in `after_sequence`, as in `sandbox_runtime`.
+`next_sequence` is the sequence the next chunk will get, and
+`truncated_before_sequence` the first one still held once anything was
+dropped. `process.read` waits up to `wait_ms` for new output, and returns at
+once for a process that has exited. A process reads as exited only once its
+output is complete (or 2 s after exit, for a background child holding the pipe
+open). It is tracked for 60 seconds after it has exited and been read to the
+end, or for 10 minutes after exit.
+
+An op carries `deadline_ms` (default 120 s); past it the host answers
+`timeout` itself. At most 32 ops run at once per link.
 
 **Failures** use `detail.kind`, which the provider maps onto
 `sandbox_runtime` errors: `not_found`, `already_exists`, `not_a_directory`,
 `is_a_directory`, `permission_denied` (including a Seatbelt denial),
 `outside_workspace`, `digest_mismatch`, `too_large`, `process_not_found`,
-`workspace_not_open`, `exec_server_unavailable`, `timeout`.
+`workspace_not_open`, `exec_server_unavailable`, `timeout`, `invalid_request`
+(a malformed op: unknown method, missing or mistyped parameter), `io_error`
+(any other operating-system failure). `retryable` is true for
+`exec_server_unavailable` and `timeout` only. The methods and kinds are listed
+in `wire_contract.json` under `host_execution`, which both sides test against.
 
 **Not offered on the host.** The provider does not declare
 `ProviderCapability.PORT_REACH`. Persistent Python sessions raise
@@ -136,7 +186,17 @@ its working directory from the sandbox, not from a hard-coded `/workspace`:
   run's cwd), the root is that folder. The owner's native tools and Lemma's
   tools then see the same files.
 - Otherwise it is `~/lemma/c/<yyyy-mm-dd>/<conversation-slug>`, the same folder
-  an Agent Host run would use.
+  an Agent Host run would use: `date` and `slug` from `workspace.open`
+  (`date` defaults to today, `slug` to the conversation id; the backend should
+  send both so a reopen on another day finds the same folder).
+
+**The backend naming a folder is not the owner choosing it.** The host uses a
+`root_hint` or a grant only if it is a folder the owner bound this
+conversation to on this machine (the desktop shell records those from a native
+folder dialog, in `conversation-folders.json`; see `conversation_folders.rs`),
+or a folder under `~/lemma` -- and never the home folder or anything
+containing it. Any other `root_hint` is ignored in favour of the default root,
+which `workspace.open`'s `root` reports; any other grant is dropped.
 
 A path in a file op must resolve, after following symlinks, inside the root,
 `$TMPDIR`, or a folder the owner granted; otherwise `outside_workspace`. This
@@ -145,18 +205,28 @@ Commands are not path-checked, only sandboxed.
 
 ## 6. The Seatbelt profile
 
-`desktop/agent-host/resources/host-sandbox.sb`, parameterised with
-`-D ROOT=… -D TMP=… -D HOME=… -D GRANT_0=…`. It is modelled on Claude Code's
-defaults: broad reads, narrow writes, open network.
+`desktop/agent-host/resources/host-sandbox.sb`, compiled into the binary and
+passed as `sandbox-exec -p`, parameterised with `-D ROOT=… -D TMP=… -D HOME=…
+-D GRANT_0=… … -D GRANT_7=…` (canonical paths; Seatbelt matches
+`/private/var`, not `/var`). It is modelled on Claude Code's and Codex's:
+**deny by default**, then broad reads, narrow writes, open network. Deny by
+default rather than allow by default, because an allowed default also allows
+the ways out of a sandbox that are not files at all -- `launchctl submit`,
+`open -a Terminal`, Apple Events -- so Mach services are allowed by name
+(logging, directory services, DNS, TLS trust, the Keychain, FSEvents).
 
 - **Reads:** allowed everywhere except `~/.ssh`, `~/.aws`, `~/.gnupg`,
   `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker/config.json`,
   `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/Library/Keychains`,
   `~/Library/Application Support/{Google/Chrome,Firefox,Arc,BraveSoftware}`,
   `~/Library/Mail`, `~/Library/Messages`, `~/Library/Cookies`, and Lemma's own
-  data directory. `gh` reads its token from the Keychain through
-  `security`'s Mach service, which stays reachable, so `gh` works without
-  opening the keychain files.
+  data directory. The credential denials come after every allow, so a root or
+  grant that contains one still cannot reach it. One exception, measured: the
+  login keychain file (`~/Library/Keychains/login.keychain-db`) is readable.
+  `gh` and git's osxkeychain helper open it in-process to find their item and
+  securityd then decides whether to release the secret; with it denied, `gh
+  auth token` answers "no oauth token found". It is encrypted with the login
+  password, and the rest of `~/Library/Keychains` stays denied.
 - **Writes:** the root, granted folders, `$TMPDIR`, `/tmp`, `/private/var/folders`,
   and the package-manager caches (`~/.npm`, `~/.cache`, `~/Library/Caches`,
   `~/.cargo/registry`, `~/.rustup/tmp`, `~/go/pkg/mod`, `~/.gradle/caches`,
@@ -165,7 +235,8 @@ defaults: broad reads, narrow writes, open network.
 - **Network:** open, outbound and loopback. `npm install` and `npm run dev`
   need both.
 - **Processes:** fork and exec are allowed. Children inherit the profile and
-  cannot drop it.
+  cannot drop it. Setuid programs (`ps`, `sudo`) cannot run under any
+  sandbox profile.
 - **Environment:** a snapshot of the owner's login shell (`$SHELL -lic env`,
   taken once, cached, refreshed from Settings). `LEMMA_*`, `AGENT_HOST_*`,
   `*_TOKEN`, `*_SECRET`, `*_API_KEY` and `AWS_*` are removed. `PATH` is kept
@@ -191,8 +262,8 @@ processes (§8).
 
 | Lane | What it proves |
 |---|---|
-| Rust unit (`make desktop-test`) | exec-server op handling, output ring and sequences, chunked write and digest, path policy including symlink escape, env scrubbing |
-| Rust, macOS only (`seatbelt.rs`) | under the real profile: `cat ~/.ssh/x` denied, `touch ~/x` denied, write in the root and `~/.npm` allowed, `git init` plus a commit in the root, `curl` to loopback |
-| Link tests | `op` → exec-server → `op_ok` across a real WebSocket, host offline, exec-server restart |
+| Rust unit (`make desktop-test`) | exec-server op handling, output ring and sequences, chunked write and digest, path policy including symlink escape, env scrubbing (`src/host_exec/`) |
+| Rust, macOS only (`tests/seatbelt.rs`) | under the real profile, with a test-made `HOME`: `cat ~/.ssh/x` denied, `touch ~/x` denied, write in the root and `~/.npm` allowed, grants, `git init` plus a commit in the root, `curl` to loopback; and the real exec-server binary under `sandbox-exec`, driven through the relay |
+| Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, root-hint admissibility, a waiting read not blocking other ops |
 | Backend unit | provider maps every op and every failure kind; selection truth table (owner, non-owner, steered, inbound, host offline, toggle off, cloud); tool filtering for Agent Host runs |
 | Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for an owner's run on the host, and a non-owner's run lands in the VM |
