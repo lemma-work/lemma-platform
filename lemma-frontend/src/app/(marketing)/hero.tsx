@@ -135,17 +135,9 @@ export function Hero() {
             </div>
             <div className={s.field}>
                 <div className={s.productFrame}>
-                    <div className={s.productBar}>
-                        <span><i /> Acme <em>Interactive sample workspace</em></span>
-                        <a href="/demo/landing" target="_blank" rel="noopener noreferrer" aria-label="Open Acme workspace full screen">Open full screen ↗</a>
-                    </div>
                     <div className={s.productViewport} ref={viewport}>
                         {!ready && <div className={s.previewLoading}>Opening Acme…</div>}
                         <iframe ref={demo} src="/demo/landing" title="Explore the Acme workspace" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" />
-                    </div>
-                    <div className={s.productCaption}>
-                        <span>{mode === "exploring" ? "You’re exploring Acme. Changes stay in this demo." : "Try the apps, tabs and dialogs. This is the product."}</span>
-                        {mode === "exploring" && <button onClick={() => { dispatch({ type: "resume" }); showStep(step); }}>Resume tour ↗</button>}
                     </div>
                 </div>
             </div>
@@ -156,7 +148,7 @@ export function Hero() {
                         <span className={s.beatNumber}>0{index + 1}</span><span><b>{beat.name}</b><span>{beat.says}</span></span>
                     </button>
                 </li>)}</ol>
-                <a className={s.tourSkip} href="#shared">Continue to shared work <span aria-hidden="true">↓</span></a>
+                <a className={s.tourSkip} href="/demo/landing" target="_blank" rel="noopener noreferrer">Open workspace full screen ↗</a>
             </div>
             <div className={s.knot}><CharacterPuppet character="loop" size={280} greeting={0} mood={near ? "delighted" : "idle"} label="Kit, your launch producer" /></div>
         </section>

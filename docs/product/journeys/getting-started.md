@@ -86,6 +86,23 @@ are shown with a retry action rather than an indefinite loading message.
 
 ---
 
+### PS-ONB-005 — A person chooses comfortable chat text on their device
+**Status:** manual
+
+> **Verified by:** opening Settings > Appearance in the browser, selecting each
+> chat text size, inspecting messages and the composer, and reloading to confirm
+> the choice persists. The API scenario suite cannot inspect rendered typography.
+
+- Appearance shall offer Small, Default, and Large chat text with a live preview.
+- The default message size shall be 15px; Small shall be 14px and Large 17px.
+- The choice shall apply immediately to conversation prose and the composer,
+  without changing navigation or document typography.
+- Touch-device composers shall remain at least 16px to avoid focus zoom.
+- The choice shall persist in the current browser and restore before paint.
+  Missing, invalid, or unavailable storage shall use the default.
+
+---
+
 ## Capability: Create an organization
 
 ### PS-ONB-010 — The person who creates an organization owns it

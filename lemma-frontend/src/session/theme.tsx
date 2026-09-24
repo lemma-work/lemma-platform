@@ -1,6 +1,7 @@
 import { SunIcon, MoonIcon, SystemIcon } from "@/ui/icons";
 import { useEffect, useState } from "react";
 import { key } from "./storage";
+import { CHAT_TEXT_SIZES, readChatTextSize, type ChatTextSize } from "./chat-text";
 
 export type Theme = "system" | "light" | "dark";
 export type Accent = "violet" | "coral" | "forest" | "ocean" | "amber" | "plum" | "slate" | "ink";
@@ -9,6 +10,12 @@ export type Corners = "sharp" | "soft" | "round";
 const THEME_KEY = key("theme");
 const ACCENT_KEY = key("accent");
 const CORNERS_KEY = key("corners");
+const CHAT_TEXT_KEY = key("chat-text-size");
+
+function readTextSize(): ChatTextSize {
+    try { return readChatTextSize(localStorage, CHAT_TEXT_KEY); }
+    catch { return "default"; }
+}
 
 export const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
     { value: "violet", label: "Violet", swatch: "#6b4fe0" },
@@ -57,16 +64,17 @@ function readCorners(): Corners {
 /** System is the absence of a stamp, not a third value on the element — the
  *  stylesheet resolves it through `prefers-color-scheme`, so clearing the
  *  attribute is what hands control back to the OS. */
-function apply(theme: Theme, accent: Accent, corners: Corners): void {
+function apply(theme: Theme, accent: Accent, corners: Corners, textSize: ChatTextSize): void {
     const root = document.documentElement;
     if (theme === "system") root.removeAttribute("data-theme");
     else root.setAttribute("data-theme", theme);
     root.setAttribute("data-accent", accent);
     root.setAttribute("data-corners", corners);
+    root.setAttribute("data-chat-text-size", textSize);
 }
 
 export function initTheme(): void {
-    apply(readTheme(), readAccent(), readCorners());
+    apply(readTheme(), readAccent(), readCorners(), readTextSize());
 }
 
 const MODES: { value: Theme; label: string; icon: typeof SunIcon }[] = [
@@ -75,7 +83,7 @@ const MODES: { value: Theme; label: string; icon: typeof SunIcon }[] = [
     { value: "dark", label: "Dark", icon: MoonIcon },
 ];
 
-/** The three appearance choices, held together because they are written
+/** Appearance choices are held together because they are written
  *  together: one effect, one storage write, one attribute pass.
  *
  *  Kept in this browser rather than on the account. It is a property of the
@@ -86,20 +94,22 @@ export function useAppearance() {
     const [theme, setTheme] = useState<Theme>(readTheme);
     const [accent, setAccent] = useState<Accent>(readAccent);
     const [corners, setCorners] = useState<Corners>(readCorners);
+    const [textSize, setTextSize] = useState<ChatTextSize>(readTextSize);
 
     useEffect(() => {
-        apply(theme, accent, corners);
+        apply(theme, accent, corners, textSize);
         try {
             if (theme === "system") localStorage.removeItem(THEME_KEY);
             else localStorage.setItem(THEME_KEY, theme);
             localStorage.setItem(ACCENT_KEY, accent);
             localStorage.setItem(CORNERS_KEY, corners);
+            localStorage.setItem(CHAT_TEXT_KEY, textSize);
         } catch {
             /* a browser refusing storage still renders in the OS theme */
         }
-    }, [theme, accent, corners]);
+    }, [theme, accent, corners, textSize]);
 
-    return { theme, setTheme, accent, setAccent, corners, setCorners };
+    return { theme, setTheme, accent, setAccent, corners, setCorners, textSize, setTextSize };
 }
 
 /** Appearance as a section of settings rather than a dropdown in the header.
@@ -109,7 +119,7 @@ export function useAppearance() {
  *  per-teammate, so it belongs where the other account-wide choices are.
  */
 export function AppearancePanel() {
-    const { theme, setTheme, accent, setAccent, corners, setCorners } = useAppearance();
+    const { theme, setTheme, accent, setAccent, corners, setCorners, textSize, setTextSize } = useAppearance();
 
     return (
         <div className="appearance">
@@ -127,6 +137,22 @@ export function AppearancePanel() {
                             {mode.label}
                         </button>
                     ))}
+                </div>
+            </div>
+
+            <div className="appearance__group">
+                <div className="theme__label" id="chat-text-label">Chat text size</div>
+                <div className="theme__modes" role="group" aria-labelledby="chat-text-label">
+                    {CHAT_TEXT_SIZES.map(entry => <button
+                        key={entry.value} className="theme__mode" type="button"
+                        aria-pressed={textSize === entry.value}
+                        onClick={() => setTextSize(entry.value)}
+                    >{entry.label}</button>)}
+                </div>
+                <p className="appearance__hint">Message and composer text. Saved in this browser.</p>
+                <div className="appearance__chat-preview" aria-label="Chat text preview">
+                    <span>Your teammate</span>
+                    <p>The draft is ready. Take a look and tell me what you’d like to change.</p>
                 </div>
             </div>
 

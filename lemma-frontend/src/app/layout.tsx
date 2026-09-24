@@ -20,7 +20,7 @@ export const metadata: Metadata = { title: "Lemma", description: "Your teammates
 // `CARRY_SCRIPT` runs first and must: it carries these keys over from the
 // pre-rename prefix, and reading them before it has paints one frame of the
 // wrong theme.
-const themeScript = `(function(){try{var d=document.documentElement,s=localStorage,t=s.getItem('${PREFIX}:theme');if(t==='light'||t==='dark')d.dataset.theme=t;d.dataset.accent=s.getItem('${PREFIX}:accent')||'violet';d.dataset.corners=s.getItem('${PREFIX}:corners')||'soft'}catch(e){}})()`;
+const themeScript = `(function(){try{var d=document.documentElement,s=localStorage,t=s.getItem('${PREFIX}:theme');if(t==='light'||t==='dark')d.dataset.theme=t;d.dataset.accent=s.getItem('${PREFIX}:accent')||'violet';d.dataset.corners=s.getItem('${PREFIX}:corners')||'soft';var p=["/demo/landing", "/demo/landing/", "/demo/launch", "/demo/launch/"].includes(location.pathname)?'lemma-tour':'${PREFIX}',c=s.getItem(p+':chat-text-size');d.dataset.chatTextSize=c==='small'||c==='large'?c:'default'}catch(e){}})()`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
     return <html lang="en" suppressHydrationWarning>

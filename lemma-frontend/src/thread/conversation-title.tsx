@@ -2,34 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { EditIcon } from "@/ui/icons";
 import { lemma } from "@/session/client";
 import { source, type ConversationRef } from "@/data";
 import { applyTitle, titleToSend, titleToShow } from "./conversation-list";
 
-/** What this conversation is about, above the conversation.
- *
- *  It had nowhere to live before. The title existed — the backend generates one
- *  after the first run completes — but it was only ever drawn in the history
- *  panel, so the one conversation you were actually reading was the one thing
- *  on screen that would not say what it was. The header above it carries the
- *  teammate's name, which is the same on every conversation with them.
- *
- *  Editable in place, because renaming is the kind of thing people do while
- *  reading rather than by going somewhere. Blank means "you pick" — see
- *  `titleToSend` for why that is `null` and not `""`.
- */
+/** Inline renaming beside a conversation in the history sidebar. */
 export function ConversationTitle({
     podId,
     conversationId,
     title,
-    busy,
 }: {
     podId: string;
     conversationId: string | null;
     /** What the list currently holds for this conversation, if anything. */
     title: string | null;
-    /** A run is going. The title still renames; this only softens the row. */
-    busy?: boolean;
 }) {
     const cache = useQueryClient();
     const [editing, setEditing] = useState(false);
@@ -83,10 +70,10 @@ export function ConversationTitle({
 
     if (editing) {
         return (
-            <div className="convo-title convo-title--editing">
+            <div className="history__rename history__rename--editing">
                 <input
                     ref={input}
-                    className="convo-title__input"
+                    className="history__rename-input"
                     aria-label="Conversation title"
                     value={draft}
                     placeholder="Leave empty to let it name itself"
@@ -103,17 +90,18 @@ export function ConversationTitle({
     }
 
     return (
-        <div className="convo-title" data-busy={busy ? "" : undefined}>
+        <div className="history__rename">
             <button
-                className="convo-title__name convo-title__name--editable"
-                title="Rename this conversation"
+                className="history__rename-button"
+                title={"Rename " + shown}
+                aria-label={"Rename " + shown}
                 disabled={saving}
                 onClick={() => { setDraft(title ?? ""); setEditing(true); }}
             >
-                {shown}
+                <EditIcon size={14} />
             </button>
             {failed && (
-                <span className="convo-title__failed" role="status">
+                <span className="history__rename-failed" role="status">
                     not renamed
                 </span>
             )}

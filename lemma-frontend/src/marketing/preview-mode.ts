@@ -15,3 +15,9 @@ export function readTourStep(data: unknown): number | null {
     return message.type === "lemma-tour:step" && Number.isInteger(message.step) &&
         typeof message.step === "number" && message.step >= -1 && message.step < 5 ? message.step : null;
 }
+
+export function previewTabForStep(step: number): string {
+    if (step === 2) return "profile";
+    if (step === 3) return "app:launch";
+    return "conversation";
+}

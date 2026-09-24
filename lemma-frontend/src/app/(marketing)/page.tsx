@@ -46,7 +46,7 @@ export default function Home() {
 
             <footer className={s.footer}>
                 <Link className={s.wordmark} href="/"><LemmaLogo /></Link>
-                <span>People use the app. Agents work through it.</span>
+                <span>AI teammates. Part of your team.</span>
                 <Link href="/t">Get started ↗</Link>
             </footer>
         </div>

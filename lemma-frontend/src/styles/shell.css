@@ -1808,8 +1808,8 @@
  *  It is sized by its own text, so a short line is a short card. */
 .said {
     width: fit-content;
-    /* The reading measure, on the thing that is read. */
-    max-width: min(100%, 68ch);
+    /* The conversation column bounds long replies independently of text size. */
+    max-width: 100%;
     background: var(--paper);
     border: 1px solid var(--line);
     border-radius: var(--r-lg);
@@ -5240,3 +5240,23 @@ button.filecard__open {
 .composer__box { align-items: flex-end; }
 textarea.composer__input { resize: none; line-height: 1.5; min-height: 36px; max-height: 200px; overflow-y: auto; overflow-wrap: anywhere; }
 a.reach { text-decoration: none; }
+
+/* Conversation sizing is independent of navigation and document typography. */
+:root { --chat-text-size: 15px }
+:root[data-chat-text-size="small"] { --chat-text-size: 14px }
+:root[data-chat-text-size="large"] { --chat-text-size: 17px }
+.msg__body, .msg__body .md, .composer__input { font-size: var(--chat-text-size) }
+.msg__body .md h1 { font-size: 1.4em }
+.msg__body .md h2 { font-size: 1.2em }
+.msg__body .md h3, .msg__body .md h4 { font-size: 1.05em }
+.theme__mode[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line) }
+.appearance__hint { margin: 0; font-size: 12px; color: var(--ink-3) }
+.appearance__chat-preview { border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; background: var(--paper) }
+.appearance__chat-preview > span { font-size: 12px; color: var(--accent) }
+.appearance__chat-preview > p { font-size: var(--chat-text-size); line-height: 1.68; margin: 8px 0 0 }
+@media (pointer: coarse) {
+    /* Keep mobile browsers from zooming the viewport when the composer receives focus. */
+    .composer__input { font-size: max(16px, var(--chat-text-size)) }
+}
+
+.appearance__group .theme__mode[aria-pressed] { min-height: 44px }

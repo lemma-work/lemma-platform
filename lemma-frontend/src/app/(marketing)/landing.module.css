@@ -385,19 +385,12 @@
 .storySummary button { display: flex; gap: 12px; font: inherit; text-align: left; padding: 0; border: 0; background: none; cursor: pointer }
 .storySummary button > span { font: 12px "DM Mono",monospace; color: var(--violet); padding-top: 3px }
 .productFrame { border: 1px solid rgb(255 254 250 / .3); border-radius: var(--radius-card); overflow: hidden; box-shadow: var(--shadow-float); background: var(--paper); }
-.productBar { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 16px; background: var(--cream); color: var(--ink); font-size: 12px; border-bottom: 1px solid var(--line) }
-.productBar > span { display: flex; align-items: center; gap: 8px }
-.productBar i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok) }
-.productBar em { font-style: normal; color: var(--ink-3); margin-left: 6px }
-.productBar a { white-space: nowrap }
-.productViewport { --preview-width: 900px; --preview-scale: 1; position: relative; height: min(62vh,620px); min-height: 420px; overflow: hidden; background: var(--paper) }
+.productViewport { --preview-width: 900px; --preview-scale: 1; position: relative; height: min(calc(62vh + 84px),704px); min-height: 504px; overflow: hidden; background: var(--paper) }
 .productIframe { border: 0; display: block; width: var(--preview-width); height: calc(100% / var(--preview-scale)); transform: scale(var(--preview-scale)); transform-origin: top left }
 .previewLoading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); font-size: 14px }
-.productCaption { min-height: 40px; padding: 10px 16px; display: flex; justify-content: space-between; gap: 12px; align-items: center; color: var(--ink-3); font-size: 12px; border-top: 1px solid var(--line); background: var(--paper) }
-.productCaption button { border: 0; background: none; font: inherit; color: var(--violet); cursor: pointer; padding: 0; white-space: nowrap }
 .realAppExample { display: flex; flex-direction: column; width: 100%; min-width: 0; gap: 12px }
 .realAppExample iframe { width: 100%; height: 560px; border: 0; border-radius: var(--radius-card); background: var(--paper) }
-.realAppExample > span { color: var(--onField); font-size: 12px }
+.realAppExample > span { color: var(--ink-3); font-size: 12px }
 .askRow > i, .askRow > b { display: none }
 .sharedRecord { width: 100%; display: flex; flex-direction: column; gap: 10px; padding: 18px; border: 1px solid rgb(255 254 250 / .45); border-radius: var(--radius-card); color: var(--paper); font-size: 12px; line-height: 1.5; background: rgb(255 254 250 / .08) }
 .sharedRecord b { font-size: 20px; font-weight: 400; letter-spacing: -.025em }
@@ -460,7 +453,7 @@
     .pile { transform: none }
     .knot, .tourCopy, .emerge { display: none }
     .heroHeadline { font-size: clamp(50px,9vw,76px) }
-    .productViewport { height: 600px }
+    .productViewport { height: 684px }
     .storySummary { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: 24px; list-style: none; margin: 32px var(--gutter) 0; padding: 24px 0; border-bottom: 1px solid var(--line) }
     .storySummary li { display: flex; gap: 12px }
     .storySummary li > span { font: 12px "DM Mono",monospace; color: var(--magenta); padding-top: 3px }
@@ -523,10 +516,7 @@
 }
 
 @media (max-width: 560px) {
-    .productBar em { display: none }
-    .productBar { padding: 12px }
-    .productCaption { padding: 10px 12px; flex-wrap: wrap }
-    .productViewport { height: 590px }
+    .productViewport { height: 674px }
     .appRail { flex-direction: row; padding: 8px; border-right: 0; border-bottom: 1px solid #20211f18 }
     .appRail .miniBrand, .orgChip, .railFind, .railLabel, .newTeammate { display: none }
     .railList { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); width: 100%; gap: 3px }
@@ -599,3 +589,126 @@
 }
 
 @keyframes rise { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+
+/* The channel example pairs the request with its reviewable output. */
+.showcase { grid-template-columns: minmax(0, 1fr); gap: 24px }
+.switcher { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-bottom: 1px solid var(--line) }
+.pick, .pickOn { border: 0; border-radius: 0; padding: 18px 20px 22px; min-height: 110px; background: transparent; box-shadow: none }
+.pickOn { box-shadow: inset 0 -2px var(--magenta) }
+.pickFace { font: 12px "DM Mono", monospace; color: var(--ink-3); padding-top: 5px }
+.pickOn .pickFace { color: var(--magenta) }
+.wide { padding: 0; min-height: 0; border-radius: 0 }
+.channelDemo { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border: 1px solid var(--line); border-radius: var(--radius-card); overflow: hidden; background: var(--paper) }
+.channelWindow { min-width: 0 }
+.channelHeader { display: flex; align-items: center; gap: 12px; padding: 20px 28px; border-bottom: 1px solid var(--line-soft) }
+.channelHeader b { font-weight: 500 }
+.channelHeader > span { border-left: 1px solid var(--line); padding-left: 12px; color: var(--ink-2); font-size: 14px }
+.channelThread { padding: 28px; display: flex; flex-direction: column; gap: 24px }
+.channelLabel { font: 12px "DM Mono", monospace; letter-spacing: .04em; color: var(--ink-3) }
+.channelThread .said { gap: 12px }
+.channelThread .said > i { width: 32px; height: 32px; flex: 0 0 32px }
+.workAttachment { display: flex; flex-direction: column; gap: 8px; margin-left: 44px; padding: 18px; border: 1px solid var(--line); border-left: 3px solid var(--magenta); border-radius: 8px; font-size: 14px; color: var(--ink-2) }
+.workAttachment b { font-weight: 500; color: var(--ink); font-size: 18px }
+.attachmentLink { color: var(--magenta); font-size: 12px }
+.channelComposer { border: 1px solid var(--line); border-radius: 8px; padding: 14px; color: var(--ink-3); font-size: 14px; display: flex; justify-content: space-between }
+.reviewWindow { padding: 28px 32px; background: var(--cream); border-left: 1px solid var(--line); min-width: 0 }
+.reviewHeader { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap }
+.reviewBadge { color: var(--wait); font-size: 12px; border: 1px solid var(--line); padding: 4px 9px; border-radius: 20px }
+.reviewWindow h3 { font-weight: 400; font-size: clamp(24px, 2.5vw, 36px); line-height: 1.15; letter-spacing: -.04em; margin: 24px 0 }
+.refundFacts { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; color: var(--ink-3); margin-bottom: 20px }
+.refundFacts span { display: flex; flex-direction: column; gap: 4px }
+.refundFacts b { color: var(--ink); font-size: 16px; font-weight: 400 }
+.replyDraft { padding: 20px; background: var(--paper); border: 1px solid var(--line-soft); border-radius: 8px }
+.replyDraft p { font-size: 14px; line-height: 1.6; color: var(--ink-2); margin: 12px 0 0 }
+.reviewNote { font-size: 12px; color: var(--ink-3); line-height: 1.6; margin: 16px 0 }
+.channelHandoff { display: flex; gap: 10px; align-items: center; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2) }
+@media (max-width: 800px) {
+    .pick, .pickOn { padding: 14px 8px; min-height: 48px }
+    .pickText em, .pickFace { display: none }
+    .channelDemo { grid-template-columns: 1fr }
+    .reviewWindow { border-left: 0; border-top: 1px solid var(--line) }
+    .channelThread, .reviewWindow { padding: 24px }
+}
+@media (max-width: 480px) {
+    .channelThread, .reviewWindow { padding: 20px }
+    .channelHeader { padding: 16px 20px }
+    .workAttachment { margin-left: 0 }
+}
+
+.mobileExample { display: grid; grid-template-columns: minmax(0,1fr) minmax(320px,1fr); align-items: center; gap: 48px; width: 100%; padding: 40px 7%; background: #e9eee8; border: 1px solid var(--line-soft); border-radius: var(--radius-card) }
+.mobileStory { max-width: 410px }
+.mobileStory h3, .scheduleSetup h3, .scheduleReport h3 { font-size: clamp(28px,3.2vw,44px); font-weight: 400; line-height: 1.12; letter-spacing: -.04em; margin: 22px 0 }
+.mobileStory > p, .scheduleSetup > p { font-size: 16px; line-height: 1.65; color: var(--ink-2) }
+.messagingBrands { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 32px }
+.messagingBrands > span { display: flex; align-items: center; gap: 9px; font-size: 14px }
+.mobileContext { display: block; font-size: 12px; color: var(--ink-3); margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line) }
+.phoneFrame { min-width: 0; width: 326px; max-width: 100%; justify-self: center; border: 6px solid #292d29; border-radius: 42px; background: #f5f3eb; box-shadow: 0 18px 38px #20211f1a; overflow: hidden; color: var(--ink) }
+.phoneStatus { display: flex; justify-content: space-between; align-items: center; height: 35px; padding: 0 22px; font-size: 12px; background: var(--paper) }
+.phoneIsland { width: 82px; height: 20px; background: #292d29; border-radius: 20px }
+.phoneHeader { display: flex; gap: 9px; align-items: center; padding: 12px 14px; background: var(--paper); border-bottom: 1px solid var(--line-soft) }
+.phoneHeader > span { font-size: 26px; color: var(--teal) }
+.phoneHeader > div { display: flex; flex-direction: column; flex: 1; gap: 1px }
+.phoneHeader b { font-size: 15px; font-weight: 500 }
+.phoneHeader div > span { font-size: 12px; color: var(--ink-3) }
+.phoneMessages { display: flex; flex-direction: column; gap: 12px; padding: 16px 12px 20px }
+.phoneDay { align-self: center; font: 12px "DM Mono",monospace; color: var(--ink-3); margin: 0 0 4px }
+.phoneIncoming, .phoneOutgoing { max-width: 90%; padding: 11px 12px 7px; border-radius: 12px; font-size: 13px; line-height: 1.5; box-shadow: 0 1px 2px #20211f0d }
+.phoneIncoming { align-self: flex-start; background: var(--paper); border-top-left-radius: 3px }
+.phoneOutgoing { align-self: flex-end; background: #dcedcf; border-top-right-radius: 3px }
+.phoneMessages time { display: block; text-align: right; font-size: 12px; color: var(--ink-3); margin-top: 3px }
+.phoneComposer { display: flex; align-items: center; justify-content: space-between; margin: 0 12px; padding: 9px 14px; background: var(--paper); border: 1px solid var(--line-soft); border-radius: 24px; font-size: 13px; color: var(--ink-3) }
+.phoneComposer > span:last-child { color: var(--teal); font-size: 20px }
+.phoneHome { width: 90px; height: 4px; border-radius: 4px; background: #292d29; margin: 14px auto 8px }
+.scheduleExample { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border: 1px solid var(--line); border-radius: var(--radius-card); overflow: hidden }
+.scheduleSetup { padding: 36px; background: var(--cream) }
+.scheduleInstruction { font-size: 16px; line-height: 1.6; margin: 24px 0 18px; padding-left: 18px; border-left: 2px solid var(--magenta) }
+.scheduleFrequency { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 24px }
+.scheduleHistory { border-top: 1px solid var(--line) }
+.scheduleHistory > div { display: flex; justify-content: space-between; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--ink-3) }
+.scheduleHistory b { font-weight: 400; text-align: right }
+.scheduleReport { background: var(--paper); padding: 36px; border-left: 1px solid var(--line) }
+.scheduleAuthor { display: flex; gap: 12px; align-items: center }
+.scheduleAuthor > div { display: flex; flex-direction: column; gap: 3px }
+.scheduleAuthor b { font-weight: 500; font-size: 16px }
+.scheduleAuthor span { font-size: 12px; color: var(--ink-3) }
+.scheduleReport h3 { font-size: 32px }
+.reportItem { display: flex; gap: 16px; padding: 18px 0; border-top: 1px solid var(--line-soft) }
+.reportItem > span { font: 12px "DM Mono",monospace; color: var(--magenta); padding-top: 4px }
+.reportItem b { font-size: 16px; font-weight: 500 }
+.reportItem p { margin: 6px 0 0; font-size: 14px; line-height: 1.6; color: var(--ink-2) }
+.scheduleFooter { display: block; font: 12px "DM Mono",monospace; color: var(--ink-3); padding-top: 20px }
+@media (max-width: 800px) {
+    .mobileExample { grid-template-columns: minmax(0, 1fr); gap: 28px; padding: 28px 20px }
+    .mobileStory { max-width: 100% }
+    .mobileStory h3 { margin: 16px 0 }
+    .mobileContext { display: none }
+    .messagingBrands { margin-top: 20px }
+    .scheduleExample { grid-template-columns: 1fr }
+    .scheduleSetup, .scheduleReport { padding: 24px }
+    .scheduleReport { border-left: 0; border-top: 1px solid var(--line) }
+}
+
+/* A shared stage keeps tab changes from moving the surrounding page. */
+.workExample { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); align-items: center; gap: 48px; width: 100%; height: 760px; padding: 40px 5%; background: #e9eee8; border: 1px solid var(--line-soft); border-radius: var(--radius-card) }
+.workStory { max-width: 410px; min-width: 0 }
+.workStory h3 { font-size: clamp(28px,3.2vw,44px); font-weight: 400; line-height: 1.12; letter-spacing: -.04em; margin: 22px 0 }
+.workStory > p { font-size: 16px; line-height: 1.65; color: var(--ink-2) }
+.workVisual { display: flex; align-items: center; justify-content: center; min-width: 0; height: 678px }
+.workVisual > .channelWindow, .workVisual > .scheduleReport { width: 100%; max-height: 100%; overflow: auto; background: var(--paper); border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 18px 38px #20211f1a }
+.workVisual .channelThread { padding: 24px; gap: 22px }
+.workVisual .workAttachment { margin-left: 0 }
+.workVisual .scheduleReport { padding: 28px }
+.workApp { width: 100%; height: 600px; overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); box-shadow: 0 18px 38px #20211f1a; display: flex; flex-direction: column }
+.workAppHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 48px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink-2) }
+.workAppHeader a { color: var(--violet); white-space: nowrap }
+.workApp iframe { width: 100%; flex: 1; min-height: 0; border: 0 }
+@media (max-width: 800px) {
+    .workExample { grid-template-columns: minmax(0,1fr); grid-template-rows: 300px minmax(0,1fr); height: 1120px; gap: 24px; padding: 28px 20px }
+    .workStory { max-width: 100%; align-self: center }
+    .workStory h3 { margin: 16px 0; font-size: 30px }
+    .workStory > p { font-size: 15px }
+    .workVisual { height: 100%; min-height: 0 }
+    .workVisual > .phoneFrame { max-height: 100%; overflow: auto }
+    .workVisual .channelThread, .workVisual .scheduleReport { padding: 20px }
+    .workVisual .said { font-size: 14px }
+}

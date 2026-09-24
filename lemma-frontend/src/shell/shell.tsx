@@ -43,7 +43,7 @@ import { pressSlot } from "@/identity/palette";
 import { useHuddle } from "@/call/use-huddle";
 import { CallScreen } from "@/call/call-screen";
 import { CallBar } from "@/call/call-bar";
-import { isLandingPreview } from "@/marketing/preview-mode";
+import { isLandingPreview, previewTabForStep } from "@/marketing/preview-mode";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -94,7 +94,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
      *  that switches pods. Without it the words land in whichever composer was
      *  already standing there, and the new teammate opens empty. */
     const [fill, setFill] = useState<{ text: string; id: number; podId: string } | null>(null);
-    const [tabs, setTabs] = useState<Record<string, string>>(() => preview ? { kit: "app:launch" } : readJson<Record<string, string>>(TAB_KEY, {}));
+    const [tabs, setTabs] = useState<Record<string, string>>(() => preview ? { kit: "conversation" } : readJson<Record<string, string>>(TAB_KEY, {}));
     /** Apps stay mounted once opened — hidden, never unmounted, so coming
      *  back to a tab does not cold-boot someone's app. */
     const appFrames = useRef<Record<string, HTMLIFrameElement | null>>({});
@@ -186,7 +186,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         setHiring(demoStep === 0);
         setAddingPeople(demoStep === 1);
         setReaching(demoStep === 4);
-        setTabs(previous => ({ ...previous, kit: demoStep === 2 ? "profile" : demoStep === 1 || demoStep === 4 ? "conversation" : "app:launch" }));
+        setTabs(previous => ({ ...previous, kit: previewTabForStep(demoStep) }));
     }, [demoStep, demoRevision, preview]);
 
     const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000 });
