@@ -2,12 +2,14 @@ import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
     CREDENTIAL_FORMS, LOCAL_SERVER_KEY, addToWorkspace, alreadyInWorkspace, channelLine, credentialFormForChannel,
-    detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, joinPolicyCopy,
+    detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, HOST_EXECUTION_CONSEQUENCE,
+    hostExecutionRow, joinPolicyCopy,
     oauthFormForConnector, onLocalWorkspaceOrigin, operatorProvider, postgresMajorChangeMessage, readSnapshot,
     sandboxWording, sectionPayloads, sharingBusy, thisMac, thisMacAvailability, thisMacReachable, updateOffer,
     type AppUpdateStatus, type Installation, type ThisMacSnapshot,
 } from "../src/desktop/this-mac.ts";
 import { requestedFocus, requestedSection } from "../src/desktop/open-settings.ts";
+import { readStatus } from "../src/desktop/agent-host.ts";
 
 /* ── a pretend page ────────────────────────────────────────────────── */
 
@@ -403,4 +405,40 @@ test("adding it to the workspace creates the provider and leaves this computer's
     const calls = page({ shell: () => true });
     await addToWorkspace(local, "", add);
     assert.deepEqual(calls, []);
+});
+
+/* ── run commands on this Mac ──────────────────────────────────────── */
+
+test("the host-execution switch reflects the Agent Host and is off-limits where nothing can confine commands", () => {
+    const on = hostExecutionRow({ host_execution: { enabled: true, available: true } });
+    assert.deepEqual(on, { checked: true, blocked: null, consequence: HOST_EXECUTION_CONSEQUENCE });
+    assert.match(on.consequence, /inside a sandbox/);
+    assert.match(on.consequence, /Teammates’ runs stay in the VM/);
+    assert.equal(hostExecutionRow({ host_execution: { enabled: false, available: true } }).checked, false);
+    // Not macOS: disabled, with the reason, whatever the setting says.
+    const unavailable = hostExecutionRow({ host_execution: { enabled: true, available: false } });
+    assert.equal(unavailable.checked, false);
+    assert.match(unavailable.blocked ?? "", /macOS/);
+    // No status yet, or a shell too old to report it: never shown as on.
+    assert.equal(hostExecutionRow(null).checked, false);
+    assert.notEqual(hostExecutionRow(null).blocked, null);
+    assert.notEqual(hostExecutionRow({ host_execution: null }).blocked, null);
+});
+
+test("the Agent Host status carries host execution, and an older shell's does not break it", () => {
+    const status = readStatus({ available: true, host_execution: { enabled: true, available: true } });
+    assert.deepEqual(status?.host_execution, { enabled: true, available: true });
+    assert.equal(readStatus({ available: true })?.host_execution, null);
+    assert.deepEqual(readStatus({ available: true, host_execution: { enabled: "yes" } })?.host_execution,
+        { enabled: false, available: false });
+});
+
+test("turning host execution on sends one boolean to one shell command", async () => {
+    const calls = page({ shell: () => ({ available: true, host_execution: { enabled: true, available: true } }) });
+    await thisMac.setHostExecution(true);
+    await thisMac.setHostExecution(false);
+    assert.deepEqual(calls, [
+        { command: "set_host_execution", args: { enabled: true } },
+        { command: "set_host_execution", args: { enabled: false } },
+    ]);
 });

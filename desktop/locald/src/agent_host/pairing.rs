@@ -95,3 +95,9 @@ pub(crate) fn host_execution_enabled(config_path: &Path) -> bool {
         .and_then(|config| config.get("host_execution").and_then(Value::as_bool))
         .unwrap_or(false)
 }
+
+/// Whether this computer can confine commands at all: the Agent Host's own
+/// test (`host_exec::seatbelt::available`), repeated so status needs no fork.
+pub(crate) fn host_execution_available() -> bool {
+    cfg!(target_os = "macos") && Path::new("/usr/bin/sandbox-exec").is_file()
+}

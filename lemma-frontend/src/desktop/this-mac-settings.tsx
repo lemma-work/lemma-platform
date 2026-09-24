@@ -9,8 +9,9 @@ import { useDesktopBridge } from "./bridge";
 import { openSettings } from "./open-settings";
 import { capitalised, useThisComputer } from "./this-computer";
 import { ThisComputerCard } from "./this-computer-card";
+import { readStatus, useAgentHost } from "./agent-host";
 import {
-    channelLine, friendlyError, healthLine, healthState, onLocalWorkspaceOrigin,
+    channelLine, friendlyError, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin,
     sandboxWording, updateOffer, sharingBusy, thisMac, thisMacAvailability,
     type Installation, type ThisMacAvailability, type ThisMacSnapshot,
 } from "./this-mac";
@@ -190,6 +191,7 @@ function CodingAgents() {
                 Choose which of its agents teammates can use in{" "}
                 <button className="linkish" onClick={() => openSettings("models")}>Models</button>.
             </p>
+            <HostExecution />
             <Loading snapshot={snapshot}>
                 {(data) => {
                     const wording = sandboxWording(data.sandbox_images?.state, noun);
@@ -206,6 +208,38 @@ function CodingAgents() {
             </Loading>
             {problem && <p className="thismac-said thismac-said--bad" role="alert">{problem}</p>}
         </div>
+    );
+}
+
+/** "Run commands on this Mac". Owner's runs only: the backend keeps every
+ *  teammate's run in the VM whatever this says. */
+function HostExecution() {
+    const host = useAgentHost();
+    const [problem, setProblem] = useState<string | null>(null);
+    const change = useMutation({
+        mutationFn: (enabled: boolean) => thisMac.setHostExecution(enabled),
+        /* The shell answers with the host's fresh status; the poll catches up
+           with it on its next tick anyway. */
+        onSuccess: (answer) => { if (readStatus(answer)) void host.refetch(); },
+        onError: (cause) => setProblem(friendlyError(cause)),
+    });
+    const row = hostExecutionRow(host.status);
+    return (
+        <>
+            <SettingRow name="Run commands on this Mac" consequence={row.blocked ?? row.consequence}>
+                <input
+                    type="checkbox"
+                    className="thismac-switch"
+                    role="switch"
+                    aria-label="Run commands on this Mac"
+                    checked={change.isPending ? change.variables === true : row.checked}
+                    disabled={row.blocked !== null || change.isPending}
+                    title={row.blocked ?? undefined}
+                    onChange={(event) => { setProblem(null); change.mutate(event.target.checked); }}
+                />
+            </SettingRow>
+            {problem && <p className="thismac-said thismac-said--bad" role="alert">{problem}</p>}
+        </>
     );
 }
 

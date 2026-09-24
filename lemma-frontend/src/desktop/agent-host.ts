@@ -32,6 +32,10 @@ export interface AgentHostStatus {
     uptime_seconds: number | null;
     last_error: string | null;
     log: string | null;
+    /** "Run commands on this Mac": whether the owner turned it on, and
+     *  whether this computer can confine commands at all (macOS only). Null
+     *  from a shell too old to say. */
+    host_execution: { enabled: boolean; available: boolean } | null;
 }
 
 /** Narrow the shell's loose JSON to a status, or null if it is not one. */
@@ -48,7 +52,14 @@ export function readStatus(payload: unknown): AgentHostStatus | null {
         uptime_seconds: typeof record.uptime_seconds === "number" ? record.uptime_seconds : null,
         last_error: typeof record.last_error === "string" ? record.last_error : null,
         log: typeof record.log === "string" ? record.log : null,
+        host_execution: readHostExecution(record.host_execution),
     };
+}
+
+function readHostExecution(raw: unknown): AgentHostStatus["host_execution"] {
+    if (!raw || typeof raw !== "object") return null;
+    const record = raw as Record<string, unknown>;
+    return { enabled: record.enabled === true, available: record.available === true };
 }
 
 /** What this page may ask of this computer's Agent Host.

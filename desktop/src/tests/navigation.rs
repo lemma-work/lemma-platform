@@ -53,6 +53,7 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
                 | "allow-apply-local-settings"
                 | "allow-local-sharing"
                 | "allow-set-start-at-login"
+                | "allow-set-host-execution"
                 | "allow-repair-runtime"
                 | "allow-open-logs"
                 | "allow-prepare-sandbox-image"

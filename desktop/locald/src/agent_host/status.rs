@@ -41,9 +41,10 @@ impl AgentHostSupervisor {
         let paired = targets.as_ref().is_some_and(|items| !items.is_empty());
         status["paired"] = json!(paired);
         status["targets"] = json!(targets.unwrap_or_default());
-        status["host_execution"] = json!(super::pairing::host_execution_enabled(
-            &self.data_dir.join("config.json")
-        ));
+        status["host_execution"] = json!({
+            "enabled": super::pairing::host_execution_enabled(&self.data_dir.join("config.json")),
+            "available": super::pairing::host_execution_available(),
+        });
         status
     }
 

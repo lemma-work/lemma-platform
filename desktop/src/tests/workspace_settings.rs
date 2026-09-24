@@ -114,6 +114,7 @@ fn every_this_mac_command_checks_its_caller_first() {
         "pub(crate) async fn apply_local_settings(",
         "pub(crate) async fn local_sharing(",
         "pub(crate) async fn set_start_at_login(",
+        "pub(crate) async fn set_host_execution(",
     ] {
         let body = function_body(&source, command);
         assert!(
@@ -360,4 +361,28 @@ fn pages_that_moved_land_on_overview_rather_than_an_error() {
         assert_eq!(control_center_page(Some(kept)).unwrap(), kept);
     }
     assert!(control_center_page(Some("nonsense")).is_err());
+}
+
+#[test]
+fn turning_host_execution_on_sends_the_daemon_a_boolean_and_nothing_else() {
+    // The page picks on or off. Which folders are writable, the profile and
+    // the grants are the host's to decide, so none of them can ride along.
+    for enabled in [true, false] {
+        let request = host_execution_request(enabled);
+        assert_eq!(request["cmd"], "agent-host.host-execution");
+        assert_eq!(request["enabled"], enabled);
+        let mut keys: Vec<_> = request.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["cmd", "enabled", "id"]);
+    }
+}
+
+#[test]
+fn host_execution_is_granted_to_the_workspace_and_registered() {
+    let capability = include_str!("../../capabilities/workspace.json").replace("\r\n", "\n");
+    assert!(capability.contains("\"allow-set-host-execution\""));
+    let app = include_str!("../app.rs").replace("\r\n", "\n");
+    assert!(app.contains("workspace_settings::set_host_execution"));
+    let build = include_str!("../../build.rs").replace("\r\n", "\n");
+    assert!(build.contains("\"set_host_execution\""));
 }

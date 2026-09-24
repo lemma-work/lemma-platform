@@ -350,6 +350,53 @@ pub(crate) async fn set_start_at_login(
         .map_err(|error| error.to_string())?
 }
 
+/// The locald request that turns host execution on or off.
+///
+/// Pure, so what reaches the daemon can be asserted without one. Only a
+/// boolean crosses: the page chooses on or off, never a folder, a profile or
+/// anything else about how commands are confined.
+pub(crate) fn host_execution_request(enabled: bool) -> Value {
+    json!({
+        "cmd": "agent-host.host-execution",
+        "id": operation_id("workspace-host-execution"),
+        "enabled": enabled,
+    })
+}
+
+fn set_host_execution_impl(app: AppHandle, enabled: bool) -> Result<Value, String> {
+    if current_mode(&app) != "local" {
+        return Err(format!("{THIS_COMPUTER} runs no local Lemma to configure"));
+    }
+    // Refused here as well as in the Agent Host, so a page on a machine that
+    // cannot confine commands gets a sentence rather than a failed operation.
+    if enabled
+        && !(cfg!(target_os = "macos") && std::path::Path::new("/usr/bin/sandbox-exec").is_file())
+    {
+        return Err(format!(
+            "{THIS_COMPUTER} cannot run agents' commands in a sandbox, so they stay in the VM"
+        ));
+    }
+    ensure_agent_host_daemon(&app)?;
+    agent_host_request(&app, host_execution_request(enabled))?;
+    // The fresh status, so the switch shows what the host now says rather
+    // than what the page asked for.
+    agent_host_ui::agent_host_status_impl(app)
+}
+
+#[tauri::command]
+/// "Run commands on this Mac": an owner's agent commands on the host, under
+/// Seatbelt, instead of in the VM. A daemon round trip, so off the UI thread.
+pub(crate) async fn set_host_execution(
+    window: Webview,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<Value, String> {
+    require_local_settings_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || set_host_execution_impl(app, enabled))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 /* ── the menu's way in ─────────────────────────────────────────────── */
 
 /// Where ⌘, and the tray's "Desktop settings…" land.

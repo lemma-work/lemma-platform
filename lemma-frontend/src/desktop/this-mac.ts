@@ -276,6 +276,8 @@ export const thisMac = {
     sharing: (action: "snapshot" | "preflight" | "enable" | "disable" | "access", payload?: Record<string, unknown>) =>
         invoke<{ cancelled?: boolean; event?: string; sharing?: unknown; preflight?: unknown }>("local_sharing", { action, payload }),
     setStartAtLogin: (enabled: boolean) => invoke<boolean>("set_start_at_login", { enabled }),
+    /** Answers with the Agent Host's fresh status. */
+    setHostExecution: (enabled: boolean) => invoke<unknown>("set_host_execution", { enabled }),
     /** True when it ran, false when the native confirmation was declined. */
     repair: () => invoke<boolean>("repair_runtime"),
     openLogs: () => invoke("open_logs"),
@@ -288,6 +290,37 @@ export const thisMac = {
         invoke<{ entries?: string; nextCursor?: string | null; sources?: { id: string; label: string }[] }>("diagnostic_logs", { source, cursor }),
     discoverModels: (payload: Record<string, unknown>) => invoke<unknown>("discover_provider_models", { payload }),
 };
+
+/* ── run commands on this Mac ──────────────────────────────────────── */
+
+export const HOST_EXECUTION_CONSEQUENCE =
+    "Commands run on your Mac inside a sandbox: they can read most files, write only to the conversation folder and caches, and use your gh/git logins. Teammates’ runs stay in the VM.";
+
+export interface HostExecutionRow {
+    checked: boolean;
+    /** Why the switch cannot be used, or null when it can. */
+    blocked: string | null;
+    consequence: string;
+}
+
+/** The "Run commands on this Mac" switch, from the Agent Host's status.
+ *  Pure, so what it says in each state is tested without a page. */
+export function hostExecutionRow(
+    status: { host_execution: { enabled: boolean; available: boolean } | null } | null,
+): HostExecutionRow {
+    const setting = status?.host_execution ?? null;
+    if (!setting) {
+        return { checked: false, blocked: "Waiting for this computer’s Agent Host…", consequence: HOST_EXECUTION_CONSEQUENCE };
+    }
+    if (!setting.available) {
+        return {
+            checked: false,
+            blocked: "Only available on macOS, which can confine commands in a sandbox. Commands run in the VM.",
+            consequence: HOST_EXECUTION_CONSEQUENCE,
+        };
+    }
+    return { checked: setting.enabled, blocked: null, consequence: HOST_EXECUTION_CONSEQUENCE };
+}
 
 /** Whether This Mac's commands make sense at all right now. */
 export function thisMacReachable(): boolean {

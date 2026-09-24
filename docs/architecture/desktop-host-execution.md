@@ -40,6 +40,14 @@ the owner-agnostic VM sandbox, exactly as before.
    within five seconds and says so on its next `control`, without a
    reconnect.
 
+   In the app it is the "Run commands on this Mac" switch under Settings →
+   This Mac → Coding agents. The switch calls the Tauri command
+   `set_host_execution`, which only the owner's own local workspace may call
+   (`require_local_settings_caller`) and which sends locald nothing but the
+   boolean. It reads its state from the Agent Host status locald reports,
+   `host_execution: {enabled, available}`, and is disabled with the reason
+   when `available` is false.
+
 This check happens once, when a run's sandbox is chosen, and the choice is
 recorded on the sandbox. A run never moves between the two mid-flight. If the
 host goes offline, an operation fails with a sentence the agent can act on
