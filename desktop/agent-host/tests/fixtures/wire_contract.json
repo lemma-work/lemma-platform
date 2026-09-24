@@ -2,46 +2,43 @@
   "$comment": [
     "The Agent Host wire contract, asserted from both sides.",
     "",
-    "Two things here exist twice, once in Rust and once in Python, and nothing",
-    "used to check that the copies agree.",
-    "",
-    "`event_types` is `protocol::EventType` and `AgentHostEventType`. A value",
-    "one side emits and the other does not know is an event the backend drops",
-    "on the floor.",
-    "",
-    "`text_extraction` is `runtime::chunk_text` and `agent_host_events.",
-    "event_text`. These must agree exactly: the host accumulates streamed text",
-    "with one and the backend re-accumulates it with the other, and the two",
-    "buffers are reconciled at every segment boundary. A disagreement does not",
-    "raise anything -- it silently truncates a persisted message.",
-    "",
-    "`tool_calls` is the sequence an adapter really sends for one tool use.",
-    "The host copies each ACP update's fields through verbatim; the backend",
-    "reads the arguments and the result back out of them. Nothing checked that",
-    "the two agreed, and they did not: a streaming adapter opens a call with",
-    "`rawInput: {}` and sends the real arguments moments later on a",
-    "status-less `tool_call_update`, which the backend dropped. Every streamed",
-    "tool call rendered with empty arguments, and views built from them had",
-    "nothing to build from.",
+    "Everything here exists twice, once in Rust and once in Python. Nothing but",
+    "this file checks that the copies agree, and a disagreement does not fail",
+    "loudly: a value one side sends and the other does not know is an event, a",
+    "command or a frame the other side drops on the floor.",
     "",
     "`protocol_version` is `lemma_agent_host::PROTOCOL_VERSION` and",
-    "`AGENT_HOST_PROTOCOL_VERSION`. Two literals, in two languages, that the",
-    "host sends and the backend compares against -- and nothing tied them, so",
-    "raising one and not the other makes every host of the old version look",
-    "unrecognised, silently, from the moment the backend deploys."
+    "`AGENT_HOST_PROTOCOL_VERSION`.",
+    "",
+    "`enums` are the wire enums in `protocol.rs` and `domain/agent_host.py`,",
+    "compared as sets in both directions.",
+    "",
+    "`link` is the frame vocabulary and close codes of the WebSocket in",
+    "`src/link/protocol.rs` and `domain/agent_host_link.py`; see",
+    "docs/architecture/agent-host.md#the-link.",
+    "",
+    "`text_extraction` is `runtime::chunk_text` and `event_text.event_text`.",
+    "The host accumulates streamed text with one and the backend re-accumulates",
+    "it with the other; a disagreement silently truncates a persisted message.",
+    "",
+    "`tool_events` are normalized tool events as the host emits them, and the",
+    "conversation message the backend must make of each. The host half is held",
+    "to real adapter output by the golden transcripts in fixtures/acp; this half",
+    "pins what the backend does with the result. See",
+    "docs/architecture/agent-host-events.md."
   ],
-  "protocol_version": 2,
+  "protocol_version": 3,
   "event_types": [
     "run_state",
-    "user_message",
     "agent_message_chunk",
     "agent_message_upsert",
     "agent_thought_chunk",
     "agent_thought_upsert",
-    "plan_upsert",
-    "tool_call_upsert",
-    "tool_call_update",
-    "usage_update",
+    "tool_call",
+    "tool_call_progress",
+    "tool_call_result",
+    "usage",
+    "session_update",
     "config_update",
     "permission_request",
     "terminal"
@@ -138,84 +135,6 @@
       "text": ""
     }
   ],
-  "tool_calls": [
-    {
-      "name": "a streamed MCP call, as claude-agent-acp sends it",
-      "$comment": "Captured from claude-agent-acp 0.62.0 calling a Lemma MCP tool. The opening rawInput is empty because the model has not written the input yet; the third update carries nothing but the call's id.",
-      "updates": [
-        {
-          "sessionUpdate": "tool_call",
-          "toolCallId": "call-1",
-          "status": "pending",
-          "rawInput": {},
-          "title": "lemma_display_resource"
-        },
-        {
-          "sessionUpdate": "tool_call_update",
-          "toolCallId": "call-1",
-          "rawInput": {
-            "request": {
-              "type": "WIDGET",
-              "content": "<div>hello</div>"
-            }
-          },
-          "title": "lemma_display_resource"
-        },
-        {
-          "sessionUpdate": "tool_call_update",
-          "toolCallId": "call-1"
-        },
-        {
-          "sessionUpdate": "tool_call_update",
-          "toolCallId": "call-1",
-          "status": "completed",
-          "rawOutput": {
-            "content": [
-              {
-                "type": "text",
-                "text": "{\"success\": true, \"url\": \"https://x/y\"}"
-              }
-            ]
-          }
-        }
-      ],
-      "tool_args": {
-        "request": {
-          "type": "WIDGET",
-          "content": "<div>hello</div>"
-        }
-      },
-      "tool_result": {
-        "success": true,
-        "url": "https://x/y"
-      }
-    },
-    {
-      "name": "a call whose arguments are complete when it opens",
-      "$comment": "An adapter that does not stream its input announces the call once, with everything. Nothing is held and nothing is refined.",
-      "updates": [
-        {
-          "sessionUpdate": "tool_call",
-          "toolCallId": "call-2",
-          "status": "pending",
-          "rawInput": {
-            "path": "README.md"
-          },
-          "title": "read_file"
-        },
-        {
-          "sessionUpdate": "tool_call_update",
-          "toolCallId": "call-2",
-          "status": "completed",
-          "rawOutput": "# Lemma"
-        }
-      ],
-      "tool_args": {
-        "path": "README.md"
-      },
-      "tool_result": "# Lemma"
-    }
-  ],
   "limits": {
     "_why": "Bounds the backend enforces on the wire. A host that exceeds one of these does not degrade: an over-long object_id gets its batch refused and the transcript discarded, and an over-large max_runs makes every poll 422 so the host reports itself offline for ever.",
     "object_id_max_length": 255,
@@ -241,5 +160,244 @@
     "added_on_delivery": {
       "mcp": "Run-scoped Lemma MCP configuration, decrypted from `encrypted_mcp` by AgentHostDispatchRepository._wire_command when the command is delivered."
     }
-  }
+  },
+  "enums": {
+    "run_state": [
+      "QUEUED_FOR_HOST",
+      "LEASED",
+      "ACCEPTED",
+      "DISPATCHING",
+      "RUNNING",
+      "RECOVERING",
+      "WAITING_INPUT",
+      "SUCCEEDED",
+      "FAILED",
+      "CANCELLED",
+      "DISPATCH_UNKNOWN"
+    ],
+    "host_status": [
+      "ONLINE",
+      "OFFLINE",
+      "DRAINING",
+      "UPGRADE_REQUIRED",
+      "REVOKED"
+    ],
+    "harness_health": [
+      "READY",
+      "AUTH_REQUIRED",
+      "UNSUPPORTED_VERSION",
+      "CONFIG_INVALID",
+      "PROBE_FAILED",
+      "INSTALLING",
+      "DISABLED"
+    ],
+    "rejection_code": [
+      "DRAINING",
+      "COMMAND_EXPIRED",
+      "HARNESS_NOT_FOUND",
+      "CONFIG_REVISION_STALE",
+      "CAPACITY_LOST",
+      "ADAPTER_UNAVAILABLE",
+      "INVALID_COMMAND"
+    ],
+    "command_kind": [
+      "START_RUN",
+      "CANCEL_RUN",
+      "RESOLVE_PERMISSION",
+      "REFRESH_CREDENTIAL"
+    ],
+    "tool_source": [
+      "native",
+      "lemma",
+      "mcp"
+    ],
+    "tool_status": [
+      "completed",
+      "failed",
+      "cancelled",
+      "denied"
+    ]
+  },
+  "link": {
+    "path": "/agent-host/link",
+    "heartbeat_ms": 20000,
+    "host_frames": [
+      "pair",
+      "hello",
+      "control",
+      "events",
+      "harnesses",
+      "mcp",
+      "interaction_wait",
+      "revoke",
+      "error"
+    ],
+    "server_frames": [
+      "paired",
+      "welcome",
+      "control_ok",
+      "events_ok",
+      "harnesses_ok",
+      "mcp_ok",
+      "interaction_ok",
+      "revoked",
+      "commands",
+      "reconnect",
+      "error"
+    ],
+    "close_codes": {
+      "normal": 1000,
+      "restarting": 1012,
+      "protocol_violation": 4400,
+      "revoked_or_missing": 4401,
+      "invalid_credential": 4403,
+      "heartbeat_timeout": 4408,
+      "superseded": 4409,
+      "upgrade_required": 4426
+    },
+    "error_codes": [
+      "INVALID_FRAME",
+      "NOT_FOUND",
+      "STALE_LEASE",
+      "SEQUENCE_GAP",
+      "TERMINAL_RUN",
+      "UNAUTHORIZED",
+      "UNAVAILABLE",
+      "INTERNAL"
+    ]
+  },
+  "tool_events": [
+    {
+      "name": "a Lemma MCP call arrives stripped of its namespace",
+      "events": [
+        {
+          "type": "tool_call",
+          "object_id": "call-1",
+          "payload": {
+            "tool": {
+              "name": "display_resource",
+              "source": "lemma",
+              "server": null,
+              "title": "lemma_display_resource",
+              "kind": "other"
+            },
+            "input": {
+              "type": "WIDGET",
+              "content": "<div>hello</div>"
+            },
+            "parent_call_id": null
+          }
+        },
+        {
+          "type": "tool_call_result",
+          "object_id": "call-1",
+          "payload": {
+            "status": "completed",
+            "output": {
+              "success": true,
+              "url": "https://x/y"
+            },
+            "error": null
+          }
+        }
+      ],
+      "tool_name": "display_resource",
+      "tool_args": {
+        "type": "WIDGET",
+        "content": "<div>hello</div>"
+      },
+      "tool_result": {
+        "success": true,
+        "url": "https://x/y"
+      }
+    },
+    {
+      "name": "a native shell command keeps its exit code and output",
+      "events": [
+        {
+          "type": "tool_call",
+          "object_id": "exec-1",
+          "payload": {
+            "tool": {
+              "name": "exec_command",
+              "source": "native",
+              "server": null,
+              "title": "echo hello-lemma",
+              "kind": "execute"
+            },
+            "input": {
+              "cmd": "echo hello-lemma",
+              "workdir": "/workspace/fixture"
+            },
+            "parent_call_id": null
+          }
+        },
+        {
+          "type": "tool_call_result",
+          "object_id": "exec-1",
+          "payload": {
+            "status": "completed",
+            "output": {
+              "exit_code": 0,
+              "stdout": "hello-lemma\n"
+            },
+            "error": null
+          }
+        }
+      ],
+      "tool_name": "exec_command",
+      "tool_args": {
+        "cmd": "echo hello-lemma",
+        "workdir": "/workspace/fixture"
+      },
+      "tool_result": {
+        "exit_code": 0,
+        "stdout": "hello-lemma\n"
+      }
+    },
+    {
+      "name": "a failed call keeps its output and says why",
+      "events": [
+        {
+          "type": "tool_call",
+          "object_id": "exec-2",
+          "payload": {
+            "tool": {
+              "name": "exec_command",
+              "source": "native",
+              "server": null,
+              "title": "false",
+              "kind": "execute"
+            },
+            "input": {
+              "cmd": "false"
+            },
+            "parent_call_id": null
+          }
+        },
+        {
+          "type": "tool_call_result",
+          "object_id": "exec-2",
+          "payload": {
+            "status": "failed",
+            "output": {
+              "exit_code": 1,
+              "stderr": "boom"
+            },
+            "error": "exited with code 1"
+          }
+        }
+      ],
+      "tool_name": "exec_command",
+      "tool_args": {
+        "cmd": "false"
+      },
+      "tool_result": {
+        "exit_code": 1,
+        "stderr": "boom",
+        "success": false,
+        "error": "exited with code 1"
+      }
+    }
+  ]
 }

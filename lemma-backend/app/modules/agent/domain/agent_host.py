@@ -16,7 +16,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.modules.agent.domain.value_objects import JsonObject
 
 
-AGENT_HOST_PROTOCOL_VERSION = 2
+# 3 is the WebSocket link with normalized run events (see
+# docs/architecture/agent-host.md#the-link); 2 was the HTTP long-poll.
+AGENT_HOST_PROTOCOL_VERSION = 3
 AGENT_HOST_OFFLINE_AFTER_SECONDS = 90
 
 # Conversation metadata key holding the provider session (a Codex rollout, a
@@ -270,19 +272,78 @@ def run_state_progresses(
 
 
 class AgentHostEventType(str, Enum):
+    """What a run event is. See docs/architecture/agent-host-events.md.
+
+    Every type arrives already normalized: the host's per-adapter normalizers
+    turn whatever an ACP adapter reported into one of these, so nothing here
+    interprets ACP itself.
+    """
+
     RUN_STATE = "run_state"
-    USER_MESSAGE = "user_message"
     AGENT_MESSAGE_CHUNK = "agent_message_chunk"
     AGENT_MESSAGE_UPSERT = "agent_message_upsert"
     AGENT_THOUGHT_CHUNK = "agent_thought_chunk"
     AGENT_THOUGHT_UPSERT = "agent_thought_upsert"
-    PLAN_UPSERT = "plan_upsert"
-    TOOL_CALL_UPSERT = "tool_call_upsert"
-    TOOL_CALL_UPDATE = "tool_call_update"
-    USAGE_UPDATE = "usage_update"
+    TOOL_CALL = "tool_call"
+    TOOL_CALL_PROGRESS = "tool_call_progress"
+    TOOL_CALL_RESULT = "tool_call_result"
+    USAGE = "usage"
+    SESSION_UPDATE = "session_update"
     CONFIG_UPDATE = "config_update"
     PERMISSION_REQUEST = "permission_request"
     TERMINAL = "terminal"
+
+
+class AgentHostToolSource(str, Enum):
+    """Whose tool a call is: the agent's own, Lemma's, or another MCP server's."""
+
+    NATIVE = "native"
+    LEMMA = "lemma"
+    MCP = "mcp"
+
+
+class AgentHostToolStatus(str, Enum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    DENIED = "denied"
+
+
+class AgentHostToolRef(BaseModel):
+    """Which tool a call is, in Lemma's vocabulary.
+
+    ``name`` is canonical (``exec_command``, ``read_file``...) when the host
+    recognised the tool, and the adapter's own name in snake_case otherwise.
+    ``title`` and ``kind`` are the adapter's own words, for display only.
+    """
+
+    name: str = Field(min_length=1, max_length=255)
+    source: AgentHostToolSource
+    server: str | None = Field(default=None, max_length=255)
+    title: str | None = None
+    kind: str | None = Field(default=None, max_length=64)
+
+
+class AgentHostToolCallPayload(BaseModel):
+    tool: AgentHostToolRef
+    input: object = None
+    parent_call_id: str | None = Field(default=None, max_length=255)
+
+
+class AgentHostToolResultPayload(BaseModel):
+    status: AgentHostToolStatus
+    output: object = None
+    error: str | None = None
+
+
+class AgentHostUsagePayload(BaseModel):
+    """Token usage for one turn, as the adapter reported it at the end."""
+
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    cached_input_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
 
 
 class AgentHostRunCheckpoint(BaseModel):

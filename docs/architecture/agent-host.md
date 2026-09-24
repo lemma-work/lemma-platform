@@ -9,7 +9,8 @@ device half of the API — see [`desktop/agent-host/README.md`](../../desktop/ag
 The Agent Host lets a Lemma workspace run coding agents that live on a user's
 own machine: Claude Code, Codex, OpenCode, Cursor. Those agents hold the user's
 own credentials and see the user's own files, so they cannot move into the
-cloud. The machine reaches Lemma over outbound HTTPS and needs no inbound port.
+cloud. The machine reaches Lemma over one outbound WebSocket (see
+[The link](#the-link)) and needs no inbound port.
 
 This was originally a CLI feature. The desktop app is now the primary way to
 use it, and the CLI is the headless path.
@@ -307,19 +308,127 @@ never happens.
 corrupt adapter cache says `run doctor --repair`, and Desktop exposes no doctor
 surface — so the advice is a dead end for every user who can receive it.
 
+## The link
+
+The host talks to Lemma over **one WebSocket per paired workspace**, opened by
+the host to `wss://<api>/agent-host/link`. It is still outbound only, so the
+machine needs no inbound port. Everything travels on it: commands down, events,
+checkpoints and harnesses up, and the Lemma MCP tool calls the agent makes.
+There is no HTTP API for the host any more.
+
+It replaced a 25-second HTTP long-poll plus one POST per streamed event. The
+poll was cheap: about 2.4 requests a minute, woken early by a Redis poke. The
+event uploads were not. While an agent streamed, every chunk, tool update and
+usage report was its own authenticated POST: roughly 1,200 to 3,600 a minute
+against a local backend and 400 to 750 over the internet. Each cost a database
+session, a host-secret hash lookup and a Redis script. The link authenticates
+once, subscribes to the host's wake-up channel once, and pushes in both
+directions the moment there is something to say. A cancel no longer waits for
+the next poll, and a checkpoint no longer waits for the current one to return.
+
+### Frames
+
+Every frame is a JSON text message:
+
+```json
+{ "type": "events", "id": "17", "body": { … } }
+{ "type": "events_ok", "re": "17", "body": { … } }
+```
+
+`id` names a request that expects an answer. `re` on the answer points back at
+it. Pushes carry neither. The frames are defined once in
+`desktop/agent-host/src/link/protocol.rs` and once in
+`lemma-backend/app/modules/agent/domain/agent_host_link.py`, and both are held
+to `desktop/agent-host/tests/fixtures/wire_contract.json`.
+
+| Direction | `type` | Body | Answered by |
+|---|---|---|---|
+| host → Lemma | `pair` | `pairing_code`, `display_name`, `hello` | `paired` (`host_id`, `user_id`, `host_secret`), then close |
+| host → Lemma | `hello` | `hello`, `capacity` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`) |
+| host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections` | `control_ok` (`commands`, `refused`) |
+| host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
+| host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
+| host → Lemma | `mcp` | `run_id`, `token`, `method`, `params` | `mcp_ok` (`result`) or `error` |
+| host → Lemma | `interaction_wait` | `run_id`, `token`, `tool_call_id` | `interaction_ok` (`answer`), once decided |
+| host → Lemma | `revoke` | nothing | `revoked`, then close |
+| Lemma → host | `commands` | `commands` | the next `control` acknowledges them |
+| Lemma → host | `reconnect` | `after_ms` | the host reconnects after that delay |
+| either | `error` | `code`, `message`, `retryable` | nothing |
+
+The first frame on a connection is `pair` (no `Authorization` header) or
+`hello` (with `Authorization: Bearer <host secret>`). Anything else first is a
+protocol violation.
+
+### Close codes
+
+| Code | Meaning | Host does |
+|---|---|---|
+| 1000 | done: after `paired` or `revoked` | nothing further |
+| 1012 | Lemma is restarting (after `reconnect`) | reconnects after `after_ms` |
+| 4400 | protocol violation | reconnects with backoff, and logs it |
+| 4401 | `AGENT_HOST_REVOKED_OR_MISSING` | counts toward dropping the pairing (three in a row) |
+| 4403 | malformed or missing credential | reconnects with backoff |
+| 4408 | no frame from the host for `heartbeat_ms × 3` | reconnects |
+| 4409 | superseded by a newer connection for this host | stops this connection; the newer one continues |
+| 4426 | the host's protocol is too old | reports `upgrade required` and stops; Desktop's updater takes over |
+
+### Heartbeat and liveness
+
+The host sends a `control` frame at least every `heartbeat_ms` (20 seconds)
+and immediately whenever it has something new to report: an acknowledgement, a
+checkpoint or a rejection. `control` is the heartbeat, for the same reason the
+poll was. It carries the non-terminal checkpoint of every run in flight, and
+that checkpoint is what renews the run's 90-second lease. 20 seconds keeps the
+lease renewed four times over, and keeps the socket well inside Cloudflare's
+100-second idle limit.
+
+### Delivery
+
+Nothing here is new durability. The link moved the transport and kept every
+guarantee:
+
+- **Commands** stay in Postgres and are handed out with `FOR UPDATE SKIP
+  LOCKED`. Any API replica holding a host's socket can push them, so there is no
+  routing table and no sticky session. A replica pushes when it is poked on the
+  host's channel, when it applies a `control` frame, and every 5 seconds as the
+  floor for a lost poke. The host de-duplicates by `command_id`
+  (`command_receipts`) and acknowledges on its next `control`.
+- **Events** keep their per-run `sequence`. The host keeps them in its SQLite
+  outbox until `events_ok` acknowledges them, and replays from there after a
+  reconnect. Lemma's stream de-duplicates by sequence.
+- **Control updates** are idempotent and stale ones are ignored.
+  `control_ok.refused` names any update Lemma could not parse, and it is the
+  only way one is refused. Lemma applies each update separately, so one bad
+  update never blocks the rest. The host's old bisection of a refused poll is
+  gone with the poll.
+- **MCP tool calls** are re-authorized on every call against the run's own
+  token, exactly as the HTTP endpoint did. A call in flight when the socket
+  drops is retried once the link is back. A parked `ask_user` is waited on with
+  `interaction_wait`, which Lemma answers when the person decides. The bridge no
+  longer polls every 2 seconds.
+
+**Newest connection wins.** A host that reconnects after a network drop can
+leave a half-open socket behind on some replica. `hello` publishes a
+`superseded` notice on the host's channel, and every other connection for that
+host closes with 4409. Commands therefore go out on one socket at a time.
+
+**Draining.** An API replica that is shutting down sends `reconnect` with a
+random `after_ms` of up to 5 seconds and closes with 1012, so a deploy does not
+reconnect every host at the same instant.
+
 ### Timing
 
-Two clocks decide how long "install an agent, use it in a chat" takes, and both
-are written where they are used rather than inferred:
+Two clocks decide how long "install an agent, use it in a chat" takes:
 
-- `DISK_SCAN_INTERVAL` — how often the supervisor asks whether the agents on this
-  machine changed. Affordable because detection is no longer probing: resolving
-  four commands is a handful of `stat` calls, not four spawned processes. One
-  sweep for the process, announced to every worker over a `watch` channel.
-- `POLL_HOLD` — how long Lemma holds a poll open. The worker loop spends
-  essentially all of its time inside one, so **anything that must happen sooner
-  needs its own arm in that select**. A check placed at the top of the loop runs
-  once per held poll however short its own interval says it is, which is how a
-  two-second scan came to answer in up to twenty-five.
+- `DISK_SCAN_INTERVAL`: how often the supervisor asks whether the agents on this
+  machine changed. It is affordable because detection is a handful of `stat`
+  calls, not a probe.
+- `heartbeat_ms`: the longest the host goes without telling Lemma it is alive.
 
 `HARNESS_REFRESH_INTERVAL` is the safety net behind the scan, not the mechanism.
+
+There is no longer a clock hiding inside the transport. With the poll, anything
+the worker loop had to do sooner than 25 seconds needed its own arm in the
+`select!`, because the loop spent nearly all of its time waiting on a held
+request. The link's reader, writer and worker are separate tasks joined by
+channels, so work happens when it is due.

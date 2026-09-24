@@ -41,4 +41,7 @@ impl NoConsoleWindow for std::process::Command {
 }
 
 pub const HOST_RELEASE: &str = env!("CARGO_PKG_VERSION");
-pub const PROTOCOL_VERSION: u16 = 2;
+/// The link protocol this host speaks. 3 is the WebSocket link with
+/// normalized run events; 2 was the HTTP long-poll. Lemma closes a link whose
+/// `hello` names any other version with 4426, and Desktop's updater takes over.
+pub const PROTOCOL_VERSION: u16 = 3;
