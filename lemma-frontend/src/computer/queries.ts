@@ -2,7 +2,31 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { ApiError } from "lemma-sdk";
 import { lemma } from "@/session/client";
 import { live } from "@/usage/queries";
+import { useEffect, useRef } from "react";
+import { startupProgress } from "./startup";
 import { MAX_READ_BYTES, MAX_TEXT_BYTES, viewerFor, type BrowserState, type Listing } from "./machine";
+
+export function useWorkspaceStatus(enabled: boolean) {
+    const cache = useQueryClient();
+    const result = useQuery({
+        queryKey: ["computer", "status"],
+        queryFn: () => lemma().workspace.status(),
+        enabled: live() && enabled,
+        refetchInterval: (query) => startupProgress(query.state.data) ? 3_000 : 15_000,
+        refetchOnWindowFocus: true,
+        retry: false,
+    });
+    const previous = useRef<string | undefined>(undefined);
+    const state = result.data?.state;
+    useEffect(() => {
+        if (state === "ready" && previous.current && previous.current !== "ready") {
+            void cache.invalidateQueries({ queryKey: ["computer", "files"] });
+            void cache.invalidateQueries({ queryKey: ["computer", "browser"] });
+        }
+        previous.current = state;
+    }, [state, cache]);
+    return result;
+}
 
 /** Reading the computer without starting it.
  *
