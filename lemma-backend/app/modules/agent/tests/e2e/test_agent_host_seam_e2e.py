@@ -119,22 +119,30 @@ def _turn(run_id: UUID) -> list[AgentHostEvent]:
         at(4, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "Let me look. "}),
         at(
             5,
-            AgentHostEventType.TOOL_CALL_UPSERT,
-            {"title": "read_file", "rawInput": {"path": "README.md"}},
+            AgentHostEventType.TOOL_CALL,
+            {
+                "tool": {
+                    "name": "read_file",
+                    "source": "native",
+                    "title": "Read README.md",
+                    "kind": "read",
+                },
+                "input": {"file_path": "README.md"},
+            },
             object_id="call-1",
         ),
         at(
             6,
-            AgentHostEventType.TOOL_CALL_UPDATE,
-            {"status": "COMPLETED", "result": "# Lemma"},
+            AgentHostEventType.TOOL_CALL_RESULT,
+            {"status": "completed", "output": {"content": "# Lemma"}},
             object_id="call-1",
         ),
         at(7, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "It is the readme."}),
         at(8, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "It is the readme."}),
         at(
             9,
-            AgentHostEventType.USAGE_UPDATE,
-            {"usage": {"input_tokens": 120, "output_tokens": 34}},
+            AgentHostEventType.USAGE,
+            {"input_tokens": 120, "output_tokens": 34},
         ),
         at(
             10,
@@ -285,10 +293,22 @@ async def test_the_stream_carries_a_permission_request_without_ending_the_run(
                     3,
                     AgentHostEventType.PERMISSION_REQUEST,
                     {
-                        "toolCall": {"title": "Run rm -rf build", "kind": "execute"},
+                        "request_id": "native-shell",
+                        "tool_call_id": "native-shell",
+                        "tool": {
+                            "name": "exec_command",
+                            "source": "native",
+                            "title": "Run rm -rf build",
+                            "kind": "execute",
+                        },
+                        "input": {"cmd": "rm -rf build"},
                         "options": [
-                            {"optionId": "once", "name": "Allow", "kind": "allow_once"},
-                            {"optionId": "no", "name": "No", "kind": "reject_once"},
+                            {
+                                "option_id": "once",
+                                "name": "Allow",
+                                "kind": "allow_once",
+                            },
+                            {"option_id": "no", "name": "No", "kind": "reject_once"},
                         ],
                     },
                     object_id="native-shell",

@@ -3,6 +3,11 @@
 Several of these pin defects found reviewing the two-lane design: a stream key
 leaking into message metadata, every flush claiming to be the final answer, and
 an upsert re-emitting text the user had already seen.
+
+Tool calls here are protocol-3 events, already named and shaped by the host
+(docs/architecture/agent-host-events.md). How one maps to its messages is in
+``test_agent_host_tool_shapes``; this file is about the conversation around
+them -- narration, thought, the final answer, permissions and run end.
 """
 
 from __future__ import annotations
@@ -43,8 +48,66 @@ def _event(
     )
 
 
+def _call(
+    sequence: int,
+    call_id: str,
+    name: str,
+    tool_input: object = None,
+    *,
+    source: str = "native",
+    title: str | None = None,
+) -> AgentHostEventEnvelope:
+    return _event(
+        sequence,
+        AgentHostEventType.TOOL_CALL,
+        {
+            "tool": {"name": name, "source": source, "title": title},
+            "input": tool_input if tool_input is not None else {},
+        },
+        object_id=call_id,
+    )
+
+
+def _result(
+    sequence: int,
+    call_id: str,
+    output: object = "ok",
+    *,
+    status: str = "completed",
+    error: str | None = None,
+) -> AgentHostEventEnvelope:
+    return _event(
+        sequence,
+        AgentHostEventType.TOOL_CALL_RESULT,
+        {"status": status, "output": output, "error": error},
+        object_id=call_id,
+    )
+
+
+def _permission(
+    sequence: int, call_id: str, name: str = "exec_command", title: str = "Run it"
+) -> AgentHostEventEnvelope:
+    return _event(
+        sequence,
+        AgentHostEventType.PERMISSION_REQUEST,
+        {
+            "request_id": call_id,
+            "tool_call_id": call_id,
+            "tool": {"name": name, "source": "native", "title": title},
+            "input": {},
+            "options": [{"option_id": "allow", "name": "Allow", "kind": "allow_once"}],
+        },
+        object_id=call_id,
+    )
+
+
 def _tokens(events) -> str:
-    return "".join(e.data["data"] for e in events if e.type is AgentEventType.TOKEN)
+    """Text and thinking as streamed; a tool's live indicator is not text."""
+    return "".join(
+        e.data["data"]
+        for e in events
+        if e.type is AgentEventType.TOKEN and e.data["kind"] in {"text", "thinking"}
+    )
 
 
 def _messages(events):
@@ -136,18 +199,8 @@ class TestTextAccumulation:
             [
                 _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "Hello"}),
                 _event(2, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "Hello"}),
-                _event(
-                    3,
-                    AgentHostEventType.TOOL_CALL_UPSERT,
-                    {"name": "read_file"},
-                    object_id="c1",
-                ),
-                _event(
-                    4,
-                    AgentHostEventType.TOOL_CALL_UPDATE,
-                    {"status": "COMPLETED", "result": "ok"},
-                    object_id="c1",
-                ),
+                _call(3, "c1", "read_file", {"file_path": "a.md"}),
+                _result(4, "c1"),
                 _event(5, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "! there"}),
                 _event(6, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "! there"}),
             ],
@@ -187,18 +240,8 @@ class TestTextAccumulation:
                     AgentHostEventType.AGENT_MESSAGE_UPSERT,
                     {"text": "Loading schemas first."},
                 ),
-                _event(
-                    2,
-                    AgentHostEventType.TOOL_CALL_UPSERT,
-                    {"name": "load_skill"},
-                    object_id="c1",
-                ),
-                _event(
-                    3,
-                    AgentHostEventType.TOOL_CALL_UPDATE,
-                    {"status": "COMPLETED", "result": "ok"},
-                    object_id="c1",
-                ),
+                _call(2, "c1", "load_skill", source="lemma"),
+                _result(3, "c1"),
                 _event(
                     4,
                     AgentHostEventType.AGENT_MESSAGE_UPSERT,
@@ -241,6 +284,114 @@ class TestTextAccumulation:
         assert _final_text(out) == "Different"
 
 
+class TestAnImageInsideAReply:
+    """An image the agent produced mid-reply stays in the saved message.
+
+    The harness saves an image block as a pod file and hands the normalizer a
+    ``payload_override`` whose text is the markdown pointing at it. The host
+    reads the same block as no text at all, so its upsert does not contain the
+    markdown. With the markdown appended to the pending text, the upsert no
+    longer started with what had streamed, and the host's text replaced it:
+    the image showed while streaming and was gone on reload.
+    """
+
+    IMAGE = "![Generated image](agent-output/chart.png)"
+
+    def _image_chunk(self, sequence: int) -> tuple[AgentHostEventEnvelope, dict]:
+        raw = {"content": {"type": "image", "data": "aGk=", "mimeType": "image/png"}}
+        return (
+            _event(sequence, AgentHostEventType.AGENT_MESSAGE_CHUNK, raw),
+            {**raw, "text": self.IMAGE},
+        )
+
+    def _reply(self, n: AgentHostEventNormalizer) -> list:
+        image, override = self._image_chunk(2)
+        out = n.normalize(
+            _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "Here: "})
+        )
+        out += n.normalize(image, payload_override=override)
+        out += n.normalize(
+            _event(3, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": " done."})
+        )
+        # What the host seals: its own text, with nothing where the image was.
+        out += n.normalize(
+            _event(4, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "Here:  done."})
+        )
+        return out
+
+    def test_the_saved_message_keeps_the_image_where_it_arrived(self) -> None:
+        n = _normalizer()
+        out = self._reply(n)
+        out += n.normalize(
+            _event(5, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
+        )
+
+        assert _final_text(out) == f"Here: {self.IMAGE} done."
+        assert _persisted_text(out) == _tokens(out), (
+            "what is saved must be what the user watched stream"
+        )
+
+    def test_the_image_survives_a_tool_call_sealing_the_segment(self) -> None:
+        n = _normalizer()
+        out = self._reply(n)
+        out += _run(n, [_call(5, "c1", "read_file"), _result(6, "c1")])
+
+        said = [m.data.text for m in _text_messages(out)]
+        assert said == [f"Here: {self.IMAGE} done."]
+
+    def test_an_unsealed_image_is_kept_at_the_end_of_the_turn(self) -> None:
+        n = _normalizer()
+        image, override = self._image_chunk(1)
+        n.normalize(image, payload_override=override)
+        out = n.normalize(
+            _event(2, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
+        )
+
+        assert _final_text(out) == self.IMAGE
+
+
+class TestThoughtPerStep:
+    """Reasoning is saved before each step, not once for the whole run.
+
+    Thought was flushed only at the end, so a run showed one "Thought" after
+    all of its tool calls, holding every step's reasoning glued together.
+    """
+
+    def test_each_tool_call_gets_the_thought_that_led_to_it(self) -> None:
+        n = _normalizer()
+        out = _run(
+            n,
+            [
+                _event(1, AgentHostEventType.AGENT_THOUGHT_UPSERT, {"text": "First."}),
+                _call(2, "c1", "read_file"),
+                _result(3, "c1"),
+                _event(4, AgentHostEventType.AGENT_THOUGHT_UPSERT, {"text": "Second."}),
+                _call(5, "c2", "grep"),
+                _result(6, "c2"),
+                _event(7, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "Done."}),
+            ],
+        )
+
+        sequence = [
+            m.data.text if m.data.kind is MessageKind.THINKING else m.data.tool_call_id
+            for m in _messages(out)
+            if m.data.kind in {MessageKind.THINKING, MessageKind.TOOL_CALL}
+        ]
+        assert sequence == ["First.", "c1", "Second.", "c2"]
+
+    def test_a_permission_request_flushes_the_thought_before_it(self) -> None:
+        n = _normalizer()
+        n.normalize(
+            _event(1, AgentHostEventType.AGENT_THOUGHT_UPSERT, {"text": "Risky."})
+        )
+        out = n.normalize(_permission(2, "perm-1"))
+
+        kinds = [m.data.kind for m in _messages(out)]
+        assert kinds[0] is MessageKind.THINKING
+        assert _messages(out)[0].data.text == "Risky."
+        assert MessageKind.TOOL_CALL in kinds
+
+
 class TestFinalAnswerFlag:
     def test_only_the_terminal_flush_is_the_final_answer(self) -> None:
         """A run that pauses for permission and then completes must not emit
@@ -249,9 +400,7 @@ class TestFinalAnswerFlag:
         n.normalize(
             _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "thinking..."})
         )
-        paused = n.normalize(
-            _event(2, AgentHostEventType.PERMISSION_REQUEST, {"tool": "bash"})
-        )
+        paused = n.normalize(_permission(2, "perm-1"))
         n.normalize(_event(3, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "done"}))
         finished = n.normalize(
             _event(4, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
@@ -285,564 +434,6 @@ class TestMetadata:
         ids = [m.data.metadata.get("agent_host_object_id") for m in _messages(out)]
         assert ids == ["msg-42"]
         assert "agent-message" not in str(ids)
-
-
-class TestToolNames:
-    """What a tool call is *called*, which is what every card and icon keys on.
-
-    The payloads here are the ones a real Claude Code run emits over ACP, taken
-    from a desktop install's event journal: no `name` field anywhere, the real
-    name under `_meta.claudeCode.toolName`, and a `kind` that is a category
-    rather than a name.
-    """
-
-    def _call(self, payload: dict) -> str:
-        n = _normalizer()
-        out = n.normalize(
-            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, payload, object_id="c1")
-        )
-        return _messages(out)[0].data.tool_name
-
-    def test_a_lemma_mcp_tool_is_the_tool_the_pod_agent_calls(self) -> None:
-        """The whole point: one tool, one name. A local agent namespaces Lemma's
-        run-scoped MCP server, so the same tool the pod agent calls as
-        `pod_write_file` arrived as `mcp__lemma__lemma_pod_write_file` and
-        rendered as its own unrecognised tool, with no icon and no card."""
-        assert (
-            self._call(
-                {
-                    "_meta": {
-                        "claudeCode": {"toolName": "mcp__lemma__lemma_pod_write_file"}
-                    },
-                    "title": "mcp__lemma__lemma_pod_write_file",
-                    "toolCallId": "c1",
-                }
-            )
-            == "pod_write_file"
-        )
-
-    def test_every_namespacing_shape_lands_on_the_same_tool(self) -> None:
-        for reported in (
-            "mcp__lemma__lemma_exec_command",
-            "mcp__lemma_tools__lemma_exec_command",
-            "lemma__lemma_exec_command",
-            "lemma_exec_command",
-            "exec_command",
-        ):
-            assert self._call({"title": reported}) == "exec_command", reported
-
-    def test_a_third_party_mcp_tool_keeps_its_own_name(self) -> None:
-        assert (
-            self._call({"title": "mcp__github__create_issue"})
-            == "mcp__github__create_issue"
-        )
-
-    def test_the_real_name_beats_the_acp_category(self) -> None:
-        """`kind` is `fetch` for a web search, a page fetch and anything else an
-        adapter files under it, so reading it as the name showed every one of
-        them as "Fetch" — and made the approval card name a category too."""
-        assert (
-            self._call(
-                {
-                    "_meta": {"claudeCode": {"toolName": "WebSearch"}},
-                    "kind": "fetch",
-                    "title": "Web search",
-                }
-            )
-            == "WebSearch"
-        )
-
-    def test_a_category_is_still_better_than_a_human_title(self) -> None:
-        """Without `_meta` the title is whatever the adapter wrote for a human —
-        for Bash that is the command itself — so `kind` still comes first."""
-        assert self._call({"kind": "execute", "title": "npm test"}) == "exec_command"
-
-    def test_other_is_not_a_name(self) -> None:
-        """`other` is the kind adapters give everything they have no category
-        for, MCP tools included. Recorded as the name it collapsed them all."""
-        assert (
-            self._call({"kind": "other", "title": "lemma_read_table"}) == "read_table"
-        )
-
-    def test_the_approval_card_names_the_tool_it_interrupts(self) -> None:
-        n = _normalizer()
-        n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"_meta": {"claudeCode": {"toolName": "WebSearch"}}, "kind": "fetch"},
-                object_id="toolu_1",
-            )
-        )
-        out = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.PERMISSION_REQUEST,
-                {
-                    "toolCall": {
-                        "toolCallId": "toolu_1",
-                        "kind": "fetch",
-                        "title": "x",
-                    },
-                    "options": [{"optionId": "allow", "kind": "allow_once"}],
-                },
-                object_id="toolu_1",
-            )
-        )
-
-        calls = [m for m in _messages(out) if m.data.tool_call_id is not None]
-        assert calls[0].data.tool_args["tool_name"] == "WebSearch"
-
-
-class TestToolCalls:
-    def test_tool_call_and_return_are_emitted_once(self) -> None:
-        n = _normalizer()
-        opened = n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"name": "read_file"},
-                object_id="call-1",
-            )
-        )
-        duplicate = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"name": "read_file"},
-                object_id="call-1",
-            )
-        )
-        closed = n.normalize(
-            _event(
-                3,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"status": "COMPLETED", "result": "ok"},
-                object_id="call-1",
-            )
-        )
-        assert len(_messages(opened)) == 1
-        assert duplicate == []
-        assert len(_messages(closed)) == 1
-
-    def test_a_pausing_tool_is_left_to_lemma_to_record(self) -> None:
-        """The harness's copy of `ask_user` never reaches the conversation.
-
-        Lemma records these itself, when the MCP call arrives, because only an
-        id Lemma minted can be answered: the approval endpoint, the snooze
-        timer and the resume all address a call by its id, and the one the
-        harness reports here belongs to a namespace none of them can reach.
-        Emitting both put two identical questions in the conversation, one of
-        them on a card whose buttons resolved nothing.
-        """
-        n = _normalizer()
-        opened = n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"name": "ask_user", "rawInput": {"question": "Which one?"}},
-                object_id="host-call-1",
-            )
-        )
-        closed = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"status": "COMPLETED", "result": {"answer": "the blue one"}},
-                object_id="host-call-1",
-            )
-        )
-        assert _messages(opened) == []
-        assert _messages(closed) == []
-
-    def test_an_ordinary_tool_is_still_recorded_from_the_harness(self) -> None:
-        """The suppression is by tool, not a general silencing of the lane."""
-        n = _normalizer()
-        opened = n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"name": "exec_command", "rawInput": {"command": "ls"}},
-                object_id="host-call-2",
-            )
-        )
-        assert len(_messages(opened)) == 1
-
-    def test_a_streamed_call_keeps_the_arguments_that_arrive_after_it(self) -> None:
-        """The sequence a streaming adapter really sends, in order.
-
-        Claude Code surfaces the call at ``content_block_start``, before the
-        model has written its input, so the first ``tool_call`` carries
-        ``rawInput: {}``. The real arguments follow on a ``tool_call_update``
-        with no status at all — which the normalizer used to drop, because only
-        terminal statuses were treated as news. Every streamed tool call
-        therefore rendered with empty arguments for the life of the
-        conversation, and anything built from them had nothing to build from.
-        """
-        n = _normalizer()
-        request = {"type": "WIDGET", "content": "<div>hello</div>"}
-
-        opened = n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"rawInput": {}, "status": "pending", "title": "display_resource"},
-                object_id="call-1",
-            )
-        )
-        refined = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"rawInput": {"request": request}, "title": "display_resource"},
-                object_id="call-1",
-            )
-        )
-        # The update that carries no arguments is the input's full stop.
-        settled = n.normalize(
-            _event(3, AgentHostEventType.TOOL_CALL_UPDATE, {}, object_id="call-1")
-        )
-
-        # Nothing durable while the arguments are still being written; a message
-        # is appended and never revised, so announcing `{}` would pin `{}`.
-        assert _messages(opened) == []
-        assert _messages(refined) == []
-        calls = _messages(settled)
-        assert len(calls) == 1
-        assert calls[0].data.tool_args == {"request": request}
-
-    def test_a_call_is_announced_only_once_its_input_stops_growing(self) -> None:
-        """An adapter streams a call's input as a growing prefix of its fields.
-
-        Observed on the wire for a real `write_file`: `{path}` first, then
-        `{path, content}` with 1126 more characters. Announcing on the first
-        non-empty piece published a call missing most of its input, and a
-        conversation message is appended rather than revised, so that was
-        final. The update carrying no arguments at all is what says the input
-        is done — and it still arrives before the tool runs.
-        """
-        n = _normalizer()
-        document = "# Report\n" + ("detail " * 200)
-
-        def feed(sequence: int, payload: dict) -> list:
-            return _messages(
-                n.normalize(
-                    _event(
-                        sequence,
-                        AgentHostEventType.TOOL_CALL_UPDATE,
-                        payload,
-                        object_id="call-1",
-                    )
-                )
-            )
-
-        n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"rawInput": {}},
-                object_id="call-1",
-            )
-        )
-        assert feed(2, {"rawInput": {"path": "report.md"}}) == []
-        assert feed(3, {"rawInput": {"path": "report.md", "content": document}}) == []
-        # The input has stopped arriving; now the call is worth writing down.
-        announced = feed(4, {})
-
-        assert len(announced) == 1
-        assert announced[0].data.tool_args == {
-            "path": "report.md",
-            "content": document,
-        }
-
-    def test_a_later_empty_update_does_not_erase_the_arguments(self) -> None:
-        """An adapter sends several refinements, and most of them carry nothing.
-
-        Observed on the wire: the update carrying ``rawInput`` is followed
-        immediately by one holding only the call's id. Folding that in
-        naively puts the empty value back and loses what was just learned.
-        """
-        n = _normalizer()
-        n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"rawInput": {}},
-                object_id="call-1",
-            )
-        )
-        n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"rawInput": {"path": "README.md"}},
-                object_id="call-1",
-            )
-        )
-        # The argument-less update ends the input and releases the call.
-        trailing = _messages(
-            n.normalize(
-                _event(3, AgentHostEventType.TOOL_CALL_UPDATE, {}, object_id="call-1")
-            )
-        )
-        closed = n.normalize(
-            _event(
-                4,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"status": "COMPLETED", "rawOutput": "ok"},
-                object_id="call-1",
-            )
-        )
-
-        assert len(trailing) == 1
-        assert trailing[0].data.tool_args == {"path": "README.md"}
-        # And the close adds only the return, never a second call card.
-        assert [m.data.kind for m in _messages(closed)] == [MessageKind.TOOL_RETURN]
-
-    def test_a_call_released_at_its_close_reads_the_closing_update(self) -> None:
-        """The closing update is often the first thing that names a tool.
-
-        A call held for arguments that never came was announced from its
-        opening alone — an anonymous ``tool`` with ``{}`` — while the name and
-        the input sat in the very event that triggered the release. Both cards
-        then disagreed with what actually ran.
-        """
-        n = _normalizer()
-        n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"rawInput": {}},
-                object_id="call-1",
-            )
-        )
-        closed = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {
-                    "status": "COMPLETED",
-                    "_meta": {"claudeCode": {"toolName": "read_file"}},
-                    "rawInput": {"path": "README.md"},
-                    "rawOutput": "# Lemma",
-                },
-                object_id="call-1",
-            )
-        )
-
-        call, result = (m.data for m in _messages(closed))
-        assert call.kind is MessageKind.TOOL_CALL
-        assert call.tool_name == "read_file"
-        assert call.tool_args == {"path": "README.md"}
-        # And the return agrees with it, rather than with the placeholder the
-        # call opened under.
-        assert result.tool_name == "read_file"
-
-    def test_a_call_whose_arguments_never_arrive_is_still_announced(self) -> None:
-        """Holding is for arguments in flight, never a way to lose a call.
-
-        If the turn ends while a call is still held — cancelled, adapter died,
-        or a tool genuinely invoked with nothing — the call happened and the
-        conversation still owes it a card, ahead of the return that closes it.
-        """
-        n = _normalizer()
-        n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"rawInput": {}, "title": "read_file"},
-                object_id="call-1",
-            )
-        )
-        finished = n.normalize(
-            _event(2, AgentHostEventType.TERMINAL, {"state": "FAILED"})
-        )
-
-        kinds = [m.data.kind for m in _messages(finished)]
-        assert MessageKind.TOOL_CALL in kinds
-        assert kinds.index(MessageKind.TOOL_CALL) < kinds.index(MessageKind.TOOL_RETURN)
-
-    def test_widget_arguments_are_not_truncated(self) -> None:
-        """Bounding a result guards against a megabyte of stdout. Bounding the
-        arguments is data loss: a WIDGET carries its whole document in
-        ``content``, and the 4096-character ceiling replaced it with a
-        placeholder, leaving the view nothing to render."""
-        n = _normalizer()
-        document = "<div>" + ("x" * 20_000) + "</div>"
-
-        n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"rawInput": {}},
-                object_id="call-1",
-            )
-        )
-        n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"rawInput": {"request": {"type": "WIDGET", "content": document}}},
-                object_id="call-1",
-            )
-        )
-        settled = n.normalize(
-            _event(3, AgentHostEventType.TOOL_CALL_UPDATE, {}, object_id="call-1")
-        )
-
-        assert _messages(settled)[0].data.tool_args["request"]["content"] == document
-
-    def test_an_mcp_result_is_the_value_the_tool_returned(self) -> None:
-        """An adapter reports an MCP call's output as the MCP envelope, while
-        the in-process harness stores what the tool returned. The frontend reads
-        a result as an object, so the envelope arrived as ``{"output": [...]}``
-        and the served view's ``url`` was a level too deep to find."""
-        n = _normalizer()
-        n.normalize(
-            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, {}, object_id="call-1")
-        )
-        closed = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {
-                    "status": "COMPLETED",
-                    "rawOutput": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": '{"success": true, "url": "https://x/y"}',
-                            }
-                        ]
-                    },
-                },
-                object_id="call-1",
-            )
-        )
-
-        assert _messages(closed)[0].data.tool_result == {
-            "success": True,
-            "url": "https://x/y",
-        }
-
-    def test_a_multi_part_mcp_result_is_left_alone(self) -> None:
-        """Only the unambiguous envelope is unwrapped. A genuinely multi-part
-        result is not a wrapper around one value, and picking a part would lose
-        the rest."""
-        n = _normalizer()
-        blocks = [
-            {"type": "text", "text": '{"a": 1}'},
-            {"type": "text", "text": '{"b": 2}'},
-        ]
-        n.normalize(
-            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, {}, object_id="call-1")
-        )
-        closed = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"status": "COMPLETED", "rawOutput": {"content": blocks}},
-                object_id="call-1",
-            )
-        )
-
-        assert _messages(closed)[0].data.tool_result == {"content": blocks}
-
-    def test_an_untagged_call_and_its_update_are_the_same_call(self) -> None:
-        """ACP's ToolCall has no required id, so an adapter can report a call
-        and its completion with nothing linking them. Falling back to the event
-        sequence gave the two different ids by construction: the call was left
-        open and swept as abandoned, while the result addressed a call nobody
-        held — one tool use rendering as two broken halves."""
-        n = _normalizer()
-
-        opened = n.normalize(
-            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, {"name": "read_file"})
-        )
-        closed = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"status": "COMPLETED", "result": "ok"},
-            )
-        )
-        finished = n.normalize(
-            _event(3, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
-        )
-
-        call = _messages(opened)[0].data
-        result = _messages(closed)[0].data
-        assert call.tool_call_id == result.tool_call_id
-        # And nothing is left over to be swept as an abandoned call.
-        assert [
-            m for m in _messages(finished) if m.data.tool_call_id == call.tool_call_id
-        ] == []
-
-    def test_two_untagged_calls_do_not_collapse_into_one(self) -> None:
-        n = _normalizer()
-
-        first = n.normalize(
-            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, {"name": "read_file"})
-        )
-        n.normalize(
-            _event(2, AgentHostEventType.TOOL_CALL_UPDATE, {"status": "COMPLETED"})
-        )
-        second = n.normalize(
-            _event(3, AgentHostEventType.TOOL_CALL_UPSERT, {"name": "write_file"})
-        )
-
-        assert (
-            _messages(first)[0].data.tool_call_id
-            != _messages(second)[0].data.tool_call_id
-        )
-
-    def test_unfinished_tool_calls_are_closed_at_terminal(self) -> None:
-        n = _normalizer()
-        n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"name": "read_file"},
-                object_id="call-1",
-            )
-        )
-        out = n.normalize(_event(2, AgentHostEventType.TERMINAL, {"state": "FAILED"}))
-        assert any(m for m in _messages(out))
-        assert out[-1].type is AgentEventType.ERROR
-
-    def test_an_unanswered_permission_is_closed_at_terminal(self) -> None:
-        """A card whose run is gone must stop offering buttons.
-
-        The host is no longer holding the request — its own timeout denied it
-        half an hour in — so the only thing left to press was a button that
-        lands on a dead run. One user pressed "Always allow" on a card four
-        hours after the run behind it had failed, and nothing happened.
-        """
-        n = _normalizer()
-        n.normalize(
-            _event(
-                1,
-                AgentHostEventType.PERMISSION_REQUEST,
-                {
-                    "toolCall": {"toolCallId": "perm-1", "title": "Web search"},
-                    "options": [{"optionId": "allow", "kind": "allow_once"}],
-                },
-                object_id="perm-1",
-            )
-        )
-
-        out = n.normalize(_event(2, AgentHostEventType.TERMINAL, {"state": "FAILED"}))
-
-        returns = [
-            message
-            for message in _messages(out)
-            if message.data.tool_call_id == "agent-host-permission:perm-1"
-        ]
-        assert [message.data.tool_name for message in returns] == ["request_approval"]
-        assert returns[0].data.tool_result["success"] is False
-        # What every renderer already keys on to draw an unanswered interaction
-        # as spent rather than live.
-        assert returns[0].data.tool_result["interaction_fallback"] is True
 
 
 class TestTerminalMapping:
@@ -898,60 +489,42 @@ class TestTerminalMapping:
 
 
 class TestPermissionRequest:
-    def test_permission_input_is_saved_before_the_approval_is_published(self) -> None:
+    def test_the_approval_follows_the_call_it_gates_and_names_it(self) -> None:
+        """The host releases the gated call before the request, so the card
+        comes after the call it asks about and says the same word for it."""
         n = _normalizer()
         opening = n.normalize(
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"title": "Read file", "kind": "read", "status": "pending"},
-                object_id="read-project",
-            )
+            _call(1, "read-project", "read_file", {"file_path": "README.md"})
         )
-        assert _messages(opening) == []
         permission = n.normalize(
-            _event(
-                2,
-                AgentHostEventType.PERMISSION_REQUEST,
-                {
-                    "toolCall": {
-                        "toolCallId": "read-project",
-                        "title": "Read README.md",
-                        "rawInput": {"path": "README.md"},
-                    },
-                    "options": [{"optionId": "once", "kind": "allow_once"}],
-                },
-                object_id="read-project",
-            )
+            _permission(2, "read-project", name="read", title="Read README.md")
         )
-        calls = _messages(permission)
+
+        calls = [
+            m
+            for m in _messages([*opening, *permission])
+            if m.data.tool_args is not None
+        ]
         assert [call.data.tool_call_id for call in calls] == [
             "read-project",
             "agent-host-permission:read-project",
         ]
-        assert calls[0].data.tool_args == {"path": "README.md"}
-        assert calls[0].data.metadata["tool_title"] == "Read README.md"
+        assert calls[0].data.tool_args == {"file_path": "README.md"}
+        # The name the call was announced under wins over the request's own.
+        assert calls[1].data.tool_args["tool_name"] == "read_file"
+        assert calls[1].data.tool_args["title"] == "Read README.md"
 
     def test_permission_request_becomes_a_request_approval_call(self) -> None:
         """The pause is rendered as an ordinary Lemma approval, so every client
         that already knows how to show one needs no Agent Host special case."""
         n = _normalizer()
-        out = n.normalize(
-            _event(
-                1,
-                AgentHostEventType.PERMISSION_REQUEST,
-                {
-                    "toolCall": {"toolCallId": "perm-1", "title": "Run rm -rf build"},
-                    "options": [{"optionId": "allow", "kind": "allow_once"}],
-                },
-                object_id="perm-1",
-            )
-        )
+        out = n.normalize(_permission(1, "perm-1", title="Run rm -rf build"))
 
         calls = [m for m in _messages(out) if m.data.tool_call_id is not None]
         assert [m.data.tool_name for m in calls] == ["request_approval"]
         assert calls[0].data.tool_call_id == "agent-host-permission:perm-1"
         assert calls[0].data.tool_args["title"] == "Run rm -rf build"
+        assert calls[0].data.tool_args["tool_name"] == "exec_command"
         assert not any(e.type is AgentEventType.ERROR for e in out)
 
     def test_permission_request_does_not_end_the_run(self) -> None:
@@ -959,14 +532,7 @@ class TestPermissionRequest:
         run that is still going, so emitting WAITING would strand everything the
         agent does after the decision."""
         n = _normalizer()
-        out = n.normalize(
-            _event(
-                1,
-                AgentHostEventType.PERMISSION_REQUEST,
-                {"toolCall": {"toolCallId": "perm-1"}},
-                object_id="perm-1",
-            )
-        )
+        out = n.normalize(_permission(1, "perm-1"))
 
         assert not any(is_terminal_event(e) for e in out)
         assert not any(e.type is AgentEventType.WAITING for e in out)
@@ -975,28 +541,44 @@ class TestPermissionRequest:
         """The STATUS event is the only pause signal left, so it must carry the
         approval's identity or Slack/Teams/Telegram render nothing."""
         n = _normalizer()
-        out = n.normalize(
-            _event(
-                1,
-                AgentHostEventType.PERMISSION_REQUEST,
-                {"toolCall": {"toolCallId": "perm-1"}},
-                object_id="perm-1",
-            )
-        )
+        out = n.normalize(_permission(1, "perm-1"))
 
         statuses = [e.data for e in out if e.type is AgentEventType.STATUS]
         assert [s["status"] for s in statuses] == ["permission_request"]
         assert statuses[0]["kind"] == "request_approval"
         assert statuses[0]["tool_call_id"] == "agent-host-permission:perm-1"
 
+    def test_an_unanswered_permission_is_closed_at_terminal(self) -> None:
+        """A card whose run is gone must stop offering buttons.
+
+        The host is no longer holding the request — its own timeout denied it
+        half an hour in — so the only thing left to press was a button that
+        lands on a dead run. One user pressed "Always allow" on a card four
+        hours after the run behind it had failed, and nothing happened.
+        """
+        n = _normalizer()
+        n.normalize(_permission(1, "perm-1"))
+
+        out = n.normalize(_event(2, AgentHostEventType.TERMINAL, {"state": "FAILED"}))
+
+        returns = [
+            message
+            for message in _messages(out)
+            if message.data.tool_call_id == "agent-host-permission:perm-1"
+        ]
+        assert [message.data.tool_name for message in returns] == ["request_approval"]
+        assert returns[0].data.tool_result["success"] is False
+        # What every renderer already keys on to draw an unanswered interaction
+        # as spent rather than live.
+        assert returns[0].data.tool_result["interaction_fallback"] is True
+
 
 class TestStructuredFinalAnswer:
-    """How a structured result gets back out of an ACP run.
+    """How a structured result gets back out of an Agent Host run.
 
-    ACP tool-call events carry no tool *name* — `ToolCall` has a `title` the
-    agent wrote and a `toolCallId`, and nothing else — so the normalizer
-    recognises our final answer by the marker the tool stamps into its own
-    result, wherever the adapter happens to echo it.
+    The final answer is recognised by the marker the tool stamps into its own
+    result rather than by the call's name, wherever the host's output left it:
+    the unwrapped value, a text block it could not unwrap, or the arguments.
     """
 
     SCHEMA = {
@@ -1014,20 +596,12 @@ class TestStructuredFinalAnswer:
             **kwargs,
         )
 
-    def _close_tool_call(self, payload: dict) -> list:
+    def _close_tool_call(
+        self, output: object = None, *, tool_input: object = None
+    ) -> list:
         return [
-            _event(
-                1,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"toolCall": {"title": "Finish up"}},
-                object_id="call-1",
-            ),
-            _event(
-                2,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {"status": "completed", **payload},
-                object_id="call-1",
-            ),
+            _call(1, "call-1", "final_answer", tool_input or {}, source="lemma"),
+            _result(2, "call-1", output),
         ]
 
     def _final_metadata(self, out) -> dict:
@@ -1048,7 +622,7 @@ class TestStructuredFinalAnswer:
 
     def test_result_payload_becomes_structured_output(self) -> None:
         n = self._structured()
-        out = _run(n, self._close_tool_call({"result": self.RECORD}))
+        out = _run(n, self._close_tool_call(self.RECORD))
 
         metadata = self._final_metadata(out)
         assert metadata["structured_output"] == {"label": "spam"}
@@ -1056,16 +630,26 @@ class TestStructuredFinalAnswer:
         assert metadata["tool_call_id"] == "call-1"
 
     def test_arguments_are_read_when_the_adapter_reports_no_output(self) -> None:
-        """Some adapters echo rawInput but not rawOutput; the args are the answer."""
+        """An adapter that reports no output still sent the arguments, and for
+        this tool the arguments are the answer."""
         n = self._structured()
-        out = _run(n, self._close_tool_call({"rawInput": self.RECORD}))
+        out = _run(n, self._close_tool_call(None, tool_input=self.RECORD))
 
         assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
 
     def test_text_only_result_is_recognised(self) -> None:
-        """Others echo only the MCP text block, which carries the same marker."""
+        """An envelope the host could not unwrap still carries the marker in its
+        text block."""
         n = self._structured()
-        out = _run(n, self._close_tool_call({"text": json.dumps(self.RECORD)}))
+        out = _run(
+            n,
+            self._close_tool_call(
+                [
+                    {"type": "text", "text": json.dumps(self.RECORD)},
+                    {"type": "text", "text": "Answer recorded."},
+                ]
+            ),
+        )
 
         assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
 
@@ -1078,7 +662,7 @@ class TestStructuredFinalAnswer:
         out = _run(
             n,
             self._close_tool_call(
-                {"result": {**self.RECORD, "output": {"label": "x", "deep": deep}}}
+                {**self.RECORD, "output": {"label": "x", "deep": deep}}
             ),
         )
 
@@ -1087,22 +671,9 @@ class TestStructuredFinalAnswer:
     def test_the_last_call_wins(self) -> None:
         n = self._structured()
         events = [
-            *self._close_tool_call({"result": self.RECORD}),
-            _event(
-                3,
-                AgentHostEventType.TOOL_CALL_UPSERT,
-                {"toolCall": {"title": "Actually"}},
-                object_id="call-2",
-            ),
-            _event(
-                4,
-                AgentHostEventType.TOOL_CALL_UPDATE,
-                {
-                    "status": "completed",
-                    "result": {**self.RECORD, "output": {"label": "ham"}},
-                },
-                object_id="call-2",
-            ),
+            *self._close_tool_call(self.RECORD),
+            _call(3, "call-2", "final_answer", source="lemma"),
+            _result(4, "call-2", {**self.RECORD, "output": {"label": "ham"}}),
         ]
         out = _run(n, events)
 
@@ -1113,13 +684,8 @@ class TestStructuredFinalAnswer:
         the terminal flush or a run that pauses loses its result."""
         n = self._structured()
         events = [
-            *self._close_tool_call({"result": self.RECORD}),
-            _event(
-                3,
-                AgentHostEventType.PERMISSION_REQUEST,
-                {"toolCall": {"toolCallId": "perm-1"}},
-                object_id="perm-1",
-            ),
+            *self._close_tool_call(self.RECORD),
+            _permission(3, "perm-1"),
         ]
         out = _run(n, events)
 
@@ -1162,7 +728,7 @@ class TestStructuredFinalAnswer:
     def test_a_recorded_answer_overrides_what_the_stream_inferred(self) -> None:
         """The tool's own record is the authority; the stream is a heuristic."""
         n = self._structured()
-        for event in self._close_tool_call({"result": self.RECORD}):
+        for event in self._close_tool_call(self.RECORD):
             n.normalize(event)
         n.adopt_final_answer({**self.RECORD, "output": {"label": "authoritative"}})
         out = n.normalize(

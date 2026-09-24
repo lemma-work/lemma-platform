@@ -1,4 +1,4 @@
-"""Normalize Agent Host events into the existing runtime event stream.
+"""Map Agent Host events onto the existing runtime event stream.
 
 Events arrive on one ordered per-run Redis Stream, so this applies them in
 order and never reconciles two sources. The previous two-lane design needed an
@@ -6,6 +6,16 @@ authoritative-sequence map, a per-stream sealed-length counter, and a
 ``startswith`` delta repair purely to survive a lossy chunk lane writing into
 the same accumulated text as the durable lane. None of that exists here: with a
 single ordered lane, a chunk cannot arrive after the upsert that supersedes it.
+
+Every event arrives already normalized (docs/architecture/agent-host-events.md).
+The host knows which adapter and which pinned version it is running, so it names
+each tool, shapes its input and output, and says whose tool it is. This module
+used to do that itself from raw ACP payloads, and guessed: every Codex MCP call
+became ``exec_command``, Claude Code's ``Bash`` never did, and every
+``usage_update`` was billed as a request with zero tokens. What is left here is
+*mapping*, one event to its messages, plus the conversation-level behaviours
+only this side can own: sealing narration, flushing thought per step, finding
+the final answer, and closing what a run leaves open.
 """
 
 from __future__ import annotations
@@ -13,8 +23,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from pydantic import BaseModel
+
+from app.core.log.log import get_logger
+from app.modules.agent.domain.agent_host import (
+    AgentHostEventType,
+    AgentHostRunState,
+    AgentHostToolCallPayload,
+    AgentHostToolResultPayload,
+    AgentHostToolStatus,
+)
 from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_events,
     permission_approval_tool_call_id,
@@ -34,6 +52,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
     no_terminal_message,
     status_event,
     terminal_event,
+    thought_event,
     usage_event,
 )
 from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
@@ -41,17 +60,21 @@ from app.modules.agent.infrastructure.harnesses.tool_returns import (
     missing_tool_return_events,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.tool_calls import (
+    OpenToolCall,
     ToolCallLedger,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
-    first_present,
-    tool_metadata,
-    tool_name_from_payload,
-    tool_result,
+from app.modules.agent.infrastructure.harnesses.agent_host.tool_events import (
+    TOOL_OUTPUT_TOKEN_KIND,
+    final_answer_in,
+    left_to_lemma,
+    open_tool_call,
+    parsed_payload,
+    tool_call_events,
+    tool_output_token,
+    tool_return_event,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.final_answer_stream import (
     final_answer_metadata,
-    final_answer_record,
     infer_final_answer,
 )
 from app.modules.agent.tools.final_answer.final_answer_text import final_answer_text
@@ -59,10 +82,13 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_MARKER,
 )
 
+logger = get_logger(__name__)
+
 # Re-exported: the harness imports the whole event vocabulary from this
 # module, and moving where a helper lives should not move where it is
 # imported from.
 __all__ = [
+    "TOOL_OUTPUT_TOKEN_KIND",
     "AgentHostEventEnvelope",
     "AgentHostEventNormalizer",
     "error_event",
@@ -115,8 +141,8 @@ class AgentHostEventNormalizer:
     ) -> None:
         """Take the authoritative final answer recorded by the tool itself.
 
-        Overrides anything inferred from the event stream: ACP tool calls carry
-        no tool name, so stream recognition is a heuristic while this is the
+        Overrides anything read from the event stream: recognising the answer
+        in a result is by the marker the tool stamps on it, while this is the
         tool's own record of what it returned.
         """
         if isinstance(record, dict) and record.get(FINAL_ANSWER_MARKER) is True:
@@ -139,58 +165,51 @@ class AgentHostEventNormalizer:
             "harness_key": self.harness_key,
         }
 
-        if event_type is AgentHostEventType.AGENT_MESSAGE_CHUNK:
-            return self._chunk(self._message, row, payload)
-        if event_type is AgentHostEventType.AGENT_MESSAGE_UPSERT:
-            return self._upsert(self._message, row, payload)
-        if event_type is AgentHostEventType.AGENT_THOUGHT_CHUNK:
-            return self._chunk(self._thought, row, payload)
-        if event_type is AgentHostEventType.AGENT_THOUGHT_UPSERT:
-            return self._upsert(self._thought, row, payload)
-        if event_type is AgentHostEventType.TOOL_CALL_UPSERT:
-            call_id = self.tool_calls.object_id(row.object_id, opening=True)
-            announced = self.tool_calls.open(
-                call_id,
-                payload,
-                {**metadata, "agent_host_object_id": call_id},
-                sequence=row.sequence,
-            )
-            return self._announce_tool_call(announced)
-        if event_type is AgentHostEventType.TOOL_CALL_UPDATE:
-            call_id = self.tool_calls.object_id(row.object_id, opening=False)
-            return self._tool_call_update(
-                row, call_id, payload, {**metadata, "agent_host_object_id": call_id}
-            )
-        if event_type is AgentHostEventType.USAGE_UPDATE:
-            return [
-                *self._drain_tokens(),
-                usage_event(
-                    agent_run_id=self.agent_run_id,
-                    model_name=self.model_name,
-                    payload=payload,
-                    metadata=metadata,
-                    sequence=row.sequence,
-                ),
-            ]
-        if event_type in {
-            AgentHostEventType.RUN_STATE,
-            AgentHostEventType.PLAN_UPSERT,
-            AgentHostEventType.CONFIG_UPDATE,
-        }:
-            return [
-                *self._drain_tokens(),
-                status_event(
-                    agent_run_id=self.agent_run_id,
-                    status=event_type.value,
-                    payload=payload,
-                    metadata=metadata,
-                    sequence=row.sequence,
-                ),
-            ]
-        if event_type is AgentHostEventType.PERMISSION_REQUEST:
-            return self._permission_request(row, payload, metadata)
-        if event_type is AgentHostEventType.TERMINAL:
-            return self._terminal(row, payload)
+        match event_type:
+            case AgentHostEventType.AGENT_MESSAGE_CHUNK:
+                return self._chunk(self._message, row, payload)
+            case AgentHostEventType.AGENT_MESSAGE_UPSERT:
+                return self._upsert(self._message, row, payload)
+            case AgentHostEventType.AGENT_THOUGHT_CHUNK:
+                return self._chunk(self._thought, row, payload)
+            case AgentHostEventType.AGENT_THOUGHT_UPSERT:
+                return self._upsert(self._thought, row, payload)
+            case AgentHostEventType.TOOL_CALL:
+                return self._tool_call(row, object_id, metadata)
+            case AgentHostEventType.TOOL_CALL_PROGRESS:
+                return self._progress(object_id, row.payload)
+            case AgentHostEventType.TOOL_CALL_RESULT:
+                return self._tool_call_result(row, object_id)
+            case AgentHostEventType.USAGE:
+                return [
+                    *self._drain_tokens(),
+                    usage_event(
+                        agent_run_id=self.agent_run_id,
+                        model_name=self.model_name,
+                        payload=row.payload,
+                        metadata=metadata,
+                        sequence=row.sequence,
+                    ),
+                ]
+            case (
+                AgentHostEventType.RUN_STATE
+                | AgentHostEventType.SESSION_UPDATE
+                | AgentHostEventType.CONFIG_UPDATE
+            ):
+                return [
+                    *self._drain_tokens(),
+                    status_event(
+                        agent_run_id=self.agent_run_id,
+                        status=event_type.value,
+                        payload=payload,
+                        metadata=metadata,
+                        sequence=row.sequence,
+                    ),
+                ]
+            case AgentHostEventType.PERMISSION_REQUEST:
+                return self._permission_request(row, payload, metadata)
+            case AgentHostEventType.TERMINAL:
+                return self._terminal(row, payload)
         return []
 
     # ------------------------------------------------------------------ text
@@ -206,7 +225,16 @@ class AgentHostEventNormalizer:
             # Rich content (an image block, say) renders to markdown through
             # the artifact writer; without it there is nothing to append.
             return []
-        segment.append(rendered, row.object_id)
+        # What the host itself counts as this chunk's text. Anything the
+        # artifact writer added beyond it is rich content the host's upsert will
+        # never contain, and has to be kept apart from the text it does (see
+        # ``Segment.inserts``).
+        host_text = event_text(row.payload)
+        if rendered.startswith(host_text):
+            rich = rendered[len(host_text) :]
+        else:
+            host_text, rich = "", rendered
+        segment.append(host_text, row.object_id, rich=rich)
         return self._stream_delta(rendered, kind=segment.kind)
 
     def _upsert(
@@ -241,43 +269,6 @@ class AgentHostEventNormalizer:
             agent_run_id=self.agent_run_id,
         )
 
-    def _announce_tool_call(
-        self, announced: tuple[MessageDraft, int] | None
-    ) -> list[AgentEvent]:
-        """Turn a call the ledger decided is ready into a durable message.
-
-        The ledger owns *when*; this owns *how*, which is why the draft carries
-        the sequence it was first reported at rather than the one that happened
-        to settle it — a call belongs where the agent made it.
-        """
-        if announced is None:
-            return []
-        draft, sequence = announced
-        # Whatever the agent said before reaching for a tool is its own message,
-        # sealed here. Accumulating across the whole run instead produced one
-        # text message per run containing every narration glued together -- and
-        # a fifty-eight step run rendered as a single paragraph reading "Loading
-        # schemas first.Schemas loaded. Starting the test sweep.Empty pod", with
-        # the actual answer welded onto the end of it.
-        narration = self._flush_narration()
-        if draft.tool_name in PAUSING_TOOL_NAMES:
-            # Already on the record, under an id that can be answered. Lemma
-            # writes these itself when the MCP call arrives, because the id the
-            # harness reports here is one no approval endpoint, timer or resume
-            # can address. Keeping both would ask the person the same question
-            # twice, once on a card nothing resolves. See ``mcp_pausing_calls``.
-            return [*narration, *self._drain_tokens()]
-        return [
-            *narration,
-            *self._drain_tokens(),
-            AgentEvent(
-                type=AgentEventType.MESSAGE,
-                data=draft,
-                agent_run_id=self.agent_run_id,
-                sequence=sequence,
-            ),
-        ]
-
     def _drain_tokens(self) -> list[AgentEvent]:
         kind = self._token_kind
         if kind is None:
@@ -300,6 +291,41 @@ class AgentHostEventNormalizer:
             )
         ]
 
+    def _flush_thought(self) -> list[AgentEvent]:
+        """Seal the agent's reasoning for this step as a message of its own.
+
+        Called at every step boundary -- each tool call, each permission
+        request, the end of the turn. It used to run only at the end, so a run
+        showed a single "Thought" after all of its tool calls, holding every
+        step's reasoning glued together, instead of the reasoning before each.
+        """
+        thought, thought_id = self._thought.take()
+        if not thought:
+            return []
+        return [
+            thought_event(
+                agent_run_id=self.agent_run_id, text=thought, object_id=thought_id
+            )
+        ]
+
+    def _flush_step(self) -> list[AgentEvent]:
+        """Everything the agent said and thought before reaching for a tool.
+
+        Whatever the agent said before a tool call is its own message, sealed
+        here. Accumulating across the whole run instead produced one text
+        message per run containing every narration glued together -- and a
+        fifty-eight step run rendered as a single paragraph reading "Loading
+        schemas first.Schemas loaded. Starting the test sweep.Empty pod", with
+        the actual answer welded onto the end of it.
+
+        Tokens drain first: a client clears live text when a message lands.
+        """
+        return [
+            *self._drain_tokens(),
+            *self._flush_thought(),
+            *self._flush_narration(),
+        ]
+
     def _flush_messages(
         self,
         *,
@@ -317,22 +343,7 @@ class AgentHostEventNormalizer:
         is never mistaken for an answer, and losing it would lose the only
         record of what the agent was doing when it failed.
         """
-        events = self._drain_tokens()
-        thought, thought_id = self._thought.take()
-        if thought:
-            events.append(
-                AgentEvent(
-                    type=AgentEventType.MESSAGE,
-                    data=MessageDraft.of_thinking(
-                        thought,
-                        metadata={
-                            "agent_host_object_id": thought_id,
-                            "is_final_answer": False,
-                        },
-                    ),
-                    agent_run_id=self.agent_run_id,
-                )
-            )
+        events = [*self._drain_tokens(), *self._flush_thought()]
         message, message_id = self._message.take()
         if discard_text:
             message = ""
@@ -389,91 +400,108 @@ class AgentHostEventNormalizer:
 
     # ------------------------------------------------------------- tool calls
 
-    def _tool_call_update(
+    def _tool_call(
         self,
         row: AgentHostEventEnvelope,
-        object_id: str,
-        payload: JsonObject,
+        call_id: str,
         metadata: JsonObject,
     ) -> list[AgentEvent]:
-        status = str(payload.get("status") or "").upper()
-        if status not in {"COMPLETED", "FAILED", "CANCELLED", "DENIED"}:
-            # Not a closing update. Claude Code sends the complete `rawInput`
-            # here, with no status at all, once the model finishes writing it —
-            # so dropping these was what left every streamed tool call showing
-            # `{}` for its arguments.
-            return self._announce_tool_call(
-                self.tool_calls.refine(object_id, payload, metadata)
-            )
-        if object_id in self.tool_calls.closed:
-            return []
-        # A call still holding its arguments has to be announced before its
-        # return, or the conversation gets a result for something it never saw
-        # start. It is handed this payload because for a call that was never
-        # refined, the closing update is the only thing that ever named the tool
-        # or carried its input.
-        opening = self._announce_tool_call(
-            self.tool_calls.release(object_id, payload, metadata)
-        )
-        # Read after the release, so the return is named whatever the call was
-        # finally announced as rather than the placeholder it opened with.
-        tool_name = self.tool_calls.open_calls.get(
-            object_id, tool_name_from_payload(payload)
-        )
-        self.tool_calls.close(object_id)
-        raw_result = first_present(payload, "result", "rawOutput")
-        if status == "COMPLETED":
-            # Read the RAW value, before bounding. `_bounded_tool_value` truncates
-            # long strings and replaces anything past `_MAX_TOOL_VALUE_DEPTH` with
-            # a placeholder — which would turn a valid structured answer into
-            # something that still looks structured but is not.
-            record = final_answer_record(raw_result) or final_answer_record(
-                first_present(payload, "arguments", "args", "rawInput")
-            )
-            if record is None:
-                record = final_answer_record(event_text(payload))
-            if record is not None:
-                self.adopt_final_answer(record, tool_call_id=object_id)
-        result = tool_result(tool_name, status, payload)
-        if tool_name in PAUSING_TOOL_NAMES:
-            # The other half of the drop above: with no call on the record under
-            # this id, a return under it pairs with nothing. What the model was
-            # actually told — a park's answer, a wait's "you are waiting" — is
-            # written against the id Lemma owns, by whatever resolved it.
-            return [*opening, *self._drain_tokens()]
+        """One call, announced once, with its final arguments.
+
+        No holding and no refining: the host releases a call only once its
+        arguments have settled (docs/architecture/agent-host-events.md), so the
+        first report is the only one and it is already right. The thought and
+        narration before it are sealed first, so each step reads in order.
+        """
+        call = self._parsed(AgentHostToolCallPayload, row, call_id)
+        if call is None or self.tool_calls.known(call_id):
+            # A duplicate would put a second card on the record for one call; a
+            # malformed one has nothing to put there.
+            return self._drain_tokens()
+        step = self._flush_step()
+        if left_to_lemma(call.tool):
+            self.tool_calls.drop(call_id)
+            return step
+        opened = open_tool_call(call, metadata)
+        self.tool_calls.open(call_id, opened)
         return [
-            *opening,
-            *self._drain_tokens(),
-            AgentEvent(
-                type=AgentEventType.MESSAGE,
-                data=MessageDraft.of_tool_return(
-                    tool_name=tool_name,
-                    tool_call_id=object_id,
-                    tool_result=result,
-                    metadata=tool_metadata(metadata, payload),
-                ),
+            *step,
+            *tool_call_events(
                 agent_run_id=self.agent_run_id,
+                call_id=call_id,
+                call=opened,
                 sequence=row.sequence,
             ),
         ]
 
-    def close_outstanding(self, terminal: AgentEvent) -> list[AgentEvent]:
-        # Held calls first: a run that ends mid-turn still has to show what the
-        # agent had started, and each one needs its opening on the record before
-        # `missing_tool_return_events` synthesizes the return that closes it.
-        released = [
-            event
-            for announced in self.tool_calls.release_all()
-            for event in self._announce_tool_call(announced)
-        ]
-        outstanding = self.tool_calls.outstanding()
+    def _progress(self, call_id: str, payload: JsonObject) -> list[AgentEvent]:
+        text = event_text(payload)
+        if not text or call_id in self.tool_calls.dropped:
+            return []
         return [
-            *released,
-            *missing_tool_return_events(
-                outstanding_tool_calls=outstanding,
-                terminal_event=terminal,
+            *self._drain_tokens(),
+            tool_output_token(
+                agent_run_id=self.agent_run_id, call_id=call_id, text=text
             ),
         ]
+
+    def _tool_call_result(
+        self, row: AgentHostEventEnvelope, call_id: str
+    ) -> list[AgentEvent]:
+        if call_id in self.tool_calls.dropped:
+            # The other half of the pausing-tool drop: with no call on the
+            # record under this id, a return under it pairs with nothing. What
+            # the model was actually told -- a park's answer, a wait's "you are
+            # waiting" -- is written against the id Lemma owns, by whatever
+            # resolved it.
+            return self._drain_tokens()
+        result = self._parsed(AgentHostToolResultPayload, row, call_id)
+        call = self.tool_calls.close(call_id) if result is not None else None
+        if result is None or call is None:
+            if result is not None:
+                # The host opens any call it is asked to close, so this cannot
+                # happen from a well-behaved host. Writing the return anyway is
+                # what used to leave results in conversations that paired with
+                # no call at all.
+                logger.warning(
+                    "agent.harnesses.agent_host.unpaired_tool_result.degraded",
+                    agent_run_id=str(self.agent_run_id),
+                    tool_call_id=call_id,
+                    agent_host_sequence=row.sequence,
+                )
+            return self._drain_tokens()
+        if result.status is AgentHostToolStatus.COMPLETED:
+            record = final_answer_in(result.output, call.input)
+            if record is not None:
+                self.adopt_final_answer(record, tool_call_id=call_id)
+        return [
+            *self._drain_tokens(),
+            tool_return_event(
+                agent_run_id=self.agent_run_id,
+                call_id=call_id,
+                call=call,
+                result=result,
+                sequence=row.sequence,
+            ),
+        ]
+
+    def _parsed[ModelT: BaseModel](
+        self, model: type[ModelT], row: AgentHostEventEnvelope, call_id: str
+    ) -> ModelT | None:
+        return parsed_payload(
+            model,
+            row.payload,
+            agent_run_id=self.agent_run_id,
+            call_id=call_id,
+            sequence=row.sequence,
+        )
+
+    def close_outstanding(self, terminal: AgentEvent) -> list[AgentEvent]:
+        """Close every call the run left open, so none spins forever."""
+        return missing_tool_return_events(
+            outstanding_tool_calls=self.tool_calls.outstanding(),
+            terminal_event=terminal,
+        )
 
     # ---------------------------------------------------------------- other
 
@@ -489,30 +517,26 @@ class AgentHostEventNormalizer:
         Slack, Teams and Telegram all show and resolve it with the machinery they
         already have; see ``domain.agent_host_permissions`` for the shape and for
         why this pause emits no WAITING event.
+
+        The host releases the call this request gates before sending it, so the
+        call is already on the record and the approval card follows it.
         """
         request_id = row.object_id or f"permission-{row.sequence}"
-        tool_call = payload.get("toolCall")
-        # ACP carries a ToolCallUpdate inside the permission request. Its input
-        # is ready for the user's decision and may be the first complete input
-        # the adapter supplied. Preserve it before publishing the approval.
-        opening: list[AgentEvent] = []
-        if isinstance(tool_call, dict):
-            tool_id = tool_call.get("toolCallId")
-            if isinstance(tool_id, str) and tool_id:
-                opening = self._announce_tool_call(
-                    self.tool_calls.release(tool_id, tool_call, metadata)
-                )
+        gated = payload.get("tool_call_id")
+        gated_call = (
+            self.tool_calls.calls.get(gated) if isinstance(gated, str) else None
+        )
         # Tracked like any other open call, so a run that ends without an answer
         # closes it. An approval card outlives its run otherwise: the host is no
         # longer holding the request — its own timeout denied it — but the card
         # still offers buttons, and pressing one lands on a run that ended hours
         # ago. Answering it *does* write a return, and a synthesized return
         # never replaces a real one, so this closes only the abandoned ones.
-        self.tool_calls.open_calls[permission_approval_tool_call_id(request_id)] = (
-            "request_approval"
+        self.tool_calls.open(
+            permission_approval_tool_call_id(request_id),
+            OpenToolCall(name="request_approval"),
         )
         return [
-            *opening,
             *self._flush_messages(final=False),
             *permission_approval_events(
                 agent_run_id=self.agent_run_id,
@@ -520,15 +544,9 @@ class AgentHostEventNormalizer:
                 sequence=row.sequence,
                 payload=payload,
                 metadata=metadata,
-                # The call this request interrupts was already reported, and its
-                # name resolved; prefer the name that call is showing under to
-                # the ACP category the permission payload carries.
-                tool_name=self.tool_calls.open_calls.get(request_id)
-                or (
-                    tool_name_from_payload(tool_call)
-                    if isinstance(tool_call, dict)
-                    else None
-                ),
+                # The name the gated call is showing under, so the card and the
+                # call it interrupts say the same word.
+                tool_name=gated_call.name if gated_call is not None else None,
             ),
         ]
 
