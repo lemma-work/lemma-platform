@@ -46,24 +46,15 @@ def validate_agent_host_selections(
         option_category = str(option.get("category") or "").strip()
         if option_category == "model":
             raise ValueError("Model must be configured through default_model_name")
-        if option_category in _PLATFORM_OWNED_OPTION_CATEGORIES:
-            # Approval/sandbox presets and turn-to-turn collaboration are
-            # Lemma's, not a per-profile choice: approvals must be answered the
-            # same way whichever harness runs, and a conversation already maps
-            # to one session. Dropped rather than rejected so a profile saved
-            # before this rule stays editable; the harness keeps applying its
-            # own safe default, which is what the built-in harness does too.
-            continue
-        # Deny-list first, then membership - the order ``selection_is_allowed``
-        # uses in acp.rs. It matters: harnesses *do* enumerate their
-        # permission modes, so a value like ``bypassPermissions`` is a legal
-        # member of the option's own list and the host refuses it anyway.
-        # Checking membership first would let exactly the common case through,
-        # to save cleanly and then fail at session setup on the first run.
-        if _is_disallowed_policy_selection(option, value):
-            raise ValueError(
-                f"That value is not allowed for Agent Host configuration: {key}"
-            )
+        # Membership in what the host published is the whole check. The host
+        # owns the permission policy: it removes every value that would turn
+        # off the approval gate (`bypassPermissions`, `acceptEdits`, ...)
+        # before publishing, and refuses one again at session setup. This used
+        # to be re-implemented here with a substring match, which read `model`
+        # as a mode and missed three of the values the host refuses -- two
+        # rule sets that disagreed, so a profile could save and then fail on
+        # its first run. Plan mode, which the host publishes, is a choice a
+        # person may make.
         allowed_values = _agent_host_option_values(option.get("options"))
         if allowed_values and value not in allowed_values:
             raise ValueError(
@@ -97,10 +88,6 @@ def validate_agent_host_model(
     return normalized
 
 
-class AgentHostSelectionRefused(ValueError):
-    """A carried-over selection the re-published harness must not be given."""
-
-
 def carry_agent_host_selections(
     *,
     config_options: list[object],
@@ -118,10 +105,8 @@ def carry_agent_host_selections(
     So an unknown key and a value that is no longer a member are *dropped*, and
     the harness applies its own default for them.
 
-    A policy-bearing value is the exception and still refuses, by raising:
-    ``_is_disallowed_policy_selection`` is what stops a stored profile turning
-    off the human-approval gate, and "the harness changed" is not a reason to
-    stop enforcing it. The caller fails the run rather than dispatching it.
+    Nothing here refuses: the host published only the values it allows, and
+    it refuses a disallowed one again at session setup.
     """
     options_by_key = _agent_host_options_by_key(config_options)
     carried: JsonObject = {}
@@ -131,14 +116,8 @@ def carry_agent_host_selections(
         if option is None:
             continue
         option_category = str(option.get("category") or "").strip()
-        if option_category == "model" or option_category in (
-            _PLATFORM_OWNED_OPTION_CATEGORIES
-        ):
+        if option_category == "model":
             continue
-        if _is_disallowed_policy_selection(option, value):
-            raise AgentHostSelectionRefused(
-                f"That value is not allowed for Agent Host configuration: {key}"
-            )
         allowed_values = _agent_host_option_values(option.get("options"))
         if allowed_values and value not in allowed_values:
             continue
@@ -168,39 +147,6 @@ def carry_agent_host_model(
         )
     except ValueError:
         return None
-
-
-# Mirrors the Agent Host's own policy filter (desktop/agent-host/src/acp.rs:569-600):
-# an option whose id or category mentions one of these governs what the coding
-# agent is allowed to do without asking.
-# Settings the platform owns, so a profile may not carry them. `mode` is the
-# approval and sandboxing preset, and approvals are Lemma's job - a run asks, a
-# human answers, identically whichever harness executes. `collaboration_mode`
-# decides how state carries across turns, which the conversation already fixes
-# by mapping to one session.
-_PLATFORM_OWNED_OPTION_CATEGORIES = frozenset({"mode", "collaboration_mode"})
-
-_POLICY_OPTION_MARKERS = ("mode", "permission", "approval", "sandbox")
-_DISALLOWED_POLICY_VALUES = frozenset(
-    {
-        "bypasspermissions",
-        "agentfullaccess",
-        "fullaccess",
-        "acceptedits",
-        "yolo",
-        "auto",
-    }
-)
-
-
-def _is_disallowed_policy_selection(option: dict[str, object], value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    identity = f"{option.get('id') or ''} {option.get('category') or ''}".lower()
-    if not any(marker in identity for marker in _POLICY_OPTION_MARKERS):
-        return False
-    normalized = "".join(ch for ch in value if ch.isalnum()).lower()
-    return normalized in _DISALLOWED_POLICY_VALUES
 
 
 def _agent_host_option_values(raw_options: object) -> list[object]:
