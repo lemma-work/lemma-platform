@@ -348,8 +348,8 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 | host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections` | `control_ok` (`commands`, `refused`) |
 | host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
 | host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
-| host → Lemma | `mcp` | `run_id`, `token`, `method`, `params` | `mcp_ok` (`result`) or `error` |
-| host → Lemma | `interaction_wait` | `run_id`, `token`, `tool_call_id` | `interaction_ok` (`answer`), once decided |
+| host → Lemma | `mcp` | `run_id`, `conversation_id`, `token`, `method`, `params` | `mcp_ok` (`result`) or `error` |
+| host → Lemma | `interaction_wait` | `run_id`, `conversation_id`, `token`, `tool_call_id` | `interaction_ok` (`answer`), once decided |
 | host → Lemma | `revoke` | nothing | `revoked`, then close |
 | Lemma → host | `commands` | `commands` | the next `control` acknowledges them |
 | Lemma → host | `reconnect` | `after_ms` | the host reconnects after that delay |

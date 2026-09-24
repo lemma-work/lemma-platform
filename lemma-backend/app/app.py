@@ -54,7 +54,7 @@ from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
 from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
-from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
+from app.mcp_server import get_pod_mcp_app
 from app.core.infrastructure.db.session import get_engine
 from app.core.request_context import (
     create_background_task,
@@ -135,9 +135,6 @@ def _apply_error_response_schema(schema: dict) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with AsyncExitStack() as stack:
-        agent_mcp_app = getattr(app.state, "agent_mcp_app", None)
-        if agent_mcp_app is not None:
-            await stack.enter_async_context(agent_mcp_app.lifespan(app))
         pod_mcp_app = getattr(app.state, "pod_mcp_app", None)
         if pod_mcp_app is not None:
             await stack.enter_async_context(pod_mcp_app.lifespan(app))
@@ -360,9 +357,6 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     auth_app = get_auth_app()
     instrument_fastapi_app(auth_app)
     app.mount("/st", auth_app)
-    agent_mcp_app = get_agent_mcp_app()
-    app.state.agent_mcp_app = agent_mcp_app
-    app.mount("/agent-runtime/conversations", agent_mcp_app)
     pod_mcp_app = get_pod_mcp_app()
     app.state.pod_mcp_app = pod_mcp_app
     app.mount("/agent-runtime/pods", pod_mcp_app)
