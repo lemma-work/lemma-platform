@@ -51,6 +51,66 @@ AGENT_HOST_LINK_HEARTBEAT_MS = 20_000
 #: Silence for this many heartbeats closes the socket with ``HEARTBEAT_TIMEOUT``.
 AGENT_HOST_LINK_MISSED_HEARTBEATS = 3
 
+#: How long a caller waits for some replica's link to take an ``op`` before it
+#: treats the host as offline. See docs/architecture/desktop-host-execution.md.
+OP_PICKUP_TIMEOUT_SECONDS = 2.0
+
+#: The most binary data one ``op`` frame carries, before base64.
+OP_MAX_DATA_BYTES = 1024 * 1024
+
+#: The longest deadline an ``op`` may carry: a ``process.read`` waits at most
+#: 35 seconds and a large write chunk is seconds at worst.
+OP_MAX_DEADLINE_MS = 10 * 60 * 1000
+
+#: ``op`` server ids start with this, so they cannot collide with the ids the
+#: host puts on its own requests.
+OP_ID_PREFIX = "s"
+
+
+class OpMethod:
+    """The ``op`` methods, as the exec-server names them."""
+
+    WORKSPACE_OPEN = "workspace.open"
+    WORKSPACE_CLOSE = "workspace.close"
+    PROCESS_START = "process.start"
+    PROCESS_READ = "process.read"
+    PROCESS_INPUT = "process.input"
+    PROCESS_RESIZE = "process.resize"
+    PROCESS_TERMINATE = "process.terminate"
+    PROCESS_LIST = "process.list"
+    FILE_STAT = "file.stat"
+    FILE_LIST = "file.list"
+    FILE_MKDIR = "file.mkdir"
+    FILE_READ = "file.read"
+    FILE_WRITE = "file.write"
+    FILE_MOVE = "file.move"
+    FILE_DELETE = "file.delete"
+    SECRET_DELIVER = "secret.deliver"
+
+
+#: Every ``detail.kind`` an ``OP_FAILED`` error may carry.
+OP_FAILURE_KINDS = frozenset(
+    {
+        "not_found",
+        "already_exists",
+        "not_a_directory",
+        "is_a_directory",
+        "permission_denied",
+        "outside_workspace",
+        "digest_mismatch",
+        "too_large",
+        "process_not_found",
+        "workspace_not_open",
+        "exec_server_unavailable",
+        "timeout",
+        "invalid_request",
+        "io_error",
+    }
+)
+
+#: The only kinds the host marks ``retryable``.
+OP_RETRYABLE_KINDS = frozenset({"exec_server_unavailable", "timeout"})
+
 
 class LinkCloseCode:
     """Why the socket closed, as numbers the host branches on.
@@ -107,6 +167,9 @@ class LinkErrorCode(str, Enum):
     UNAUTHORIZED = "UNAUTHORIZED"
     UNAVAILABLE = "UNAVAILABLE"
     INTERNAL = "INTERNAL"
+    #: An ``op`` the host could not perform. ``detail.kind`` says why; see
+    #: ``OP_FAILURE_KINDS``.
+    OP_FAILED = "OP_FAILED"
 
 
 class HostFrameType(str, Enum):
@@ -118,6 +181,7 @@ class HostFrameType(str, Enum):
     MCP = "mcp"
     INTERACTION_WAIT = "interaction_wait"
     REVOKE = "revoke"
+    OP_OK = "op_ok"
     ERROR = "error"
 
 
@@ -132,6 +196,7 @@ class ServerFrameType(str, Enum):
     REVOKED = "revoked"
     COMMANDS = "commands"
     RECONNECT = "reconnect"
+    OP = "op"
     ERROR = "error"
 
 
@@ -157,9 +222,46 @@ class LinkFrame(BaseModel):
 PairBody = AgentHostPairingComplete
 
 
+class HostExecutionCapability(BaseModel):
+    """Whether this host runs its owner's Lemma commands on the machine itself.
+
+    See docs/architecture/desktop-host-execution.md. ``enabled`` is the owner's
+    toggle (Settings, This Mac, Coding agents); ``available`` is whether the
+    exec-server could actually be started under its sandbox profile right now.
+    Both have to hold before a run is sent here.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    platform: str | None = Field(default=None, max_length=32)
+    available: bool = False
+
+    @property
+    def usable(self) -> bool:
+        return self.enabled and self.available
+
+
+class HostCapabilities(BaseModel):
+    """What a host can do beyond running agents, as Lemma stores it.
+
+    The host sends ``host_execution`` as its own field on ``hello`` and on every
+    ``control``; this is the shape it is kept in on the host row, open to what
+    a later host reports beside it.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    host_execution: HostExecutionCapability = Field(
+        default_factory=HostExecutionCapability
+    )
+
+
 class HelloBody(BaseModel):
     hello: HostHello
     capacity: AgentHostCapacity = Field(default_factory=AgentHostCapacity)
+    #: Absent from a host too old to know it, which means "no host execution".
+    host_execution: HostExecutionCapability | None = None
 
 
 class ControlBody(BaseModel):
@@ -173,6 +275,9 @@ class ControlBody(BaseModel):
     """
 
     capacity: AgentHostCapacity = Field(default_factory=AgentHostCapacity)
+    #: On every heartbeat, so turning host execution on or off applies within
+    #: one instead of at the next reconnect. Absent means unchanged.
+    host_execution: HostExecutionCapability | None = None
     acknowledged_command_ids: list[object] = Field(default_factory=list, max_length=256)
     checkpoints: list[object] = Field(default_factory=list, max_length=256)
     rejections: list[object] = Field(default_factory=list, max_length=256)
@@ -216,6 +321,14 @@ class ErrorBody(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     message: str = Field(default="", max_length=4096)
     retryable: bool = False
+    #: Carried by an answer to an ``op``: ``{"kind": ...}``.
+    detail: JsonObject | None = None
+
+
+class OpOkBody(BaseModel):
+    """The host's answer to one ``op``. ``result`` is the method's own shape."""
+
+    result: JsonObject = Field(default_factory=dict)
 
 
 # -------------------------------------------------------------- server frames
@@ -289,6 +402,19 @@ class McpOkBody(BaseModel):
 
 class InteractionOkBody(BaseModel):
     answer: JsonObject
+
+
+class OpBody(BaseModel):
+    """One operation inside a host workspace, sent from Lemma to the host.
+
+    ``workspace`` is the sandbox's logical id; the host maps it to the root it
+    was given at ``workspace.open`` and refuses anything else.
+    """
+
+    workspace: UUID
+    method: str = Field(min_length=1, max_length=64)
+    params: JsonObject = Field(default_factory=dict)
+    deadline_ms: int = Field(ge=1, le=OP_MAX_DEADLINE_MS)
 
 
 class ReconnectBody(BaseModel):

@@ -106,13 +106,21 @@ def _directory_sections(
     put in.
     """
     has_pod_files = AgentToolset.POD in enabled or AgentToolset.WORKSPACE_CLI in enabled
+    # An Agent Host run with host execution on is not given Lemma's command
+    # tools (desktop-host-execution.md §7), whatever its toolsets say.
+    has_workspace_tools = AgentToolset.WORKSPACE_CLI in enabled and not getattr(
+        ctx, "host_runs_native_commands", False
+    )
     sections: list[str] = []
-    if AgentToolset.WORKSPACE_CLI in enabled or runs_as_remote_process:
+    host_workspace = getattr(ctx, "host_workspace", None)
+    if host_workspace is not None and has_workspace_tools:
+        sections.append(_host_directory_section(host_workspace.root))
+    elif AgentToolset.WORKSPACE_CLI in enabled or runs_as_remote_process:
         sections.append(
             _workspace_directory_section(
                 ctx=ctx,
                 conversation=conversation,
-                has_workspace_tools=AgentToolset.WORKSPACE_CLI in enabled,
+                has_workspace_tools=has_workspace_tools,
                 runs_as_remote_process=runs_as_remote_process,
                 has_pod_files=has_pod_files,
             )
@@ -120,6 +128,41 @@ def _directory_sections(
     if has_pod_files:
         sections.append(_pod_directory_section(ctx=ctx, conversation=conversation))
     return sections
+
+
+def _host_directory_section(root: str) -> str:
+    """Where a run that executes on the owner's Mac is, and what that means.
+
+    docs/architecture/desktop-host-execution.md §7: the agent is told it is on
+    the owner's Mac, where its root is, and that the browser is a different
+    machine -- otherwise it reaches for the sandbox habits the VM section
+    teaches, or tries to drive a browser on a computer that has none for it.
+    """
+    return (
+        "# Working Directory\n"
+        "Your commands and files run **on the owner's own Mac**, not in a "
+        f"sandbox. Your working directory is {_prompt_path(root)}, a real "
+        "folder on that computer; relative paths resolve there. The owner's "
+        "tools are on the `PATH` as in their own terminal, and `git` and `gh` "
+        "are already signed in as them -- don't configure either.\n\n"
+        "You can read broadly, but writes are confined to this folder, the "
+        "temporary directory and package-manager caches, and credential "
+        "stores such as `~/.ssh` cannot be read at all. A refusal is that "
+        "boundary, not a bug to work around. This is the owner's machine: "
+        "don't install things globally, and don't delete what you did not "
+        "create.\n\n"
+        "Persistent Python sessions are not available here; run `python3` "
+        "through `exec_command`.\n\n"
+        "The browser the person watches is a separate machine (Lemma's VM). "
+        "It reaches this Mac's `localhost` through a relay, so a server you "
+        "start here is open to it at the same `localhost` URL. `agent-browser` "
+        "is not on this Mac: drive that browser with the `browser` tool, one "
+        "`agent-browser` command per call, instead of `exec_command`. Save "
+        "screenshots under `/home/user/` and look at them with `view_image`; "
+        "any other path `view_image` is given is read from this Mac.\n\n"
+        "Files a person **attached to this conversation are not here** -- "
+        "they are in pod files, under the directory named in `# Pod Files`."
+    )
 
 
 def _pod_cwd(ctx: AgentContext, conversation: Conversation) -> str:

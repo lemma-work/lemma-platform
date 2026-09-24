@@ -94,6 +94,12 @@ class AgentHostModel(UUIDAuditBase):
     protocol_version: Mapped[int | None] = mapped_column(nullable=True)
     host_release: Mapped[str] = mapped_column(String(128), nullable=False)
     capacity: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # What the host reported it can do beyond running agents, as the `hello`
+    # carried it -- today only `host_execution`. See
+    # docs/architecture/desktop-host-execution.md.
+    capabilities: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -126,7 +132,9 @@ class AgentHostHarnessModel(UUIDAuditBase):
     adapter_version: Mapped[str] = mapped_column(String(128), nullable=False)
     upstream_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     health: Mapped[str] = mapped_column(String(64), nullable=False)
-    capabilities: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    capabilities: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     config_revision: Mapped[str] = mapped_column(String(255), nullable=False)
     config_options: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     stale_after: Mapped[datetime] = mapped_column(

@@ -275,3 +275,68 @@ processes (§8).
 | Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, root-hint admissibility, a waiting read not blocking other ops |
 | Backend unit | provider maps every op and every failure kind; selection truth table (owner, non-owner, steered, inbound, host offline, toggle off, cloud); tool filtering for Agent Host runs |
 | Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for an owner's run on the host, and a non-owner's run lands in the VM |
+
+## 9. The backend half
+
+Where each part of the above lives in `lemma-backend`, and the choices the
+contract left to it.
+
+- **Selection** (§2) is `agent/services/host_execution_selection.py`, called
+  once from `build_run_context`. "Triggering human" is read from how the run
+  started: a person in Lemma's own app qualifies (`user_message`,
+  `queued_messages`, `manual_retry`, `approval_resume`, `person`), and so does
+  a continuation of such a run (`agent_wait`, `wait_resume`,
+  `message_replies`) unless a schedule started the conversation. A sub-agent
+  never does, and neither does a run in a conversation bound to a channel,
+  even when the channel resolved the sender to the owner: that identity is
+  the platform's assertion, not an owner's session. An unknown source does
+  not qualify. A Mac that cannot open the workspace at selection time gives
+  the run the VM; nothing has run yet, so nothing moves.
+- **Where the choice is recorded.** A host sandbox's id is a UUIDv8 tagged
+  `lmhost`, derived from the conversation (`workspace/domain/host_execution.py`),
+  and its instance rows record provider `agent_host`. `HostRoutingProvider`
+  sends a call to the host provider only for such an id, so a host sandbox can
+  never reach the VM and nothing else can reach the host. The owner's VM
+  workspace keeps its own id; the browser stays there.
+  `sandbox_host_bindings` records the host, the root hint, `date` and `slug`,
+  and the `root` the host answered.
+- **`workspace.open`** is sent with `conversation_id`, `root_hint` (the folder
+  an Agent Host run in the conversation last reported, else null), `date` and
+  `slug` from the conversation's own `c/<date>/<slug>` directory, and no
+  grants.
+- **Routing** (§3). The notice is `{type: "op", op_id, reply, workspace,
+  method, params, deadline_ms}` on the host's notice channel. The link session
+  first claims it (`SET NX` on the op id, so two links open across a reconnect
+  cannot both forward it), then publishes `{type: "picked_up"}` and, once the
+  host answers, `{type: "result", result}` or `{type: "result", error: {code,
+  message, retryable, kind}}` on the reply channel.
+- **Capabilities.** `host_execution` from `hello` and every `control` is kept
+  on the host row (`agent_hosts.capabilities`).
+- **Failures.** `detail.kind` maps as in
+  [provider adapters §8.3](sandbox/provider-adapters.md#83-failures);
+  `host_offline` -- nothing picked the op up -- reaches the agent as "This Mac
+  is not connected, so the command did not run".
+- **Agent Host runs** (§7) have Lemma's `WORKSPACE_CLI` toolset withheld
+  (`RunToolAssembler.assemble(host_execution="native")`), and their runtime
+  prompt swaps its Runtime and Browser sections for
+  `prompts/agent_host_host_execution.md`.
+- **The browser.** Such a run used to drive the VM browser with
+  `agent-browser` through `lemma_exec_command`, and an in-process host run's
+  `exec_command` now runs on the Mac, where `agent-browser` does not exist. Both
+  are given the `browser` tool instead (`tools/browser/vm_browser.py`), offered
+  only when the agent has the workspace CLI: one `agent-browser` invocation per
+  call in the owner's VM workspace, with `exec_command`'s session and output
+  shaping. The arguments are split and re-quoted, so nothing but
+  `agent-browser` runs through it. On a host run `view_image` reads a path under
+  `/home/user/` from the VM (where screenshots land) and any other path from
+  the Mac.
+- **Recorded on the run.** The choice -- `{"target": "vm"}` or `{"target":
+  "host", "sandbox_id", "root"}` -- is written under `execution` in the run's
+  metadata the first time its context is built. A reclaimed run reads it back
+  instead of selecting again, and an approved tool executed after a pause uses
+  the paused run's record, so neither can land in the VM when the run was on
+  the host. A recorded host whose Mac is offline fails the op with
+  `host_offline`.
+- **`grants`** are always empty: the backend has no notion of folders an owner
+  granted. The folder chip's binding lives in the desktop shell, which the
+  host reads from `conversation_id` itself.

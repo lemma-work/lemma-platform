@@ -194,6 +194,74 @@ class WorkspaceToolRuntime:
             )
         return session
 
+    async def get_host_session(
+        self,
+        *,
+        user_id: UUID,
+        pod_id: UUID | None,
+        sandbox_id: UUID,
+        root: str,
+        session_id: str | None = None,
+        close_on_exit: bool = True,
+        workload_type: str | None = None,
+        workload_id: UUID | None = None,
+        scope: list[str] | None = None,
+        organization_id: UUID | None = None,
+        workload_name: str | None = None,
+        scope_key: str | None = None,
+    ) -> IWorkspaceSession:
+        """A session on the owner's host sandbox, rooted at ``root``.
+
+        None of the VM session's preparation applies: there is no runtime
+        bundle to install and no browser proxy to start on the owner's Mac, and
+        the root already exists because opening the workspace made it. The
+        environment is the same delegated one, cached the same way, so the
+        owner's own `lemma` CLI works if they have it.
+        """
+        from app.modules.workspace.host_workspace_session import HostWorkspaceSession
+        from app.modules.workspace.services.sandbox_composition import (
+            build_local_client,
+        )
+
+        cache_key = self._get_cache_key(
+            user_id=user_id,
+            pod_id=pod_id,
+            organization_id=organization_id,
+            workload_type=workload_type,
+            workload_id=workload_id,
+            workload_name=workload_name,
+            scope_key=f"{scope_key or _DEFAULT_SCOPE}:host",
+            scope=scope,
+            session_id=session_id,
+        )
+        env_vars = await self.env_cache.get(cache_key)
+        if env_vars is None:
+            env_vars = await self.workspace_service.get_env_vars(
+                user_id,
+                pod_id,
+                organization_id=organization_id,
+                workload_type=workload_type,
+                workload_id=workload_id,
+                workload_name=workload_name,
+                scope=scope,
+                session_id=session_id,
+            )
+            await self.env_cache.set(
+                cache_key,
+                env_vars,
+                ttl_seconds=self._resolve_env_ttl_seconds(env_vars),
+            )
+        return HostWorkspaceSession(
+            root=root,
+            client=build_local_client(),
+            sandbox_id=sandbox_id,
+            session_id=session_id,
+            env_vars=env_vars,
+            auto_close=close_on_exit,
+            owns_client=False,
+            output_cursor_store=self.process_store,
+        )
+
     async def bind_process_to_session(
         self,
         *,

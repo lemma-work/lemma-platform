@@ -358,6 +358,9 @@ class ResumeToolReturnBuilder:
             AgentCallableToolFactory,
         )
         from app.modules.agent.tools.context import ConversationContext
+        from app.modules.agent.services.host_execution_selection import (
+            recorded_host_workspace,
+        )
         from app.core.crypto import get_secret_cipher
         from app.modules.agent.services.workspace_location import resolve_pod_cwd
 
@@ -411,4 +414,8 @@ class ResumeToolReturnBuilder:
             workspace_cwd=workspace_location.cwd,
             workspace_repo=workspace_location.repo,
             pod_cwd=resolve_pod_cwd(conversation),
+            # The paused run's own recorded choice, never a new one: an
+            # approved command must land where the run was executing
+            # (desktop-host-execution.md §2), not silently in the VM.
+            host_workspace=await recorded_host_workspace(agent_run_id),
         )
