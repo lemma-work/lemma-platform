@@ -16,6 +16,7 @@ migration scripts define, and the revision the database says it is at.
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 from pathlib import Path
 import time
 
@@ -43,9 +44,9 @@ _last_checked_at: float | None = None
 def _code_head_revision() -> str | None:
     """The head the shipped migration scripts define, or None if unanswerable.
 
-    ``migrations/`` sits beside ``app/`` in the repository and in the image, so
-    it is found relative to this file rather than through the working directory,
-    which differs between the API, the worker and a test run.
+    ``migrations/`` normally sits beside ``app/`` in the repository and image.
+    Deployments with their own migration chain set ``LEMMA_MIGRATIONS_DIR`` to
+    that chain's absolute directory.
     """
     # Alembic is imported here rather than at module scope: it is 110 modules,
     # this module is reached from `app.app`, and the head is read at most once
@@ -53,7 +54,10 @@ def _code_head_revision() -> str | None:
     from alembic.script import ScriptDirectory
     from alembic.util.exc import CommandError
 
-    directory = Path(__file__).resolve().parents[4] / "migrations"
+    directory = Path(
+        os.environ.get("LEMMA_MIGRATIONS_DIR")
+        or Path(__file__).resolve().parents[4] / "migrations"
+    )
     if not directory.is_dir():
         return None
     try:
