@@ -89,6 +89,14 @@ the frontend themselves: from `tests/scenarios`, run
 
 ## Conversation loading
 
+The Computer view shows workspace download and startup progress and refreshes
+files when the workspace becomes ready. Its browser accepts native paste and
+can float in a separate window where Document Picture-in-Picture is supported.
+Closing the window returns the browser to the pane; leaving Computer closes
+the viewer. Teammates share the person's browser and saved logins.
+In development, `/demo/computer` previews startup states and the floating-window
+control using sample content without connecting to a workspace.
+
 Opening saved history reserves the transcript area with a delayed, gently pulsing
 skeleton using the same avatar gutter, right-aligned user bubbles, and teammate
 reply cards as loaded messages. New conversations show the welcome state immediately. Background reads

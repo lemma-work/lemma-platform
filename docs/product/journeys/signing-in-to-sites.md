@@ -159,5 +159,11 @@ and that decision was where it went wrong.
 - The system shall not let anyone else watch or drive another person's browser.
 - A viewer shall be able to move the pointer, type, and scroll, and shall not be
   able to make the browser do anything else.
+- A person driving the browser shall be able to paste text using their native
+  keyboard shortcut.
+- Where floating windows are supported, a person shall be able to pop out the
+  browser and bring it back. Leaving the Computer view shall close its viewer.
+- While the workspace starts, the Computer view shall show startup status and
+  measured download progress when available, rather than reporting it asleep.
 
 **Contracts:** `workspace.browser.status`
