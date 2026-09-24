@@ -5260,3 +5260,56 @@ a.reach { text-decoration: none; }
 }
 
 .appearance__group .theme__mode[aria-pressed] { min-height: 44px }
+
+.md--copyable, .copy-section { position: relative; }
+.md--copyable { padding-bottom: 22px; }
+.copy-control { display: inline-flex; }
+.md--copyable > .copy-control { position: absolute; right: 0; bottom: -10px; opacity: 0; }
+.md--copyable:hover > .copy-control, .md--copyable:focus-within > .copy-control { opacity: 1; }
+.copy-control__button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: var(--paper); color: var(--ink-2); cursor: pointer; }
+.copy-control__button:hover { background: var(--chrome); color: var(--ink); }
+.copy-section { margin: 12px 0; padding-top: 32px; border: 1px solid var(--line-2); border-radius: 10px; }
+.copy-section > .copy-control { position: absolute; top: 0; right: 0; }
+.copy-section pre { margin: 0; }
+.copy-section:has(table) { overflow-x: auto; }
+@media (hover: none) { .md--copyable > .copy-control { opacity: 1; } }
+
+.apps-pane { padding: 28px clamp(20px, 3vw, 40px); }
+.apps-pane__content { max-width: 1240px; margin: 0 auto; }
+.apps-pane__header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.apps-pane h1 { margin: 0; font-size: 24px; font-weight: 500; }
+.apps-pane p { color: var(--ink-2); line-height: 1.55; }
+.apps-pane__header p { margin: 6px 0 0; font-size: 14px; }
+.apps-pane__header > .btn { gap: 8px; flex-shrink: 0; min-height: 44px; }
+.apps-pane__existing { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 24px 0 32px; }
+.apps-pane__app { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 14px; text-align: left; border: 1px solid var(--line-2); border-radius: 10px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.apps-pane__app > span:nth-child(2) { flex: 1; overflow-wrap: anywhere; }
+.apps-pane__app:hover { border-color: var(--ink-3); }
+.apps-pane__icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: var(--canvas); color: var(--ink-2); }
+.app-catalog { margin-top: 28px; container-type: inline-size; }
+.app-catalog__header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.app-catalog h2 { margin: 0; font-size: 18px; font-weight: 500; }
+.app-catalog__header > span { color: var(--ink-3); font-size: 12px; }
+.app-catalog__categories { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0 20px; }
+.app-catalog__categories button { min-height: 44px; padding: 8px 16px; border: 1px solid transparent; border-radius: 8px; color: var(--ink-2); background: transparent; font-size: 14px; cursor: pointer; }
+.app-catalog__categories button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.app-catalog__categories button:not([aria-pressed="true"]):hover { background: var(--chrome); }
+.app-catalog__grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.app-idea { min-width: 0; overflow: hidden; border: 1px solid var(--line-2); border-radius: 12px; background: var(--paper); display: flex; flex-direction: column; }
+.app-idea__preview { position: relative; overflow: hidden; aspect-ratio: 3 / 2; background: var(--canvas); border-bottom: 1px solid var(--line-2); }
+.app-idea__preview img { position: absolute; width: 200%; max-width: none; height: 200%; }
+.app-idea__body { padding: 16px; display: flex; flex-direction: column; flex: 1; }
+.app-idea h3 { margin: 0; font-size: 16px; font-weight: 500; }
+.app-idea p { margin: 8px 0 16px; font-size: 13px; flex: 1; }
+.app-idea__body > button { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; width: 100%; border: 0; border-top: 1px solid var(--line-2); padding: 12px 0 0; background: transparent; color: var(--ink); font-size: 12px; text-align: left; cursor: pointer; }
+.app-idea__body > button span { overflow-wrap: anywhere; }
+.app-idea__body > button svg { flex-shrink: 0; }
+.app-idea__body > button:hover { color: var(--accent); }
+@container (max-width: 950px) { .app-catalog__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 440px) { .app-catalog__grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+    .apps-pane__header { align-items: flex-start; flex-direction: column; gap: 14px; }
+    .app-catalog__header { align-items: flex-start; flex-direction: column; gap: 6px; }
+    .app-catalog__categories { gap: 4px; }
+    .app-catalog__categories button { padding-inline: 12px; }
+}

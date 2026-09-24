@@ -488,7 +488,7 @@ export const liveSource: PodSource = {
     },
 
     async listTabs(podId: string): Promise<Tab[]> {
-        const tabs: Tab[] = [{ id: "conversation", kind: "conversation", label: "Conversation" }];
+        const tabs: Tab[] = [{ id: "conversation", kind: "conversation", label: "Conversation" }, { id: "apps", kind: "apps", label: "Apps" }];
         try {
             const listed = (await lemma(podId).apps.list({ limit: 12 })) as Listish;
             for (const raw of itemsOf(listed)) {

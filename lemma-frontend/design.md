@@ -49,3 +49,13 @@ the device's bottom safe area.
 Conversation titles live in the history sidebar, with an inline Rename action.
 Enter or blur saves, Escape cancels, and a failed save restores the prior title.
 The transcript has no separate title row.
+
+Every teammate has an Apps tab, including before the first app is built. Existing
+apps stay reachable above an idea catalog. Personal, Marketing, Product, Sales and
+Engineering each show four distinct illustrated app ideas, in a responsive card
+grid. Example previews are labeled. Build actions use the current teammate name
+and prepare an editable composer draft without sending it.
+
+Messages expose Copy on hover or keyboard focus (always on touch screens). Code
+blocks, quotes and tables have separate copy controls with success or failure feedback.
+Email links use the configured mail handler in the current browsing context.

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION } from "@/data";
 import type { Tab } from "@/data";
+import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
@@ -689,7 +690,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     /* `focusedView` is the view asking for the whole pane; `compactView` is
        only about whether the header is on screen. They were one flag, which
        is why hiding the header by hand would also have restyled the pane. */
-    const focusedView = activeTab?.kind === "app" || activeTab?.kind === "file" || activeTab?.kind === "profile" || activeTab?.kind === "library" || activeTab?.kind === "table" || activeTab?.kind === "record" || activeTab?.kind === "computer";
+    const focusedView = activeTab?.kind === "apps" || activeTab?.kind === "app" || activeTab?.kind === "file" || activeTab?.kind === "profile" || activeTab?.kind === "library" || activeTab?.kind === "table" || activeTab?.kind === "record" || activeTab?.kind === "computer";
     const compactView = focusedView || headerHidden;
     const activeKey = pod && activeTab ? pod.id + "|" + activeTab.id : "";
 
@@ -1081,6 +1082,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         onSeeAll={openHistory}
                                     />
                             </div>
+                            {activeTab?.kind === "apps" && <AppsPane name={pod.name} tabs={allTabs} onOpen={pickTab} onAsk={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }} />}
                             {activeTab?.kind === "history" && (
                                 <AllConversations
                                     pod={pod}

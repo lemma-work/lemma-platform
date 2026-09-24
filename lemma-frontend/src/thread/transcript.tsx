@@ -234,7 +234,7 @@ export function Transcript({
                                             <span className="msg__at">{turn.human.at}</span>
                                         </div>
                                         <div className="msg__body">
-                                            <Prose text={turn.human.text} />
+                                            <Prose text={turn.human.text} copyable />
                                         </div>
                                     </div>
                                 )}
@@ -267,7 +267,7 @@ export function Transcript({
                                                    hiding them in the trace. */
                                                 return (
                                                     <div className="said" key={item.id}>
-                                                        <Prose text={item.text} />
+                                                        <Prose text={item.text} copyable />
                                                     </div>
                                                 );
                                             }

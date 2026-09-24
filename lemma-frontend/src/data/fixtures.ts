@@ -2038,6 +2038,7 @@ export const fixtureSource: PodSource = {
         await wait(40);
         const tabs: Tab[] = [
             { id: "conversation", kind: "conversation", label: "Conversation" },
+            { id: "apps", kind: "apps", label: "Apps" },
             { id: "app:sample", kind: "app", label: "Sample app", url: "/sample-workspace.html", status: "sample" },
             { id: "library", kind: "library", label: "Library" },
             { id: "profile", kind: "profile", label: "Profile" },

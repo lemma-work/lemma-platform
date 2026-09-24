@@ -1,3 +1,7 @@
+"use client";
+
+import { type ReactNode } from "react";
+import { CopyButton } from "./copy-button";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -96,10 +100,26 @@ const schema = {
     },
 };
 
-export function Prose({ text }: { text: string }) {
+function codeText(node: Element | Root["children"][number]): string {
+    if (node.type === "text") return node.value;
+    return "children" in node ? node.children.map(codeText).join("") : "";
+}
+
+function CopySection({ children, text }: { children: ReactNode; text: string }) {
+    return <div className="copy-section"><CopyButton text={text} label="Copy section" />{children}</div>;
+}
+
+export function Prose({ text, copyable = false }: { text: string; copyable?: boolean }) {
     return (
-        <div className="md">
+        <div className={copyable ? "md md--copyable" : "md"}>
+            {copyable && <CopyButton text={text} label="Copy message" />}
             <Markdown
+                components={{
+                    pre: ({ children, node, ...props }) => <CopySection text={node ? codeText(node) : ""}><pre {...props}>{children}</pre></CopySection>,
+                    blockquote: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><blockquote {...props}>{children}</blockquote></CopySection>,
+                    details: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><details {...props}>{children}</details></CopySection>,
+                    table: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><table {...props}>{children}</table></CopySection>,
+                }}
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw, [rehypeSanitize, schema], narrowStyles]}
             >

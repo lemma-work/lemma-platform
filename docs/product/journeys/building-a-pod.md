@@ -15,6 +15,13 @@ pod is [Working with data](working-with-data.md),
 [Agents and conversations](agents-and-conversations.md). Fine-grained control
 over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 
+The workspace shall always offer an Apps view, including when a teammate has no
+apps. App ideas shall be grouped by Personal, Marketing, Product, Sales and
+Engineering, with four examples visible in each category. Build actions shall
+use the current teammate name. Example previews shall be labeled as examples. Choosing an example
+shall prepare an editable request in the conversation without sending it.
+Existing apps shall remain reachable in their own tabs.
+
 ---
 
 ## Capability: Create a pod
