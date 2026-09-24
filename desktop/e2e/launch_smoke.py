@@ -730,6 +730,12 @@ def main() -> int:
         "--artifacts", type=Path, default=REPOSITORY / "output/desktop-launch-smoke"
     )
     arguments = parser.parse_args()
+    # Absolute, because the binaries under them are started with the private
+    # support directory as their working directory, where a path relative to
+    # the caller's no longer names anything.
+    for name in ("app", "sidecars", "artifacts"):
+        if getattr(arguments, name) is not None:
+            setattr(arguments, name, getattr(arguments, name).resolve())
     for name in (
         "LEMMA_SMOKE_DATABASE_URL",
         "LEMMA_SMOKE_REDIS_URL",
