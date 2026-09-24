@@ -137,6 +137,15 @@ class HostLink:
         )
         return frame_id
 
+    def reply(self, frame_type: str, re: str, body: dict | None = None) -> None:
+        """Answer a request the *server* sent, such as an ``op``."""
+        self._communicator.input_queue.put_nowait(
+            {
+                "type": "websocket.receive",
+                "text": json.dumps({"type": frame_type, "re": re, "body": body or {}}),
+            }
+        )
+
     async def answer_to(self, frame_id: str, timeout: float = 30) -> dict:
         # Shielded, so a caller that times out -- to show nothing came back yet
         # -- can still await the same answer afterwards.
@@ -158,15 +167,21 @@ class HostLink:
         assert self.close_code is not None, "the reader ended without a close"
         return self.close_code
 
-    async def hello(self, machine: dict, *, capacity: dict | None = None) -> dict:
-        return await self.request(
-            "hello",
-            {
-                "hello": machine,
-                "capacity": capacity
-                or {"max_runs": 1, "active_runs": 0, "available_runs": 1},
-            },
-        )
+    async def hello(
+        self,
+        machine: dict,
+        *,
+        capacity: dict | None = None,
+        host_execution: dict | None = None,
+    ) -> dict:
+        body = {
+            "hello": machine,
+            "capacity": capacity
+            or {"max_runs": 1, "active_runs": 0, "available_runs": 1},
+        }
+        if host_execution is not None:
+            body["host_execution"] = host_execution
+        return await self.request("hello", body)
 
     async def aclose(self) -> None:
         if self.close_code is None:
@@ -238,11 +253,17 @@ class LinkMcpError(AssertionError):
 
 
 async def connected_host(
-    app, machine: dict, *, capacity: dict | None = None
+    app,
+    machine: dict,
+    *,
+    capacity: dict | None = None,
+    host_execution: dict | None = None,
 ) -> HostLink:
     """A link that has said ``hello`` and been welcomed."""
     link = await HostLink(app, secret=machine["host_secret"]).open()
-    welcome = await link.hello(machine["hello"], capacity=capacity)
+    welcome = await link.hello(
+        machine["hello"], capacity=capacity, host_execution=host_execution
+    )
     assert welcome["type"] == "welcome", welcome
     return link
 

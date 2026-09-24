@@ -66,8 +66,10 @@ from app.modules.agent.domain.agent_host_link import (
     WelcomeBody,
 )
 from app.modules.agent.infrastructure.agent_host.channels import (
+    OP,
     REVOKED,
     SUPERSEDED,
+    HostNotice,
     host_poke_channel,
     parse_host_notice,
     superseded_notice,
@@ -77,6 +79,7 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostProtocolViolation,
     AgentHostRepositoryError,
 )
+from app.modules.agent.services.agent_host_link_ops import LinkOpRelay
 from app.modules.agent.services.agent_host_link_mcp import (
     AgentHostLinkMcp,
     notice_stream,
@@ -157,6 +160,7 @@ class AgentHostLinkSession:
         )
         self._stopped = asyncio.Event()
         self._writer = LinkWriter(socket, on_lost=self._stopped.set)
+        self.ops = LinkOpRelay(writer=self._writer, channels=channels)
         self._finished = asyncio.Event()
         self._tasks: set[asyncio.Task[None]] = set()
         self._close_code: int | None = None
@@ -190,6 +194,7 @@ class AgentHostLinkSession:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+            await self.ops.close()
             await self._hang_up()
             self._registry.discard(self)
             self._finished.set()
@@ -309,8 +314,11 @@ class AgentHostLinkSession:
         elif frame.type in concurrent:
             await self._in_flight.acquire()
             self._spawn(frame, concurrent[frame.type])
+        elif frame.type == HostFrameType.OP_OK:
+            self.ops.answer_ok(frame)
         elif frame.type == HostFrameType.ERROR:
-            self._host_reported(frame)
+            if not self.ops.answer_error(frame):
+                self._host_reported(frame)
         elif frame.type in {HostFrameType.PAIR, HostFrameType.HELLO}:
             raise LinkClose(
                 LinkCloseCode.PROTOCOL_VIOLATION, f"{frame.type} after hello"
@@ -391,7 +399,10 @@ class AgentHostLinkSession:
             ) from None
         try:
             host = await self._store.open_link(
-                secret=secret, hello=body.hello, capacity=body.capacity
+                secret=secret,
+                hello=body.hello,
+                capacity=body.capacity,
+                host_execution=body.host_execution,
             )
         except AgentHostRepositoryError:
             host = None
@@ -525,13 +536,17 @@ class AgentHostLinkSession:
                     )
                     notices.detach()
                     raw = None
-                if raw is not None and self._obey(raw):
+                notice = parse_host_notice(raw) if raw is not None else None
+                if notice is not None and notice.kind == OP:
+                    # An op is not a reason to re-read the command queue.
+                    self.ops.accept(notice.payload, host_id=host_id)
+                    continue
+                if notice is not None and self._obey(notice):
                     return
                 await self._push_commands(host_id)
 
-    def _obey(self, raw: str | bytes) -> bool:
+    def _obey(self, notice: HostNotice) -> bool:
         """Act on a notice; True when it ended this connection."""
-        notice = parse_host_notice(raw)
         if notice.kind == REVOKED:
             self.stop(LinkCloseCode.REVOKED_OR_MISSING, REVOKED_OR_MISSING_REASON)
             return True

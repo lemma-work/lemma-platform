@@ -31,7 +31,10 @@ from app.modules.agent.domain.agent_host import (
     AgentHostStatus,
     HostHello,
 )
-from app.modules.agent.domain.agent_host_link import AgentHostHarnessRecord
+from app.modules.agent.domain.agent_host_link import (
+    AgentHostHarnessRecord,
+    HostExecutionCapability,
+)
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostPairingRejected,
     AgentHostRepositoryError,
@@ -149,6 +152,7 @@ class FakeStore:
         self.append_error: Exception | None = None
         self.control_error: Exception | None = None
         self.reads = 0
+        self.host_execution: HostExecutionCapability | None = None
 
     async def consume_pairing_code(self, body) -> AgentHostPairingCompleted:
         if body.pairing_code != PAIRING_CODE:
@@ -158,8 +162,14 @@ class FakeStore:
         )
 
     async def open_link(
-        self, *, secret: str, hello: HostHello, capacity: AgentHostCapacity
+        self,
+        *,
+        secret: str,
+        hello: HostHello,
+        capacity: AgentHostCapacity,
+        host_execution: HostExecutionCapability | None = None,
     ) -> LinkedHost | None:
+        self.host_execution = host_execution
         if secret != SECRET or self.revoked:
             return None
         status = (
@@ -347,6 +357,19 @@ class Link:
             max_in_flight=max_in_flight,
         )
         self.task: asyncio.Task | None = None
+        # `SET NX`, in memory: shared through the channels object so two links
+        # on one fake Redis contend for the same op the way two replicas do.
+        claimed = getattr(self.channels, "claimed_ops", None)
+        if claimed is None:
+            claimed = self.channels.claimed_ops = set()
+
+        async def claim(op_id: str) -> bool:
+            if op_id in claimed:
+                return False
+            claimed.add(op_id)
+            return True
+
+        self.session.ops.claim = claim
 
     def start(self) -> Link:
         self.task = asyncio.ensure_future(self.session.serve_link())
