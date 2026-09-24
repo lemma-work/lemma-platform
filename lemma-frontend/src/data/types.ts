@@ -367,6 +367,7 @@ export interface PodSource {
     joinOrg(orgId: string): Promise<void>;
     createOrg(wanted: NewOrg): Promise<Org>;
     listPods(orgId: string): Promise<Pod[]>;
+    getPod(podId: string): Promise<Pod | null>;
     listTabs(podId: string): Promise<Tab[]>;
     createPod(orgId: string, name: string, description?: string): Promise<Pod>;
     /** Set (or clear) a teammate's face. An emoji, a URL, or the

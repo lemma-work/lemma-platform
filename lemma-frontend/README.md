@@ -99,3 +99,40 @@ failed, populated, and workspace states using the real transcript and composer
 components. Workspace bootstrap and session gates share a workspace skeleton;
 local opening actions use the same accessible progress indicator. History lists
 use row placeholders rather than standalone loading prose.
+
+## Session recovery
+
+An unsuccessful return from sign-in offers Sign in again and Back to home, without
+assuming cookies caused the failure. Each explicit retry counts as a portal trip
+so an unsuccessful retry cannot trigger another automatic redirect. The portal
+and workspace use the same bounded session-refresh retry limit.
+
+Initial cookie discovery cannot override later authentication events or replace
+an explicitly configured bearer identity. Account changes clear cached workspace
+data and saved organization/tab locations while preserving appearance settings;
+refreshing the same account retains its saved locations. Other open tabs reload
+when the workspace account or configured credentials change. Sign-out reports an
+unconfirmed server session instead of silently returning home.
+
+Run `node --experimental-strip-types --import ./tests/resolve.mjs --test tests/observe-auth.test.ts tests/storage.test.ts tests/door.test.ts`
+for frontend lifecycle checks, and `npx vitest run src/__tests__/auth.test.ts` in
+`lemma-typescript` for SDK request-race and sign-out checks.
+
+## Linked teammate access
+
+Opening a teammate link verifies that pod directly, independently of the cached
+organization list, and selects its organization from the response. An incomplete
+or stale list is not an access denial. Verification failures offer Retry; only
+an explicit forbidden response offers Ask to join. The workspace never substitutes
+another teammate for the one named in a link.
+
+Run `node --experimental-strip-types --import ./tests/resolve.mjs --test tests/pod-access.test.ts`
+for the access-state regression checks.
+
+Approved chat cards collapse to an action and approval-scope row. Expand the row
+to inspect the original explanation and command arguments. Pending requests keep
+the full decision controls visible, and submitted approvals retain their waiting
+status until the tool finishes.
+
+Header channel actions with labels keep their natural width; folded teammate
+names retain enough line height for descenders while long names still truncate.

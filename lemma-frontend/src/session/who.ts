@@ -73,6 +73,8 @@ export async function signedIn(): Promise<boolean> {
     }
     if (sdk === "authenticated") return entersTheApp(sdk, null, sample, configured);
 
+    if (client.auth.isTokenMode) return false;
+
     /* Only now, and only once: the SDK's "no" is not the API's. */
     return entersTheApp(sdk, Boolean(await askTheApi()), sample, configured);
 }

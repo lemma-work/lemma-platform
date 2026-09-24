@@ -41,6 +41,7 @@ function guidance(id: string) {
 export const previewSource: PodSource = {
     ...fixtureSource,
     async listOrgs() { return [{ id: "acme", name: "Acme" }]; },
+    async getPod(podId) { return (await this.listPods("acme")).find(pod => pod.id === podId) ?? null; },
     async listPods(orgId) {
         return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: person.icon, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
     },

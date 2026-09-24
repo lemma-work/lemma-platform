@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { CheckIcon, DenyIcon, QuestionIcon, ShieldIcon } from "@/ui/icons";
+import { CheckIcon, ChevronDownIcon, DenyIcon, QuestionIcon, ShieldIcon } from "@/ui/icons";
 import { decisionLabel, interactionHeading, type ApprovalDecision, type AskQuestion } from "./approval";
 import type { Interaction } from "./turns";
 
@@ -319,14 +319,7 @@ export function InteractionCard({
     const settled = !interaction.open ? interaction.decision || "ANSWERED" : submitted ?? "";
     const denied = settled === "DENY";
 
-    return (
-        <div
-            className="approval"
-            data-kind={question ? "question" : "approval"}
-            data-state={settled ? (denied ? "denied" : "done") : "open"}
-            data-docked={docked ? "" : undefined}
-        >
-            <div className="approval__top">
+    const header = (<>
                 <span className="approval__icon">
                     {settled ? (
                         denied ? <DenyIcon size={16} weight="bold" /> : <CheckIcon size={16} weight="bold" />
@@ -353,7 +346,8 @@ export function InteractionCard({
                               : "needs approval"}
                     </span>
                 )}
-            </div>
+    </>);
+    const details = (<>
 
             {interaction.details.request && <p className="approval__detail">{interaction.details.request}</p>}
 
@@ -371,6 +365,32 @@ export function InteractionCard({
                     ))}
                 </dl>
             )}
+    </>);
+
+    if (!question && (settled === "APPROVE_ONCE" || settled === "APPROVE_FOR_SESSION")) {
+        return (
+            <div className="approval approval--compact" data-kind="approval" data-state="done" data-docked={docked ? "" : undefined}>
+                <details className="approval__record">
+                    <summary className="approval__top">
+                        {header}
+                        <ChevronDownIcon className="approval__chevron" size={14} />
+                    </summary>
+                    <div className="approval__record-body">{details}</div>
+                </details>
+                {submitted && interaction.open && <p className="approval__after">{afterNote(submitted)}</p>}
+            </div>
+        );
+    }
+
+    return (
+        <div
+            className="approval"
+            data-kind={question ? "question" : "approval"}
+            data-state={settled ? (denied ? "denied" : "done") : "open"}
+            data-docked={docked ? "" : undefined}
+        >
+            <div className="approval__top">{header}</div>
+            {details}
 
             {question && questions.length > 0 ? (
                 <Questions interaction={interaction} questions={questions} onResolve={onResolve} />

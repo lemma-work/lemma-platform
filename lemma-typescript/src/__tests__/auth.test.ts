@@ -1,5 +1,7 @@
+import Session from "supertokens-web-js/recipe/session/index.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ensureCookieSessionSupport } from "../supertokens.js";
 import { AuthManager, clearTestingToken, resolveSafeRedirectUri, setTestingToken } from "../auth.js";
 
 const siteOrigin = "https://app.lemma.work";
@@ -81,6 +83,79 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     resolveSessionCheck?.(true);
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore a session when an older check finishes after invalidation", async () => {
+    setTestingToken("TESTTOKEN");
+    let resolveResponse!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise<Response>(resolve => { resolveResponse = resolve; }));
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    const checking = auth.checkAuth();
+    auth.markUnauthenticated();
+    resolveResponse(new Response(JSON.stringify({ id: "old-user", email: "old@example.test" })));
+    await checking;
+    expect(auth.getState()).toEqual({ status: "unauthenticated", user: null });
+  });
+
+  it("does not restore a token session when a pending check finishes after sign-out", async () => {
+    setTestingToken("TESTTOKEN");
+    let resolveResponse!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise<Response>(resolve => { resolveResponse = resolve; }));
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    const checking = auth.checkAuth();
+    await auth.signOut();
+    resolveResponse(new Response(JSON.stringify({ id: "old-user", email: "old@example.test" })));
+    await checking;
+    expect(auth.getState()).toEqual({ status: "unauthenticated", user: null });
+  });
+
+  it("reuses one invalidation listener across repeated session checks", async () => {
+    vi.mocked(ensureCookieSessionSupport).mockClear();
+    doesSessionExist.mockResolvedValue(false);
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    await auth.checkAuth();
+    await auth.checkAuth();
+    const listeners = vi.mocked(ensureCookieSessionSupport).mock.calls.map(call => call[1]);
+    expect(new Set(listeners).size).toBe(1);
+  });
+
+  it("does not report a successful sign-out when session verification is offline", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Offline"));
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    expect(await auth.signOut()).toBe(false);
+  });
+
+  it("a new check can succeed without an older rejection erasing its identity", async () => {
+    setTestingToken("TESTTOKEN");
+    let resolveOld!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch")
+      .mockReturnValueOnce(new Promise<Response>(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "new-user", email: "new@example.test" })));
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    const old = auth.checkAuth();
+    auth.markUnauthenticated();
+    await auth.checkAuth();
+    resolveOld(new Response(null, { status: 401 }));
+    await old;
+    expect(auth.getState().user?.id).toBe("new-user");
+  });
+
+  it("successful access-token refresh preserves the current user", async () => {
+    doesSessionExist.mockResolvedValue(true);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "person", email: "person@example.test" })));
+    vi.mocked(Session.attemptRefreshingSession).mockResolvedValueOnce(true);
+    vi.mocked(Session.getAccessToken).mockResolvedValueOnce("refreshed-test-token");
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    await auth.checkAuth();
+    const before = auth.getState();
+    expect(await auth.refreshAccessToken()).toBe("refreshed-test-token");
+    expect(auth.getState()).toEqual(before);
+  });
+
+  it("an unsuccessful refresh does not return an old access token", async () => {
+    vi.mocked(Session.attemptRefreshingSession).mockResolvedValueOnce(false);
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    await expect(auth.refreshAccessToken()).rejects.toThrow("Session refresh failed");
   });
 
   it("bypasses the session gate in injected-token mode", async () => {
