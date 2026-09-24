@@ -195,16 +195,23 @@ class KillableBackend:
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        self._task = asyncio.create_task(self._server.serve())
-        for _ in range(100):
-            if self._server.started:
-                return
-            if self._task.done():
+        task = asyncio.create_task(self._server.serve())
+        self._task = task
+
+        async def started() -> bool:
+            if task.done():
                 raise RuntimeError("the backend exited before startup") from (
-                    self._task.exception()
+                    task.exception()
                 )
-            await asyncio.sleep(0.1)
-        raise RuntimeError("timed out starting the backend")
+            return self._server.started
+
+        await eventually(
+            label="the backend listening",
+            probe=started,
+            done=bool,
+            timeout_seconds=10,
+            interval_seconds=0.1,
+        )
 
     def crash(self) -> None:
         for listener in self._server.servers:
