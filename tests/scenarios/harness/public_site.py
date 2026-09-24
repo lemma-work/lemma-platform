@@ -91,7 +91,10 @@ def public_site() -> Iterator[PublicWebsite]:
         "NEXT_PUBLIC_API_URL": "",
         "NEXT_PUBLIC_AUTH_URL": "",
         "NEXT_PUBLIC_DATA": "live",
-        "NEXT_PUBLIC_LEMMA_DEPLOYMENT": "local",
+        # The public website is what hosted Lemma serves. A `local` deployment
+        # is a desktop installation, which sends `/` and `/download` to the
+        # workspace instead of serving them.
+        "NEXT_PUBLIC_LEMMA_DEPLOYMENT": "hosted",
         "NEXT_PUBLIC_ANALYTICS_KEY": "",
         "NEXT_PUBLIC_SITE_URL": "https://example.test",
         "NEXT_TELEMETRY_DISABLED": "1",
@@ -127,7 +130,7 @@ def public_site() -> Iterator[PublicWebsite]:
                     "Public website exited before becoming ready"
                 )
                 if selector.select(timeout=max(0, deadline - time.monotonic())):
-                    if "Lemma listening on port" in process.stdout.readline():
+                    if "Lemma listening on" in process.stdout.readline():
                         break
             else:
                 raise AssertionError("Public website did not become ready")
