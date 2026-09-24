@@ -36,11 +36,19 @@ class WorkspaceStatusResponse(BaseModel):
         )
     )
     detail: str | None = Field(default=None, description="A sentence for a person.")
+    done_mb: int | None = Field(
+        default=None, description="While `downloading`: megabytes fetched so far."
+    )
+    total_mb: int | None = Field(
+        default=None, description="While `downloading`: megabytes in total."
+    )
 
 
 @router.get(
     "/status",
     response_model=WorkspaceStatusResponse,
+    # Absent, not null, while a download cannot be measured -- as documented.
+    response_model_exclude_none=True,
     operation_id="workspace.status",
     summary="Whether your computer is ready",
 )
@@ -57,7 +65,12 @@ async def workspace_status(user: CurrentUser) -> WorkspaceStatusResponse:
         )
         phase = await current_phase(sandbox.id)
         if phase is not None:
-            return WorkspaceStatusResponse(state=phase["phase"], detail=phase["detail"])
+            return WorkspaceStatusResponse(
+                state=phase["phase"],
+                detail=phase["detail"],
+                done_mb=phase.get("done_mb"),
+                total_mb=phase.get("total_mb"),
+            )
         info = await service.describe(sandbox.id)
     except (SandboxError, OSError) as exc:
         logger.warning(

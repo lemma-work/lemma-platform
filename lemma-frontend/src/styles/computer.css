@@ -46,6 +46,13 @@
 .screen-panel--live .screen-glass{background:#000}
 .screen-live{position:absolute;inset:0}
 .screen-live canvas{display:block}
+.screen-surfaces{position:absolute;inset:0}
+.computer-popout{margin:0;height:100vh;background:var(--paper);color:var(--ink)}
+.computer-startup{display:grid;gap:12px;padding:24px;max-width:32rem;margin:auto}
+.computer-startup p{margin:0;color:var(--ink-2)}
+.computer-startup progress{width:100%;accent-color:var(--accent)}
+.computer-preview{max-width:760px;margin:auto;min-height:100dvh;padding:24px}
+.computer-preview-actions{display:flex;gap:12px;flex-wrap:wrap}
 /* One per connection attempt, stacked, so a reconnect keeps the last picture
    until the new one has a frame to replace it with. Usually there is exactly
    one; two for the seconds a browser takes to come back. */

@@ -1,3 +1,4 @@
+import { LoadingIndicator } from "@/ui/loading";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, agentLogo, stillLooking, type Computer, type LocalAgent, type Runtime } from "@/data";
@@ -480,7 +481,7 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                             </div>
                             {stillLooking(computer) ? (
                                 <p className="mgroup__empty">
-                                    <RefreshIcon size={13} className="spin" /> Looking for coding agents on it…
+                                    <LoadingIndicator label="Finding coding agents" />
                                 </p>
                             ) : computer.agents.length === 0 ? (
                                 <p className="mgroup__empty">

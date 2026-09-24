@@ -51,7 +51,7 @@ export function startAuth(): void {
     SuperTokens.init({
         appInfo: { appName: "Lemma", apiDomain, apiBasePath },
         recipeList: [
-            Session.init({ tokenTransferMethod: "cookie" }),
+            Session.init({ tokenTransferMethod: "cookie", maxRetryAttemptsForSessionRefresh: 3 }),
             EmailPassword.init({
                 preAPIHook: async (context) => {
                     const purpose = GUARDED[context.action];

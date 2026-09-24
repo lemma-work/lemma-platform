@@ -134,3 +134,58 @@ def test_a_command_output_in_an_unrecognised_shape_is_kept():
     envelope = [{"type": "text", "text": "hello from mcp"}]
     result = tool_result("exec_command", "COMPLETED", {"rawOutput": envelope})
     assert result == {"output": envelope}
+
+
+# What codex-acp 1.1.7 actually sends (dist/index.js, createCommandExecution*):
+# `command` is one string with the shell still on it, and the completion carries
+# `formatted_output` and an `exit_code` that is null when the command never ran.
+CODEX_EXEC_START = {
+    "kind": "execute",
+    "title": "ls -la",
+    "status": "in_progress",
+    "rawInput": {"command": "/bin/zsh -lc 'ls -la'", "cwd": "/Users/me/project"},
+}
+
+
+def test_codex_sends_the_command_as_one_string_with_its_shell():
+    args = tool_args(CODEX_EXEC_START, "exec_command")
+    assert args == {"cmd": "ls -la", "cwd": "/Users/me/project"}
+
+
+def test_codex_completion_output_is_the_terminal_text():
+    payload = {
+        "status": "completed",
+        "rawOutput": {"formatted_output": "total 8\n", "exit_code": 0},
+    }
+    assert tool_result("exec_command", "COMPLETED", payload) == {
+        "exit_code": 0,
+        "stdout": "total 8\n",
+    }
+
+
+def test_an_empty_stdout_does_not_hide_the_aggregated_output():
+    payload = {
+        "rawOutput": {"stdout": "", "aggregated_output": "boom\n", "exit_code": 1}
+    }
+    result = tool_result("exec_command", "FAILED", payload)
+    assert result["stdout"] == "boom\n"
+    assert result["exit_code"] == 1
+    assert result["error"] == "exited with code 1"
+
+
+def test_a_command_that_never_ran_says_so_rather_than_failed():
+    payload = {"rawOutput": {"formatted_output": "", "exit_code": None}}
+    result = tool_result("exec_command", "FAILED", payload)
+    assert result["error"] == "did not run to completion (declined or stopped)"
+
+
+def test_a_malformed_exit_code_is_ignored_not_raised():
+    payload = {"rawOutput": {"exit_code": "--1", "formatted_output": "x"}}
+    assert tool_result("exec_command", "COMPLETED", payload) == {"stdout": "x"}
+    payload = {"rawOutput": {"exit_code": "-2", "formatted_output": "x"}}
+    assert tool_result("exec_command", "COMPLETED", payload)["exit_code"] == -2
+
+
+def test_an_absurdly_long_exit_code_is_ignored_not_raised():
+    payload = {"rawOutput": {"exit_code": "9" * 5000, "formatted_output": "x"}}
+    assert tool_result("exec_command", "COMPLETED", payload) == {"stdout": "x"}

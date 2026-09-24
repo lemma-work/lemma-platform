@@ -12,6 +12,7 @@ mod inspect;
 mod limits;
 mod network;
 mod protocol;
+mod pull_progress;
 mod run_contract;
 mod sandbox_tunnel;
 

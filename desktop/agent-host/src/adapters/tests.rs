@@ -502,3 +502,43 @@ fn nvm_search_prefers_the_newest_installed_node() {
     assert!(paths[1].ends_with("v18.20.1/bin"));
     assert_eq!(paths.len(), 2);
 }
+
+#[test]
+fn a_codex_run_cannot_reach_for_the_persons_own_browser() {
+    // In Lemma the browser the person watches is the sandbox's. Codex's own
+    // browser and computer-use plugins, enabled in the person's `~/.codex`,
+    // opened their real Chrome instead -- invisible in Lemma and signed in as
+    // them. `CODEX_CONFIG` overrides only this run's sessions.
+    let manifest = AdapterManifest::builtin().unwrap();
+    let spec = manifest
+        .adapters
+        .iter()
+        .find(|adapter| adapter.key == "codex")
+        .expect("codex is a certified adapter")
+        .clone();
+    let resolved = ResolvedAdapter {
+        spec,
+        command: PathBuf::from("/cache/codex-acp"),
+        upstream_command: PathBuf::from("/usr/local/bin/codex"),
+        upstream_version: None,
+    };
+    let environment = resolved.environment();
+    let config: serde_json::Value =
+        serde_json::from_str(&environment["CODEX_CONFIG"]).expect("CODEX_CONFIG is JSON");
+    for plugin in [
+        "browser@openai-bundled",
+        "chrome@openai-bundled",
+        "computer-use@openai-bundled",
+        "unified-computer-use@openai-bundled",
+    ] {
+        assert_eq!(
+            config["plugins"][plugin]["enabled"],
+            serde_json::Value::Bool(false),
+            "{plugin} stays off in a Lemma run"
+        );
+    }
+    assert!(
+        environment.contains_key("PATH"),
+        "the adapter's own variables still apply"
+    );
+}

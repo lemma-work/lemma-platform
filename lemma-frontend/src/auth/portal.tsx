@@ -1,5 +1,7 @@
 "use client";
 
+import { PageLoading } from "@/ui/loading";
+
 import { useEffect, useState } from "react";
 import { startAuth } from "./supertokens";
 import { screenFor } from "./which";
@@ -41,7 +43,7 @@ export function Portal({ path }: { path?: string[] }) {
         );
     }
 
-    if (!ready) return <div className="screen"><div className="screen__inner auth"><p role="status">Opening…</p></div></div>;
+    if (!ready) return <PageLoading label="Opening sign in" />;
 
     switch (screenFor(path)) {
         case "sign-in": return <SignInUp mode="in" />;

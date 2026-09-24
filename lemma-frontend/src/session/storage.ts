@@ -77,3 +77,24 @@ export const CARRY_SCRIPT =
     `(function(){try{var s=localStorage,k=${JSON.stringify(CARRIED)},i,o,n,v;` +
     `for(i=0;i<k.length;i++){o='${WAS}:'+k[i];n='${PREFIX}:'+k[i];v=s.getItem(o);` +
     `if(v!==null){if(s.getItem(n)===null)s.setItem(n,v);s.removeItem(o)}}}catch(e){}})();`;
+
+/** Workspace locations belong to an account; appearance belongs to the browser. */
+export function retainWorkspaceOwner(store: KeyValueStore, owner: string | null): boolean {
+    const ownerKey = key("workspace-owner");
+    const changed = store.getItem(ownerKey) !== owner;
+    if (changed || owner === null) {
+        for (const name of ["org", "tabs"]) {
+            store.removeItem(key(name));
+            store.removeItem(WAS + ":" + name);
+        }
+    }
+    if (owner === null) store.removeItem(ownerKey);
+    else store.setItem(ownerKey, owner);
+    return changed;
+}
+
+/** Other tabs must discard their captured client and mounted workspace too. */
+export function sessionStorageChanged(name: string | null, before: string | null, after: string | null): boolean {
+    if (name === null) return true;
+    return before !== after && [key("workspace-owner"), "lemma_token", "lemma_api_url"].includes(name);
+}

@@ -1,0 +1,77 @@
+<svg width="760" height="520" viewBox="0 0 760 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" stroke="#D9D3C8" stroke-width="1"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#202124" flood-opacity=".08"/>
+    </filter>
+  </defs>
+
+  <rect x=".5" y=".5" width="759" height="519" rx="27.5" fill="#FFFDF8" stroke="#D9D3C8"/>
+  <path d="M28 0V520M52 0V520M76 0V520M100 0V520M124 0V520M148 0V520M172 0V520M196 0V520M220 0V520M244 0V520M268 0V520M292 0V520M316 0V520M340 0V520M364 0V520M388 0V520M412 0V520M436 0V520M460 0V520M484 0V520M508 0V520M532 0V520M556 0V520M580 0V520M604 0V520M628 0V520M652 0V520M676 0V520M700 0V520M724 0V520M748 0V520" stroke="#F0ECE3"/>
+  <path d="M0 28H760M0 52H760M0 76H760M0 100H760M0 124H760M0 148H760M0 172H760M0 196H760M0 220H760M0 244H760M0 268H760M0 292H760M0 316H760M0 340H760M0 364H760M0 388H760M0 412H760M0 436H760M0 460H760M0 484H760M0 508H760" stroke="#F0ECE3"/>
+
+  <g filter="url(#shadow)">
+    <rect x="47" y="55" width="244" height="128" rx="15" fill="#FFFDF8" stroke="#CFC8BC"/>
+    <rect x="63" y="71" width="212" height="64" rx="9" fill="#F4F0E8"/>
+    <path d="M78 117V90H101V117M108 117V82H131V117M138 117V98H161V117" stroke="#202124" stroke-width="3"/>
+    <path d="M184 88H253M184 101H239M184 114H226" stroke="#959087" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="78" cy="157" r="5" fill="#ADD8BD"/>
+    <path d="M91 157H181" stroke="#202124" stroke-width="4" stroke-linecap="round"/>
+    <path d="M210 157H260" stroke="#959087" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="47" y="203" width="244" height="128" rx="15" fill="#0B238D" stroke="#091B6B"/>
+    <path d="M67 228H160M67 246H192M67 264H174" stroke="#FFF4D2" stroke-width="7" stroke-linecap="round"/>
+    <path d="M67 290H139" stroke="#A9C7EE" stroke-width="4" stroke-linecap="round"/>
+    <path d="M214 220H263V314H231L214 297V220Z" fill="#FFF4D2"/>
+    <path d="M214 297H231V314" stroke="#E0C679" stroke-width="2"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="47" y="351" width="244" height="114" rx="15" fill="#FFFDF8" stroke="#CFC8BC"/>
+    <circle cx="91" cy="407" r="27" fill="#EEA38E"/>
+    <path d="M91 390V424M74 407H108" stroke="#202124" stroke-width="3" stroke-linecap="round"/>
+    <path d="M139 384H263M139 403H239M139 422H251" stroke="#202124" stroke-width="5" stroke-linecap="round"/>
+    <path d="M139 441H204" stroke="#959087" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <path d="M315 123H366M315 267H366M315 408H366" stroke="#202124" stroke-width="2" stroke-dasharray="4 7"/>
+  <circle cx="380" cy="266" r="27" fill="#F5D96F" stroke="#202124"/>
+  <path d="M368 266H391M383 257L392 266L383 275" stroke="#202124" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <g filter="url(#shadow)">
+    <rect x="414" y="72" width="299" height="377" rx="20" fill="#FFFDF8" stroke="#202124" stroke-width="1.5"/>
+    <path d="M414 126H713" stroke="#D9D3C8"/>
+    <circle cx="443" cy="99" r="10" fill="#202124"/>
+    <path d="M466 93H535M466 105H514" stroke="#202124" stroke-width="4" stroke-linecap="round"/>
+    <rect x="627" y="90" width="58" height="20" rx="10" fill="#DDECDD"/>
+    <circle cx="640" cy="100" r="4" fill="#3E7650"/>
+    <path d="M650 100H675" stroke="#3E7650" stroke-width="3" stroke-linecap="round"/>
+
+    <rect x="438" y="151" width="251" height="72" rx="12" fill="#F0ECE3"/>
+    <rect x="453" y="166" width="40" height="40" rx="10" fill="#A9C7EE"/>
+    <path d="M464 177H482V195H464V177Z" stroke="#202124" stroke-width="2"/>
+    <path d="M512 170H581M512 184H653M512 198H616" stroke="#202124" stroke-width="4" stroke-linecap="round"/>
+
+    <rect x="438" y="238" width="119" height="83" rx="12" fill="#F9E3DC"/>
+    <circle cx="466" cy="267" r="13" fill="#EEA38E"/>
+    <path d="M489 260H536M489 274H524" stroke="#202124" stroke-width="3" stroke-linecap="round"/>
+    <path d="M453 302H540" stroke="#959087" stroke-width="3" stroke-linecap="round"/>
+
+    <rect x="570" y="238" width="119" height="83" rx="12" fill="#F8F0C9"/>
+    <path d="M589 260H608V279H589V260ZM624 260H643V279H624V260ZM659 260H678V279H659V260Z" stroke="#202124" stroke-width="2"/>
+    <path d="M598 279V294H668V279" stroke="#202124" stroke-width="2"/>
+
+    <rect x="438" y="336" width="251" height="88" rx="12" fill="#E8F1E8"/>
+    <path d="M457 358H670M457 376H636M457 394H653" stroke="#202124" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="670" cy="394" r="7" fill="#3E7650"/>
+  </g>
+
+  <rect x="47" y="25" width="142" height="24" rx="12" fill="#202124"/>
+  <text x="118" y="41" text-anchor="middle" fill="#FFFDF8" font-family="ui-monospace, SFMono-Regular, monospace" font-size="10" letter-spacing="1.4">WORKING SYSTEMS</text>
+  <rect x="566" y="36" width="147" height="24" rx="12" fill="#F5D96F" stroke="#202124"/>
+  <text x="640" y="52" text-anchor="middle" fill="#202124" font-family="ui-monospace, SFMono-Regular, monospace" font-size="10" letter-spacing="1.4">YOUR LEMMA POD</text>
+</svg>

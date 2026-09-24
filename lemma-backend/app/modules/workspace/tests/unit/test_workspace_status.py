@@ -66,3 +66,20 @@ async def test_an_unreachable_store_is_unknown_not_an_error():
     sandbox_id = uuid4()
     await sandbox_progress.record_phase(sandbox_id, "still downloading x")
     assert await sandbox_progress.current_phase(sandbox_id) is None
+
+
+async def test_a_download_the_guest_can_measure_carries_its_megabytes():
+    sandbox_id = uuid4()
+    await sandbox_progress.record_phase(
+        sandbox_id,
+        "still downloading ghcr.io/lemma-work/lemma-workspace@sha256:d6dc (412 MB of 980 MB)",
+    )
+    phase = await sandbox_progress.current_phase(sandbox_id)
+    assert phase is not None
+    assert phase["phase"] == "downloading"
+    assert (phase["done_mb"], phase["total_mb"]) == (412, 980)
+
+
+def test_a_download_the_guest_cannot_measure_yet_has_no_figures():
+    phase = sandbox_progress.phase_for("still downloading ghcr.io/x@sha256:1")
+    assert "done_mb" not in phase

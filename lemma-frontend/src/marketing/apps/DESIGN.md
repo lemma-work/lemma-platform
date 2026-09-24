@@ -13,3 +13,13 @@ For a researcher, turn selected interview evidence into a defensible finding and
 
 ## Shared quality floor
 Keyboard labels/focus, status announcements, specific validation messages, responsive stacking at 700px and no body overflow at 375px. Views contain source content rather than summaries of work supposedly done elsewhere. Test primary journeys in-browser and pure validation functions in Node. Existing SDK and product controls remain untouched; these apps use the preview's local fixture contract.
+
+## Revised architectures — independent products
+
+The common product chrome has been removed. Remy now opens in a dense correspondence inbox with a narrow account switcher, mail reader, and contact/commitment inspector. Its all-accounts view is a flat stage-filterable record table, never a card board. System sans, crisp white and cool gray, blue action links, compact spacing.
+
+June is an import workbench: compact customer tabs and job information, numbered horizontal process strip, edge-to-edge grid and a contrasting validation console below it. Monospace field values, explicit row errors, minimal rounded surfaces. The grid is the dominant canvas; no editorial headline or hero composition.
+
+Scout opens on a research manuscript: large serif title on a warm paper sheet, editable finding, numbered source footnotes, yellow margin annotations. Small document tabs switch to source inspection or experiment design. This is a document and its references, not a three-panel dashboard.
+
+The four default views must be distinguishable by silhouette, density and information architecture before reading their names. Recheck desktop, embedded width and 375px after implementation.

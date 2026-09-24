@@ -1,7 +1,9 @@
+import { LoadingRows } from "@/ui/loading";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Pod } from "@/data";
+import { ConversationTitle } from "./conversation-title";
 
 /** Every conversation this teammate has had. The panel beside the transcript
  *  shows the last few; this is where the rest live, so the panel never grows
@@ -40,7 +42,7 @@ export function AllConversations({
                     />
                 </div>
 
-                {history.isPending && <p className="empty-row">Reading history…</p>}
+                {history.isPending && <LoadingRows label="Loading history" rows={5} />}
                 {history.isError && <p className="empty-row">Couldn’t load conversation history.</p>}
                 {history.isSuccess && entries.length === 0 && (
                     <p className="empty-row">{filter ? "Nothing matches that." : "No conversations yet."}</p>
@@ -48,16 +50,18 @@ export function AllConversations({
 
                 <div className="all__list">
                     {entries.map((entry) => (
-                        <button
-                            key={entry.id}
-                            className="all__row"
-                            aria-current={entry.id === conversationId}
-                            onClick={() => onPick(entry.id)}
-                        >
-                            <span className="all__name">{entry.title}</span>
-                            {entry.kind !== "CHAT" && <span className="all__kind">{entry.kind.toLowerCase()}</span>}
-                            <span className="all__at">{entry.at}</span>
-                        </button>
+                        <div key={entry.id} className="history__entry all__entry">
+                            <button
+                                className="all__row"
+                                aria-current={entry.id === conversationId}
+                                onClick={() => onPick(entry.id)}
+                            >
+                                <span className="all__name">{entry.title}</span>
+                                {entry.kind !== "CHAT" && <span className="all__kind">{entry.kind.toLowerCase()}</span>}
+                                <span className="all__at">{entry.at}</span>
+                            </button>
+                            <ConversationTitle podId={pod.id} conversationId={entry.id} title={entry.title} />
+                        </div>
                     ))}
                 </div>
             </div>

@@ -1,0 +1,22 @@
+name: Announce development release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - name: Post release thread
+        env:
+          SLACK_RELEASE_BOT_TOKEN: ${{ secrets.SLACK_RELEASE_BOT_TOKEN }}
+          SLACK_RELEASE_BUTTON_ENABLED: ${{ vars.SLACK_RELEASE_BUTTON_ENABLED }}
+        run: python3 scripts/announce_dev_merge.py

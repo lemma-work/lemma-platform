@@ -432,3 +432,25 @@ jobs:
           python3 scripts/report_scenarios_to_slack.py scenario-results/**/*.xml \
             --lane nightly \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  public-website:
+    name: Public website
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: tests/scenarios/uv.lock
+      - run: npm ci
+        working-directory: lemma-typescript
+      - run: npm ci
+        working-directory: lemma-frontend
+      - run: uv sync
+        working-directory: tests/scenarios
+      - run: uv run pytest journeys/public_website -q
+        working-directory: tests/scenarios

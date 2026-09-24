@@ -1808,8 +1808,8 @@
  *  It is sized by its own text, so a short line is a short card. */
 .said {
     width: fit-content;
-    /* The reading measure, on the thing that is read. */
-    max-width: min(100%, 68ch);
+    /* The conversation column bounds long replies independently of text size. */
+    max-width: 100%;
     background: var(--paper);
     border: 1px solid var(--line);
     border-radius: var(--r-lg);
@@ -3002,11 +3002,13 @@
     flex: none;
     font-size: 12.5px;
     color: var(--accent);
+    background: transparent;
     text-decoration: none;
-    border: 1px solid transparent;
+    border: 1px solid var(--line-2);
     border-radius: var(--r-sm);
     padding: 3px 9px;
     margin-right: -5px;
+    cursor: pointer;
 }
 .filecard__open:hover {
     border-color: var(--accent-line);
@@ -4772,7 +4774,7 @@ button.filecard__open {
 /* The profile form. Two-up where the pairs belong together and the labels are
    short enough to read at half width; one column on a narrow screen. */
 .profile-form { display: flex; flex-direction: column; text-align: left; }
-.profile-form__pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.profile-form__pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; }
 @media (max-width: 520px) { .profile-form__pair { grid-template-columns: 1fr; } }
 .profile-form__problem { font-style: normal; font-size: 12px; color: var(--bad); }
 .profile-form__saved { font-size: 12.5px; color: var(--ok); }
@@ -4958,9 +4960,9 @@ button.filecard__open {
    `flex: 1` is what makes the panel's fixed height reach the layout inside it.
    Without it the body sizes to its content and the list on the left stops
    halfway down a 660px panel, which looks like a rendering fault. */
-.modal__body--flush { padding: 0; overflow: hidden; display: flex; flex: 1; min-height: 0; }
+.modal__body--flush { border-bottom-left-radius: inherit; border-bottom-right-radius: inherit; padding: 0; overflow: hidden; display: flex; flex: 1; min-height: 0; }
 
-.settings-layout { display: grid; grid-template-columns: 224px minmax(0, 1fr); flex: 1; min-height: 0; }
+.settings-layout { min-width: 0; display: grid; grid-template-columns: 224px minmax(0, 1fr); flex: 1; min-height: 0; }
 .settings-nav {
     border-right: 1px solid var(--line);
     padding: 12px 10px 16px;
@@ -5023,7 +5025,7 @@ button.filecard__open {
 .settings-org select:disabled { cursor: default; opacity: 1; }
 .settings-org select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 
-.settings-pane { overflow-y: auto; min-height: 0; }
+.settings-pane { overflow: auto; min-height: 0; min-width: 0; overscroll-behavior: contain; }
 /* One width for every section.
  *
  *  There were two — a narrow one for forms and a wide one for tables — which
@@ -5240,3 +5242,120 @@ button.filecard__open {
 .composer__box { align-items: flex-end; }
 textarea.composer__input { resize: none; line-height: 1.5; min-height: 36px; max-height: 200px; overflow-y: auto; overflow-wrap: anywhere; }
 a.reach { text-decoration: none; }
+
+/* Conversation sizing is independent of navigation and document typography. */
+:root { --chat-text-size: 15px }
+:root[data-chat-text-size="small"] { --chat-text-size: 14px }
+:root[data-chat-text-size="large"] { --chat-text-size: 17px }
+.msg__body, .msg__body .md, .composer__input { font-size: var(--chat-text-size) }
+.msg__body .md h1 { font-size: 1.4em }
+.msg__body .md h2 { font-size: 1.2em }
+.msg__body .md h3, .msg__body .md h4 { font-size: 1.05em }
+.theme__mode[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line) }
+.appearance__hint { margin: 0; font-size: 12px; color: var(--ink-3) }
+.appearance__chat-preview { border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; background: var(--paper) }
+.appearance__chat-preview > span { font-size: 12px; color: var(--accent) }
+.appearance__chat-preview > p { font-size: var(--chat-text-size); line-height: 1.68; margin: 8px 0 0 }
+@media (pointer: coarse) {
+    /* Keep mobile browsers from zooming the viewport when the composer receives focus. */
+    .composer__input { font-size: max(16px, var(--chat-text-size)) }
+}
+
+.appearance__group .theme__mode[aria-pressed] { min-height: 44px }
+
+.copy-section { position: relative; }
+.copy-control { display: inline-flex; }
+.message-text { width: fit-content; max-width: 100%; min-width: 0; }
+.message-text, .msg--you { position: relative; }
+.message-actions { position: absolute; right: 6px; bottom: -12px; z-index: 1; display: flex; opacity: 0; pointer-events: none; }
+.message-text:hover > .message-actions,
+.message-text:focus-within > .message-actions,
+.msg--you:hover > .message-actions,
+.msg--you:focus-within > .message-actions { opacity: 1; pointer-events: auto; }
+.message-actions .copy-control__button { width: 28px; height: 28px; background: var(--paper); color: var(--ink-3); }
+.message-actions .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
+.copy-control__button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: var(--paper); color: var(--ink-2); cursor: pointer; }
+.copy-control__button:hover { background: var(--chrome); color: var(--ink); }
+.copy-section { margin: 12px 0; padding-top: 32px; border: 1px solid var(--line-2); border-radius: 10px; }
+.copy-section > .copy-control { position: absolute; top: 0; right: 0; }
+.copy-section pre { margin: 0; }
+.copy-section:has(table) { overflow-x: auto; }
+
+
+.apps-pane { padding: 28px clamp(20px, 3vw, 40px); }
+.apps-pane__content { max-width: 1240px; margin: 0 auto; }
+.apps-pane__header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.apps-pane h1 { margin: 0; font-size: 24px; font-weight: 500; }
+.apps-pane p { color: var(--ink-2); line-height: 1.55; }
+.apps-pane__header p { margin: 6px 0 0; font-size: 14px; }
+.apps-pane__header > .btn { gap: 8px; flex-shrink: 0; min-height: 44px; }
+.apps-pane__existing { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 24px 0 32px; }
+.apps-pane__app { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 14px; text-align: left; border: 1px solid var(--line-2); border-radius: 10px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.apps-pane__app > span:nth-child(2) { flex: 1; overflow-wrap: anywhere; }
+.apps-pane__app:hover { border-color: var(--ink-3); }
+.apps-pane__icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: var(--canvas); color: var(--ink-2); }
+.app-catalog { margin-top: 28px; container-type: inline-size; }
+.app-catalog__header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.app-catalog h2 { margin: 0; font-size: 18px; font-weight: 500; }
+.app-catalog__header > span { color: var(--ink-3); font-size: 12px; }
+.app-catalog__categories { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0 20px; }
+.app-catalog__categories button { min-height: 44px; padding: 8px 16px; border: 1px solid transparent; border-radius: 8px; color: var(--ink-2); background: transparent; font-size: 14px; cursor: pointer; }
+.app-catalog__categories button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.app-catalog__categories button:not([aria-pressed="true"]):hover { background: var(--chrome); }
+.app-catalog__grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.app-idea { min-width: 0; overflow: hidden; border: 1px solid var(--line-2); border-radius: 12px; background: var(--paper); display: flex; flex-direction: column; }
+.app-idea__preview { position: relative; overflow: hidden; aspect-ratio: 3 / 2; background: var(--canvas); border-bottom: 1px solid var(--line-2); }
+.app-idea__preview img { position: absolute; width: 200%; max-width: none; height: 200%; }
+.app-idea__body { padding: 16px; display: flex; flex-direction: column; flex: 1; }
+.app-idea h3 { margin: 0; font-size: 16px; font-weight: 500; }
+.app-idea p { margin: 8px 0 16px; font-size: 13px; flex: 1; }
+.app-idea__body > button { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; width: 100%; border: 0; border-top: 1px solid var(--line-2); padding: 12px 0 0; background: transparent; color: var(--ink); font-size: 12px; text-align: left; cursor: pointer; }
+.app-idea__body > button span { overflow-wrap: anywhere; }
+.app-idea__body > button svg { flex-shrink: 0; }
+.app-idea__body > button:hover { color: var(--accent); }
+@container (max-width: 950px) { .app-catalog__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 440px) { .app-catalog__grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+    .apps-pane__header { align-items: flex-start; flex-direction: column; gap: 14px; }
+    .app-catalog__header { align-items: flex-start; flex-direction: column; gap: 6px; }
+    .app-catalog__categories { gap: 4px; }
+    .app-catalog__categories button { padding-inline: 12px; }
+}
+
+.surface-setup,
+.surface-setup__fieldset,
+.surface-setup__section,
+.surface-setup__field {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+}
+.surface-setup__fieldset {
+    border: 0;
+    padding: 0;
+    margin: 0;
+}
+.surface-setup__section {
+    padding-block: 12px;
+    border-top: 1px solid var(--line);
+}
+.surface-setup h3,
+.surface-setup h4,
+.surface-setup p { margin: 0; }
+.surface-setup code { overflow-wrap: anywhere; white-space: pre-wrap; }
+.surface-setup select { min-width: 0; max-width: 100%; }
+.surface-setup__actions,
+.surface-setup__route { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.surface-setup__route select { flex: 1; }
+.surface-setup__route small { flex-basis: 100%; }
+.surface-setup button,
+.surface-setup summary { min-height: 44px; }
+.surface-setup__route.record-form__field { flex-direction: row; }
+.surface-setup__route.record-form__field select { width: auto; min-height: 44px; }
+.surface-setup .connect-check { min-height: 44px; }
+
+/* Keep settings content and focus backgrounds inside the rounded panel. */
+.modal__panel--wide { overflow: hidden; min-width: 0; }
+.modal__panel--wide > .modal__head { flex-shrink: 0; }
+.settings-who { min-width: 0; max-width: 100%; }
+.settings-who > div { min-width: 0; overflow-wrap: anywhere; }

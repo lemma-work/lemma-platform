@@ -84,6 +84,10 @@ button {
 }
 
 .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
     font-size: 12.5px;
     border-radius: 9px;
     padding: 8px 14px;
@@ -93,6 +97,9 @@ button {
     color: var(--ink);
     box-shadow: var(--depth-rest), var(--edge-lit);
     transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+.btn > svg {
+    flex-shrink: 0;
 }
 .btn:hover {
     border-color: var(--ink-3);
@@ -173,4 +180,13 @@ td.num {
     color: var(--ink);
     text-align: right;
     padding-right: 0;
+}
+
+.page-loading {
+    display: grid;
+    place-items: center;
+    min-height: 100dvh;
+    height: 100%;
+    color: var(--ink-3);
+    font-size: 14px;
 }

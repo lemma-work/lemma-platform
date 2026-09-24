@@ -1,5 +1,7 @@
 "use client";
 
+import { PageLoading } from "@/ui/loading";
+
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -9,7 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // and the loading shell.
 const App = dynamic(() => import("@/shell/app").then(m => m.App), {
     ssr: false,
-    loading: () => <div className="screen"><div className="screen__inner"><p role="status">Opening…</p></div></div>,
+    loading: () => <PageLoading label="Opening Lemma" />,
 });
 
 export function Workspace() {

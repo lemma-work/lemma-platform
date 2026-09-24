@@ -1,8 +1,10 @@
+import { LoadingRows } from "@/ui/loading";
+import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Invitation, Org } from "@/data";
-import { ArrowRightIcon, CheckIcon, GlobeIcon, LockIcon, OrgIcon, UserIcon } from "@/ui/icons";
+import { ArrowRightIcon, GlobeIcon, LockIcon, OrgIcon, UserIcon } from "@/ui/icons";
 import { LemmaLogo } from "@/ui/icons";
 import { AI_MATES, ORG } from "@/copy";
 import { canOpenToDomain, domainOf, personalNameFor, teamNameFor } from "./arrival";
@@ -85,7 +87,7 @@ export function ArrivalView({
             <header className="arrival-page__bar"><LemmaLogo /></header>
             <div className="arrival">
                 {waiting ? (
-                    <p role="status">Looking for your {ORG}…</p>
+                    <LoadingRows label="Loading organizations" />
                 ) : (
                     <>
                         {/* The heading is the question the two cards answer.
@@ -331,9 +333,6 @@ function MakeOne({
  *  back and the shell taking over. */
 export function ArrivalDone() {
     return (
-        <div className="screen"><div className="screen__inner arrival">
-            <p className="arrival__mark"><CheckIcon size={26} /></p>
-            <p role="status">Opening your workspace…</p>
-        </div></div>
+        <WorkspaceLoading />
     );
 }

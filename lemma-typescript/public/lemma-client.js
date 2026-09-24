@@ -9524,11 +9524,13 @@ var LemmaClient = (() => {
       __publicField(this, "state", { status: "loading", user: null });
       __publicField(this, "listeners", /* @__PURE__ */ new Set());
       __publicField(this, "authCheckPromise", null);
+      __publicField(this, "authRevision", 0);
+      __publicField(this, "onUnauthorised", () => this.markUnauthenticated());
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
       this.injectedToken = (token == null ? void 0 : token.trim()) || detectInjectedToken();
       if (!this.injectedToken) {
-        ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+        ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       }
     }
     /** Whether requests will use an injected Bearer token (testing mode). */
@@ -9663,7 +9665,7 @@ var LemmaClient = (() => {
         });
         return response.status !== 401;
       } catch {
-        return false;
+        return true;
       }
     }
     /**
@@ -9675,7 +9677,7 @@ var LemmaClient = (() => {
         return this.injectedToken;
       }
       this.assertBrowserContext();
-      ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+      ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       const token = await import_session2.default.getAccessToken();
       if (!token) {
         throw new Error("Token unavailable");
@@ -9690,7 +9692,7 @@ var LemmaClient = (() => {
         return this.injectedToken;
       }
       this.assertBrowserContext();
-      ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+      ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       const refreshed = await import_session2.default.attemptRefreshingSession();
       if (!refreshed) {
         throw new Error("Session refresh failed");
@@ -9732,40 +9734,44 @@ var LemmaClient = (() => {
       if (this.authCheckPromise) {
         return this.authCheckPromise;
       }
-      this.authCheckPromise = this.performAuthCheck().finally(() => {
-        this.authCheckPromise = null;
+      const checking = this.performAuthCheck(this.authRevision).finally(() => {
+        if (this.authCheckPromise === checking) this.authCheckPromise = null;
       });
-      return this.authCheckPromise;
+      this.authCheckPromise = checking;
+      return checking;
     }
-    async performAuthCheck() {
+    async performAuthCheck(revision) {
+      const unauthenticated = () => revision === this.authRevision ? this.applyUnauthenticatedState() : this.state;
       this.setState({ status: "loading", user: null });
       if (!this.injectedToken && typeof window !== "undefined") {
-        ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+        ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
         try {
           if (!await import_session2.default.doesSessionExist()) {
-            return this.applyUnauthenticatedState();
+            return unauthenticated();
           }
         } catch {
-          return this.applyUnauthenticatedState();
+          return unauthenticated();
         }
       }
+      if (revision !== this.authRevision) return this.state;
       try {
         const response = await fetch(
           `${this.apiUrl}/users/me`,
           this.getRequestInit({ method: "GET" })
         );
         if (response.status === 401) {
-          return this.applyUnauthenticatedState();
+          return unauthenticated();
         }
         if (!response.ok) {
-          return this.applyUnauthenticatedState();
+          return unauthenticated();
         }
         const user = await response.json();
+        if (revision !== this.authRevision) return this.state;
         const next = { status: "authenticated", user };
         this.setState(next);
         return next;
       } catch {
-        return this.applyUnauthenticatedState();
+        return unauthenticated();
       }
     }
     /**
@@ -9773,6 +9779,8 @@ var LemmaClient = (() => {
      * Does NOT redirect — call redirectToAuth() explicitly if desired.
      */
     markUnauthenticated() {
+      this.authRevision += 1;
+      this.authCheckPromise = null;
       this.applyUnauthenticatedState();
     }
     /**
@@ -9780,13 +9788,15 @@ var LemmaClient = (() => {
      * Returns true when the session is no longer active.
      */
     async signOut() {
+      this.authRevision += 1;
+      this.authCheckPromise = null;
       if (this.injectedToken) {
         this.clearInjectedToken();
         this.markUnauthenticated();
         return true;
       }
       this.assertBrowserContext();
-      ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
+      ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       try {
         await import_session2.default.signOut();
       } catch {
@@ -17434,6 +17444,8 @@ var LemmaClient = (() => {
      * `ready` it is running; `downloading` it is fetching its image, which the
      * first start after an update does; `starting` it is coming up; `asleep` it
      * is not running and starts on first use; `unavailable` it could not be asked.
+     * While `downloading`, `done_mb` and `total_mb` say how far it has got, once
+     * that can be measured.
      */
     status() {
       return this.http.request("GET", "/workspace/status");

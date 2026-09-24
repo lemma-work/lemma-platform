@@ -34,13 +34,14 @@ function persona(id: string) {
 }
 function guidance(id: string) {
     const person = teammateFor(id);
-    return `---\nname: working-guidance\ndescription: How ${person.name} works with the team.\n---\n\n# ${person.name} · Working guidance\n\n${person.job}\n\n## What the team taught me\n\n${person.learned}\n`;
+    return `---\nname: brand-voice\ndescription: How ${person.name} works with the team.\n---\n\n# ${person.name} · Working guidance\n\n${person.job}\n\n## What the team taught me\n\n${person.learned}\n`;
 }
 
 /** Isolated fictional work; production and general QA fixtures stay separate. */
 export const previewSource: PodSource = {
     ...fixtureSource,
     async listOrgs() { return [{ id: "acme", name: "Acme" }]; },
+    async getPod(podId) { return (await previewSource.listPods("acme")).find(pod => pod.id === podId) ?? null; },
     async listPods(orgId) {
         return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: person.icon, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
     },

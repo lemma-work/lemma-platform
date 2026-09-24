@@ -13,6 +13,11 @@ an agent real work, walk away, and be confident it cannot do anything they did
 not permit — and that anything genuinely consequential comes back to them before
 it happens.
 
+People shall be able to copy their messages and teammate replies, including
+separately copying code blocks, tables, quotes and expandable sections. Copy
+controls shall be reachable by keyboard and on touch screens, and shall report
+whether copying succeeded.
+
 ---
 
 ## Capability: Define an agent

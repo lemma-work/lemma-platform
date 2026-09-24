@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isPreviewPath, readTourStep } from "../src/marketing/preview-mode.ts";
+import { isPreviewPath, readTourStep, previewTabForStep } from "../src/marketing/preview-mode.ts";
 import { addPreviewMember, previewSource } from "../src/marketing/preview-source.ts";
 
 test("sample routing is restricted to the two dedicated preview documents", () => {
@@ -33,6 +33,7 @@ test("the Acme app and learned guidance resolve to actual preview resources", as
     for (const skill of skills.items) {
         const file = await previewSource.readFile("kit", skill.path + "/SKILL.md");
         assert.match(file.text ?? "", /description:/);
+        assert.match(file.text ?? "", /name: brand-voice/);
     }
 });
 
@@ -60,4 +61,22 @@ test("each sample teammate owns their conversation, app, profile and learned con
     assert.equal(urls.size, 4);
     assert.equal(conversations.size, 4);
     assert.deepEqual(await previewSource.listPods("another-org"), []);
+});
+
+test("the preview opens on conversation and only the app tour step opens Launch studio", () => {
+    assert.equal(previewTabForStep(-1), "conversation");
+    assert.equal(previewTabForStep(0), "conversation");
+    assert.equal(previewTabForStep(1), "conversation");
+    assert.equal(previewTabForStep(2), "profile");
+    assert.equal(previewTabForStep(3), "app:launch");
+    assert.equal(previewTabForStep(4), "conversation");
+});
+
+// The lazy source proxy calls methods without an object receiver.
+test("anonymous preview lookup works through a detached source method", async () => {
+    const getPod = previewSource.getPod;
+    for (const pod of await previewSource.listPods("acme")) {
+        assert.deepEqual(await getPod(pod.id), pod);
+    }
+    assert.equal(await getPod("unknown"), null);
 });

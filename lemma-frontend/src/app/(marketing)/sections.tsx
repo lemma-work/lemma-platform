@@ -127,49 +127,39 @@ function Ask({ who, mark, at, where, logo, says, side, row }: Ask) {
 
 type Panel = {
     key: string; title: string; shortTitle: string; blurb: string;
-    character: CharacterName; open: React.ReactNode;
+    open: React.ReactNode;
 };
 
 const PANELS: Panel[] = [
     {
-        key: "chat", title: "Slack and Teams", shortTitle: "Team chat", blurb: "Talk to your teammate in your team’s channels.",
-        character: "gem",
+        key: "chat", title: "Slack and Teams", shortTitle: "Team chat", blurb: "Bring the work into your team’s conversation.",
         open: <ChatOpen />,
     },
     {
-        key: "phone", title: "Telegram and WhatsApp", shortTitle: "Messaging", blurb: "Message your teammate from your phone.",
-        character: "gem",
+        key: "phone", title: "Telegram and WhatsApp", shortTitle: "Messaging", blurb: "Pick up the same work when you’re away.",
         open: <PhoneOpen />,
     },
     {
-        key: "apps", title: "Apps", shortTitle: "Apps", blurb: "Use the apps your teammate builds for the job.",
-        character: "gem",
+        key: "apps", title: "Apps", shortTitle: "Apps", blurb: "Open the work. Make edits. Review what’s ready.",
         open: <AppsOpen />,
     },
     {
-        key: "clock", title: "Scheduled work", shortTitle: "Scheduled", blurb: "Give it recurring work and choose when it runs.",
-        character: "gem",
+        key: "clock", title: "Scheduled work", shortTitle: "Scheduled", blurb: "Set the rhythm. Get the next update without asking.",
         open: <ClockOpen />,
     },
 ];
 
 export function Examples() {
-    /* A list down the side rather than a row across the top.
-     *
-     *  Four cards above one panel left the chosen card sitting somewhere along
-     *  a row while the panel it belonged to spanned the whole width, so the two
-     *  never looked joined. Beside each other they do: the list is narrow, the
-     *  surface is large, and the tone runs through both. */
     const [at, setAt] = useState(0);
     const shown = PANELS[at];
     return (
         <section className={s.section} id="examples">
             <p className={s.sectionEyebrow}>WORK WITH YOUR TEAMMATE</p>
             <h2 className={s.sectionHeading}>Works where you work.</h2>
-            <p className={s.sectionNote}>Example conversations and apps.</p>
+            <p className={s.sectionNote}>Your AI teammates, in the tools you already use.</p>
 
             <div className={s.showcase}>
-                <div className={s.switcher} role="tablist" aria-orientation="vertical" aria-label="Ways to work with your teammate">
+                <div className={s.switcher} role="tablist" aria-orientation="horizontal" aria-label="Ways to work with your teammate">
                     {PANELS.map((panel, index) => (
                         <button
                             key={panel.key}
@@ -192,7 +182,7 @@ export function Examples() {
                             }}
                         >
                             <span className={s.pickFace}>
-                                <Character character={panel.character} size={34} />
+                                <span aria-hidden="true">0{index + 1}</span>
                             </span>
                             <span className={s.pickText}>
                                 <b className={s.pickFull}>{panel.title}</b><b className={s.pickShort}>{panel.shortTitle}</b>
@@ -206,7 +196,7 @@ export function Examples() {
                     id="ran-panel"
                     role="tabpanel"
                     aria-labelledby={`ran-tab-${at}`}
-                    className={`${s.wide} ${s.magenta}`}
+                    className={s.wide}
                 >
                     <div key={shown.key} className={s.exampleContent}>{shown.open}</div>
                 </div>
@@ -215,141 +205,92 @@ export function Examples() {
     );
 }
 
-/* ── The four surfaces, opened ──────────────────────────────────────────
-   Every one of them is two paper sheets on the teammate's colour, with the
-   same parts in the same order: a mono label, a title, the thing itself, and
-   a mono line at the bottom saying what it means.
-
-   The first pass had one column on paper and the other on a translucent wash,
-   which put two materials side by side and matched nothing else on the page.
-   Paper on colour is the rule the hero and the band already follow. */
-
-const SLACK_CHANNELS = ["# customer-team", "# incidents", "# launch", "# random"];
-
-function ChatOpen() {
-    return (
-        <div className={s.two}>
-            <div className={s.sheet}>
-                <span className={s.sheetLabel}>
-                    <img src="/connector-logos/slack.svg" alt="" width={13} height={13} />
-                    ACME · SLACK
-                </span>
-                <div className={s.chatBody}>
-                    <div className={s.chatNav}>
-                        {SLACK_CHANNELS.map((one, at) => (
-                            <span key={one} className={at === 0 ? s.chanOn : undefined}>{one}</span>
-                        ))}
-                    </div>
-                    <div className={s.thread3}>
-                        <span className={s.said}><i>PR</i><span><b>Priya</b>Any refunds waiting on me?</span></span>
-                        <span className={s.said}>
-                            <i className={s.saidBot}><Character character="gem" size={18} /></i>
-                            <span><b>Support<em>APP</em></b>Northfield’s $420 refund. I’ve checked the policy and drafted a reply.</span>
-                        </span>
-                        <span className={s.said}><i>PR</i><span><b>Priya</b>Show me the draft.</span></span>
-                    </div>
-                </div>
-                <span className={s.sheetFoot}>ASK FOR WORK, REVIEW IT, AND FOLLOW UP IN SLACK</span>
-            </div>
-
-            <div className={s.sheet}>
-                <span className={s.sheetLabel}>
-                    <img src="/connector-logos/teams.svg" alt="" width={13} height={13} />
-                    CUSTOMER OPS · TEAMS
-                </span>
-                <div className={s.thread3}>
-                    <span className={s.said}><i>DV</i><span><b>Dev</b>Where are we on the Northfield refund?</span></span>
-                    <span className={s.said}>
-                        <i className={s.saidBot}><Character character="gem" size={18} /></i>
-                        <span><b>Support<em>APP</em></b>The reply is drafted. Priya is reviewing it; the refund hasn’t been issued.</span>
-                    </span>
-                </div>
-                <span className={s.sheetFoot}>THE SAME TEAMMATE IN SLACK AND TEAMS</span>
-            </div>
+function WorkExample({ eyebrow, title, description, channels, children }: {
+    eyebrow: string; title: string; description: string;
+    channels?: { name: string; logo: string }[];
+    children: React.ReactNode;
+}) {
+    return <div className={s.workExample}>
+        <div className={s.workStory}>
+            <span className={s.channelLabel}>{eyebrow}</span>
+            <h3>{title}</h3>
+            <p>{description}</p>
+            {channels && <div className={s.messagingBrands}>{channels.map(channel => <span key={channel.name}><img src={channel.logo} alt="" width={22} height={22} />{channel.name}</span>)}</div>}
         </div>
-    );
-}
-
-function PhoneOpen() {
-    return (
-        <div className={s.two}>
-            <div className={s.sheet}>
-                <span className={s.sheetLabel}>
-                    <img src="/connector-logos/telegram.svg" alt="" width={13} height={13} />
-                    SUPPORT · TELEGRAM
-                </span>
-                <div className={s.chat}>
-                    <span className={s.toThem}>Pull the deploy log from this morning.</span>
-                    <span className={s.fromThem}>Here it is — 2.4 MB, nothing failed.</span>
-                    <span className={s.fileChip}>deploy-2026-09-12.log</span>
-                    <span className={s.fromThem}>Want me to watch tonight&rsquo;s too?</span>
-                </div>
-                <span className={s.sheetFoot}>CONNECT THE CHANNEL AND VERIFY YOUR ACCOUNT</span>
-            </div>
-
-            <div className={s.sheet}>
-                <span className={s.sheetLabel}>
-                    <img src="/connector-logos/whatsapp.svg" alt="" width={13} height={13} />
-                    SUPPORT · WHATSAPP
-                </span>
-                <div className={s.chat}>
-                    <span className={s.toThem}>Northfield emailed me too — has the refund gone out?</span>
-                    <span className={s.fromThem}>Not yet. It needs Priya&rsquo;s yes, and she has it in front of her.</span>
-                    <span className={s.toThem}>Nudge her at 4 if nothing.</span>
-                    <span className={s.fromThem}>Done. I&rsquo;ll only ask once.</span>
-                </div>
-                <span className={s.sheetFoot}>THE SAME REFUND · FROM A PHONE</span>
-            </div>
-        </div>
-    );
-}
-
-function AppsOpen() {
-    return <div className={s.realAppExample}>
-        <iframe src="/demo/launch" title="Explore Kit’s launch studio" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms" />
-        <span>ACME SAMPLE · REVIEW AN ASSET, ADD A NOTE, OR PREPARE THE NEXT STEP</span>
+        <div className={s.workVisual}>{children}</div>
     </div>;
 }
 
-const RUNS = [
-    { when: "Today 07:00", took: "1m 12s", got: "3 things worth reading", ask: false },
-    { when: "Yesterday 07:00", took: "48s", got: "Nothing moved", ask: false },
-    { when: "Tue 07:00", took: "2m 04s", got: "Asked you about pricing", ask: true },
-    { when: "Mon 07:00", took: "1m 31s", got: "2 things worth reading", ask: false },
-];
+function ChatOpen() {
+    return <WorkExample eyebrow="IN YOUR TEAM’S CHANNELS" title="Part of the conversation. Part of the team."
+        description="Every AI teammate on Lemma can work with your team in Slack and Microsoft Teams. Ask for work, review what’s ready, and follow up in the channels you already use."
+        channels={[{ name: "Slack", logo: "/connector-logos/slack.svg" }, { name: "Microsoft Teams", logo: "/connector-logos/teams.svg" }]}>
+            <div className={s.channelWindow}>
+                <div className={s.channelHeader}>
+                    <img src="/connector-logos/slack.svg" alt="Slack" width={22} height={22} />
+                    <b>Acme</b><span># launch</span>
+                </div>
+                <div className={s.channelThread}>
+                    <span className={s.channelLabel}>EXAMPLE CONVERSATION</span>
+                    <span className={s.said}><i>PR</i><span><b>Priya <em>9:41 AM</em></b>Kit, what needs my attention before Thursday’s launch?</span></span>
+                    <span className={s.said}>
+                        <i className={s.saidBot}><Character character="loop" size={28} /></i>
+                        <span><b>Kit <em>TEAMMATE</em></b>The landing page and announcement are ready for review. The demo needs three updated shots, and Harbor’s story still needs logo permission.</span>
+                    </span>
+                    <div className={s.workAttachment}>
+                        <span className={s.channelLabel}>READY FOR REVIEW</span>
+                        <b>Thursday launch review</b>
+                        <span>2 assets to review · 2 blockers</span>
+                        <span className={s.attachmentLink}>Landing page · Announcement</span>
+                    </div>
+                    <div className={s.channelComposer}>Message #launch<span>↵</span></div>
+                </div>
+            </div>
+    </WorkExample>;
+}
+
+function PhoneOpen() {
+    return <WorkExample eyebrow="ON YOUR PHONE" title="Your teammates. A message away."
+        description="Every AI teammate on Lemma is accessible through WhatsApp and Telegram. Send a request, get an update, or keep work moving when you’re away from your desk."
+        channels={[{ name: "WhatsApp", logo: "/connector-logos/whatsapp.svg" }, { name: "Telegram", logo: "/connector-logos/telegram.svg" }]}>
+            <div className={s.phoneFrame} aria-label="Example WhatsApp conversation with Kit">
+                <div className={s.phoneStatus}><span>9:41</span><span className={s.phoneIsland} /><span>▰</span></div>
+                <div className={s.phoneHeader}><span aria-hidden="true">‹</span><Character character="loop" size={34} /><div><b>Kit</b><span>Launch producer</span></div><img src="/connector-logos/whatsapp.svg" alt="WhatsApp" width={22} height={22} /></div>
+                <div className={s.phoneMessages}>
+                    <span className={s.phoneDay}>THURSDAY · EXAMPLE</span>
+                    <div className={s.phoneOutgoing}>On my way in. What’s still blocking the launch?<time>9:41</time></div>
+                    <div className={s.phoneIncoming}>Three demo shots need updating. Harbor’s logo permission is still missing.<time>9:41</time></div>
+                    <div className={s.phoneOutgoing}>And the announcement?<time>9:42</time></div>
+                    <div className={s.phoneIncoming}>Revision 3 is ready in Launch studio. You can review it alongside the landing page. Nothing has been published.<time>9:42</time></div>
+                </div>
+                <div className={s.phoneComposer}><span>Message Kit</span><span aria-hidden="true">↑</span></div>
+                <div className={s.phoneHome} />
+            </div>
+    </WorkExample>;
+}
+
+function AppsOpen() {
+    return <WorkExample eyebrow="APPS BUILT FOR THE JOB" title="Go from talking about work to working on it."
+        description="Your AI teammates build apps around the work you give them. Open a draft, update a record, or review a decision in a shared workspace your whole team can use.">
+        <div className={s.workApp}>
+            <div className={s.workAppHeader}><span>Launch studio · Interactive example</span><a href="/demo/launch" target="_blank" rel="noopener noreferrer">Open ↗</a></div>
+            <iframe src="/demo/launch" title="Explore Kit’s launch studio" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms" />
+        </div>
+    </WorkExample>;
+}
 
 function ClockOpen() {
-    return (
-        <div className={s.two}>
-            <div className={s.sheet}>
-                <span className={s.sheetLabel}>DAILY-PULSE · EVERY WEEKDAY 07:00</span>
-                <span className={s.sheetTitle}>A scheduled competitor check</span>
-                <div className={s.rows}>
-                    {RUNS.map(run => (
-                        <span key={run.when} className={s.row}>
-                            <b>{run.when}</b>
-                            <b className={s.rowThin}>{run.took}</b>
-                            <b className={run.ask ? s.rowWait : undefined}>{run.got}</b>
-                        </span>
-                    ))}
-                </div>
-                <span className={s.sheetFoot}>SCHEDULED TO CHECK EVERY WEEKDAY</span>
+    return <WorkExample eyebrow="ON A SCHEDULE" title="The work keeps moving. Even before you ask."
+        description="Give your AI teammates recurring work and choose when it runs. They check progress, prepare updates, and bring back what needs your attention.">
+            <div className={s.scheduleReport}>
+                <div className={s.scheduleAuthor}><Character character="loop" size={38} /><div><b>Kit</b><span>Thursday launch check-in · 9:00 AM</span></div></div>
+                <h3>Two reviews.<br />Two things to unblock.</h3>
+                <div className={s.reportItem}><span>01</span><div><b>Ready for Priya</b><p>Landing page and announcement, both at revision 3. Open Launch studio to review the changes.</p></div></div>
+                <div className={s.reportItem}><span>02</span><div><b>Demo needs an update</b><p>Three shots still show the old onboarding. The affected frames and revised script are marked.</p></div></div>
+                <div className={s.reportItem}><span>03</span><div><b>Permission still missing</b><p>Harbor’s story is drafted. Logo permission is the remaining dependency.</p></div></div>
+                <span className={s.scheduleFooter}>EXAMPLE UPDATE · NOTHING PUBLISHED</span>
             </div>
-
-            <div className={s.sheet}>
-                <span className={s.sheetLabel}>POSTED AT 07:01</span>
-                <span className={s.sheetTitle}>What it left you this morning</span>
-                <p className={s.sheetText}>
-                    Northfield repriced to $49 overnight — that is under us for the first time.
-                    Kite shipped a launch page. Morrow did nothing.
-                </p>
-                <span className={s.pulseAsk}>
-                    Review whether this changes our comparison page. The previous price and source are attached.
-                </span>
-                <span className={s.sheetFoot}>BEFORE ANYBODY ASKED</span>
-            </div>
-        </div>
-    );
+    </WorkExample>;
 }
 
 type Layer = { key: string; name: string; says: string; open: React.ReactNode };

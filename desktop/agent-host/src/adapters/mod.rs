@@ -101,6 +101,15 @@ pub struct AdapterSpec {
     /// on this machine and then run a different one.
     #[serde(default)]
     pub upstream_path_env: Option<String>,
+    /// Variables set for every run of this adapter, on top of the person's own.
+    ///
+    /// Codex reads `CODEX_CONFIG` as overrides merged into each session's
+    /// config, which is how a Lemma run turns off Codex's own browser and
+    /// computer-use plugins without touching the person's `~/.codex`: in Lemma,
+    /// the browser the person watches is the sandbox's, and a request to open a
+    /// page otherwise went to their own Chrome.
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
     /// Whether to install this adapter without its optional dependencies.
     ///
     /// True for both certified adapters, whose optional dependencies are

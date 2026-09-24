@@ -18,3 +18,44 @@
 For visual changes, inspect 1440, 1024, 768 and 375px widths, light/dark themes,
 and reduced motion. Run the checks listed in [README.md](README.md); authenticated
 flows also need a live session. Design checks: `npm run check:design`.
+
+The embedded hero opens on Conversation without a separate demo header, footer,
+or passive waiting summary below the composer. Keep the space for the workspace;
+full-screen access lives beside the tour steps.
+
+The four work examples follow Kit's Thursday launch: channel request, mobile
+follow-up, Launch studio review, and a scheduled readiness check. Messaging uses
+one phone-framed conversation; the surrounding copy names both supported channels.
+
+All four work tabs share one sage stage, explanation column, framed preview, and
+fixed stage height per breakpoint. Marketing copy describes all Lemma teammates;
+named teammates appear only within examples.
+
+Appearance includes Chat text size: Small (14px), Default (15px), and Large
+(17px), with a live preview and a browser-local preference restored before paint.
+Only message prose, its headings, and the composer follow this setting; navigation
+and document tabs retain their type scale. On touch devices, the composer keeps a
+16px minimum to avoid focus zoom.
+
+Reply bubbles can use the full conversation column independently of chat text
+size, so smaller text fits more on each line. Short messages still size naturally
+to their content.
+
+On mobile, conversation edges use a 10px gutter and replies place attribution
+above the full-width body. Bubble padding is 12px horizontally; the composer
+uses the same outer gutter without a second inset, retaining 44px controls and
+the device's bottom safe area.
+
+Conversation titles live in the history sidebar, with an inline Rename action.
+Enter or blur saves, Escape cancels, and a failed save restores the prior title.
+The transcript has no separate title row.
+
+Every teammate has an Apps tab, including before the first app is built. Existing
+apps stay reachable above an idea catalog. Personal, Marketing, Product, Sales and
+Engineering each show four distinct illustrated app ideas, in a responsive card
+grid. Example previews are labeled. Build actions use the current teammate name
+and prepare an editable composer draft without sending it.
+
+Messages expose Copy on hover or keyboard focus (always on touch screens). Code
+blocks, quotes and tables have separate copy controls with success or failure feedback.
+Email links use the configured mail handler in the current browsing context.

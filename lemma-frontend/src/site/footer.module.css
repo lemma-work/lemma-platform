@@ -1,0 +1,101 @@
+.footer {
+    --ink: #20211f;
+    --brand: #4a35c9;
+    background: #f4f3ed;
+    color: #20211f;
+    border-top: 1px solid #20211f22;
+    padding: 0 5vw;
+}
+.footer a {
+    color: inherit;
+    text-decoration: none;
+}
+.footer a:hover {
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+.footer a:focus-visible {
+    outline: 2px solid #4a35c9;
+    outline-offset: 5px;
+}
+.directory {
+    max-width: 1320px;
+    margin: auto;
+    padding: 46px 0;
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr 1fr;
+    gap: 36px;
+}
+.brand svg {
+    width: 100px;
+    height: 30px;
+}
+.footer .brand p {
+    font-size: 14px;
+    line-height: 1.65;
+    color: #4c4d48;
+    margin: 14px 0 12px;
+    max-width: 23ch;
+}
+.oss {
+    display: inline-block;
+    font-size: 12px;
+    color: #4a35c9 !important;
+    padding: 4px 0;
+}
+.directory nav {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    font-size: 13px;
+}
+.footer .directory h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+    color: #65665e;
+    margin: 0 0 8px;
+}
+.bottom {
+    max-width: 1320px;
+    margin: auto;
+    border-top: 1px solid #20211f22;
+    padding: 24px 0;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 18px;
+    font-size: 11px;
+    color: #65665e;
+}
+.bottom small {
+    font-size: inherit;
+}
+.bottom nav {
+    display: flex;
+    gap: 20px;
+}
+@media (max-width: 760px) {
+    .directory {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 36px 24px;
+        padding: 32px 0;
+    }
+    .brand {
+        grid-column: 1 / -1;
+    }
+    .footer .brand p {
+        display: none;
+    }
+    .oss {
+        margin-top: 16px;
+    }
+    .bottom {
+        flex-direction: column;
+    }
+}
+
+.brand :global(.lemma-wordmark) { color: #20211f; font-size: 25px; }
+.brand :global(.lemma-brand-mark i) { background: #4a35c9; }

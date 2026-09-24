@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingRows } from "@/ui/loading";
+
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Prose } from "@/thread/markdown";
@@ -10,6 +12,9 @@ import {
 import { live } from "@/usage/queries";
 import { Logins } from "./logins-view";
 import { Screen } from "./screen";
+import { useWorkspaceStatus } from "./queries";
+import { startupProgress } from "./startup";
+import { WorkspaceStartup } from "./startup-view";
 import { useBrowser, useConversationDirectory, useFileBody, useFiles, useFileStat, useOpenBrowserTab, wholeFile } from "./queries";
 import {
     crumbs, describe, isNoise, machineState, ordered, parentOf, readableSize, rootsOf,
@@ -151,7 +156,9 @@ export function ComputerView({ podId, conversationId, visible }: {
        it listed, so one request settles where this pane is and where it may
        go. */
     const asked = at ?? home.data ?? null;
-    const listing = useFiles(asked, wake, visible);
+    const workspace = useWorkspaceStatus(visible);
+    const preparing = startupProgress(workspace.data) !== null;
+    const listing = useFiles(asked, wake, visible && !preparing);
     const first = listing.data?.pages[0];
     const roots = rootsOf(first);
     /* The server's own word for where we are, because it resolved the path it
@@ -188,6 +195,13 @@ export function ComputerView({ podId, conversationId, visible }: {
         );
     }
 
+    if (preparing) return (
+        <section className="library-view computer-view" aria-label="Computer">
+            <header className="library-heading"><h1>Your computer</h1></header>
+            <WorkspaceStartup status={workspace.data} />
+        </section>
+    );
+
     return (
         <section className="library-view computer-view" aria-label="Computer">
             {/* The screen first, because that is what a computer is from the
@@ -205,7 +219,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                 />
                 <div className="computer-intro">
                     <h1>Your computer</h1>
-                    <p>Your AI teammates sign in to this one machine, each conversation in a profile of its own.</p>
+                    <p>Your AI teammates share this computer and its browser. Your saved logins stay here.</p>
                 </div>
             </header>
 
@@ -261,7 +275,7 @@ export function ComputerView({ podId, conversationId, visible }: {
 
             {openFile ? <FileBody path={openFile} /> : (
                 <>
-                    {listing.isPending && <p className="computer-note" role="status">Looking…</p>}
+                    {listing.isPending && <LoadingRows label="Loading files" />}
                     {listing.isError && (
                         <p className="computer-note" role="alert">
                             This computer could not be read.{" "}

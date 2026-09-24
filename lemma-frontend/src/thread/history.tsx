@@ -1,3 +1,4 @@
+import { LoadingRows } from "@/ui/loading";
 import { PlusIcon, ArrowRightIcon, VoiceIcon, ArchiveIcon } from "@/ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -5,6 +6,8 @@ import { lemma } from "@/session/client";
 import { source, NEW_CONVERSATION } from "@/data";
 import type { ConversationRef, Pod } from "@/data";
 import { applyArchived, unbound } from "./conversation-list";
+
+import { ConversationTitle } from "./conversation-title";
 
 const SHOWN = 5;
 
@@ -86,7 +89,7 @@ export function History({
                 New conversation
             </button>
 
-            {history.isPending && <p className="history__quiet">Reading history…</p>}
+            {history.isPending && <LoadingRows label="Loading history" />}
             {history.isError && <p className="history__quiet">Couldn’t load conversation history.</p>}
 
             {recent.length > 0 && (
@@ -104,6 +107,7 @@ export function History({
                                     <span className="history__name">{entry.title}</span>
                                     <span className="history__at">{entry.at}</span>
                                 </button>
+                                <ConversationTitle podId={pod.id} conversationId={entry.id} title={entry.title} />
                                 {(
                                     <button
                                         className="history__archive"

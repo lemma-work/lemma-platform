@@ -1965,6 +1965,7 @@ export const fixtureSource: PodSource = {
         stopPretending();
         return made;
     },
+    async getPod(podId: string) { return PODS.find(pod => pod.id === podId) ?? null; },
     async listPods(orgId: string) {
         await wait(60);
         /* A copy, not the array itself. Handing out the internal one meant
@@ -2038,6 +2039,7 @@ export const fixtureSource: PodSource = {
         await wait(40);
         const tabs: Tab[] = [
             { id: "conversation", kind: "conversation", label: "Conversation" },
+            { id: "apps", kind: "apps", label: "Apps" },
             { id: "app:sample", kind: "app", label: "Sample app", url: "/sample-workspace.html", status: "sample" },
             { id: "library", kind: "library", label: "Library" },
             { id: "profile", kind: "profile", label: "Profile" },
@@ -2112,6 +2114,12 @@ export const fixtureSource: PodSource = {
         await wait(40);
         return [...SURFACES];
     },
+    async getSurface() { throw new Error("Channel configuration is available in a connected workspace."); },
+    async surfaceSetup() { throw new Error("Setup status is available in a connected workspace."); },
+    async surfaceGuide() { throw new Error("Setup instructions are available in a connected workspace."); },
+    async surfaceChannels() { return { channels: [] }; },
+    async updateSurface() { throw new Error("Channel configuration is available in a connected workspace."); },
+    async createSurfaceAccount() { throw new Error("Connect accounts in a connected workspace."); },
     async listConnectable() {
         await wait(90);
         return [...CONNECTABLE].map(readConnectable).filter((entry): entry is Connectable => entry !== null).sort(byEffort);

@@ -164,7 +164,7 @@ def _command_args(value: object, payload: JsonObject) -> object:
 
 def _command_text(command: object) -> str | None:
     if isinstance(command, str):
-        return command.strip() or None
+        return _without_shell_prefix(command.strip()) or None
     if not isinstance(command, list) or not all(
         isinstance(part, str) for part in command
     ):
@@ -176,6 +176,21 @@ def _command_text(command: object) -> str | None:
     ):
         return command[2].strip() or None
     return shlex.join(command) or None
+
+
+def _without_shell_prefix(command: str) -> str:
+    """The script inside `/bin/zsh -lc '...'`, which Codex sends as one string."""
+    try:
+        argv = shlex.split(command)
+    except ValueError:  # Unbalanced quotes: show it as typed.
+        return command
+    if (
+        len(argv) == 3
+        and argv[0] in _SHELLS
+        and argv[1] in ("-c", "-lc", "-lic", "-ic")
+    ):
+        return argv[2].strip()
+    return command
 
 
 def _file_args(value: object, payload: JsonObject) -> object:
@@ -220,26 +235,71 @@ def tool_result(tool_name: str, status: str, payload: JsonObject) -> JsonValue:
     return result
 
 
+#: Fields a command's result is read from; a result naming any of them is not an
+#: unknown shape, even when all of them are empty.
+_COMMAND_FIELDS = frozenset(
+    {
+        "exit_code",
+        "exitCode",
+        "stdout",
+        "stderr",
+        "aggregated_output",
+        "formatted_output",
+        "output",
+    }
+)
+
+
 def _command_result(raw: object, payload: JsonObject) -> JsonObject:
     fields = raw if isinstance(raw, dict) else {}
     result: JsonObject = {}
-    exit_code = first_present(fields, "exit_code", "exitCode")
-    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+    exit_code = _exit_code(fields)
+    if exit_code is not None:
         result["exit_code"] = exit_code
-    stdout = first_present(
-        fields, "stdout", "aggregated_output", "formatted_output", "output"
-    )
-    if not isinstance(stdout, str):
+    stdout = _command_output(fields)
+    if stdout is None:
         stdout = raw if isinstance(raw, str) else _content_text(payload)
     if stdout:
         result["stdout"] = bounded_tool_value(stdout)
     stderr = fields.get("stderr")
     if isinstance(stderr, str) and stderr:
         result["stderr"] = bounded_tool_value(stderr)
-    if not result and raw not in (None, "", {}, []):
+    if not result and _unrecognised(raw, fields):
         # A shape none of the above names: keep it rather than lose the output.
         result["output"] = bounded_tool_value(unwrap_mcp_content(raw))
     return result
+
+
+def _exit_code(fields: JsonObject) -> int | None:
+    value = first_present(fields, "exit_code", "exitCode")
+    if isinstance(value, str):
+        digits = value.removeprefix("-")
+        if not (digits.isascii() and digits.isdecimal()):
+            return None
+        try:
+            return int(value)
+        except ValueError:  # Past Python's integer-string digit limit.
+            return None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _command_output(fields: JsonObject) -> str | None:
+    """The first output field that says something.
+
+    Codex sends `stdout: ""` beside the real text in `aggregated_output`, and
+    `formatted_output` alone at completion.
+    """
+    for key in ("stdout", "aggregated_output", "formatted_output", "output"):
+        value = fields.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _unrecognised(raw: object, fields: JsonObject) -> bool:
+    return raw not in (None, "", {}, []) and not _COMMAND_FIELDS & set(fields)
 
 
 def _content_text(payload: JsonObject) -> str:
@@ -265,6 +325,10 @@ def _failure_sentence(status: str, payload: JsonObject, result: JsonObject) -> s
     exit_code = result.get("exit_code")
     if isinstance(exit_code, int):
         return f"exited with code {exit_code}"
+    if status == "FAILED" and not result.keys() & {"stdout", "stderr", "output"}:
+        # No exit code and nothing printed: the command never ran to an end --
+        # declined by the agent's own sandbox, or stopped.
+        return "did not run to completion (declined or stopped)"
     return {"DENIED": "not allowed", "CANCELLED": "cancelled"}.get(
         status, status.lower()
     )

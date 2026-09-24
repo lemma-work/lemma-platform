@@ -1,0 +1,27 @@
+---
+title: "September 24 — The new workspace and clearer desktop setup"
+description: "A teammate-focused frontend, distinct working demos, and clearer desktop download and tool progress."
+published: 2026-09-24
+tags:
+  - development-update
+---
+
+These changes are merged into main after v0.8.0. This is a development update, not a new stable version. Desktop builds are available through the [September 24 nightly](https://github.com/lemma-work/lemma-platform/releases/tag/desktop-nightly-31c1d5de-106-1).
+
+## A workspace centered on your teammates
+
+The new frontend brings the teammate workspace into the platform repository. Conversations, apps, files, and teammate profiles share one interface. The operator application remains available as Lemma Harness.
+
+The landing experience now includes distinct working examples for launch production, sales, customer onboarding, and research. The examples show different jobs and the tools that go with them.
+
+## See what desktop is doing
+
+First-start workspace downloads show progress when the size is known. The file explorer explains that the workspace is being prepared instead of presenting startup as a failure.
+
+Codex tool cards show clearer commands, output, and failure details. Host agents are directed to the sandbox browser visible inside Lemma for browser work.
+
+## More predictable updates
+
+Desktop update checks distinguish a PostgreSQL major-version change from an ordinary update. Nightly packaging and update-feed fixes improve the installation path.
+
+Sources: [workspace integration](https://github.com/lemma-work/lemma-platform/pull/776), [working demos](https://github.com/lemma-work/lemma-platform/pull/780), [landing refinements](https://github.com/lemma-work/lemma-platform/pull/782), [desktop progress and tools](https://github.com/lemma-work/lemma-platform/pull/775), [update checks](https://github.com/lemma-work/lemma-platform/pull/772), [update feeds](https://github.com/lemma-work/lemma-platform/pull/769).

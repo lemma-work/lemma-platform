@@ -19,6 +19,7 @@ const PLACES: [Address, string][] = [
     [at(null), "/t/" + POD],
     [at("conversation"), "/t/" + POD + "/conversation"],
     [at("conversation", { conversationId: "c_17" }), "/t/" + POD + "/conversation/c_17"],
+    [at("apps"), "/t/" + POD + "/apps"],
     [at("library"), "/t/" + POD + "/library"],
     [at("history"), "/t/" + POD + "/history"],
     [at("computer"), "/t/" + POD + "/computer"],

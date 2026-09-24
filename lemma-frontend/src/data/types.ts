@@ -1,3 +1,4 @@
+import type { AgentSurfaceResponse, SurfaceSetupResponse, SurfacePlatformSetupGuide, AvailableSurfaceChannelsResponse, SurfaceUpdateRequest } from "lemma-sdk";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
@@ -85,12 +86,14 @@ export interface Surface {
     name: string;
     mine: boolean;
     agentName: string;
+    agentKey?: string;
     /** Where you actually reach it — a Telegram username, a WhatsApp number,
      *  an email address. The API calls this `reach.handle` and it is the same
      *  shape for every platform. */
     handle: string;
     email?: string;
     active: boolean;
+    status?: string;
 }
 
 /** A guided setup in flight: Lemma's manager bot makes you a bot of your own.
@@ -123,6 +126,7 @@ export interface AccountConnect {
     /** Account ids that existed before this started — how a new one is
      *  recognised when it lands. */
     before: string[];
+    authConfigId?: string;
 }
 
 /** A pod file, resolved far enough to put on screen. */
@@ -197,6 +201,7 @@ export interface SharedLink {
 }
 
 export type Tab =
+    | { id: "apps"; kind: "apps"; label: string }
     | { id: "library"; kind: "library"; label: string }
     | { id: string; kind: "table"; label: string; name: string }
     | { id: "conversation"; kind: "conversation"; label: string }
@@ -366,6 +371,7 @@ export interface PodSource {
     joinOrg(orgId: string): Promise<void>;
     createOrg(wanted: NewOrg): Promise<Org>;
     listPods(orgId: string): Promise<Pod[]>;
+    getPod(podId: string): Promise<Pod | null>;
     listTabs(podId: string): Promise<Tab[]>;
     createPod(orgId: string, name: string, description?: string): Promise<Pod>;
     /** Set (or clear) a teammate's face. An emoji, a URL, or the
@@ -389,6 +395,12 @@ export interface PodSource {
     /** Every platform this pod could be reached on, and what each would cost
      *  to set up. Read before anything is clicked — see `connectable.ts`. */
     listConnectable(podId: string): Promise<Connectable[]>;
+    getSurface(podId: string, name: string): Promise<AgentSurfaceResponse>;
+    surfaceSetup(podId: string, name: string): Promise<SurfaceSetupResponse>;
+    surfaceGuide(podId: string, platform: string): Promise<SurfacePlatformSetupGuide>;
+    surfaceChannels(podId: string, name: string): Promise<AvailableSurfaceChannelsResponse>;
+    updateSurface(podId: string, name: string, patch: SurfaceUpdateRequest): Promise<void>;
+    createSurfaceAccount(orgId: string, entry: Connectable, credentials: Record<string, unknown>): Promise<string>;
     /** The one-click path: a Lemma-run identity answers, with no account of
      *  yours. Returns the surface, which already carries the address. */
     connectSystem(podId: string, platform: string): Promise<Surface>;
@@ -484,13 +496,14 @@ export interface PodSource {
         connectorId: string,
         name: string,
         config: Record<string, unknown>,
+        kind?: string,
     ): Promise<string>;
     /** Begin authorising an account with the provider. Finishing happens on
      *  their consent page, and the account appears here afterwards. */
     startAccount(orgId: string, connectorId: string, authConfigId?: string): Promise<AccountConnect>;
     /** The account this authorisation produced, once it exists and is usable.
      *  Empty until then. */
-    findAccount(orgId: string, connectorId: string, before: string[]): Promise<string>;
+    findAccount(orgId: string, connectorId: string, before: string[], authConfigId?: string): Promise<string>;
     /** Put a surface on an account that has just been authorised. */
     connectAccount(podId: string, platform: string, accountId: string): Promise<Surface>;
     /** Begin the guided path. Finishing happens in Telegram. */

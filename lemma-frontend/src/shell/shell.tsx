@@ -1,3 +1,9 @@
+"use client";
+import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
+import { settingsFromQuery } from "@/site/legacy-address";
+
+import { PageLoading } from "@/ui/loading";
+import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { Library, TableView } from "@/library/library";
 import { readableName } from "@/library/reading";
 import { RecordView } from "@/library/record-view";
@@ -5,16 +11,18 @@ import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
 import { AllowanceNote } from "@/usage/allowance-note";
 import { ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION } from "@/data";
 import type { Tab } from "@/data";
+import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
 import { NOWHERE, readAddress, tabFromId, writeAddress } from "./address";
+import { podAccess } from "./pod-access";
 import { NotYours } from "./not-yours";
 import { OrgSwitcher } from "./org-switcher";
 import { Rail } from "./rail";
@@ -43,7 +51,7 @@ import { pressSlot } from "@/identity/palette";
 import { useHuddle } from "@/call/use-huddle";
 import { CallScreen } from "@/call/call-screen";
 import { CallBar } from "@/call/call-bar";
-import { isLandingPreview } from "@/marketing/preview-mode";
+import { isLandingPreview, previewTabForStep } from "@/marketing/preview-mode";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -65,8 +73,10 @@ function readJson<T>(key: string, fallback: T): T {
 export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRevision?: number } = {}) {
     const preview = isLandingPreview();
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
-    const [orgId, setOrgId] = useState<string | null>(() => readJson<string | null>(ORG_KEY, null));
     const pathname = usePathname();
+    const incoming = useSearchParams();
+    const [orgId, setOrgId] = useState<string | null>(() => incoming.get("org") ?? readJson<string | null>(ORG_KEY, null));
+    const [entrySection] = useState(() => incoming.get("section") ?? undefined);
     /** Where the address bar says you are. `address.ts` has the grammar and
      *  the reasoning; what matters here is that reading it through
      *  `usePathname` makes Back and Forward work for nothing, because the
@@ -93,8 +103,18 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
      *  its conversation mounted, and the reveal sets a fill in the same batch
      *  that switches pods. Without it the words land in whichever composer was
      *  already standing there, and the new teammate opens empty. */
-    const [fill, setFill] = useState<{ text: string; id: number; podId: string } | null>(null);
-    const [tabs, setTabs] = useState<Record<string, string>>(() => preview ? { kit: "app:launch" } : readJson<Record<string, string>>(TAB_KEY, {}));
+    const [fill, setFill] = useState<{ text: string; id: number; podId: string } | null>(() => {
+        const raw = incoming.get("remixSource");
+        if (!raw || !podId) return null;
+        try {
+            const url = new URL(raw);
+            if (!["http:", "https:"].includes(url.protocol)) return null;
+            return { text: "Help me rebuild or adapt this app for our workspace: " + url.href, id: 1, podId };
+        } catch {
+            return null;
+        }
+    });
+    const [tabs, setTabs] = useState<Record<string, string>>(() => preview ? { kit: "conversation" } : readJson<Record<string, string>>(TAB_KEY, {}));
     /** Apps stay mounted once opened — hidden, never unmounted, so coming
      *  back to a tab does not cold-boot someone's app. */
     const appFrames = useRef<Record<string, HTMLIFrameElement | null>>({});
@@ -107,11 +127,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
      *  stay in the strip until closed, the way an opened tab does. */
     const [extraTabs, setExtraTabs] = useState<Record<string, Tab[]>>({});
     const [searching, setSearching] = useState(false);
-    const [settings, setSettings] = useState<SettingsSection | null>(null);
+    const [settings, setSettings] = useState<SettingsSection | null>(() => settingsFromQuery(incoming.get("settings")));
     /* Hiring takes the whole pane, like organization settings — a candidate
        gets the same profile page a hired teammate gets, and that does not
        fit in a dialog. */
-    const [hiring, setHiring] = useState(false);
+    const [hiring, setHiring] = useState(() => incoming.get('hire') === '1');
     const [collapsed, setCollapsed] = useState(() => readJson(key("sidebar-collapsed"), false));
     const [mobileOpen, setMobileOpen] = useState(false);
     const [sidebarHidden, setSidebarHidden] = useState(() => readJson(key("sidebar-hidden"), false));
@@ -172,7 +192,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
        header — it is a whole-pane view that closes on its way here — so the
        one other door into that sheet is mounted beside the people dialog,
        which is here for the same reason. */
-    const [reaching, setReaching] = useState(false);
+    const [reaching, setReaching] = useState(() => incoming.get('reach') === '1');
 
     // Only the explicitly labelled, isolated product-tour document accepts this prop.
     // These are the same UI states reached by the shell's own buttons.
@@ -186,7 +206,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         setHiring(demoStep === 0);
         setAddingPeople(demoStep === 1);
         setReaching(demoStep === 4);
-        setTabs(previous => ({ ...previous, kit: demoStep === 2 ? "profile" : demoStep === 1 || demoStep === 4 ? "conversation" : "app:launch" }));
+        setTabs(previous => ({ ...previous, kit: previewTabForStep(demoStep) }));
     }, [demoStep, demoRevision, preview]);
 
     const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000 });
@@ -200,7 +220,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
            account, and reading one gave the arrival screen nothing to work
            with, so it fell back to the local part of an address and offered
            to call somebody's workspace "deepakjha0196+99's Personal". */
-        queryFn: () => lemma().users.current() as Promise<{ email?: string; first_name?: string; last_name?: string } | undefined>,
+        queryFn: () => lemma().users.current() as Promise<{ id?: string; email?: string; first_name?: string; last_name?: string } | undefined>,
         enabled: source.label !== "sample",
         staleTime: 5 * 60_000,
     });
@@ -210,8 +230,27 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
        in storage that matches nothing, and every `find` against it returns
        undefined, so the app quietly loses its organization without ever
        saying it could not find it. */
+    const linkedPod = useQuery({
+        queryKey: ["pod-access", podId],
+        queryFn: () => source.getPod(podId!),
+        enabled: Boolean(podId),
+        staleTime: 0,
+        retry: false,
+    });
     const remembered = orgs.data?.some((candidate) => candidate.id === orgId) ? orgId : null;
-    const activeOrgId = remembered ?? orgs.data?.[0]?.id ?? null;
+    const activeOrgId = linkedPod.data?.orgId ?? remembered ?? orgs.data?.[0]?.id ?? null;
+    useEffect(() => {
+        if (source.label === "sample") return;
+        let active = true;
+        void startAnalytics().then(() => {
+            if (active && me.data?.id) setAnalyticsIdentity({
+                userId: me.data.id,
+                organizationId: activeOrgId ?? undefined,
+                podId: podId ?? undefined,
+            });
+        });
+        return () => { active = false; };
+    }, [me.data?.id, activeOrgId, podId]);
     const activeOrg = orgs.data?.find((candidate) => candidate.id === activeOrgId) ?? null;
 
     const pods = useQuery({
@@ -231,16 +270,9 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         setSelection(previous => ({ id: named, generation: previous.generation + 1 }));
     }, [podId]);
 
-    const listedPod = useMemo(
-        () => pods.data?.find((candidate) => candidate.id === podId) ?? pods.data?.[0] ?? null,
-        [pods.data, podId],
-    );
-
-
-    const stranger = useMemo(() => {
-        if (!podId || !pods.isSuccess) return null;
-        return pods.data.some((candidate) => candidate.id === podId) ? null : podId;
-    }, [podId, pods.isSuccess, pods.data]);
+    const access = podAccess(podId, pods.data, linkedPod);
+    const listedPod = access.pod;
+    const stranger = access.state === "denied" ? podId : null;
 
     /* Only the teammate you are looking at pays for its roster. */
     const detail = useQuery({
@@ -545,11 +577,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
      *  screen has its own door. */
     const offered = useRef<Set<string>>(new Set());
     useEffect(() => {
-        if (!activeOrgId || !pods.isSuccess || pods.data.length > 0) return;
+        if (podId || !activeOrgId || !pods.isSuccess || pods.data.length > 0) return;
         if (offered.current.has(activeOrgId)) return;
         offered.current.add(activeOrgId);
         setHiring(true);
-    }, [activeOrgId, pods.isSuccess, pods.data]);
+    }, [podId, activeOrgId, pods.isSuccess, pods.data]);
 
     const pickTab = useCallback(
         (tabId: string) => {
@@ -615,7 +647,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     useEffect(() => { if (pod && activeTab?.kind === "library") setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind]);
 
     if (orgs.isPending) {
-        return <div className="screen"><div className="screen__inner"><p role="status">Opening…</p></div></div>;
+        return preview ? <PageLoading label="Opening sample workspace" /> : <WorkspaceLoading />;
     }
 
     /* A 401 has already told `SessionGate` to show the door; this component is
@@ -662,7 +694,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     /* `focusedView` is the view asking for the whole pane; `compactView` is
        only about whether the header is on screen. They were one flag, which
        is why hiding the header by hand would also have restyled the pane. */
-    const focusedView = activeTab?.kind === "app" || activeTab?.kind === "file" || activeTab?.kind === "profile" || activeTab?.kind === "library" || activeTab?.kind === "table" || activeTab?.kind === "record" || activeTab?.kind === "computer";
+    const focusedView = activeTab?.kind === "apps" || activeTab?.kind === "app" || activeTab?.kind === "file" || activeTab?.kind === "profile" || activeTab?.kind === "library" || activeTab?.kind === "table" || activeTab?.kind === "record" || activeTab?.kind === "computer";
     const compactView = focusedView || headerHidden;
     const activeKey = pod && activeTab ? pod.id + "|" + activeTab.id : "";
 
@@ -740,7 +772,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                 {settings && <SettingsModal
                     orgs={orgs.data ?? []}
                     activeOrgId={activeOrgId}
-                    onPickOrg={setOrgId}
+                    onPickOrg={(id) => { setOrgId(id); goToPod(null); setConversationId(null); }}
                     initial={settings}
                     onClose={() => setSettings(null)}
                 />}
@@ -770,7 +802,6 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     <div className="settings-view">
                         <NotYours
                             podId={stranger}
-                            orgName={activeOrg?.name ?? ""}
                             /* Admitted. The pod list is refetching, and when it
                                comes back with this teammate in it `stranger`
                                goes null on its own and the stage takes over —
@@ -779,7 +810,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                because arriving in a teammate for the first time
                                should not inherit whatever was selected in the
                                stand-in behind the door. */
-                            onArrived={() => setConversationId(null)}
+                            onArrived={() => { void linkedPod.refetch(); setConversationId(null); }}
                         />
                     </div>
                 )}
@@ -836,14 +867,19 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     } : undefined}
                     hidden={Boolean(hiring || huddle.expanded || stranger)}
                 >
-                {!pod ? (
+                {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? (preview ? <PageLoading label="Opening sample workspace" /> : <WorkspaceLoading embedded />) :
+                    access.state === "error" || access.state === "missing" ? (
+                        <div className="screen"><div className="screen__inner">
+                            <h2>{access.state === "missing" ? "We couldn’t find this teammate" : "We couldn’t open this teammate"}</h2>
+                            <p>{access.state === "missing" ? "Check the link, or try again." : "Access could not be verified. Check your connection and try again."}</p>
+                            <div className="screen__actions"><button className="btn btn--primary" onClick={() => void linkedPod.refetch()}>Try again</button></div>
+                        </div></div>
+                    ) :
                     <div className="screen">
                         <div className="screen__inner">
-                            <h2>{pods.isPending ? "Looking…" : "Nobody here yet"}</h2>
+                            <h2>Nobody here yet</h2>
                             <p>
-                                {pods.isPending
-                                    ? "Fetching who works here."
-                                    : "Hire your first " + AI_MATE + " and this is where they will be."}
+                                {"Hire your first " + AI_MATE + " and this is where they will be."}
                             </p>
                             {/* A screen that tells somebody what they could do
                                 and gives them no way to do it is a screen that
@@ -1054,6 +1090,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         onSeeAll={openHistory}
                                     />
                             </div>
+                            {activeTab?.kind === "apps" && <AppsPane name={pod.name} tabs={allTabs} onOpen={pickTab} onAsk={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }} />}
                             {activeTab?.kind === "history" && (
                                 <AllConversations
                                     pod={pod}
@@ -1101,7 +1138,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                             {activeTab?.kind === "profile" && (
                                 <ProfilePane
                                     key={pod.id}
-                                    initialSection={preview && demoStep === 2 ? "skills" : undefined}
+                                    initialSection={preview && demoStep === 2 ? "skills" : entrySection}
                                     openAgentName={openAgentName}
                                     onOpenAgentName={setOpenAgentName}
                                     /* Same path a widget's compose request

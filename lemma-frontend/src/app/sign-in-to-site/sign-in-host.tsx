@@ -1,5 +1,7 @@
 "use client";
 
+import { PageLoading } from "@/ui/loading";
+
 import dynamic from "next/dynamic";
 
 /** The browser-only boundary, held in a client component because that is the
@@ -11,7 +13,7 @@ import dynamic from "next/dynamic";
  */
 const Arrival = dynamic(() => import("@/computer/sign-in-arrival").then((m) => m.SignInArrival), {
     ssr: false,
-    loading: () => <div className="screen"><div className="screen__inner"><p role="status">Opening…</p></div></div>,
+    loading: () => <PageLoading label="Opening browser sign in" />,
 });
 
 export function SignInHost({ conversationId, toolCallId }: { conversationId: string; toolCallId: string }) {

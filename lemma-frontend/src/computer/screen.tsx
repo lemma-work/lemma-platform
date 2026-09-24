@@ -1,4 +1,7 @@
+import { LoadingIndicator } from "@/ui/loading";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { usePictureInPicture } from "./use-picture-in-picture";
 import { CloseIcon, ExternalIcon } from "@/ui/icons";
 import { LiveScreen } from "./live-screen";
 import { type LiveState } from "./live";
@@ -77,13 +80,16 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
     }, [visible, state]);
 
     const showing = watching && visible;
+    const pip = usePictureInPicture(showing);
 
     return (
         <div className={"screen-panel screen-panel--" + (showing && live === "live" ? "live" : state)}>
             <div className="screen-glass">
                 {showing ? (
                     <>
-                        <LiveScreen mode="control" conversationId={conversationId} onState={setLive} />
+                        {pip.pipWindow ? (
+                            <button className="screen-action" onClick={pip.close}>Bring it back</button>
+                        ) : <LiveScreen mode="control" conversationId={conversationId} onState={setLive} />}
                         <button
                             className="screen-stop"
                             title="Stop watching"
@@ -101,6 +107,16 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                     </button>
                 ) : null}
             </div>
+            {showing && pip.supported && (
+                <button className="computer-inline" onClick={() => pip.pipWindow ? pip.close() : void pip.open()}>
+                    <ExternalIcon size={13} /> {pip.pipWindow ? "Bring it back" : "Pop out"}
+                </button>
+            )}
+            {showing && pip.failed && <p className="computer-note" role="alert">Couldn’t open the floating window. You can keep using the browser here.</p>}
+            {showing && pip.pipWindow && createPortal(
+                <LiveScreen mode="control" conversationId={conversationId} autoResize={false} onState={setLive} />,
+                pip.pipWindow.document.body,
+            )}
             <p className="screen-caption" role="status">
                 {showing ? (
                     <>
@@ -108,7 +124,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                         {live === "live" && <><strong>Live.</strong> This is the teammate&rsquo;s browser, and you can use it. </>}
                         {(live === "refused" || live === "stale-image" || live === "unsupported") && (
                             <button className="computer-inline" disabled={busy} onClick={onOpenTab}>
-                                <ExternalIcon size={13} /> {busy ? "Opening…" : "Open it in a tab"}
+                                <ExternalIcon size={13} /> {busy ? <LoadingIndicator inline label="Loading" /> : "Open it in a tab"}
                             </button>
                         )}
                     </>

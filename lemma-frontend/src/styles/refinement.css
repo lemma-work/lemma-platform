@@ -158,6 +158,7 @@ button svg, a svg { flex-shrink:0; }
 .head__channels { border-left:1px solid var(--line);padding-left:16px;margin-left:5px;flex:none; }
 .head__channels .reaches { gap:5px; }
 .head__channels .reach { border:0;background:transparent;border-radius:8px;box-shadow:none;min-width:34px;width:34px;height:34px; }
+.head__channels .reach.reach--labeled { width:auto;max-width:none;flex:none;padding-inline:10px;white-space:nowrap; }
 .head__channels .reach:hover { background:var(--chrome); }
 .head__channels .reach--disconnected { width:40px;border:1px dashed var(--line-2);margin-left:2px; }
 .head__channels .reach--disconnected .reach__mark { opacity:.5;filter:grayscale(1) blur(.3px); }
@@ -414,7 +415,8 @@ button svg, a svg { flex-shrink:0; }
 .workspace-toolbar .tabs { margin-top:0;align-self:stretch; }
 .workspace-toolbar .tab { margin-block:0;padding-block:0;position:relative;border-bottom:0; }
 .workspace-toolbar .tab[aria-selected="true"]::after { content:"";position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--accent); }
-.toolbar-identity { line-height:1; }
+.toolbar-identity { line-height:1.5;min-height:44px; }
+.toolbar-identity > span:last-child { min-width:0;padding-block:2px; }
 
 /* The header's own hide control. It sits last, past the settings gear, so
    the row reads left to right as identity → channels → people → appearance
@@ -886,6 +888,22 @@ button svg, a svg { flex-shrink:0; }
 .approval[data-state="denied"] .approval__icon { color:var(--ink-3); }
 .approval[data-state="done"] .approval__title,
 .approval[data-state="denied"] .approval__title { color:var(--ink-2); }
+.approval.approval--compact { padding:0;margin:8px 0 4px; }
+.approval--compact .approval__top { margin:0;padding:10px 12px;min-height:44px;gap:10px;cursor:pointer;list-style:none; }
+.approval__record > summary::-webkit-details-marker { display:none; }
+.approval--compact .approval__title { white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.approval--compact .pill { flex-shrink:0;font-size:10.5px; }
+.approval__chevron { flex-shrink:0;color:var(--ink-3); }
+.approval__record[open] .approval__chevron { transform:rotate(180deg); }
+.approval__record[open] .approval__title { white-space:normal;overflow-wrap:anywhere; }
+.approval__record-body { padding:0 12px 12px; }
+.approval--compact > .approval__after { margin:0;padding:0 12px 10px; }
+@media (max-width:600px) {
+    .approval--compact .approval__top { flex-wrap:wrap; }
+    .approval--compact .approval__title { flex-basis:calc(100% - 40px); }
+    .approval--compact .pill { margin-left:20px;white-space:normal; }
+    .approval--compact .approval__chevron { margin-left:auto; }
+}
 .approval[data-kind="question"] .approval__icon { color:var(--accent); }
 .approval[data-kind="question"][data-state="open"] { border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft); }
 
@@ -1778,3 +1796,85 @@ button svg, a svg { flex-shrink:0; }
 .verify__strip p { margin:0;font-size:11.5px;line-height:1.5;color:var(--ink-3); }
 .verify__strip-head { display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%; }
 .verify__strip-error { color:var(--bad); }
+
+@media (max-width: 767px) {
+    /* Keep attribution above the message instead of reserving an empty avatar column. */
+    .convo-host { --turn-indent: 0px }
+    .convo-host .pane__inner { padding: 12px 10px 20px }
+    .msg--reply { grid-template-columns: 30px minmax(0, 1fr); column-gap: 8px; row-gap: 6px }
+    .msg--reply .msg__col { display: contents }
+    .msg--reply .msg__head { grid-column: 2; align-self: center; margin-bottom: 0 }
+    .msg--reply .msg__body { grid-column: 1 / -1; min-width: 0 }
+    .msg--you { padding-left: 20px }
+    .said { padding: 10px 12px }
+    .msg--you .msg__body { padding: 8px 12px }
+    .convo-title { padding-inline: 10px }
+    .convo-host .composer { padding: 6px 10px max(10px, env(safe-area-inset-bottom)) }
+    .convo-host .composer__row { padding-inline: 0; gap: 6px }
+    .convo-host .composer__box { padding: 6px; gap: 6px }
+    .convo-host .composer__input { padding-left: 2px }
+    .convo-host .composer__attach,
+    .convo-host .composer__send,
+    .convo-host .composer__stop,
+    .convo-host .composer__wave { min-width: 44px; min-height: 44px }
+}
+
+.history__entry > .history__item { padding-right: 66px }
+.history__rename-button { position: absolute; right: 30px; top: 5px; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-3); cursor: pointer; opacity: 0 }
+.history__entry:hover .history__rename-button,
+.history__entry:focus-within .history__rename-button { opacity: 1 }
+.history__rename-button:hover { color: var(--ink); background: var(--chrome) }
+.history__rename-button:disabled { opacity: .4 }
+.history__rename--editing { padding: 6px 0 }
+.history__rename-input { width: 100%; min-width: 0; min-height: 44px; padding: 8px; border: 1px solid var(--accent-line); border-radius: var(--r-sm); background: var(--paper); color: var(--ink); font: inherit; font-size: 13px }
+.history__entry:has(.history__rename--editing) > .history__item,
+.history__entry:has(.history__rename--editing) > .history__archive { display: none }
+.history__rename-failed { display: block; padding: 4px 10px; color: var(--bad); font-size: 12px }
+@media (pointer: coarse) {
+    .history__entry > .history__item { padding-right: 92px }
+    .history__rename-button { opacity: 1; right: 46px; width: 44px; height: 44px }
+    .history__archive { opacity: 1; width: 44px; height: 44px; right: 2px }
+    .history__rename-input { font-size: 16px }
+}
+.all__entry .all__row { width: 100%; padding-right: 48px }
+.all__entry .history__rename-button { right: 2px; top: 50%; transform: translateY(-50%) }
+.all__entry:has(.history__rename--editing) > .all__row { display: none }
+
+/* Loading surfaces share the final message layout and the current theme. */
+.loading-shape { display: block; height: 10px; border-radius: 4px; background: var(--line-2); }
+.conversation-loading { opacity: 0; animation: loading-reveal 160ms ease 180ms forwards; }
+.conversation-loading .loading-shape, .loading-rows .loading-shape { animation: loading-breathe 2s ease-in-out infinite; }
+.conversation-loading__name { width: 58px; height: 9px; margin-block: 5px; }
+.conversation-loading__avatar { width: 30px; height: 30px; border-radius: 50%; }
+.conversation-loading__question { width: min(65%, 340px); display: grid; gap: 12px; }
+.conversation-loading__answer { width: min(100%, 480px); display: grid; gap: 13px; }
+.conversation-loading__question .loading-shape:last-child { width: 72%; }
+.conversation-loading__answer .loading-shape:last-child { width: 58%; }
+.conversation-error { padding-block: 24px; color: var(--ink-2); font-size: 13px; }
+.conversation-error .earlier { margin-top: 12px; min-height: 44px; }
+.loading-indicator { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 24px; padding: 8px; color: var(--ink-3); }
+.loading-indicator--inline { padding: 0 4px; vertical-align: middle; }
+.loading-indicator > span { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: loading-breathe 1.4s ease-in-out infinite; }
+.loading-indicator > span:nth-child(2) { animation-delay: 160ms; }
+.loading-indicator > span:nth-child(3) { animation-delay: 320ms; }
+.loading-rows { display: grid; gap: 24px; padding: 20px 0; }
+.loading-rows__row { display: grid; gap: 10px; }
+.loading-rows__row .loading-shape:first-child { width: 72%; }
+.loading-rows__row .loading-shape:last-child { width: 45%; height: 8px; }
+.workspace-loading { display: flex; width: 100%; height: 100dvh; background: var(--canvas); overflow: hidden; }
+.workspace-loading--embedded { height: 100%; }
+.workspace-loading__rail { width: 230px; flex: none; padding: 28px 24px; border-right: 1px solid var(--line-2); }
+.workspace-loading__brand { width: 75px; height: 18px; margin-bottom: 40px; }
+.workspace-loading__main { flex: 1; min-width: 0; }
+.workspace-loading__header { height: 72px; padding: 28px var(--gutter); border-bottom: 1px solid var(--line); flex: none; }
+.workspace-loading__header .loading-shape { width: 110px; height: 14px; }
+.workspace-loading__composer { margin: 12px var(--gutter) 28px; padding: 18px; display: flex; align-items: center; justify-content: space-between; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.workspace-loading__composer .loading-shape:first-child { width: 120px; }
+.workspace-loading__composer .loading-shape:last-child { width: 28px; height: 28px; border-radius: 50%; }
+@keyframes loading-reveal { to { opacity: 1; } }
+@keyframes loading-breathe { 0%, 100% { opacity: .45; } 50% { opacity: .85; } }
+@media (max-width: 600px) { .workspace-loading__rail { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+    .conversation-loading { animation: none; opacity: 1; }
+    .conversation-loading .loading-shape, .loading-rows .loading-shape, .loading-indicator > span { animation: none; opacity: .65; }
+}

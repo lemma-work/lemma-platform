@@ -20,10 +20,14 @@ class WorkspaceStatusResponse:
             after an update does. `starting`: coming up. `asleep`: not running, and starts on first use. `unavailable`:
             could not be asked.
         detail (None | str | Unset): A sentence for a person.
+        done_mb (int | None | Unset): While `downloading`: megabytes fetched so far.
+        total_mb (int | None | Unset): While `downloading`: megabytes in total.
     """
 
     state: WorkspaceStatusResponseState
     detail: None | str | Unset = UNSET
+    done_mb: int | None | Unset = UNSET
+    total_mb: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -35,6 +39,18 @@ class WorkspaceStatusResponse:
         else:
             detail = self.detail
 
+        done_mb: int | None | Unset
+        if isinstance(self.done_mb, Unset):
+            done_mb = UNSET
+        else:
+            done_mb = self.done_mb
+
+        total_mb: int | None | Unset
+        if isinstance(self.total_mb, Unset):
+            total_mb = UNSET
+        else:
+            total_mb = self.total_mb
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -44,6 +60,10 @@ class WorkspaceStatusResponse:
         )
         if detail is not UNSET:
             field_dict["detail"] = detail
+        if done_mb is not UNSET:
+            field_dict["done_mb"] = done_mb
+        if total_mb is not UNSET:
+            field_dict["total_mb"] = total_mb
 
         return field_dict
 
@@ -61,9 +81,29 @@ class WorkspaceStatusResponse:
 
         detail = _parse_detail(d.pop("detail", UNSET))
 
+        def _parse_done_mb(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        done_mb = _parse_done_mb(d.pop("done_mb", UNSET))
+
+        def _parse_total_mb(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        total_mb = _parse_total_mb(d.pop("total_mb", UNSET))
+
         workspace_status_response = cls(
             state=state,
             detail=detail,
+            done_mb=done_mb,
+            total_mb=total_mb,
         )
 
         workspace_status_response.additional_properties = d

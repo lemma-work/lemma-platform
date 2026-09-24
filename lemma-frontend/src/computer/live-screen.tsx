@@ -1,5 +1,6 @@
 "use client";
 
+import { handleBrowserKeyDown } from "./keyboard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type RFBClient from "@novnc/novnc";
 import { apiUrl, sessionToken } from "@/session/client";
@@ -83,6 +84,7 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
     onState: (state: LiveState) => void;
 }) {
     const holder = useRef<HTMLDivElement>(null);
+    const surfaces = useRef<HTMLDivElement>(null);
     const client = useRef<RFBClient | null>(null);
     /* The callback is read through a ref so that a parent re-rendering with a
        new closure does not tear down a live connection and start another. */
@@ -104,7 +106,7 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
     askSize.current = resize.mutate;
 
     useEffect(() => {
-        const container = holder.current;
+        const container = surfaces.current;
         if (!container) return;
 
         let stopped = false;
@@ -256,24 +258,8 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
         return () => { watcher.disconnect(); if (timer) clearTimeout(timer); };
     }, [autoResize, connected]);
 
-    /* The keystroke that works over there is Ctrl, so the native gesture is
-       translated rather than passed through — otherwise somebody's muscle
-       memory silently does nothing, and macOS tends to swallow the keyup of a
-       Cmd combination besides, leaving the modifier stuck down on the far
-       side. Cmd+V is deliberately not here: the paste below already carries
-       the text and writes it across first, which is what makes it race-free,
-       and handling the keystroke too would paste twice. */
     const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-        const rfb = client.current;
-        if (!rfb || rfb.viewOnly || !event.metaKey || event.ctrlKey || event.altKey) return;
-        const key = event.key.toLowerCase();
-        if (key.length !== 1 || !"cxa".includes(key)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        rfb.sendKey(XK_CONTROL_L, "ControlLeft", true);
-        rfb.sendKey(key.charCodeAt(0), "Key" + key.toUpperCase(), true);
-        rfb.sendKey(key.charCodeAt(0), "Key" + key.toUpperCase(), false);
-        rfb.sendKey(XK_CONTROL_L, "ControlLeft", false);
+        handleBrowserKeyDown(event, client.current);
     }, []);
 
     const onPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
@@ -287,7 +273,9 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
     }, []);
 
     return (
-        <div className="screen-live" ref={holder} onKeyDown={onKeyDown} onPaste={onPaste}>
+        <div className="screen-live" ref={holder} onKeyDownCapture={onKeyDown} onPasteCapture={onPaste}>
+            {/* noVNC owns these children; reconnect cleanup must not remove React's hint. */}
+            <div className="screen-surfaces" ref={surfaces} />
             {/* Said only where it is both true and actionable: this pane can
                 drive, and the keyboard is not in it yet. A password typed at a
                 picture that was never listening is the failure worth one line

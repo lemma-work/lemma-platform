@@ -18955,6 +18955,18 @@
             "description": "A sentence for a person.",
             "title": "Detail"
           },
+          "done_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "While `downloading`: megabytes fetched so far.",
+            "title": "Done Mb"
+          },
           "state": {
             "description": "`ready`: running. `downloading`: fetching its image, which the first start after an update does. `starting`: coming up. `asleep`: not running, and starts on first use. `unavailable`: could not be asked.",
             "enum": [
@@ -18966,6 +18978,18 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "total_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "While `downloading`: megabytes in total.",
+            "title": "Total Mb"
           }
         },
         "required": [

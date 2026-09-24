@@ -1,3 +1,4 @@
+import { LoadingIndicator } from "@/ui/loading";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Tab } from "@/data";
@@ -43,7 +44,7 @@ export function ViewActions({ tab, podId, teammate, onNew, onHistory, onComputer
             }}
         >
             <ChatIcon size={17} />
-            <span>{discussion.opening ? "Opening…" : "Ask " + (teammate ?? "the teammate")}</span>
+            <span>{discussion.opening ? <LoadingIndicator inline label="Loading" /> : "Ask " + (teammate ?? "the teammate")}</span>
         </button>
     ) : null;
     const path = tab?.kind === "file" ? tab.path : "";

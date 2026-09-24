@@ -1,3 +1,4 @@
+import { LoadingRows } from "@/ui/loading";
 import { Surfaces, useSurfaces } from "@/shell/surfaces";
 import {
     AgentIcon, EditIcon, ExternalIcon, ChatIcon, BrowserIcon, CheckCircleIcon, ClockIcon,
@@ -1084,7 +1085,7 @@ export function ProfilePane({
     if (!profile.data) {
         return (
             <div className="pane"><div className="pane__inner">
-                <p className="empty-row">Looking {pod.name} up…</p>
+                <LoadingRows label={"Loading " + pod.name + "’s profile"} rows={4} />
             </div></div>
         );
     }

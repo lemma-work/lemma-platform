@@ -75,6 +75,20 @@ async def test_a_database_at_the_head_revision_is_current(monkeypatch):
     assert await migration_state.schema_migration_state() == migration_state.CURRENT
 
 
+async def test_configured_migration_chain_is_used_for_readiness(monkeypatch, tmp_path):
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    (versions / "custom.py").write_text(
+        'revision = "custom_head"\ndown_revision = None\n'
+    )
+    monkeypatch.setenv("LEMMA_MIGRATIONS_DIR", str(tmp_path))
+    migration_state.forget_cached_schema_state()
+    _database_at(monkeypatch, "custom_head")
+
+    assert migration_state._code_head_revision() == "custom_head"
+    assert await migration_state.schema_migration_state() == migration_state.CURRENT
+
+
 async def test_a_database_behind_the_head_revision_is_pending(monkeypatch):
     _database_at(monkeypatch, "0001_something_much_older")
 

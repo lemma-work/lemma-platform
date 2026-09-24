@@ -14,6 +14,13 @@ const file = vi.hoisted(() => ({
     data: undefined as { blob: Blob; text: string | null; tooLarge: boolean; sizeBytes: number } | undefined,
 }));
 
+const workspace = vi.hoisted(() => ({ status: undefined as { state: string; detail?: string } | undefined }));
+
+vi.mock('@/lib/hooks/use-workspace-status', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/hooks/use-workspace-status')>();
+    return { ...actual, useWorkspaceStatus: () => ({ data: workspace.status }) };
+});
+
 vi.mock('@/lib/hooks/use-workspace-files', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/hooks/use-workspace-files')>();
     return {
@@ -221,5 +228,19 @@ describe('what the detail pane will and will not render', () => {
         expect(await screen.findByRole('button', { name: /download/i })).toBeTruthy();
 
         expect(document.querySelector('pre')?.textContent).toBe('hello');
+    });
+});
+
+describe('while the computer is coming up', () => {
+    afterEach(() => {
+        workspace.status = undefined;
+        cleanup();
+    });
+
+    it('says it is preparing rather than asleep or failing', () => {
+        workspace.status = { state: 'downloading', detail: 'Downloading the workspace image.' };
+        render(<WorkspaceFilesPane workspaceCwd="/home/user/lemma" />);
+        expect(screen.getByText('Preparing your workspace…')).toBeTruthy();
+        expect(screen.getByText('Downloading the workspace image.')).toBeTruthy();
     });
 });

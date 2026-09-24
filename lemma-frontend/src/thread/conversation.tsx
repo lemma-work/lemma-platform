@@ -1,14 +1,14 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { source } from "@/data";
-import type { ConversationRef, Message, Pod } from "@/data";
+import { isLandingPreview } from "@/marketing/preview-mode";
+import type { Message, Pod } from "@/data";
 import type { ApprovalDecision } from "./approval";
 import { NEW_CONVERSATION } from "@/data";
 import { buildTurns, openInteraction } from "./turns";
 import { Transcript } from "./transcript";
 import { Composer } from "./composer";
 import { InteractionDock } from "./interaction-dock";
-import { ConversationTitle } from "./conversation-title";
 import { toAttachments, type Attachment } from "./attachments";
 
 /** How much of the sample history one "Earlier" hands back. Small, because the
@@ -45,7 +45,6 @@ export function ConversationPane({
     onFilled?: () => void;
     onCreated?: (id: string) => void;
 }) {
-    const cache = useQueryClient();
     const [error, setError] = useState<string | null>(null);
 
     /* Attaching works here as far as it can go: files are held, listed and
@@ -100,34 +99,19 @@ export function ConversationPane({
        looks at until an agent happens to ask for something. */
     const waitingOn = useMemo(() => openInteraction(turns), [turns]);
 
-    /* The sample pane carries the title for the same reason it goes through the
-       same turn builder and the same transcript: a stand-in that is missing a
-       row the real thing has is a stand-in you cannot judge a layout against.
-       It is read-only here — `ConversationTitle` will not offer a rename with
-       no backend to accept one. */
     const open = conversationId && conversationId !== NEW_CONVERSATION ? conversationId : conversation.data?.id ?? null;
-    /* The same place the live pane reads it from. Both panes taking the title
-       off the conversation list is what lets one rename update the header and
-       the panel beside it at once, without either of them knowing the other
-       exists. */
-    const titled = cache
-        .getQueryData<ConversationRef[]>(["conversations", pod.id])
-        ?.find(entry => entry.id === open);
 
     return (
         <>
-            <ConversationTitle
-                podId={pod.id}
-                conversationId={open}
-                title={titled?.title ?? conversation.data?.title ?? null}
-            />
             <Transcript
                 turns={turns}
                 teammate={pod.teammate}
                 streaming={null}
                 state="idle"
                 error={error ?? (conversation.isError ? "Could not read this conversation." : null)}
-                emptyTitle={conversation.isPending ? "Opening conversation…" : conversationId === NEW_CONVERSATION ? "New conversation" : "Nothing said in here yet"}
+                loading={conversation.isPending && conversationId !== NEW_CONVERSATION}
+                onReload={conversation.isError ? () => void conversation.refetch() : undefined}
+                emptyTitle={conversationId === NEW_CONVERSATION ? "New conversation" : "Nothing said in here yet"}
                 podId={pod.id}
                 /* The live pane hands this down and this one did not, which
                    meant every card keyed to a conversation — a paused sign-in
@@ -146,12 +130,12 @@ export function ConversationPane({
                 onOpenApp={onOpenApp}
                 onOpenFile={onOpenFile}
                 onOpenTable={onOpenTable}
-                emptyBody={conversation.isPending ? "" : pod.teammate.name + " is ready. Send a message to start."}
+                emptyBody={pod.teammate.name + " is ready. Send a message to start."}
             />
             <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
             <Composer
                 placeholder={"Talk to " + pod.name + "…"}
-                note={waitingOn ? undefined : pod.waiting || undefined}
+                note={waitingOn || isLandingPreview() ? undefined : pod.waiting || undefined}
                 busy={false}
                 canStop={false}
                 fill={fill}

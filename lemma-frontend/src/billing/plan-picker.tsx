@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingIndicator } from "@/ui/loading";
+
 import { useEffect, useState } from "react";
 import { CheckIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
 import {
@@ -159,7 +161,7 @@ export function PlanPicker({
                                     title={disabled}
                                     onClick={() => void pick(plan)}
                                 >
-                                    {busy === plan.id ? "Opening…" : move === "change" ? "Switch to this" : "Choose"}
+                                    {busy === plan.id ? <LoadingIndicator inline label="Loading checkout" /> : move === "change" ? "Switch to this" : "Choose"}
                                 </button>
                             )}
                         </article>

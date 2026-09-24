@@ -33,6 +33,9 @@ starts or wakes anything: asking must not be what wakes a sleeping computer.
 - `unavailable`: the answer could not be read; poll again.
 
 `detail` is a sentence for a person while `downloading` or `starting`.
+`done_mb` and `total_mb` report download progress while `downloading`, once
+the guest has the image's manifest; before that, and on fabrics that cannot
+measure it, they are absent.
 
 ## `workspace.files.list`
 
