@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:24-alpine AS builder
+FROM node:25-alpine AS builder
 WORKDIR /app/lemma-typescript
 COPY lemma-typescript/package.json lemma-typescript/package-lock.json ./
 RUN npm ci
@@ -27,7 +27,7 @@ ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL} \
     NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM node:24-alpine AS runner
+FROM node:25-alpine AS runner
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=8080 HOSTNAME=0.0.0.0
 WORKDIR /app/lemma-typescript
 COPY lemma-typescript/package.json lemma-typescript/package-lock.json ./
