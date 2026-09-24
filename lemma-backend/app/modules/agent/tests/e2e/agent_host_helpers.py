@@ -107,7 +107,7 @@ class HostLink:
                     self.close_reason = message.get("reason")
                     return
                 frame = json.loads(message["text"])
-                waiter = self._waiting.pop(frame.get("re") or "", None)
+                waiter = self._waiting.get(frame.get("re") or "")
                 if waiter is not None and not waiter.done():
                     waiter.set_result(frame)
                 else:
@@ -138,7 +138,11 @@ class HostLink:
         return frame_id
 
     async def answer_to(self, frame_id: str, timeout: float = 30) -> dict:
-        return await asyncio.wait_for(self._waiting[frame_id], timeout=timeout)
+        # Shielded, so a caller that times out -- to show nothing came back yet
+        # -- can still await the same answer afterwards.
+        return await asyncio.wait_for(
+            asyncio.shield(self._waiting[frame_id]), timeout=timeout
+        )
 
     async def request(
         self, frame_type: str, body: dict | None = None, timeout: float = 30
