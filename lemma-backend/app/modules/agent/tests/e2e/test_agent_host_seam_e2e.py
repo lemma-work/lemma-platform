@@ -74,6 +74,7 @@ from app.modules.agent.services.wait_wake_service import AgentWaitService
 from app.modules.agent.tools.waiting.models import WaitForRequest
 from app.modules.agent.tools.waiting.pydantic_adapter import wait_for
 from app.modules.agent.tests.e2e.agent_host_helpers import (
+    publish_harnesses,
     conversation_with_a_leased_run,
     paired_machine,
     stale_after,
@@ -1105,25 +1106,23 @@ async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
     await db_session.commit()
 
     # Meanwhile the harness was republished at a newer revision.
-    republished = await scenario.async_client.put(
-        "/agent-host/harnesses",
-        json={
-            "harnesses": [
-                {
-                    "harness_key": "codex",
-                    "display_name": "Codex",
-                    "adapter_version": "1.0.0",
-                    "health": "READY",
-                    "capabilities": {"load_session": True},
-                    "config_revision": "rev-2",
-                    "config_options": [],
-                    "stale_after": stale_after(),
-                }
-            ]
-        },
-        headers={"Authorization": f"Bearer {machine['host_secret']}"},
+    republished = await publish_harnesses(
+        scenario.async_client,
+        machine,
+        [
+            {
+                "harness_key": "codex",
+                "display_name": "Codex",
+                "adapter_version": "1.0.0",
+                "health": "READY",
+                "capabilities": {"load_session": True},
+                "config_revision": "rev-2",
+                "config_options": [],
+                "stale_after": stale_after(),
+            }
+        ],
     )
-    assert republished.status_code == 200, republished.text
+    assert republished["type"] == "harnesses_ok", republished
 
     # The host refuses the stale-revision command; the backend re-aims it.
     rejected = await repository.poll_commands(

@@ -228,7 +228,7 @@ async def test_a_malformed_update_is_refused_by_name_and_the_rest_still_apply():
     answer = await link.socket.answer_to(frame_id)
 
     refused = {(r["kind"], r["index"]) for r in answer["body"]["refused"]}
-    assert refused == {("acknowledgement", 1), ("checkpoint", 0), ("rejection", 0)}
+    assert refused == {("ack", 1), ("checkpoint", 0), ("rejection", 0)}
     by_kind = {r["kind"]: r for r in answer["body"]["refused"]}
     assert by_kind["checkpoint"]["run_id"] == bad["run_id"]
     assert by_kind["rejection"]["command_id"] == bad_rejection["command_id"]
@@ -482,6 +482,26 @@ async def test_a_slow_tool_call_does_not_hold_up_the_heartbeat():
     assert (await link.socket.answer_to(heartbeat))["type"] == "control_ok"
     link.mcp_service.release_call.set()
     assert (await link.socket.answer_to(slow))["type"] == "mcp_ok"
+    await link.close()
+
+
+async def test_past_the_in_flight_bound_a_request_is_refused_not_queued():
+    """Queueing would stop the reader, and the heartbeat behind it."""
+    link = Link(max_in_flight=1)
+    await link.open()
+    link.mcp_service.release_call.clear()
+    call = {"name": "lemma_pod_get_records", "arguments": {}}
+
+    first = link.socket.send("mcp", _mcp_body(link, "tools/call", params=call))
+    second = link.socket.send("mcp", _mcp_body(link, "tools/call", params=call))
+    refused = await link.socket.answer_to(second)
+    heartbeat = link.socket.send("control", {})
+
+    assert refused["body"]["code"] == "UNAVAILABLE"
+    assert refused["body"]["retryable"] is True
+    assert (await link.socket.answer_to(heartbeat))["type"] == "control_ok"
+    link.mcp_service.release_call.set()
+    assert (await link.socket.answer_to(first))["type"] == "mcp_ok"
     await link.close()
 
 

@@ -135,10 +135,12 @@ class AgentHostLinkSession:
         channels: RealtimeChannel,
         registry: LinkRegistry,
         heartbeat_ms: int = AGENT_HOST_LINK_HEARTBEAT_MS,
-        push_floor_seconds: float = PUSH_FLOOR_SECONDS,
-        resend_after_seconds: float = RESEND_AFTER_SECONDS,
-        max_in_flight: int = MAX_IN_FLIGHT_REQUESTS,
+        push_floor_seconds: float | None = None,
+        resend_after_seconds: float | None = None,
+        max_in_flight: int | None = None,
     ) -> None:
+        # The tunables are read here rather than bound as defaults, so a test
+        # that shortens the module's floor reaches the session the route builds.
         self.connection_id = uuid7()
         self._socket = socket
         self._store = store
@@ -147,8 +149,12 @@ class AgentHostLinkSession:
         self._registry = registry
         self._heartbeat_ms = heartbeat_ms
         self._silence_limit = heartbeat_ms * AGENT_HOST_LINK_MISSED_HEARTBEATS / 1000
-        self._push_floor_seconds = push_floor_seconds
-        self._in_flight = asyncio.Semaphore(max_in_flight)
+        self._push_floor_seconds = (
+            PUSH_FLOOR_SECONDS if push_floor_seconds is None else push_floor_seconds
+        )
+        self._in_flight = asyncio.Semaphore(
+            MAX_IN_FLIGHT_REQUESTS if max_in_flight is None else max_in_flight
+        )
         self._stopped = asyncio.Event()
         self._writer = LinkWriter(socket, on_lost=self._stopped.set)
         self._finished = asyncio.Event()
@@ -158,7 +164,11 @@ class AgentHostLinkSession:
         self._host: LinkedHost | None = None
         self._hello: HostHello | None = None
         self._capacity = AgentHostCapacity()
-        self._sent = SentCommands(resend_after_seconds)
+        self._sent = SentCommands(
+            RESEND_AFTER_SECONDS
+            if resend_after_seconds is None
+            else resend_after_seconds
+        )
 
     @property
     def host_id(self) -> UUID | None:
@@ -287,6 +297,15 @@ class AgentHostLinkSession:
         }
         if frame.type in in_order:
             await self._supervised(frame, in_order[frame.type])
+        elif frame.type in concurrent and self._in_flight.locked():
+            # Refused rather than queued: waiting for a slot here would stop
+            # the reader, and with it the heartbeat that renews every lease.
+            await self._writer.send_error(
+                frame,
+                LinkErrorCode.UNAVAILABLE,
+                "too many requests in flight on this link",
+                retryable=True,
+            )
         elif frame.type in concurrent:
             await self._in_flight.acquire()
             self._spawn(frame, concurrent[frame.type])

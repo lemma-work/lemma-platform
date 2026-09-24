@@ -238,7 +238,7 @@ class RefusedUpdate(BaseModel):
     a valid UUID to echo.
     """
 
-    kind: Literal["acknowledgement", "checkpoint", "rejection"]
+    kind: Literal["ack", "checkpoint", "rejection"]
     index: int = Field(ge=0)
     command_id: str | None = None
     run_id: str | None = None

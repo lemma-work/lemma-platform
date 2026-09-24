@@ -298,7 +298,7 @@ async def acknowledge_commands(
             # executing it, and refusing the frame would only make it resend
             # the same acknowledgement forever.
             _log_unappliable_update(
-                kind="acknowledgement",
+                kind="ack",
                 host_id=host_id,
                 run_id=None,
                 exc=AgentHostNotFound(f"command {command_id} is unknown"),

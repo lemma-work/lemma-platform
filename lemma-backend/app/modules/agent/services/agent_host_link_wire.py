@@ -170,7 +170,7 @@ def parse_control_items(
             continue
         refused.append(
             RefusedUpdate(
-                kind="acknowledgement",
+                kind="ack",
                 index=index,
                 command_id=raw if isinstance(raw, str) else None,
                 reason="not a command id",

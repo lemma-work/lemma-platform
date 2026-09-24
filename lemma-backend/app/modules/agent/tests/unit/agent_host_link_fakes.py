@@ -325,6 +325,7 @@ class Link:
         push_floor_seconds: float = 60.0,
         resend_after_seconds: float = 30.0,
         recheck_seconds: float = 60.0,
+        max_in_flight: int | None = None,
     ) -> None:
         self.store = store or FakeStore()
         self.channels = channels or FakeChannels()
@@ -343,6 +344,7 @@ class Link:
             heartbeat_ms=heartbeat_ms,
             push_floor_seconds=push_floor_seconds,
             resend_after_seconds=resend_after_seconds,
+            max_in_flight=max_in_flight,
         )
         self.task: asyncio.Task | None = None
 
