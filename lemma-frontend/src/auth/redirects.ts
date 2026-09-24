@@ -1,5 +1,6 @@
 import { resolveSafeRedirectUri } from "lemma-sdk";
 import { appsDomainSuffix, DEFAULT_LANDING, PORTAL_PATH, siteOrigin } from "./config";
+import { heldRequestId } from "@/desktop/auth-handoff";
 
 /** Held across the round trip to Google or Microsoft, which leaves and
  *  re-enters this app with a URL we did not write. `sessionStorage` rather
@@ -119,8 +120,10 @@ export function forgetDestination(): void {
     }
 }
 
-/** Where to go now: what they asked for, what they asked for before the round
- *  trip, or the workspace. */
+/** Where to go now: back to the desktop app if this browser is signing in for
+ *  it, else what they asked for, what they asked for before the round trip, or
+ *  the workspace. */
 export function landing(search: string): string {
+    if (heldRequestId()) return PORTAL_PATH + "/desktop";
     return destinationFrom(search) ?? takeDestination() ?? DEFAULT_LANDING;
 }

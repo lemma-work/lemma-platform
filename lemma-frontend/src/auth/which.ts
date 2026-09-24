@@ -11,7 +11,7 @@
  *  somebody else is already holding.
  */
 
-export type Screen = "sign-in" | "sign-up" | "reset" | "verify" | "callback" | "unknown";
+export type Screen = "sign-in" | "sign-up" | "reset" | "verify" | "callback" | "desktop" | "unknown";
 
 export function screenFor(path: string[] | undefined): Screen {
     const segments = (path ?? []).filter(Boolean);
@@ -35,6 +35,10 @@ export function screenFor(path: string[] | undefined): Screen {
                leaving, and trusting the URL instead would mean believing
                whoever sent the browser back about who they are. */
             return segments.length === 2 ? "callback" : "unknown";
+        case "desktop":
+            /* Ours, not somebody else's: where a browser signing in for the
+               desktop app hands the session back. See `desktop/auth-handoff.ts`. */
+            return segments.length === 1 ? "desktop" : "unknown";
         default:
             return "unknown";
     }

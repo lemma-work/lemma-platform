@@ -3,11 +3,13 @@
 import { PageLoading } from "@/ui/loading";
 
 import { useEffect, useState } from "react";
-import { startAuth } from "./supertokens";
+import { Session, startAuth } from "./supertokens";
 import { screenFor } from "./which";
 import { Callback, Reset, SignInUp, Verify } from "./screens";
 import { PORTAL_PATH } from "./config";
 import { hasApiUrl } from "@/session/client";
+import { holdRequestId, requestIdFromSearch, shouldUseBrowserHandoff } from "@/desktop/auth-handoff";
+import { DesktopReturn, DesktopSignIn } from "@/desktop/sign-in";
 
 /** The portal, mounted.
  *
@@ -25,6 +27,16 @@ export function Portal({ path }: { path?: string[] }) {
 
     useEffect(() => {
         startAuth();
+        /* A browser the desktop app sent here to sign in. The request is held
+           across the provider round trip, and a browser that is already signed
+           in goes straight to handing the session back. */
+        const desktopRequest = requestIdFromSearch(window.location.search);
+        if (desktopRequest) {
+            holdRequestId(desktopRequest);
+            void Session.doesSessionExist().then((signedIn) => {
+                if (signedIn) window.location.replace(PORTAL_PATH + "/desktop");
+            });
+        }
         setReady(true);
     }, []);
 
@@ -45,9 +57,14 @@ export function Portal({ path }: { path?: string[] }) {
 
     if (!ready) return <PageLoading label="Opening sign in" />;
 
+    /* The desktop app on a hosted workspace signs in through the system
+       browser rather than in its own webview. */
+    const handoff = shouldUseBrowserHandoff();
+
     switch (screenFor(path)) {
-        case "sign-in": return <SignInUp mode="in" />;
-        case "sign-up": return <SignInUp mode="up" />;
+        case "sign-in": return handoff ? <DesktopSignIn mode="in" /> : <SignInUp mode="in" />;
+        case "sign-up": return handoff ? <DesktopSignIn mode="up" /> : <SignInUp mode="up" />;
+        case "desktop": return <DesktopReturn />;
         case "reset": return <Reset />;
         case "verify": return <Verify />;
         case "callback": return <Callback />;

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { AccountConnect, Connectable, Pod } from "@/data";
 import { CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { copyText } from "@/desktop/clipboard";
 
 /** Giving a teammate a bot of its own.
  *
@@ -27,8 +28,7 @@ function Copyable({ text, label }: { text: string; label: string }) {
         <button
             className="btn"
             onClick={() => {
-                navigator.clipboard
-                    ?.writeText(text)
+                copyText(text)
                     .then(() => {
                         setCopied(true);
                         window.setTimeout(() => setCopied(false), 1600);

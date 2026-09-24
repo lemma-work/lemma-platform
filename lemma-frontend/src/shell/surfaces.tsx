@@ -6,6 +6,7 @@ import type { Pod, Surface } from "@/data";
 import { CheckIcon, CopyIcon, PlusIcon, RefreshIcon, WarningIcon } from "@/ui/icons";
 import { ChannelIcon, channelKey, channelName } from "./channels";
 import { ReachSheet } from "./reach";
+import { copyText } from "@/desktop/clipboard";
 
 /** The strip: where this teammate can already be reached.
  *
@@ -46,7 +47,7 @@ function CopyAddress({ surface, compact = false }: { surface: Surface; compact?:
             onClick={async () => {
                 clearTimeout(timer.current);
                 try {
-                    await navigator.clipboard.writeText(surface.email ?? surface.handle);
+                    await copyText(surface.email ?? surface.handle);
                     setState("copied");
                 } catch {
                     setState("error");
