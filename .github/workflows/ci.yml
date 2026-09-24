@@ -677,6 +677,14 @@ jobs:
         working-directory: lemma-frontend
       - run: npm test
         working-directory: lemma-frontend
+      - name: Cache the auth test browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-auth-${{ runner.os }}-${{ hashFiles('lemma-frontend/package-lock.json') }}
       - name: Install browser for auth journeys
         working-directory: lemma-frontend
         run: npx playwright install --with-deps chromium
