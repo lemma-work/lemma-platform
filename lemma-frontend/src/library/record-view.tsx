@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingRows } from "@/ui/loading";
+
 import { useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { ChevronRightIcon, TableIcon, PlusIcon } from "@/ui/icons";
@@ -229,7 +231,7 @@ export function RecordView({
                                         <span className="record-link__why">via {link.column}</span>
                                     </div>
                                     {found?.isPending ? (
-                                        <p className="record-link__none" role="status">Looking…</p>
+                                        <LoadingRows label="Loading linked records" rows={2} />
                                     ) : found?.isError ? (
                                         <p className="record-link__none">Couldn’t load linked records.</p>
                                     ) : shown.length === 0 ? (

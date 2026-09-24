@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingRows } from "@/ui/loading";
+
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Prose } from "@/thread/markdown";
@@ -261,7 +263,7 @@ export function ComputerView({ podId, conversationId, visible }: {
 
             {openFile ? <FileBody path={openFile} /> : (
                 <>
-                    {listing.isPending && <p className="computer-note" role="status">Looking…</p>}
+                    {listing.isPending && <LoadingRows label="Loading files" />}
                     {listing.isError && (
                         <p className="computer-note" role="alert">
                             This computer could not be read.{" "}

@@ -1,3 +1,4 @@
+import { LoadingIndicator } from "@/ui/loading";
 import { useEffect, useState } from "react";
 import { CloseIcon, ExternalIcon } from "@/ui/icons";
 import { LiveScreen } from "./live-screen";
@@ -108,7 +109,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                         {live === "live" && <><strong>Live.</strong> This is the teammate&rsquo;s browser, and you can use it. </>}
                         {(live === "refused" || live === "stale-image" || live === "unsupported") && (
                             <button className="computer-inline" disabled={busy} onClick={onOpenTab}>
-                                <ExternalIcon size={13} /> {busy ? "Opening…" : "Open it in a tab"}
+                                <ExternalIcon size={13} /> {busy ? <LoadingIndicator inline label="Loading" /> : "Open it in a tab"}
                             </button>
                         )}
                     </>

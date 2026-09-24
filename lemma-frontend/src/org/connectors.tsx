@@ -1,3 +1,4 @@
+import { LoadingIndicator } from "@/ui/loading";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
@@ -217,7 +218,7 @@ function ConnectorCard({
                 ) : (
                     <button className="btn" disabled={start.isPending}
                         onClick={() => { setError(null); setConnecting(installs.find((one) => one.is_default) ?? installs[0] ?? null); }}>
-                        {start.isPending ? "Opening…" : accounts.length > 0 ? "Add another" : "Connect"}
+                        {start.isPending ? <LoadingIndicator inline label="Loading" /> : accounts.length > 0 ? "Add another" : "Connect"}
                     </button>
                 )}
             </div>

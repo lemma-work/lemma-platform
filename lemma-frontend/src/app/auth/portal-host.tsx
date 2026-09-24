@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkspaceLoading } from "@/shell/workspace-loading";
+
 import dynamic from "next/dynamic";
 
 /** The browser-only boundary, held in a client component because that is the
@@ -13,7 +15,7 @@ import dynamic from "next/dynamic";
  */
 const Portal = dynamic(() => import("@/auth/portal").then((m) => m.Portal), {
     ssr: false,
-    loading: () => <div className="screen"><div className="screen__inner auth"><p role="status">Opening…</p></div></div>,
+    loading: () => <WorkspaceLoading />,
 });
 
 export function PortalHost({ path }: { path?: string[] }) {

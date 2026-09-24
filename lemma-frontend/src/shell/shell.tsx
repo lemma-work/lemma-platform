@@ -1,6 +1,8 @@
 "use client";
 import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
 import { settingsFromQuery } from "@/site/legacy-address";
+
+import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { Library, TableView } from "@/library/library";
 import { readableName } from "@/library/reading";
 import { RecordView } from "@/library/record-view";
@@ -643,7 +645,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     useEffect(() => { if (pod && activeTab?.kind === "library") setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind]);
 
     if (orgs.isPending) {
-        return <div className="screen"><div className="screen__inner"><p role="status">Opening…</p></div></div>;
+        return <WorkspaceLoading />;
     }
 
     /* A 401 has already told `SessionGate` to show the door; this component is
@@ -864,14 +866,12 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     } : undefined}
                     hidden={Boolean(hiring || huddle.expanded || stranger)}
                 >
-                {!pod ? (
+                {!pod ? (pods.isPending ? <WorkspaceLoading embedded /> :
                     <div className="screen">
                         <div className="screen__inner">
-                            <h2>{pods.isPending ? "Looking…" : "Nobody here yet"}</h2>
+                            <h2>Nobody here yet</h2>
                             <p>
-                                {pods.isPending
-                                    ? "Fetching who works here."
-                                    : "Hire your first " + AI_MATE + " and this is where they will be."}
+                                {"Hire your first " + AI_MATE + " and this is where they will be."}
                             </p>
                             {/* A screen that tells somebody what they could do
                                 and gives them no way to do it is a screen that

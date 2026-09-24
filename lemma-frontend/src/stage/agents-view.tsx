@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingRows } from "@/ui/loading";
+
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
@@ -85,7 +87,7 @@ export function AgentsView({ podId, teammate, embedded, open: opened, onOpen: se
                 )}
             </header>
 
-            {agents.isPending && <p className="empty-row" role="status">Reading…</p>}
+            {agents.isPending && <LoadingRows label="Loading teammates" />}
             {agents.isError && (
                 <p className="empty-row" role="alert">
                     {isForbidden(agents.error)
@@ -196,7 +198,7 @@ function AgentDetailPane({ podId, name, teammate, onBack, onDiscussAgent, onGone
                 <BackIcon size={15} /> All agents
             </button>
 
-            {agent.isPending && <p className="empty-row" role="status">Reading {calling}…</p>}
+            {agent.isPending && <LoadingRows label={"Loading " + calling} />}
             {agent.isError && (
                 <p className="empty-row" role="alert">
                     {isForbidden(agent.error)

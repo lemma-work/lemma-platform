@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkspaceLoading } from "@/shell/workspace-loading";
+
 import Link from "next/link";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { CharacterPuppet } from "@/shell/character-puppet";
@@ -136,7 +138,7 @@ export function Hero() {
             <div className={s.field}>
                 <div className={s.productFrame}>
                     <div className={s.productViewport} ref={viewport}>
-                        {!ready && <div className={s.previewLoading}>Opening Acme…</div>}
+                        {!ready && <div className={s.previewLoading}><WorkspaceLoading /></div>}
                         <iframe ref={demo} src="/demo/landing" title="Explore the Acme workspace" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" />
                     </div>
                 </div>

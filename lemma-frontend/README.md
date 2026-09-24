@@ -86,3 +86,16 @@ Run `npm run check`, `npm test`, and `npm run build` for the component gates.
 With Node dependencies installed, the public website scenarios build and boot
 the frontend themselves: from `tests/scenarios`, run
 `uv run pytest journeys/public_website -q`. They use no backend credentials.
+
+## Conversation loading
+
+Opening saved history reserves the transcript area with a delayed, gently pulsing
+skeleton using the same avatar gutter, right-aligned user bubbles, and teammate
+reply cards as loaded messages. New conversations show the welcome state immediately. Background reads
+keep existing messages visible; failed history loads offer Retry and preserve the
+composer draft. The skeleton respects reduced motion and announces loading to
+assistive technology. In development, `/demo/loading` previews loading, empty,
+failed, populated, and workspace states using the real transcript and composer
+components. Workspace bootstrap and session gates share a workspace skeleton;
+local opening actions use the same accessible progress indicator. History lists
+use row placeholders rather than standalone loading prose.

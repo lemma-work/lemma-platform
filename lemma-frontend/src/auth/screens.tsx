@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingIndicator } from "@/ui/loading";
+
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { EmailPassword, EmailVerification, ThirdParty } from "./supertokens";
 import { authFailure, sayProblem, type Attempt } from "./errors";
@@ -246,7 +248,7 @@ function Providers({ onProblem }: { onProblem: (said: string) => void }) {
                     onClick={() => void leave(provider.id)}
                 >
                     <provider.Mark />
-                    <span>{going === provider.id ? "Opening " + provider.name + "\u2026" : "Continue with " + provider.name}</span>
+                    <span>{going === provider.id ? <LoadingIndicator inline label={"Connecting to " + provider.name} /> : "Continue with " + provider.name}</span>
                 </button>
             ))}
         </div>

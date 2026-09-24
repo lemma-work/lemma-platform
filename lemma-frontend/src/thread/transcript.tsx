@@ -1,6 +1,8 @@
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, SendIcon } from "@/ui/icons";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { TRANSCRIPT_ROW_ATTRIBUTE, useTranscriptScroll } from "./use-transcript-scroll";
+import { transcriptState } from "./transcript-state";
+import { ConversationLoading } from "./conversation-loading";
 import { Prose } from "./markdown";
 import { Mark } from "@/shell/mark";
 import { ResourceCard } from "./resource-card";
@@ -118,7 +120,8 @@ export function Transcript({
     emptyBody,
     hasMore,
     loadingEarlier,
-    detail,
+    loading = false,
+    onReload,
     podId,
     conversationId,
     onOpenApp,
@@ -141,10 +144,8 @@ export function Transcript({
      *  sits at the very top, where a click that changes nothing for a second
      *  reads as a dead button. */
     loadingEarlier?: boolean;
-    /** Shown under the empty state — what the session actually holds, so an
-     *  empty transcript is never ambiguous between "nothing was said" and
-     *  "nothing loaded". */
-    detail?: string;
+    loading?: boolean;
+    onReload?: () => void;
     podId: string;
     conversationId?: string | null;
     onOpenApp?: (name: string) => void;
@@ -186,7 +187,7 @@ export function Transcript({
         earlierRef.current = goEarlier;
     }, [goEarlier]);
 
-    const empty = turns.length === 0 && !streaming?.text && !error;
+    const display = transcriptState({ loading, hasTurns: turns.length > 0, hasStreamingText: Boolean(streaming?.text), error });
     const live = Boolean(streaming && (streaming.text || streaming.thinking || streaming.tool));
     /* The run in flight belongs to the last turn — unless that turn is a
        message you just sent and nothing has come back for it yet, in which
@@ -195,7 +196,7 @@ export function Transcript({
     const mergeInto = live && lastIndex >= 0 ? lastIndex : -1;
 
     return (
-        <div className="pane convo-scroll" ref={scroll.containerRef} onScroll={scroll.onScroll}>
+        <div aria-busy={loading} className="pane convo-scroll" ref={scroll.containerRef} onScroll={scroll.onScroll}>
             <div className="pane__inner">
                 {hasMore && (
                     <button className="earlier" onClick={goEarlier} disabled={loadingEarlier}>
@@ -203,11 +204,12 @@ export function Transcript({
                     </button>
                 )}
 
-                {empty && (
+                {display === "loading" && <ConversationLoading />}
+
+                {display === "empty" && (
                     <div className="quiet">
                         <h2>{emptyTitle}</h2>
                         <p>{emptyBody}</p>
-                        {detail && <span className="quiet__detail">{detail}</span>}
                     </div>
                 )}
 
@@ -338,14 +340,14 @@ export function Transcript({
                     )}
                 </div>
 
-                {state === "running" && !streaming?.text && (
+                {state === "running" && !loading && !streaming?.text && (
                     <div className="working">
                         <span className="working__dot" />
                         {teammate.name} is working…
                     </div>
                 )}
 
-                {state === "failed" && (
+                {state === "failed" && !onReload && (
                     <div className="failed">
                         <span>{error ?? "That run failed."}</span>
                         {onRetry && (
@@ -356,7 +358,12 @@ export function Transcript({
                     </div>
                 )}
 
-                {error && state !== "failed" && <p className="empty-row">{error}</p>}
+                {error && (state !== "failed" || onReload) && (
+                    <div className="conversation-error" role="alert">
+                        <p>{error}</p>
+                        {onReload && <button className="earlier" onClick={onReload} disabled={loading}>Retry</button>}
+                    </div>
+                )}
             </div>
 
             {/* Only while the reader has actually left the bottom. A jump
