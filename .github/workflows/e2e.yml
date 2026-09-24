@@ -29,24 +29,26 @@ name: Backend E2E
 #
 #     python scripts/plan_e2e_shards.py --run-id <a green run>
 #
-# Trigger model: backend-e2e runs directly on every PR push that touches the
-# backend or anything vendored into it. There is no workflow_run cascade any
-# more — coverage aggregation moved to `backend-coverage.yml`, which is the
-# only thing that ever needed one, and keeping it here put a 256-second job
-# that gates nothing on the critical path of every PR.
+# Trigger model: everything here runs directly on the PR push that touches the
+# backend or anything vendored into it. No workflow_run cascade: the backend
+# unit lane lives in this file too (it moved from ci.yml), so unit and e2e
+# coverage are combined by the `coverage` job inside the same run, against the
+# same checkout. It used to be a separate workflow_run consumer that polled up
+# to 20 minutes for the other run's artifact, combined a merge-commit unit run
+# with head-commit e2e runs, and was red on 512 of its 1000 runs -- mostly for
+# having nothing to combine.
 #
-# Required check: main's protect-main ruleset requires "lemma-backend unit"
-# plus "Backend E2E passed" — the aggregator at the bottom of this file, not
-# the individual shard names. That indirection is load-bearing: it lets the
-# shard layout be regenerated, and it lets the whole workflow be skipped on a
-# PR that cannot affect it, without either of those silently dropping a
-# required check. It also means the sandbox shard finally gates a merge; under
-# the old literal-name list the workspace journeys ran but blocked nothing.
+# Required check: main's protect-main ruleset requires "Backend E2E passed" --
+# the aggregator at the bottom of this file, not the individual job names. It
+# covers the unit lane, every e2e shard and the coverage floor. That
+# indirection is load-bearing: it lets the shard layout be regenerated, and it
+# lets the whole workflow be skipped on a PR that cannot affect it, without
+# either of those silently dropping a required check.
 
 on:
   workflow_dispatch:
-  # Main builds the sandbox images and nothing else (every other job here is
-  # gated to pull_request/dispatch). A run can only restore caches from its own
+  # Main warms the image and model caches and runs the unit lane; the e2e
+  # shards are gated to pull_request/dispatch. A run can only restore caches from its own
   # branch or from the default branch, and this workflow never ran on main --
   # so no PR could ever inherit a warm sandbox-image cache, and every branch
   # paid a cold build. Warming it here is what makes the cache actually cache.
@@ -131,6 +133,7 @@ jobs:
         run: echo "value=e2e-sandbox-images-${{ hashFiles(
               'lemma-backend/sandbox-images/**',
               'lemma-backend/sandbox_runtime/**',
+              'lemma-backend/Makefile',
               'lemma-python/**',
               'lemma-pod-bundle/**',
               'lemma-cli/**',
@@ -162,9 +165,213 @@ jobs:
           path: /tmp/e2e-sandbox-images.tar
           key: ${{ steps.key.outputs.value }}
 
+  # Third-party service images (Postgres, Redis, SuperTokens, Kreuzberg),
+  # pulled once per run here and handed to the shards through the cache,
+  # instead of every shard cold-pulling ~1.2 GB and eight of them racing to save
+  # the same key. Runs on pushes to main too: a PR can restore a cache from its
+  # own branch or from main, and this used to be saved only in PR scope, so
+  # every new PR paid the cold pull -- and a registry hiccup on that pull
+  # failed all eight shards at once.
+  #
+  # The image list is read out of `test_utils.py` rather than restated here.
+  # It used to be restated, and a fixture image missing from this list was
+  # silently pulled at test time instead.
+  service-images:
+    name: pull service images
+    needs: changes
+    if: >-
+      needs.changes.outputs.backend == 'true' &&
+      (github.event_name != 'pull_request' ||
+       contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      key: ${{ steps.key.outputs.value }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+      - name: Resolve the image list and cache key
+        id: key
+        run: |
+          images="$(grep -oE '^[A-Z_]+_IMAGE = "[^"]+"' lemma-backend/app/core/test_utils.py | cut -d'"' -f2 | sort | tr '\n' ' ')"
+          test -n "$images" || { echo "::error::no *_IMAGE pins found in test_utils.py"; exit 1; }
+          echo "Images: $images"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "value=e2e-service-images-$(echo "$images" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Is the image set already cached?
+        id: probe
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-service-images.tar
+          key: ${{ steps.key.outputs.value }}
+          lookup-only: true
+      # In parallel, each with its own retry, so one slow or flaky registry
+      # costs a retry rather than the run.
+      - name: Pull service images
+        if: steps.probe.outputs.cache-hit != 'true'
+        run: |
+          pull() {
+            for attempt in 1 2 3; do
+              docker pull --quiet "$1" && return 0
+              echo "::warning::pull of $1 failed (attempt $attempt)"
+              sleep $((attempt * 10))
+            done
+            echo "::error::could not pull $1"
+            return 1
+          }
+          pids=()
+          for image in ${{ steps.key.outputs.images }}; do
+            pull "$image" & pids+=($!)
+          done
+          status=0
+          for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+          exit "$status"
+      - name: Save service images
+        if: steps.probe.outputs.cache-hit != 'true'
+        run: docker save -o /tmp/e2e-service-images.tar ${{ steps.key.outputs.images }}
+      - name: Upload the image cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/e2e-service-images.tar
+          key: ${{ steps.key.outputs.value }}
+      # e2e forces embedding_provider=local (e2e_base.py), which is FastEmbed
+      # downloading BAAI/bge-base-en-v1.5 -- a few hundred megabytes -- the
+      # first time anything embeds. Warmed here, once, and on main, for the
+      # same reason as the images: a cache saved only by a PR shard was never
+      # visible to the next PR.
+      - name: Is the embedding model already cached?
+        id: fastembed-probe
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/lemma/fastembed
+          key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
+          lookup-only: true
+      - uses: astral-sh/setup-uv@v7
+        if: steps.fastembed-probe.outputs.cache-hit != 'true'
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
+      - name: Download the embedding model
+        if: steps.fastembed-probe.outputs.cache-hit != 'true'
+        working-directory: lemma-backend
+        run: >-
+          uv run python -c "from app.core.embeddings.local_embedder import
+          FastEmbedLocalEmbedder; FastEmbedLocalEmbedder()._load_model()"
+      - name: Upload the embedding model cache
+        if: steps.fastembed-probe.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/lemma/fastembed
+          key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
+
+  backend-unit:
+    name: lemma-backend unit
+    timeout-minutes: 30
+    needs: changes
+    if: >-
+      needs.changes.outputs.backend == 'true' &&
+      (github.event_name != 'pull_request' ||
+       contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action))
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lemma-backend
+    services:
+      redis:
+        # The same tag `test_utils.py` pins and the e2e workflow caches.
+        # This said `redis:7`, a second, different image (192MB against
+        # 42MB) pulled fresh for this job alone.
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      # This lane runs `$(UNIT_MARKERS)`, which includes the integration tests,
+      # and those skip themselves when no database answers. Without this service 57
+      # of them did -- the whole workspace integration suite: the sandbox state
+      # machine, the repository, and every one of the sweeper's decisions about
+      # what it may destroy. They passed locally and were absent here, which is
+      # how a sweep that deleted live user workspaces reached production with 24
+      # tests written about it.
+      #
+      # The two that need a Docker daemon or a cargo-built bridge are marked
+      # `local_host` and deselected instead: a database this lane can be given,
+      # and those it cannot, so here they could only ever skip.
+      postgres:
+        image: pgvector/pgvector:0.8.3-pg18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lemma
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lemma"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      # The same commit the e2e shards check out, so the `coverage` job
+      # combines line numbers from one tree rather than two.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
+      - name: Sync deps
+        run: uv sync --extra local
+      - name: Unit tests with coverage
+        run: make coverage-backend-unit
+        env:
+          REDIS_URL: redis://localhost:6379
+          TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
+      # Collection-time checks cannot see a test that starts and then skips
+      # itself from a fixture. 72 of this lane's tests do exactly that when
+      # Postgres is unreachable, and this job's own comment records what the
+      # same suite silently skipping 57 tests once cost.
+      - name: No suite skipped itself at runtime
+        if: always()
+        run: >-
+          python3 ../scripts/check_test_run.py --lane unit
+          coverage-backend/junit-unit.xml
+
+      - name: Add backend coverage to job summary
+        if: always()
+        run: |
+          if [ -f coverage-backend/comment.md ]; then
+            cat coverage-backend/comment.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload backend unit coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-unit-coverage
+          include-hidden-files: true
+          path: |
+            lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/comment.md
+            lemma-backend/coverage-backend/summary.json
+            lemma-backend/coverage-backend/coverage.json
+            lemma-backend/coverage-backend/coverage.xml
+            # `make coverage-backend-unit` has always written this and nothing
+            # has ever collected it, so the unit lane's slow tail is invisible
+            # -- 195 seconds with no way to see whether that is a broad spread
+            # or three slow tests, which is the difference between needing
+            # per-worker database isolation for xdist and needing to split
+            # three tests. The e2e shards upload theirs and get a slowest-tests
+            # summary out of it; this is the same line.
+            lemma-backend/coverage-backend/junit-*.xml
+          if-no-files-found: ignore
   backend-e2e:
     name: lemma-backend e2e (${{ matrix.shard.name }})
-    needs: [changes, sandbox-images]
+    needs: [changes, sandbox-images, service-images]
     # Manual dispatch, or directly on every PR push that can affect the
     # backend. Independent of "CI"'s outcome and of any label.
     #
@@ -175,6 +382,7 @@ jobs:
     if: >-
       !cancelled() &&
       needs.sandbox-images.result != 'failure' &&
+      needs.service-images.result == 'success' &&
       needs.changes.outputs.backend == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' &&
@@ -210,53 +418,19 @@ jobs:
         # (test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wheel)
         # needs it installed, same as the unit-test CI job (ci.yml).
         run: uv sync --extra local
-      # Every image `test_utils.py` pins, because GH-hosted runners are fresh
-      # VMs with nothing pre-pulled and each shard would otherwise cold-pull
-      # the lot on every run. Keyed on the file that pins the versions, so a
-      # version bump there is the only thing that busts it.
-      #
-      # Kreuzberg (594MB) and MinIO (228MB) were missing from this list while
-      # being started by the datastore, schedule and core e2e fixtures, so
-      # those shards paid an uncached pull every run -- `kreuzberg_url` alone
-      # measured 35s of session setup. They are cached here with the rest
-      # rather than per-shard: `e2e-shards.json` is generated, so gating on a
-      # shard name would either hand-edit a generated file or hard-code names
-      # the generator is free to change.
-      - name: Cache e2e container images
-        id: cache-e2e-images
-        uses: actions/cache@v6
+      # Pulled once for the whole run by `service-images`, which either found
+      # this key or created it -- so a miss here is a broken assumption, not
+      # something to paper over by pulling in every shard again.
+      - name: Restore service images
+        uses: actions/cache/restore@v6
         with:
-          path: /tmp/e2e-docker-images.tar
-          key: e2e-docker-images-${{ hashFiles('lemma-backend/app/core/test_utils.py') }}
-      - name: Load cached e2e container images
-        if: steps.cache-e2e-images.outputs.cache-hit == 'true'
-        run: docker load -i /tmp/e2e-docker-images.tar
-      - name: Pull e2e container images
-        if: steps.cache-e2e-images.outputs.cache-hit != 'true'
-        run: |
-          docker pull docker.io/pgvector/pgvector:0.8.3-pg18
-          docker pull redis:7.4-alpine
-          docker pull docker.io/supertokens/supertokens-postgresql:11.4.5
-          docker pull ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2
-          docker pull quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
-      - name: Save e2e container images to cache
-        if: steps.cache-e2e-images.outputs.cache-hit != 'true'
-        run: |
-          docker save -o /tmp/e2e-docker-images.tar \
-            docker.io/pgvector/pgvector:0.8.3-pg18 \
-            redis:7.4-alpine \
-            docker.io/supertokens/supertokens-postgresql:11.4.5 \
-            ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2 \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
-      # e2e forces embedding_provider=local (e2e_base.py), which is FastEmbed
-      # downloading BAAI/bge-base-en-v1.5 -- a few hundred megabytes -- into
-      # ~/.cache/lemma/fastembed the first time anything embeds. On a fresh
-      # runner that download lands inside whichever test embeds first, which is
-      # how test_kreuzberg_upload_runs_outbox_worker_projection_search_and_dedup
-      # came to be the single slowest test in the suite at 130 seconds. The
-      # model is pinned in config.py, so that is what the key follows.
-      - name: Cache the local embedding model
-        uses: actions/cache@v6
+          path: /tmp/e2e-service-images.tar
+          key: ${{ needs.service-images.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Load service images
+        run: docker load -i /tmp/e2e-service-images.tar
+      - name: Restore the local embedding model
+        uses: actions/cache/restore@v6
         with:
           path: ~/.cache/lemma/fastembed
           key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
@@ -321,11 +495,6 @@ jobs:
         run: |
           python3 ../scripts/e2e_durations.py \
             coverage-backend/junit-e2e-${{ matrix.shard.name }}.xml --check
-      - name: Record the commit this coverage was measured on
-        if: always()
-        run: |
-          mkdir -p coverage-backend
-          echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       # `junit-*.phases.json` is the per-phase breakdown written beside each
       # JUnit. Kept because the JUnit alone cannot answer the question the
       # budget step above raises -- whether a test is slow, or merely went
@@ -339,13 +508,182 @@ jobs:
           include-hidden-files: true
           path: |
             lemma-backend/.coverage.backend
-            lemma-backend/coverage-backend/measured-sha.txt
             lemma-backend/coverage-backend/comment.md
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
             lemma-backend/coverage-backend/junit-*.xml
             lemma-backend/coverage-backend/junit-*.phases.json
+          if-no-files-found: ignore
+
+  # One number, one floor. Unit + every e2e shard, combined in this run from
+  # the same checkout, must stay at or above `lemma-backend/coverage-floor.txt`
+  # **as it is on main** -- so a pull request cannot lower its own bar; lowering
+  # it is a reviewed change that applies from the next PR on. A PR may lose a
+  # little coverage and still pass: the floor sits ~2 points under the measured
+  # total (89.9% when it was set), which absorbs the ~0.4-point run-to-run
+  # spread of coverage measured across xdist workers.
+  #
+  # Per-module floors and a changed-lines threshold used to be enforced here
+  # too. They were red on more than half of all runs, which is a gate nobody
+  # reads; the module table is still in the PR comment for anyone who wants it.
+  coverage:
+    name: backend coverage
+    needs: [changes, backend-unit, backend-e2e]
+    # Only when both producers ran and passed. A skipped e2e matrix (a PR that
+    # cannot affect the backend) skips this too, and the aggregator reads that
+    # as success; a failed producer is already failing the aggregator itself.
+    if: >-
+      !cancelled() &&
+      needs.backend-unit.result == 'success' &&
+      needs.backend-e2e.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The one PR comment below. Fork PRs get a read-only token and the step
+      # skips them.
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
+      - name: Sync dependencies
+        run: uv sync
+      - name: Download unit and e2e coverage
+        uses: actions/download-artifact@v8
+        with:
+          pattern: backend-*-coverage
+          path: lemma-backend/coverage-artifacts
+      - name: Combine coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-backend
+          combine() {  # combine <output data file> <find root>
+            local dir; dir="$(mktemp -d)"; local index=0
+            while IFS= read -r file; do
+              # coverage.py discovers parallel inputs by suffixing the data
+              # file's basename, so the copies must keep that basename.
+              cp "$file" "$dir/$(basename "$1").$index"; index=$((index + 1))
+            done < <(find $2 -type f -name '.coverage.backend*')
+            if [ "$index" -eq 0 ]; then
+              echo "::error::no coverage data under $2"; return 1
+            fi
+            COVERAGE_FILE="$1" uv run coverage combine "$dir"
+          }
+          combine "$PWD/.coverage.unit" coverage-artifacts/backend-unit-coverage
+          combine "$PWD/.coverage.e2e" "coverage-artifacts/backend-e2e-*-coverage"
+          combine "$PWD/.coverage.backend" coverage-artifacts
+          COVERAGE_FILE="$PWD/.coverage.unit" uv run coverage json -o coverage-backend/unit.json
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage json -o coverage-backend/e2e-union.json
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage json -o coverage-backend/coverage.json
+      - name: Build the coverage report
+        run: >-
+          uv run python scripts/backend_coverage_report.py
+          --unit-coverage-json coverage-backend/unit.json
+          --e2e-coverage-json coverage-backend/e2e-union.json
+          --combined-coverage-json coverage-backend/coverage.json
+          --unit-junit-glob 'coverage-artifacts/backend-unit-coverage/**/junit-*.xml'
+          --e2e-junit-glob 'coverage-artifacts/backend-e2e-*/**/junit-*.xml'
+          --markdown-out coverage-backend/overall.md
+          --summary-json-out coverage-backend/overall-summary.json
+      - name: Add the coverage report to the job summary
+        run: cat coverage-backend/overall.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish one authoritative PR coverage comment
+        if: github.event_name == 'pull_request' && hashFiles('lemma-backend/coverage-backend/overall.md') != ''
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- lemma-backend-coverage:overall -->';
+            const body = fs.readFileSync(
+              'lemma-backend/coverage-backend/overall.md',
+              'utf8',
+            );
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.info('No PR is associated with this workflow run.');
+              return;
+            }
+            const {owner, repo} = context.repo;
+            const {data: pull} = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (pull.head.repo.full_name !== `${owner}/${repo}`) {
+              core.info(`Skipping coverage comment for fork PR ${pull.head.repo.full_name}.`);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const obsoleteComments = comments.filter((comment) =>
+              comment.user?.type === 'Bot' &&
+              /<!-- lemma-backend-coverage:(?!overall)[^>]+ -->/.test(comment.body || '')
+            );
+            for (const comment of obsoleteComments) {
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: comment.id,
+              });
+            }
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr.number,
+                body,
+              });
+            }
+      - name: Total coverage is at or above main's floor
+        run: |
+          if git fetch --quiet --depth=1 origin main \
+             && floor="$(git show FETCH_HEAD:lemma-backend/coverage-floor.txt 2>/dev/null)"; then
+            source="main"
+          else
+            floor="$(cat coverage-floor.txt)"; source="this branch (main has no floor file)"
+          fi
+          floor="$(echo "$floor" | tr -d '[:space:]')"
+          total="$(jq '.totals.percent_covered' coverage-backend/coverage.json)"
+          printf 'Combined backend coverage: %.2f%% (floor %s%%, from %s)\n' "$total" "$floor" "$source" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          if awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t < f) }'; then
+            echo "::error::Combined backend coverage $(printf '%.2f' "$total")% is below the ${floor}% floor. Add tests for the code this PR adds or changes."
+            exit 1
+          fi
+      - name: Upload the combined coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-aggregate-coverage
+          path: |
+            lemma-backend/coverage-backend/coverage.json
+            lemma-backend/coverage-backend/unit.json
+            lemma-backend/coverage-backend/e2e-union.json
+            lemma-backend/coverage-backend/overall.md
+            lemma-backend/coverage-backend/overall-summary.json
           if-no-files-found: ignore
 
   e2e-passed:
@@ -369,18 +707,18 @@ jobs:
     # siblings, so a cancelled shard with a live run means somebody stopped one
     # job, and a required check must not go green on a run that did not finish.
     #
-    # Skipped entirely on a push to main: that event exists only to warm the
-    # sandbox-image cache, `backend-e2e` does not run there, and a required
+    # Skipped entirely on a push to main: that event exists to warm the image
+    # caches (and run the unit lane), `backend-e2e` does not run there, and a required
     # check reporting green for a run that tested nothing is worse than no
     # check at all.
     if: ${{ !cancelled() && github.event_name != 'push' }}
-    needs: [changes, sandbox-images, backend-e2e]
+    needs: [changes, sandbox-images, service-images, backend-unit, backend-e2e, coverage]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any shard failed
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
-          echo "::error::One or more backend e2e shards failed or were cancelled."
+          echo "::error::The backend unit lane, an e2e shard or the coverage floor failed or was cancelled."
           exit 1
       # A skipped matrix is the correct answer for a PR that cannot affect the
       # backend, so it reports success. Without this, path-filtering a required

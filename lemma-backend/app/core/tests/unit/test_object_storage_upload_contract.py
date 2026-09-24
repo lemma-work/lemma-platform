@@ -16,8 +16,9 @@ minimum, so small files succeeded and hid it. It reached production on datastore
 file upload before anyone noticed.
 
 This is a static gate rather than a runtime one because the failure only appears
-against a real GCS/S3 endpoint. The e2e counterpart runs a >5 MiB upload against
-MinIO, which enforces the same minimum; this test is what runs on every merge.
+against a real GCS/S3 endpoint. ``test_multipart_upload.py`` is the runtime
+counterpart: a >5 MiB upload against moto's S3 server, which enforces the same
+minimum.
 """
 
 from __future__ import annotations
