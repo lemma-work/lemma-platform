@@ -19,7 +19,10 @@ from app.modules.workspace.domain.sandbox import (
     SandboxHandle,
     capabilities_for,
 )
-from app.modules.workspace.providers.base import ProviderInstance
+from app.modules.workspace.providers.base import (
+    ProviderInstance,
+    provider_name_for,
+)
 
 
 class SandboxAddressingMixin:
@@ -55,7 +58,7 @@ class SandboxAddressingMixin:
             sandbox_id=sandbox.id,
             kind=sandbox.kind,
             epoch=epoch if epoch is not None else sandbox.epoch,
-            provider=self._provider.name,
+            provider=provider_name_for(self._provider, sandbox.id),
             provider_id=instance.provider_id,
             capabilities=capabilities_for(sandbox.kind),
             storage_generation=(
