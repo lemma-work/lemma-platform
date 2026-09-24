@@ -48,6 +48,7 @@ on:
       - Release Lemma TypeScript SDK
       - Release Lemma Terminal CLI
       - Announce a release
+      - Announce development release
     types: [completed]
   workflow_dispatch:
     inputs:
