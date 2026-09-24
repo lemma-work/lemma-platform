@@ -541,7 +541,7 @@ jobs:
               "min_admin_version": "0.1.0",
               "images": {
                   "backend": image("lemma-backend"),
-                  "frontend": image("lemma-harness"),
+                  "frontend": image("lemma-frontend"),
                   "workspace": image("lemma-workspace"),
                   "function": image("lemma-function"),
                   # Same refs under the pre-rename keys. A lemma-stack or locald
@@ -807,7 +807,7 @@ jobs:
               "min_admin_version": "0.1.0",
               "images": {
                   "backend": image("lemma-backend"),
-                  "frontend": image("lemma-harness"),
+                  "frontend": image("lemma-frontend"),
                   "workspace": image("lemma-workspace"),
                   "function": image("lemma-function"),
                   # Same refs under the pre-rename keys, for clients already

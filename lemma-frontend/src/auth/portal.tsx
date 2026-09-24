@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { startAuth } from "./supertokens";
 import { screenFor } from "./which";
 import { Callback, Reset, SignInUp, Verify } from "./screens";
-import { PORTAL_PATH } from "./config";
+import { PORTAL_PATH, asksForSignUp } from "./config";
 import { hasApiUrl } from "@/session/client";
 
 /** The portal, mounted.
@@ -45,7 +45,12 @@ export function Portal({ path }: { path?: string[] }) {
 
     if (!ready) return <PageLoading label="Opening sign in" />;
 
-    switch (screenFor(path)) {
+    const screen = screenFor(path);
+    /* The bare door can be asked to open on sign-up; any deeper path already
+       says which screen it is and keeps it. */
+    const signUp = screen === "sign-in" && (path ?? []).length === 0
+        && asksForSignUp(window.location.search, window.location.hash);
+    switch (signUp ? "sign-up" : screen) {
         case "sign-in": return <SignInUp mode="in" />;
         case "sign-up": return <SignInUp mode="up" />;
         case "reset": return <Reset />;

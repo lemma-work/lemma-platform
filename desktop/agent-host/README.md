@@ -349,12 +349,13 @@ backend dependencies, and Docker on macOS or Linux, with no provider credentials
 It runs in the required Desktop contracts CI job. Native Windows provider and
 packaged-app qualification remain separate.
 
-`make desktop-agent-host-browser-e2e` adds the real web chat: sending a message,
+`make desktop-agent-host-browser-e2e` adds the real web chat, in lemma-frontend
+(the workspace Desktop serves, started with `server.mjs --dev`): sending a message,
 reading the approval card, approving or denying the native tool, live Unicode
 streaming, Stop, simultaneous approvals with different decisions, a provider
 crash, closing/reopening a streaming chat, and reloading
 the resulting transcript. Install the locked dependencies in `lemma-typescript`,
-`lemma-harness`, and `desktop/ui-tests`, then install Playwright Chromium with
+`lemma-frontend`, and `desktop/ui-tests`, then install Playwright Chromium with
 `npm exec --prefix desktop/ui-tests -- playwright install chromium`. Alternatively,
 set `LEMMA_TEST_BROWSER_CHANNEL=chrome` to use installed Chrome. The test creates
 its own account, host, frontend server and browser profile; process groups and

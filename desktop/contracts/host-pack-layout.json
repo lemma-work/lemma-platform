@@ -20,9 +20,12 @@
     "",
     "`required` names things the consumer refuses to start without, and lists",
     "the alternatives it accepts in the order it tries them. Order matters:",
-    "Next's standalone output nests the server under a directory named after",
-    "the workspace, and which name that is has changed with Next versions --",
-    "so the consumer tries all three and the producer resolves the same three.",
+    "Next's standalone output nests the app under the directory it has in the",
+    "repository (`lemma-frontend/`) because tracing is rooted at the repository;",
+    "unrooted it lands at the top. The consumer tries both and the producer",
+    "resolves the same two, in the same order. The file is lemma-frontend's",
+    "custom `server.mjs`, not Next's generated `server.js`: only the custom",
+    "server carries the voice and live-call WebSocket gateways.",
     "",
     "`derived` names paths the consumer builds by joining rather than probing.",
     "There is no fallback for these: they either exist or the service that",
@@ -72,12 +75,10 @@
       "producer_writes": "frontend-launcher.mjs"
     },
     {
-      "what": "Next.js standalone server",
+      "what": "frontend server",
       "candidates": [
-        "frontend/server.js",
-        "frontend/app/server.js",
-        "frontend/lemma-harness/server.js",
-        "frontend/lemma-frontend/server.js"
+        "frontend/lemma-frontend/server.mjs",
+        "frontend/server.mjs"
       ],
       "producer_writes": null
     }

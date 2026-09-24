@@ -311,6 +311,11 @@ def frontend_env(doc: TOMLDocument) -> dict[str, str]:
         "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI": f"{frontend_origin(doc)}/",
         "NEXT_PUBLIC_SESSION_TOKEN_DOMAIN": "",
         "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
+        # What makes lemma-frontend behave as an installation rather than as
+        # hosted Lemma: no marketing page at `/`, no analytics, no billing.
+        # Read by the server at start (`/site-config.js`), not baked into the
+        # image, which is the same build hosted Lemma serves.
+        "NEXT_PUBLIC_LEMMA_DEPLOYMENT": "local",
     }
     env.update(store.env_overrides(doc, "frontend"))
     return env

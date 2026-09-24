@@ -4,6 +4,7 @@ import styles from "./footer.module.css";
 import type { ReactNode } from "react";
 import { LemmaLogo } from "@/ui/icons";
 import { copyrightNotice } from "./company";
+import { HostedOnly } from "./hosted-only";
 export function SiteFooter() {
     const groups = [
         {
@@ -52,11 +53,9 @@ export function SiteFooter() {
                 {groups.map((group) => (
                     <nav key={group.title} aria-label={group.title}>
                         <h3>{group.title}</h3>
-                        {group.links.map(([label, href]) => (
-                            <a key={href} href={href}>
-                                {label}
-                            </a>
-                        ))}
+                        {group.links.map(([label, href]) => href === "/download"
+                            ? <HostedOnly key={href}><a href={href}>{label}</a></HostedOnly>
+                            : <a key={href} href={href}>{label}</a>)}
                     </nav>
                 ))}
             </div>
@@ -124,7 +123,7 @@ export function SiteHeader() {
             <nav aria-label="Main navigation">
                 <Link href="/templates">Templates</Link>
                 <Link href="/docs">Docs</Link>
-                <Link href="/download">Download</Link>
+                <HostedOnly><Link href="/download">Download</Link></HostedOnly>
                 <a href={githubUrl}>GitHub ↗</a>
                 <Link href="/t">Get started ↗</Link>
             </nav>

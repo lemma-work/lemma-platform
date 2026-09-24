@@ -189,22 +189,19 @@ def test_the_browser_bundles_land_where_the_backend_serves_them(
         )
 
 
-@pytest.mark.parametrize(
-    "layout",
-    ["server.js", "app/server.js", "lemma-harness/server.js", "lemma-frontend/server.js"],
-)
+@pytest.mark.parametrize("layout", ["lemma-frontend/server.mjs", "server.mjs"])
 def test_the_server_is_found_wherever_next_decides_to_put_it(
     tmp_path: Path, layout: str
 ) -> None:
-    """Next nests its standalone server under a name it chooses itself.
+    """Next nests the app under its directory in the repository, or not at all.
 
-    Which name has changed with Next versions, so both sides probe the same
+    Which one depends on where tracing is rooted, so both sides probe the same
     candidates in the same order -- and this is the one part of the contract
     with real behaviour behind it rather than a string, so it gets a real test.
     """
     server = tmp_path / layout
     server.parent.mkdir(parents=True, exist_ok=True)
-    server.write_text("// next standalone entrypoint\n")
+    server.write_text("// lemma-frontend custom server\n")
 
     found = standalone_server(tmp_path)
 
@@ -216,7 +213,7 @@ def test_the_server_is_found_wherever_next_decides_to_put_it(
     candidates = next(
         entry["candidates"]
         for entry in CONTRACT["required"]
-        if entry["what"] == "Next.js standalone server"
+        if entry["what"] == "frontend server"
     )
     assert expected in candidates
 
@@ -230,15 +227,15 @@ def test_the_server_candidates_are_tried_in_the_order_both_sides_agree_on(
     the previous layout behind -- the two sides must pick the same file. Picking
     differently means the pack ships one server and the app starts the other.
     """
-    for layout in ("lemma-harness/server.js", "lemma-frontend/server.js", "app/server.js", "server.js"):
+    for layout in ("server.mjs", "lemma-frontend/server.mjs"):
         path = tmp_path / layout
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("// next standalone entrypoint\n")
+        path.write_text("// lemma-frontend custom server\n")
 
     candidates = next(
         entry["candidates"]
         for entry in CONTRACT["required"]
-        if entry["what"] == "Next.js standalone server"
+        if entry["what"] == "frontend server"
     )
     first = candidates[0].removeprefix("frontend/")
     assert standalone_server(tmp_path) == tmp_path / first
@@ -251,8 +248,18 @@ def test_a_pack_with_no_server_names_what_it_looked_for(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as raised:
         standalone_server(tmp_path)
     message = str(raised.value)
-    for candidate in ("server.js", "app/server.js", "lemma-harness/server.js", "lemma-frontend/server.js"):
+    for candidate in ("lemma-frontend/server.mjs", "server.mjs"):
         assert candidate in message
+
+
+def test_next_s_own_server_is_not_mistaken_for_the_frontend(tmp_path: Path) -> None:
+    # Next writes `server.js` into every standalone tree. Started instead of
+    # the custom server it serves every page and 404s every voice call, which
+    # is a pack that looks healthy and is not.
+    (tmp_path / "lemma-frontend").mkdir()
+    (tmp_path / "lemma-frontend/server.js").write_text("// next's own\n")
+    with pytest.raises(SystemExit):
+        standalone_server(tmp_path)
 
 
 def _pack_with(root: Path, relative: str, body: bytes = b"x") -> Path:

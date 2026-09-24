@@ -46,15 +46,13 @@ pub(crate) fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
         "frontend launcher",
         &["frontend/frontend-launcher.mjs"],
     )?;
+    // lemma-frontend's custom server at the top of its standalone tree, not
+    // the `server.js` Next generates beside it: only the custom server carries
+    // the voice and live-call WebSocket gateways.
     let frontend_server = required_file(
         root,
-        "Next.js standalone server",
-        &[
-            "frontend/server.js",
-            "frontend/app/server.js",
-            "frontend/lemma-harness/server.js",
-            "frontend/lemma-frontend/server.js",
-        ],
+        "frontend server",
+        &["frontend/lemma-frontend/server.mjs", "frontend/server.mjs"],
     )?;
     let backend_dir = root.join("backend");
     Ok(Bindings {
@@ -85,7 +83,7 @@ pub(crate) fn source_bindings(root: &Path) -> io::Result<Bindings> {
 /// where secrets live should not need them.
 pub(crate) fn source_bindings_with(root: &Path, uv: &Path, node: &Path) -> io::Result<Bindings> {
     let backend_dir = required_dir(root, "the backend project", "lemma-backend")?;
-    let frontend_dir = required_dir(root, "the frontend project", "lemma-harness")?;
+    let frontend_dir = required_dir(root, "the frontend project", "lemma-frontend")?;
     // The backend owns sandbox provisioning, so one interpreter runs every
     // migration; only the working directory and config name differ.
     let launcher = required_file(

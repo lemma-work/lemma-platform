@@ -1,6 +1,8 @@
 import { LemmaClient } from "lemma-sdk";
 import { configuredApiUrl, requireApiUrl } from "./origins";
 import { isLandingPreview } from "@/marketing/preview-mode";
+import { siteRuntime } from "@/site/runtime";
+import { isLocalDeployment } from "@/site/config";
 
 /** One place a client is made, and one place the API origin is decided.
  *
@@ -62,7 +64,7 @@ export function upstreamUrl(): string {
  *  otherwise make `authUrl()` return `""`, which reaches `new URL("")` and a
  *  sign-in button that throws instead of going anywhere. */
 function configuredAuthUrl(): string {
-    return (process.env.NEXT_PUBLIC_AUTH_URL ?? "").trim();
+    return siteRuntime().authUrl.trim();
 }
 
 /** Where the platform UI lives, for the places this app deliberately hands
@@ -85,7 +87,10 @@ export function siteUrl(): string {
  *  labelled "Get the app" that fetches somebody else's is a worse answer than
  *  no button. Set it empty to drop the button and keep the explanation. */
 export function downloadUrl(): string {
-    const set = process.env.NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL;
+    /* Somebody looking at a desktop installation is already running the app,
+       or is on a phone the installer is not for. */
+    if (isLocalDeployment()) return "";
+    const set = siteRuntime().desktopDownloadUrl;
     /* `??`, not `||`: blank is the way to say "no button", and a fallback that
        could not tell blank from absent would take that option away. */
     return (set ?? "https://lemma.work/download").trim();
