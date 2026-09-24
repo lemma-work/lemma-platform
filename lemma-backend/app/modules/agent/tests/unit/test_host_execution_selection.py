@@ -29,10 +29,15 @@ from app.modules.agent.services.host_execution_selection import (
     choose_host_workspace,
     default_folder,
     host_runs_native_commands,
+    recorded_host_workspace,
     triggered_by_owner,
 )
 from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent.tools.tool_assembler import RunToolAssembler
+from app.modules.agent.tools.browser.vm_browser import vm_browser_toolset
+from app.modules.agent.tools.tool_assembler import (
+    RunToolAssembler,
+    _for_host_execution,
+)
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
 )
@@ -63,13 +68,22 @@ class Facts:
         self.host = host
         self.opens = opens
         self.opened: list[dict] = []
+        self.records: dict[UUID, dict] = {}
+        self.host_lookups = 0
 
     def build(self) -> HostExecutionFacts:
         async def is_owner(user_id: UUID) -> bool:
             return self.desktop and user_id == self.owner
 
         async def usable_host(user_id: UUID) -> UUID | None:
+            self.host_lookups += 1
             return self.host
+
+        async def recorded(run_id: UUID) -> dict | None:
+            return self.records.get(run_id)
+
+        async def record(run_id: UUID, value: dict) -> None:
+            self.records[run_id] = value
 
         async def open_workspace(**kwargs) -> HostWorkspace:
             self.opened.append(kwargs)
@@ -84,6 +98,8 @@ class Facts:
             is_owner=is_owner,
             usable_host=usable_host,
             open_workspace=open_workspace,
+            recorded=recorded,
+            record=record,
         )
 
 
@@ -110,11 +126,12 @@ async def _choose(
     conversation: Conversation | None = None,
     source: str | None = "user_message",
     user_id: UUID = OWNER,
+    run: AgentRun | None = None,
 ):
     conversation = conversation or _conversation()
     return await choose_host_workspace(
         conversation=conversation,
-        agent_run=_run(conversation, source),
+        agent_run=run or _run(conversation, source),
         user_id=user_id,
         facts=facts.build(),
     )
@@ -260,13 +277,27 @@ async def test_the_assembler_withholds_only_the_workspace_command_tools():
     assembler = RunToolAssembler(None)
 
     everything = await assembler.assemble(agent=None, conversation=conversation)
-    filtered = await assembler.assemble(
-        agent=None, conversation=conversation, drop_workspace_cli=True
+    native = await assembler.assemble(
+        agent=None, conversation=conversation, host_execution="native"
+    )
+    sandbox = await assembler.assemble(
+        agent=None, conversation=conversation, host_execution="sandbox"
     )
 
     assert any(is_workspace_cli_toolset(t) for t in everything)
-    assert not any(is_workspace_cli_toolset(t) for t in filtered)
-    assert [t for t in everything if not is_workspace_cli_toolset(t)] == filtered
+    assert vm_browser_toolset not in everything
+    # An Agent Host run loses the shell and gains the VM browser in its place.
+    assert not any(is_workspace_cli_toolset(t) for t in native)
+    assert native == [t for t in everything if not is_workspace_cli_toolset(t)] + [
+        vm_browser_toolset
+    ]
+    # An in-process host run keeps its shell (now on the Mac) and gains it too.
+    assert sandbox == [*everything, vm_browser_toolset]
+
+
+def test_no_browser_tool_for_an_agent_that_never_had_a_shell():
+    assert _for_host_execution([], "native") == []
+    assert _for_host_execution([], "sandbox") == []
 
 
 # ------------------------------------------------------------------- prompts
@@ -325,3 +356,76 @@ def test_an_agent_host_run_with_host_execution_is_not_sent_to_sandbox_tools():
     # The sections that are not about commands are the shared ones.
     assert "ends the turn and resumes later" in runtime
     assert "lemma_exec_command" in load_agent_host_runtime_prompt()
+
+
+# ------------------------------------------------------ recorded on the run
+
+
+async def test_the_choice_is_recorded_on_the_run_either_way():
+    facts = Facts()
+    conversation = _conversation()
+    on_host, in_vm = _run(conversation), _run(conversation, "subagent")
+
+    await _choose(facts, conversation=conversation, run=on_host)
+    await _choose(facts, conversation=conversation, run=in_vm)
+
+    assert facts.records[on_host.id] == {
+        "target": "host",
+        "sandbox_id": str(host_sandbox_id(conversation.id)),
+        "root": ROOT,
+    }
+    assert facts.records[in_vm.id] == {"target": "vm"}
+
+
+async def test_a_reclaimed_run_reuses_its_choice_even_with_the_mac_gone():
+    """§2: never moves mid-flight. The ops then answer host_offline."""
+    facts = Facts()
+    conversation = _conversation()
+    run = _run(conversation)
+    first = await _choose(facts, conversation=conversation, run=run)
+
+    facts.host = None  # the Mac went away before the worker reclaimed the run
+    again = await _choose(facts, conversation=conversation, run=run)
+
+    assert again == first
+    assert len(facts.opened) == 1
+    assert facts.host_lookups == 1
+
+
+async def test_a_reclaimed_vm_run_stays_in_the_vm_when_the_mac_appears():
+    facts = Facts(host=None)
+    conversation = _conversation()
+    run = _run(conversation)
+    assert await _choose(facts, conversation=conversation, run=run) is None
+
+    facts.host = HOST
+    assert await _choose(facts, conversation=conversation, run=run) is None
+    assert facts.opened == []
+
+
+async def test_an_approved_tool_runs_where_its_paused_run_ran():
+    facts = Facts()
+    conversation = _conversation()
+    run = _run(conversation)
+    chosen = await _choose(facts, conversation=conversation, run=run)
+    facts.host = None
+
+    assert await recorded_host_workspace(run.id, facts=facts.build()) == chosen
+    # A run with nothing recorded selects nothing here: the approval path never
+    # decides afresh.
+    assert await recorded_host_workspace(uuid4(), facts=facts.build()) is None
+    assert facts.host_lookups == 1
+
+
+async def test_an_unreadable_host_record_is_refused_not_read_as_the_vm():
+    facts = Facts()
+    run_id = uuid4()
+    facts.records[run_id] = {"target": "host"}
+    with pytest.raises(ValueError):
+        await recorded_host_workspace(run_id, facts=facts.build())
+
+
+async def test_nothing_is_recorded_off_desktop():
+    facts = Facts(desktop=False)
+    await _choose(facts)
+    assert facts.records == {}

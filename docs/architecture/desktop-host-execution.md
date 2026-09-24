@@ -308,11 +308,27 @@ contract left to it.
   [provider adapters §8.3](sandbox/provider-adapters.md#83-failures);
   `host_offline` -- nothing picked the op up -- reaches the agent as "This Mac
   is not connected, so the command did not run".
-- **Agent Host runs** (§7) have Lemma's `WORKSPACE_CLI` toolset withheld by
-  `RunToolAssembler.assemble(drop_workspace_cli=...)`, and their runtime prompt
-  swaps its Runtime and Browser sections for
-  `prompts/agent_host_host_execution.md`. The only way such a run drove the VM
-  browser was `agent-browser` through `lemma_exec_command`, so with host
-  execution on it cannot drive it and is told to ask the person. An
-  in-process run on the host is in the same position: `agent-browser` is not
-  on the Mac. A route from the host to the VM browser is open work.
+- **Agent Host runs** (§7) have Lemma's `WORKSPACE_CLI` toolset withheld
+  (`RunToolAssembler.assemble(host_execution="native")`), and their runtime
+  prompt swaps its Runtime and Browser sections for
+  `prompts/agent_host_host_execution.md`.
+- **The browser.** Such a run used to drive the VM browser with
+  `agent-browser` through `lemma_exec_command`, and an in-process host run's
+  `exec_command` now runs on the Mac, where `agent-browser` does not exist. Both
+  are given the `browser` tool instead (`tools/browser/vm_browser.py`), offered
+  only when the agent has the workspace CLI: one `agent-browser` invocation per
+  call in the owner's VM workspace, with `exec_command`'s session and output
+  shaping. The arguments are split and re-quoted, so nothing but
+  `agent-browser` runs through it. On a host run `view_image` reads a path under
+  `/home/user/` from the VM (where screenshots land) and any other path from
+  the Mac.
+- **Recorded on the run.** The choice -- `{"target": "vm"}` or `{"target":
+  "host", "sandbox_id", "root"}` -- is written under `execution` in the run's
+  metadata the first time its context is built. A reclaimed run reads it back
+  instead of selecting again, and an approved tool executed after a pause uses
+  the paused run's record, so neither can land in the VM when the run was on
+  the host. A recorded host whose Mac is offline fails the op with
+  `host_offline`.
+- **`grants`** are always empty: the backend has no notion of folders an owner
+  granted. The folder chip's binding lives in the desktop shell, which the
+  host reads from `conversation_id` itself.

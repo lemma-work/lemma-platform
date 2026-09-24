@@ -195,3 +195,38 @@ async def test_the_real_binary_runs_an_owners_command_on_the_host():
         "wire the real binary through pairing and a Desktop-owner run once the "
         "exec-server lands; see test_agent_host_process_e2e.py for the harness"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_choice_is_written_on_the_run_and_read_back(db_session, scenario):
+    """The record a reclaimed run and an approved tool both read (§2)."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent.infrastructure.models import AgentRunModel
+    from app.modules.agent.infrastructure.run_execution_record import (
+        read_run_execution,
+        record_run_execution,
+    )
+
+    await scenario.create_org_with_pod(name_prefix="HostExec")
+    created = await scenario.owner_client.post(
+        f"/pods/{scenario.pod_id}/conversations", json={"title": "e2e"}
+    )
+    assert created.status_code in {200, 201}, created.text
+    run = AgentRunModel(
+        conversation_id=UUID(created.json()["id"]),
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+        run_metadata={"source": "user_message"},
+    )
+    db_session.add(run)
+    await db_session.flush()
+    uow = SqlAlchemyUnitOfWork(db_session)
+
+    assert await read_run_execution(uow, run.id) is None
+    choice = {"target": "host", "sandbox_id": str(uuid4()), "root": "/Users/o/p"}
+    await record_run_execution(uow, run.id, choice)
+
+    assert await read_run_execution(uow, run.id) == choice
+    await db_session.refresh(run)
+    # Written beside what was there, not over it.
+    assert run.run_metadata["source"] == "user_message"

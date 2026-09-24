@@ -156,8 +156,10 @@ def _host_directory_section(root: str) -> str:
         "The browser the person watches is a separate machine (Lemma's VM). "
         "It reaches this Mac's `localhost` through a relay, so a server you "
         "start here is open to it at the same `localhost` URL. `agent-browser` "
-        "is not on this Mac, so this run cannot drive that browser; ask the "
-        "person to look when a page needs checking.\n\n"
+        "is not on this Mac: drive that browser with the `browser` tool, one "
+        "`agent-browser` command per call, instead of `exec_command`. Save "
+        "screenshots under `/home/user/` and look at them with `view_image`; "
+        "any other path `view_image` is given is read from this Mac.\n\n"
         "Files a person **attached to this conversation are not here** -- "
         "they are in pod files, under the directory named in `# Pod Files`."
     )

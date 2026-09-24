@@ -108,10 +108,45 @@ async def read_workspace_file_bytes(
     Raises ``FileNotFoundError`` when the file is missing; callers translate that
     into a tool-level error.
     """
-    raw = await deps.file_manager.read_file(path)
-    content = raw.encode("utf-8") if isinstance(raw, str) else raw
+    if _on_the_host(deps, path):
+        content = await _read_host_file(deps, path)
+    else:
+        raw = await deps.file_manager.read_file(path)
+        content = raw.encode("utf-8") if isinstance(raw, str) else raw
     mime = mimetypes.guess_type(path)[0] or sniff_media_mime(content)
     return content, mime
+
+
+def _on_the_host(deps: BaseAgentContext, path: str) -> bool:
+    """On a host-execution run, whether ``path`` names a file on the Mac.
+
+    Such a run has two filesystems: its own folder on the owner's Mac, and the
+    VM workspace where the browser saves screenshots. A path under the VM's home
+    (``/home/user/...``) is the VM's; everything else, relative paths included,
+    is the Mac's -- that is where the run's commands wrote it.
+    """
+    if getattr(deps, "host_workspace", None) is None:
+        return False
+    return not any(
+        path == root or path.startswith(f"{root}/")
+        for root in RUNTIME_FILESYSTEM_ROOTS
+        if root != "/tmp"
+    )
+
+
+async def _read_host_file(deps: BaseAgentContext, path: str) -> bytes:
+    from app.modules.agent.tools.workspace_cli.workspace_cli import (
+        get_workspace_session,
+    )
+
+    from sandbox_runtime.errors import SandboxPathNotFound
+
+    session = await get_workspace_session(deps, session_id=None, close_on_exit=True)
+    async with session:
+        try:
+            return await session.read_file(path)
+        except SandboxPathNotFound as exc:
+            raise FileNotFoundError(path) from exc
 
 
 async def read_agent_file_bytes(

@@ -145,8 +145,11 @@ class AgentToolDispatcher:
                 vision_mode=ctx.vision_mode,
                 # Only on the Agent Host bridge, which is what asks for
                 # `final_answer`; see `host_execution_selection`.
-                drop_workspace_cli=include_final_answer
-                and bool(getattr(ctx, "host_runs_native_commands", False)),
+                host_execution=(
+                    getattr(ctx, "host_execution_mode", None)
+                    if include_final_answer
+                    else None
+                ),
             )
         run_ctx = self._run_context(ctx, agent_run_id)
         prepared: dict[str, PreparedTool] = {}

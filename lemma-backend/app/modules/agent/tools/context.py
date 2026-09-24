@@ -7,6 +7,7 @@ without importing anything from the old agent module.
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -90,10 +91,27 @@ class BaseAgentContext(AgentContext):
         # it was written under -- a `removeprefix` of the *current* root did
         # nothing for a cwd under the previous one, leaving an absolute string
         # where a relative one was required.
-        return WorkspaceFileManager(self.user_id, cwd=self.get_workspace_cwd())
+        # The VM workspace's cwd even on a host-execution run: this manager
+        # reaches the VM, and the host root means nothing there.
+        return WorkspaceFileManager(
+            self.user_id, cwd=self.workspace_cwd or WORKSPACE_ROOT
+        )
 
     async def get_subscription_models(self) -> SubscriptionModels:
         return await resolve_subscription_models(self.user_id)
+
+    @property
+    def host_execution_mode(self) -> Literal["native", "sandbox"] | None:
+        """How this run's commands reach the owner's Mac, if they do.
+
+        ``"native"``: an Agent Host run whose own tools are on the Mac.
+        ``"sandbox"``: an in-process run whose ``exec_command`` runs there.
+        """
+        if self.host_runs_native_commands:
+            return "native"
+        if self.host_workspace is not None:
+            return "sandbox"
+        return None
 
     def get_workspace_cwd(self) -> str:
         """This conversation's directory, or the project root when there is none.

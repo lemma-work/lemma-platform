@@ -283,7 +283,7 @@ class AgentRunnerService:
                 vision_mode=ctx.vision_mode,
                 # Already read while building the context, not loaded twice.
                 grants=getattr(ctx, "grant_summary", None),
-                drop_workspace_cli=ctx.host_runs_native_commands,
+                host_execution=ctx.host_execution_mode,
             )
             # Remote harnesses (Codex/Claude-Code) reach every tool through the MCP
             # server, so they keep the full toolset list. The in-process LEMMA

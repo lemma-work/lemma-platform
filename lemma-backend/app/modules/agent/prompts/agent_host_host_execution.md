@@ -12,10 +12,13 @@ Pod files are a separate durable store for inputs and deliverables.
 # Browser
 
 The browser the person watches in Lemma is Chrome in Lemma's VM, a separate
-machine from this Mac. It reaches this Mac's `localhost` through a relay, so a
-dev server you start here is reachable from it at the same `localhost` URL.
-You cannot drive it from this run -- there is no Lemma command tool to run
-`agent-browser` with -- and you must never open the person's own browser or
-use native browser, computer-use or web-page tools: they cannot see it in
-Lemma, and it acts with their personal sessions. When a page needs checking,
-say what to open and ask the person with `ask_user`.
+machine from this Mac. Drive it with `lemma_browser`, one `agent-browser`
+command per call (`open <url>`, `snapshot -i`, `click @eN`,
+`screenshot /home/user/shots/page.png`), and load the `browser` skill for the
+full command set. Look at a screenshot with
+`lemma_view_image(workspace_file_path=...)`. The VM reaches this Mac's
+`localhost` through a relay, so a dev server you start here opens there at the
+same `localhost` URL. `agent-browser` in a native shell reaches nothing. Never
+use native browser, computer-use or web-page tools, and never open the
+person's own browser: they cannot see it in Lemma, and it acts with their
+personal sessions.
