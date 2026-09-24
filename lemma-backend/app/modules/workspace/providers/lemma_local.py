@@ -171,6 +171,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                 "sandbox.ensure",
                 {
                     **({} if spec.host_access else {"host_access": False}),
+                    **({"host_loopback": True} if spec.host_loopback else {}),
                     "sandbox_id": guest_id,
                     "workload_kind": spec.kind.value,
                     "image": image,

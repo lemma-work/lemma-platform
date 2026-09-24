@@ -98,6 +98,7 @@ if op == "sandbox.ensure":
         "created": (existing or {}).get("created", 0) + 1,
         "apps": params.get("apps"),
         "host_access": params.get("host_access", "unsent"),
+        "host_loopback": params.get("host_loopback", "unsent"),
     }
     ok({"status": {"state": "running", "runtime_url": "http://127.0.0.1:9999",
                    "apps": _apps(params.get("apps"))},
@@ -244,6 +245,26 @@ async def test_host_access_is_sent_only_when_it_narrows_the_default(
     sandboxes = _state(provider)["sandboxes"]
     assert sandboxes[f"w-{default.hex}"]["host_access"] == "unsent"
     assert sandboxes[f"w-{narrowed.hex}"]["host_access"] is False
+
+
+async def test_the_loopback_relay_is_sent_only_for_the_sandbox_granted_it(
+    provider: LemmaLocalSandboxProvider,
+) -> None:
+    """Only the owner's workspace is granted the relay, and only it says so.
+
+    Unsent is "no relay" to the guest, so every other sandbox -- and every
+    sandbox an older guest is asked for -- is ensured exactly as before.
+    """
+    ordinary = uuid4()
+    owners = uuid4()
+    await provider.create(_spec(ordinary))
+    await provider.create(replace(_spec(owners), host_loopback=True))
+
+    sandboxes = _state(provider)["sandboxes"]
+    assert sandboxes[f"w-{ordinary.hex}"]["host_loopback"] == "unsent"
+    assert sandboxes[f"w-{owners.hex}"]["host_loopback"] is True
+    # A separate grant from the host alias, which both keep.
+    assert sandboxes[f"w-{owners.hex}"]["host_access"] == "unsent"
 
 
 async def test_unpinned_images_are_refused(

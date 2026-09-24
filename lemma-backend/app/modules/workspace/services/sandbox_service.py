@@ -22,6 +22,7 @@ files are actually gone.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -88,9 +89,19 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
     # call ensures three times: session, start_process, read_process_output.
     _recent: dict[tuple[int, UUID], tuple[float, SandboxHandle]] = {}
 
-    def __init__(self, *, provider, uow_factory) -> None:
+    def __init__(
+        self,
+        *,
+        provider,
+        uow_factory,
+        host_loopback_policy: Callable[[Sandbox], Awaitable[bool]] | None = None,
+    ) -> None:
         self._provider = provider
         self._uow_factory = uow_factory
+        # Which sandbox gets the loopback relay to the owner's Mac. None grants
+        # it to nobody, which is right everywhere but a Desktop install; see
+        # `host_loopback_policy`.
+        self._host_loopback_policy = host_loopback_policy
 
     # ------------------------------------------------------------------
     # Identity
@@ -435,6 +446,10 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             volume_name=volume_name,
             mounts=sandbox.mounts,
             size=size,
+            host_loopback=(
+                self._host_loopback_policy is not None
+                and await self._host_loopback_policy(sandbox)
+            ),
         )
         try:
             created = await self._provider.create(spec)

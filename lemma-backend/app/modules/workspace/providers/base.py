@@ -93,16 +93,23 @@ class ProviderCreateSpec:
     # What the owner's plan pays for. None is the provider's configured default.
     # Only a workspace is sized by plan; a function sandbox keeps its own.
     size: SandboxSize | None = None
-    # Whether the sandbox may reach the machine it runs on, through the
-    # `host.lemma.internal` alias. Only the Desktop guest acts on it: its
-    # sandboxes share a computer with the installation owner, and a later
-    # change narrows this to the owner's own browser sandbox. True keeps every
-    # sandbox's current reach -- the workspace runtime's callbacks to the
-    # backend go through that alias, so switching it off is a deliberate,
-    # per-sandbox decision and never a default. `lemma_local` sends the key
-    # only when it is False: the guest parses `sandbox.ensure` with
-    # `deny_unknown_fields`, so an older guest would refuse even a `True`.
+    # Whether the `host.lemma.internal` alias resolves in the sandbox. Only
+    # the Desktop guest acts on it. Every sandbox needs it -- the workspace
+    # runtime's callbacks and the function gateway reach the backend through
+    # it, via the two callback forwarders locald runs on the host gateway --
+    # so it is True by default and switching it off is a deliberate,
+    # per-sandbox decision. It is *not* a way onto the Mac's own loopback;
+    # that is `host_loopback`. `lemma_local` sends the key only when it is
+    # False: the guest parses `sandbox.ensure` with `deny_unknown_fields`, so
+    # an older guest would refuse even a `True`.
     host_access: bool = True
+    # Whether the sandbox gets the loopback relay: a socket through which its
+    # browser reaches a port on the Mac's own `127.0.0.1` -- the owner's dev
+    # server, started by host execution. True for exactly one sandbox, the
+    # installation owner's own workspace (see `host_loopback_policy`); never
+    # for an invited person's. Only the Desktop guest acts on it, and
+    # `lemma_local` sends it only when True, for the same older-guest reason.
+    host_loopback: bool = False
 
 
 class ProviderStorageKind(StrEnum):
