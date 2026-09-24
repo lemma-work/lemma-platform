@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hostOf, normalizeToolName, parseToolCard, restLength } from "../src/thread/tool-cards.ts";
+import { diffLines, hostOf, parseToolCard, restLength } from "../src/thread/tool-cards.ts";
+import { toolKey, toolLabel } from "../src/thread/tool-name.ts";
 import { argSummary, buildTurns, commentOf, liveNote, openSignIn, type RawMessage } from "../src/thread/turns.ts";
 
 /** What these tools actually return, pinned.
@@ -17,11 +18,25 @@ const call = (toolName: string, args: unknown, result?: unknown, answered = resu
 /* ── the tool name ─────────────────────────────────────────────────── */
 
 test("reads a tool through whatever it was namespaced with", () => {
-    assert.equal(normalizeToolName("exec_command"), "exec_command");
-    assert.equal(normalizeToolName("mcp__lemma__exec_command"), "exec_command");
-    assert.equal(normalizeToolName("mcp_exec_command"), "exec_command");
-    assert.equal(normalizeToolName("Exec-Command"), "exec_command");
-    assert.equal(normalizeToolName(undefined), "");
+    assert.equal(toolKey("exec_command"), "exec_command");
+    assert.equal(toolKey("mcp__lemma__exec_command"), "exec_command");
+    // Old conversations hold what local agents used to report.
+    assert.equal(toolKey("mcp__lemma_tools__lemma_exec_command"), "exec_command");
+    assert.equal(toolKey("lemma_tools_lemma_web_search"), "web_search");
+    assert.equal(toolKey("Exec-Command"), "exec_command");
+    assert.equal(toolKey(undefined), "");
+});
+
+test("never hands somebody else's MCP tool a Lemma card", () => {
+    // Namespaced: the server is not Lemma's.
+    assert.equal(toolKey("mcp__search__web_search"), "");
+    assert.equal(parseToolCard({ toolName: "mcp__search__web_search", args: { query: "acp" }, answered: false }), null);
+    // Bare name, but the Agent Host says whose it is.
+    const metadata = { tool_source: "mcp", tool_server: "exa" };
+    assert.equal(parseToolCard({ toolName: "web_search", args: { query: "acp" }, answered: false, metadata }), null);
+    assert.equal(toolLabel("web_search", metadata), "Web search · exa");
+    assert.equal(toolLabel("mcp__github__create_issue"), "Create issue · github");
+    assert.equal(toolLabel("mcp__lemma_tools__lemma_exec_command"), "Exec command");
 });
 
 test("leaves every other tool on the grey note", () => {
@@ -717,4 +732,136 @@ test("a run in flight says what the step in front of it is for", () => {
     assert.equal(liveNote({ text: "", thinking: "", tool: { toolName: "request_approval", args: {} } })[0].label, "Waiting on you");
     // Streaming text means the work is over; the row has nothing to add.
     assert.deepEqual(liveNote({ text: "Here you go", thinking: "", tool: null }), []);
+});
+
+/* ── a local agent's canonical tools ───────────────────────────────── */
+
+const host = (toolName: string, args: unknown, result?: unknown, answered = result !== undefined) =>
+    parseToolCard({ toolName, args, result, answered, metadata: { tool_source: "native", tool_title: toolName } });
+
+test("read_file names the file and keeps what was in it", () => {
+    const card = host("read_file", { file_path: "/workspace/fixture/notes.txt", offset: 10, limit: 5 }, { content: "one\ntwo\n" });
+    assert.equal(card?.kind, "file-read");
+    if (card?.kind !== "file-read") return;
+    assert.equal(card.name, "notes.txt");
+    assert.equal(card.range, "lines 10–15");
+    assert.equal(card.lines, 2);
+    assert.equal(card.failed, false);
+    assert.equal(host("read_file", {}), null);
+});
+
+test("a failed call keeps its error", () => {
+    const card = host("read_file", { file_path: "/nope" }, { success: false, error: "not allowed" });
+    assert.equal(card?.kind === "file-read" && card.failed, true);
+    assert.equal(card?.kind === "file-read" && card.error, "not allowed");
+});
+
+test("write_file is a file of added lines", () => {
+    const card = host("write_file", { file_path: "/w/notes.txt", content: "one\n" }, { message: "Wrote file successfully." });
+    assert.equal(card?.kind, "file-change");
+    if (card?.kind !== "file-change") return;
+    assert.equal(card.action, "write");
+    assert.deepEqual(card.files[0].lines, [{ sign: "+", text: "one" }]);
+    assert.equal(card.added, 1);
+    assert.equal(card.message, "Wrote file successfully.");
+});
+
+test("edit_file prefers the applied changes over the strings asked for", () => {
+    // Codex's shape: `changes` on both sides, the return being what landed.
+    const changes = [{ file_path: "/w/notes.txt", kind: "update", old_text: "one\n", new_text: "two\n" }];
+    const card = host("edit_file", { file_path: "/w/notes.txt", changes }, { changes });
+    assert.equal(card?.kind === "file-change" && card.added, 1);
+    assert.equal(card?.kind === "file-change" && card.removed, 1);
+    // OpenCode's: one string replacement.
+    const replaced = host("edit_file", { file_path: "/w/a.ts", old_string: "const a = 1;", new_string: "const a = 2;" });
+    assert.equal(replaced?.kind === "file-change" && replaced.pending, true);
+    assert.deepEqual(replaced?.kind === "file-change" && replaced.files[0].lines, [
+        { sign: "-", text: "const a = 1;" },
+        { sign: "+", text: "const a = 2;" },
+    ]);
+});
+
+test("a patch across several files names how many", () => {
+    const card = host("edit_file", {
+        changes: [
+            { file_path: "/w/a.ts", kind: "add", new_text: "x\n" },
+            { file_path: "/w/b.ts", kind: "delete", old_text: "y\n" },
+        ],
+    });
+    assert.equal(card?.kind === "file-change" && card.name, "2 files");
+    assert.equal(card?.kind === "file-change" && card.files[1].change, "delete");
+});
+
+test("delete and move name their files", () => {
+    const gone = host("delete_file", { file_path: "/w/old.txt" }, { message: "deleted" });
+    assert.equal(gone?.kind === "file-change" && gone.action, "delete");
+    const moved = host("move_file", { source: "/w/a.txt", destination: "/w/b.txt" }, { message: "moved" });
+    assert.equal(moved?.kind === "file-change" && moved.path, "/w/a.txt");
+    assert.equal(moved?.kind === "file-change" && moved.destination, "/w/b.txt");
+});
+
+test("a diff folds what did not change", () => {
+    const before = Array.from({ length: 20 }, (_, index) => "line " + index).join("\n");
+    const after = before.replace("line 10", "line ten");
+    const lines = diffLines(before, after);
+    assert.deepEqual(lines.filter((line) => line.sign === "-"), [{ sign: "-", text: "line 10" }]);
+    assert.deepEqual(lines.filter((line) => line.sign === "+"), [{ sign: "+", text: "line ten" }]);
+    assert.equal(lines[0].sign, "gap");
+    assert.equal(lines.at(-1)?.sign, "gap");
+    assert.ok(lines.length < 12);
+});
+
+test("list_files, glob and grep carry their pattern and output", () => {
+    const grep = host("grep", { pattern: "two", path: "/w", glob: "*.txt" }, { output: "notes.txt:1:two\nnotes.txt:4:two\n" });
+    assert.equal(grep?.kind === "file-search" && grep.pattern, "two");
+    assert.equal(grep?.kind === "file-search" && grep.filter, "*.txt");
+    assert.equal(grep?.kind === "file-search" && grep.count, 2);
+    const glob = host("glob", { pattern: "*.txt", path: "/w" }, { output: "/w/notes.txt" });
+    assert.equal(glob?.kind === "file-search" && glob.count, 1);
+    // Codex lists with no arguments at all; the adapter's title stands in.
+    const listed = host("list_files", {}, { output: "notes.txt\n" });
+    assert.equal(listed?.kind === "file-search" && listed.title, "list_files");
+    assert.equal(listed?.kind === "file-search" && listed.output, "notes.txt");
+});
+
+test("task says what the sub-agent was sent to do and what it said", () => {
+    const card = host("task", { description: "Find the flaky test", prompt: "Look in tests/", subagent_type: "explore" }, { output: "It is test_x." });
+    assert.equal(card?.kind, "task");
+    if (card?.kind !== "task") return;
+    assert.equal(card.description, "Find the flaky test");
+    assert.equal(card.agentType, "explore");
+    assert.equal(card.output, "It is test_x.");
+    assert.equal(host("task", {}), null);
+});
+
+test("a local agent's web_search reads its canonical output", () => {
+    const prose = host("web_search", { query: "Agent Client Protocol" }, { output: "ACP standardizes editors and agents." });
+    assert.equal(prose?.kind === "sources" && prose.text, "ACP standardizes editors and agents.");
+    assert.equal(prose?.kind === "sources" && prose.listed, false);
+    // Codex closes a search with nothing: no count, no "nothing came back".
+    const bare = host("web_search", { query: "acp" }, null);
+    assert.equal(bare?.kind === "sources" && bare.listed, false);
+    assert.equal(bare?.kind === "sources" && bare.text, "");
+    // A result list written as JSON text is still a list.
+    const json = JSON.stringify({ results: [{ url: "https://agentclientprotocol.com", title: "ACP" }] });
+    const listed = host("web_search", { query: "acp" }, { output: json });
+    assert.equal(listed?.kind === "sources" && listed.sources.length, 1);
+    assert.equal(listed?.kind === "sources" && listed.text, "");
+});
+
+test("a local agent's web_fetch names its one url and what it asked", () => {
+    const card = host("web_fetch", { url: "https://example.com/doc", prompt: "What is the rate limit?" }, { output: "100 a minute." });
+    assert.equal(card?.kind, "sources");
+    if (card?.kind !== "sources") return;
+    assert.equal(card.sources[0]?.host, "example.com");
+    assert.equal(card.asked, "What is the rate limit?");
+    assert.equal(card.text, "100 a minute.");
+});
+
+test("the pod agent's richer web shapes still read as before", () => {
+    const search = call("web_search", { query: "acp" }, { results: [{ url: "https://a.example", title: "A" }] });
+    assert.equal(search?.kind === "sources" && search.listed, true);
+    assert.equal(search?.kind === "sources" && search.sources.length, 1);
+    const fetch = call("web_fetch", { urls: ["https://a.example"] }, { pages: [{ url: "https://a.example", success: true, files: { markdown: "/w/a.md" } }] });
+    assert.equal(fetch?.kind === "sources" && fetch.sources[0]?.savedAs, "/w/a.md");
 });

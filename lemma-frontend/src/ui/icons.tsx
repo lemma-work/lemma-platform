@@ -25,6 +25,8 @@ export {
     // capability rather than a tool; `Toolbox` is the neutral mark for a
     // toolset this build has not been taught a name for yet.
     Brain as MemoryIcon, Toolbox as ToolIcon,
+    // A file removed, and a file moved, on the cards for a local agent's edits.
+    Trash as DeleteIcon, ArrowsLeftRight as MoveIcon,
 } from "@phosphor-icons/react";
 
 export function LemmaLogo({ compact = false }: { compact?: boolean }) {

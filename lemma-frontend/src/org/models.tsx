@@ -1,9 +1,19 @@
 import { LoadingIndicator } from "@/ui/loading";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { source, agentLogo, stillLooking, type Computer, type LocalAgent, type Runtime } from "@/data";
+import {
+    source,
+    agentLogo,
+    agentSettingsChanges,
+    stillLooking,
+    type AgentSettings,
+    type Computer,
+    type LocalAgent,
+    type Runtime,
+} from "@/data";
 import { downloadUrl } from "@/session/client";
 import { Modal } from "@/shell/modal";
+import { AgentSettingsFields, EditAgentSettings } from "./agent-settings";
 import {
     ComputerIcon,
     DownloadIcon,
@@ -182,6 +192,7 @@ function AgentRow({
     onChanged: () => void;
 }) {
     const [adding, setAdding] = useState(false);
+    const [editing, setEditing] = useState(false);
     const restore = useMutation({
         mutationFn: () => source.restoreRuntime(orgId, saved!.id),
         onSuccess: onChanged,
@@ -230,6 +241,8 @@ function AgentRow({
                         <button className="linkish" disabled={restore.isPending} onClick={() => restore.mutate()}>
                             {restore.isPending ? "Bringing back…" : "Bring back"}
                         </button>
+                    ) : added && usable ? (
+                        <button className="linkish" onClick={() => setEditing(true)}>Settings</button>
                     ) : added || !usable ? undefined : (
                         /* Offered only while that computer can actually take
                            it. Adding binds the runtime to the live agent — the
@@ -244,6 +257,16 @@ function AgentRow({
             />
             {adding && (
                 <AddAgent agent={agent} computer={computer} orgId={orgId} onClose={() => setAdding(false)} onAdded={onChanged} />
+            )}
+            {editing && saved && (
+                <EditAgentSettings
+                    agent={agent}
+                    computer={computer}
+                    runtime={saved}
+                    orgId={orgId}
+                    onClose={() => setEditing(false)}
+                    onSaved={onChanged}
+                />
             )}
         </>
     );
@@ -263,12 +286,20 @@ function AddAgent({
     onAdded: () => void;
 }) {
     const [name, setName] = useState(agent.name);
-    const [model, setModel] = useState(agent.models[0]?.name ?? "");
+    /* Unpinned unless somebody picks: the agent's own default is what it
+       runs on that computer already, and the first model of its list is
+       only the first model of its list. */
+    const [settings, setSettings] = useState<AgentSettings>({ model: "", selections: {} });
     const [shared, setShared] = useState(false);
     const [error, setError] = useState("");
 
     const add = useMutation({
-        mutationFn: () => source.addLocalAgent(orgId, agent.id, { name: name.trim(), model, shared }),
+        mutationFn: () => source.addLocalAgent(orgId, agent.id, {
+            name: name.trim(),
+            model: settings.model,
+            selections: agentSettingsChanges({ model: "", selections: {} }, settings).config_selections ?? {},
+            shared,
+        }),
         onSuccess: () => { onAdded(); onClose(); },
         onError: (problem) => setError(problem instanceof Error ? problem.message : "That could not be added."),
     });
@@ -279,19 +310,7 @@ function AddAgent({
                 <label htmlFor="agent-name">Name</label>
                 <input id="agent-name" value={name} onChange={(event) => setName(event.target.value)} />
             </div>
-            {agent.models.length > 0 && (
-                <div className="field">
-                    <label htmlFor="agent-model">Model</label>
-                    <select id="agent-model" value={model} onChange={(event) => setModel(event.target.value)}>
-                        {/* Empty is a real answer: the agent runs whatever it
-                            is already set to over there. */}
-                        <option value="">Computer default</option>
-                        {agent.models.map((one) => (
-                            <option key={one.name} value={one.name}>{one.label}</option>
-                        ))}
-                    </select>
-                </div>
-            )}
+            <AgentSettingsFields agent={agent} computer={computer} settings={settings} onChange={setSettings} />
             <label className="check">
                 <input type="checkbox" checked={shared} onChange={(event) => setShared(event.target.checked)} />
                 <span>

@@ -418,7 +418,11 @@ export function LiveConversation({
                  for. Dropped here, the row had nothing current to show and
                  fell back to a sentence from several steps ago. */
               tool: session.streamingTool
-                  ? { toolName: session.streamingTool.toolName, args: session.streamingTool.args }
+                  ? {
+                        toolName: session.streamingTool.toolName,
+                        toolCallId: session.streamingTool.toolCallId,
+                        args: session.streamingTool.args,
+                    }
                   : null,
           }
         : null;

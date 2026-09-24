@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     source,
+    agentDefaultLabel,
     agentLogo,
     chosenModel,
     describeChoice,
@@ -46,17 +47,25 @@ function sameName(label: string, model: string): boolean {
 
 /** Every model, flattened into the rows a person picks from. A runtime that
  *  offers nothing by name still gets one row — it runs *something*, and the
- *  backend resolves which at dispatch. */
+ *  backend resolves which at dispatch.
+ *
+ *  An unpinned coding agent gets that row as well, first, named for what it
+ *  is: dispatch sends no model, so the agent runs whatever it is set to on
+ *  its computer. Showing only its models made the first of them look chosen
+ *  when nothing was. */
 function rowsOf(runtimes: Runtime[]): { runtime: Runtime; choice: Choice; label: string }[] {
-    return runtimes.flatMap((runtime) =>
-        runtime.models.length > 0
-            ? runtime.models.map((model) => ({
-                runtime,
-                choice: { runtimeId: runtime.id, model: model.name },
-                label: model.label,
-            }))
-            : [{ runtime, choice: { runtimeId: runtime.id, model: "" }, label: "its usual model" }],
-    );
+    return runtimes.flatMap((runtime) => {
+        const own = { runtime, choice: { runtimeId: runtime.id, model: "" }, label: "" };
+        if (runtime.models.length === 0) return [{ ...own, label: "its usual model" }];
+        const models = runtime.models.map((model) => ({
+            runtime,
+            choice: { runtimeId: runtime.id, model: model.name },
+            label: model.label,
+        }));
+        return runtime.kind === "agent" && !runtime.defaultModel
+            ? [{ ...own, label: agentDefaultLabel() }, ...models]
+            : models;
+    });
 }
 
 export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {

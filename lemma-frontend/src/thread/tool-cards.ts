@@ -14,9 +14,25 @@
  *
  *  The return shapes are the backend's, in `app/modules/agent/tools/`:
  *  `browser/models.py`, `workspace_cli/models.py`, `web/models.py`,
- *  `connectors/pydantic_adapter.py` and `snooze/models.py`. */
+ *  `connectors/pydantic_adapter.py` and `snooze/models.py`. A local coding
+ *  agent's calls arrive through the Agent Host already in the canonical
+ *  vocabulary of `docs/architecture/agent-host-events.md` ("Canonical tools"),
+ *  which is where the file, search and sub-agent cards read their shapes. */
 
-export type ToolCard = SignInAsk | BrowserStep | TerminalRun | SourceList | ConnectorRun | SnoozeWait | ImageLook;
+import { toolKey, toolTitle } from "./tool-name";
+
+export type ToolCard =
+    | SignInAsk
+    | BrowserStep
+    | TerminalRun
+    | SourceList
+    | ConnectorRun
+    | SnoozeWait
+    | ImageLook
+    | FileRead
+    | FileChange
+    | FileSearch
+    | SubTask;
 
 /** A paused `browser_sign_in`: the run is stopped until somebody goes and signs
  *  in to a site, in the agent's own browser. */
@@ -158,9 +174,102 @@ export interface SourceList {
     sources: Source[];
     /** The provider could not run it exactly as asked. */
     note: string;
+    /** Whether the return listed its results at all. A local agent's search
+     *  answers in prose, or with nothing, and "0 results" over that would
+     *  be a count nobody took. */
+    listed: boolean;
+    /** What came back as text rather than as a list — a local agent's
+     *  canonical `{output}`, and the answer to a fetch's `prompt`. */
+    text: string;
+    /** A fetch's `prompt`: what it went to the page to find out. */
+    asked: string;
     /** The whole call failed. */
     error: string;
     pending: boolean;
+}
+
+/** A `read_file`: the path, and what was in it. */
+export interface FileRead {
+    kind: "file-read";
+    path: string;
+    /** The last segment, which is all a one-line head can fit. */
+    name: string;
+    /** "from line 40", "lines 40–60", when the call read a window. */
+    range: string;
+    /** As the return had it; the backend has already bounded it. */
+    content: string;
+    lines: number;
+    pending: boolean;
+    failed: boolean;
+    error: string;
+}
+
+/** One line of a change. `gap` stands for unchanged lines left out between
+ *  two hunks, so a one-line fix in a long file is not the whole file. */
+export interface DiffLine {
+    sign: "+" | "-" | " " | "gap";
+    text: string;
+}
+
+export interface FileDiff {
+    path: string;
+    change: "add" | "update" | "delete";
+    lines: DiffLine[];
+    added: number;
+    removed: number;
+}
+
+/** `write_file`, `edit_file`, `delete_file` or `move_file`. */
+export interface FileChange {
+    kind: "file-change";
+    action: "write" | "edit" | "delete" | "move";
+    path: string;
+    name: string;
+    /** Where a move put it. */
+    destination: string;
+    /** One per file touched. An `apply_patch` touches several. */
+    files: FileDiff[];
+    added: number;
+    removed: number;
+    /** The tool's own sentence, when it is all the return has. */
+    message: string;
+    pending: boolean;
+    failed: boolean;
+    error: string;
+}
+
+/** `list_files`, `glob` or `grep`: what was looked for, and what turned up. */
+export interface FileSearch {
+    kind: "file-search";
+    action: "list" | "glob" | "grep";
+    /** The glob or the regular expression. Empty for a listing. */
+    pattern: string;
+    path: string;
+    /** A grep's file filter. */
+    filter: string;
+    /** The adapter's own words, for a call whose arguments are empty — Codex
+     *  names a search only in its title. */
+    title: string;
+    output: string;
+    /** Non-empty lines in `output`, which is a match or a file each. */
+    count: number;
+    pending: boolean;
+    failed: boolean;
+    error: string;
+}
+
+/** A `task`: a sub-agent sent off to do part of the work. */
+export interface SubTask {
+    kind: "task";
+    description: string;
+    /** Which kind of sub-agent, when the harness has several. */
+    agentType: string;
+    prompt: string;
+    /** What it came back with. */
+    output: string;
+    pending: boolean;
+    failed: boolean;
+    error: string;
 }
 
 /** One `run_connector_operation`. */
@@ -265,18 +374,6 @@ function asString(value: unknown): string {
 
 function asNumber(value: unknown): number | undefined {
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-/** The tool, whatever it was namespaced with.
- *
- *  Same rule as `isDisplayResourceTool`: separators normalise to underscores,
- *  and anything before the last `__` is the namespace. An agent reaches these
- *  tools as `exec_command` in a pod and as `mcp__lemma__exec_command` through a
- *  host, and matching the exact string is how the second one stayed grey. */
-export function normalizeToolName(name: unknown): string {
-    if (typeof name !== "string") return "";
-    const flat = name.toLowerCase().trim().replace(/[.:\-\s]/g, "_").replace(/^.*__/, "");
-    return flat.startsWith("mcp_") ? flat.slice(4) : flat;
 }
 
 /** A field off a tool return, flat or wrapped.
@@ -513,11 +610,13 @@ function fetchedSources(args: unknown, result: unknown, answered: boolean): Sour
             })
             .filter((source) => source.url);
     }
-    /* Still in flight. The urls asked for are the honest stand-in: a fetch of
+    /* Still in flight, or a local agent's fetch, which returns text rather
+       than pages. The urls asked for are the honest stand-in: a fetch of
        five pages takes minutes, and an empty card for the length of it says
-       less than the generic grey line would. */
-    const urls = asRecord(args).urls;
-    if (!Array.isArray(urls)) return [];
+       less than the generic grey line would. A local agent names one `url`. */
+    const record = asRecord(args);
+    const urls = Array.isArray(record.urls) ? record.urls : asString(record.url) ? [record.url] : null;
+    if (!urls) return [];
     return urls
         .map((value) => asString(value))
         .filter(Boolean)
@@ -534,11 +633,35 @@ function fetchedSources(args: unknown, result: unknown, answered: boolean): Sour
         }));
 }
 
+/** A return's text, for the canonical tools that answer `{output}` — or a
+ *  bare string, which a bounded value can be. */
+function outputText(result: unknown): string {
+    if (typeof result === "string") return result.trim();
+    const output = resultField(result, "output");
+    return typeof output === "string" ? output.trim() : "";
+}
+
+/** Results a search wrote as JSON text. Some search tools answer the model
+ *  with the JSON rather than with an object, and the list inside is worth
+ *  more than the brace-soup around it. */
+function resultsInText(text: string): unknown {
+    if (!text.startsWith("{")) return undefined;
+    try {
+        return asRecord(JSON.parse(text)).results;
+    } catch {
+        return undefined;
+    }
+}
+
 function sourcesCard(tool: string, args: unknown, result: unknown, answered: boolean): SourceList | null {
     const record = asRecord(args);
     const search = tool === "web_search";
     const query = asString(record.query);
-    const sources = search ? (answered ? searchSources(result) : []) : fetchedSources(args, result, answered);
+    const text = answered ? outputText(result) : "";
+    const embedded = search && text ? resultsInText(text) : undefined;
+    const listing = embedded !== undefined ? { results: embedded } : result;
+    const listed = search ? Array.isArray(resultField(listing, "results")) : true;
+    const sources = search ? (answered ? searchSources(listing) : []) : fetchedSources(args, result, answered);
 
     /* A search with no query and a fetch with no urls are both calls this
        cannot name, and a card headed "Searched the web" over nothing is worse
@@ -552,6 +675,9 @@ function sourcesCard(tool: string, args: unknown, result: unknown, answered: boo
         query,
         sources,
         note: answered ? asString(resultField(result, "note")) : "",
+        listed,
+        text: embedded !== undefined ? "" : text,
+        asked: search ? "" : asString(record.prompt),
         error: answered ? asString(resultField(result, "error")) : "",
         pending: !answered,
     };
@@ -854,6 +980,232 @@ function browserCard(did: BrowserStep["did"], args: unknown, result: unknown, an
     };
 }
 
+/* ── a local agent's own tools, in the canonical vocabulary ────────── */
+
+/** Whether a canonical call failed, and in whose words. The backend keeps a
+ *  failed call's output and adds `success: false` and a sentence in `error`
+ *  (`tool_events.tool_result_value`), so both are positive evidence. */
+function failureOf(result: unknown, answered: boolean): { failed: boolean; error: string } {
+    if (!answered) return { failed: false, error: "" };
+    const error = asString(resultField(result, "error"));
+    return { failed: Boolean(error) || resultField(result, "success") === false, error };
+}
+
+function nameOf(path: string): string {
+    return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+function readCard(args: unknown, result: unknown, answered: boolean): FileRead | null {
+    const record = asRecord(args);
+    const path = asString(record.file_path) || asString(record.path);
+    if (!path) return null;
+    const offset = asNumber(record.offset);
+    const limit = asNumber(record.limit);
+    const range =
+        offset !== undefined && limit !== undefined
+            ? "lines " + offset + "–" + (offset + limit)
+            : offset !== undefined
+              ? "from line " + offset
+              : limit !== undefined
+                ? "first " + limit + " lines"
+                : "";
+    const raw = typeof result === "string" ? result : resultField(result, "content");
+    const content = answered && typeof raw === "string" ? raw : "";
+    return {
+        kind: "file-read",
+        path,
+        name: nameOf(path),
+        range,
+        content,
+        lines: content ? content.replace(/\n$/, "").split("\n").length : 0,
+        pending: !answered,
+        ...failureOf(result, answered),
+    };
+}
+
+function linesOf(text: string): string[] {
+    return text ? text.replace(/\n$/, "").split("\n") : [];
+}
+
+/** Past this many line pairs a change is shown as everything out and
+ *  everything in, rather than aligned. The alignment is quadratic, and a
+ *  rewrite of a long file is a rewrite whichever way it is drawn. */
+const ALIGN_LIMIT = 250_000;
+/** Unchanged lines kept either side of a change. */
+const CONTEXT = 3;
+
+/** A line diff of two texts.
+ *
+ *  Common head and tail first, which is nearly all of an ordinary edit, then
+ *  a longest-common-subsequence alignment of what is left. Long unchanged
+ *  runs are folded to a gap, so the card shows what changed and not the
+ *  file. */
+export function diffLines(before: string, after: string): DiffLine[] {
+    const old = linesOf(before);
+    const next = linesOf(after);
+    let head = 0;
+    while (head < old.length && head < next.length && old[head] === next[head]) head += 1;
+    let tail = 0;
+    while (
+        tail < old.length - head &&
+        tail < next.length - head &&
+        old[old.length - 1 - tail] === next[next.length - 1 - tail]
+    ) {
+        tail += 1;
+    }
+    const a = old.slice(head, old.length - tail);
+    const b = next.slice(head, next.length - tail);
+
+    const middle: DiffLine[] = [];
+    if (a.length * b.length > ALIGN_LIMIT) {
+        middle.push(...a.map((text) => ({ sign: "-" as const, text })), ...b.map((text) => ({ sign: "+" as const, text })));
+    } else {
+        const table = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+        for (let i = a.length - 1; i >= 0; i -= 1) {
+            for (let j = b.length - 1; j >= 0; j -= 1) {
+                table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+            }
+        }
+        let i = 0;
+        let j = 0;
+        while (i < a.length || j < b.length) {
+            if (i < a.length && j < b.length && a[i] === b[j]) {
+                middle.push({ sign: " ", text: a[i] });
+                i += 1;
+                j += 1;
+            } else if (j < b.length && (i >= a.length || table[i][j + 1] > table[i + 1][j])) {
+                /* Strictly greater, so a replaced line reads as the old one
+                   out and then the new one in, the order a reviewer expects. */
+                middle.push({ sign: "+", text: b[j] });
+                j += 1;
+            } else {
+                middle.push({ sign: "-", text: a[i] });
+                i += 1;
+            }
+        }
+    }
+
+    const all: DiffLine[] = [
+        ...old.slice(0, head).map((text) => ({ sign: " " as const, text })),
+        ...middle,
+        ...old.slice(old.length - tail).map((text) => ({ sign: " " as const, text })),
+    ];
+    const near = all.map((_line, index) =>
+        all.slice(Math.max(0, index - CONTEXT), index + CONTEXT + 1).some((other) => other.sign === "+" || other.sign === "-"),
+    );
+    const shown: DiffLine[] = [];
+    all.forEach((line, index) => {
+        if (near[index]) shown.push(line);
+        else if (shown.at(-1)?.sign !== "gap") shown.push({ sign: "gap", text: "" });
+    });
+    return shown;
+}
+
+function fileDiff(path: string, change: FileDiff["change"], before: string, after: string): FileDiff {
+    const lines = diffLines(before, after);
+    return {
+        path,
+        change,
+        lines,
+        added: lines.filter((line) => line.sign === "+").length,
+        removed: lines.filter((line) => line.sign === "-").length,
+    };
+}
+
+/** `changes: [{file_path, kind, old_text, new_text}]`, off the return first
+ *  (what was applied) and the arguments second (what was asked for). */
+function diffsOf(value: unknown): FileDiff[] {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((entry): FileDiff | null => {
+            const record = asRecord(entry);
+            const path = asString(record.file_path) || asString(record.path);
+            if (!path) return null;
+            const kind = asString(record.kind);
+            const change: FileDiff["change"] = kind === "add" || kind === "delete" ? kind : "update";
+            const before = typeof record.old_text === "string" ? record.old_text : "";
+            const after = typeof record.new_text === "string" ? record.new_text : "";
+            return fileDiff(path, change, change === "add" ? "" : before, change === "delete" ? "" : after);
+        })
+        .filter((diff): diff is FileDiff => diff !== null);
+}
+
+function changeCard(
+    action: FileChange["action"],
+    args: unknown,
+    result: unknown,
+    answered: boolean,
+): FileChange | null {
+    const record = asRecord(args);
+    const source = asString(record.source);
+    const path = action === "move" ? source : asString(record.file_path) || asString(record.path);
+
+    let files = diffsOf(resultField(result, "changes"));
+    if (!files.length) files = diffsOf(record.changes);
+    if (!files.length && action === "write" && typeof record.content === "string") {
+        files = [fileDiff(path, "add", "", record.content)];
+    }
+    if (!files.length && action === "edit" && (typeof record.old_string === "string" || typeof record.new_string === "string")) {
+        const raw = (value: unknown) => (typeof value === "string" ? value : "");
+        files = [fileDiff(path, "update", raw(record.old_string), raw(record.new_string))];
+    }
+
+    const named = path || files[0]?.path || "";
+    if (!named) return null;
+    return {
+        kind: "file-change",
+        action,
+        path: named,
+        name: files.length > 1 ? files.length + " files" : nameOf(named),
+        destination: action === "move" ? asString(record.destination) : "",
+        files,
+        added: files.reduce((sum, file) => sum + file.added, 0),
+        removed: files.reduce((sum, file) => sum + file.removed, 0),
+        message: answered ? asString(resultField(result, "message")) : "",
+        pending: !answered,
+        ...failureOf(result, answered),
+    };
+}
+
+function searchCard(
+    action: FileSearch["action"],
+    args: unknown,
+    result: unknown,
+    answered: boolean,
+    title: string,
+): FileSearch {
+    const record = asRecord(args);
+    const output = answered ? outputText(result) : "";
+    return {
+        kind: "file-search",
+        action,
+        pattern: action === "list" ? "" : asString(record.pattern),
+        path: asString(record.path),
+        filter: action === "grep" ? asString(record.glob) : "",
+        title,
+        output,
+        count: output ? output.split("\n").filter((line) => line.trim()).length : 0,
+        pending: !answered,
+        ...failureOf(result, answered),
+    };
+}
+
+function taskCard(args: unknown, result: unknown, answered: boolean): SubTask | null {
+    const record = asRecord(args);
+    const description = asString(record.description);
+    const prompt = asString(record.prompt);
+    if (!description && !prompt) return null;
+    return {
+        kind: "task",
+        description: description || prompt.split("\n")[0],
+        agentType: asString(record.subagent_type),
+        prompt,
+        output: answered ? outputText(result) : "",
+        pending: !answered,
+        ...failureOf(result, answered),
+    };
+}
+
 /** The one entry point: a tool call, and the card it deserves — or `null`,
  *  which is the existing grey note and has to stay reachable for every one of
  *  the thirty-odd tools nothing here claims. */
@@ -863,6 +1215,7 @@ export function parseToolCard({
     result,
     answered,
     atMs,
+    metadata,
 }: {
     toolName: unknown;
     args: unknown;
@@ -873,8 +1226,12 @@ export function parseToolCard({
     answered: boolean;
     /** The call's own timestamp, which is the only clock a snooze has. */
     atMs?: number;
+    /** The call message's metadata. It says whose tool this is
+     *  (`tool_source`), which is what keeps somebody's MCP `web_search` off
+     *  Lemma's card, and carries the adapter's own title. */
+    metadata?: Record<string, unknown> | null;
 }): ToolCard | null {
-    switch (normalizeToolName(toolName)) {
+    switch (toolKey(toolName, metadata)) {
         case "browser_sign_in":
             return signInCard(args, result, answered);
         case "browser_open":
@@ -901,6 +1258,24 @@ export function parseToolCard({
             return connectorCard(args, result, answered);
         case "snooze":
             return snoozeCard(args, result, answered, atMs);
+        case "read_file":
+            return readCard(args, result, answered);
+        case "write_file":
+            return changeCard("write", args, result, answered);
+        case "edit_file":
+            return changeCard("edit", args, result, answered);
+        case "delete_file":
+            return changeCard("delete", args, result, answered);
+        case "move_file":
+            return changeCard("move", args, result, answered);
+        case "list_files":
+            return searchCard("list", args, result, answered, toolTitle(metadata));
+        case "glob":
+            return searchCard("glob", args, result, answered, toolTitle(metadata));
+        case "grep":
+            return searchCard("grep", args, result, answered, toolTitle(metadata));
+        case "task":
+            return taskCard(args, result, answered);
         default:
             return null;
     }
