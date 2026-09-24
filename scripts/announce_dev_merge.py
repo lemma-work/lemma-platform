@@ -44,7 +44,8 @@ def main() -> None:
     sha = os.environ["GITHUB_SHA"]
     short = sha[:7]
     subject = git("log", "-1", "--format=%s", sha)
-    author = slack_text(git("log", "-1", "--format=%an", sha))
+    author_name = git("log", "-1", "--format=%an", sha)
+    author = slack_text(author_name)
     commit_url = f"https://github.com/{repo}/commit/{sha}"
     pr_match = re.search(r" \(#(\d+)\)$", subject)
     title = subject[: pr_match.start()] if pr_match else subject
@@ -58,7 +59,11 @@ def main() -> None:
         token,
         {
             "channel": CHANNEL,
-            "text": f"{title} — merged to lemma-platform/main; release to development",
+            "text": (
+                f"{title}. {review_label}: {review_url}. By {author_name}. "
+                f"Commit {short}: {commit_url}. Merged to lemma-platform/main; "
+                "release target: development."
+            ),
             "unfurl_links": False,
             "blocks": [
                 {"type": "header", "text": {"type": "plain_text", "text": heading, "emoji": True}},
