@@ -19,6 +19,10 @@ container: a running sandbox keeps what it was created with.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from uuid import UUID
+
 from app.modules.workspace.domain.sandbox import (
     Sandbox,
     SandboxKind,
@@ -26,26 +30,54 @@ from app.modules.workspace.domain.sandbox import (
 )
 
 
-async def is_owner_browser_sandbox(sandbox: Sandbox) -> bool:
+def _is_desktop() -> bool:
+    # Imported here, as `provider_factory` does, so the workspace module's
+    # import graph does not grow identity's for every deployment that is not
+    # Desktop.
+    from app.modules.identity.contracts.installation import is_desktop_installation
+
+    return is_desktop_installation()
+
+
+async def _is_owner(user_id: UUID) -> bool:
+    from app.modules.identity.contracts.installation import is_installation_owner
+
+    return await is_installation_owner(user_id)
+
+
+@dataclass(frozen=True, slots=True)
+class InstallationFacts:
+    """Where the two answers come from: identity's, injected so a test can
+    state them."""
+
+    is_desktop: Callable[[], bool] = _is_desktop
+    is_owner: Callable[[UUID], Awaitable[bool]] = _is_owner
+
+
+FACTS = InstallationFacts()
+
+
+async def no_host_loopback(sandbox: Sandbox) -> bool:
+    """The policy where there is no owner's Mac to reach: nobody gets the relay.
+
+    `SandboxService`'s default, so every deployment but Desktop -- and every
+    test that builds a service directly -- grants nothing.
+    """
+    return False
+
+
+async def is_owner_browser_sandbox(
+    sandbox: Sandbox, *, facts: InstallationFacts = FACTS
+) -> bool:
     """Whether this sandbox is the owner's own workspace on a Desktop install.
 
     A failure to read the owner is not absorbed as "no": it fails the
-    provision, as any other database failure during it does, rather than
-    quietly building the owner a sandbox without the relay that the next
-    provision would then disagree with.
+    provision, as any other database failure during it does.
     """
     if sandbox.kind is not SandboxKind.WORKSPACE:
         return False
     if sandbox.owner_kind is not SandboxOwnerKind.USER:
         return False
-    # Imported here, as `provider_factory` does, so the workspace module's
-    # import graph does not grow identity's for every deployment that is not
-    # Desktop.
-    from app.modules.identity.contracts.installation import (
-        is_desktop_installation,
-        is_installation_owner,
-    )
-
-    if not is_desktop_installation():
+    if not facts.is_desktop():
         return False
-    return await is_installation_owner(sandbox.owner_id)
+    return await facts.is_owner(sandbox.owner_id)

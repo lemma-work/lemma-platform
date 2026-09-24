@@ -111,6 +111,16 @@ class ProviderCreateSpec:
     # `lemma_local` sends it only when True, for the same older-guest reason.
     host_loopback: bool = False
 
+    def guest_grants(self) -> dict[str, bool]:
+        """The grants a guest `sandbox.ensure` carries, each only when it
+        differs from the guest's default -- the guest parses the request with
+        `deny_unknown_fields`, so an older one refuses a key it does not know
+        even when its value changes nothing."""
+        return {
+            **({} if self.host_access else {"host_access": False}),
+            **({"host_loopback": True} if self.host_loopback else {}),
+        }
+
 
 class ProviderStorageKind(StrEnum):
     """Where a workspace's durable files actually live.

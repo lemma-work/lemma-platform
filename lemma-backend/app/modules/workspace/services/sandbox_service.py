@@ -22,7 +22,6 @@ files are actually gone.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -50,7 +49,6 @@ from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepos
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
     ProviderCreateAmbiguous,
-    ProviderCreateSpec,
     ProviderFailed,
     ProviderInstance,
     ProviderNotReady,
@@ -62,6 +60,8 @@ from app.modules.workspace.providers.profiles import profile_for, profile_is_sta
 from app.modules.workspace.services.sandbox_addressing import (
     SandboxAddressingMixin,
 )
+from app.modules.workspace.services.host_loopback_policy import no_host_loopback
+from app.modules.workspace.services.sandbox_create_spec import provider_create_spec
 from app.modules.workspace.services.sandbox_sizing import plan_size_for
 from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
 
@@ -90,18 +90,11 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
     _recent: dict[tuple[int, UUID], tuple[float, SandboxHandle]] = {}
 
     def __init__(
-        self,
-        *,
-        provider,
-        uow_factory,
-        host_loopback_policy: Callable[[Sandbox], Awaitable[bool]] | None = None,
+        self, *, provider, uow_factory, host_loopback=no_host_loopback
     ) -> None:
         self._provider = provider
         self._uow_factory = uow_factory
-        # Which sandbox gets the loopback relay to the owner's Mac. None grants
-        # it to nobody, which is right everywhere but a Desktop install; see
-        # `host_loopback_policy`.
-        self._host_loopback_policy = host_loopback_policy
+        self._host_loopback = host_loopback  # See `host_loopback_policy`.
 
     # ------------------------------------------------------------------
     # Identity
@@ -431,25 +424,15 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             )
             await uow.commit()
 
-        spec = ProviderCreateSpec(
-            sandbox_id=sandbox.id,
-            kind=sandbox.kind,
+        spec = provider_create_spec(
+            sandbox,
+            profile,
             epoch=epoch,
             name=name,
-            image=profile.image,
-            # The configured profile, not the row's: the row was just brought
-            # up to date, and the container is stamped with this so the next
-            # ensure can tell whether it is still current.
-            profile_name=profile.name,
-            profile_digest=profile.digest,
             deadline_at=deadline_at,
             volume_name=volume_name,
-            mounts=sandbox.mounts,
             size=size,
-            host_loopback=(
-                self._host_loopback_policy is not None
-                and await self._host_loopback_policy(sandbox)
-            ),
+            host_loopback=await self._host_loopback(sandbox),
         )
         try:
             created = await self._provider.create(spec)

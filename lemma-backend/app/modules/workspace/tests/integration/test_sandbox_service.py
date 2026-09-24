@@ -131,7 +131,7 @@ async def test_the_loopback_relay_follows_the_policy_and_defaults_to_nobody(
 ) -> None:
     """The service asks its policy per sandbox and puts the answer on the spec.
 
-    Without a policy nobody is granted the relay, which is every deployment
+    By default nobody is granted the relay, which is every deployment
     but Desktop; with one, only the sandbox it names is.
     """
     SandboxService._inflight.clear()
@@ -150,7 +150,7 @@ async def test_the_loopback_relay_follows_the_policy_and_defaults_to_nobody(
     granted = SandboxService(
         provider=provider,
         uow_factory=sandbox_uow_factory,
-        host_loopback_policy=only_the_owner,
+        host_loopback=only_the_owner,
     )
     owners = await granted.resolve(
         kind=SandboxKind.WORKSPACE, owner_kind=SandboxOwnerKind.USER, owner_id=owner
