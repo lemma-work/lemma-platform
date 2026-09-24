@@ -39,7 +39,7 @@ The frontend reads it from `GET /users/me/installation`:
 
 ## Who can reach the installation
 
-Sharing (Local settings → Sharing) decides which networks can reach the
+Sharing (Settings → This Mac → Sharing) decides which networks can reach the
 workspace. It is enforced by locald's gateway and, for Public, by the tunnel.
 
 | Mode | Reachable from | Notes |
@@ -84,7 +84,9 @@ preference, **Who can join** (`who_can_join` in `sharing.json`: `invite_only` by
 default, or `open`). It is part of the control snapshot, it can be changed while
 sharing is live (`sharing.access`, which restarts only the backend), and the
 Public confirmation and LAN warning on the Sharing page describe whichever is
-in force.
+in force. Enabling Public from the workspace is confirmed in a native dialog
+the shell raises itself (`local_sharing`); the page cannot set the consent
+flag.
 
 ## What a non-owner gets
 
@@ -138,7 +140,11 @@ which is what the flag is there to key.
 The workspace page is a remote origin to Tauri, and reaches the shell only
 through a capability that names this Mac's own local origin. A shared origin —
 the LAN address or the tunnel host — is deliberately absent from that
-capability and fails the Rust-side caller check too. A visitor's browser can
+capability and fails the Rust-side caller check too. The This Mac settings
+commands check more narrowly still: local mode, the loopback workspace origin
+this app navigated to, and nothing else — so the owner's own window, once
+sharing has moved it to the shared address, is refused as well, and turns
+sharing off from the native Local settings instead. A visitor's browser can
 drive the shared Lemma; it can never invoke the desktop shell, the Agent Host
 or anything that touches the local stack. See
 [The privilege boundary](agent-host.md#the-privilege-boundary).

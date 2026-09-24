@@ -93,5 +93,21 @@ of it renders nothing in a browser.
   signed out (`crossSiteFramesCarryCookies`), with a panel in the frame's place.
 - **Settings from the shell.** The menu and tray raise
   `lemma:open-settings` with `{ section }`; the shell opens Settings there.
+  An optional `focus` names the part to open at (Advanced's Google form).
+- **This Mac settings.** A third group in Settings, after You and the
+  organization, named with the machine's noun: Overview, Coding agents,
+  Sharing, Updates, Advanced. Only in the app, on a local install, for the
+  installation owner, on this installation's loopback origin
+  (`thisMacAvailability` in `this-mac.ts`); a guest sees no hint of it. Each
+  setting is one row — its name, one line of what it does, its control — in
+  `.thismac-row`; choices reuse `.theme__modes`, lists `.mgroup`/`.mrow`,
+  fields `.field`/`.check`. No environment-variable names in copy.
+- **Configure at the point of need.** A connector or channel missing this
+  computer's OAuth app or bot shows "Set up on this Mac"
+  (`SetUpOnThisMac`), only while that form is empty. Models suggests local
+  model servers it found answering, rather than asking for a URL.
+- **Consent belongs to the shell.** Public sharing, repair and update install
+  are confirmed natively by the shell; the page never draws its own "are you
+  sure" for them.
 - Desktop styles live in `src/styles/desktop.css`, built from the Models
   page's own pieces, under the same token and weight rules as everything else.

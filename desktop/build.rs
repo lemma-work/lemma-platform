@@ -34,13 +34,11 @@ const COMMANDS: &[&str] = &[
     "agent_host_pair",
     "agent_host_refresh",
     "agent_host_open_log",
-    "apply_operator_config",
     "discover_provider_models",
     "configure_ai_provider",
     "sharing_action",
     "close_local_settings",
     "confirm_destructive_action",
-    "confirm_settings_changes",
     "resolve_confirmation",
     "open_developer_tools",
     "local_recovery_options",
@@ -51,6 +49,10 @@ const COMMANDS: &[&str] = &[
     "install_app_update",
     "telemetry_status",
     "set_telemetry_enabled",
+    "local_settings_snapshot",
+    "apply_local_settings",
+    "local_sharing",
+    "set_start_at_login",
 ];
 
 fn main() {

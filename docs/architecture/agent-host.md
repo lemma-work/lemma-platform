@@ -194,8 +194,25 @@ existed only to tell the toggle which way to point.
 The workspace page is a **remote origin** to Tauri — locald serves it over
 http, and the hosted build loads `lemma.work` — so it can only reach the shell
 through a capability naming its URL. `capabilities/workspace.json` grants
-exactly `open_control_center` plus five `agent_host_*` commands, and nothing
-that touches the local stack.
+`open_control_center`, five `agent_host_*` commands, `sandbox_image_status`,
+the conversation-folder commands, `discover_provider_models` and
+`configure_ai_provider` — and, for Settings → This Mac, the commands that
+change this computer's own settings: `local_settings_snapshot`,
+`apply_local_settings`, `local_sharing`, `set_start_at_login`,
+`repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
+`check_for_app_update`, `install_app_update`, `telemetry_status` and
+`set_telemetry_enabled`. Nothing destructive is granted: resetting data,
+reinstalling and restarting into recovery stay in Local settings.
+
+The This Mac commands carry a narrower Rust check than the Agent Host ones,
+`require_local_settings_caller`: local mode, the `main` webview, the origin
+this app navigated to, and that origin one of the shipped loopback workspace
+hosts. The capability also lists `https://lemma.work`, and that check is what
+keeps a hosted page from reaching an installation it is not. Public sharing,
+repair and installing an update each raise a native confirmation from Rust
+before acting, so the page asking is never the person agreeing.
+[Desktop architecture](desktop.md#tauri-ipc-commands-and-who-may-call-them)
+has the full table.
 
 Note what those five *cannot* do. `agent_host_start` has no counterpart, and
 `agent_host_unpair` is gone: the workspace can ask this computer to be running,
@@ -212,7 +229,9 @@ navigated to.
 Sharing republishes the same workspace on a LAN address or tunnel host. Those
 are different origins, are deliberately absent from the capability, and fail the
 Rust-side check too — a visitor's browser can drive the shared Lemma, but never
-this Mac's Agent Host.
+this Mac's Agent Host. The owner's own window moves to the shared origin while
+sharing is on, so it loses the This Mac settings too; the menu's Desktop
+settings… opens Local settings then, which is where sharing is turned off.
 
 Because the app declares an ACL manifest (`desktop/build.rs`), *every* app
 command now needs an explicit grant, including from the bundled pages. Adding a
