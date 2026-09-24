@@ -329,20 +329,18 @@ describe('harnessConfigControls', () => {
         expect(controls[0].currentValue).toBe('ask');
     });
 
-    it('drops an escalating value from an option that enumerates it', () => {
-        // Claude Code lists bypassPermissions among its own permission modes,
-        // and Agent Host refuses it anyway at session setup. Offering it would
-        // be a choice that can only ever fail on the user's first run.
+    it('offers every value the host published, plan mode included', () => {
+        // The host has already removed the values Lemma refuses and marked the
+        // option as policy; a second rule here only disagreed with it.
         const [control] = harnessConfigControls([
             {
-                id: 'permission_mode',
-                category: 'permission',
-                name: 'Permission mode',
+                id: 'mode',
+                category: 'mode',
+                name: 'Mode',
+                metadata: { policy: true },
                 options: [
                     { id: 'default', name: 'Ask' },
                     { id: 'plan', name: 'Plan' },
-                    { id: 'bypassPermissions', name: 'Bypass' },
-                    { id: 'acceptEdits', name: 'Accept edits' },
                 ],
             },
         ]);
@@ -351,8 +349,6 @@ describe('harnessConfigControls', () => {
     });
 
     it('leaves an ordinary option list alone', () => {
-        // The filter keys off the option being policy-bearing, so a value that
-        // merely looks alarming elsewhere is untouched.
         const [control] = harnessConfigControls([
             {
                 id: 'startup',
