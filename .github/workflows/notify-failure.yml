@@ -25,9 +25,6 @@ name: Notify a failure nobody is looking at
 # `workflow_run` only fires for a copy of this file on the default branch, so
 # changes to it are not testable from a pull request. Dispatch it by hand
 # against a known-failed run id after merging if you change the message.
-#
-# "Backend coverage" is deliberately not watched. See the exemption in
-# scripts/check_ci_aggregators.py, where the reason is written down.
 
 on:
   workflow_run:
