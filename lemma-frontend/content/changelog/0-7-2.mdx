@@ -1,0 +1,94 @@
+---
+title: 0.7.2
+description: Desktop updates itself, agent runs last hours instead of fifty minutes, and a conversation stops being something you wait on.
+published: 2026-09-01
+tags:
+  - release
+---
+
+## Desktop can update itself
+
+0.7.1 shipped an auto-updater and a signing key. What it did not have was a
+feed a pre-release build could follow, or a version it could compare — every
+nightly called itself the same number, so the updater asked whether 0.7.1 was
+newer than 0.7.1 and was always told no. The update path only ever ran on
+release day, which is the worst day to discover it.
+
+Nightlies now follow a feed of their own at an address that does not move, and
+carry an ordered version, so the update they offer is the one after the one you
+have. That means the path a real release takes is exercised every night rather
+than once a version.
+
+Two things behind it were worth fixing on their own. The version a build stamps
+lives in three places, and stamping only two of them produced an install that
+met its own runtime and refused it — so the build now fails if those numbers
+disagree, naming both, instead of signing and publishing something that cannot
+start. And every installed runtime used to be kept forever: 1.7 GiB per version,
+in Application Support, discovered from a full disk. An install now keeps the
+release it is running and the one before it, which is enough to step back
+without downloading it all again.
+
+## An agent run can take as long as the work does
+
+A local agent working steadily on a real task was stopped at minute fifty:
+`Agent Host run deadline elapsed`. The number came from the credential the run
+was dispatched with, which expired in an hour and which nothing renewed. Something
+renews it now, and has for a while — but the ceiling stayed behind, and every run
+since had been cut short for a reason that no longer applied.
+
+Runs may now last four hours. A host that crashes, sleeps or loses its network
+is still failed within about two minutes, because that was never the deadline's
+job: the run lease notices, and it is ninety seconds long.
+
+An Agent Host that outlived the app that started it used to hold its workspace
+lock forever, so every later launch found local agents unreachable and said only
+"Fetch is aborted". A leftover is now reclaimed before the next one starts.
+
+## Conversations you can keep talking to
+
+A running conversation accepts a follow-up message instead of making you wait
+for the turn to end. A stopped run is one you can carry on from. An interrupted
+run resumes from the queue rather than waiting for a sweep, and one busy
+conversation no longer freezes the rest of the pod.
+
+Around that: sub-agents appear as chips with tabs that name themselves,
+approvals show the one that is actually pending and look approved the moment you
+approve them, and a message typed past a card is treated as a message rather
+than as that card's answer.
+
+## Documents, files and apps
+
+A `.docx` renders as the document it is instead of a parser error. A shared file
+renders the way the workspace renders it, rather than redirecting past it. An
+image somebody sends is one the agent can open. A published app can be added to
+a home screen, and an app an agent has just built opens instead of reporting
+itself unavailable.
+
+A link inside an app that points at one of your pod files used to end on a raw
+JSON error in a window with no way back. It now lands on a page that says what
+happened and offers to open the file in your workspace.
+
+## Pods, exports and surfaces
+
+Pods can be renamed, and conversations can be named, archived and pinned.
+
+Pod export stopped leaving files behind. It had been reading a preview of the
+file tree — capped at three entries per directory — and treating it as the
+pod's contents, so a migration of 266 files exported 104 of them and reported
+success. Skills were dropped from every bundle. Both are fixed, the caps that
+remain say what they skipped, and a bundle this version writes can be imported
+by it.
+
+Surfaces now share one delivery seam, so email stops being the exception, and
+each agent can have its own Slack bot instead of the second one being
+unreachable.
+
+## Faster, and quieter about it
+
+Cold start is about seven seconds shorter: the window sizes itself correctly,
+the Continue screen stops being in the way, and the backend spends less time
+importing things it does not need yet.
+
+Failures that nobody was watching now reach Slack, a backend whose worker has
+died reports itself unready instead of healthy, and the scenario suite stopped
+reporting its own noise as failures.

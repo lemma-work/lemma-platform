@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from '@/site/help';
 import { useState, type ComponentType } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Org } from "@/data";
@@ -34,7 +35,7 @@ import {
  *  the rest belong to the organization and are paid for once.
  */
 export type SettingsSection =
-    | "account" | "appearance" | "usage" | "plan"
+    | "help" | "account" | "appearance" | "usage" | "plan"
     | "people" | "connectors" | "models" | "org-usage" | "team-billing";
 
 interface Entry {
@@ -46,6 +47,7 @@ interface Entry {
 }
 
 const YOURS: Entry[] = [
+    {key:'help',label:'Help',icon:ProfileIcon,title:'Help',blurb:'Guides and concepts for working with your teammates.'},
     { key: "account", label: "Account", icon: ProfileIcon, title: "Account", blurb: "The person behind the work." },
     { key: "appearance", label: "Appearance", icon: AppearanceIcon, title: "Appearance", blurb: "How this app looks on this screen." },
     { key: "usage", label: "Usage", icon: UsageIcon, title: "Your usage", blurb: "What you have spent, and what you may spend." },
@@ -223,6 +225,7 @@ export function SettingsModal({
                         {org && section === "connectors" && <ConnectorsSection orgId={org.id} />}
                         {org && section === "models" && <ModelsSection orgId={org.id} />}
                         {org && section === "org-usage" && <OrgUsageSection orgId={org.id} />}
+                        {section === 'help' && <Help />}
                         {org && section === "team-billing" && <TeamBillingSection orgId={org.id} />}
                     </div>
                 </div>

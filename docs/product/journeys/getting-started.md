@@ -326,3 +326,35 @@ are shown with a retry action rather than an indefinite loading message.
   a later first-chat request shall still ensure a pod and assistant.
 
 **Contracts:** `users.ensure_first_workspace`
+
+## Capability: Explore the public website
+
+### PS-ONB-060 — A visitor can learn about Lemma without signing in
+**Status:** covered
+
+- When a visitor opens documentation, company information, legal terms, the blog,
+  changelog, templates, or downloads, the system shall show the public content
+  without requiring a session.
+- When a visitor follows an indexed documentation link, the system shall show
+  the named guide; an unknown guide shall return a not-found response.
+- The system shall provide navigation between public pages and the workspace.
+
+### PS-ONB-061 — An AI reader can discover and read the public website
+**Status:** covered
+
+- When a reader requests Markdown for a supported public page, the system shall
+  return the page's content as Markdown at the same address and distinguish the
+  representation in its cache headers.
+- The system shall provide an AI index, a public API specification, a sitemap,
+  crawler rules, and a feed for dated content.
+
+### PS-ONB-062 — Existing public and workspace entry links keep working
+**Status:** covered
+
+- When a person follows an existing sign-in, legal, conversation, table, or
+  account-billing link, the system shall route them to the corresponding view
+  in the main frontend while retaining its resource identity.
+- When a person opens a shared contact, the system shall offer a contact file
+  with the channels carried by the link.
+- When a social crawler requests a public preview image, the system shall
+  return an image suitable for a link preview.

@@ -13,8 +13,14 @@ COPY lemma-frontend/ ./
 ARG NEXT_PUBLIC_DATA=live
 ARG NEXT_PUBLIC_API_URL
 ARG NEXT_PUBLIC_AUTH_URL
+ARG NEXT_PUBLIC_SITE_URL=https://lemma.work
+ARG NEXT_PUBLIC_ANALYTICS_INGEST_HOST=https://eu.i.posthog.com
+ARG NEXT_PUBLIC_ANALYTICS_ASSETS_HOST=https://eu-assets.i.posthog.com
 ARG NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=
-ENV NEXT_PUBLIC_DATA=${NEXT_PUBLIC_DATA} \
+ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL} \
+    NEXT_PUBLIC_ANALYTICS_INGEST_HOST=${NEXT_PUBLIC_ANALYTICS_INGEST_HOST} \
+    NEXT_PUBLIC_ANALYTICS_ASSETS_HOST=${NEXT_PUBLIC_ANALYTICS_ASSETS_HOST} \
+    NEXT_PUBLIC_DATA=${NEXT_PUBLIC_DATA} \
     NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
     NEXT_PUBLIC_AUTH_URL=${NEXT_PUBLIC_AUTH_URL} \
     NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=${NEXT_PUBLIC_APPS_DOMAIN_SUFFIX} \
@@ -33,6 +39,7 @@ COPY lemma-frontend/package.json lemma-frontend/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/lemma-frontend/.next ./.next
 COPY --from=builder /app/lemma-frontend/public ./public
+COPY --from=builder /app/lemma-frontend/content ./content
 COPY --from=builder /app/lemma-frontend/server.mjs ./server.mjs
 COPY --from=builder /app/lemma-frontend/server ./server
 COPY --from=builder /app/lemma-frontend/next.config.ts ./next.config.ts

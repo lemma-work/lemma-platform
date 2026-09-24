@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 166 |
+| `covered` | 169 |
 | `gap` | 2 |
 | `manual` | 13 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **181** |
+| **total** | **184** |
 
-Scenario tests declaring a promise: 400.
+Scenario tests declaring a promise: 403.
 
 ## Contract coverage
 
@@ -163,6 +163,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
+| `PS-ONB-060` A visitor can learn about Lemma without signing in | `covered` | `test_public_guides_and_company_pages` |
+| `PS-ONB-061` An AI reader can discover and read the public website | `covered` | `test_machine_readable_site` |
+| `PS-ONB-062` Existing public and workspace entry links keep working | `covered` | `test_existing_links` |
 
 ## [Operating a deployment](journeys/operating-a-deployment.md)
 

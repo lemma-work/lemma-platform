@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { AuthState, LemmaClient } from "lemma-sdk";
 import { useQueryClient } from "@tanstack/react-query";
 import { lemma, hasApiUrl, hasToken } from "./client";
+import { resetAnalyticsIdentity } from '@/site/analytics/client';
 import { key } from "./storage";
 import { askTheApi, type Person } from "./who";
 import { PORTAL_PATH } from "@/auth/config";
@@ -121,6 +122,7 @@ export function useSession(): Session {
             /* Best effort. A sign-out that could not reach the server must
                still put the person on the other side of the door. */
         }
+        resetAnalyticsIdentity();
         cache.clear();
         /* A full document load, deliberately: it is the only thing that drops
            every in-memory copy of what the last person could see — the query

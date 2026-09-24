@@ -17,7 +17,7 @@ const REFUSED = "/__refused";
  *  the SDK send; the other two are what older links and the platform's own
  *  pages have used, and a link already in somebody's inbox does not get to
  *  stop working because the spelling was tidied. */
-const PARAMS = ["redirect_uri", "redirectTo", "redirectBack"] as const;
+const PARAMS = ["redirect_uri", "redirectTo", "redirectBack", "next"] as const;
 
 export function rawDestination(search: string): string | null {
     const params = new URLSearchParams(search);

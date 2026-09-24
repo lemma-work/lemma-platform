@@ -1,0 +1,76 @@
+.section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(32px, 5vw, 72px);
+    align-items: center;
+    max-width: 1440px;
+    margin: auto;
+    padding: 100px 5%;
+    border-top: 1px solid var(--line);
+}
+.section .eyebrow {
+    font:
+        11px "DM Mono",
+        monospace;
+    letter-spacing: 0.1em;
+    color: var(--ink-3);
+    margin: 0 0 24px;
+}
+.section .intro h2 {
+    font-size: clamp(38px, 4.5vw, 64px);
+    font-weight: 400;
+    letter-spacing: -0.045em;
+    line-height: 1.07;
+    margin: 0 0 24px;
+}
+.section .intro > p:not(.eyebrow) {
+    max-width: 38ch;
+    font-size: 17px;
+    line-height: 1.75;
+    color: var(--ink-2);
+    margin: 0 0 30px;
+}
+.github {
+    display: inline-flex;
+    gap: 28px;
+    border: 1px solid var(--ink);
+    border-radius: 99px;
+    padding: 14px 22px;
+    font-size: 14px;
+}
+.github:hover {
+    background: var(--paper);
+}
+.visual {
+    align-self: center;
+}
+.visual img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 24px;
+}
+.resources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 22px;
+    margin-top: 24px;
+    font-size: 12px;
+}
+.resources a {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 4px;
+}
+.license {
+    display: block;
+    font-size: 11px;
+    color: var(--ink-3);
+    margin-top: 24px;
+}
+@media (max-width: 760px) {
+    .section {
+        grid-template-columns: 1fr;
+        padding: 60px 6%;
+        gap: 40px;
+    }
+}
