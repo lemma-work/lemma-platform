@@ -996,6 +996,13 @@ desktop-dev:
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@command -v node >/dev/null 2>&1 || \
 		(echo "  ✗ node not found — install Node.js $(NODE_VERSION) from https://nodejs.org"; exit 1)
+	@# locald runs $(WORKSPACE_DIR)'s server.mjs straight from the checkout, with
+	@# no npm in between -- so a missing install or an unbuilt SDK is not an
+	@# error message, it is a frontend health check that times out two minutes
+	@# into startup. Say so here instead.
+	@test -d $(WORKSPACE_DIR)/node_modules && test -d $(TS_DIR)/node_modules || ( \
+		echo "  ✗ run 'npm ci' in $(TS_DIR) and $(WORKSPACE_DIR) first"; exit 1)
+	@test -f $(TS_DIR)/dist/index.js || (cd $(TS_DIR) && npm run build --silent)
 	@$(DESKTOP_DIR)/scripts/dev-local.sh --source $(if $(filter 1,$(CONTROL)),--control,)
 
 # Four binaries from one cargo invocation. Asking for them separately would
@@ -1333,7 +1340,6 @@ desktop-agent-host-e2e:
 desktop-agent-host-browser-e2e:
 	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
 	@npm --prefix lemma-typescript run build
-	@node --test desktop/ui-tests/drivers/setup-layout.mjs
 	@cd lemma-backend && CORS_ORIGIN_REGEX='^http://127[.]0[.]0[.]1:[0-9]+$$' \
 		uv run pytest app/modules/agent/tests/e2e/test_agent_host_process_e2e.py \
 		-m agent_host_browser --no-showlocals
@@ -2148,5 +2154,6 @@ test-workspace:
 _init-workspace-env:
 	@mkdir -p $(WORKSPACE_DIR)
 	@if [ ! -f $(WORKSPACE_DIR)/.env.local ]; then \
-		printf 'NEXT_PUBLIC_DATA=live\nNEXT_PUBLIC_API_URL=%s\n' '$(DEV_BACKEND_URL)' > $(WORKSPACE_DIR)/.env.local; \
+		printf 'NEXT_PUBLIC_DATA=live\nNEXT_PUBLIC_API_URL=%s\nNEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=%s\n' \
+			'$(DEV_BACKEND_URL)' '$(DEV_FRONTEND_EMAIL_VERIFICATION)' > $(WORKSPACE_DIR)/.env.local; \
 	fi

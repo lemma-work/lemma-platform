@@ -5,6 +5,7 @@ import { allowanceOf, formatPercent, resetsIn } from "./allowance";
 import { offered, paying } from "@/billing/plan";
 import { useMyPlan, usePlans } from "@/billing/queries";
 import { UpgradeIcon } from "@/ui/icons";
+import { isLocalDeployment } from "@/site/config";
 
 export function AllowanceNote({
     orgId,
@@ -31,8 +32,9 @@ export function AllowanceNote({
     const canUpgrade = !theirsToPay && !paying(mine.data) && somethingToSell;
 
     /* Nothing to say: paying already, or covered by an organization, and not
-       near a limit. */
-    if (!warning && !canUpgrade) return null;
+       near a limit. A local installation has no plans to open either -- its
+       settings do not have that section. */
+    if (isLocalDeployment() || (!warning && !canUpgrade)) return null;
 
     const window = state.kind === "uncapped" ? null : state.window;
     const tone = blocked ? "bad" : warning ? "warn" : "quiet";

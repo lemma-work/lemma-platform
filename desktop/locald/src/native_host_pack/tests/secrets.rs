@@ -57,7 +57,7 @@ fn a_checkout_never_reaches_for_the_keychain() {
     // quietly — it puts up "a keychain cannot be found to store
     // secret-encryption-keyset" and the whole run stalls behind a dialog.
     let root = tempfile::tempdir().unwrap();
-    for directory in ["lemma-backend", "lemma-harness"] {
+    for directory in ["lemma-backend", "lemma-frontend"] {
         fs::create_dir_all(root.path().join(directory)).unwrap();
     }
     fs::create_dir_all(root.path().join("desktop/runtime")).unwrap();

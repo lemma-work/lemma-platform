@@ -10,7 +10,7 @@
 }
 .section .eyebrow {
     font:
-        11px "DM Mono",
+        11px var(--font-mono, "DM Mono"),
         monospace;
     letter-spacing: 0.1em;
     color: var(--ink-3);

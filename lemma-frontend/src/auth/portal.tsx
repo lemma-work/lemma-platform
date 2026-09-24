@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { Session, startAuth } from "./supertokens";
 import { screenFor } from "./which";
 import { Callback, Reset, SignInUp, Verify } from "./screens";
-import { PORTAL_PATH } from "./config";
+import { PORTAL_PATH, asksForSignUp } from "./config";
 import { hasApiUrl } from "@/session/client";
 import { holdRequestId, requestIdFromSearch, shouldUseBrowserHandoff } from "@/desktop/auth-handoff";
 import { DesktopReturn, DesktopSignIn } from "@/desktop/sign-in";
@@ -60,8 +60,12 @@ export function Portal({ path }: { path?: string[] }) {
     /* The desktop app on a hosted workspace signs in through the system
        browser rather than in its own webview. */
     const handoff = shouldUseBrowserHandoff();
-
-    switch (screenFor(path)) {
+    const screen = screenFor(path);
+    /* The bare door can be asked to open on sign-up; any deeper path already
+       says which screen it is and keeps it. */
+    const signUp = screen === "sign-in" && (path ?? []).length === 0
+        && asksForSignUp(window.location.search, window.location.hash);
+    switch (signUp ? "sign-up" : screen) {
         case "sign-in": return handoff ? <DesktopSignIn mode="in" /> : <SignInUp mode="in" />;
         case "sign-up": return handoff ? <DesktopSignIn mode="up" /> : <SignInUp mode="up" />;
         case "desktop": return <DesktopReturn />;

@@ -12,7 +12,8 @@
 # being worked on.
 #
 # `--source` is the one to use while developing: locald supervises the backend
-# out of lemma-backend/ through `uv run` and the frontend through `next dev`, so
+# out of lemma-backend/ through `uv run` and lemma-frontend through its own
+# `server.mjs --dev` (Next in development mode, voice gateways included), so
 # the workspace you get is the code you are editing rather than whatever the
 # last release shipped. Everything else -- the managed runtime, ports, health
 # checks, restart policy -- is identical to the packaged path, because a dev run

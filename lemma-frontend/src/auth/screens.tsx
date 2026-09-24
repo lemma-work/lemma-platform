@@ -5,7 +5,7 @@ import { LoadingIndicator } from "@/ui/loading";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { EmailPassword, EmailVerification, ThirdParty } from "./supertokens";
 import { authFailure, sayProblem, type Attempt } from "./errors";
-import { DEFAULT_LANDING, PORTAL_PATH, siteOrigin } from "./config";
+import { DEFAULT_LANDING, PORTAL_PATH, emailVerificationRequired, siteOrigin } from "./config";
 import { forgetDestination, landing, rememberDestination, destinationFrom, asksForDestination } from "./redirects";
 import { waitingFor } from "./waiting";
 import { CharacterPuppet } from "@/shell/character-puppet";
@@ -267,6 +267,8 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
        caret — not while it merely holds a value, because a filled password on
        a blurred form is not being typed. */
     const [onPassword, setOnPassword] = useState(false);
+    /* The address a verification email went to, once sign-up has sent one. */
+    const [sentTo, setSentTo] = useState<string | null>(null);
     const { go, refused } = useLanding();
 
     const attempt: Attempt = mode === "in" ? "sign-in" : "sign-up";
@@ -283,7 +285,21 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
                 ? await EmailPassword.signIn({ formFields })
                 : await EmailPassword.signUp({ formFields });
 
-            if (answer.status === "OK") { go(); return; }
+            if (answer.status === "OK") {
+                /* A deployment that gates on a proven address gets the email
+                   now, while the person is still looking at this screen --
+                   landing them in a workspace whose every request answers
+                   "verify first" is a dead end with no way out of it. The
+                   desktop app says it does not gate, and goes straight in. */
+                if (mode === "up" && emailVerificationRequired()) {
+                    await EmailVerification.sendVerificationEmail();
+                    setSentTo(email.trim());
+                    setBusy(false);
+                    return;
+                }
+                go();
+                return;
+            }
             if (answer.status === "FIELD_ERROR") {
                 setFields(fieldErrors(answer.formFields));
                 setBusy(false);
@@ -311,6 +327,16 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
             setSaid(sayProblem(error));
         }
     }, [email, password, mode, go, attempt]);
+
+    if (sentTo) {
+        return (
+            <Screen title="Check your email" lead={"We sent a link to " + sentTo + ". Open it to finish making your account."}>
+                <div className="screen__actions">
+                    <a className="screen__aside" href={PORTAL_PATH}>Back to sign in</a>
+                </div>
+            </Screen>
+        );
+    }
 
     return (
         <Screen
