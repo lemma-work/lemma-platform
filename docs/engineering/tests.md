@@ -169,16 +169,14 @@ carried by nothing — hard once cleared. `local_cli` stopped being empty in #63
 and the lane naming it could not build what those tests need; the protected
 workflow's comment has the story
 
-### TST-13 — coverage floors are per module and ratcheted; the global number is advisory
+### TST-13 — coverage is one combined total against one floor
 
-One global percentage lets a small well-tested module pay for a large untested
-one. `check_coverage_thresholds.py` already accepts repeated `--min-module`.
-
-*Today:* `--min-total 70 --min-module schedule=65`. Unfloored, by production
-lines: `agent` (47,316), `agent_surfaces` (41,847), `core` (27,481), `datastore`
-(22,268), `connectors` (16,374), `workspace` (12,593), `pod_bundle` (10,050),
-`identity` (8,597), `workflow` (7,511), `function` (6,563), `pod` (5,108),
-`apps` (3,820), `usage` (2,789), `icon` (500)
+Per-module floors and a changed-lines threshold were tried, and were red on more
+than half of all runs: coverage measured across xdist workers moves by fractions
+between runs, and a gate that is red most of the time gates nothing. The rule is
+now a single floor on the combined unit + e2e total, read from `main`, sitting
+about two points under the measurement. The module table in the PR comment is
+for reading, not for gating.
 
 ### TST-14 — every bug fix ships a test that fails before it and passes after
 

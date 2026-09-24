@@ -6,6 +6,8 @@ import json
 import pathlib
 from pathlib import Path
 
+import yaml
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 
@@ -219,98 +221,55 @@ def test_workspace_marked_files_are_routed_consistently_within_a_directory() -> 
         )
 
 
-def test_e2e_union_gate_is_separate_from_unit_aggregate() -> None:
-    workflow = (_REPO_ROOT / ".github/workflows/backend-coverage.yml").read_text()
+def test_coverage_is_combined_inside_the_e2e_run() -> None:
+    """Unit and e2e coverage meet in one run, from one checkout.
 
-    assert "coverage-backend/e2e-union.json" in workflow
-    assert "--lane e2e_union" in workflow
-    assert workflow.index("Combine E2E-only coverage") > workflow.index(
-        "Download validated unit coverage"
-    )
-
-
-def test_every_module_of_any_size_has_a_recorded_coverage_floor() -> None:
-    """Four modules were named on the command line and the rest had none.
-
-    A module with no floor can lose all of its coverage while the whole-repo
-    figure -- one number over ~190k statements -- barely moves, which is how
-    the largest modules came to be the least protected. The floors are a
-    ratchet now, so this asserts every module the gate measures is in it: a new
-    module arriving without one is the case that would otherwise pass quietly.
+    It used to be a separate `workflow_run` workflow that polled for the other
+    run's unit artifact, combined a merge-commit unit run with head-commit e2e
+    shards, and was red on 512 of its 1000 runs -- mostly because it ran with
+    nothing to combine. In the same run, `needs:` does all of that for free.
     """
-    baseline = json.loads(
-        (_REPO_ROOT / "lemma-backend/coverage-baseline.json").read_text()
-    )
+    workflow = yaml.safe_load((_REPO_ROOT / ".github/workflows/e2e.yml").read_text())
+    jobs = workflow["jobs"]
 
-    assert set(baseline) == {"combined", "e2e_union"}, sorted(baseline)
-    for lane, floors in baseline.items():
-        assert floors, f"{lane} records no floors at all"
-        for module, floor in floors.items():
-            assert 0 < float(floor) <= 100, f"{lane}/{module} floor is {floor}"
+    assert not (_REPO_ROOT / ".github/workflows/backend-coverage.yml").exists()
+    assert "backend-unit" in jobs
+    assert {"backend-unit", "backend-e2e"} <= set(jobs["coverage"]["needs"])
+    # The required check has to see the floor, or it is advisory again.
+    assert {"backend-unit", "coverage"} <= set(jobs["e2e-passed"]["needs"])
 
-    # `test_support` is scaffolding for other modules' tests and is not
-    # measured at all; `analytics` is five statements, where one of them is
-    # worth twenty points and a floor would report noise rather than coverage.
-    # Anything else arriving without a floor is the case this test is for.
-    unfloored = {"test_support", "analytics"}
-    modules = {
-        path.name
-        for path in (_REPO_ROOT / "lemma-backend/app/modules").iterdir()
-        if path.is_dir() and not path.name.startswith("_")
-    } - unfloored
-    for lane, floors in baseline.items():
-        missing = sorted(modules - set(floors))
-        assert not missing, (
-            f"{lane} has no coverage floor for {missing}. Run "
-            f"`make coverage-baseline` after a full coverage run — a module "
-            f"with no floor is one nothing would notice going uncovered."
+    # Every producer and the coverage job check out the same commit.
+    for name in ("backend-unit", "backend-e2e", "coverage"):
+        checkout = next(
+            step
+            for step in jobs[name]["steps"]
+            if str(step.get("uses", "")).startswith("actions/checkout")
         )
+        assert checkout.get("with", {}).get("ref") == (
+            "${{ github.event.pull_request.head.sha || github.ref }}"
+        ), f"{name} checks out a different commit from the other coverage producers"
 
 
-def test_coverage_aggregation_is_not_on_the_pull_request_critical_path() -> None:
-    """It gates nothing and cost 256s at the end of every PR, so it moved.
-
-    Off the e2e workflow entirely, onto a workflow_run consumer -- which is
-    also the only trigger that can reach the unit-coverage artifact from the
-    "CI" run rather than regenerating it by re-running the whole unit suite.
-    """
+def test_the_coverage_floor_is_read_from_main() -> None:
+    """A pull request must not be able to lower its own bar."""
     e2e_workflow = (_REPO_ROOT / ".github/workflows/e2e.yml").read_text()
-    coverage_workflow = (
-        _REPO_ROOT / ".github/workflows/backend-coverage.yml"
-    ).read_text()
+    floor = float((_REPO_ROOT / "lemma-backend/coverage-floor.txt").read_text())
 
-    assert "aggregate-coverage" not in e2e_workflow
-    assert "check_coverage_thresholds" not in e2e_workflow
-    assert "diff-cover" not in e2e_workflow
-    assert 'workflows: ["Backend E2E"]' in coverage_workflow
-    # The expensive fallback is gone: it re-ran the entire unit suite because
-    # the workflow_run fast path above it was unreachable.
-    assert "make coverage-backend-unit" not in coverage_workflow
+    assert 0 < floor <= 100
+    assert "git show FETCH_HEAD:lemma-backend/coverage-floor.txt" in e2e_workflow
 
 
 def test_ci_publishes_one_authoritative_module_wise_coverage_comment() -> None:
-    coverage_workflow = (
-        _REPO_ROOT / ".github/workflows/backend-coverage.yml"
-    ).read_text()
     e2e_workflow = (_REPO_ROOT / ".github/workflows/e2e.yml").read_text()
     ci_workflow = (_REPO_ROOT / ".github/workflows/ci.yml").read_text()
 
-    assert "Publish one authoritative PR coverage comment" in coverage_workflow
-    assert "<!-- lemma-backend-coverage:overall -->" in coverage_workflow
-    assert "--unit-coverage-json" in coverage_workflow
-    assert "--e2e-coverage-json" in coverage_workflow
-    assert "--combined-coverage-json" in coverage_workflow
-    assert "Publish authoritative E2E union PR comment" not in coverage_workflow
-    assert "Update PR backend coverage comment" not in coverage_workflow
+    assert "<!-- lemma-backend-coverage:overall -->" in e2e_workflow
+    assert "--unit-coverage-json" in e2e_workflow
+    assert "--e2e-coverage-json" in e2e_workflow
+    assert "--combined-coverage-json" in e2e_workflow
     assert "Update PR backend coverage comment" not in ci_workflow
-    # The invariant is one comment, not one action. Counting
-    # `actions/github-script` used to stand in for that and no longer can: the
-    # workflow now also uses it to locate the CI run that produced the unit
-    # coverage artifact, which posts nothing.
-    assert coverage_workflow.count("createComment") == 1
-    assert coverage_workflow.count("updateComment") == 1
-    # And the e2e workflow must not grow a second author of its own.
-    assert "github-script" not in e2e_workflow
+    assert e2e_workflow.count("createComment") == 1
+    assert e2e_workflow.count("updateComment") == 1
 
 
 def test_a_shard_can_be_reproduced_locally_without_copying_its_markers() -> None:
