@@ -24,3 +24,7 @@ Quiet production studio chrome, warm paper canvases, ink #202723, forest #234c3c
 Default: landing asset v3, pending review. Edit copy -> unsaved preview -> save v4 -> compare v3/v4 -> add version-linked comment -> approve v4 -> release view updates. Later edit clears approval. Storyboard updates are explicit sample checkboxes, never imply a video was rendered. Customer story starts blocked and can be anonymized. Empty comments invite a note; invalid actions explain the condition; storage errors preserve in-memory work.
 
 At <=1000px the review panel flows below the canvas. At <=600px assets become a horizontal rail, controls wrap, and the canvas fits without horizontal body overflow. Buttons have focus outlines; inputs have labels; validation and status changes use live regions. Verify desktop and 375px rendered pixels and the whole edit/save/compare/review loop.
+
+## Revised visual architecture
+
+A dark production stage (#181a1f) surrounds the bright campaign artwork. Assets form a bottom filmstrip, not a left navigation list. The inspector is a narrow dark column on the right; the stage scrolls independently so the filmstrip remains visible. Compact neutral sans typography for tools; serif is reserved for the actual campaign asset. Mobile restores normal document flow. No repeated app identity header.
