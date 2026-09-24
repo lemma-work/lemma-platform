@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, agentLogo, stillLooking, type Computer, type LocalAgent, type Runtime } from "@/data";
 import { downloadUrl } from "@/session/client";
 import { Modal } from "@/shell/modal";
+import { useIsDesktop } from "@/desktop/bridge";
+import { ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
 import {
     ComputerIcon,
     DownloadIcon,
@@ -24,11 +26,12 @@ import {
  *  computer is a heading *inside* the list, and every model is written down
  *  exactly once, in the place it comes from.
  *
- *  What this app cannot do is pair a machine. Agent Host ships in the Lemma
+ *  What a browser cannot do is pair a machine. Agent Host ships in the Lemma
  *  desktop app and is supervised by it; a browser has nothing to pair and
  *  handing out a pairing code would hand out a credential nothing can spend.
- *  So the computers here are the ones that app already connected, and the
- *  empty state asks for the app rather than pretending otherwise. */
+ *  So in a browser the computers here are the ones that app already
+ *  connected, and the empty state asks for the app. Inside the app, this
+ *  computer connects itself and heads the list with its live status. */
 
 /* Prefilled routes for the providers people actually connect. Everything else
    is the same two protocols with a different URL, which is what "Something
@@ -436,6 +439,41 @@ export function ModelsSection({ orgId }: { orgId: string }) {
     const troubled = all.filter((runtime) => !runtime.archived && runtime.trouble).length;
     const reading = runtimes.isPending || computers.isPending;
 
+    /* Inside the desktop app, the computer this app runs on leads the list with
+       its own live status, and is not drawn a second time below. */
+    const desktop = useIsDesktop();
+    const thisHostId = useThisHostId();
+    const mine = machines.find((computer) => computer.id === thisHostId) ?? null;
+    const others = machines.filter((computer) => computer !== mine);
+
+    /* One computer's agents, drawn the same way wherever the computer is. */
+    const agentsOf = (computer: Computer) => (
+        stillLooking(computer) ? (
+            <p className="mgroup__empty">
+                <LoadingIndicator label="Finding coding agents" />
+            </p>
+        ) : computer.agents.length === 0 ? (
+            <p className="mgroup__empty">
+                {computer.online
+                    ? "No coding agents found. Install Claude Code, Codex, Cursor or OpenCode there and it shows up here."
+                    : "Nothing published. It reports what it finds when it is next awake."}
+            </p>
+        ) : (
+            <ul className="mlist">
+                {computer.agents.map((agent) => (
+                    <AgentRow
+                        key={agent.id}
+                        agent={agent}
+                        computer={computer}
+                        saved={savedByAgent.get(agent.id) ?? null}
+                        orgId={orgId}
+                        onChanged={refresh}
+                    />
+                ))}
+            </ul>
+        )
+    );
+
     return (
         <div className="section">
             {/* No heading here: the settings pane names this section and
@@ -461,7 +499,13 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                         </ul>
                     )}
 
-                    {machines.map((computer) => (
+                    {desktop && (
+                        <ThisComputerCard release={mine?.release}>
+                            {mine && agentsOf(mine)}
+                        </ThisComputerCard>
+                    )}
+
+                    {others.map((computer) => (
                         <section className="mgroup" key={computer.id}>
                             <div className="mgroup__head">
                                 <ComputerIcon size={14} />
@@ -479,34 +523,11 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                                     {computer.status}
                                 </span>
                             </div>
-                            {stillLooking(computer) ? (
-                                <p className="mgroup__empty">
-                                    <LoadingIndicator label="Finding coding agents" />
-                                </p>
-                            ) : computer.agents.length === 0 ? (
-                                <p className="mgroup__empty">
-                                    {computer.online
-                                        ? "No coding agents found. Install Claude Code, Codex, Cursor or OpenCode there and it shows up here."
-                                        : "Nothing published. It reports what it finds when it is next awake."}
-                                </p>
-                            ) : (
-                                <ul className="mlist">
-                                    {computer.agents.map((agent) => (
-                                        <AgentRow
-                                            key={agent.id}
-                                            agent={agent}
-                                            computer={computer}
-                                            saved={savedByAgent.get(agent.id) ?? null}
-                                            orgId={orgId}
-                                            onChanged={refresh}
-                                        />
-                                    ))}
-                                </ul>
-                            )}
+                            {agentsOf(computer)}
                         </section>
                     ))}
 
-                    {computers.isSuccess && machines.length === 0 && (
+                    {computers.isSuccess && machines.length === 0 && !desktop && (
                         /* A browser has no computer to offer: Agent Host ships
                            inside the desktop app and is supervised by it, so
                            this is a handoff rather than a wizard. */

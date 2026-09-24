@@ -14,6 +14,8 @@ import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
 import { sendToConversation } from "./send-message";
+import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
+import { FolderChip } from "@/desktop/folder-chip";
 
 /** The conversation, on the SDK's own session.
  *
@@ -113,6 +115,9 @@ export function LiveConversation({
         autoLoad: false,
         autoResume: false,
     });
+    /* The folder on this computer the conversation works in — desktop app,
+       local install only; `FolderChip` draws nothing anywhere else. */
+    const folder = useConversationFolder(session.conversationId ?? null);
 
     const [historyLoading, setHistoryLoading] = useState(Boolean(conversationId && conversationId !== NEW_CONVERSATION));
     const [loadAttempt, setLoadAttempt] = useState(0);
@@ -311,7 +316,14 @@ export function LiveConversation({
                        agent_id that falls outside the filter it was created
                        for. Omitting the field is the only payload that means
                        "the pod's own assistant". */
-                    create: () => client.conversations.create({ pod_id: pod.id }),
+                    create: async () => {
+                        const made = await client.conversations.create({ pod_id: pod.id });
+                        /* A folder chosen while composing is parked in the
+                           desktop shell. Adopted here, before the session
+                           learns the id and before the first run reads it. */
+                        await adoptConversationFolder(made.id, folder.pendingId);
+                        return made;
+                    },
                     isActive: () => mounted.current,
                     /* Because the conversation is created off the client, the
                        session does not know it exists. Telling the pod first
@@ -367,7 +379,7 @@ export function LiveConversation({
                 if (mounted.current) setSending(false);
             }
         },
-        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles],
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId],
     );
 
     const resolve = useCallback(
@@ -458,6 +470,7 @@ export function LiveConversation({
                 dockedId={waitingOn?.id}
             />
             <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
+            <FolderChip folder={folder} />
             <Composer
                 placeholder={"Talk to " + pod.name + "…"}
                 note={

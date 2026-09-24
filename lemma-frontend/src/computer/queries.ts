@@ -5,6 +5,7 @@ import { live } from "@/usage/queries";
 import { useEffect, useRef } from "react";
 import { startupProgress } from "./startup";
 import { MAX_READ_BYTES, MAX_TEXT_BYTES, viewerFor, type BrowserState, type Listing } from "./machine";
+import { openExternalWhenReady } from "@/desktop/open-external";
 
 export function useWorkspaceStatus(enabled: boolean) {
     const cache = useQueryClient();
@@ -232,26 +233,16 @@ export function useBrowserAccess() {
  *  nothing to say about it — which makes this the one route to the display
  *  that still works when the socket is refused.
  *
- *  The tab is opened empty inside the click's own turn and pointed at the
- *  grant when it arrives. Opening it in the callback instead is what a browser
- *  calls a popup: the grant takes a round trip and a provision to come back,
- *  by which time the gesture is long over and the tab is blocked. `noopener`
- *  cannot do the severing here because it makes `window.open` hand back
- *  nothing to point, so the reference is cut by hand, which is the same
- *  protection.
+ *  The grant takes a round trip and a provision to come back, by which time
+ *  the click is long over — so the tab has to be claimed inside the click and
+ *  pointed later, which `openExternalWhenReady` does (and does differently in
+ *  the desktop app, which refuses a blank window).
  */
 export function useOpenBrowserTab() {
     const access = useBrowserAccess();
     const open = () => {
-        const opened = window.open("", "_blank");
-        access.mutate(undefined, {
-            onSuccess: (grant) => {
-                if (!opened || opened.closed) { window.open(grant.url, "_blank", "noopener,noreferrer"); return; }
-                opened.opener = null;
-                opened.location.replace(grant.url);
-            },
-            onError: () => { if (opened && !opened.closed) opened.close(); },
-        });
+        /* Failure is already on `access`, which is what `failed` reads. */
+        void openExternalWhenReady(access.mutateAsync().then((grant) => grant.url)).catch(() => undefined);
     };
     return { open, busy: access.isPending, failed: access.isError };
 }

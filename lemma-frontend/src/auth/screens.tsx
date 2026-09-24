@@ -113,7 +113,7 @@ function Aside({ destination, looking }: { destination: string | null; looking: 
  *  `looking` is only ever false on the screens that have a password field; the
  *  rest pass nothing and the cast simply waits.
  */
-function Screen({ title, lead, children, footer, looking = true }: {
+export function Screen({ title, lead, children, footer, looking = true }: {
     title: string; lead?: ReactNode; children?: ReactNode; footer?: ReactNode; looking?: boolean;
 }) {
     const destination = typeof window === "undefined" ? null : destinationFrom(window.location.search);

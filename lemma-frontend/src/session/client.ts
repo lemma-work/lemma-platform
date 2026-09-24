@@ -1,6 +1,7 @@
 import { LemmaClient } from "lemma-sdk";
 import { configuredApiUrl, requireApiUrl } from "./origins";
 import { isLandingPreview } from "@/marketing/preview-mode";
+import { isDesktop } from "@/desktop/bridge";
 
 /** One place a client is made, and one place the API origin is decided.
  *
@@ -215,7 +216,9 @@ export function lemma(podId?: string): LemmaClient {
     const configured = hasApiUrl();
     const url = configured ? apiUrl() : NO_ORIGIN;
     const auth = configured ? authUrl() : NO_ORIGIN + "/auth";
-    base ??= new LemmaClient({ apiUrl: url, authUrl: auth, client: "lemma-app" });
+    /* `lemma-desktop` inside the desktop app, hosted workspace or local: the
+       origin exists to tell a person at the app from one in a browser. */
+    base ??= new LemmaClient({ apiUrl: url, authUrl: auth, client: isDesktop() ? "lemma-desktop" : "lemma-app" });
     if (!podId) return base;
 
     const existing = scoped.get(podId);

@@ -7,6 +7,7 @@ import { ExternalIcon, RefreshIcon, PlusIcon, HistoryIcon, SettingsIcon, CopyIco
 import { ShareDialog } from "@/thread/share-dialog";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
 import type { ResourceKind } from "@/thread/resource-conversation";
+import { copyText } from "@/desktop/clipboard";
 
 /** What the tab in front of you is, as a thing that can carry a conversation.
  *
@@ -68,7 +69,7 @@ export function ViewActions({ tab, podId, teammate, onNew, onHistory, onComputer
         finally { setDownloading(false); }
     };
     const copy = async () => {
-        try { if (!file.data?.appUrl) return; await navigator.clipboard.writeText(file.data.appUrl); setFeedback("Link copied"); }
+        try { if (!file.data?.appUrl) return; await copyText(file.data.appUrl); setFeedback("Link copied"); }
         catch { setFeedback("Could not copy link"); }
     };
     let primary;
