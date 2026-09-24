@@ -57,6 +57,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.harnesses.agent_host.credential_expiry_unknown.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.harnesses.agent_host.credential_refresh_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'error_type'})),
     'agent.harnesses.agent_host.event_stream_read.degraded': EventSpec('warning', frozenset({'agent_run_id', 'attempt', 'error_type'})),
+    'agent.harnesses.agent_host.malformed_event.degraded': EventSpec('warning', frozenset({'agent_host_sequence', 'agent_run_id', 'error', 'payload_model', 'tool_call_id'})),
+    'agent.harnesses.agent_host.unpaired_tool_result.degraded': EventSpec('warning', frozenset({'agent_host_sequence', 'agent_run_id', 'tool_call_id'})),
     'agent.history.compacted.observed': EventSpec('info', frozenset({'folded_pin_count', 'kept_count', 'pinned_count', 'size_after', 'size_before', 'summarized_count'})),
     'agent.history.summarization_failed.degraded': EventSpec('warning', frozenset({'transcript_length'})),
     'agent.history.token_ceiling_enforced.degraded': EventSpec('warning', frozenset({'dropped_count', 'size_after', 'size_before'})),

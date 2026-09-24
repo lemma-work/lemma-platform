@@ -1,244 +1,78 @@
-"""Which tool calls a run has open, and when each becomes durable.
+"""Which tool calls a run has open, so the run can close them when it ends.
 
-Split out of the normalizer because it is a state machine with its own rules,
-and the normalizer's job is only to turn what it decides into events.
+This used to be a state machine. A streaming adapter reports a tool call before
+the model has finished writing its input, and a conversation message is
+appended, never revised, so the backend *held* each call until its arguments
+stopped growing, folding successive ACP updates together and guessing which one
+meant "done". The host does that now, with adapter-specific knowledge the
+backend never had (docs/architecture/agent-host-events.md#tool-calls): it emits
+``tool_call`` exactly once, with final arguments, and a ``tool_call_result``
+always follows one. What is left here is bookkeeping:
 
-The rule that shapes all of it: a conversation message is appended, never
-revised. A streaming adapter surfaces a tool call at ``content_block_start``,
-before the model has finished writing its input, so the first report carries
-``rawInput: {}`` and the real arguments follow moments later on a status-less
-update. Announcing the call immediately therefore pinned ``{}`` as its
-arguments for the life of the conversation, and any view built from them had
-nothing to build from. So a call whose arguments are still in flight is *held*
-until they arrive — which the adapter always does before the tool runs.
+* the name each call was announced under, because its return must carry the
+  same one and the result event does not repeat it;
+* which calls were deliberately *not* announced (Lemma's own pausing tools, see
+  ``AgentHostEventNormalizer._tool_call``), so their results are dropped with
+  them rather than reported as unpaired;
+* which calls are still open, so a run that ends mid-call closes them with a
+  synthesized return instead of leaving a spinner that never stops.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.modules.agent.domain.value_objects import JsonObject, MessageDraft
-from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
-    raw_tool_args,
-    tool_args,
-    tool_metadata,
-    tool_name_from_payload,
-)
+from app.modules.agent.domain.value_objects import JsonObject
 
 
-def _is_empty(value: object) -> bool:
-    return isinstance(value, (dict, list, str)) and len(value) == 0
+@dataclass(frozen=True, slots=True)
+class OpenToolCall:
+    """What a result needs to know about the call it closes.
 
-
-@dataclass(slots=True)
-class _HeldToolCall:
-    """A tool call announced before its arguments were written.
-
-    Holds the best payload seen so far. Successive updates are folded in rather
-    than replacing it, because an adapter refines a call in pieces — one update
-    carries the arguments, the next only a title, a third nothing but its id —
-    and a plain overwrite would let the emptiest of them win.
+    ``input`` is kept raw -- unbounded and untouched -- because a structured
+    final answer can ride in the arguments rather than the output, and bounding
+    would turn it into something that looks structured without being so.
     """
 
-    tool_name: str
-    payload: JsonObject
-    metadata: JsonObject
-    sequence: int
-
-    def arguments_settled(self) -> bool:
-        """Whether this call is ready to go on the durable record.
-
-        Pending calls may omit arguments entirely before asking permission.
-        That omission cannot seal an empty input before the permission request
-        supplies it. Calls that never supply arguments are released on close.
-
-        A call that really was invoked with nothing is the one case this reads
-        wrongly, and it costs only lateness: :meth:`ToolCallLedger.release`
-        announces it when the call closes.
-        """
-        arguments = raw_tool_args(self.payload)
-        if arguments is None:
-            return str(self.payload.get("status") or "").upper() not in {
-                "PENDING",
-                "IN_PROGRESS",
-            }
-        return not _is_empty(arguments)
-
-    def absorb(self, payload: JsonObject, metadata: JsonObject) -> None:
-        """Fold a later report of the same call into this one.
-
-        Empty and null fields are skipped rather than written: an adapter sends
-        several refinements per call, and the ones carrying nothing must not
-        undo the one that carried the arguments.
-        """
-        for key, value in payload.items():
-            if value is None:
-                continue
-            if key in {"arguments", "args", "rawInput"} and _is_empty(value):
-                continue
-            self.payload[key] = value
-        self.metadata.update(metadata)
-        refined = tool_name_from_payload(self.payload)
-        if refined and refined != "tool":
-            self.tool_name = refined
-
-    def draft(self, object_id: str) -> MessageDraft:
-        return MessageDraft.of_tool_call(
-            tool_name=self.tool_name,
-            tool_call_id=object_id,
-            tool_args=tool_args(self.payload, self.tool_name),
-            metadata=tool_metadata(self.metadata, self.payload),
-        )
+    name: str
+    input: object = None
+    metadata: JsonObject = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class ToolCallLedger:
-    """Every tool call this run has opened, and how far each one has got."""
+    """Every tool call this run has announced, and whether each has closed."""
 
-    #: Announced calls, by id, holding the name each was announced under.
-    open_calls: dict[str, str] = field(default_factory=dict)
+    calls: dict[str, OpenToolCall] = field(default_factory=dict)
     closed: set[str] = field(default_factory=set)
-    #: Calls whose arguments have not arrived yet. See the module docstring.
-    held: dict[str, _HeldToolCall] = field(default_factory=dict)
-    # ACP's ToolCall has no required id field, so an adapter is free to report a
-    # call and its completion with nothing tying them together. See
-    # :meth:`object_id`.
-    anonymous_seen: int = 0
-    anonymous_open: str | None = None
+    #: Calls left to Lemma to record (its pausing tools). Their results are
+    #: dropped with them.
+    dropped: set[str] = field(default_factory=set)
 
-    def object_id(self, reported: str | None, *, opening: bool) -> str:
-        """The id a tool call and its later update must agree on.
+    def known(self, call_id: str) -> bool:
+        return call_id in self.calls or call_id in self.dropped
 
-        ACP's ``ToolCall`` carries no required identifier, so an adapter can
-        report a call and its completion with nothing linking them. The old
-        fallback was the event sequence, which is different for the two events
-        by definition: the call was therefore never closed — it was swept at
-        the end as an abandoned call — and the update emitted a result for an
-        id nobody held.
+    def open(self, call_id: str, call: OpenToolCall) -> None:
+        self.calls[call_id] = call
 
-        With no id on the wire the only correlation available is order, so an
-        untagged update is attributed to the untagged call still open. That is
-        a heuristic, and it is exactly as good as the information the adapter
-        gave us; ``acp.rs`` reaches for the same one when a permission request
-        arrives without a tool-call id.
+    def drop(self, call_id: str) -> None:
+        self.dropped.add(call_id)
+
+    def close(self, call_id: str) -> OpenToolCall | None:
+        """Close a call, returning it, or ``None`` if it is not open.
+
+        ``None`` covers both a result for a call never announced and a second
+        result for one already closed; neither may put a return on the record.
         """
-        if reported:
-            return reported
-        if opening:
-            self.anonymous_seen += 1
-            self.anonymous_open = f"anonymous-tool-call-{self.anonymous_seen}"
-            return self.anonymous_open
-        return (
-            self.anonymous_open or f"anonymous-tool-call-{max(self.anonymous_seen, 1)}"
-        )
-
-    def open(
-        self,
-        object_id: str,
-        payload: JsonObject,
-        metadata: JsonObject,
-        *,
-        sequence: int,
-    ) -> tuple[MessageDraft, int] | None:
-        """Take a reported tool call, announcing it if it is ready."""
-        if object_id in self.open_calls:
-            # A second opening for a call already announced. Adapters re-surface
-            # a call rather than inventing a new id, so this is a refinement in
-            # everything but name; treat it as one.
-            return self.refine(object_id, payload, metadata)
-        held = _HeldToolCall(
-            tool_name=tool_name_from_payload(payload),
-            payload=dict(payload),
-            metadata=dict(metadata),
-            sequence=sequence,
-        )
-        self.open_calls[object_id] = held.tool_name
-        if held.arguments_settled():
-            return self._announce(object_id, held)
-        self.held[object_id] = held
-        return None
-
-    def refine(
-        self, object_id: str, payload: JsonObject, metadata: JsonObject
-    ) -> tuple[MessageDraft, int] | None:
-        """Fold a status-less update into the call it refines.
-
-        Announces only once the arguments have stopped arriving, which is the
-        same shape the in-process harness has: a tool call is one part, streamed
-        in deltas and emitted whole when the model finishes writing it.
-
-        An adapter streams a call's input in pieces, and each piece is a
-        *complete prefix of the fields written so far* rather than the whole
-        thing — a `write_file` was observed arriving as `{path}` and only then
-        as `{path, content}`, 1126 characters later. Announcing on the first
-        non-empty piece therefore published a call missing most of its input,
-        and a conversation message is appended, never revised. So an update that
-        carries arguments only folds them in; the one that carries *none* is the
-        signal that the input is final, and is what releases the call. It still
-        arrives before the tool runs, so the card is not delayed behind
-        execution. If an adapter never sends one, the close releases it anyway.
-        """
-        held = self.held.get(object_id)
-        if held is None:
-            # Already announced; nothing left to correct, because the message is
-            # on the durable record.
+        call = self.calls.get(call_id)
+        if call is None or call_id in self.closed:
             return None
-        still_writing = raw_tool_args(payload) is not None
-        held.absorb(payload, metadata)
-        if still_writing or not held.arguments_settled():
-            return None
-        return self._announce(object_id, held)
-
-    def release(
-        self,
-        object_id: str,
-        payload: JsonObject | None = None,
-        metadata: JsonObject | None = None,
-    ) -> tuple[MessageDraft, int] | None:
-        """Announce a call whose arguments never arrived, so it is not lost.
-
-        A call is held only while its arguments are still being written. If the
-        turn ends first — the agent was cancelled, the adapter died, the tool
-        genuinely takes no arguments — the call still happened and still owes
-        the conversation a card.
-
-        ``payload`` is the update doing the releasing, and is folded in first.
-        The closing update is frequently the only one that ever named the tool
-        or carried its input: releasing without reading it announced the call as
-        an anonymous ``tool`` with ``{}`` for arguments while the answer to both
-        sat in the very event that triggered the release. Only the fields a call
-        reads are used; a result on the same payload is ignored here and handled
-        by the caller.
-        """
-        held = self.held.get(object_id)
-        if held is None:
-            return None
-        if payload is not None:
-            held.absorb(payload, metadata or {})
-        return self._announce(object_id, held)
-
-    def release_all(self) -> list[tuple[MessageDraft, int]]:
-        return [
-            announced
-            for object_id in list(self.held)
-            if (announced := self.release(object_id)) is not None
-        ]
-
-    def close(self, object_id: str) -> None:
-        self.closed.add(object_id)
-        if object_id == self.anonymous_open:
-            self.anonymous_open = None
+        self.closed.add(call_id)
+        return call
 
     def outstanding(self) -> dict[str, str]:
         return {
-            object_id: tool_name
-            for object_id, tool_name in self.open_calls.items()
-            if object_id not in self.closed
+            call_id: call.name
+            for call_id, call in self.calls.items()
+            if call_id not in self.closed
         }
-
-    def _announce(
-        self, object_id: str, held: _HeldToolCall
-    ) -> tuple[MessageDraft, int]:
-        self.held.pop(object_id, None)
-        self.open_calls[object_id] = held.tool_name
-        return held.draft(object_id), held.sequence

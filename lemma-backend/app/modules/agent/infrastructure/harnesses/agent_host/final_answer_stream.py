@@ -1,11 +1,11 @@
 """Recognising a structured final answer inside an Agent Host event stream.
 
-ACP tool-call events carry no tool *name* — ``ToolCall`` has a ``title`` the
-agent wrote for humans and a ``toolCallId``, and nothing that reliably says
-"this was ``lemma_final_answer``". So the answer is recognised by the marker the
-tool stamps into its own result, which rides in both the text block and the
-structuredContent of the MCP result and therefore survives whichever half an
-adapter echoes back.
+The answer is recognised by the marker the tool stamps into its own result,
+not by the call's name. The host does name every call now, but the marker was
+always the stronger signal: it rides in both the text block and the
+structuredContent of the MCP result, so it survives whichever half an adapter
+echoes back, and it cannot be claimed by a native tool that happens to share
+the name.
 
 The text fallback here is a deliberate last resort for an agent that never
 called the tool. It is fenced hard, because guessing wrong invents a structured

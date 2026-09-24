@@ -30,6 +30,8 @@ from app.modules.agent.domain.agent_host import (
     AgentHostEvent,
     AgentHostEventType,
     AgentHostRunSpec,
+    AgentHostToolCallPayload,
+    AgentHostToolResultPayload,
 )
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure.harnesses.agent_host.events import (
@@ -86,37 +88,31 @@ def test_event_text_matches_the_contract(case: dict) -> None:
 
 @pytest.mark.parametrize(
     "case",
-    CONTRACT["tool_calls"],
-    ids=[case["name"] for case in CONTRACT["tool_calls"]],
+    CONTRACT["tool_events"],
+    ids=[case["name"] for case in CONTRACT["tool_events"]],
 )
-def test_a_tool_call_arrives_with_its_arguments_and_its_result(case: dict) -> None:
-    """The other half of the tool-call contract.
+def test_normalized_tool_events_map_to_the_messages_the_contract_names(
+    case: dict,
+) -> None:
+    """The backend's half of the tool contract: map, never reinterpret.
 
-    The host's half, asserted in ``wire_contract.rs``, is that nothing an
-    adapter reported is dropped on the way here. This half is that what arrived
-    is actually read: the arguments out of whichever field carried them, and an
-    MCP result out of the envelope around it. Both halves are needed and
-    neither is sufficient — the arguments did reach this process, in
-    ``rawInput`` on a status-less update, and were thrown away on arrival.
+    The host's half, asserted in ``wire_contract.rs``, is that it emits these
+    normalized events. This half is that each becomes exactly one call and one
+    return, under the host's name, with its input verbatim and its output --
+    plus ``success``/``error`` when it did not complete -- and nothing guessed
+    in between. The backend used to read raw ACP here and got the name wrong
+    for every Codex MCP call.
     """
     normalizer = AgentHostEventNormalizer(agent_run_id=uuid7(), model_name="test")
     messages = [
         event
-        for sequence, update in enumerate(case["updates"], start=1)
+        for sequence, raw in enumerate(case["events"], start=1)
         for event in normalizer.normalize(
             AgentHostEventEnvelope(
                 sequence=sequence,
-                type=(
-                    AgentHostEventType.TOOL_CALL_UPSERT.value
-                    if update["sessionUpdate"] == "tool_call"
-                    else AgentHostEventType.TOOL_CALL_UPDATE.value
-                ),
-                object_id=update.get("toolCallId"),
-                payload={
-                    key: value
-                    for key, value in update.items()
-                    if key not in {"sessionUpdate", "toolCallId"}
-                },
+                type=AgentHostEventType(raw["type"]).value,
+                object_id=raw["object_id"],
+                payload=raw["payload"],
             )
         )
         if event.type is AgentEventType.MESSAGE
@@ -126,8 +122,23 @@ def test_a_tool_call_arrives_with_its_arguments_and_its_result(case: dict) -> No
     returns = [m for m in messages if m.data.kind is MessageKind.TOOL_RETURN]
     assert len(calls) == 1, "one tool use must render as exactly one call"
     assert len(returns) == 1, "one tool use must render as exactly one return"
+    assert calls[0].data.tool_name == case["tool_name"]
+    assert returns[0].data.tool_name == case["tool_name"]
     assert calls[0].data.tool_args == case["tool_args"]
     assert returns[0].data.tool_result == case["tool_result"]
+
+
+def test_the_tool_event_payloads_are_the_ones_this_side_models() -> None:
+    """Each fixture payload validates against the typed model the mapper
+    reads, so a field renamed on one side fails here rather than as a card
+    with no name."""
+    models = {
+        AgentHostEventType.TOOL_CALL.value: AgentHostToolCallPayload,
+        AgentHostEventType.TOOL_CALL_RESULT.value: AgentHostToolResultPayload,
+    }
+    for case in CONTRACT["tool_events"]:
+        for raw in case["events"]:
+            models[raw["type"]].model_validate(raw["payload"])
 
 
 def test_the_declared_limits_are_the_ones_this_side_enforces() -> None:
