@@ -1,0 +1,79 @@
+---
+title: 0.7.1
+description: Lemma Desktop becomes installable and recoverable, and agents get a memory of their own.
+published: 2026-08-27
+tags:
+  - release
+---
+
+## Lemma Desktop ships
+
+Installing the 0.7.0 nightly and watching it fail surfaced two ways the app
+could lose a user's data outright: Postgres 18 moved where it stores its
+cluster and the volume mount never followed, so a fresh install wrote its
+database into a container's throwaway volume instead of the one people are
+told holds their data; and a secrets file that went missing — not just
+corrupted — was treated as a first run instead of the permanent loss it is.
+Both are fixed, and the auto-updater has a signing key for the first time, so
+a release can finally be followed by another one without a manual reinstall.
+
+That sits on top of a full adversarial review of the app, its CI, and its
+recovery paths, which found and closed 10 blockers, 26 serious issues, and
+40+ polish items — the app now gets itself unstuck instead of leaving a dead
+end, and a quit that used to hang now closes. Pod apps and pod functions,
+which worked everywhere except Desktop, now carry a session and an address
+like they do on the web.
+
+Underneath, the Agent Host — the bridge to Codex, Claude Code, and other
+ACP-compatible coding agents — reattaches to a run you walked away from,
+retries a failed run without dying on two missing methods, and stops
+rejecting a run for naming the harness revision the host itself just
+published.
+
+## Agents remember, and you choose what they run on
+
+Agents can now hold onto things: `/memory` for facts a whole pod should
+share, `/me` for what's private to you, both built on the pod-file model that
+already backs everything else an agent reads. Memory is a capability you
+grant like any other, not something every agent silently has — and it
+collapses what an agent can do from twelve switches down to five.
+
+Choosing a model is a popover now, not a window that stops the app — the chip
+in the composer opens with the default, five recent picks by number key, and
+the full catalog one row away. Models themselves moved into Pod settings,
+next to Access and Automation, because every question people ask of the
+catalog — what a chat runs on, why an agent can't reach a laptop — starts
+from inside a pod. And an agent's reasoning is recorded as reasoning: it can
+no longer be shown, or returned, as its answer.
+
+## Messaging gets more precise
+
+An agent can now say where a message goes. `message_user` takes a channel —
+email, Slack, Teams, Telegram, WhatsApp — and either delivers there or
+refuses, never silently swaps it for another. A pod's assistant gets its
+inbound mailbox the moment the pod exists, not the first time it happens to
+send something. A second Slack workspace or Teams tenant no longer goes
+permanently unreachable, WhatsApp gets progress messages on runs that can't
+stream, and a voice note is transcribed once, in the language it was actually
+spoken.
+
+## Security and correctness sweep
+
+Every open CodeQL finding is closed, `ruff format` is now enforced across all
+883 first-party Python files, and the scenario suite runs at the SSRF
+strictness a real deployment uses instead of a permissive stand-in. Closing
+the last 19 gaps in the scenario suite's coverage found and fixed 17 real
+bugs on the way, including one that let a pod's sole owner make it
+permanently unadministrable.
+
+## Fixes
+
+- A widget in a conversation renders at its own height instead of being cut
+  off at 480px, and opens in its own tab instead of overwriting another
+- Retrying a failed run works again on every surface that offers it — the
+  API, Telegram's `/retry`, and the retry button
+- A message sent while an agent is working now reaches the run that's
+  already going, instead of starting a second one
+- Files sent from a conversation arrive as an attachment, not a link only a
+  Lemma account can open
+- The pod settings tab formerly called "Access" is now "Members"

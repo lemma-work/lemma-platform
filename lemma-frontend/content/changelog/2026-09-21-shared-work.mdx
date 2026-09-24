@@ -1,0 +1,25 @@
+---
+title: "September 21 — Shared channels and browser handoff"
+description: "More precise Slack routing, clearer delivery failures, browser takeover and paste, and organization billing controls."
+published: 2026-09-21
+tags:
+  - development-update
+---
+
+A development update covering changes merged into main after v0.8.0. Availability depends on the build or deployment you use.
+
+## Keep channel conversations in the right place
+
+Slack bot routing identifies the surface that owns the conversation. Threaded replies are handled when the thread is one the teammate participates in, rather than treating every thread as a request.
+
+When a message cannot reach its destination, delivery failures provide a clearer explanation.
+
+## Take over the browser when needed
+
+The browser pane improves human takeover and paste support. Sign-in and reconnection fixes help keep the browser usable as work passes between a person and an agent.
+
+## Manage the organization from the workspace
+
+Billing controls and organization settings are available from the frontend. Per-seat pricing accounts for the team purchasing the plan.
+
+Sources: [Slack surface routing](https://github.com/lemma-work/lemma-platform/pull/762), [thread participation](https://github.com/lemma-work/lemma-platform/pull/761), [delivery errors](https://github.com/lemma-work/lemma-platform/pull/765), [browser handoff](https://github.com/lemma-work/lemma-platform/pull/755), [billing and settings](https://github.com/lemma-work/lemma-platform/pull/720), [per-seat pricing](https://github.com/lemma-work/lemma-platform/pull/758).

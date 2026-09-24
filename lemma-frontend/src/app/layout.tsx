@@ -1,3 +1,7 @@
+import Script from 'next/script';
+import "@/styles/site.css";
+import { Analytics } from "@/site/analytics";
+import { publicSiteUrl } from "@/site/seo/site-url";
 import type { Metadata } from "next";
 import { CARRY_SCRIPT, PREFIX } from "@/session/storage";
 import "@/styles/base.css";
@@ -14,7 +18,7 @@ import "@/styles/computer.css";
 import "@/styles/tool-cards.css";
 import "@/styles/document.css";
 
-export const metadata: Metadata = { title: "Lemma", description: "Your teammates and the work they are doing." };
+export const metadata: Metadata = { metadataBase: new URL(publicSiteUrl()), title: {default: 'Lemma', template: '%s | Lemma'}, description: 'Your teammates and the work they are doing.', manifest: '/manifest.webmanifest', alternates: {types: {'application/rss+xml':'/feed.xml'}} };
 
 // Apply saved appearance before paint. The app reads the same preferences.
 // `CARRY_SCRIPT` runs first and must: it carries these keys over from the
@@ -24,7 +28,7 @@ const themeScript = `(function(){try{var d=document.documentElement,s=localStora
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
     return <html lang="en" suppressHydrationWarning>
-        <head>
+        <head><Script src="/site-config.js" strategy="beforeInteractive" />
             {/* Two tags, not one string. Concatenating two IIFEs is how the
                 appearance script stopped running once already: it parses, and
                 then calls the first one's return value. */}
@@ -34,6 +38,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
             <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:ital,wght@0,400..600;1,400..600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=DM+Mono:wght@400;500&display=swap" />
         </head>
-        <body><div id="root">{children}</div></body>
+        <body><Analytics /><div id="root">{children}</div></body>
     </html>;
 }

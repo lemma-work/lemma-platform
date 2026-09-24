@@ -1,3 +1,6 @@
+"use client";
+import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
+import { settingsFromQuery } from "@/site/legacy-address";
 import { Library, TableView } from "@/library/library";
 import { readableName } from "@/library/reading";
 import { RecordView } from "@/library/record-view";
@@ -5,7 +8,7 @@ import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
 import { AllowanceNote } from "@/usage/allowance-note";
 import { ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION } from "@/data";
@@ -65,8 +68,10 @@ function readJson<T>(key: string, fallback: T): T {
 export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRevision?: number } = {}) {
     const preview = isLandingPreview();
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
-    const [orgId, setOrgId] = useState<string | null>(() => readJson<string | null>(ORG_KEY, null));
     const pathname = usePathname();
+    const incoming = useSearchParams();
+    const [orgId, setOrgId] = useState<string | null>(() => incoming.get("org") ?? readJson<string | null>(ORG_KEY, null));
+    const [entrySection] = useState(() => incoming.get("section") ?? undefined);
     /** Where the address bar says you are. `address.ts` has the grammar and
      *  the reasoning; what matters here is that reading it through
      *  `usePathname` makes Back and Forward work for nothing, because the
@@ -93,7 +98,17 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
      *  its conversation mounted, and the reveal sets a fill in the same batch
      *  that switches pods. Without it the words land in whichever composer was
      *  already standing there, and the new teammate opens empty. */
-    const [fill, setFill] = useState<{ text: string; id: number; podId: string } | null>(null);
+    const [fill, setFill] = useState<{ text: string; id: number; podId: string } | null>(() => {
+        const raw = incoming.get("remixSource");
+        if (!raw || !podId) return null;
+        try {
+            const url = new URL(raw);
+            if (!["http:", "https:"].includes(url.protocol)) return null;
+            return { text: "Help me rebuild or adapt this app for our workspace: " + url.href, id: 1, podId };
+        } catch {
+            return null;
+        }
+    });
     const [tabs, setTabs] = useState<Record<string, string>>(() => preview ? { kit: "conversation" } : readJson<Record<string, string>>(TAB_KEY, {}));
     /** Apps stay mounted once opened — hidden, never unmounted, so coming
      *  back to a tab does not cold-boot someone's app. */
@@ -107,11 +122,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
      *  stay in the strip until closed, the way an opened tab does. */
     const [extraTabs, setExtraTabs] = useState<Record<string, Tab[]>>({});
     const [searching, setSearching] = useState(false);
-    const [settings, setSettings] = useState<SettingsSection | null>(null);
+    const [settings, setSettings] = useState<SettingsSection | null>(() => settingsFromQuery(incoming.get("settings")));
     /* Hiring takes the whole pane, like organization settings — a candidate
        gets the same profile page a hired teammate gets, and that does not
        fit in a dialog. */
-    const [hiring, setHiring] = useState(false);
+    const [hiring, setHiring] = useState(() => incoming.get('hire') === '1');
     const [collapsed, setCollapsed] = useState(() => readJson(key("sidebar-collapsed"), false));
     const [mobileOpen, setMobileOpen] = useState(false);
     const [sidebarHidden, setSidebarHidden] = useState(() => readJson(key("sidebar-hidden"), false));
@@ -172,7 +187,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
        header — it is a whole-pane view that closes on its way here — so the
        one other door into that sheet is mounted beside the people dialog,
        which is here for the same reason. */
-    const [reaching, setReaching] = useState(false);
+    const [reaching, setReaching] = useState(() => incoming.get('reach') === '1');
 
     // Only the explicitly labelled, isolated product-tour document accepts this prop.
     // These are the same UI states reached by the shell's own buttons.
@@ -200,7 +215,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
            account, and reading one gave the arrival screen nothing to work
            with, so it fell back to the local part of an address and offered
            to call somebody's workspace "deepakjha0196+99's Personal". */
-        queryFn: () => lemma().users.current() as Promise<{ email?: string; first_name?: string; last_name?: string } | undefined>,
+        queryFn: () => lemma().users.current() as Promise<{ id?: string; email?: string; first_name?: string; last_name?: string } | undefined>,
         enabled: source.label !== "sample",
         staleTime: 5 * 60_000,
     });
@@ -212,6 +227,18 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
        saying it could not find it. */
     const remembered = orgs.data?.some((candidate) => candidate.id === orgId) ? orgId : null;
     const activeOrgId = remembered ?? orgs.data?.[0]?.id ?? null;
+    useEffect(() => {
+        if (source.label === "sample") return;
+        let active = true;
+        void startAnalytics().then(() => {
+            if (active && me.data?.id) setAnalyticsIdentity({
+                userId: me.data.id,
+                organizationId: activeOrgId ?? undefined,
+                podId: podId ?? undefined,
+            });
+        });
+        return () => { active = false; };
+    }, [me.data?.id, activeOrgId, podId]);
     const activeOrg = orgs.data?.find((candidate) => candidate.id === activeOrgId) ?? null;
 
     const pods = useQuery({
@@ -1101,7 +1128,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                             {activeTab?.kind === "profile" && (
                                 <ProfilePane
                                     key={pod.id}
-                                    initialSection={preview && demoStep === 2 ? "skills" : undefined}
+                                    initialSection={preview && demoStep === 2 ? "skills" : entrySection}
                                     openAgentName={openAgentName}
                                     onOpenAgentName={setOpenAgentName}
                                     /* Same path a widget's compose request
