@@ -153,7 +153,7 @@ pub(crate) async fn check_for_app_update(
     window: Webview,
     app: AppHandle,
 ) -> Result<AppUpdateStatus, String> {
-    require_control_window(&window)?;
+    require_settings_caller(&window, &app)?;
     let mut status = AppUpdateStatus {
         channel: release_channel(),
         current_version: env!("CARGO_PKG_VERSION"),
@@ -266,7 +266,7 @@ pub(crate) async fn install_app_update(
     reset_data: bool,
     expected_version: String,
 ) -> Result<(), String> {
-    require_control_window(&window)?;
+    require_settings_caller(&window, &app)?;
     if !updates_enabled() {
         return Err(
             "this build does not update itself; download the current release instead".into(),

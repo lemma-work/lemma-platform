@@ -6,60 +6,20 @@ import {
   confirmAction,
   friendlyError,
   invoke,
-  nextId,
-  pendingSaves,
   store,
   toast,
 } from "./core.js";
 import { loadAppUpdate, loadRuntimeInfo, postgresMajorChangeMessage } from "./updates.js";
-import { saveConfiguration } from "./config.js";
-import { renderSandboxImage } from "./overview.js";
 import { retrySnapshotNow } from "./events.js";
 
-let closeDecisionPending = false;
-
+// Nothing on this page is a draft any more -- the forms that were moved to the
+// workspace's own settings -- so leaving is never a decision to make.
 export async function closeLocalSettings() {
-  if (closeDecisionPending) return false;
   const status = $("settings-close-status");
   status.hidden = true;
-  if (pendingSaves.size) {
-    status.textContent = "A save is still running. Wait for its result before closing.";
-    status.hidden = false;
-    return false;
-  }
-  closeDecisionPending = true;
   try {
-    if (document.querySelector(".config-page.dirty")) {
-      const decision = await invoke("confirm_settings_changes");
-      if (decision === "confirm") {
-        for (const page of document.querySelectorAll(".config-page.dirty")) {
-          if (!await saveConfiguration(page.querySelector("[data-save]"))) {
-            status.textContent = "A section could not be saved. Review its error; your draft is preserved.";
-            status.hidden = false;
-            return false;
-          }
-        }
-        if (document.querySelector(".config-page.dirty")) {
-          status.textContent = "New edits are still unsaved. Review them before closing.";
-          status.hidden = false;
-          return false;
-        }
-      } else if (decision !== "discard") {
-        return false;
-      }
-      if (pendingSaves.size) {
-        status.textContent = "A save is still running. Wait for its result before closing.";
-        status.hidden = false;
-        return false;
-      }
-    }
     return await leaveSettings();
-  } catch (error) {
-    status.textContent = `Couldn't close settings. ${friendlyError(error)}`;
-    status.hidden = false;
-    return false;
   } finally {
-    closeDecisionPending = false;
     $("back-to-lemma").focus();
   }
 }
@@ -89,23 +49,6 @@ export async function runDesktopAction(button) {
       );
       if (!stopEverything) return;
       await invoke("stop", { includeInfra: true });
-    }
-    if (action === "prepare-sandbox-image") {
-      button.disabled = true;
-      button.textContent = "Starting…";
-      try {
-        await invoke("prepare_sandbox_image", { id: nextId("sandbox-prepare") });
-      } catch (error) {
-        // Put the offer back. Without this the button stayed disabled reading
-        // "Starting…" for a download that never started, and the only way to
-        // try again was to reopen Settings.
-        renderSandboxImage(store.snapshot?.sandbox_images);
-        throw error;
-      }
-      // Not re-enabled on success: the `sandbox-images` broadcast arrives with
-      // `downloading` and renders the panel, and re-enabling it would offer a
-      // second download of what is already being fetched.
-      renderSandboxImage({ state: "downloading", detail: "" });
     }
     if (action === "logs") await invoke("open_logs");
     if (action === "devtools") await invoke("open_developer_tools");

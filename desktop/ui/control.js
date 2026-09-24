@@ -8,35 +8,13 @@ import {
   LOCAL_PAGES,
   copyText,
   forThisDevice,
-  friendlyError,
-  invoke,
   listen,
-  nextId,
-  pendingSaves,
-  store,
-  toast,
 } from "./control/core.js";
 import { startLogPolling, stopLogPolling, wireLogControls } from "./control/logs.js";
 import { loadAppUpdate, loadRuntimeInfo } from "./control/updates.js";
 import { closeLocalSettings, runDesktopAction } from "./control/actions.js";
-import {
-  applyProviderPreset,
-  clearDiscoveredModels,
-  discoverModels,
-  fillConfiguration,
-  labelSecretButton,
-  markDirty,
-  saveConfiguration,
-  setSectionError,
-} from "./control/config.js";
 import { loadTelemetry } from "./control/overview.js";
-import {
-  disableSharing,
-  enableLanSharing,
-  enablePublicSharing,
-  renderSharing,
-  selectSharingChoice,
-} from "./control/sharing.js";
+import { disableSharing } from "./control/sharing.js";
 import {
   handleLocaldEvent,
   requestSnapshot,
@@ -44,15 +22,13 @@ import {
   showSnapshotUnavailable,
 } from "./control/events.js";
 
+// What is left here is what has to work when the workspace does not. The AI
+// provider, sharing, integrations, channels and updates moved to the
+// workspace's own Settings, under This Mac, where the rest of Lemma's settings
+// already were; the menu opens them there whenever the local workspace is up.
 const titles = {
   computer: ["This computer", "Installed agents and the connection to your workspace."],
-  overview: ["Overview", "Health, attention, and exposure at a glance."],
-  ai: ["AI provider", "Choose and validate the system model profile used by local agents."],
-  sharing: ["Sharing", "Keep Lemma private, use it on trusted Wi-Fi, or create an intentional public link."],
-  integrations: ["Integrations", "Configure service connections without mixing them with login or channel credentials."],
-  channels: ["Channels", "Make agents reachable through only the receivers you explicitly enable."],
-  runtime: ["Runtime", "Application health, lifecycle controls, and private dependency status."],
-  updates: ["Updates", "Exact release matching, verified packs, and safe repair boundaries."],
+  overview: ["Overview", "Health, what is exposed, and this app's version."],
   recovery: ["Recovery", "Repair a broken installation or explicitly erase local Lemma and set up again."],
   diagnostics: ["Diagnostics", "Local paths, canonical origins, logs, and non-destructive repair."],
 };
@@ -112,37 +88,6 @@ function configureInteractionHandlers() {
     }
     closeLocalSettings();
   });
-  document.querySelectorAll(".config-page input, .config-page select").forEach((input) => {
-    input.addEventListener("input", () => markDirty(input));
-    input.addEventListener("change", () => markDirty(input));
-  });
-  document.querySelectorAll(".secret-clear").forEach((button) => {
-    const input = button.parentElement.querySelector("input[data-secret]");
-    labelSecretButton(button, input);
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      input.value = "";
-      input.dataset.clear = input.dataset.clear === "true" ? "false" : "true";
-      button.classList.toggle("armed", input.dataset.clear === "true");
-      button.textContent = input.dataset.clear === "true" ? "Keep" : "Remove";
-      labelSecretButton(button, input);
-      markDirty(button);
-    });
-  });
-  document.querySelectorAll("[data-save]").forEach((button) => {
-    button.addEventListener("click", () => saveConfiguration(button));
-    const discard = document.createElement("button");
-    discard.className = "btn";
-    discard.textContent = "Discard changes";
-    discard.addEventListener("click", () => {
-      const page = button.closest(".config-page");
-      if ([...pendingSaves.values()].some((pending) => pending.page === page)) return;
-      page.classList.remove("dirty");
-      setSectionError(page, "");
-      fillConfiguration();
-    });
-    button.parentElement.append(discard);
-  });
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", () => runDesktopAction(button));
   });
@@ -150,45 +95,8 @@ function configureInteractionHandlers() {
     button.addEventListener("click", () => copyText($(button.dataset.copyTarget).textContent));
   });
   $("attention-action").addEventListener("click", () => {
-    const page = $("attention-action").dataset.page || "ai";
-    setPage(page);
+    setPage($("attention-action").dataset.page || "overview");
   });
-  document.querySelectorAll("[data-preset]").forEach((button) => {
-    button.addEventListener("click", () => applyProviderPreset(button.dataset.preset));
-  });
-  $("ai-discover").addEventListener("click", discoverModels);
-  $("ai-base").addEventListener("input", () => {
-    // The listed models belong to the endpoint they came from. Once that
-    // changes they are someone else's models, and offering them as a choice
-    // is how a default that the provider has never heard of gets saved.
-    clearDiscoveredModels();
-  });
-  for (const id of ["ai-protocol", "ai-key", "ai-private-network"]) {
-    $(id).addEventListener("change", clearDiscoveredModels);
-  }
-  document.querySelectorAll("[data-sharing-mode]").forEach((button) => {
-    button.addEventListener("click", () => selectSharingChoice(button.dataset.sharingMode));
-  });
-  document.querySelectorAll("[data-provider]").forEach((button) => {
-    button.addEventListener("click", () => {
-      store.sharingProvider = button.dataset.provider;
-      document.querySelectorAll("[data-provider]").forEach((candidate) => {
-        candidate.classList.toggle("active", candidate.dataset.provider === store.sharingProvider);
-      });
-      renderSharing(store.snapshot?.sharing);
-      invoke("sharing_action", {
-        action: "preflight",
-        id: nextId("sharing-preflight"),
-        payload: { provider: store.sharingProvider },
-      }).catch((error) => toast(friendlyError(error), true));
-    });
-  });
-  $("cloudflare-setup").addEventListener("change", () => {
-    store.cloudflareSetupChoice = $("cloudflare-setup").value;
-    renderSharing(store.snapshot?.sharing);
-  });
-  $("sharing-enable-lan").addEventListener("click", enableLanSharing);
-  $("sharing-enable-public").addEventListener("click", enablePublicSharing);
   $("sharing-disable").addEventListener("click", disableSharing);
 }
 
@@ -214,7 +122,7 @@ listen("lemma:control-page", (page) => {
 });
 listen("lemma:locald-event", handleLocaldEvent);
 listen("lemma:locald-disconnected", () => {
-  showSnapshotUnavailable("The local service manager disconnected. Reconnecting; your drafts are preserved.");
+  showSnapshotUnavailable("The local service manager disconnected. Reconnecting.");
   scheduleSnapshotRetry();
 });
 // Static copy in control.html, rewritten wholesale rather than kept as a list

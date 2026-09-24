@@ -274,10 +274,15 @@ pub(crate) fn open_developer_tools(window: Webview, app: AppHandle) -> Result<()
 #[tauri::command(async)]
 pub(crate) fn diagnostic_logs(
     window: Webview,
+    app: AppHandle,
     source: Option<String>,
     cursor: Option<String>,
 ) -> Result<DiagnosticLogSnapshot, String> {
-    require_local_native_window(&window)?;
+    // Redacted on the way out, so This Mac → Advanced can show the same tails
+    // Local settings does.
+    if require_local_native_window(&window).is_err() {
+        require_local_settings_caller(&window, &app)?;
+    }
     let sources = diagnostic_log_sources();
     let selected = source.as_deref().unwrap_or("events");
     let (_, _, path) = sources

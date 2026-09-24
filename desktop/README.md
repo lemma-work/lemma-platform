@@ -491,7 +491,7 @@ stable versions. Local development builds do not self-update. Runtime and app
 assets are retained so an installed nightly is not stranded by automatic pruning.
 
 To qualify the update path, install nightly A, create representative local data,
-and publish nightly B with app/backend/frontend changes. Use Desktop settings →
+and publish nightly B with app/backend/frontend changes. Use Settings → This Mac →
 Updates to install B, reopen, and verify the version, credentials, data, services,
 and conversation continuity. Repeat with interrupted downloads and installation
 failure. Run this on macOS and Windows; feed publication alone is not upgrade
@@ -582,15 +582,16 @@ Acceptance flow:
    enlarged text, confirm every step's Continue/Create action is fully visible
    without scrolling. Tab through the form: content may scroll, actions stay
    put.
-7. Open **Local settings** from the workspace footer, close it with Escape,
-   reopen it from the tray, and confirm the underlying workspace state was not
-   remounted or lost. It must look like the rest of the product: warm paper,
-   violet primary action, no gold.
-8. On the AI provider page, press **Ollama** and **LM Studio** to prefill a
-   loopback endpoint, then **Connect and list models** and pick a default from
-   the list — typing a model name must not be required. Apply it and verify
-   thinking and structured tool calls. Also verify an API provider can replace
-   them, and that a model the provider does not serve is refused.
+7. Press ⌘, and use the tray's **Desktop settings…**: both open Settings at
+   **This Mac** in the workspace, without remounting it. Stop the stack and
+   press ⌘, again: Local settings opens instead, with Overview, Recovery and
+   Diagnostics. Sign in as a second, non-owner account and confirm This Mac
+   is not shown at all.
+8. With Ollama and LM Studio running, open **Settings → Models** and confirm
+   each is offered as **Add as provider** with its models; add one and verify
+   thinking and structured tool calls. If this install had an AI provider set
+   before, confirm it is offered as **Add to workspace** and that titles still
+   work after adding it.
 9. From the onboarding agents step, and again from **Models**, confirm the
    computer pairs on its own. A failed start or pairing must display the
    failure and offer **Retry connection**, without remaining on a loading row.
@@ -600,13 +601,13 @@ Acceptance flow:
    and reopening restores the paired host. A machine with no coding agents
    installed must say so and still let the step continue. Repeat in hosted
    mode: the Agent Host connects without downloading the complete local stack.
-10. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
+10. From **Settings → This Mac → Sharing**, enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
     second browser, create/sign into an account, and verify streamed chat, a
     tool call, and a file transfer. Confirm that browser is offered the account
     portal rather than the landing page. Disable it and confirm the LAN port
     closes.
 11. Verify ngrok preflight without exposing credentials. Activate a public link
-    only after the open-signup confirmation, repeat streamed chat/file/webhook
+    only after the native confirmation (the page cannot skip it), repeat streamed chat/file/webhook
     checks, then disable it. After `cloudflared tunnel login`, verify automatic
     setup creates one installation-owned named tunnel and DNS route, reuses it
     after disable, and still offers an existing tunnel as an advanced option.
@@ -614,7 +615,7 @@ Acceptance flow:
 12. Run a sandbox operation that uses `lemma` CLI against the dynamic API.
 13. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
     the UI honestly says published pod apps remain local-only.
-14. Check the menu bar: **Settings…** on ⌘, opens Local settings, and no menu
+14. Check the menu bar: **Desktop settings…** on ⌘, opens This Mac settings (or Local settings when the workspace is not up), and no menu
     item names a service. The tray's first line must report the stack's real
     state, and everything operational must sit under **Troubleshoot**.
 15. Close the window; verify schedules, the Agent Host, and active sharing
@@ -686,7 +687,7 @@ a shipped artifact.
 25. **Concurrency.** Press Start and Reset within the same second. One must be
     refused as busy, and the loser must touch nothing.
 26. **Update.** Install v(N-1) from its DMG into Applications, complete first
-    run, create a workspace. Publish v(N) and confirm Local settings offers it
+    run, create a workspace. Publish v(N) and confirm This Mac → Updates offers it
     with the real runtime download size. Update, restart, and confirm the
     workspace returns with its data, that `pgrep -a lemma-locald` shows nothing
     from the previous bundle, and that the relaunched app does not bounce off

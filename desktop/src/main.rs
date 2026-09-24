@@ -44,6 +44,7 @@ mod update_policy;
 mod window_placement;
 mod windowing;
 mod workspace;
+mod workspace_settings;
 
 use agent_host_ui::*;
 use app_update::*;
@@ -88,6 +89,7 @@ use tauri_plugin_updater::UpdaterExt as _;
 use window_placement::*;
 use windowing::*;
 use workspace::*;
+use workspace_settings::*;
 
 mod artifact_install;
 

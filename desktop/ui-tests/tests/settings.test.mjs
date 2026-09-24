@@ -3,10 +3,8 @@ import test from 'node:test';
 
 import {
   fakeElement,
-  fakePage,
   fresh,
   installDom,
-  operatorConfig,
   resetShared,
   shared,
 } from '../drivers/control-dom.mjs';
@@ -15,29 +13,11 @@ import {
 // connection mode once, when it loads.
 let dom = installDom();
 
-/** A fresh DOM and shared state, with the three config sections. */
+/** A fresh DOM and shared state, as a newly opened Local settings has them. */
 async function page() {
   dom = installDom();
   const core = await resetShared();
-  const pages = ['ai', 'integrations', 'channels'].map(fakePage);
-  for (const section of pages) {
-    dom.queries.set(`.config-page[data-page="${section.dataset.page}"]`, section);
-  }
-  dom.lists.set('.config-page', pages);
-  core.store.snapshot = {
-    operator: { config: operatorConfig(), secrets: { 'ai.api_key': true } },
-  };
-  return { core, pages };
-}
-
-/** A secret input, as `input[data-secret]` is, inside a section. */
-function secretInput(section, name, value = '', clear = 'false') {
-  return fakeElement({
-    value,
-    dataset: { secret: name, clear },
-    closest: () => section,
-    parentElement: fakeElement(),
-  });
+  return { core };
 }
 
 /** `setTimeout`, captured rather than run, for the duration of one test. */
@@ -56,89 +36,9 @@ function captureTimers(t) {
   return timers;
 }
 
-test('a health snapshot preserves an unsaved provider draft', async () => {
-  const { pages } = await page();
-  const config = await shared('config');
-  pages[0].classList.add('dirty');
-  dom.element('ai-base').value = 'https://unsaved.example/v1';
-
-  config.fillConfiguration();
-
-  assert.equal(dom.element('ai-base').value, 'https://unsaved.example/v1');
-  assert.equal(pages[0].classList.contains('dirty'), true);
-});
-
-test('model discovery leaves an unchanged saved key absent on the wire', async () => {
-  await page();
-  const config = await shared('config');
-  dom.answer(async () => []);
-  dom.element('ai-base').value = 'https://saved.example/v1';
-  dom.element('ai-protocol').value = 'openai_compat';
-
-  await config.discoverModels();
-
-  const [{ args }] = dom.commands.filter(({ command }) => command === 'discover_provider_models');
-  assert.equal(Object.hasOwn(args.payload, 'api_key'), false);
-});
-
-test('a discovery response cannot populate a different provider draft', async () => {
-  await page();
-  const config = await shared('config');
-  let resolve;
-  dom.answer(() => new Promise((done) => { resolve = done; }));
-  dom.element('ai-base').value = 'https://first.example/v1';
-
-  const pending = config.discoverModels();
-  dom.element('ai-base').value = 'https://second.example/v1';
-  resolve(['old-provider-model']);
-  await pending;
-
-  // The real `applyDiscoveredModels`, which would have filled the picker.
-  assert.equal(dom.element('ai-model-count').textContent, '');
-  assert.equal(dom.element('ai-model').children.length, 0);
-});
-
-test('saving integrations excludes provider and channel drafts and their secrets', async () => {
-  const { core, pages } = await page();
-  const config = await shared('config');
-  dom.lists.set('input[data-secret]', [
-    secretInput(pages[1], 'integrations.deepgram_api_key', 'replacement'),
-    secretInput(pages[0], 'ai.api_key', 'unsaved-api-key'),
-  ]);
-  core.sectionRevisions.set('integrations', 7);
-  dom.element('google-id').value = 'draft-google';
-  dom.element('ai-base').value = 'https://unsaved.example';
-
-  const patch = config.collectConfiguration('integrations');
-
-  assert.equal(patch.expected_revision, 7);
-  assert.equal(patch.section.name, 'integrations');
-  assert.equal(patch.section.value.google_client_id, 'draft-google');
-  assert.deepEqual(Object.keys(patch.secrets), ['integrations.deepgram_api_key']);
-  assert.equal(patch.secrets['integrations.deepgram_api_key'].action, 'replace');
-  assert.equal(Object.hasOwn(patch, 'config'), false);
-});
-
-test('secret keep and remove are distinct from replacement', async () => {
-  const { pages } = await page();
-  const config = await shared('config');
-  const secret = secretInput(pages[0], 'ai.api_key');
-  dom.lists.set('input[data-secret]', [secret]);
-
-  assert.equal(config.collectConfiguration('ai').secrets['ai.api_key'].action, 'keep');
-  secret.dataset.clear = 'true';
-  assert.equal(config.collectConfiguration('ai').secrets['ai.api_key'].action, 'remove');
-});
-
-test('typing a replacement cancels a previously armed credential removal', async () => {
-  const { pages } = await page();
-  const config = await shared('config');
-  const key = secretInput(pages[0], 'ai.api_key', 'replacement', 'true');
-
-  config.markDirty(key);
-
-  assert.equal(key.dataset.clear, 'false');
-});
+// Provider drafts, model discovery, saving one section at a time and keeping
+// or removing a stored secret moved with their forms to the workspace's own
+// Settings, under This Mac; lemma-frontend/tests/this-mac.test.ts covers them.
 
 test('an existing snapshot does not prevent reconnect or hide an outage', async (t) => {
   await page();
@@ -180,88 +80,9 @@ test('a refused update names the change it refuses', async () => {
   assert.match(updates.postgresMajorChangeMessage({}), /a different Postgres version/);
 });
 
-/** A save in flight for `section`, recording how it completed. */
-function pendingSave(core, section, extra = {}) {
-  const outcome = {};
-  core.pendingSaves.set('save', {
-    page: section,
-    button: fakeElement(),
-    original: 'Save',
-    complete: (value) => { outcome.completed = value; },
-    ...extra,
-  });
-  return outcome;
-}
-
-test('save completion preserves edits made while the save was running', async (t) => {
-  const { core, pages } = await page();
-  const events = await fresh('events');
-  captureTimers(t);
-  core.store.snapshot = null;
-  pages[0].classList.add('dirty');
-  core.draftVersions.set('ai', 2);
-  const outcome = pendingSave(core, pages[0], { version: 1 });
-
-  events.handleLocaldEvent({ event: 'config.applied', id: 'save', operator: { config: { revision: 2 } } });
-
-  assert.equal(pages[0].classList.contains('dirty'), true);
-  assert.equal(outcome.completed, true);
-});
-
-test('a conflict preserves the draft and leaves a persistent section error', async (t) => {
-  const { core, pages } = await page();
-  const events = await fresh('events');
-  captureTimers(t);
-  pages[0].classList.add('dirty');
-  const outcome = pendingSave(core, pages[0]);
-
-  events.handleLocaldEvent({ event: 'error', id: 'save', code: 'config-conflict', message: 'Settings changed elsewhere' });
-
-  assert.equal(pages[0].classList.contains('dirty'), true);
-  assert.equal(pages[0].querySelector('.section-error')?.textContent, 'Settings changed elsewhere');
-  assert.equal(outcome.completed, false);
-});
-
-test('reconnecting recovers a save whose completion event was lost', async (t) => {
-  const { core, pages } = await page();
-  const events = await fresh('events');
-  captureTimers(t);
-  pages[0].classList.add('dirty');
-  const outcome = pendingSave(core, pages[0], { version: 0 });
-  const operator = {
-    config: operatorConfig({ revision: 2 }),
-    secrets: {},
-    readiness: { ai: 'ready', integrations: 'unset', surfaces: 'unset' },
-  };
-
-  // `state` because the daemon always sends it and the page requires it: a
-  // snapshot without one cannot be rendered, and rendering the previous one as
-  // though it were current is worse than saying so.
-  events.handleLocaldEvent({
-    event: 'control.snapshot',
-    state: { ready: true },
-    operator,
-    config_operations: { save: { status: 'succeeded', operator } },
-  });
-
-  assert.equal(pages[0].classList.contains('dirty'), false);
-  assert.equal(outcome.completed, true);
-});
-
-test('saving one section cannot silently rebase another draft past an unseen change', async (t) => {
-  const { core, pages } = await page();
-  const events = await fresh('events');
-  captureTimers(t);
-  core.store.snapshot = null;
-  core.sectionRevisions.set('ai', 1);
-  core.sectionRevisions.set('integrations', 2);
-  pendingSave(core, pages[1], { version: 0, expectedRevision: 2 });
-
-  events.handleLocaldEvent({ event: 'config.applied', id: 'save', operator: { config: { revision: 3 } } });
-
-  assert.equal(core.sectionRevisions.get('ai'), 1);
-  assert.equal(core.sectionRevisions.get('integrations'), 3);
-});
+// How a save completes -- edits made while it ran, a conflict with a change
+// made elsewhere, a completion event lost to a reconnect -- went with the forms
+// that saved; lemma-frontend/tests/this-mac.test.ts covers it there.
 
 test('the install-health switch is hidden unless this build can send anything', async () => {
   await page();
@@ -333,4 +154,45 @@ test('a daemon that does not come back is asked less and less often', async (t) 
   events.resetSnapshotRetry();
   events.scheduleSnapshotRetry();
   assert.equal(timers[0].delay, 1000);
+});
+
+test('stopping sharing is offered only while this computer is shared', async () => {
+  await page();
+  const sharing = await shared('sharing');
+  const button = dom.element('sharing-disable');
+
+  sharing.renderSharingControls({ mode: 'this_computer', phase: 'ready' });
+  assert.equal(button.hidden, true, 'nothing to stop on a private installation');
+
+  sharing.renderSharingControls({ mode: 'public', phase: 'ready' });
+  assert.equal(button.hidden, false);
+  assert.equal(button.disabled, false);
+});
+
+test('stopping sharing asks the shell to disable it, and says so', async () => {
+  const { core } = await page();
+  const sharing = await shared('sharing');
+  core.store.snapshot = { sharing: { mode: 'local_network', phase: 'ready' } };
+
+  await sharing.disableSharing();
+
+  const sent = dom.commands.filter(({ command }) => command === 'sharing_action');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].args.action, 'disable');
+  // Held busy until the daemon reports the change, so a second press cannot
+  // start a second transition while the first is running.
+  assert.equal(dom.element('sharing-disable').disabled, true);
+  assert.match(dom.element('toast').textContent, /This computer/);
+});
+
+test('a refused stop puts the button back and says why', async () => {
+  const { core } = await page();
+  const sharing = await shared('sharing');
+  core.store.snapshot = { sharing: { mode: 'public', phase: 'ready' } };
+  dom.answer(async () => { throw new Error('control endpoint unavailable'); });
+
+  await sharing.disableSharing();
+
+  assert.equal(dom.element('sharing-disable').disabled, false);
+  assert.match(dom.element('toast').textContent, /background service isn't running/);
 });
