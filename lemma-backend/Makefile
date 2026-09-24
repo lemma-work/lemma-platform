@@ -236,15 +236,26 @@ coverage-unit:
 coverage-e2e:
 	uv run pytest -m e2e --cov=app --cov-report=term-missing --cov-report=xml:coverage-e2e.xml
 
+# xdist across every core: 275s serial became ~85s on a 4-vCPU runner. The
+# one fixture that shares Postgres tables gives each worker its own database
+# (app/modules/workspace/tests/integration/conftest.py). UNIT_WORKERS=0 runs
+# serially, for bisecting an ordering problem.
+UNIT_WORKERS ?= auto
 coverage-backend-unit:
 	@mkdir -p $(BACKEND_COVERAGE_DIR)
 	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
+		-n $(UNIT_WORKERS) \
 		-m "$(UNIT_MARKERS)" \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-unit.xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=unit
 
+# One retry for a failed e2e test, so a single flake does not fail the whole
+# pull request. Not silent: every retried test is listed in
+# junit-<phase>.reruns.txt and annotated on the run by e2e.yml. E2E_RERUNS=
+# turns it off.
+E2E_RERUNS ?= --reruns 1 --reruns-delay 2
 coverage-backend-e2e-shard:
 	@test -n "$(E2E_ARGS)" || (echo "E2E_ARGS is required" && exit 1)
 	@test -n "$(COVERAGE_PHASE)" || (echo "COVERAGE_PHASE is required, e.g. e2e-surfaces" && exit 1)
@@ -252,7 +263,7 @@ coverage-backend-e2e-shard:
 	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
-		$(E2E_PARALLEL) $(E2E_ARGS) \
+		$(E2E_PARALLEL) $(E2E_ARGS) $(E2E_RERUNS) \
 		-m "$(E2E_SHARD_MARKERS)" \
 		-o timeout=120 \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-$(COVERAGE_PHASE).xml

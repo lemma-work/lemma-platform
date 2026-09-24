@@ -63,10 +63,14 @@ permissions:
   contents: read
 
 concurrency:
-  # No longer scoped by event_name: that existed only because a workflow_run
-  # cascade queued from main's copy of this file raced the direct trigger.
-  # With workflow_run gone there is one run per branch to cancel.
-  group: e2e-${{ github.event.pull_request.head.ref || github.ref_name }}
+  # Keyed on the pull request number, not the head branch name: two fork pull
+  # requests both named `patch-1` used to cancel each other.
+  # Superseded pull request pushes are cancelled; pushes to main never are.
+  # Main's runs are the ones that warm every cache a pull request restores
+  # from, and a burst of merges used to cancel all but the last of them.
+  # On main the group is the commit itself, so no run there is ever queued
+  # behind, or cancelled by, the next merge.
+  group: e2e-${{ github.ref == 'refs/heads/main' && github.sha || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -487,6 +491,18 @@ jobs:
           E2E_WORKERS=${{ matrix.shard.workers }}
           E2E_SHARD_MARKERS="${{ matrix.shard.markers }}"
           COVERAGE_PHASE=e2e-${{ matrix.shard.name }}
+      # A test retried by E2E_RERUNS passed on its second try, so the shard is
+      # green -- but it is a flake, and it is annotated here rather than lost.
+      - name: Report tests that only passed on retry
+        if: always()
+        run: |
+          file=coverage-backend/junit-e2e-${{ matrix.shard.name }}.reruns.txt
+          [ -s "$file" ] || exit 0
+          echo "### Flaky: passed only on retry" >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r test; do
+            echo "::warning title=Flaky e2e test::$test failed once and passed on retry"
+            echo "- \`$test\`" >> "$GITHUB_STEP_SUMMARY"
+          done < "$file"
       # The slow tail is where this suite's wall-clock lives -- half of it sits
       # in a tenth of the tests -- so keep it visible rather than buried in a
       # log nobody opens.
@@ -526,6 +542,7 @@ jobs:
             lemma-backend/coverage-backend/coverage.xml
             lemma-backend/coverage-backend/junit-*.xml
             lemma-backend/coverage-backend/junit-*.phases.json
+            lemma-backend/coverage-backend/junit-*.reruns.txt
           if-no-files-found: ignore
 
   # One number, one floor. Unit + every e2e shard, combined in this run from

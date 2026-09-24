@@ -11,7 +11,12 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Superseded pull request pushes are cancelled; pushes to main never are.
+  # Main's runs are the ones that warm every cache a pull request restores
+  # from, and a burst of merges used to cancel all but the last of them.
+  # On main the group is the commit itself, so no run there is ever queued
+  # behind, or cancelled by, the next merge.
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -220,6 +225,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - name: Sync deps
         run: uv sync --extra local
       # One command, and it is the one the contributing guide tells a person to
@@ -268,6 +274,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - run: uv sync
       - name: Verify consolidated reliability migration
         run: uv run python scripts/verify_reliability_migration.py
@@ -735,6 +742,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
 
       - name: Install backend dependencies
         working-directory: lemma-backend
@@ -1427,7 +1437,10 @@ jobs:
   ci:
     name: CI passed
     timeout-minutes: 10
-    if: always()
+    # `!cancelled()`, not `always()`, like the other two aggregators: a run
+    # superseded by a newer push is not a failure, and reporting it as one
+    # made the run list unreadable.
+    if: ${{ !cancelled() }}
     needs:
       - changes
       # `lemma-backend unit` moved to e2e.yml, beside the e2e shards, so its

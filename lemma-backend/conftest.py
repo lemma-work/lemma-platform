@@ -237,6 +237,7 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
 _PHASE_DURATIONS: dict[str, dict[str, float]] = {}
 _SESSION_SETUP_CARRIERS: set[str] = set()
 _WORKERS_SEEN: set[str] = set()
+_RERUNS: set[str] = set()
 
 
 def _junit_case_id(report) -> str:
@@ -262,6 +263,10 @@ def pytest_runtest_logreport(report) -> None:
     So note who paid it. `scripts/e2e_durations.py --check` reads this and
     judges that test on its own work instead.
     """
+    if report.outcome == "rerun":
+        # pytest-rerunfailures retried it. Noted so a test that only passes on
+        # its second try is reported as a flake rather than read as green.
+        _RERUNS.add(report.nodeid)
     case = _junit_case_id(report)
     phases = _PHASE_DURATIONS.setdefault(case, {})
     phases[report.when] = phases.get(report.when, 0.0) + report.duration
@@ -296,9 +301,28 @@ def _write_phase_sidecar(session: pytest.Session) -> None:
     )
 
 
+def _write_rerun_sidecar(session: pytest.Session) -> None:
+    """List every test that needed a retry, beside the JUnit.
+
+    The e2e shards retry a failed test once (`E2E_RERUNS` in the Makefile), so
+    one flaky test no longer fails a whole pull request. What that must not do
+    is make the flake invisible: CI reads this file and annotates the run with
+    each test in it.
+    """
+    junit = getattr(session.config.option, "xmlpath", None)
+    if not junit or hasattr(session.config, "workerinput"):
+        return
+    from pathlib import Path
+
+    Path(junit).with_suffix(".reruns.txt").write_text(
+        "".join(f"{nodeid}\n" for nodeid in sorted(_RERUNS))
+    )
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     del exitstatus
     _write_phase_sidecar(session)
+    _write_rerun_sidecar(session)
     from app.modules.test_support import e2e_base
 
     # Context managers remove only the containers owned by this pytest process.

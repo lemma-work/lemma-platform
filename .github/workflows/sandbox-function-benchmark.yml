@@ -42,6 +42,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - name: Install locked backend dependencies
         run: uv sync --locked
       - name: Build sandbox provider conformance images
@@ -115,6 +116,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - name: Install locked backend dependencies
         run: uv sync --locked
       - name: Install pinned Cloudflare tunnel client
