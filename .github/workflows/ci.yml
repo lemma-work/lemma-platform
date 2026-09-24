@@ -728,11 +728,17 @@ jobs:
       # `tests/fixtures/wire_contract.json` are assertions over a committed
       # file; only the named suites, because the rest of this crate's tests
       # spawn agents.
-      - name: Agent Host wire contract
+      #
+      # normalize_golden rides along for the same reason: it is assertions over
+      # committed transcripts and agent-adapters.lock.json, and it is what
+      # refuses an adapter bump that has neither a recording for the new
+      # version nor a reason in unrecorded.json.
+      - name: Agent Host wire contract and golden transcripts
         working-directory: desktop
         run: >-
           cargo test -p lemma-agent-host --locked
           --test wire_contract --test control_plane_contract
+          --test normalize_golden
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
