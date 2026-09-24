@@ -222,3 +222,24 @@ fn the_loopback_relay_refuses_runtime_ports_and_what_the_daemon_adds_later() {
     assert!(now.contains(&61000), "{now:?}");
     assert!(expected.is_subset(&now));
 }
+
+/// The relay admits nothing until the daemon supplies the host-execution
+/// switch, and then follows it.
+#[test]
+fn the_loopback_relay_follows_the_host_execution_switch_and_defaults_off() {
+    let (_root, controller) = super::test_controller();
+    let enabled = controller.host_execution();
+    assert!(!enabled(), "unset must read as off");
+
+    let switch = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let read = std::sync::Arc::clone(&switch);
+    controller.set_host_execution(std::sync::Arc::new(move || {
+        read.load(std::sync::atomic::Ordering::SeqCst)
+    }));
+    assert!(
+        enabled(),
+        "a gate set after the relay was built is still read"
+    );
+    switch.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(!enabled());
+}

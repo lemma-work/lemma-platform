@@ -136,10 +136,42 @@ The alias is **not** a way onto the Mac's own loopback: a server on the Mac's
 `127.0.0.1` is not reachable at the gateway address. That is the loopback
 relay, below, and only the owner's sandbox has it.
 
-The flag controls a name, not a route: without the alias a container can still
-dial the gateway by address, and so reach any Mac service listening on every
-interface. Closing that needs a per-container firewall rule, which is what the
-flag is there to key.
+The flag controls a name, not a route. What a sandbox can reach at the gateway
+address is decided by guestd's firewall, below.
+
+## What a sandbox can reach on the Mac
+
+The host gateway is the Mac's own address on the VM's network, so without a
+rule a container could dial any Mac service listening on every interface. guestd
+installs one, in `sandbox_firewall.rs`, before it starts any sandbox:
+traffic from the sandbox bridge (`nerdctl0`) to the gateway passes a chain
+(`LEMMA-HOST-<hash>`, jumped to from the top of `FORWARD`) that lets through
+replies to connections the Mac opened, the two callback ports, and DNS, which
+vmnet serves on the gateway, and rejects everything else (`tcp-reset` for TCP,
+so a refused connection fails at once rather than timing out).
+
+- **The ports come from locald.** It names the backend's and frontend's ports
+  as `callback_ports` in every `core.*` request, and guestd keeps them in
+  `run/callback-ports.json` so a restarted guestd still knows them. A guest
+  that has never been told refuses to start a sandbox rather than start one
+  that can reach nothing it needs.
+- **The same rule for every sandbox**, the owner's and an invited person's
+  alike. The owner reaches the Mac's loopback through the relay socket, never
+  through the gateway, so the owner's sandbox needs no wider rule. Because the
+  rule does not vary by container it is keyed on the bridge rather than on
+  each container's address.
+- **Replaced without a gap.** The chain is named after its contents. New ports
+  are built into a new chain in full, jumped to, and only then is the old jump
+  and chain removed — the old one must go, because the new chain *returns*
+  allowed traffic to `FORWARD`, where the old chain would reject it.
+- **Fails closed.** A guest where the rules cannot be installed starts no
+  sandbox.
+
+**What it does not cover.** The rule names the gateway address. Another of the
+Mac's addresses, such as its LAN address, is reached through the VM's NAT like
+any other machine on the network, and a Mac service listening on every
+interface answers there. The core ports inside the guest are a separate rule,
+`LEMMA-SANDBOX-ISOLATION`.
 
 ## The loopback relay
 
@@ -169,6 +201,11 @@ Chrome ─proxy─► host_fallback ─unix─► guestd ─vsock 42413─► le
   address an invited person's sandbox could dial. The directory is root's and
   not writable from inside, so the owner's sandbox can use the socket but not
   replace it. This is a separate grant from `host_access`.
+- **Only while "Run commands on this Mac" is on.** locald reads the Agent
+  Host's `host_execution` setting on every connection, as it does the deny
+  list, and admits nothing while it is off: there is then no server of the
+  agent's on the Mac to check. Turning it off closes the relay for the next
+  request, with no restart.
 - **Loopback only, and the port is all that is asked.** A request is digits
   and a newline. guestd refuses anything else, and ports below 1024, before
   opening vsock. locald connects to `127.0.0.1`, then `::1`, on that port —
@@ -184,11 +221,12 @@ Chrome ─proxy─► host_fallback ─unix─► guestd ─vsock 42413─► le
 - **Nothing in lemma-vz decides anything.** It carries bytes between guest
   vsock streams and locald's socket (`run/host-loopback.sock`, mode 0600).
 
-**What it does not cover.** Every run in the owner's workspace shares its
-sandbox, including a run started by an inbound channel message that resolved
-to the owner. Such a run cannot execute on the host, but its browser can reach
-non-Lemma servers on the Mac's loopback through the relay. A page the owner's
-browser loads can do the same. A `curl localhost:3000` in the sandbox's shell does
+**What it does not cover.** While the switch is on, the owner's VM browser —
+and any page it loads — can reach any non-Lemma server on the Mac's loopback,
+the same exposure the owner's own browser on the Mac has. Every run in the
+owner's workspace shares that sandbox, including a run started by an inbound
+channel message that resolved to the owner: such a run cannot execute on the
+host, but its browser can use the relay while the switch is on. A `curl localhost:3000` in the sandbox's shell does
 not go through the relay: the fall-through is Chrome's proxy, not the shell's.
 
 **Windows.** The WSL guest runs guestd per request and never binds the relay

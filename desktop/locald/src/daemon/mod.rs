@@ -234,6 +234,8 @@ impl Daemon {
                 sharing.clone(),
                 Arc::clone(&agent_host),
             ));
+            let owner_switch = Arc::clone(&agent_host);
+            runtime.set_host_execution(Arc::new(move || owner_switch.host_execution_enabled()));
         }
         Ok(Arc::new(Self {
             paths,

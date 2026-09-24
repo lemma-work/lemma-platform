@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::loopback_relay::LemmaPorts;
+use crate::loopback_relay::{HostExecution, LemmaPorts, RelayPolicy};
 
 /// What the controller keeps for the relay.
 #[derive(Default)]
@@ -16,6 +16,10 @@ pub(crate) struct HostLoopbackState {
     /// Ports other parts of the daemon own -- the sharing gateway, the Agent
     /// Host's relays -- supplied by the daemon, which can see them.
     lemma_ports: Arc<Mutex<Option<LemmaPorts>>>,
+    /// The owner's "Run commands on this Mac" switch, supplied by the daemon,
+    /// which owns the Agent Host. Unset means off: the relay admits nothing
+    /// until it is told otherwise.
+    host_execution: Arc<Mutex<Option<HostExecution>>>,
     #[cfg(target_os = "macos")]
     relay: Mutex<Option<crate::loopback_relay::LoopbackRelay>>,
 }
@@ -46,6 +50,35 @@ impl ManagedRuntimeController {
             .lemma_ports
             .lock()
             .expect("lemma port provider lock poisoned") = Some(ports);
+    }
+
+    /// Tell the relay where to read the host-execution switch from.
+    pub(crate) fn set_host_execution(&self, gate: HostExecution) {
+        *self
+            .host_loopback
+            .host_execution
+            .lock()
+            .expect("host execution gate lock poisoned") = Some(gate);
+    }
+
+    /// Whether the relay may admit anything, as of now.
+    pub(crate) fn host_execution(&self) -> HostExecution {
+        let gate = Arc::clone(&self.host_loopback.host_execution);
+        Arc::new(move || {
+            let gate = gate
+                .lock()
+                .expect("host execution gate lock poisoned")
+                .clone();
+            gate.is_some_and(|enabled| enabled())
+        })
+    }
+
+    /// What the relay judges each connection against.
+    pub(crate) fn relay_policy(&self) -> RelayPolicy {
+        RelayPolicy {
+            host_execution: self.host_execution(),
+            lemma_ports: self.lemma_ports(),
+        }
     }
 
     /// Every port the relay must refuse, as of now.
@@ -79,7 +112,7 @@ impl ManagedRuntimeController {
         }
         match crate::loopback_relay::LoopbackRelay::start(
             self.runtime.host_loopback_socket(),
-            self.lemma_ports(),
+            self.relay_policy(),
         ) {
             Ok(started) => *relay = Some(started),
             Err(error) => eprintln!("the loopback relay did not start: {error}"),

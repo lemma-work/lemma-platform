@@ -14,6 +14,12 @@
 //!
 //! What it will connect to:
 //!
+//! - **Nothing, unless the owner has turned on "Run commands on this Mac".**
+//!   The relay exists so the owner's agent can check a server it started on
+//!   the Mac; with host execution off there is no such server to check, and
+//!   the relay admits nothing. Read from the Agent Host's config on every
+//!   connection (see [`HostExecution`]), so turning the switch off closes the
+//!   relay for the next request without a restart.
 //! - **Loopback only.** `127.0.0.1`, then `::1` -- a dev server started with
 //!   `localhost` binds whichever one the resolver gave it first. Never a name
 //!   and never another address: the request carries a port and nothing else.
@@ -64,9 +70,20 @@ pub(crate) const FIRST_UNPRIVILEGED_PORT: u16 = 1024;
 /// with it, and the Agent Host opens an MCP relay per paired workspace.
 pub(crate) type LemmaPorts = Arc<dyn Fn() -> BTreeSet<u16> + Send + Sync>;
 
+/// Whether the owner has host execution on, as of now.
+pub(crate) type HostExecution = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// What every connection is judged against, each part asked for afresh.
+#[derive(Clone)]
+pub(crate) struct RelayPolicy {
+    pub(crate) host_execution: HostExecution,
+    pub(crate) lemma_ports: LemmaPorts,
+}
+
 /// Why a request was refused. The words are what the sandbox is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
+    HostExecutionOff,
     NotAPort,
     Privileged,
     LemmaPort,
@@ -75,6 +92,7 @@ pub(crate) enum Refusal {
 impl Refusal {
     pub(crate) fn reason(self) -> &'static str {
         match self {
+            Self::HostExecutionOff => "running commands on this Mac is turned off",
             Self::NotAPort => "not a port",
             Self::Privileged => "privileged ports are not relayed",
             Self::LemmaPort => "that port is one of Lemma's own",
@@ -157,10 +175,10 @@ pub(crate) enum Outcome {
 ///
 /// `connect` reaches a port on the Mac, and is passed in so the policy and the
 /// splice can be tested without a real server on a fixed port. It is only
-/// called for a port `admit` accepted.
+/// called for a port the policy accepted.
 pub(crate) async fn serve_connection<C, U, F, Fut>(
     mut client: C,
-    lemma_ports: &LemmaPorts,
+    policy: &RelayPolicy,
     connect: F,
 ) -> io::Result<Outcome>
 where
@@ -177,7 +195,12 @@ where
         }
         Ok(Err(error)) => return Err(error),
     };
-    let port = match admit(&line, &lemma_ports()) {
+    let admitted = if (policy.host_execution)() {
+        admit(&line, &(policy.lemma_ports)())
+    } else {
+        Err(Refusal::HostExecutionOff)
+    };
+    let port = match admitted {
         Ok(port) => port,
         Err(refusal) => {
             client
@@ -223,7 +246,7 @@ impl LoopbackRelay {
     /// The socket is this user's alone (0600): the VM helper runs as this
     /// user, and nothing else on the Mac has any business asking the relay for
     /// anything.
-    pub(crate) fn start(path: PathBuf, lemma_ports: LemmaPorts) -> io::Result<Self> {
+    pub(crate) fn start(path: PathBuf, policy: RelayPolicy) -> io::Result<Self> {
         let listener = bind_private_socket(&path)?;
         listener.set_nonblocking(true)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -257,9 +280,9 @@ impl LoopbackRelay {
                                         continue;
                                     }
                                 };
-                                let lemma_ports = Arc::clone(&lemma_ports);
+                                let policy = policy.clone();
                                 connections.spawn(async move {
-                                    match serve_connection(stream, &lemma_ports, connect_loopback).await {
+                                    match serve_connection(stream, &policy, connect_loopback).await {
                                         Ok(Outcome::Refused(Refusal::LemmaPort)) => {
                                             // Worth a line: a sandbox asked for
                                             // Lemma itself, which a person
@@ -332,13 +355,17 @@ mod tests {
     use super::*;
     use tokio::net::{TcpListener, UnixStream};
 
-    fn no_lemma_ports() -> LemmaPorts {
-        Arc::new(BTreeSet::new)
+    /// Host execution on, refusing `ports`.
+    fn lemma_ports(ports: &[u16]) -> RelayPolicy {
+        let ports: BTreeSet<u16> = ports.iter().copied().collect();
+        RelayPolicy {
+            host_execution: Arc::new(|| true),
+            lemma_ports: Arc::new(move || ports.clone()),
+        }
     }
 
-    fn lemma_ports(ports: &[u16]) -> LemmaPorts {
-        let ports: BTreeSet<u16> = ports.iter().copied().collect();
-        Arc::new(move || ports.clone())
+    fn no_lemma_ports() -> RelayPolicy {
+        lemma_ports(&[])
     }
 
     #[test]
@@ -392,7 +419,10 @@ mod tests {
     async fn the_lemma_port_list_is_read_per_connection() {
         let current = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
         let seen = Arc::clone(&current);
-        let ports: LemmaPorts = Arc::new(move || seen.lock().unwrap().clone());
+        let ports = RelayPolicy {
+            host_execution: Arc::new(|| true),
+            lemma_ports: Arc::new(move || seen.lock().unwrap().clone()),
+        };
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = upstream.local_addr().unwrap().port();
 
@@ -415,6 +445,52 @@ mod tests {
             served.await.unwrap().unwrap(),
             Outcome::Refused(Refusal::LemmaPort)
         );
+    }
+
+    /// With "Run commands on this Mac" off the relay admits nothing, and the
+    /// switch is read per connection: turning it on or off takes effect on
+    /// the next request.
+    #[tokio::test]
+    async fn nothing_is_relayed_while_host_execution_is_off() {
+        let enabled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let switch = Arc::clone(&enabled);
+        let policy = RelayPolicy {
+            host_execution: Arc::new(move || switch.load(std::sync::atomic::Ordering::SeqCst)),
+            lemma_ports: Arc::new(BTreeSet::new),
+        };
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = upstream.local_addr().unwrap().port();
+
+        let ask = |policy: RelayPolicy| async move {
+            let (mut guest, relay) = UnixStream::pair().unwrap();
+            let served = tokio::spawn(async move {
+                serve_connection(relay, &policy, |_| async {
+                    Err::<TcpStream, _>(io::Error::other("unreachable in this test"))
+                })
+                .await
+            });
+            guest
+                .write_all(format!("{port}\n").as_bytes())
+                .await
+                .unwrap();
+            let mut answer = String::new();
+            guest.read_to_string(&mut answer).await.unwrap();
+            (answer, served.await.unwrap().unwrap())
+        };
+
+        let (answer, outcome) = ask(policy.clone()).await;
+        assert_eq!(answer, "error running commands on this Mac is turned off\n");
+        assert_eq!(outcome, Outcome::Refused(Refusal::HostExecutionOff));
+
+        // On: the request gets as far as connecting (which this test's
+        // `connect` fails, so it is reported unreachable -- not refused).
+        enabled.store(true, std::sync::atomic::Ordering::SeqCst);
+        let (_, outcome) = ask(policy.clone()).await;
+        assert_eq!(outcome, Outcome::Unreachable(port));
+
+        enabled.store(false, std::sync::atomic::Ordering::SeqCst);
+        let (_, outcome) = ask(policy).await;
+        assert_eq!(outcome, Outcome::Refused(Refusal::HostExecutionOff));
     }
 
     #[tokio::test]

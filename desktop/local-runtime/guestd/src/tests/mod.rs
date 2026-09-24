@@ -7,6 +7,7 @@ mod core_data;
 mod data_binding;
 mod diagnostics;
 mod engine;
+mod host_gateway_firewall;
 mod host_loopback;
 mod images;
 mod inspect;
@@ -259,6 +260,7 @@ pub(super) fn core_parameters(postgres_image: &str) -> CoreParameters {
             postgres_password: "a".repeat(64),
             redis_password: "b".repeat(64),
         },
+        callback_ports: vec![8711, 3711],
     }
 }
 

@@ -89,9 +89,9 @@ pub(crate) struct EnsureParameters {
     /// host gateway. It is *not* a way onto the Mac's own loopback -- that is
     /// `host_loopback`, below, which only the owner's sandbox is given.
     ///
-    /// A name, not a wall. Without the alias a container can still dial the
-    /// host gateway by address; closing that needs a per-container firewall
-    /// rule, and this flag is what such a rule would key on.
+    /// A name, not a wall: what a sandbox can reach at the gateway address,
+    /// with or without the name, is `sandbox_firewall`'s host-gateway chain --
+    /// the callback ports and DNS, for every sandbox alike.
     #[serde(default = "default_host_access")]
     pub(crate) host_access: bool,
     /// Whether the container gets the loopback relay: a Unix socket through
@@ -140,6 +140,12 @@ pub(crate) struct CoreCredentials {
 pub(crate) struct CoreParameters {
     pub(crate) images: CoreImages,
     pub(crate) credentials: CoreCredentials,
+    /// The ports locald's callback forwarders listen on at the host gateway:
+    /// the backend's and the frontend's. The only ports on the Mac a sandbox
+    /// may reach (see `sandbox_firewall`). Defaulted so an older locald's
+    /// request still parses; such a guest simply has none recorded.
+    #[serde(default)]
+    pub(crate) callback_ports: Vec<u16>,
 }
 
 #[derive(Clone, Copy)]

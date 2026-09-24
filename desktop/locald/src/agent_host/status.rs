@@ -89,6 +89,12 @@ impl AgentHostSupervisor {
     pub(crate) fn mcp_relay_ports(&self) -> Vec<u16> {
         mcp_relay_ports(&self.data_dir.join("mcp-relay"))
     }
+
+    /// The owner's "Run commands on this Mac" switch, read from the host's
+    /// config now -- the loopback relay asks on every connection.
+    pub(crate) fn host_execution_enabled(&self) -> bool {
+        super::pairing::host_execution_enabled(&self.data_dir.join("config.json"))
+    }
 }
 
 /// Every `port` in the endpoint files in `directory`. A file that cannot be

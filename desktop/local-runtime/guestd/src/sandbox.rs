@@ -71,6 +71,12 @@ impl<E: Engine + 'static> GuestService<E> {
         if should_create {
             if self.sandbox_isolation {
                 ensure_sandbox_isolation(&run_iptables)?;
+                ensure_host_gateway_isolation(
+                    &self.host_gateway,
+                    &self.callback_ports()?,
+                    &run_iptables,
+                    &list_iptables,
+                )?;
             }
             self.admit_sandbox_memory(requested_memory)?;
             self.ensure_sandbox_image_for_start(&parameters.image, parameters.workload_kind)?;
