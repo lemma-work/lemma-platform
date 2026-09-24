@@ -121,19 +121,83 @@ prerequisite for it being safe to add.
 ## The host alias
 
 Every sandbox can reach the host through `host.lemma.internal`, which guestd
-adds to the container's hosts file pointing at the VM's host gateway. The
-backend and workspace forwarders listen there, and the workspace runtime's
-callbacks and the function gateway use it — so today every sandbox needs it.
+adds to the container's hosts file pointing at the VM's host gateway. locald
+runs two callback forwarders there — the backend's and the frontend's ports,
+relayed to the Mac's loopback — and the workspace runtime's callbacks and the
+function gateway use them, so every sandbox, the owner's and an invited
+person's alike, needs the alias.
 
-It is now an explicit per-sandbox flag, `host_access` on `sandbox.ensure`
+It is an explicit per-sandbox flag, `host_access` on `sandbox.ensure`
 (`ProviderCreateSpec.host_access` in the backend, passed through the bridge
 and hostctl unchanged). It defaults to `true`, and the backend sends it only
-when it is `false`, so a guest that predates the flag keeps working. A later
-change can restrict it to the owner's own browser sandbox.
+when it is `false`, so a guest that predates the flag keeps working.
+
+The alias is **not** a way onto the Mac's own loopback: a server on the Mac's
+`127.0.0.1` is not reachable at the gateway address. That is the loopback
+relay, below, and only the owner's sandbox has it.
 
 The flag controls a name, not a route: without the alias a container can still
-dial the gateway by address. Closing that needs a per-container firewall rule,
-which is what the flag is there to key.
+dial the gateway by address, and so reach any Mac service listening on every
+interface. Closing that needs a per-container firewall rule, which is what the
+flag is there to key.
+
+## The loopback relay
+
+With [host execution](desktop-host-execution.md) the owner's agent starts
+`npm run dev` on the Mac, where it listens on `127.0.0.1:3000`, and checks the
+result with a browser that runs in the owner's workspace sandbox in the guest.
+The loopback relay is how that browser reaches the Mac's loopback:
+
+```
+Chrome ─proxy─► host_fallback ─unix─► guestd ─vsock 42413─► lemma-vz ─unix─► locald ─tcp─► 127.0.0.1:<port>
+(owner's workspace sandbox)      (relay.sock)                (HostLoopbackBridge)  (loopback_relay)
+```
+
+- **Per request, not per port.** Chrome in the owner's sandbox is pointed at
+  `sandbox_runtime.host_fallback` (`--proxy-server` plus
+  `--proxy-bypass-list=<-loopback>`; a PAC is ignored for loopback). A loopback
+  port the sandbox is serving stays the sandbox's, so an agent previewing what
+  it built there is unaffected. Only a port nothing in the sandbox answers on
+  is asked for through the relay.
+- **Only the owner's browser sandbox.** The backend decides, at provision time
+  (`host_loopback_policy.is_owner_browser_sandbox`): a workspace, owned by a
+  person, on a Desktop install, whose owner is the installation owner. It
+  sends `host_loopback: true` on `sandbox.ensure` for that sandbox and no
+  other. guestd then bind-mounts its relay directory into that container at
+  `/run/lemma-host-loopback` (and refuses the grant for a function sandbox).
+  The socket exists only in containers it is mounted into, so there is no
+  address an invited person's sandbox could dial. The directory is root's and
+  not writable from inside, so the owner's sandbox can use the socket but not
+  replace it. This is a separate grant from `host_access`.
+- **Loopback only, and the port is all that is asked.** A request is digits
+  and a newline. guestd refuses anything else, and ports below 1024, before
+  opening vsock. locald connects to `127.0.0.1`, then `::1`, on that port —
+  never a name and never another address.
+- **Not Lemma's own ports.** locald refuses, re-reading the list on every
+  connection: the managed runtime's backend, frontend and PostgreSQL, Redis
+  and SuperTokens forwards; every loopback health URL in the host pack; the
+  sharing gateway and the tunnel's local API (ngrok's inspection port,
+  cloudflared's metrics port); and the Agent Host's MCP relay ports, from its
+  `mcp-relay/*.json` endpoint files. Privileged ports are refused here too.
+  A refusal reaches the sandbox as `error <reason>`, and Chrome shows a failed
+  load.
+- **Nothing in lemma-vz decides anything.** It carries bytes between guest
+  vsock streams and locald's socket (`run/host-loopback.sock`, mode 0600).
+
+**What it does not cover.** Every run in the owner's workspace shares its
+sandbox, including a run started by an inbound channel message that resolved
+to the owner. Such a run cannot execute on the host, but its browser can reach
+non-Lemma servers on the Mac's loopback through the relay. A page the owner's
+browser loads can do the same. A `curl localhost:3000` in the sandbox's shell does
+not go through the relay: the fall-through is Chrome's proxy, not the shell's.
+
+**Windows.** The WSL guest runs guestd per request and never binds the relay
+socket, so the owner's sandbox finds no socket, the fall-through is not
+started, and `localhost` stays the sandbox's. Before the relay, a loopback miss
+was retried on the host alias; that path is gone on every platform.
+
+**Containers created before this** keep the arguments they were created with
+until `sandbox.ensure` next replaces them; a guest restart does.
 
 ## The Tauri IPC origin rule
 

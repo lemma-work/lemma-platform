@@ -17,7 +17,10 @@ see any of them.
 Host execution runs the owner's agent commands **on the Mac**, inside an OS
 sandbox modelled on Claude Code's, so `gh pr create` or `npm run dev` just
 works. The browser stays in the VM. The VM reaching a server the agent started
-on the Mac is a separate piece, the loopback relay.
+on the Mac is a separate piece, the
+[loopback relay](desktop-security.md#the-loopback-relay): the owner's VM
+browser asks for `localhost:3000`, and when nothing in the sandbox serves it
+the request reaches port 3000 on the Mac's own loopback.
 
 ## 2. Who gets it
 

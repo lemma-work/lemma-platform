@@ -333,6 +333,12 @@ The native host-pack renderer derives:
 - `FUNCTION_RUNTIME_GATEWAY_URL`;
 - `host.lemma.internal`.
 
+The owner's workspace sandbox also has the loopback relay, which carries its
+browser to a port on this Mac's own `127.0.0.1` over vsock and locald's
+`run/host-loopback.sock`; see
+[Desktop security](desktop-security.md#the-loopback-relay) for who has it and
+which ports it refuses.
+
 Guest-to-host callback relays own their connections in one asynchronous runtime
 per listener. Admission is bounded; stopping a relay cancels and joins its
 connection tasks, including idle and backpressured streams, before releasing
