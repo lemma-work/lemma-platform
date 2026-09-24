@@ -1,6 +1,6 @@
 "use client";
 
-import { WorkspaceLoading } from "@/shell/workspace-loading";
+import { PageLoading } from "@/ui/loading";
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // and the loading shell.
 const App = dynamic(() => import("@/shell/app").then(m => m.App), {
     ssr: false,
-    loading: () => <WorkspaceLoading />,
+    loading: () => <PageLoading label="Opening Lemma" />,
 });
 
 export function Workspace() {

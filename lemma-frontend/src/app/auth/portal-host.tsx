@@ -1,6 +1,6 @@
 "use client";
 
-import { WorkspaceLoading } from "@/shell/workspace-loading";
+import { PageLoading } from "@/ui/loading";
 
 import dynamic from "next/dynamic";
 
@@ -15,7 +15,7 @@ import dynamic from "next/dynamic";
  */
 const Portal = dynamic(() => import("@/auth/portal").then((m) => m.Portal), {
     ssr: false,
-    loading: () => <WorkspaceLoading />,
+    loading: () => <PageLoading label="Opening sign in" />,
 });
 
 export function PortalHost({ path }: { path?: string[] }) {

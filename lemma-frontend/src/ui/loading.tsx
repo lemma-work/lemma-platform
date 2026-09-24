@@ -10,3 +10,10 @@ export function LoadingRows({ label = "Loading", rows = 3 }: { label?: string; r
         {Array.from({ length: rows }, (_, index) => <div className="loading-rows__row" key={index} aria-hidden="true"><span className="loading-shape" /><span className="loading-shape" /></div>)}
     </div>;
 }
+
+/** A page transition before there is workspace content to represent. */
+export function PageLoading({ label }: { label: string }) {
+    return <div className="page-loading" role="status" aria-label={label}>
+        <span>{label}…</span>
+    </div>;
+}

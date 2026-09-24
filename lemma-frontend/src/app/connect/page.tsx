@@ -1,6 +1,6 @@
 "use client";
 
-import { WorkspaceLoading } from "@/shell/workspace-loading";
+import { PageLoading } from "@/ui/loading";
 
 import dynamic from "next/dynamic";
 
@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
    browser's storage, and there is no server-side answer to what is in it. */
 const ConnectScreen = dynamic(() => import("@/session/connect-screen").then(m => m.ConnectScreen), {
     ssr: false,
-    loading: () => <WorkspaceLoading />,
+    loading: () => <PageLoading label="Opening connection settings" />,
 });
 
 export default function ConnectPage() {

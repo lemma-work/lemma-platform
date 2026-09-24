@@ -109,10 +109,9 @@ function CopySection({ children, text }: { children: ReactNode; text: string }) 
     return <div className="copy-section"><CopyButton text={text} label="Copy section" />{children}</div>;
 }
 
-export function Prose({ text, copyable = false }: { text: string; copyable?: boolean }) {
+export function Prose({ text }: { text: string }) {
     return (
-        <div className={copyable ? "md md--copyable" : "md"}>
-            {copyable && <CopyButton text={text} label="Copy message" />}
+        <div className="md">
             <Markdown
                 components={{
                     pre: ({ children, node, ...props }) => <CopySection text={node ? codeText(node) : ""}><pre {...props}>{children}</pre></CopySection>,

@@ -1,6 +1,5 @@
 import type { SettingsSection } from "@/settings/settings-modal";
 export const SETTINGS: readonly SettingsSection[] = [
-    "help",
     "account",
     "appearance",
     "usage",

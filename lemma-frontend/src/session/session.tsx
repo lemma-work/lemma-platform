@@ -6,7 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { lemma, hasApiUrl, hasToken } from "./client";
 import { key, retainWorkspaceOwner, sessionStorageChanged } from "./storage";
 import { observeAuth } from "./observe-auth";
-import { WorkspaceLoading } from "@/shell/workspace-loading";
+import { PageLoading } from "@/ui/loading";
 import { resetAnalyticsIdentity } from '@/site/analytics/client';
 import { askTheApi, type Person } from "./who";
 import { PORTAL_PATH } from "@/auth/config";
@@ -267,7 +267,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
 
     if (session.status === "loading") {
         return (
-            <WorkspaceLoading />
+            <PageLoading label="Checking your session" />
         );
     }
 

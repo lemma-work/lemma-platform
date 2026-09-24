@@ -1,3 +1,4 @@
+import { surfacesForAgent } from "@/data/surface-settings";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
@@ -68,7 +69,7 @@ function CopyAddress({ surface, compact = false }: { surface: Surface; compact?:
 export function Surfaces({ pod, expanded = false }: { pod: Pod; expanded?: boolean }) {
     const surfaces = useSurfaces(pod.id);
     const [sheet, setSheet] = useState(false);
-    const all = surfaces.data ?? [];
+    const all = surfacesForAgent(surfaces.data ?? []);
     const mine = all.filter((surface) => surface.mine && surface.active !== false && Boolean(surface.handle));
 
     if (surfaces.isPending) {
@@ -95,12 +96,12 @@ export function Surfaces({ pod, expanded = false }: { pod: Pod; expanded?: boole
                 ))}
                 <button
                     className={`reach reach--add${expanded || mine.length === 0 ? " reach--labeled" : ""}`}
-                    title={mine.length ? `Reach ${pod.name} somewhere else` : `Give ${pod.name} a way to be reached`}
-                    aria-label={mine.length ? `Reach ${pod.name} somewhere else` : `Give ${pod.name} a way to be reached`}
+                    title={`Manage channels for ${pod.name}`}
+                    aria-label={`Manage channels for ${pod.name}`}
                     onClick={() => setSheet(true)}
                 >
                     <span className="reach__mark"><PlusIcon size={15} /></span>
-                    {(expanded || mine.length === 0) && <span>{mine.length ? "Somewhere else" : "Add a channel"}</span>}
+                    {(expanded || mine.length === 0) && <span>{all.length ? "Manage channels" : "Add a channel"}</span>}
                 </button>
                 {surfaces.isError && (
                     <span title="Channel status may be out of date"><WarningIcon size={16} /></span>

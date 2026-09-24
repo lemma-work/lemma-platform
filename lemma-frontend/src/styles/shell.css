@@ -4774,7 +4774,7 @@ button.filecard__open {
 /* The profile form. Two-up where the pairs belong together and the labels are
    short enough to read at half width; one column on a narrow screen. */
 .profile-form { display: flex; flex-direction: column; text-align: left; }
-.profile-form__pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.profile-form__pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; }
 @media (max-width: 520px) { .profile-form__pair { grid-template-columns: 1fr; } }
 .profile-form__problem { font-style: normal; font-size: 12px; color: var(--bad); }
 .profile-form__saved { font-size: 12.5px; color: var(--ok); }
@@ -4960,9 +4960,9 @@ button.filecard__open {
    `flex: 1` is what makes the panel's fixed height reach the layout inside it.
    Without it the body sizes to its content and the list on the left stops
    halfway down a 660px panel, which looks like a rendering fault. */
-.modal__body--flush { padding: 0; overflow: hidden; display: flex; flex: 1; min-height: 0; }
+.modal__body--flush { border-bottom-left-radius: inherit; border-bottom-right-radius: inherit; padding: 0; overflow: hidden; display: flex; flex: 1; min-height: 0; }
 
-.settings-layout { display: grid; grid-template-columns: 224px minmax(0, 1fr); flex: 1; min-height: 0; }
+.settings-layout { min-width: 0; display: grid; grid-template-columns: 224px minmax(0, 1fr); flex: 1; min-height: 0; }
 .settings-nav {
     border-right: 1px solid var(--line);
     padding: 12px 10px 16px;
@@ -5025,7 +5025,7 @@ button.filecard__open {
 .settings-org select:disabled { cursor: default; opacity: 1; }
 .settings-org select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 
-.settings-pane { overflow-y: auto; min-height: 0; }
+.settings-pane { overflow: auto; min-height: 0; min-width: 0; overscroll-behavior: contain; }
 /* One width for every section.
  *
  *  There were two — a narrow one for forms and a wide one for tables — which
@@ -5263,18 +5263,24 @@ a.reach { text-decoration: none; }
 
 .appearance__group .theme__mode[aria-pressed] { min-height: 44px }
 
-.md--copyable, .copy-section { position: relative; }
-.md--copyable { padding-bottom: 22px; }
+.copy-section { position: relative; }
 .copy-control { display: inline-flex; }
-.md--copyable > .copy-control { position: absolute; right: 0; bottom: -10px; opacity: 0; }
-.md--copyable:hover > .copy-control, .md--copyable:focus-within > .copy-control { opacity: 1; }
+.message-text { width: fit-content; max-width: 100%; min-width: 0; }
+.message-text, .msg--you { position: relative; }
+.message-actions { position: absolute; right: 6px; bottom: -12px; z-index: 1; display: flex; opacity: 0; pointer-events: none; }
+.message-text:hover > .message-actions,
+.message-text:focus-within > .message-actions,
+.msg--you:hover > .message-actions,
+.msg--you:focus-within > .message-actions { opacity: 1; pointer-events: auto; }
+.message-actions .copy-control__button { width: 28px; height: 28px; background: var(--paper); color: var(--ink-3); }
+.message-actions .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
 .copy-control__button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: var(--paper); color: var(--ink-2); cursor: pointer; }
 .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
 .copy-section { margin: 12px 0; padding-top: 32px; border: 1px solid var(--line-2); border-radius: 10px; }
 .copy-section > .copy-control { position: absolute; top: 0; right: 0; }
 .copy-section pre { margin: 0; }
 .copy-section:has(table) { overflow-x: auto; }
-@media (hover: none) { .md--copyable > .copy-control { opacity: 1; } }
+
 
 .apps-pane { padding: 28px clamp(20px, 3vw, 40px); }
 .apps-pane__content { max-width: 1240px; margin: 0 auto; }
@@ -5315,3 +5321,41 @@ a.reach { text-decoration: none; }
     .app-catalog__categories { gap: 4px; }
     .app-catalog__categories button { padding-inline: 12px; }
 }
+
+.surface-setup,
+.surface-setup__fieldset,
+.surface-setup__section,
+.surface-setup__field {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+}
+.surface-setup__fieldset {
+    border: 0;
+    padding: 0;
+    margin: 0;
+}
+.surface-setup__section {
+    padding-block: 12px;
+    border-top: 1px solid var(--line);
+}
+.surface-setup h3,
+.surface-setup h4,
+.surface-setup p { margin: 0; }
+.surface-setup code { overflow-wrap: anywhere; white-space: pre-wrap; }
+.surface-setup select { min-width: 0; max-width: 100%; }
+.surface-setup__actions,
+.surface-setup__route { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.surface-setup__route select { flex: 1; }
+.surface-setup__route small { flex-basis: 100%; }
+.surface-setup button,
+.surface-setup summary { min-height: 44px; }
+.surface-setup__route.record-form__field { flex-direction: row; }
+.surface-setup__route.record-form__field select { width: auto; min-height: 44px; }
+.surface-setup .connect-check { min-height: 44px; }
+
+/* Keep settings content and focus backgrounds inside the rounded panel. */
+.modal__panel--wide { overflow: hidden; min-width: 0; }
+.modal__panel--wide > .modal__head { flex-shrink: 0; }
+.settings-who { min-width: 0; max-width: 100%; }
+.settings-who > div { min-width: 0; overflow-wrap: anywhere; }

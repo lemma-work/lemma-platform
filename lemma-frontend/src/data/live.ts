@@ -542,6 +542,7 @@ export const liveSource: PodSource = {
                 name: String(surface.name ?? surface.platform),
                 mine: Boolean(surface.uses_default_agent) || isPodDefaultAgent(surface.agent_name),
                 agentName: displayAgentName(String(surface.agent_name ?? "")),
+                agentKey: surface.agent_name ?? undefined,
                 handle:
                     surface.reach?.handle ??
                     surface.surface_identity_username ??
@@ -549,7 +550,20 @@ export const liveSource: PodSource = {
                     "",
                 email: surface.reach?.email ?? surface.surface_identity_email ?? undefined,
                 active: (surface.status ?? "ACTIVE") === "ACTIVE",
+                status: surface.status ?? "ACTIVE",
             }));
+    },
+
+    async getSurface(podId, name) { return lemma(podId).podSurfaces.get(podId, name); },
+    async surfaceSetup(podId, name) { return lemma(podId).podSurfaces.setup(podId, name); },
+    async surfaceGuide(podId, platform) { return lemma(podId).podSurfaces.setupGuide(podId, platform); },
+    async surfaceChannels(podId, name) { return lemma(podId).podSurfaces.channels(podId, name); },
+    async updateSurface(podId, name, patch) { await lemma(podId).podSurfaces.update(podId, name, patch); },
+    async createSurfaceAccount(orgId, entry, credentials) {
+        const client = lemma();
+        const install = await client.connectors.enableApp(orgId, entry.connectorId, { kind: entry.kind });
+        const account = await client.connectors.accounts.create(orgId, { auth_config_id: install.id, credentials });
+        return account.id;
     },
 
     async listConnectable(podId: string): Promise<Connectable[]> {
@@ -810,6 +824,7 @@ export const liveSource: PodSource = {
         connectorId: string,
         name: string,
         config: Record<string, unknown>,
+        kind?: string,
     ): Promise<string> {
         /* `config_source` is what tells the backend these are the org's own
            credentials rather than Lemma's. Without it the SDK's own comment
@@ -818,7 +833,8 @@ export const liveSource: PodSource = {
         const made = (await lemma().connectors.enableApp(orgId, connectorId, {
             name,
             config,
-            config_source: "CUSTOM",
+            config_source: "ORG_CUSTOM",
+            kind,
         })) as { id?: string };
         return String(made.id ?? "");
     },
@@ -839,10 +855,10 @@ export const liveSource: PodSource = {
                alone would authorise the wrong one. */
             authConfigId ? { connector_id: connectorId, auth_config_id: authConfigId } : connectorId,
         )) as { authorization_url?: string | null };
-        return { authorizeUrl: request.authorization_url ?? "", before };
+        return { authorizeUrl: request.authorization_url ?? "", before, authConfigId };
     },
 
-    async findAccount(orgId: string, connectorId: string, before: string[]): Promise<string> {
+    async findAccount(orgId: string, connectorId: string, before: string[], authConfigId?: string): Promise<string> {
         const listed = (await lemma().connectors.accounts.list(orgId, { connectorId, limit: 100 })) as Listish;
         const accounts = itemsOf(listed)
             .map(readAccount)
@@ -853,9 +869,10 @@ export const liveSource: PodSource = {
            existing row rather than insert a new one, and the first version of
            this waited forever for an id that was never going to appear. */
         const seen = new Set(before);
-        const fresh = accounts.find((account) => !seen.has(account.id) && account.usable);
+        const eligible = accounts.filter(account => !authConfigId || account.authConfigId === authConfigId);
+        const fresh = eligible.find((account) => !seen.has(account.id) && account.usable);
         if (fresh) return fresh.id;
-        return bestAccount(accounts, connectorId)?.id ?? "";
+        return bestAccount(eligible, connectorId)?.id ?? "";
     },
 
     async connectAccount(podId: string, platform: string, accountId: string): Promise<Surface> {
