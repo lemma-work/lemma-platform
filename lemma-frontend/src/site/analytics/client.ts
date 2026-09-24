@@ -21,6 +21,8 @@
  *   only once someone accepts. See `consent.ts`.
  */
 
+import { isAnalyticsDocument } from "./document";
+
 import type { CaptureResult } from "posthog-js";
 
 import { config, isLocalDeployment } from "@/site/config";
@@ -55,7 +57,7 @@ let pendingPathname: string | null = null;
  * the existing deployment helper rather than a new flag that could drift.
  */
 function analyticsAllowed(): boolean {
-    if (typeof window === "undefined") return false;
+    if (!isAnalyticsDocument()) return false;
     if (isLocalDeployment()) return false;
     return Boolean(config.ANALYTICS_KEY);
 }

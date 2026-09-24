@@ -136,3 +136,7 @@ status until the tool finishes.
 
 Header channel actions with labels keep their natural width; folded teammate
 names retain enough line height for descenders while long names still truncate.
+
+Embedded demo documents leave analytics and consent to their containing page.
+Standalone demos show the same analytics choice as other top-level pages.
+Demo teammate access resolves against Acme sample data without authentication.
