@@ -75,4 +75,23 @@ impl AgentHostSupervisor {
         self.invalidate_details();
         Ok(())
     }
+
+    /// Turn running the owner's Lemma agents' commands on this computer on or
+    /// off. The host re-reads its configuration every few seconds and tells
+    /// Lemma on its next `control` frame, so there is nothing to restart.
+    pub fn set_host_execution(&self, enabled: bool) -> io::Result<()> {
+        self.run_cli(&["host-execution", if enabled { "enable" } else { "disable" }])?;
+        self.invalidate_details();
+        Ok(())
+    }
+}
+
+/// The owner's host-execution setting, straight from the host's config.
+/// Absent means off, which is the host's own default.
+pub(crate) fn host_execution_enabled(config_path: &Path) -> bool {
+    std::fs::read_to_string(config_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|config| config.get("host_execution").and_then(Value::as_bool))
+        .unwrap_or(false)
 }

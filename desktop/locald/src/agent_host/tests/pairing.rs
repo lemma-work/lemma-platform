@@ -53,3 +53,14 @@ fn quitting_the_app_does_not_stop_it_wanting_to_run() {
     supervisor.suspend().unwrap();
     assert!(AgentHostSupervisor::discover(&locald_root).desired_running());
 }
+
+#[test]
+fn the_host_execution_setting_is_read_from_the_hosts_config_and_defaults_off() {
+    let home = tempdir().unwrap();
+    let config = home.path().join("agent-host/config.json");
+    assert!(!crate::agent_host::pairing::host_execution_enabled(&config));
+    write(&config, r#"{"targets": [], "host_execution": true}"#);
+    assert!(crate::agent_host::pairing::host_execution_enabled(&config));
+    write(&config, r#"{"targets": []}"#);
+    assert!(!crate::agent_host::pairing::host_execution_enabled(&config));
+}
