@@ -417,7 +417,7 @@ impl TargetWorker {
                 provider_seen: AtomicBool::new(true),
                 dispatched: AtomicBool::new(true),
                 stream_segments: std::sync::Mutex::new(segments),
-                events_ready: Arc::clone(&self.events_ready),
+                events_ready: self.events_ready.clone(),
             }
             .flush_stream_segments()?;
             if run.prompt_dispatched {

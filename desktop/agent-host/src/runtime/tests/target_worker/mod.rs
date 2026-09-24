@@ -8,33 +8,29 @@ pub(super) use crate::runtime::*;
 mod cancellation;
 mod events;
 mod harnesses;
-mod polling;
+mod control;
 mod runs;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::routing::post;
-use axum::{Json, Router};
 use chrono::Utc;
-use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
 use uuid::Uuid;
 
 use super::{CANCEL_KILL_AFTER, ProbedHarnesses, TargetWorker, deliver_events};
 use crate::acp::{AcpCallbacks, AcpProbeOutcome, AcpRunOutcome, AcpRunRequest, AgentDriver};
 use crate::adapters::{AdapterManifest, ResolvedAdapter};
-use crate::api::PublishedHarness;
 use crate::config::{HostPaths, TargetConfig};
 use crate::journal::Journal;
+use crate::link::LinkHandle;
+use crate::link::protocol::PublishedHarness;
+use crate::link::stub::{StubLink, StubState};
 use crate::permissions::PermissionDecision;
 use crate::protocol::{
-    Command, CommandKind, EventAck, EventBatch, EventType, HostCapacity, HostStatus, JsonMap,
-    PollRequest, PollResponse, RunSpec, RunState,
+    Command, CommandKind, EventType, HostCapacity, HostHello, JsonMap, RunSpec, RunState,
 };
 
 pub(super) fn capacity() -> HostCapacity {
@@ -80,81 +76,17 @@ impl AgentDriver for IdleDriver {
     }
 }
 
-#[derive(Default)]
-pub(super) struct StubState {
-    /// Runs whose batches the stub refuses, as Lemma does when its
-    /// transient event stream no longer holds the sequences a batch
-    /// assumes.
-    refused: Mutex<Vec<Uuid>>,
-    accepted: Mutex<Vec<(Uuid, u64)>>,
-    /// Runs whose checkpoints the stub refuses, standing in for any reason
-    /// a future server might reject one update out of a poll's batch.
-    refused_checkpoints: Mutex<Vec<Uuid>>,
-    applied_checkpoints: Mutex<Vec<(Uuid, RunState)>>,
-    polls: Mutex<u32>,
-    /// Commands handed out one per poll, to prove none are lost while a
-    /// refused control batch is being narrowed.
-    undelivered_commands: Mutex<Vec<Command>>,
-}
-
-pub(super) async fn poll(
-    State(state): State<Arc<StubState>>,
-    Json(request): Json<PollRequest>,
-) -> Result<Json<PollResponse>, StatusCode> {
-    *state.polls.lock().unwrap() += 1;
-    let refused = state.refused_checkpoints.lock().unwrap().clone();
-    if request
-        .checkpoints
-        .iter()
-        .any(|checkpoint| refused.contains(&checkpoint.run_id))
-    {
-        return Err(StatusCode::CONFLICT);
-    }
-    state.applied_checkpoints.lock().unwrap().extend(
-        request
-            .checkpoints
-            .iter()
-            .map(|checkpoint| (checkpoint.run_id, checkpoint.state)),
-    );
-    let command = state.undelivered_commands.lock().unwrap().pop();
-    Ok(Json(PollResponse {
-        protocol_version: crate::PROTOCOL_VERSION,
-        host_status: HostStatus::Online,
-        commands: command.into_iter().collect(),
-        poll_after_ms: 0,
-    }))
-}
-
-pub(super) async fn append_events(
-    State(state): State<Arc<StubState>>,
-    Json(batch): Json<EventBatch>,
-) -> Result<Json<EventAck>, StatusCode> {
-    let first = batch.events.first().expect("batches are never empty");
-    if state.refused.lock().unwrap().contains(&first.run_id) {
-        // The same 409 the backend raises for `event sequence gap`.
-        return Err(StatusCode::CONFLICT);
-    }
-    let last = batch.events.last().expect("batches are never empty");
-    state
-        .accepted
-        .lock()
-        .unwrap()
-        .push((first.run_id, last.sequence));
-    Ok(Json(EventAck {
-        run_id: first.run_id,
-        lease_epoch: first.lease_epoch,
-        acked_through: last.sequence,
-    }))
-}
-
 pub(super) struct Harness {
     worker: TargetWorker,
     stub: Arc<StubState>,
+    /// A link to the stand-in, already through its handshake, and published
+    /// in the worker's slot the way the link loop does.
+    link: LinkHandle,
     journal: Journal,
     target_id: Uuid,
     _directory: tempfile::TempDir,
     _shutdown: watch::Sender<bool>,
-    server: tokio::task::JoinHandle<()>,
+    server: StubLink,
 }
 
 impl Harness {
@@ -163,17 +95,8 @@ impl Harness {
     }
 
     async fn with_manifest(manifest: AdapterManifest) -> Self {
-        let stub = Arc::<StubState>::default();
-        let app = Router::new()
-            .route("/agent-host/events/append", post(append_events))
-            .route("/agent-host/poll", post(poll))
-            .with_state(Arc::clone(&stub));
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-
+        let server = StubLink::start().await;
+        let stub = Arc::clone(&server.state);
         let directory = tempfile::TempDir::new().unwrap();
         let paths = HostPaths::under(directory.path());
         paths.ensure().unwrap();
@@ -182,7 +105,7 @@ impl Harness {
         let target = TargetConfig {
             target_id,
             name: "stub".into(),
-            base_url: url::Url::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
+            base_url: server.url.clone(),
             host_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             host_secret: "test-secret".into(),
@@ -206,9 +129,20 @@ impl Harness {
             watch::channel(0_u64).1,
         )
         .unwrap();
+        let link = crate::link::connect(
+            &server.url,
+            "test-secret",
+            HostHello::current("installation"),
+            capacity(),
+        )
+        .await
+        .unwrap()
+        .handle;
+        worker.slot_owner.set(Some(link.clone()));
         Self {
             worker,
             stub,
+            link,
             journal,
             target_id,
             _directory: directory,
@@ -281,12 +215,6 @@ impl Harness {
             .filter(|event| event.run_id == run_id)
             .map(|event| event.sequence)
             .collect()
-    }
-}
-
-impl Drop for Harness {
-    fn drop(&mut self) {
-        self.server.abort();
     }
 }
 

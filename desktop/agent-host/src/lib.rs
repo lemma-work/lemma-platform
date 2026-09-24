@@ -6,12 +6,14 @@
 
 pub mod acp;
 pub mod adapters;
-pub mod api;
 pub mod config;
 pub mod conversation_directory;
 mod conversation_folders;
 pub mod journal;
+pub mod link;
 pub mod mcp_bridge;
+mod mcp_relay;
+pub mod normalize;
 pub mod permissions;
 pub mod protocol;
 pub mod runtime;

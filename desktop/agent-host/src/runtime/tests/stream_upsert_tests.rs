@@ -142,7 +142,7 @@ fn fixture() -> (TempDir, JournalCallbacks, Uuid) {
         provider_seen: AtomicBool::new(true),
         dispatched: AtomicBool::new(true),
         stream_segments: std::sync::Mutex::new(StreamSegments::default()),
-        events_ready: Arc::new(tokio::sync::Notify::new()),
+        events_ready: super::OutboxSignal::default(),
     };
     (directory, callbacks, run_id)
 }
@@ -252,7 +252,7 @@ fn text_chunks_flush_as_one_upsert_before_the_next_durable_event() {
 
     callbacks
         .event(
-            EventType::ToolCallUpsert,
+            EventType::ToolCall,
             Some("call-1".into()),
             JsonMap::new(),
         )
@@ -265,7 +265,7 @@ fn text_chunks_flush_as_one_upsert_before_the_next_durable_event() {
             EventType::AgentMessageChunk,
             EventType::AgentMessageChunk,
             EventType::AgentMessageUpsert,
-            EventType::ToolCallUpsert,
+            EventType::ToolCall,
         ]
     );
     assert_eq!(
@@ -290,7 +290,7 @@ fn recovery_seals_only_text_after_each_kinds_last_upsert() {
         .unwrap();
     callbacks
         .event(
-            EventType::ToolCallUpsert,
+            EventType::ToolCall,
             Some("tool".into()),
             JsonMap::new(),
         )

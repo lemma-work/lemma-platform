@@ -1,4 +1,4 @@
-use super::shorten_object_id;
+use crate::normalize::shorten_object_id;
 
 /// The backend stores `object_id` in a 255-character column and refuses a
 /// longer one. The host reads that refusal as the run's own fault, replays

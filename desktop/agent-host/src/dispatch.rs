@@ -54,13 +54,13 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             allow_insecure_http,
         } => {
             let config = HostConfig::load_or_create(&paths)?;
-            // Deliberately does not install adapters. Pairing is an HTTP call
-            // with a single-use code and needs none of them, but it used to wait
+            // Deliberately does not install adapters. Pairing is one exchange
+            // on the link with a single-use code and needs none of them, but it used to wait
             // for the whole cache to be built first -- which is why connecting
             // took minutes and why nothing appeared to be happening while it
             // did. `serve` warms the cache when the app opens instead, and a
             // harness that is not cached yet reports itself as installing.
-            let target = lemma_agent_host::api::TargetClient::pair(
+            let target = lemma_agent_host::link::pair(
                 url,
                 &pairing_code,
                 &name,
@@ -125,13 +125,11 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         } => {
             let config = HostConfig::load_or_create(&paths)?;
             let selected = select_one_target(&config, target.as_deref())?.clone();
-            let client = lemma_agent_host::api::TargetClient::new(
-                selected.clone(),
-                config.installation_id.clone(),
-            )?;
-            if let Err(error) = client.revoke().await {
+            if let Err(error) =
+                lemma_agent_host::link::revoke(&selected, &config.installation_id).await
+            {
                 if !force_local {
-                    return Err(error.into());
+                    return Err(error);
                 }
                 eprintln!(
                     "Warning: remote revocation failed; removing local state because --force-local was supplied: {error}"

@@ -22,13 +22,12 @@ use uuid::Uuid;
 
 use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use crate::adapters::{AdapterManifest, AdapterWarmup, ResolvedAdapter};
-use crate::api::{ApiError, PublishedHarness, TargetClient};
 use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::journal::{AcceptOutcome, Checkpoint, Journal};
 use crate::permissions::{PermissionDecision, PermissionGate};
 use crate::protocol::{
     Command, CommandKind, CommandRejection, ConfigOption, EventType, HarnessCapabilities,
-    HarnessHealth, HarnessSnapshot, HostCapacity, HostStatus, JsonMap, PollResponse, RejectionCode,
+    HarnessHealth, HarnessSnapshot, HostCapacity, JsonMap, RejectionCode,
     RunCheckpoint, RunSpec, RunState,
 };
 
@@ -40,7 +39,7 @@ mod events;
 mod failures;
 mod harnesses;
 mod host;
-mod polling;
+mod control;
 mod run;
 mod worker;
 
@@ -89,10 +88,8 @@ pub(crate) const TRANSIENT_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 /// affordable only because detection no longer means probing: it is a handful of
 /// `stat` calls, not four spawned processes.
 ///
-/// It only means anything because the poll loop has a tick of its own to wake it
-/// — see `POLL_HOLD`. As a check performed once per iteration it would have been
-/// a *ceiling* on frequency and nothing at all on latency, since an iteration is
-/// however long the server holds the poll.
+/// The supervisor sweeps on this interval and announces a change to every
+/// worker over a `watch` channel, which the link loop has an arm for.
 pub(crate) const DISK_SCAN_INTERVAL: Duration = Duration::from_secs(2);
 /// How often to re-read the local control file (drain, resume, refresh).
 ///
@@ -115,18 +112,13 @@ pub(crate) const RETRY_MIN: Duration = Duration::from_millis(500);
 pub(crate) const RETRY_MAX: Duration = Duration::from_secs(30);
 /// How far event delivery is allowed to back off, and why it is not `RETRY_MAX`.
 ///
-/// The poll loop backs off to thirty seconds because a failing poll means the
+/// Reconnecting backs off to thirty seconds because a failing link means the
 /// target may be unreachable, and hammering it helps nobody. Event delivery is
-/// not that: it runs *beside* a poll loop that is separately proving the target
-/// answers, and everything it carries -- a run's output, its terminal state --
-/// is what somebody is sitting and waiting for.
-///
-/// Sharing the thirty-second ceiling meant a handful of transient failures
-/// compounded into more than a minute of silence: 0.5s, 1, 2, 4, 8, 16, 30 is
-/// 61.5s before the eighth attempt, on a control plane the poll loop was
-/// talking to successfully the whole time. That is how a run finishes with
-/// nothing delivered and no sign of why -- the retries below this were logged
-/// at `debug`, which the host does not emit.
+/// not that: it waits for the link loop to have a connection, and everything
+/// it carries -- a run's output, its terminal state -- is what somebody is
+/// sitting and waiting for. Sharing the thirty-second ceiling once meant a
+/// handful of transient failures compounded into more than a minute of
+/// silence.
 pub(crate) const EVENT_RETRY_MAX: Duration = Duration::from_secs(2);
 /// Consecutive delivery failures before saying so at a level that is emitted.
 pub(crate) const EVENT_RETRY_QUIET: u32 = 3;
@@ -142,19 +134,22 @@ pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(10);
 // path is what normally resolves a cancellation, and the kill is the backstop
 // for an adapter that ignores the notification altogether.
 pub(crate) const CANCEL_KILL_AFTER: Duration = Duration::from_secs(15);
-// How many polls a run whose liveness checkpoint Lemma refused waits before
-// trying again. A refusal is usually transient (a deploy, a blip); giving up on
-// the heartbeat permanently sentences a healthy run to lease expiry, so the
-// host backs off rather than stopping.
-pub(crate) const REFUSED_HEARTBEAT_RETRY_POLLS: u32 = 20;
+// How long a run whose liveness checkpoint Lemma refused waits before trying
+// again. A refusal is usually transient (a deploy, a blip); giving up on the
+// heartbeat permanently sentences a healthy run to lease expiry, so the host
+// backs off rather than stopping.
+pub(crate) const REFUSED_HEARTBEAT_BACKOFF: Duration = Duration::from_secs(5 * 60);
+/// How long event delivery lingers after being woken before it sends.
+///
+/// An agent streams a chunk every few milliseconds, and each used to be its own
+/// request, on the order of a thousand a minute against a local backend. A short
+/// linger turns a burst into one `events` frame, and is well under what a
+/// person reading the stream can notice.
+pub(crate) const EVENT_LINGER: Duration = Duration::from_millis(30);
 // How many times one run's event batch may be rejected outright before the
 // host stops trying to deliver that run's transcript. The first rejection is
 // answered with a full replay, so this allows exactly one repair attempt.
 pub(crate) const MAX_EVENT_REJECTIONS: u32 = 2;
-// How many extra requests one poll may spend bisecting a control batch the
-// server refuses. Comfortably above the ceiling for the 256 updates a poll can
-// carry, so the bound only ever bites on a batch that is refused wholesale.
-pub(crate) const MAX_CONTROL_PROBES: u32 = 12;
 pub(crate) const GENERATED_ARTIFACT_DIRECTORY: &str = ".lemma-artifacts";
 pub(crate) const MAX_GENERATED_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 pub(crate) const MAX_GENERATED_IMAGES: usize = 10;

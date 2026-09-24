@@ -1,7 +1,7 @@
 //! The host runtime: one worker per target, and the tasks around them.
 
 use super::{
-    AcpDriver, AdapterManifest, AdapterWarmup, AgentDriver, ApiError, Arc, DISK_SCAN_INTERVAL,
+    AcpDriver, AdapterManifest, AdapterWarmup, AgentDriver, Arc, DISK_SCAN_INTERVAL,
     Duration, HARNESS_REFRESH_INTERVAL, HashMap, HostConfig, HostPaths, JOURNAL_CLEANUP_INTERVAL,
     JoinHandle, Journal, PathBuf, Semaphore, TRANSIENT_RETRY_INTERVAL, TargetWorker, Utc, Uuid,
     watch,
@@ -260,8 +260,11 @@ impl HostRuntime {
                                     // machine reports itself disconnected;
                                     // pairing again re-enables it.
                                     if error
-                                        .downcast_ref::<ApiError>()
-                                        .is_some_and(ApiError::is_unauthorized)
+                                        .downcast_ref::<crate::link::LinkError>()
+                                        .is_some_and(|error| {
+                                            error.is_invalid_credential()
+                                                || error.is_revoked_or_missing()
+                                        })
                                     {
                                         tracing::warn!(
                                             %target_id,

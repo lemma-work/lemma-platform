@@ -383,25 +383,6 @@ pub struct EventAck {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PairingCompleteRequest {
-    pub pairing_code: String,
-    pub display_name: String,
-    pub hello: HostHello,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PairingCompleteResponse {
-    pub host_id: Uuid,
-    pub user_id: Uuid,
-    pub host_secret: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HarnessPublishRequest {
-    pub harnesses: Vec<HarnessSnapshot>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HarnessSnapshot {
     pub harness_key: String,
     pub display_name: String,

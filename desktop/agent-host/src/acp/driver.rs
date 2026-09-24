@@ -8,10 +8,16 @@ use super::{
     SelectedPermissionOutcome, SessionNotification, SupervisedAgent, Value, allow_once,
     always_allow_offer, async_trait, before_prompt_deadline, build_agent, capture_stderr,
     configure_session, convert_config_option, effective_options, internal, invalid,
-    is_scoped_mcp_tool_approval, normalize_session_update, open_session, outcome_for_decision,
+    is_scoped_mcp_tool_approval, open_session, outcome_for_decision,
     permission_payload, plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names,
     session_to_resume, tool_call_id,
 };
+use crate::normalize::{Dialect, Normalizer, RunContext};
+
+/// One run's normalizer, shared by the update and permission handlers. Both
+/// run on the ACP receive loop in order, so the lock is never contended; it
+/// is there because the two handlers are separate closures.
+type SharedNormalizer = Arc<std::sync::Mutex<Normalizer>>;
 
 #[derive(Clone, Default)]
 pub struct AcpDriver;
@@ -93,10 +99,15 @@ impl AgentDriver for AcpDriver {
             ..
         } = request;
         let resume_session_id = session_to_resume(&run_spec, can_load_session);
+        let normalizer: SharedNormalizer = Arc::new(std::sync::Mutex::new(Normalizer::new(
+            Dialect::for_harness(&adapter.spec.key),
+            RunContext::from_mcp(&run_spec.mcp),
+        )));
         let updates = UpdateSink {
             streaming: Arc::new(AtomicBool::new(false)),
             session: Arc::new(std::sync::OnceLock::new()),
             callbacks: Arc::clone(&callbacks),
+            normalizer: Arc::clone(&normalizer),
         };
         let permission_handler = PermissionHandler {
             gate: permissions,
@@ -110,8 +121,10 @@ impl AgentDriver for AcpDriver {
                 .is_some()
                 .then(|| Arc::new(scoped_mcp_tool_names(&run_spec.mcp))),
             callbacks: Arc::clone(&callbacks),
+            normalizer: Arc::clone(&normalizer),
         };
         let turn_updates = updates.clone();
+        let owed_callbacks = Arc::clone(&callbacks);
         let outcome = agent_client_protocol::Client
             .builder()
             .name("lemma-agent-host")
@@ -192,6 +205,22 @@ impl AgentDriver for AcpDriver {
             })
             .await
             .map_err(anyhow::Error::from);
+        // Whatever the turn still owes: calls the adapter opened and never
+        // settled -- the turn ended, was cancelled, or the adapter died --
+        // still happened and still get a card, and the adapter's token count
+        // for the turn, when it reported one. Before the terminal event, which
+        // the runtime writes once this returns.
+        let usage = outcome.as_ref().ok().and_then(|outcome| outcome.usage.clone());
+        let owed = normalizer
+            .lock()
+            .expect("normalizer poisoned")
+            .finish(usage.as_ref());
+        for event in owed {
+            if let Err(error) = owed_callbacks.event(event.event_type, event.object_id, event.payload)
+            {
+                tracing::error!(%error, "could not persist an event the turn still owed");
+            }
+        }
         // See `SupervisedAgent`: the protocol has read to stdout EOF, so every
         // chunk the agent streamed is already journalled. A non-zero exit
         // explains the failure; it no longer replaces the answer.
@@ -218,6 +247,7 @@ struct UpdateSink {
     /// another conversation's output into this one's transcript.
     session: Arc<std::sync::OnceLock<String>>,
     callbacks: Arc<dyn AcpCallbacks>,
+    normalizer: SharedNormalizer,
 }
 
 impl UpdateSink {
@@ -241,18 +271,20 @@ impl UpdateSink {
             );
             return Ok(());
         }
-        let Some((event_type, object_id, payload)) = normalize_session_update(&notification.update)
-        else {
-            return Ok(());
-        };
-        tracing::debug!(?event_type, "ACP notification received");
-        self.callbacks
-            .event(event_type, object_id, payload)
-            .map_err(|error| {
-                tracing::error!(%error, ?event_type, "could not persist ACP notification");
-                internal(error)
-            })?;
-        tracing::debug!(?event_type, "ACP notification persisted");
+        let events = self
+            .normalizer
+            .lock()
+            .expect("normalizer poisoned")
+            .session_update(&notification.update);
+        for event in events {
+            let event_type = event.event_type;
+            self.callbacks
+                .event(event_type, event.object_id, event.payload)
+                .map_err(|error| {
+                    tracing::error!(%error, ?event_type, "could not persist ACP notification");
+                    internal(error)
+                })?;
+        }
         Ok(())
     }
 }
@@ -266,6 +298,7 @@ struct PermissionHandler {
     /// The tools Lemma's run-scoped MCP server publishes, when the run has one.
     scoped_mcp_tools: Option<Arc<std::collections::HashSet<String>>>,
     callbacks: Arc<dyn AcpCallbacks>,
+    normalizer: SharedNormalizer,
 }
 
 enum Triage {
@@ -307,13 +340,29 @@ impl PermissionHandler {
                 SelectedPermissionOutcome::new(offer.option_id.clone()),
             )));
         }
-        let payload = permission_payload(request);
+        let mut payload = permission_payload(request);
+        // The call being gated goes on the record first, so the approval card
+        // follows the call it asks about -- and carries that call's canonical
+        // name and input rather than the adapter's own shapes.
+        let (released, gated_call, call_fields) = self
+            .normalizer
+            .lock()
+            .expect("normalizer poisoned")
+            .permission_request(&serde_json::to_value(request).unwrap_or(Value::Null));
+        for event in released {
+            self.callbacks
+                .event(event.event_type, event.object_id, event.payload)
+                .map_err(internal)?;
+        }
+        payload.extend(call_fields);
         // Without a toolCallId every request in a session would collapse onto
         // one gate key, so concurrent prompts would deny each other and
         // overwrite each other's approval card in Lemma. The counter makes the
         // fallback unique per request; the id round-trips as the event's
-        // object_id and comes back verbatim in RESOLVE_PERMISSION.
-        let request_id = tool_call_id(&payload).unwrap_or_else(|| {
+        // object_id and comes back verbatim in RESOLVE_PERMISSION. It is the
+        // gated call's own id, shortened the same way, so the two cannot stop
+        // matching however long the adapter's id was.
+        let request_id = gated_call.or_else(|| tool_call_id(&payload)).unwrap_or_else(|| {
             format!(
                 "{}:{}",
                 request.session_id,

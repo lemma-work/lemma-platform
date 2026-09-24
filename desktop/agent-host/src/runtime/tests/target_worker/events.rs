@@ -2,25 +2,19 @@
 
 use super::*;
 
-/// The finding: a run's output reached Lemma only by abandoning the poll.
-///
-/// Delivery used to be an arm of the same `select!` as the poll, so every
-/// event a run streamed cancelled the poll in flight and opened a new one.
-/// The server never learned the old one was gone and held it for the rest
-/// of its 25 seconds — one host streaming a single answer stacked 26
-/// concurrent polls against exactly one while idle.
-///
-/// This drives delivery with no poll running at all, which is only a
-/// meaningful thing to ask because the two are now independent.
+/// A run's output reaches Lemma on its own task, as it is journaled, with
+/// nothing else about the worker running -- and keeps doing so for the whole
+/// turn rather than delivering the first batch and going quiet.
 #[tokio::test]
-async fn a_runs_events_reach_lemma_with_no_poll_involved() {
+async fn a_runs_events_reach_lemma_as_they_are_journaled() {
     let harness = Harness::new().await;
     let run_id = harness.seed_run(3);
 
     let (_shutdown_tx, shutdown) = watch::channel(false);
     let delivery = tokio::spawn(deliver_events(
         Arc::clone(&harness.worker.flusher),
-        Arc::clone(&harness.worker.events_ready),
+        harness.worker.events_ready.clone(),
+        harness.worker.link.clone(),
         shutdown,
     ));
     // Exactly what a run task does the moment it journals an event.
@@ -38,9 +32,7 @@ async fn a_runs_events_reach_lemma_with_no_poll_involved() {
     )
     .await;
 
-    // And it keeps serving. A run streams for its whole turn, so delivering
-    // the first batch and then going quiet until the poll came back is the
-    // same defect in a different place.
+    // And it keeps serving: a run streams for its whole turn.
     for _ in 0..4 {
         harness
             .journal
@@ -68,7 +60,7 @@ async fn a_runs_events_reach_lemma_with_no_poll_involved() {
 
 /// Shutting the loop down must not strand what the journal still holds.
 ///
-/// The delivery task is aborted when the poll loop ends, so the last flush
+/// The delivery task is aborted when the link loop ends, so the last flush
 /// belongs to the shutdown path. Both take the same lock, which is what
 /// stops them sending one batch twice.
 #[tokio::test]
@@ -78,7 +70,8 @@ async fn events_journaled_after_delivery_stops_are_still_sent() {
     let (shutdown_tx, shutdown) = watch::channel(false);
     let delivery = tokio::spawn(deliver_events(
         Arc::clone(&harness.worker.flusher),
-        Arc::clone(&harness.worker.events_ready),
+        harness.worker.events_ready.clone(),
+        harness.worker.link.clone(),
         shutdown,
     ));
     let _ = shutdown_tx.send(true);
@@ -86,25 +79,24 @@ async fn events_journaled_after_delivery_stops_are_still_sent() {
 
     // Journaled with nothing left running to notice.
     let run_id = harness.seed_run(2);
-    harness.worker.flush_events().await.unwrap();
+    harness.worker.flush_events(&harness.link).await.unwrap();
 
     assert_eq!(harness.accepted().get(&run_id), Some(&2));
     assert!(harness.pending(run_id).is_empty());
 }
 
-/// The finding: one run Lemma refuses used to abort the whole flush and
-/// make the caller skip its poll, which is the lease heartbeat for every
-/// other run on the host.
+/// One run Lemma refuses must not abort the whole flush: that would starve
+/// every other run on the host of delivery.
 #[tokio::test]
 async fn a_refused_run_neither_stops_the_flush_nor_fails_it() {
     let mut harness = Harness::new().await;
     let poisoned = harness.seed_run(3);
     let healthy = harness.seed_run(2);
-    harness.stub.refused.lock().unwrap().push(poisoned);
+    harness.stub.refused_runs.lock().unwrap().push(poisoned);
 
     harness
         .worker
-        .flush_events()
+        .flush_events(&harness.link)
         .await
         .expect("a run Lemma refuses is not a target-level failure");
 
@@ -122,13 +114,13 @@ async fn a_refused_run_neither_stops_the_flush_nor_fails_it() {
 async fn a_refusal_replays_the_run_from_its_first_event() {
     let mut harness = Harness::new().await;
     let run_id = harness.seed_run(3);
-    harness.worker.flush_events().await.unwrap();
+    harness.worker.flush_events(&harness.link).await.unwrap();
     assert_eq!(harness.accepted().get(&run_id), Some(&3));
     assert!(harness.pending(run_id).is_empty());
 
     // Lemma loses the stream: it now refuses a batch that starts above the
     // sequence it expects.
-    harness.stub.refused.lock().unwrap().push(run_id);
+    harness.stub.refused_runs.lock().unwrap().push(run_id);
     harness
         .journal
         .append_event(
@@ -141,7 +133,7 @@ async fn a_refusal_replays_the_run_from_its_first_event() {
         )
         .unwrap();
 
-    harness.worker.flush_events().await.unwrap();
+    harness.worker.flush_events(&harness.link).await.unwrap();
 
     assert_eq!(
         harness.pending(run_id),
@@ -157,10 +149,10 @@ async fn a_run_lemma_keeps_refusing_is_eventually_dropped() {
     let mut harness = Harness::new().await;
     let poisoned = harness.seed_run(3);
     let healthy = harness.seed_run(1);
-    harness.stub.refused.lock().unwrap().push(poisoned);
+    harness.stub.refused_runs.lock().unwrap().push(poisoned);
 
     for _ in 0..3 {
-        harness.worker.flush_events().await.unwrap();
+        harness.worker.flush_events(&harness.link).await.unwrap();
     }
 
     assert!(
@@ -202,7 +194,7 @@ async fn a_failed_run_keeps_its_reason_once_the_terminal_event_is_acknowledged()
         .journal
         .acknowledge_events(
             harness.target_id,
-            &EventAck {
+            &crate::protocol::EventAck {
                 run_id,
                 lease_epoch: 1,
                 acked_through,
@@ -229,58 +221,22 @@ async fn a_failed_run_keeps_its_reason_once_the_terminal_event_is_acknowledged()
 async fn a_target_level_failure_still_fails_the_flush() {
     let mut harness = Harness::new().await;
     harness.seed_run(1);
-    harness.server.abort();
-    // Let the listener actually close before the flush tries to use it.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The link goes away underneath the flush.
+    harness.link.close(1000, "test");
+    within(Duration::from_secs(5), "the link to close", || {
+        harness.link.is_closed()
+    })
+    .await;
 
-    assert!(harness.worker.flush_events().await.is_err());
-}
-
-/// The poll is the lease heartbeat for every run on the host and the only
-/// way commands come back down, and it carries every run's checkpoint in
-/// one batch. One refused checkpoint used to fail that whole request, which
-/// the worker read as the target being offline -- so every other run's
-/// lease expired underneath it while its provider kept working.
-#[tokio::test]
-async fn a_refused_checkpoint_does_not_hold_back_every_other_run() {
-    let mut harness = Harness::new().await;
-    let healthy = harness.seed_run(0);
-    let poisoned = harness.seed_run(0);
-    harness
-        .stub
-        .refused_checkpoints
-        .lock()
-        .unwrap()
-        .push(poisoned);
-
-    let response = harness
-        .worker
-        .poll_target(capacity())
-        .await
-        .expect("one refused checkpoint is not the target going offline");
-
-    assert_eq!(response.host_status, HostStatus::Online);
-    let applied = harness.stub.applied_checkpoints.lock().unwrap().clone();
-    assert!(
-        applied.iter().any(|(run_id, _)| *run_id == healthy),
-        "the healthy run's checkpoint must still be applied, got {applied:?}"
-    );
-    assert!(applied.iter().all(|(run_id, _)| *run_id != poisoned));
-    assert!(
-        harness.worker.refused_heartbeats.contains_key(&poisoned),
-        "the refused run must be named, not left to poison every later poll"
-    );
+    assert!(harness.worker.flush_events(&harness.link).await.is_err());
 }
 
 /// Event delivery must not go quiet for a minute over transient failures.
 ///
-/// Delivery used to share the poll loop's thirty-second ceiling. Doubling
+/// Delivery once shared the reconnect loop's thirty-second ceiling. Doubling
 /// from 500ms, a run of failures spends 0.5 + 1 + 2 + 4 + 8 + 16 + 30 =
-/// 61.5s before the eighth attempt -- on a control plane the poll loop is
-/// separately, successfully talking to the whole time. A run can finish
-/// inside that window with none of its output delivered, and the retries
-/// were logged at `debug`, which the host does not emit, so there was
-/// nothing to find afterwards.
+/// 61.5s before the eighth attempt. A run can finish inside that window with
+/// none of its output delivered.
 ///
 /// The numbers rather than the constant, because the constant is only
 /// meaningful as the total silence it permits.

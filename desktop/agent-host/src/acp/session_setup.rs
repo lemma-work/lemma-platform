@@ -317,10 +317,18 @@ pub(crate) async fn prompt_turn(
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_owned());
     let (state, message) = run_outcome(asked_to_stop, &stop_reason);
+    // ACP's end-of-turn token count. Still marked unstable in the protocol,
+    // and it is the only place an adapter reports tokens at all: the
+    // `usage_update` notification is the context window, not usage.
+    let usage = response
+        .usage
+        .as_ref()
+        .and_then(|usage| serde_json::to_value(usage).ok());
     Ok(AcpRunOutcome {
         provider_session_id: session_id.to_string(),
         state,
         stop_reason,
         message,
+        usage,
     })
 }
