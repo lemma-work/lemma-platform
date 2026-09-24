@@ -127,6 +127,12 @@ DEV_SUPERTOKENS_PORT  ?= 3567
 DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
 DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
+# What the CLI is handed, which is not the auth origin: the SDK appends
+# /cli/login to it and the portal serves that page under its website base path.
+# Hosted Lemma already ships this with the path on it -- the CLI's built-in
+# lemma-cloud server is https://lemma.work/auth -- so a dev stack reporting the
+# bare origin sends `lemma auth login` to a 404.
+DEV_CLI_AUTH_FRONTEND_URL := $(DEV_AUTH_FRONTEND_URL)/auth
 DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 # A sandbox browser needs an origin, not a path: the dashboard is a Next.js
 # app whose assets are all absolute. `*.localhost` resolves without any DNS
@@ -225,7 +231,7 @@ BACKEND_API_URL                 ?= $(DEV_BACKEND_URL)
 BACKEND_FRONTEND_URL            ?= $(DEV_FRONTEND_URL)
 BACKEND_AUTH_FRONTEND_URL       ?= $(DEV_AUTH_FRONTEND_URL)
 BACKEND_CLI_API_URL             ?= $(DEV_BACKEND_URL)
-BACKEND_CLI_AUTH_FRONTEND_URL   ?= $(DEV_AUTH_FRONTEND_URL)
+BACKEND_CLI_AUTH_FRONTEND_URL   ?= $(DEV_CLI_AUTH_FRONTEND_URL)
 BACKEND_WORKSPACE_CALLBACK_API_URL ?= $(DEV_SANDBOX_BACKEND_URL)
 BACKEND_WORKSPACE_CALLBACK_AUTH_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_WORKSPACE_CALLBACK_FRONTEND_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
@@ -265,6 +271,7 @@ DEV_LOCAL_AUTH_ENV := \
 	AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false \
 	AUTH_ABUSE_PROTECTION_ENABLED=false \
 	AUTH_ALTCHA_ENABLED=false
+DEV_AUTH_EMAIL_VERIFICATION_REQUIRED := $(patsubst AUTH_EMAIL_VERIFICATION_REQUIRED=%,%,$(filter AUTH_EMAIL_VERIFICATION_REQUIRED=%,$(DEV_LOCAL_AUTH_ENV)))
 DEV_LOCAL_AUTH_KEYS := $(foreach pair,$(DEV_LOCAL_AUTH_ENV),$(firstword $(subst =, ,$(pair))))
 
 # The one gate above the *browser* also has an opinion about, and the reason the
@@ -335,7 +342,7 @@ FRONTEND_DEV_ENV := \
 	NEXT_PUBLIC_AUTH_URL=$(FRONTEND_AUTH_URL) \
 	NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=$(FRONTEND_SESSION_TOKEN_DOMAIN) \
 	NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(FRONTEND_APPS_DOMAIN_SUFFIX) \
-	NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=false
+	NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=$(DEV_AUTH_EMAIL_VERIFICATION_REQUIRED)
 
 
 # ── Workspace sandbox provisioning ────────────────────────────────────────────
@@ -528,7 +535,7 @@ _init-backend-env:
 			echo "FRONTEND_URL=$(DEV_FRONTEND_URL)"; \
 			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 			echo "CLI_API_URL=$(DEV_BACKEND_URL)"; \
-			echo "CLI_AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
+			echo "CLI_AUTH_FRONTEND_URL=$(DEV_CLI_AUTH_FRONTEND_URL)"; \
 			echo "APP_BASE_DOMAIN=$(DEV_APP_BASE_DOMAIN)"; \
 			echo "AUTH_WEBSITE_BASE_PATH=/auth"; \
 			echo "SUPERTOKENS_API_BASE_PATH=/auth"; \
@@ -587,7 +594,7 @@ _ensure-backend-env-keys:
 		append FRONTEND_URL '$(DEV_FRONTEND_URL)'; \
 		append AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
 		append CLI_API_URL '$(DEV_BACKEND_URL)'; \
-		append CLI_AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+		append CLI_AUTH_FRONTEND_URL '$(DEV_CLI_AUTH_FRONTEND_URL)'; \
 		append APP_BASE_DOMAIN '$(DEV_APP_BASE_DOMAIN)'; \
 		append AUTH_WEBSITE_BASE_PATH /auth; \
 		append SUPERTOKENS_API_BASE_PATH /auth; \
@@ -622,7 +629,7 @@ _init-frontend-env:
 			echo "NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL)"; \
 			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 			echo "NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(DEV_APPS_DOMAIN_SUFFIX)"; \
-			echo "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=$(DEV_FRONTEND_EMAIL_VERIFICATION)"; \
+			echo "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=$(DEV_AUTH_EMAIL_VERIFICATION_REQUIRED)"; \
 		} > $(FRONTEND_DIR)/.env.local; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	else \
@@ -631,8 +638,7 @@ _init-frontend-env:
 
 _ensure-frontend-env-keys:
 	@set -e; missing=""; \
-	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL NEXT_PUBLIC_APPS_DOMAIN_SUFFIX \
-		NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED; do \
+	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL NEXT_PUBLIC_APPS_DOMAIN_SUFFIX NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED; do \
 		if ! grep -qE "^$$k=" $(FRONTEND_DIR)/.env.local; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -645,7 +651,7 @@ _ensure-frontend-env-keys:
 		append NEXT_PUBLIC_SITE_URL '$(DEV_FRONTEND_URL)'; \
 		append NEXT_PUBLIC_AUTH_URL '$(DEV_AUTH_FRONTEND_URL)'; \
 		append NEXT_PUBLIC_APPS_DOMAIN_SUFFIX '$(DEV_APPS_DOMAIN_SUFFIX)'; \
-		append NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED '$(DEV_FRONTEND_EMAIL_VERIFICATION)'; \
+		append NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED '$(DEV_AUTH_EMAIL_VERIFICATION_REQUIRED)'; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	fi
 
