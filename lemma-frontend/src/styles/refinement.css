@@ -1778,3 +1778,46 @@ button svg, a svg { flex-shrink:0; }
 .verify__strip p { margin:0;font-size:11.5px;line-height:1.5;color:var(--ink-3); }
 .verify__strip-head { display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%; }
 .verify__strip-error { color:var(--bad); }
+
+@media (max-width: 767px) {
+    /* Keep attribution above the message instead of reserving an empty avatar column. */
+    .convo-host { --turn-indent: 0px }
+    .convo-host .pane__inner { padding: 12px 10px 20px }
+    .msg--reply { grid-template-columns: 30px minmax(0, 1fr); column-gap: 8px; row-gap: 6px }
+    .msg--reply .msg__col { display: contents }
+    .msg--reply .msg__head { grid-column: 2; align-self: center; margin-bottom: 0 }
+    .msg--reply .msg__body { grid-column: 1 / -1; min-width: 0 }
+    .msg--you { padding-left: 20px }
+    .said { padding: 10px 12px }
+    .msg--you .msg__body { padding: 8px 12px }
+    .convo-title { padding-inline: 10px }
+    .convo-host .composer { padding: 6px 10px max(10px, env(safe-area-inset-bottom)) }
+    .convo-host .composer__row { padding-inline: 0; gap: 6px }
+    .convo-host .composer__box { padding: 6px; gap: 6px }
+    .convo-host .composer__input { padding-left: 2px }
+    .convo-host .composer__attach,
+    .convo-host .composer__send,
+    .convo-host .composer__stop,
+    .convo-host .composer__wave { min-width: 44px; min-height: 44px }
+}
+
+.history__entry > .history__item { padding-right: 66px }
+.history__rename-button { position: absolute; right: 30px; top: 5px; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-3); cursor: pointer; opacity: 0 }
+.history__entry:hover .history__rename-button,
+.history__entry:focus-within .history__rename-button { opacity: 1 }
+.history__rename-button:hover { color: var(--ink); background: var(--chrome) }
+.history__rename-button:disabled { opacity: .4 }
+.history__rename--editing { padding: 6px 0 }
+.history__rename-input { width: 100%; min-width: 0; min-height: 44px; padding: 8px; border: 1px solid var(--accent-line); border-radius: var(--r-sm); background: var(--paper); color: var(--ink); font: inherit; font-size: 13px }
+.history__entry:has(.history__rename--editing) > .history__item,
+.history__entry:has(.history__rename--editing) > .history__archive { display: none }
+.history__rename-failed { display: block; padding: 4px 10px; color: var(--bad); font-size: 12px }
+@media (pointer: coarse) {
+    .history__entry > .history__item { padding-right: 92px }
+    .history__rename-button { opacity: 1; right: 46px; width: 44px; height: 44px }
+    .history__archive { opacity: 1; width: 44px; height: 44px; right: 2px }
+    .history__rename-input { font-size: 16px }
+}
+.all__entry .all__row { width: 100%; padding-right: 48px }
+.all__entry .history__rename-button { right: 2px; top: 50%; transform: translateY(-50%) }
+.all__entry:has(.history__rename--editing) > .all__row { display: none }

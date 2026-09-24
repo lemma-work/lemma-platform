@@ -7,7 +7,6 @@ import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { InteractionDock } from "./interaction-dock";
-import { ConversationTitle } from "./conversation-title";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
 import { applyTitle } from "./conversation-list";
 import type { ConversationRef } from "@/data";
@@ -81,7 +80,6 @@ export function LiveConversation({
        can finish before the list that was invalidated on create has come back
        — and a patch against a list that does not contain it yet is a patch
        that lands nowhere. */
-    const [streamedTitle, setStreamedTitle] = useState<{ id: string; title: string } | null>(null);
     /* Which conversation the stream belongs to, readable from a callback the
        session owns. A ref rather than the session's own field, which cannot be
        read from inside the options that construct it. */
@@ -98,7 +96,6 @@ export function LiveConversation({
         onTitle: (title, id) => {
             const target = id ?? streamingIn.current;
             if (!target) return;
-            setStreamedTitle({ id: target, title });
             queryClient.setQueryData<ConversationRef[]>(
                 ["conversations", pod.id],
                 previous => applyTitle(previous, target, title),
@@ -415,25 +412,8 @@ export function LiveConversation({
 
     const error = sendError ?? loadError ?? (session.error ? session.error.message : null);
 
-    /* Two sources, and the streamed one wins. The list is the durable answer;
-       the stream is the fresher one, and for the seconds between a title being
-       generated and the list being refetched it is the only one that has it. */
-    const listed = queryClient
-        .getQueryData<ConversationRef[]>(["conversations", pod.id])
-        ?.find(entry => entry.id === session.conversationId);
-    const title =
-        streamedTitle && streamedTitle.id === session.conversationId
-            ? streamedTitle.title
-            : listed?.title ?? null;
-
     return (
         <>
-            <ConversationTitle
-                podId={pod.id}
-                conversationId={session.conversationId}
-                title={title}
-                busy={state === "running"}
-            />
             <Transcript
                 turns={turns}
                 teammate={pod.teammate}

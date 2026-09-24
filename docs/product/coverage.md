@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 166 |
 | `gap` | 2 |
-| `manual` | 12 |
+| `manual` | 13 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **180** |
+| **total** | **181** |
 
 Scenario tests declaring a promise: 400.
 
@@ -146,6 +146,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-002` A person who has joined nothing sees an empty start, not an error | `covered` | `test_person_with_no_organization_sees_an_empty_start` |
 | `PS-ONB-003` A signed-in person is identified consistently everywhere | `covered` | `test_a_credential_identifies_its_owner`, `test_a_forged_credential_is_refused` |
 | `PS-ONB-004` A person sets a display name and preferences that follow them | `covered` | `test_a_profile_is_one_thing` |
+| `PS-ONB-005` A person chooses comfortable chat text on their device | `manual` | — |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |

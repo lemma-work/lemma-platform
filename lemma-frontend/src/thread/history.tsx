@@ -6,6 +6,8 @@ import { source, NEW_CONVERSATION } from "@/data";
 import type { ConversationRef, Pod } from "@/data";
 import { applyArchived, unbound } from "./conversation-list";
 
+import { ConversationTitle } from "./conversation-title";
+
 const SHOWN = 5;
 
 /** This teammate's last few conversations, beside their transcript. Five,
@@ -104,6 +106,7 @@ export function History({
                                     <span className="history__name">{entry.title}</span>
                                     <span className="history__at">{entry.at}</span>
                                 </button>
+                                <ConversationTitle podId={pod.id} conversationId={entry.id} title={entry.title} />
                                 {(
                                     <button
                                         className="history__archive"
