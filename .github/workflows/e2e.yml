@@ -119,6 +119,10 @@ jobs:
        contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action))
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      contents: read
+      # The GHCR layer cache: read on a pull request, written on main.
+      packages: write
     outputs:
       key: ${{ steps.key.outputs.value }}
     defaults:
@@ -150,9 +154,24 @@ jobs:
           path: /tmp/e2e-sandbox-images.tar
           key: ${{ steps.key.outputs.value }}
           lookup-only: true
+      - uses: docker/setup-buildx-action@v4
+        if: steps.probe.outputs.cache-hit != 'true'
+      # Best effort: without a login (a fork) the cache read misses and the
+      # build runs cold, which is what it always did.
+      - name: Log in to GHCR for the layer cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - name: Build sandbox images
         if: steps.probe.outputs.cache-hit != 'true'
         run: make sandbox-images
+        env:
+          SANDBOX_CACHE_REPO: ghcr.io/lemma-work/ci-cache/sandbox
+          SANDBOX_CACHE_PUSH: ${{ github.event_name == 'push' && '1' || '' }}
       - name: Save sandbox images to cache
         if: steps.probe.outputs.cache-hit != 'true'
         run: |
@@ -185,6 +204,12 @@ jobs:
        contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action))
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # Read the GHCR mirror; on main, also fill it (`push-missing` below).
+      # Permissions cannot be conditional, and a fork's token is read-only
+      # whatever this says.
+      packages: write
     outputs:
       key: ${{ steps.key.outputs.value }}
     steps:
@@ -206,27 +231,14 @@ jobs:
           path: /tmp/e2e-service-images.tar
           key: ${{ steps.key.outputs.value }}
           lookup-only: true
-      # In parallel, each with its own retry, so one slow or flaky registry
-      # costs a retry rather than the run.
+      # Through our GHCR mirror, falling back to upstream with retries; main
+      # copies anything the mirror is missing. See the action for why.
       - name: Pull service images
         if: steps.probe.outputs.cache-hit != 'true'
-        run: |
-          pull() {
-            for attempt in 1 2 3; do
-              docker pull --quiet "$1" && return 0
-              echo "::warning::pull of $1 failed (attempt $attempt)"
-              sleep $((attempt * 10))
-            done
-            echo "::error::could not pull $1"
-            return 1
-          }
-          pids=()
-          for image in ${{ steps.key.outputs.images }}; do
-            pull "$image" & pids+=($!)
-          done
-          status=0
-          for pid in "${pids[@]}"; do wait "$pid" || status=1; done
-          exit "$status"
+        uses: ./.github/actions/pull-images
+        with:
+          images: ${{ steps.key.outputs.images }}
+          push-missing: ${{ github.event_name == 'push' }}
       - name: Save service images
         if: steps.probe.outputs.cache-hit != 'true'
         run: docker save -o /tmp/e2e-service-images.tar ${{ steps.key.outputs.images }}

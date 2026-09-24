@@ -801,8 +801,26 @@ print-sandbox-images:
 
 sandbox-images: sandbox-image-workspace sandbox-image-function
 
+# Layer cache for the two local builds, off unless SANDBOX_CACHE_REPO is set.
+# CI points it at GHCR so a changed input rebuilds only the layers it touches
+# instead of the whole image (~100s cold). Pushing the cache is main's job
+# (SANDBOX_CACHE_PUSH=1); everything else only reads it. Needs a buildx builder
+# with the docker-container driver, which `docker/setup-buildx-action` makes.
+SANDBOX_CACHE_REPO ?=
+SANDBOX_CACHE_PUSH ?=
+ifeq ($(strip $(SANDBOX_CACHE_REPO)),)
+SANDBOX_BUILD = docker build
+sandbox_cache_args =
+else
+SANDBOX_BUILD = docker buildx build --load
+sandbox_cache_args = --cache-from type=registry,ref=$(SANDBOX_CACHE_REPO):$(1) \
+	$(if $(SANDBOX_CACHE_PUSH),--cache-to type=registry$(comma)ref=$(SANDBOX_CACHE_REPO):$(1)$(comma)mode=max)
+endif
+comma := ,
+
 sandbox-image-workspace:
-	docker build \
+	$(SANDBOX_BUILD) \
+		$(call sandbox_cache_args,workspace) \
 		--platform $(SANDBOX_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.workspace \
 		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
@@ -811,7 +829,8 @@ sandbox-image-workspace:
 		..
 
 sandbox-image-function:
-	docker build \
+	$(SANDBOX_BUILD) \
+		$(call sandbox_cache_args,function) \
 		--platform $(SANDBOX_FUNCTION_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.function \
 		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \

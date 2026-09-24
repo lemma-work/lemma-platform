@@ -30,6 +30,8 @@ on:
 
 permissions:
   contents: read
+  # Pulling from the GHCR image mirror (.github/actions/pull-images).
+  packages: read
 
 concurrency:
   # Keyed by event as well as branch, so the two speeds do not cancel each
@@ -146,6 +148,16 @@ jobs:
       - name: Sync scenario suite
         working-directory: tests/scenarios
         run: uv sync
+      # The stack `docker run`s these; pulled first, through the GHCR mirror
+      # with retries, so a registry hiccup is a retry rather than a red journey.
+      - name: Resolve the stack's service images
+        id: images
+        # The sandbox images (`:scenarios`) are built locally, not pulled.
+        run: echo "list=$(grep -oE '^[A-Z_]+_IMAGE = "[^"]+"' tests/scenarios/harness/stack.py | cut -d'"' -f2 | grep -v ':scenarios$' | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+      - name: Pull the stack's service images
+        uses: ./.github/actions/pull-images
+        with:
+          images: ${{ steps.images.outputs.list }}
       - name: Run journey
         working-directory: tests/scenarios
         run: uv run pytest ${{ matrix.journey.path }} -q --junitxml=results.xml
@@ -209,6 +221,16 @@ jobs:
       - name: Sync scenario suite
         working-directory: tests/scenarios
         run: uv sync
+      # The stack `docker run`s these; pulled first, through the GHCR mirror
+      # with retries, so a registry hiccup is a retry rather than a red journey.
+      - name: Resolve the stack's service images
+        id: images
+        # The sandbox images (`:scenarios`) are built locally, not pulled.
+        run: echo "list=$(grep -oE '^[A-Z_]+_IMAGE = "[^"]+"' tests/scenarios/harness/stack.py | cut -d'"' -f2 | grep -v ':scenarios$' | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+      - name: Pull the stack's service images
+        uses: ./.github/actions/pull-images
+        with:
+          images: ${{ steps.images.outputs.list }}
       - name: Build the sandbox images
         run: make scenarios-images
       - name: Run the sandbox lane

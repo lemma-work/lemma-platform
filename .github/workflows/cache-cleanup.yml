@@ -1,0 +1,37 @@
+name: Delete a closed pull request's caches
+
+# The repository has 10 GB of Actions cache, and when it is full GitHub evicts
+# the least recently used entries -- which were main's, the ones every new pull
+# request restores from. Most of that 10 GB was pull-request copies of the
+# same thing: each PR's own e2e image tars, embedding model, npm and Rust
+# caches (measured Sep 2026: 10.5 GB over 57 entries, most scoped to
+# refs/pull/*/merge). A cache scoped to a closed pull request can never be
+# restored by anything again, so it is dropped the moment the PR closes.
+#
+# `pull_request_target`, so a fork's pull request gets a token that can delete
+# too. Safe here: nothing checks out or runs the pull request's code.
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cleanup:
+    name: delete caches for this pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete every cache scoped to the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          ids="$(gh cache list --ref "$REF" --limit 500 --json id --jq '.[].id')"
+          for id in $ids; do
+            gh cache delete "$id" || echo "::warning::could not delete cache $id"
+          done
+          echo "Deleted $(echo "$ids" | grep -c . || true) cache(s) for $REF."

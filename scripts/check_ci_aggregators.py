@@ -59,9 +59,13 @@ EXEMPT = {
 # state every scheduled lane in this repository was in.
 NOTIFIER = "notify-failure.yml"
 
-# Workflows the notifier deliberately does not watch. Empty: the only entry was
-# the `workflow_run` coverage gate, which is now a job inside e2e.yml.
-UNWATCHED: set[str] = set()
+# Workflows the notifier deliberately does not watch.
+UNWATCHED = {
+    # Runs only when a pull request closes, and the notifier announces only
+    # runs outside a pull request, so there is nothing it could ever post. A
+    # failure here costs cache space, not correctness.
+    "cache-cleanup.yml",
+}
 
 # Every workflow is checked for timeouts, not just the two with aggregators.
 # Release workflows are exempt: their jobs legitimately run for well over an
