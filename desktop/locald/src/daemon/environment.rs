@@ -24,6 +24,7 @@ const SHARED_DESKTOP_AUTH_CREATE_LIMIT: u32 = 100;
 pub(crate) fn sharing_environment(
     origin: &str,
     mode: SharingMode,
+    who_can_join: WhoCanJoin,
 ) -> (HashMap<String, String>, HashMap<String, String>) {
     let origin = origin.trim_end_matches('/');
     let api_url = format!("{origin}/_lemma/api");
@@ -90,6 +91,13 @@ pub(crate) fn sharing_environment(
             SHARED_DESKTOP_AUTH_CREATE_LIMIT.to_string(),
         ),
         ("DEBUG".into(), "false".into()),
+        // Who may create an account, now that somebody other than the owner
+        // can reach the sign-up page. Written in both directions rather than
+        // only when narrowing: the backend's own Desktop default is already
+        // invite-only, but an explicit value is what makes this overlay the
+        // single place that decides, and what a reader of the running
+        // environment can check.
+        ("SIGNUP_MODE".into(), who_can_join.signup_mode().into()),
     ]);
     let frontend = HashMap::from([
         ("NEXT_PUBLIC_API_URL".into(), api_url),

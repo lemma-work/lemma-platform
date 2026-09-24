@@ -105,3 +105,39 @@ class OrganizationLimitError(DomainError):
             status_code=403,
             details={"limit": limit, "used": used},
         )
+
+
+_SIGNUP_INVITE_ONLY = "SIGNUP_INVITE_ONLY"
+_SIGNUP_INVITE_ONLY_MESSAGE = (
+    "This Lemma is invite-only. Ask its owner for an invitation."
+)
+_SIGNUP_CLOSED_MESSAGE = "This Lemma is not accepting new accounts."
+
+
+class SignupNotAllowedError(IdentityDomainError):
+    """This installation does not accept a new account from this address.
+
+    Raised by every path that creates a user, so the refusal reads the same
+    whether somebody used a password, a Google account or an emailed code. The
+    codes are distinct because the two refusals ask for different things of
+    the person reading them: invite-only has a way in (be invited), closed has
+    none.
+
+    The message is the whole of what the auth screen prints -- SuperTokens
+    carries it as the `reason` of a `*_NOT_ALLOWED` answer -- so it has to be
+    something a stranger at the sign-up page can act on, not an API status.
+    """
+
+    INVITE_ONLY = _SIGNUP_INVITE_ONLY
+    CLOSED = "SIGNUP_CLOSED"
+
+    INVITE_ONLY_MESSAGE = _SIGNUP_INVITE_ONLY_MESSAGE
+    CLOSED_MESSAGE = _SIGNUP_CLOSED_MESSAGE
+
+    def __init__(self, code: str):
+        message = (
+            _SIGNUP_INVITE_ONLY_MESSAGE
+            if code == _SIGNUP_INVITE_ONLY
+            else _SIGNUP_CLOSED_MESSAGE
+        )
+        super().__init__(message, code=code, status_code=403)

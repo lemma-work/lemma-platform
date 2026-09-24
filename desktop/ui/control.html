@@ -180,7 +180,7 @@
             <div class="field"><label for="sharing-interface">Network interface</label><select id="sharing-interface"><option value="">Choose an interface</option></select></div>
             <div class="field"><label>Security</label><div class="inline-note">HTTP on trusted Wi-Fi · no certificate installation</div></div>
           </div>
-          <div class="warning-box">Anyone on this Wi-Fi who has the address can reach the signup screen. Use this only on a private network you trust.</div>
+          <div class="warning-box">Anyone on this Wi-Fi who has the address can reach the sign-in screen. <span id="lan-join-copy">Only people you invite can create an account.</span> Use this only on a private network you trust.</div>
           <div class="button-row"><button class="btn primary" id="sharing-enable-lan">Enable on local network</button></div>
           <div class="qr-card" id="sharing-qr" hidden><div id="sharing-qr-image"></div><div><strong>Scan from another device</strong><p>Both devices must remain on the selected Wi-Fi network.</p></div></div>
         </article>
@@ -198,7 +198,7 @@
             <div class="field span-two" id="cloudflare-existing-field" hidden><label for="cloudflare-tunnel">Existing named tunnel</label><select id="cloudflare-tunnel"><option value="">Choose a tunnel</option></select></div>
             <div class="inline-note span-two" id="cloudflare-managed-summary">After one-time login, Lemma will create a dedicated named tunnel and DNS route, then reuse them without auto-starting.</div>
           </div>
-          <div class="danger-warning"><strong>Open signup is enabled.</strong><p>Every activation asks you to confirm that anyone with this link can create an account and use this Lemma installation.</p></div>
+          <div class="danger-warning"><strong id="public-join-title">Signup is invite-only.</strong><p id="public-join-copy">Anyone with this link can reach this Lemma's sign-in page. Only people you invite can create an account.</p></div>
           <div class="limitation-note">Published pod apps stay local-only in this release because their routing needs wildcard subdomains. The main workspace, auth, API, files, chat, tools, webhooks, and streaming are shared.</div>
           <div class="button-row"><button class="btn primary" id="sharing-enable-public">Create public link</button></div>
         </article>

@@ -304,7 +304,12 @@ fn erasing_local_data_refuses_anything_but_its_exact_confirmation() {
 fn sharing_commands_refuse_before_they_take_the_lock_a_start_needs() {
     let (_root, daemon) = daemon();
 
-    for command in ["sharing.preflight", "sharing.enable", "sharing.disable"] {
+    for command in [
+        "sharing.preflight",
+        "sharing.enable",
+        "sharing.disable",
+        "sharing.access",
+    ] {
         let replies = exchange(
             &daemon,
             json!({"cmd": command, "id": command, "payload": {}}),
