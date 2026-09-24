@@ -178,7 +178,17 @@ def test_a_port_only_the_mac_serves_goes_through_the_relay(free_port, relay) -> 
         assert where == "host"
         assert relay.asked == [free_port]
         connection.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        assert connection.recv(4096).endswith(b"the host")
+        # The server writes its headers and its body separately, so one
+        # `recv` may return only the headers; read until the body is in or
+        # the server stops sending.
+        connection.settimeout(10)
+        response = b""
+        while not response.endswith(b"the host"):
+            chunk = connection.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+        assert response.endswith(b"the host"), response
         connection.close()
     finally:
         _stop(host)
