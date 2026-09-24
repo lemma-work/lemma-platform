@@ -33,7 +33,7 @@ from app.modules.agent.infrastructure.runtime_models import (
 
 
 # Heartbeat rows are rewritten at most this often; the 90s offline threshold
-# leaves ample slack for a host polling on a 25s long-poll deadline.
+# leaves ample slack for a host whose link heartbeats every 20s.
 _SEEN_WRITE_INTERVAL_SECONDS = 20
 
 
@@ -210,8 +210,8 @@ class AgentHostRepository:
     ) -> AgentHostModel:
         """Record one heartbeat, rewriting the row only when something changed.
 
-        Polls arrive at least every 25s; skipping no-op writes keeps an idle
-        host from producing a locked row update on every request.
+        ``control`` frames arrive at least every 20s; skipping no-op writes
+        keeps an idle host from producing a locked row update on every one.
         """
         timestamp = now or utcnow()
         host = await self.require(host_id)

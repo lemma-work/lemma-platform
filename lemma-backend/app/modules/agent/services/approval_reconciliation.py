@@ -127,8 +127,8 @@ async def dispatch_agent_host_permission(
         await uow.commit()
     if command is None:
         return False
-    # The host is long-polling; without the poke the decision waits out the
-    # poll deadline while a user watches an idle agent.
+    # Without the poke the decision waits for the link's 5-second floor while
+    # a user watches an idle agent.
     await poke_host(command.host_id)
     return True
 

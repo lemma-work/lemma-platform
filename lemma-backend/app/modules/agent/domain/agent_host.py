@@ -362,19 +362,6 @@ class AgentHostCommandRejection(BaseModel):
     detail: str | None = Field(default=None, max_length=2048)
 
 
-class AgentHostPollRequest(BaseModel):
-    hello: HostHello
-    capacity: AgentHostCapacity = Field(default_factory=AgentHostCapacity)
-    acknowledged_command_ids: list[UUID] = Field(default_factory=list, max_length=256)
-    checkpoints: list[AgentHostRunCheckpoint] = Field(
-        default_factory=list, max_length=256
-    )
-    rejections: list[AgentHostCommandRejection] = Field(
-        default_factory=list,
-        max_length=256,
-    )
-
-
 # The one delivery policy that lets a turn leave the instructions out. Matches
 # `protocol::NEW_SESSION_ONLY` in the host; the host treats anything else,
 # including absent, as "send them", so the two cannot disagree dangerously.
@@ -431,13 +418,6 @@ class AgentHostCommand(BaseModel):
         } and (self.run_id is None or self.lease_epoch is None):
             raise ValueError(f"{self.kind.value} requires run_id and lease_epoch")
         return self
-
-
-class AgentHostPollResponse(BaseModel):
-    protocol_version: int = AGENT_HOST_PROTOCOL_VERSION
-    host_status: AgentHostStatus
-    commands: list[AgentHostCommand] = Field(default_factory=list)
-    poll_after_ms: int = Field(default=0, ge=0, le=60_000)
 
 
 class AgentHostEvent(BaseModel):
