@@ -154,11 +154,14 @@ test('password reset preserves the destination through the emailed link in the s
     assert.equal(state.signups, 0);
 });
 
-test('legacy signup links show account creation and unverified sessions resume verification', async t => {
-    const { page, state } = await fixture(t);
+test('legacy signup links show account creation', async t => {
+    const { page } = await fixture(t);
     await page.goto(origin + '/auth?show=signup');
     await page.getByRole('heading', { name: 'Make an account', exact: true }).waitFor();
-    state.signedIn = true;
+});
+
+test('unverified sessions resume verification', async t => {
+    const { page, state } = await fixture(t, { signedIn: true });
     await page.goto(origin + start);
     await page.getByRole('heading', { name: 'Check your email', exact: true }).waitFor();
     assert.equal(state.sends, 1);
