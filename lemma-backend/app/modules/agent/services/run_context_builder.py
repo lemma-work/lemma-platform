@@ -161,4 +161,18 @@ async def build_run_context(
         model_supports_vision=supports_vision,
         delegate_model_configured=vision_delegate_available(),
     )
+    # Where this run's commands execute, decided once, here, for the whole run.
+    # See `host_execution_selection`; imported here to keep it (and identity's
+    # installation owner) out of every process's startup import graph.
+    from app.modules.agent.services.host_execution_selection import (
+        choose_host_workspace,
+        host_runs_native_commands,
+    )
+
+    if resolved_runtime.harness_kind == HarnessKind.LEMMA:
+        ctx.host_workspace = await choose_host_workspace(
+            conversation=conversation, agent_run=agent_run, user_id=user_id
+        )
+    else:
+        ctx.host_runs_native_commands = await host_runs_native_commands(conversation)
     return ctx

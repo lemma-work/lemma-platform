@@ -1,0 +1,327 @@
+"""Who gets host execution, and what their run is given when they do.
+
+The truth table of docs/architecture/desktop-host-execution.md §2, row by row,
+with each fact the rules read stated by the test through
+``HostExecutionFacts`` rather than patched in. Then §7: the tools an Agent Host
+run loses and the prompt a host run is shown.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from uuid import UUID, uuid4
+
+import pytest
+
+from sandbox_runtime.errors import SandboxRejected
+
+from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
+from app.modules.agent.domain.entities import AgentRun, Conversation
+from app.modules.agent.domain.prompt_directories import _directory_sections
+from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.infrastructure.agent_host.host_execution import (
+    host_capabilities,
+)
+from app.modules.agent.services.host_execution_selection import (
+    HostExecutionFacts,
+    choose_host_workspace,
+    default_folder,
+    host_runs_native_commands,
+    triggered_by_owner,
+)
+from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.tools.tool_assembler import RunToolAssembler
+from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+    is_workspace_cli_toolset,
+)
+from app.modules.workspace.contracts.host_execution import (
+    HostWorkspace,
+    host_sandbox_id,
+)
+
+OWNER = uuid4()
+TEAMMATE = uuid4()
+HOST = uuid4()
+ROOT = "/Users/owner/lemma/c/2026-09-25/abc12345"
+
+
+class Facts:
+    """The world, as one row of the truth table states it."""
+
+    def __init__(
+        self,
+        *,
+        desktop: bool = True,
+        owner: UUID = OWNER,
+        host: UUID | None = HOST,
+        opens: bool = True,
+    ) -> None:
+        self.desktop = desktop
+        self.owner = owner
+        self.host = host
+        self.opens = opens
+        self.opened: list[dict] = []
+
+    def build(self) -> HostExecutionFacts:
+        async def is_owner(user_id: UUID) -> bool:
+            return self.desktop and user_id == self.owner
+
+        async def usable_host(user_id: UUID) -> UUID | None:
+            return self.host
+
+        async def open_workspace(**kwargs) -> HostWorkspace:
+            self.opened.append(kwargs)
+            if not self.opens:
+                raise SandboxRejected("This Mac is not connected")
+            return HostWorkspace(
+                sandbox_id=host_sandbox_id(kwargs["conversation_id"]), root=ROOT
+            )
+
+        return HostExecutionFacts(
+            is_desktop=lambda: self.desktop,
+            is_owner=is_owner,
+            usable_host=usable_host,
+            open_workspace=open_workspace,
+        )
+
+
+def _conversation(user_id: UUID = OWNER, **metadata) -> Conversation:
+    return Conversation(
+        user_id=user_id,
+        pod_id=uuid4(),
+        metadata={"cwd": "/home/user/lemma/c/2026-09-25/abc12345", **metadata},
+        created_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
+    )
+
+
+def _run(conversation: Conversation, source: str | None = "user_message") -> AgentRun:
+    return AgentRun(
+        conversation_id=conversation.id,
+        started_at=datetime.now(timezone.utc),
+        metadata={"source": source} if source else {},
+    )
+
+
+async def _choose(
+    facts: Facts,
+    *,
+    conversation: Conversation | None = None,
+    source: str | None = "user_message",
+    user_id: UUID = OWNER,
+):
+    conversation = conversation or _conversation()
+    return await choose_host_workspace(
+        conversation=conversation,
+        agent_run=_run(conversation, source),
+        user_id=user_id,
+        facts=facts.build(),
+    )
+
+
+# ------------------------------------------------------------- truth table
+
+
+async def test_the_owners_own_message_runs_on_their_mac():
+    facts = Facts()
+    chosen = await _choose(facts)
+
+    assert chosen is not None and chosen.root == ROOT
+    assert facts.opened[0]["host_id"] == HOST
+    assert facts.opened[0]["owner_id"] == OWNER
+    assert (facts.opened[0]["day"], facts.opened[0]["slug"]) == (
+        "2026-09-25",
+        "abc12345",
+    )
+    assert facts.opened[0]["root_hint"] is None
+
+
+async def test_a_non_owner_never_runs_on_the_host_even_in_the_owners_install():
+    facts = Facts()
+    conversation = _conversation(user_id=TEAMMATE)
+
+    assert await _choose(facts, conversation=conversation, user_id=TEAMMATE) is None
+    assert facts.opened == []
+
+
+async def test_a_run_not_acting_as_the_conversations_owner_does_not_qualify():
+    """A run triggered or steered by someone else is not the owner's run."""
+    facts = Facts()
+    assert await _choose(facts, user_id=TEAMMATE) is None
+    assert facts.opened == []
+
+
+@pytest.mark.parametrize("platform", ["slack", "email", "telegram", "whatsapp"])
+async def test_an_inbound_channel_run_never_runs_on_the_host(platform):
+    facts = Facts()
+    conversation = _conversation(surface_platform=platform)
+
+    assert await _choose(facts, conversation=conversation) is None
+    assert facts.opened == []
+
+
+async def test_a_host_that_is_offline_or_has_host_execution_off_gives_the_vm():
+    # `usable_host` is None for offline, toggled off, and not available alike;
+    # how a stored report reads as usable is tested below.
+    facts = Facts(host=None)
+    assert await _choose(facts) is None
+    assert facts.opened == []
+
+
+async def test_a_mac_that_cannot_open_the_workspace_gives_the_vm_before_anything_ran():
+    facts = Facts(opens=False)
+    assert await _choose(facts) is None
+    assert len(facts.opened) == 1
+
+
+async def test_a_hosted_deployment_never_runs_on_a_host():
+    facts = Facts(desktop=False)
+    assert await _choose(facts) is None
+    assert facts.opened == []
+
+
+@pytest.mark.parametrize(
+    ("source", "started_by", "expected"),
+    [
+        ("user_message", None, True),
+        ("queued_messages", None, True),
+        ("manual_retry", None, True),
+        ("approval_resume", None, True),
+        ("person", None, True),
+        ("agent_wait", None, True),
+        ("wait_resume", None, True),
+        ("agent_wait", "SCHEDULE", False),
+        ("user_message", "SCHEDULE", True),
+        ("subagent", None, False),
+        (None, None, False),
+        ("something_new", None, False),
+    ],
+)
+def test_which_run_sources_count_as_the_owner(source, started_by, expected):
+    conversation = _conversation(**({"started_by": started_by} if started_by else {}))
+    assert triggered_by_owner(conversation, _run(conversation, source)) is expected
+
+
+def test_a_sub_agent_conversation_is_not_the_owner_at_the_keyboard():
+    conversation = _conversation(is_sub_agent=True)
+    assert not triggered_by_owner(conversation, _run(conversation))
+
+
+async def test_a_bound_folder_is_the_root_hint():
+    facts = Facts()
+    conversation = _conversation(
+        **{AGENT_HOST_SESSION_METADATA_KEY: {"host_cwd": "/Users/owner/code/app"}}
+    )
+    await _choose(facts, conversation=conversation)
+    assert facts.opened[0]["root_hint"] == "/Users/owner/code/app"
+
+
+def test_a_conversation_without_a_dated_cwd_still_gets_a_folder():
+    conversation = _conversation(cwd="/home/user/lemma/repos/o/r")
+    day, slug = default_folder(conversation)
+    assert day == "2026-09-25" and slug == conversation.id.hex[:8]
+
+
+async def test_agent_host_runs_drop_lemmas_command_tools_only_for_the_owner():
+    assert await host_runs_native_commands(_conversation(), facts=Facts().build())
+    assert not await host_runs_native_commands(
+        _conversation(user_id=TEAMMATE), facts=Facts().build()
+    )
+    assert not await host_runs_native_commands(
+        _conversation(), facts=Facts(host=None).build()
+    )
+    assert not await host_runs_native_commands(
+        _conversation(), facts=Facts(desktop=False).build()
+    )
+
+
+@pytest.mark.parametrize(
+    ("stored", "usable"),
+    [
+        ({"host_execution": {"enabled": True, "available": True}}, True),
+        ({"host_execution": {"enabled": False, "available": True}}, False),
+        ({"host_execution": {"enabled": True, "available": False}}, False),
+        ({}, False),
+        ({"host_execution": "garbage"}, False),
+    ],
+    ids=["on", "toggle-off", "not-available", "old-host", "malformed"],
+)
+def test_a_stored_host_report_is_usable_only_when_on_and_available(stored, usable):
+    host = SimpleNamespace(capabilities=stored)
+    assert host_capabilities(host).host_execution.usable is usable
+
+
+# ------------------------------------------------------------- tool filtering
+
+
+async def test_the_assembler_withholds_only_the_workspace_command_tools():
+    conversation = SimpleNamespace(id=uuid4(), metadata={})
+    assembler = RunToolAssembler(None)
+
+    everything = await assembler.assemble(agent=None, conversation=conversation)
+    filtered = await assembler.assemble(
+        agent=None, conversation=conversation, drop_workspace_cli=True
+    )
+
+    assert any(is_workspace_cli_toolset(t) for t in everything)
+    assert not any(is_workspace_cli_toolset(t) for t in filtered)
+    assert [t for t in everything if not is_workspace_cli_toolset(t)] == filtered
+
+
+# ------------------------------------------------------------------- prompts
+
+
+def _ctx(**fields) -> ConversationContext:
+    return ConversationContext(
+        user_id=OWNER,
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        workspace_cwd="/home/user/lemma/c/2026-09-25/abc12345",
+        **fields,
+    )
+
+
+def test_a_host_run_is_told_it_is_on_the_owners_mac_and_where():
+    ctx = _ctx(host_workspace=HostWorkspace(sandbox_id=uuid4(), root=ROOT))
+    sections = _directory_sections(
+        ctx=ctx,
+        conversation=_conversation(),
+        enabled={AgentToolset.WORKSPACE_CLI, AgentToolset.POD},
+        runs_as_remote_process=False,
+    )
+    text = "\n".join(sections)
+
+    assert "on the owner's own Mac" in text
+    assert f"`{ROOT}`" in text
+    assert "separate machine" in text and "localhost" in text
+    assert "/home/user/lemma" not in sections[0]
+    assert ctx.get_workspace_cwd() == ROOT
+
+
+def test_a_vm_run_keeps_its_sandbox_section():
+    sections = _directory_sections(
+        ctx=_ctx(),
+        conversation=_conversation(),
+        enabled={AgentToolset.WORKSPACE_CLI},
+        runs_as_remote_process=False,
+    )
+    assert "owner's own Mac" not in sections[0]
+    assert "/home/user/lemma/c/2026-09-25/abc12345" in sections[0]
+
+
+def test_an_agent_host_run_with_host_execution_is_not_sent_to_sandbox_tools():
+    sections = _directory_sections(
+        ctx=_ctx(host_runs_native_commands=True),
+        conversation=_conversation(),
+        enabled={AgentToolset.WORKSPACE_CLI},
+        runs_as_remote_process=True,
+    )
+    assert "no Lemma sandbox execution tools" in sections[0]
+
+    runtime = load_agent_host_runtime_prompt(host_execution=True)
+    assert "lemma_exec_command" not in runtime
+    assert "on the owner's own Mac" in runtime
+    # The sections that are not about commands are the shared ones.
+    assert "ends the turn and resumes later" in runtime
+    assert "lemma_exec_command" in load_agent_host_runtime_prompt()

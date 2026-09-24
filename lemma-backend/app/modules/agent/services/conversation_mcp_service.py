@@ -382,7 +382,15 @@ class ConversationMCPService:
                 pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
                 **surface_context_from_conversation(conversation),
             )
-            return agent, conversation, ctx
+        # Outside the unit of work: it opens its own, and holding this one
+        # across it would pin a pooled connection for nothing. Imported here to
+        # keep selection out of the startup import graph.
+        from app.modules.agent.services.host_execution_selection import (
+            host_runs_native_commands,
+        )
+
+        ctx.host_runs_native_commands = await host_runs_native_commands(conversation)
+        return agent, conversation, ctx
 
     async def _resolved_runtime_profile(
         self,

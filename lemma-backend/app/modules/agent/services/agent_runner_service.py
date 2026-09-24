@@ -281,9 +281,9 @@ class AgentRunnerService:
                 agent=agent,
                 conversation=conversation,
                 vision_mode=ctx.vision_mode,
-                # Already read while building the context; the assembler would
-                # otherwise load the same grants again on every run.
+                # Already read while building the context, not loaded twice.
                 grants=getattr(ctx, "grant_summary", None),
+                drop_workspace_cli=ctx.host_runs_native_commands,
             )
             # Remote harnesses (Codex/Claude-Code) reach every tool through the MCP
             # server, so they keep the full toolset list. The in-process LEMMA

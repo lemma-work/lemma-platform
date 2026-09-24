@@ -23,6 +23,9 @@ from app.modules.agent.tools.registry import (
     resolve_agent_toolsets,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+    is_workspace_cli_toolset,
+)
 
 
 async def load_agent_grant_summary(
@@ -55,8 +58,17 @@ class RunToolAssembler:
         include_final_answer: bool = False,
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
+        drop_workspace_cli: bool = False,
     ) -> list[AbstractToolset[ConversationContext]]:
         """Every tool this (agent, conversation) can reach.
+
+        ``drop_workspace_cli`` withholds Lemma's command tools from an Agent
+        Host run whose owner has host execution on
+        (docs/architecture/desktop-host-execution.md §7): the coding agent
+        already has a shell and file tools in the same folder on the same Mac,
+        and two tools that do one thing in one place only confuse the model.
+        Browser, pod, connectors, ``ask_user``, ``display_resource`` and the
+        rest stay.
 
         ``grants`` lets a caller that already loaded the agent's grant summary
         (the runner does, to build its context brief) hand it over instead of
@@ -72,6 +84,12 @@ class RunToolAssembler:
                 vision_mode=vision_mode,
                 grants=grants,
             )
+            if drop_workspace_cli:
+                toolsets = [
+                    toolset
+                    for toolset in toolsets
+                    if not is_workspace_cli_toolset(toolset)
+                ]
             span.set_attribute("lemma.toolsets", len(toolsets))
             return toolsets
 

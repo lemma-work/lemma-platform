@@ -22,6 +22,7 @@ from app.modules.agent.services.workspace_location import (
     ProjectRepo,
     pod_cwd_from_workspace_cwd,
 )
+from app.modules.workspace.contracts.host_execution import HostWorkspace
 from app.modules.workspace.contracts.tooling import WorkspaceFileManager
 
 
@@ -53,6 +54,16 @@ class BaseAgentContext(AgentContext):
     # Default pod-filesystem working directory for this conversation, e.g.
     # `/me/c/{date}/{slug}`. Relative pod tool paths resolve against this.
     pod_cwd: str | None = None
+    # Set when this run's commands and files execute on the installation
+    # owner's Mac rather than in the VM (docs/architecture/
+    # desktop-host-execution.md). Chosen once, when the run's context is built,
+    # and carried for every tool call of the run: a run never moves between
+    # the two. The browser stays in the VM whatever this says.
+    host_workspace: HostWorkspace | None = None
+    # An Agent Host (coding agent) run whose owner has host execution on: the
+    # agent already runs on the Mac with its own shell and file tools, so
+    # Lemma's duplicates are withheld (§7).
+    host_runs_native_commands: bool = False
 
     # How image-returning tools should answer on this run. Transient (derived
     # from the resolved model each run), never persisted. UNAVAILABLE is the
@@ -99,6 +110,8 @@ class BaseAgentContext(AgentContext):
         it used to take named a directory after all-zeroes. The project root is
         the honest answer for "no conversation".
         """
+        if self.host_workspace is not None:
+            return self.host_workspace.root
         return self.workspace_cwd or WORKSPACE_ROOT
 
     def get_pod_cwd(self) -> str:
