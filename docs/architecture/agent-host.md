@@ -20,7 +20,7 @@ use it, and the CLI is the headless path.
 **locald, in both connection modes.** It already owns process supervision —
 own process group so stopping also stops every ACP adapter, restart backoff,
 log rotation — and duplicating that in the shell would risk two `serve`
-processes polling the same backend and claiming the same runs.
+processes linked to the same backend and claiming the same runs.
 
 | Mode | How locald starts | What it manages |
 |---|---|---|
@@ -80,8 +80,8 @@ it:
   nothing else in the system could see. Turning the host *off* set the same flag,
   collapsing "pause this laptop" and "never auto-pair me" into one bit.
 - **The only real "no" is removing a machine you are not at**, and that already
-  had a durable home: `agent.host.revoke` sets `revoked_at`, and the poll
-  endpoint refuses a revoked host. It sticks because the machine is not there to
+  had a durable home: `agent.host.revoke` sets `revoked_at`, closes any
+  open link, and the link refuses the host from then on. It sticks because the machine is not there to
   re-pair itself. The Remove control is hidden on this computer's own card for
   exactly that reason.
 
@@ -299,9 +299,9 @@ persisted on both sides.
 
 **Every state variant has a producer.** `HarnessHealth::Installing` had UI copy
 written for it and was emitted by nothing for as long as installing finished
-before anything could look. `HostStatus::Revoked` is unreachable on the poll path
-because authentication fails before a response body exists — the host learns it
-from a 401 instead. Nothing fails when a variant has no producer; it just quietly
+before anything could look. `HostStatus::Revoked` is unreachable on the link
+because authentication fails before a `welcome` exists — the host learns it
+from close code 4401 instead. Nothing fails when a variant has no producer; it just quietly
 never happens.
 
 **A remedy named in an error must be reachable by the person reading it.** A

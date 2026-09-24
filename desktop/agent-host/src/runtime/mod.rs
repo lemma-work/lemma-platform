@@ -27,19 +27,19 @@ use crate::journal::{AcceptOutcome, Checkpoint, Journal};
 use crate::permissions::{PermissionDecision, PermissionGate};
 use crate::protocol::{
     Command, CommandKind, CommandRejection, ConfigOption, EventType, HarnessCapabilities,
-    HarnessHealth, HarnessSnapshot, HostCapacity, JsonMap, RejectionCode,
-    RunCheckpoint, RunSpec, RunState,
+    HarnessHealth, HarnessSnapshot, HostCapacity, JsonMap, RejectionCode, RunCheckpoint, RunSpec,
+    RunState,
 };
 
 mod artifacts;
 mod callbacks;
 mod commands;
+mod control;
 pub(crate) mod credentials;
 mod events;
 mod failures;
 mod harnesses;
 mod host;
-mod control;
 mod run;
 mod worker;
 

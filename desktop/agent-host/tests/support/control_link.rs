@@ -275,7 +275,7 @@ fn handle(state: &ControlState, session: &Session, frame: Frame) {
                 };
                 match endpoint.answer(&frame.body) {
                     Ok(result) => {
-                        session.reply(&frame, server::MCP_OK, json!({ "result": result }))
+                        session.reply(&frame, server::MCP_OK, json!({ "result": result }));
                     }
                     Err(failure) => refuse(&session, &frame, failure),
                 }

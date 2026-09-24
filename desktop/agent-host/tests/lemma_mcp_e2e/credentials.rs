@@ -80,25 +80,36 @@ async fn a_tool_call_the_link_dropped_is_reported_rather_than_repeated() {
 }
 
 #[tokio::test]
-async fn a_refused_call_is_answered_rather_than_disconnecting_the_agent() {
-    // A refusal is not fatal. The agent gets a JSON-RPC error for the call it
-    // made, which renders as one failed tool, and keeps every other tool it
-    // has -- even when Lemma says the refusal is transient.
+async fn a_transient_refusal_is_retried_and_a_lasting_one_is_answered() {
+    // Lemma saying it could not answer *yet* -- its own database or Redis was
+    // away -- is retried by the relay, so the agent never sees a blip. One
+    // that outlasts the retries comes back as this call's own JSON-RPC error,
+    // which renders as one failed tool: the agent keeps every other tool it
+    // has, and the next call works.
     let endpoint = LemmaMcpEndpoint::new();
     endpoint.fail_next([ScriptedFailure::Unavailable]);
     let directory = TempDir::new().unwrap();
     let (mut bridge, _relay, _target_id, _run_id) =
         bridge_for(&directory, &endpoint, endpoint.run_configuration()).await;
 
+    let retried = bridge.request("tools/list", json!({})).await;
+    endpoint.fail_next([
+        ScriptedFailure::Unavailable,
+        ScriptedFailure::Unavailable,
+        ScriptedFailure::Unavailable,
+    ]);
     let refused = bridge.request("tools/list", json!({})).await;
-    // The bridge is still there, and the next call works.
     let served = bridge.request("tools/list", json!({})).await;
     bridge.finish().await;
 
+    assert!(
+        retried.pointer("/result/tools").is_some(),
+        "one transient refusal should be retried away: {retried}"
+    );
     assert_eq!(
         refused.pointer("/error/code").and_then(Value::as_i64),
         Some(-32603),
-        "a refused call should come back as this call's own error: {refused}"
+        "a refusal that lasts should come back as this call's own error: {refused}"
     );
     assert!(
         served.pointer("/result/tools").is_some(),
@@ -109,10 +120,11 @@ async fn a_refused_call_is_answered_rather_than_disconnecting_the_agent() {
 #[tokio::test]
 async fn a_refused_credential_is_replaced_from_the_journal_on_the_next_call() {
     // A run's credential is replaced in the journal by REFRESH_CREDENTIAL, and
-    // the relay reads it from there on every call. So a credential Lemma has
-    // stopped accepting costs the agent the one call it was refused on, and
-    // the next call carries the replacement -- without the bridge, the agent
-    // or the run being restarted.
+    // the relay reads it from there on every attempt. A refused credential is
+    // tried once more -- a replacement may be landing -- and if it is still
+    // the stale one, the agent is told for that one call. The next call
+    // carries the replacement, without the bridge, the agent or the run being
+    // restarted.
     let endpoint = LemmaMcpEndpoint::new();
     let mut stale = endpoint.run_configuration();
     stale["token"] = json!("a-token-lemma-no-longer-accepts");
@@ -144,7 +156,11 @@ async fn a_refused_credential_is_replaced_from_the_journal_on_the_next_call() {
             .into_iter()
             .map(|record| record.token)
             .collect::<Vec<_>>(),
-        vec!["a-token-lemma-no-longer-accepts", MCP_BEARER],
+        vec![
+            "a-token-lemma-no-longer-accepts",
+            "a-token-lemma-no-longer-accepts",
+            MCP_BEARER
+        ],
         "each call carries the credential the journal holds when it is made"
     );
 }

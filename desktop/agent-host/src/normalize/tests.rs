@@ -147,7 +147,10 @@ fn a_codex_web_search_waits_for_its_query() {
         "title": "Web search: Agent Client Protocol", "status": "completed",
         "rawInput": { "type": "webSearch", "query": "Agent Client Protocol" },
     }));
-    assert_eq!(kinds(&closed), vec![EventType::ToolCall, EventType::ToolCallResult]);
+    assert_eq!(
+        kinds(&closed),
+        vec![EventType::ToolCall, EventType::ToolCallResult]
+    );
     let call = tool(&closed[0]);
     assert_eq!(call.tool.name, "web_search");
     assert_eq!(call.input["query"], "Agent Client Protocol");
@@ -179,7 +182,7 @@ fn a_reused_id_opens_a_new_call() {
     assert_eq!(second[0].object_id, second[1].object_id);
 }
 
-/// OpenCode names the tool only in its first title and describes the call in
+/// `OpenCode` names the tool only in its first title and describes the call in
 /// every later one.
 #[test]
 fn opencode_is_named_by_its_first_title() {
@@ -204,10 +207,13 @@ fn opencode_is_named_by_its_first_title() {
         "sessionUpdate": "tool_call_update", "toolCallId": "call_1", "status": "completed",
         "rawOutput": { "output": "hi\n", "metadata": { "exit": 0 } },
     }));
-    assert_eq!(result(&closed[0]).output, json!({ "exit_code": 0, "stdout": "hi\n" }));
+    assert_eq!(
+        result(&closed[0]).output,
+        json!({ "exit_code": 0, "stdout": "hi\n" })
+    );
 }
 
-/// OpenCode joins server and tool with `_`; only Lemma's own are split back
+/// `OpenCode` joins server and tool with `_`; only Lemma's own are split back
 /// apart, against the list the run published.
 #[test]
 fn opencode_lemma_tools_are_recognised_and_lookalikes_are_not() {
@@ -218,7 +224,10 @@ fn opencode_lemma_tools_are_recognised_and_lookalikes_are_not() {
     };
     let ours = normalizer.session_update_value(&open("a", "lemma_tools_lemma_exec_command"));
     let ours = tool(&ours[0]);
-    assert_eq!((ours.tool.name.as_str(), ours.tool.source), ("exec_command", ToolSource::Lemma));
+    assert_eq!(
+        (ours.tool.name.as_str(), ours.tool.source),
+        ("exec_command", ToolSource::Lemma)
+    );
     let unpublished = normalizer.session_update_value(&open("b", "lemma_tools_lemma_rm_rf"));
     let unpublished = tool(&unpublished[0]);
     assert_eq!(unpublished.tool.source, ToolSource::Native);
@@ -229,10 +238,11 @@ fn opencode_lemma_tools_are_recognised_and_lookalikes_are_not() {
 #[test]
 fn a_permission_request_releases_the_call_it_gates() {
     let mut normalizer = normalizer(Dialect::ClaudeCode);
-    normalizer.session_update_value(&json!({
+    let held = normalizer.session_update_value(&json!({
         "sessionUpdate": "tool_call", "toolCallId": "toolu_9", "status": "pending",
         "rawInput": {}, "kind": "edit", "_meta": { "claudeCode": { "toolName": "Write" } },
     }));
+    assert!(held.is_empty(), "the call waits for its final input");
     let (events, id, fields) = normalizer.permission_request(&json!({
         "sessionId": "s",
         "toolCall": { "toolCallId": "toolu_9", "rawInput": { "file_path": "/a", "content": "x" },
@@ -254,7 +264,10 @@ fn a_plan_is_an_update_plan_call() {
         "sessionUpdate": "plan",
         "entries": [{ "content": "Read", "status": "completed", "priority": "high" }],
     }));
-    assert_eq!(kinds(&events), vec![EventType::ToolCall, EventType::ToolCallResult]);
+    assert_eq!(
+        kinds(&events),
+        vec![EventType::ToolCall, EventType::ToolCallResult]
+    );
     assert_eq!(tool(&events[0]).tool.name, "update_plan");
     assert_eq!(result(&events[1]).output["todos"][0]["content"], "Read");
     assert_eq!(events[0].object_id, events[1].object_id);
@@ -266,7 +279,7 @@ fn a_plan_is_an_update_plan_call() {
 fn the_context_window_is_not_usage() {
     let mut normalizer = normalizer(Dialect::Codex);
     let events = normalizer.session_update_value(&json!({
-        "sessionUpdate": "usage_update", "used": 20661, "size": 258400,
+        "sessionUpdate": "usage_update", "used": 20661, "size": 258_400,
     }));
     assert_eq!(kinds(&events), vec![EventType::SessionUpdate]);
     assert_eq!(events[0].payload["context"]["used"], 20661);
@@ -283,10 +296,11 @@ fn the_context_window_is_not_usage() {
 #[test]
 fn a_call_still_held_at_the_end_of_the_turn_is_released() {
     let mut normalizer = normalizer(Dialect::ClaudeCode);
-    normalizer.session_update_value(&json!({
+    let held = normalizer.session_update_value(&json!({
         "sessionUpdate": "tool_call", "toolCallId": "toolu_5", "status": "pending",
         "rawInput": {}, "_meta": { "claudeCode": { "toolName": "Read" } },
     }));
+    assert!(held.is_empty(), "the call waits for its final input");
     let owed = normalizer.finish(None);
     assert_eq!(kinds(&owed), vec![EventType::ToolCall]);
     assert_eq!(tool(&owed[0]).tool.name, "read_file");
@@ -301,7 +315,10 @@ fn a_result_without_an_opening_is_opened_first() {
         "kind": "execute", "rawInput": { "command": "false" },
         "rawOutput": { "exit_code": 1, "stderr": "boom" },
     }));
-    assert_eq!(kinds(&events), vec![EventType::ToolCall, EventType::ToolCallResult]);
+    assert_eq!(
+        kinds(&events),
+        vec![EventType::ToolCall, EventType::ToolCallResult]
+    );
     let closed = result(&events[1]);
     assert_eq!(closed.status, ToolStatus::Failed);
     assert_eq!(closed.error.as_deref(), Some("exited with code 1"));
@@ -327,7 +344,8 @@ fn a_declined_claude_call_is_denied_not_failed() {
 #[test]
 fn progress_streams_and_late_reports_are_ignored() {
     let mut normalizer = normalizer(Dialect::ClaudeCode);
-    normalizer.session_update_value(&json!({
+    // Opening the call is setup; what it emits is not what this test checks.
+    let _ = normalizer.session_update_value(&json!({
         "sessionUpdate": "tool_call", "toolCallId": "toolu_8", "status": "pending",
         "rawInput": { "command": "make" }, "_meta": { "claudeCode": { "toolName": "Bash" } },
     }));
@@ -337,7 +355,8 @@ fn progress_streams_and_late_reports_are_ignored() {
     }));
     assert_eq!(kinds(&progress), vec![EventType::ToolCallProgress]);
     assert_eq!(progress[0].payload["text"], "building\n");
-    normalizer.session_update_value(&json!({
+    // Closing the call is setup for the late report below.
+    let _ = normalizer.session_update_value(&json!({
         "sessionUpdate": "tool_call_update", "toolCallId": "toolu_8", "status": "completed",
         "rawOutput": "done",
     }));
@@ -364,7 +383,10 @@ fn text_chunks_carry_text_and_rich_blocks_carry_their_content() {
     let echoed = normalizer.session_update_value(&json!({
         "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "me" },
     }));
-    assert!(echoed.is_empty(), "the user's own words are not the agent's");
+    assert!(
+        echoed.is_empty(),
+        "the user's own words are not the agent's"
+    );
 }
 
 #[test]

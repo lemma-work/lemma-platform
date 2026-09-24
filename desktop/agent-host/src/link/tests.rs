@@ -96,7 +96,10 @@ async fn pushed_commands_reach_the_host() {
         lease_epoch: Some(1),
         payload: serde_json::Value::Null,
     };
-    assert!(stub.state.push(server::COMMANDS, json!({ "commands": [command.clone()] })));
+    assert!(
+        stub.state
+            .push(server::COMMANDS, json!({ "commands": [command.clone()] }))
+    );
     let push = tokio::time::timeout(Duration::from_secs(5), connected.pushes.recv())
         .await
         .expect("the push must arrive")
@@ -113,7 +116,10 @@ async fn pushed_commands_reach_the_host() {
 async fn a_reconnect_push_carries_its_delay() {
     let stub = StubLink::start().await;
     let mut connected = connected(&stub).await;
-    assert!(stub.state.push(server::RECONNECT, json!({ "after_ms": 1234 })));
+    assert!(
+        stub.state
+            .push(server::RECONNECT, json!({ "after_ms": 1234 }))
+    );
     let push = tokio::time::timeout(Duration::from_secs(5), connected.pushes.recv())
         .await
         .unwrap()
@@ -179,4 +185,21 @@ async fn the_slot_waits_for_an_open_link() {
             .unwrap()
             .unwrap()
     );
+}
+
+/// Closing the link from the host's end ends the connection Lemma holds,
+/// rather than leaving it open until a heartbeat lapses.
+#[tokio::test]
+async fn closing_the_link_ends_the_connection_lemma_holds() {
+    let stub = StubLink::start().await;
+    let link = connected(&stub).await.handle;
+    assert!(stub.state.connected());
+    link.close(close::NORMAL, "test");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while stub.state.connected() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the stand-in must see the host go");
 }

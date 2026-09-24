@@ -159,11 +159,20 @@ fn every_call_is_announced_once_and_closed_once() {
                 let id = event["object_id"].as_str().unwrap_or_default().to_owned();
                 match event["type"].as_str() {
                     Some("tool_call") => {
-                        assert!(opened.insert(id.clone()), "{id} opened twice in {transcript:?}");
+                        assert!(
+                            opened.insert(id.clone()),
+                            "{id} opened twice in {transcript:?}"
+                        );
                     }
                     Some("tool_call_result") => {
-                        assert!(opened.contains(&id), "{id} closed before it opened in {transcript:?}");
-                        assert!(closed.insert(id.clone()), "{id} closed twice in {transcript:?}");
+                        assert!(
+                            opened.contains(&id),
+                            "{id} closed before it opened in {transcript:?}"
+                        );
+                        assert!(
+                            closed.insert(id.clone()),
+                            "{id} closed twice in {transcript:?}"
+                        );
                     }
                     _ => {}
                 }
@@ -189,18 +198,17 @@ fn every_pinned_adapter_has_a_transcript_or_says_why_not() {
         .unwrap(),
     )
     .unwrap();
-    let unrecorded: Value = serde_json::from_str(
-        &std::fs::read_to_string(fixtures().join("unrecorded.json")).unwrap(),
-    )
-    .unwrap();
+    let unrecorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixtures().join("unrecorded.json")).unwrap())
+            .unwrap();
     for adapter in lock["adapters"].as_array().unwrap() {
         let key = adapter["key"].as_str().unwrap();
         let version = adapter["adapter_version"].as_str().unwrap();
         let directory = fixtures().join(format!("{key}@{version}"));
         let has_transcript = std::fs::read_dir(&directory).is_ok_and(|entries| {
-            entries.filter_map(Result::ok).any(|entry| {
-                entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl")
-            })
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
         });
         let excused = unrecorded
             .get(format!("{key}@{version}"))

@@ -41,6 +41,12 @@ const LINK_WAIT: Duration = Duration::from_secs(60);
 /// How long a parked call waits for a person, matching the half hour a native
 /// permission request is held open: it is the same act from their side.
 const PARK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// How many times one MCP request is tried before its failure goes to the
+/// agent, which can say so or work around it -- better than a bridge that
+/// stalls behind a Lemma that is genuinely down.
+const MAX_ATTEMPTS: u32 = 3;
+/// The pause before trying again, growing with each attempt.
+const RETRY_PAUSE: Duration = Duration::from_millis(500);
 /// The largest line either side accepts.
 pub(crate) const MAX_RELAY_LINE: usize = 8 * 1024 * 1024;
 
@@ -52,8 +58,12 @@ pub(crate) struct RelayEndpoint {
 }
 
 /// The endpoint file for one target, under the host's private directory.
+#[must_use]
 pub fn endpoint_path(paths: &HostPaths, target_id: Uuid) -> PathBuf {
-    paths.root.join("mcp-relay").join(format!("{target_id}.json"))
+    paths
+        .root
+        .join("mcp-relay")
+        .join(format!("{target_id}.json"))
 }
 
 /// One request from the bridge.
@@ -238,8 +248,30 @@ impl Relay {
             };
             match link.mcp(&body).await {
                 Ok(result) => return Ok(result),
+                // A credential refused once is worth one more try: the relay
+                // reads the run's token afresh every call, and a replacement
+                // may be landing right now. Nothing ran, so this is safe for a
+                // tool call too.
+                Err(LinkError::Rejected { code, .. })
+                    if code == "UNAUTHORIZED" && attempts == 1 =>
+                {
+                    tracing::info!(
+                        "Lemma refused the run's credential; retrying with the journalled one"
+                    );
+                    tokio::time::sleep(RETRY_PAUSE).await;
+                }
+                // Lemma says it could not answer and that asking again is safe
+                // -- its own dependencies were unavailable.
+                Err(LinkError::Rejected {
+                    retryable: true,
+                    message,
+                    ..
+                }) if attempts < MAX_ATTEMPTS => {
+                    tracing::info!(%message, "Lemma could not answer an MCP request yet; retrying");
+                    tokio::time::sleep(RETRY_PAUSE * attempts).await;
+                }
                 Err(LinkError::Rejected { message, .. }) => return Err(message),
-                Err(error) if retry && attempts < 3 => {
+                Err(error) if retry && attempts < MAX_ATTEMPTS => {
                     tracing::info!(%error, "the link dropped during an MCP request; retrying");
                 }
                 Err(error) => {

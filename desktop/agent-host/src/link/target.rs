@@ -144,5 +144,4 @@ mod tests {
         // A public name stays refused whether or not it resolves here.
         assert!(!is_loopback_host(Some("lemma.work")));
     }
-
 }

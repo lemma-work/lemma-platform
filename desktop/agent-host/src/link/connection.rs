@@ -175,13 +175,26 @@ impl LinkHandle {
             body: serde_json::to_value(body)
                 .map_err(|error| LinkError::Protocol(error.to_string()))?,
         };
-        let text =
-            serde_json::to_string(&frame).map_err(|error| LinkError::Protocol(error.to_string()))?;
+        let text = serde_json::to_string(&frame)
+            .map_err(|error| LinkError::Protocol(error.to_string()))?;
         let (answer, answered) = oneshot::channel();
         self.pending
             .lock()
             .expect("pending requests poisoned")
             .insert(id.clone(), answer);
+        // Checked again now the waiter is registered. The link is marked closed
+        // before its waiters are drained, so a request either sees the mark
+        // here or is registered in time to be drained. Without this second
+        // look, one registered just after the drain would be answered by
+        // nobody -- and an MCP call has no timeout of its own, so the agent's
+        // tool call would hang for good.
+        if let Some(error) = self.closed.borrow().clone() {
+            self.pending
+                .lock()
+                .expect("pending requests poisoned")
+                .remove(&id);
+            return Err(error);
+        }
         if self.outgoing.send(Outgoing::Frame(text)).is_err() {
             self.pending
                 .lock()
@@ -192,16 +205,16 @@ impl LinkHandle {
             }));
         }
         let reply = match timeout {
-            Some(limit) => match tokio::time::timeout(limit, answered).await {
-                Ok(reply) => reply,
-                Err(_) => {
+            Some(limit) => {
+                let Ok(reply) = tokio::time::timeout(limit, answered).await else {
                     self.pending
                         .lock()
                         .expect("pending requests poisoned")
                         .remove(&id);
                     return Err(LinkError::Timeout(kind));
-                }
-            },
+                };
+                reply
+            }
             None => answered.await,
         };
         let frame = reply.map_err(|_| {
@@ -335,6 +348,7 @@ pub async fn open(
 
     // The writer. One task owns the sink, so frames are never interleaved.
     let writer_closed = closed_tx.clone();
+    let writer_pending = Arc::clone(&pending);
     tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
             let result = match message {
@@ -351,13 +365,26 @@ pub async fn open(
                 }
             };
             if let Err(error) = result {
+                let error = LinkError::Transport(error.to_string());
                 writer_closed.send_if_modified(|closed| {
                     if closed.is_none() {
-                        *closed = Some(LinkError::Transport(error.to_string()));
+                        *closed = Some(error.clone());
                         return true;
                     }
                     false
                 });
+                // A socket that cannot be written to may still read, so the
+                // reader is not guaranteed to end soon; what is waiting on an
+                // answer learns now that none is coming.
+                let waiters: Vec<_> = writer_pending
+                    .lock()
+                    .expect("pending requests poisoned")
+                    .drain()
+                    .map(|(_, waiter)| waiter)
+                    .collect();
+                for waiter in waiters {
+                    let _ = waiter.send(Err(error.clone()));
+                }
                 break;
             }
         }
@@ -416,14 +443,21 @@ pub async fn open(
                 }
                 continue;
             }
-            match push_from(frame) {
-                Some(push) => {
-                    let _ = pushes_tx.send(push);
-                }
-                None => continue,
+            if let Some(push) = push_from(frame) {
+                let _ = pushes_tx.send(push);
             }
         };
-        // Everyone still waiting learns why, and so does the worker.
+        // Marked closed first, then everyone waiting is told why. In this
+        // order a request either sees the link closed when it re-checks after
+        // registering, or is registered in time to be drained here -- never
+        // neither.
+        closed_tx.send_if_modified(|closed| {
+            if closed.is_none() {
+                *closed = Some(error.clone());
+                return true;
+            }
+            false
+        });
         let waiters: Vec<_> = reader_pending
             .lock()
             .expect("pending requests poisoned")
@@ -433,13 +467,6 @@ pub async fn open(
         for waiter in waiters {
             let _ = waiter.send(Err(error.clone()));
         }
-        closed_tx.send_if_modified(|closed| {
-            if closed.is_none() {
-                *closed = Some(error);
-                return true;
-            }
-            false
-        });
         // Stop the writer too.
         let _ = reader_outgoing.send(Outgoing::Close(close::NORMAL, String::new()));
     });
@@ -474,7 +501,11 @@ pub async fn open(
 }
 
 /// Send the first frame and wait for its answer, however the link ends.
-async fn handshake(handle: &LinkHandle, kind: &'static str, body: Value) -> Result<Frame, LinkError> {
+async fn handshake(
+    handle: &LinkHandle,
+    kind: &'static str,
+    body: Value,
+) -> Result<Frame, LinkError> {
     let id = "0".to_owned();
     let frame = Frame {
         kind: kind.to_owned(),
@@ -495,11 +526,9 @@ async fn handshake(handle: &LinkHandle, kind: &'static str, body: Value) -> Resu
         .await
         .map_err(|_| LinkError::Timeout(kind))?
         .map_err(|_| {
-            handle
-                .closed
-                .borrow()
-                .clone()
-                .unwrap_or_else(|| LinkError::Transport("the link closed during the handshake".to_owned()))
+            handle.closed.borrow().clone().unwrap_or_else(|| {
+                LinkError::Transport("the link closed during the handshake".to_owned())
+            })
         })??;
     if reply.kind == server::ERROR {
         let error: ErrorBody = serde_json::from_value(reply.body)
@@ -566,7 +595,10 @@ mod tests {
         let url = link_url(&Url::parse("https://api.lemma.work/api").unwrap()).unwrap();
         assert_eq!(url.as_str(), "wss://api.lemma.work/api/agent-host/link");
         let url = link_url(&Url::parse("http://app.lemma.localhost:52502/").unwrap()).unwrap();
-        assert_eq!(url.as_str(), "ws://app.lemma.localhost:52502/agent-host/link");
+        assert_eq!(
+            url.as_str(),
+            "ws://app.lemma.localhost:52502/agent-host/link"
+        );
     }
 
     #[test]

@@ -196,6 +196,7 @@ impl TargetWorker {
             // between fails exactly like this one. The refresh reschedules
             // itself on the normal interval, so this cannot compound.
             self.refresh_due = std::time::Instant::now();
+            self.force_probe = true;
             // Both revisions in the detail, not only in this log line. The
             // detail is what reaches Lemma on the rejection and is stored with
             // the command, and "how far behind was it?" is the first question

@@ -12,12 +12,12 @@ use serde_json::{Map, Value, json};
 /// The canonical name for an adapter's own tool name, if it has one.
 ///
 /// Matched case-insensitively on the name with separators removed, so
-/// Claude Code's `WebFetch`, OpenCode's `webfetch` and a hypothetical
+/// Claude Code's `WebFetch`, `OpenCode`'s `webfetch` and a hypothetical
 /// `web_fetch` all land on the same tool.
 pub(crate) fn canonical_name(raw: &str) -> Option<&'static str> {
     let key: String = raw
         .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .map(|character| character.to_ascii_lowercase())
         .collect();
     Some(match key.as_str() {
@@ -404,7 +404,7 @@ pub(crate) fn blocks_text(value: &Value) -> Option<String> {
 /// Adapters report an MCP result three ways. Codex wraps the whole
 /// `CallToolResult` as `{result: {content, structuredContent}, error}`. Claude
 /// Code passes the Anthropic tool-result content through: a list of text
-/// blocks. OpenCode stringifies the text into `{output: "..."}`. Lemma's tools
+/// blocks. `OpenCode` stringifies the text into `{output: "..."}`. Lemma's tools
 /// return a JSON object, and a card reads its fields, so that object is what
 /// the result is.
 pub(crate) fn mcp_result(raw: &Value, content: &[Value]) -> Value {
@@ -473,7 +473,12 @@ pub(crate) fn command_result(raw: &Value, content: &[Value], meta: &Value) -> Va
     let mut result = Map::new();
     let fields = raw.as_object();
     let exit = fields
-        .and_then(|fields| fields.get("exit_code").or_else(|| fields.get("exitCode")).cloned())
+        .and_then(|fields| {
+            fields
+                .get("exit_code")
+                .or_else(|| fields.get("exitCode"))
+                .cloned()
+        })
         .or_else(|| raw.pointer("/metadata/exit").cloned())
         .or_else(|| meta.pointer("/terminal_exit/exit_code").cloned());
     if let Some(exit) = exit.and_then(|exit| exit.as_i64()) {
@@ -510,12 +515,7 @@ pub(crate) fn command_result(raw: &Value, content: &[Value], meta: &Value) -> Va
 }
 
 /// What a finished canonical tool returned, in the shape its card reads.
-pub(crate) fn canonical_output(
-    name: &str,
-    raw: &Value,
-    content: &[Value],
-    meta: &Value,
-) -> Value {
+pub(crate) fn canonical_output(name: &str, raw: &Value, content: &[Value], meta: &Value) -> Value {
     match name {
         "exec_command" => command_result(raw, content, meta),
         "read_file" => {
@@ -523,7 +523,11 @@ pub(crate) fn canonical_output(
             // `<path>`/`<content>` markup with line numbers, and its content
             // block carries the file itself.
             let text = content_text(content)
-                .or_else(|| raw.pointer("/metadata/preview").and_then(Value::as_str).map(str::to_owned))
+                .or_else(|| {
+                    raw.pointer("/metadata/preview")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
                 .or_else(|| output_text(raw, &[]));
             text.map_or(Value::Null, |text| json!({ "content": text }))
         }
@@ -540,10 +544,15 @@ pub(crate) fn canonical_output(
         }
         "update_plan" => raw
             .get("todos")
-            .map(|todos| json!({ "todos": todos }))
-            .unwrap_or_else(|| raw.clone()),
+            .map_or_else(|| raw.clone(), |todos| json!({ "todos": todos })),
         _ => output_text(raw, content).map_or_else(
-            || if raw.is_null() { Value::Null } else { raw.clone() },
+            || {
+                if raw.is_null() {
+                    Value::Null
+                } else {
+                    raw.clone()
+                }
+            },
             |text| json!({ "output": text }),
         ),
     }

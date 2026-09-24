@@ -119,9 +119,15 @@ async fn answer(relay: &RelayClient, method: &str, params: Value) -> Result<Valu
             "serverInfo": { "name": "lemma", "version": crate::HOST_RELEASE },
         })),
         "ping" => Ok(json!({})),
-        "tools/list" => relay.request("tools/list", params).await.map_err(internal),
+        "tools/list" => relay
+            .request("tools/list", params)
+            .await
+            .map_err(|message| internal(&message)),
         "tools/call" => {
-            let result = relay.request("tools/call", params).await.map_err(internal)?;
+            let result = relay
+                .request("tools/call", params)
+                .await
+                .map_err(|message| internal(&message))?;
             // Lemma may have answered "waiting for the person" -- `ask_user`
             // and `request_approval` cannot end the agent's turn from inside a
             // tool call. Hold the call open until they decide, so the model
@@ -151,7 +157,7 @@ async fn answer(relay: &RelayClient, method: &str, params: Value) -> Result<Valu
     }
 }
 
-fn internal(message: String) -> Failure {
+fn internal(message: &str) -> Failure {
     Failure {
         code: INTERNAL_ERROR,
         message: format!("Lemma could not answer this tool call: {message}"),
@@ -234,7 +240,10 @@ impl RelayClient {
             }
             // The relay went away: everyone waiting hears so by their sender
             // being dropped.
-            reader_waiters.lock().expect("relay waiters poisoned").clear();
+            reader_waiters
+                .lock()
+                .expect("relay waiters poisoned")
+                .clear();
         });
         *self.connection.lock().await = Some(RelayConnection {
             token: endpoint.token,
@@ -249,7 +258,10 @@ impl RelayClient {
         for attempt in 0..2 {
             let answered = {
                 let mut connection = self.connection.lock().await;
-                if connection.as_ref().is_none_or(|open| open.lines.is_closed()) {
+                if connection
+                    .as_ref()
+                    .is_none_or(|open| open.lines.is_closed())
+                {
                     drop(connection);
                     self.open().await.map_err(|error| error.to_string())?;
                     connection = self.connection.lock().await;

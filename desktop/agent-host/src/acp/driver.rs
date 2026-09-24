@@ -8,9 +8,9 @@ use super::{
     SelectedPermissionOutcome, SessionNotification, SupervisedAgent, Value, allow_once,
     always_allow_offer, async_trait, before_prompt_deadline, build_agent, capture_stderr,
     configure_session, convert_config_option, effective_options, internal, invalid,
-    is_scoped_mcp_tool_approval, open_session, outcome_for_decision,
-    permission_payload, plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names,
-    session_to_resume, tool_call_id,
+    is_scoped_mcp_tool_approval, open_session, outcome_for_decision, permission_payload,
+    plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names, session_to_resume,
+    tool_call_id,
 };
 use crate::normalize::{Dialect, Normalizer, RunContext};
 
@@ -210,13 +210,17 @@ impl AgentDriver for AcpDriver {
         // still happened and still get a card, and the adapter's token count
         // for the turn, when it reported one. Before the terminal event, which
         // the runtime writes once this returns.
-        let usage = outcome.as_ref().ok().and_then(|outcome| outcome.usage.clone());
+        let usage = outcome
+            .as_ref()
+            .ok()
+            .and_then(|outcome| outcome.usage.clone());
         let owed = normalizer
             .lock()
             .expect("normalizer poisoned")
             .finish(usage.as_ref());
         for event in owed {
-            if let Err(error) = owed_callbacks.event(event.event_type, event.object_id, event.payload)
+            if let Err(error) =
+                owed_callbacks.event(event.event_type, event.object_id, event.payload)
             {
                 tracing::error!(%error, "could not persist an event the turn still owed");
             }
@@ -362,13 +366,15 @@ impl PermissionHandler {
         // object_id and comes back verbatim in RESOLVE_PERMISSION. It is the
         // gated call's own id, shortened the same way, so the two cannot stop
         // matching however long the adapter's id was.
-        let request_id = gated_call.or_else(|| tool_call_id(&payload)).unwrap_or_else(|| {
-            format!(
-                "{}:{}",
-                request.session_id,
-                self.sequence.fetch_add(1, Ordering::Relaxed)
-            )
-        });
+        let request_id = gated_call
+            .or_else(|| tool_call_id(&payload))
+            .unwrap_or_else(|| {
+                format!(
+                    "{}:{}",
+                    request.session_id,
+                    self.sequence.fetch_add(1, Ordering::Relaxed)
+                )
+            });
         self.callbacks
             .event(
                 EventType::PermissionRequest,

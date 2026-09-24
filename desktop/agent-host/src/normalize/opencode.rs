@@ -1,12 +1,12 @@
-//! OpenCode, through its native `opencode acp`.
+//! `OpenCode`, through its native `opencode acp`.
 //!
-//! OpenCode's tool name is the `title` of the call's *first* report
+//! `OpenCode`'s tool name is the `title` of the call's *first* report
 //! (`bash`, `read`, `edit`, `todowrite`...). Every later update replaces the
 //! title with a description of the call -- the command, or the file it
 //! touched -- so the name has to be kept from the opening. MCP tools are named
 //! by joining server and tool with `_` (`lemma_tools_lemma_exec_command`),
 //! which cannot be split for a server this host does not know; only Lemma's
-//! own are recognised, and anyone else's is reported under OpenCode's joined
+//! own are recognised, and anyone else's is reported under `OpenCode`'s joined
 //! name. Results carry the tool's text in `rawOutput.output` and, for a
 //! command, the exit status in `rawOutput.metadata.exit`. All of this is read
 //! off the transcripts in `tests/fixtures/acp/opencode@*`.
@@ -33,7 +33,7 @@ pub(super) fn identify(call: &Call, context: &RunContext) -> (ToolRef, Value) {
     }
 }
 
-/// A native tool's result. OpenCode's `todowrite` reports the list it wrote
+/// A native tool's result. `OpenCode`'s `todowrite` reports the list it wrote
 /// only as JSON text, so the plan card is fed the list from the call's own
 /// input rather than from that text.
 pub(super) fn output(call: &Call, tool: &ToolRef) -> Value {

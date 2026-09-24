@@ -32,7 +32,6 @@ mod opencode;
 #[cfg(test)]
 mod tests;
 
-
 /// One event, ready for the journal.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Normalized {
@@ -151,7 +150,7 @@ impl RunContext {
     }
 
     /// A name an adapter joined from server and tool with `separator`
-    /// (OpenCode's `lemma_tools_lemma_exec_command`), if the server is ours.
+    /// (`OpenCode`'s `lemma_tools_lemma_exec_command`), if the server is ours.
     pub(crate) fn joined_lemma_tool(&self, joined: &str, separator: &str) -> Option<ToolRef> {
         let lowered = joined.to_ascii_lowercase();
         let servers = self
@@ -189,7 +188,7 @@ pub(crate) struct Call {
     /// The id this call's events carry: the adapter's, shortened, and made
     /// unique when an adapter reuses one.
     id: String,
-    /// The title on the call's first report. OpenCode puts the tool's name
+    /// The title on the call's first report. `OpenCode` puts the tool's name
     /// there and replaces it with a description on the next update.
     pub(crate) first_title: Option<String>,
     pub(crate) title: Option<String>,
@@ -414,7 +413,10 @@ impl Normalizer {
             // The user's own words echoed back; Lemma already has them.
             "user_message_chunk" => Vec::new(),
             other => {
-                tracing::debug!(update = other, "ignoring an ACP update this host does not map");
+                tracing::debug!(
+                    update = other,
+                    "ignoring an ACP update this host does not map"
+                );
                 Vec::new()
             }
         }
@@ -428,7 +430,10 @@ impl Normalizer {
     /// follow the call it asks about. Returns the id the request is known by,
     /// shortened the same way as the call's, so the two cannot stop matching
     /// on a long adapter id.
-    pub fn permission_request(&mut self, request: &Value) -> (Vec<Normalized>, Option<String>, JsonMap) {
+    pub fn permission_request(
+        &mut self,
+        request: &Value,
+    ) -> (Vec<Normalized>, Option<String>, JsonMap) {
         let mut events = Vec::new();
         let mut extra = JsonMap::new();
         let Some(tool_call) = request.get("toolCall").and_then(Value::as_object) else {
@@ -647,10 +652,17 @@ impl Normalizer {
             return Vec::new();
         };
         let output = match tool.source {
-            ToolSource::Lemma | ToolSource::Mcp => canonical::mcp_result(&call.raw_output, &call.content),
+            ToolSource::Lemma | ToolSource::Mcp => {
+                canonical::mcp_result(&call.raw_output, &call.content)
+            }
             ToolSource::Native => match self.dialect {
                 Dialect::OpenCode => opencode::output(call, &tool),
-                _ => canonical::canonical_output(&tool.name, &call.raw_output, &call.content, &call.meta()),
+                _ => canonical::canonical_output(
+                    &tool.name,
+                    &call.raw_output,
+                    &call.content,
+                    &call.meta(),
+                ),
             },
         };
         let error = failure_sentence(status, &call.raw_output, &output);
@@ -737,7 +749,7 @@ fn text_event(event_type: EventType, update: &Map<String, Value>) -> Normalized 
 
 /// Live output of a running call, where an adapter streams one.
 ///
-/// Only explicit terminal deltas: OpenCode repeats a call's *whole* output on
+/// Only explicit terminal deltas: `OpenCode` repeats a call's *whole* output on
 /// each in-progress update, and forwarding that as a delta would print it
 /// over and over.
 fn progress_text(update: &Map<String, Value>) -> Option<String> {
@@ -760,7 +772,11 @@ fn usage_payload(usage: &Value) -> Option<UsagePayload> {
     let payload = UsagePayload {
         input_tokens: number(&["inputTokens", "input_tokens"]),
         output_tokens: number(&["outputTokens", "output_tokens"]),
-        cached_input_tokens: number(&["cachedReadTokens", "cached_read_tokens", "cachedInputTokens"]),
+        cached_input_tokens: number(&[
+            "cachedReadTokens",
+            "cached_read_tokens",
+            "cachedInputTokens",
+        ]),
         reasoning_tokens: number(&["thoughtTokens", "thought_tokens", "reasoningOutputTokens"]),
         total_tokens: number(&["totalTokens", "total_tokens"]),
     };
@@ -777,10 +793,12 @@ fn failure_sentence(status: ToolStatus, raw: &Value, output: &Value) -> Option<S
             let stated = raw
                 .get("error")
                 .and_then(|error| {
-                    error
-                        .as_str()
-                        .map(str::to_owned)
-                        .or_else(|| error.get("message").and_then(Value::as_str).map(str::to_owned))
+                    error.as_str().map(str::to_owned).or_else(|| {
+                        error
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
                 })
                 .filter(|text| !text.trim().is_empty());
             if stated.is_some() {

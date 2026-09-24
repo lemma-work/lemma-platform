@@ -6,9 +6,9 @@
 pub(super) use crate::runtime::*;
 
 mod cancellation;
+mod control;
 mod events;
 mod harnesses;
-mod control;
 mod runs;
 
 use std::collections::HashMap;
@@ -86,7 +86,8 @@ pub(super) struct Harness {
     target_id: Uuid,
     _directory: tempfile::TempDir,
     _shutdown: watch::Sender<bool>,
-    server: StubLink,
+    /// Held only so the stand-in keeps serving for the harness's lifetime.
+    _server: StubLink,
 }
 
 impl Harness {
@@ -147,7 +148,7 @@ impl Harness {
             target_id,
             _directory: directory,
             _shutdown: shutdown_tx,
-            server,
+            _server: server,
         }
     }
 

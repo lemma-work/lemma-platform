@@ -417,11 +417,28 @@ impl HarnessSnapshot {
     /// fence is actually protecting is the *configuration* a profile was bound
     /// against — the options offered and the capabilities advertised — and a
     /// release that changes either of those changes them here too.
+    ///
+    /// Nor is any option's `current_value`. That is the agent's own default
+    /// -- the model Claude Code is set to use, say -- and a person changing it
+    /// in the agent's settings changes nothing a profile was bound against:
+    /// what is offered stayed the same. Hashing it meant that edit refused
+    /// every run already dispatched as `CONFIG_REVISION_STALE`.
     #[must_use]
     pub fn revision(&self) -> String {
+        let offered: Vec<Value> = self
+            .config_options
+            .iter()
+            .map(|option| {
+                let mut value = serde_json::to_value(option).expect("option serialization");
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("current_value");
+                }
+                value
+            })
+            .collect();
         let value = serde_json::json!({
             "adapter_version": self.adapter_version,
-            "config_options": self.config_options,
+            "config_options": offered,
             "capabilities": self.capabilities,
         });
         hex::encode(Sha256::digest(
@@ -584,6 +601,26 @@ mod tests {
         });
 
         assert_ne!(before.revision(), after.revision());
+    }
+
+    /// The agent's own default is not part of what a profile bound against.
+    #[test]
+    fn changing_the_agents_default_does_not_change_the_revision() {
+        let option = |current: &str| ConfigOption {
+            id: "model".into(),
+            category: "model".into(),
+            name: "Model".into(),
+            description: None,
+            current_value: Value::String(current.into()),
+            options: Vec::new(),
+            metadata: JsonMap::new(),
+        };
+        let mut before = snapshot();
+        before.config_options.push(option("opus"));
+        let mut after = snapshot();
+        after.config_options.push(option("sonnet"));
+
+        assert_eq!(before.revision(), after.revision());
     }
 
     /// Capabilities decide whether a run may resume a session, so a harness

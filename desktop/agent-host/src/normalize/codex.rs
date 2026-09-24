@@ -60,12 +60,22 @@ pub(super) fn identify(call: &Call, context: &RunContext) -> (ToolRef, Value) {
     let (name, input) = match call.kind.as_deref() {
         Some("execute") => (
             "exec_command",
-            canonical_input("exec_command", &call.raw_input, &call.locations, &call.content),
+            canonical_input(
+                "exec_command",
+                &call.raw_input,
+                &call.locations,
+                &call.content,
+            ),
         ),
         Some("edit") => edit(call),
         Some("delete") => (
             "delete_file",
-            canonical_input("delete_file", &call.raw_input, &call.locations, &call.content),
+            canonical_input(
+                "delete_file",
+                &call.raw_input,
+                &call.locations,
+                &call.content,
+            ),
         ),
         Some("move") => (
             "move_file",
@@ -125,7 +135,10 @@ fn edit(call: &Call) -> (&'static str, Value) {
     let mut input = canonical_input("edit_file", &call.raw_input, &call.locations, &call.content);
     if let Value::Object(object) = &mut input
         && !object.contains_key("file_path")
-        && let Some(path) = changes.first().and_then(|change| change.get("file_path")).cloned()
+        && let Some(path) = changes
+            .first()
+            .and_then(|change| change.get("file_path"))
+            .cloned()
     {
         object.insert("file_path".to_owned(), path);
     }

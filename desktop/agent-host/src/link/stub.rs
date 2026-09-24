@@ -19,9 +19,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::protocol::{
-    ControlBody, Frame, HarnessesBody, PublishedHarness, close, host, server,
-};
+use super::protocol::{ControlBody, Frame, HarnessesBody, PublishedHarness, close, host, server};
 use crate::protocol::{Command, EventBatch, RunState};
 
 #[derive(Default)]

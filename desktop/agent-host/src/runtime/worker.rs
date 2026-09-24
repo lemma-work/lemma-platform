@@ -87,6 +87,12 @@ pub(crate) struct TargetWorker {
         mpsc::UnboundedReceiver<Option<ProbedHarnesses>>,
     ),
     pub(crate) probe_task: Option<OwnedTask<()>>,
+    /// Whether the next refresh must probe every agent afresh, rather than
+    /// reuse probes of unchanged versions. Raised by everything that says the
+    /// agents may have changed -- an install, a run that found its agent
+    /// signed out, the person pressing Re-check -- and not by the scheduled
+    /// refresh, which is only a safety net.
+    pub(crate) force_probe: bool,
     /// The link currently open, for the tasks that run beside this loop.
     pub(crate) slot_owner: LinkSlotOwner,
     pub(crate) link: LinkSlot,
@@ -130,6 +136,13 @@ pub(crate) struct ProbedHarnesses {
 pub(crate) struct ProbedHarness {
     pub(crate) capabilities: HarnessCapabilities,
     pub(crate) config_options: Vec<ConfigOption>,
+    /// The versions this probe was of, and whether it succeeded. A scheduled
+    /// refresh reuses a successful probe of the same versions rather than
+    /// opening another real session in the agent -- each probe is a
+    /// `session/new` that lands in the person's own session history.
+    pub(crate) adapter_version: String,
+    pub(crate) upstream_version: Option<String>,
+    pub(crate) ready: bool,
 }
 
 /// How a connected session ended.
@@ -148,6 +161,17 @@ enum SessionEnd {
 /// nothing else wakes it. Cheap, and short enough that a cancellation's kill
 /// deadline is kept to within a second.
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The longest a host waits to reconnect after Lemma restarts.
+const RESTART_JITTER_MAX_MS: u64 = 5_000;
+
+/// A random delay in `0..RESTART_JITTER_MAX_MS`, so a deploy does not bring
+/// every host back in the same instant.
+fn restart_jitter() -> Duration {
+    let mut bytes = [0_u8; 8];
+    let random = getrandom::fill(&mut bytes).map_or(0, |()| u64::from_le_bytes(bytes));
+    Duration::from_millis(random % RESTART_JITTER_MAX_MS)
+}
 
 impl TargetWorker {
     #[allow(clippy::too_many_arguments)]
@@ -199,6 +223,7 @@ impl TargetWorker {
             events_ready: OutboxSignal::default(),
             probed: mpsc::unbounded_channel(),
             probe_task: None,
+            force_probe: true,
             slot_owner,
             link,
         })
@@ -275,6 +300,22 @@ impl TargetWorker {
                         SessionEnd::Shutdown => return Ok(()),
                         SessionEnd::Lost { error, after } => {
                             self.slot_owner.set(None);
+                            // Lemma restarting says so with 1012, usually
+                            // without the `reconnect` frame that would carry a
+                            // delay -- uvicorn closes sockets before the app's
+                            // own shutdown runs. Every host sees the same close
+                            // at the same instant, so each picks its own delay
+                            // rather than all reconnecting at once.
+                            let after = after.or_else(|| {
+                                matches!(
+                                    error,
+                                    LinkError::Closed {
+                                        code: close::RESTARTING,
+                                        ..
+                                    }
+                                )
+                                .then(restart_jitter)
+                            });
                             if let Some(after) = after {
                                 self.note_offline(&error.to_string())?;
                                 self.wait_retry(after).await;
@@ -315,7 +356,9 @@ impl TargetWorker {
                     "Lemma does not know this pairing; retrying before dropping it"
                 );
             } else if error.is_invalid_credential() {
-                self.cancel_all("Lemma rejected this Agent Host; the target may have been revoked")?;
+                self.cancel_all(
+                    "Lemma rejected this Agent Host; the target may have been revoked",
+                )?;
                 return Err(error.into());
             }
             self.note_offline(&error.to_string())?;
@@ -397,6 +440,7 @@ impl TargetWorker {
                     // The agents on this machine changed: probe now, not at
                     // the next scheduled refresh.
                     self.refresh_due = std::time::Instant::now();
+                    self.force_probe = true;
                     self.housekeeping()?;
                 }
                 _ = housekeeping.tick() => self.housekeeping()?,
@@ -416,9 +460,11 @@ impl TargetWorker {
             self.apply_local_controls()?;
         }
         self.drain_published();
-        if self.reprobe_requested.swap(false, Ordering::SeqCst)
-            || self.refresh_due <= std::time::Instant::now()
-        {
+        if self.reprobe_requested.swap(false, Ordering::SeqCst) {
+            self.force_probe = true;
+            self.refresh_due = std::time::Instant::now();
+        }
+        if self.refresh_due <= std::time::Instant::now() {
             self.refresh_harnesses();
             self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
         }
@@ -544,6 +590,7 @@ impl TargetWorker {
         self.draining = current.draining;
         if current.refresh_generation != self.target.refresh_generation {
             self.refresh_due = std::time::Instant::now();
+            self.force_probe = true;
         }
         self.target.draining = current.draining;
         self.target.refresh_generation = current.refresh_generation;
