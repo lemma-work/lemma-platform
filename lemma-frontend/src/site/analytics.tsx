@@ -12,6 +12,7 @@ import {
     subscribeToConsent,
     consentServerSnapshot,
 } from "./analytics/consent";
+import { isAnalyticsDocument } from "./analytics/document";
 import { config, isLocalDeployment } from "./config";
 export function Analytics() {
     const pathname = usePathname();
@@ -39,6 +40,7 @@ export function Analytics() {
     }, [consent]);
     if (
         !hydrated ||
+        !isAnalyticsDocument() ||
         !config.ANALYTICS_KEY ||
         isLocalDeployment() ||
         consent !== "unanswered"
