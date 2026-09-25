@@ -8,9 +8,12 @@ use crate::host_loopback::{
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// A read that never ends fails the test instead of hanging it. Generous on
+/// purpose: it guards against a hang, not a slow machine, and a shared CI
+/// runner once took longer than five seconds to move 256 KiB through the relay.
 fn bounded(stream: &UnixStream) {
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
 }
 
