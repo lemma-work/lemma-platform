@@ -336,6 +336,73 @@ describe("AgentController", () => {
     }
   });
 
+  function reconnectingClient(options: {
+    resumeStream: () => Promise<ReadableStream<Uint8Array>>;
+    authStatus?: () => string;
+  }): LemmaClient {
+    return {
+      podId: "pod-1",
+      withPod() {
+        return this;
+      },
+      auth: { getState: () => ({ status: options.authStatus?.() ?? "authenticated", user: null }) },
+      conversations: {
+        create: async () => ({ id: "conv-1", status: "WAITING", pod_id: "pod-1" }),
+        get: async (id: string) => ({ id, status: "RUNNING" }),
+        list: async () => ({ items: [], limit: 20, next_page_token: null }),
+        messages: { list: async () => ({ items: [], limit: 100, next_page_token: null }) },
+        sendMessageStream: async () => droppedStream(),
+        resumeStream: options.resumeStream,
+        stopRun: async () => ({ id: "conv-1", status: "WAITING" }),
+      },
+    } as unknown as LemmaClient;
+  }
+
+  it("backs off on a resumed stream that opens and closes with nothing in it", async () => {
+    vi.useFakeTimers();
+    try {
+      const resumeStream = vi.fn(async () => sseStream([]));
+      const controller = new AgentController({
+        client: reconnectingClient({ resumeStream }),
+        scope: { podId: "pod-1", agentName: "triage" },
+      });
+      await controller.createConversation();
+      void controller.sendMessage("hi");
+
+      /* Resetting the backoff on connect made this every second, forever.
+         Backing off, the first 15 s hold 1 + 2 + 4 + 8. */
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(resumeStream).toHaveBeenCalledTimes(4);
+      controller.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops reconnecting once the session is signed out", async () => {
+    vi.useFakeTimers();
+    try {
+      let status = "authenticated";
+      const resumeStream = vi.fn(async () => {
+        status = "unauthenticated";
+        throw Object.assign(new Error("Unauthorized"), { statusCode: 401 });
+      });
+      const controller = new AgentController({
+        client: reconnectingClient({ resumeStream, authStatus: () => status }),
+        scope: { podId: "pod-1", agentName: "triage" },
+      });
+      await controller.createConversation();
+      const turn = controller.sendMessage("hi");
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      await turn;
+      expect(resumeStream).toHaveBeenCalledOnce();
+      expect(controller.getState().isStreaming).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("setConversationId resets the session snapshot", async () => {
     const controller = makeController([
       {

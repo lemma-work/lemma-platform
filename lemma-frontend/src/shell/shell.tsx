@@ -23,7 +23,7 @@ import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
 import { NOWHERE, readAddress, tabFromId, writeAddress } from "./address";
-import { podAccess } from "./pod-access";
+import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
 import { OrgSwitcher } from "./org-switcher";
 import { Rail } from "./rail";
@@ -65,6 +65,7 @@ const TAB_CLOSE_MS = 180;
 
 const ORG_KEY = key("org");
 const TAB_KEY = key("tabs");
+const LAST_POD_KEY = key("last-pod");
 
 function readJson<T>(key: string, fallback: T): T {
     try {
@@ -120,6 +121,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         }
     });
     const [tabs, setTabs] = useState<Record<string, string>>(() => preview ? { kit: "conversation" } : readJson<Record<string, string>>(TAB_KEY, {}));
+    /** Which teammate `/t` opens when the address names none: the one last
+     *  open in that organization, so the front door and every organization
+     *  switch land where somebody left off rather than on the first pod. */
+    const [lastPods, setLastPods] = useState<LastPods>(() => preview ? {} : readLastPods(readJson<unknown>(LAST_POD_KEY, {})));
     /** Apps stay mounted once opened — hidden, never unmounted, so coming
      *  back to a tab does not cold-boot someone's app. */
     const appFrames = useRef<Record<string, HTMLIFrameElement | null>>({});
@@ -289,9 +294,15 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         setSelection(previous => ({ id: named, generation: previous.generation + 1 }));
     }, [podId]);
 
-    const access = podAccess(podId, pods.data, linkedPod);
+    const access = podAccess(podId, pods.data, linkedPod, activeOrgId ? lastPods[activeOrgId] ?? null : null);
     const listedPod = access.pod;
     const stranger = access.state === "denied" ? podId : null;
+    /* Keyed by the pod's own organization, not the active one: a link into
+       another organization's teammate is remembered where it belongs. */
+    useEffect(() => {
+        if (preview || !listedPod) return;
+        setLastPods(previous => rememberPod(previous, listedPod.orgId, listedPod.id));
+    }, [preview, listedPod]);
 
     /* Only the teammate you are looking at pays for its roster. */
     const detail = useQuery({
@@ -576,10 +587,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         try {
             localStorage.setItem(TAB_KEY, JSON.stringify(tabs));
             if (activeOrgId) localStorage.setItem(ORG_KEY, JSON.stringify(activeOrgId));
+            if (!preview) localStorage.setItem(LAST_POD_KEY, JSON.stringify(lastPods));
         } catch {
             /* storage refused; the app still works */
         }
-    }, [tabs, activeOrgId]);
+    }, [tabs, activeOrgId, lastPods, preview]);
 
     /* Remember every app tab that has been opened, with its URL. */
     useEffect(() => {

@@ -17,6 +17,7 @@ import {
     type Notification,
 } from "./notification-state";
 import { NotificationForm } from "./notification-form";
+import { ClampedProse } from "@/thread/clamped-prose";
 
 /** The things the pod has asked this person for.
  *
@@ -227,7 +228,7 @@ function Row({
     return (
         <article className="notify__item" data-unread={isUnread(notification) ? "" : undefined}>
             <h3>{notification.title}</h3>
-            {notification.body && <p className="notify__body">{notification.body}</p>}
+            {notification.body && <div className="notify__body"><ClampedProse text={notification.body} /></div>}
             {delivery && <p className="notify__delivery">{delivery}</p>}
             {outcome && <p className="notify__outcome">{outcome}</p>}
 

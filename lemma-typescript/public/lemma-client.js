@@ -9198,10 +9198,59 @@ var LemmaClient = (() => {
   // src/supertokens.ts
   var import_supertokens_web_js = __toESM(require_supertokens_web_js(), 1);
   var import_session = __toESM(require_session2(), 1);
+
+  // src/refresh-breaker.ts
+  var RefreshSuspendedError = class extends Error {
+    constructor(retryAt) {
+      super("Session refresh is paused after repeated failures.");
+      __publicField(this, "retryAt");
+      this.name = "RefreshSuspendedError";
+      this.retryAt = retryAt;
+    }
+  };
+  function createRefreshBreaker(options = {}) {
+    var _a, _b, _c, _d, _e, _f;
+    const budget = (_a = options.budget) != null ? _a : 4;
+    const windowMs = (_b = options.windowMs) != null ? _b : 6e4;
+    const cooldownMs = (_c = options.cooldownMs) != null ? _c : 3e4;
+    const maxCooldownMs = (_d = options.maxCooldownMs) != null ? _d : 5 * 6e4;
+    const forgetAfterMs = (_e = options.forgetAfterMs) != null ? _e : 10 * 6e4;
+    const now = (_f = options.now) != null ? _f : Date.now;
+    let attempts = [];
+    let until = 0;
+    let strikes = 0;
+    let lastTrip = -Infinity;
+    return {
+      admit() {
+        var _a2;
+        const at = now();
+        if (at < until) throw new RefreshSuspendedError(until);
+        if (at - lastTrip > forgetAfterMs) strikes = 0;
+        attempts = attempts.filter((when) => at - when < windowMs);
+        if (attempts.length >= budget) {
+          until = at + Math.min(maxCooldownMs, cooldownMs * 2 ** strikes);
+          strikes += 1;
+          lastTrip = at;
+          attempts = [];
+          (_a2 = options.onTrip) == null ? void 0 : _a2.call(options, until);
+          throw new RefreshSuspendedError(until);
+        }
+        attempts.push(at);
+      },
+      suspendedUntil() {
+        return now() < until ? until : null;
+      }
+    };
+  }
+
+  // src/supertokens.ts
   var APP_NAME = "Lemma";
   var SESSION_API_SUFFIX = "/st/auth";
   var initializedSignature = null;
   var unauthorisedListeners = /* @__PURE__ */ new Set();
+  var refreshBreaker = createRefreshBreaker({
+    onTrip: () => unauthorisedListeners.forEach((listener) => listener())
+  });
   function normalizePath(pathname) {
     const trimmed = pathname.trim();
     if (!trimmed || trimmed === "/") {
@@ -9282,6 +9331,12 @@ var LemmaClient = (() => {
            * the one case it was raised for.
            */
           maxRetryAttemptsForSessionRefresh: 3,
+          /* Thrown inside SuperTokens' refresh `try`, so a refused refresh never
+             reaches the network and fails only the request that asked for it. */
+          preAPIHook: async (context) => {
+            if (context.action === "REFRESH_SESSION") refreshBreaker.admit();
+            return context;
+          },
           onHandleEvent: (event) => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
@@ -17558,7 +17613,7 @@ var LemmaClient = (() => {
   // src/datastore-changes.ts
   var RECONNECT_BASE_DELAY_MS = 500;
   var RECONNECT_MAX_DELAY_MS = 3e4;
-  var WS_POLICY_VIOLATION = 1008;
+  var WS_UNAUTHENTICATED = 4401;
   function reconnectDelayMs(attempt) {
     const ceiling = Math.min(
       RECONNECT_MAX_DELAY_MS,
@@ -17579,21 +17634,30 @@ var LemmaClient = (() => {
     let cursor = options.since;
     let attempt = 0;
     let stopped = false;
+    let authRefreshed = false;
     let reconnectTimer = null;
     const status = (next) => {
       var _a;
       return (_a = options.onStatus) == null ? void 0 : _a.call(options, next);
     };
-    const scheduleReconnect = () => {
+    const fail = (error) => {
       var _a;
       if (stopped) return;
-      if (options.maxRetries != null && attempt >= options.maxRetries) {
+      stopped = true;
+      status("closed");
+      (_a = options.onError) == null ? void 0 : _a.call(options, error);
+    };
+    const scheduleReconnect = () => {
+      var _a, _b;
+      if (stopped) return;
+      if (((_a = auth.getState) == null ? void 0 : _a.call(auth).status) === "unauthenticated") {
         stopped = true;
         status("closed");
-        (_a = options.onError) == null ? void 0 : _a.call(
-          options,
-          new Error("Datastore change stream: max reconnect attempts reached")
-        );
+        (_b = options.onError) == null ? void 0 : _b.call(options, new Error("Datastore change stream: signed out"));
+        return;
+      }
+      if (options.maxRetries != null && attempt >= options.maxRetries) {
+        fail(new Error("Datastore change stream: max reconnect attempts reached"));
         return;
       }
       const delay = reconnectDelayMs(attempt);
@@ -17623,10 +17687,6 @@ var LemmaClient = (() => {
         return;
       }
       socket = ws;
-      ws.onopen = () => {
-        attempt = 0;
-        status("open");
-      };
       ws.onmessage = (event) => {
         var _a2;
         let frame;
@@ -17638,6 +17698,9 @@ var LemmaClient = (() => {
         if (!frame || typeof frame !== "object") return;
         const record = frame;
         if (record.type === "ready") {
+          attempt = 0;
+          authRefreshed = false;
+          status("open");
           cursor = record.since || cursor;
           if (cursor) (_a2 = options.onReady) == null ? void 0 : _a2.call(options, { since: cursor });
           return;
@@ -17651,8 +17714,20 @@ var LemmaClient = (() => {
           status("closed");
           return;
         }
-        if (event.code === WS_POLICY_VIOLATION && !options.useCookie) {
-          auth.refreshAccessToken().then(scheduleReconnect, scheduleReconnect);
+        if (event.code === WS_UNAUTHENTICATED) {
+          if (authRefreshed) {
+            fail(new Error("Datastore change stream: session rejected after refresh"));
+            return;
+          }
+          authRefreshed = true;
+          auth.refreshAccessToken().then(
+            scheduleReconnect,
+            (error) => fail(
+              new Error(
+                `Datastore change stream: session refresh failed (${error instanceof Error ? error.message : String(error)})`
+              )
+            )
+          );
           return;
         }
         scheduleReconnect();

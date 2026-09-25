@@ -315,6 +315,20 @@ export const BLANK: Hire = {
     counts: { tables: 0, functions: 0, workflows: 0 },
 };
 
+/** A blank hire with a face of its own.
+ *
+ *  `BLANK.seed` is one fixed string, so taking `BLANK` as it stands gave every
+ *  teammate started from a described job the same character — the seed picks
+ *  it, and `hire()` then pins it onto the pod on purpose. An archetype wants
+ *  that: every Follow-ups looks like Follow-ups. Somebody new is nobody in
+ *  particular, so each one is dealt a seed of its own when it is picked, and
+ *  the making and the reveal both draw from that same seed. */
+export function blankHire(
+    nonce: string = Date.now().toString(36) + Math.random().toString(36).slice(2),
+): Hire {
+    return { ...BLANK, seed: "blank/" + nonce };
+}
+
 /** What to offer as a first message, once the hire is actually made.
  *
  *  A blank teammate has no script and should not be given an invented one —

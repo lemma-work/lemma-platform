@@ -2,16 +2,17 @@
 
 import { LoadingIndicator } from "@/ui/loading";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { EmailPassword, ThirdParty } from "./supertokens";
 import { authFailure, sayProblem, type Attempt } from "./errors";
 import { PORTAL_PATH, siteOrigin } from "./config";
 import { authLink, rememberDestination, pendingDestination, destinationFrom, asksForDestination } from "./redirects";
 import { accountAccess, completeAuth, completionDestination } from "./completion";
+import { continueWithProvider } from "./provider-login";
 import { EmailCodeForm } from "./email-code-form";
 import { waitingFor } from "./waiting";
 import { CharacterPuppet } from "@/shell/character-puppet";
-import { LemmaLogo } from "@/ui/icons";
+import { HideIcon, LemmaLogo, ShowIcon } from "@/ui/icons";
 import { GoogleMark, MicrosoftMark } from "./marks";
 
 /* ── the two panes ──────────────────────────────────────────────────── */
@@ -171,21 +172,88 @@ function Field({ id, label, type, value, onChange, said, autoComplete, autoFocus
     onChange: (next: string) => void; said?: string; autoComplete?: string; autoFocus?: boolean;
     onFocus?: () => void; onBlur?: () => void;
 }) {
+    const input = useRef<HTMLInputElement>(null);
+    const secret = type === "password";
+    const [shown, setShown] = useState(false);
+
+    /* Hidden again the moment the form goes. A password left readable on the
+       screen after "Make my account" is one somebody walks away from, and a
+       password manager deciding whether to offer to save it looks for a
+       password field, not a text one. */
+    useEffect(() => {
+        const form = input.current?.form;
+        if (!secret || !form) return;
+        const hide = () => setShown(false);
+        form.addEventListener("submit", hide);
+        return () => form.removeEventListener("submit", hide);
+    }, [secret]);
+
+    /* Changing an input's type drops its selection, so somebody who stopped
+       mid-word to check a character would find the caret thrown to the start. */
+    const caret = useRef<[number | null, number | null] | null>(null);
+    const reveal = () => {
+        const field = input.current;
+        caret.current = field && document.activeElement === field ? [field.selectionStart, field.selectionEnd] : null;
+        setShown((now) => !now);
+    };
+    useLayoutEffect(() => {
+        const field = input.current;
+        const at = caret.current;
+        caret.current = null;
+        if (!field || !at) return;
+        field.setSelectionRange(...at);
+        /* And again a frame later: Chrome rebuilds the field's editor on the
+           layout after a type change, and on a real click that rebuild lands
+           after this effect and puts the caret back at zero. */
+        const frame = requestAnimationFrame(() => field.setSelectionRange(...at));
+        return () => cancelAnimationFrame(frame);
+    }, [shown]);
+
+    const control = (
+        <input
+            ref={input}
+            id={id}
+            type={secret && shown ? "text" : type}
+            value={value}
+            autoComplete={autoComplete}
+            autoFocus={autoFocus}
+            /* Shown as text, a password is still not prose: a spellchecker
+               that underlines it, or sends it off to be checked, is the
+               wrong reader. */
+            spellCheck={secret ? false : undefined}
+            autoCapitalize={secret ? "off" : undefined}
+            autoCorrect={secret ? "off" : undefined}
+            aria-invalid={said ? true : undefined}
+            aria-describedby={said ? id + "-said" : undefined}
+            onFocus={onFocus}
+            onBlur={onBlur}
+            onChange={(event) => onChange(event.target.value)}
+        />
+    );
+
     return (
         <div className="field">
             <label htmlFor={id}>{label}</label>
-            <input
-                id={id}
-                type={type}
-                value={value}
-                autoComplete={autoComplete}
-                autoFocus={autoFocus}
-                aria-invalid={said ? true : undefined}
-                aria-describedby={said ? id + "-said" : undefined}
-                onFocus={onFocus}
-                onBlur={onBlur}
-                onChange={(event) => onChange(event.target.value)}
-            />
+            {!secret ? control : (
+                <div className="field__secret">
+                    {control}
+                    {/* Pressing the eye leaves the caret where it was: the
+                        mousedown is swallowed so the input never blurs, and the
+                        cast does not turn round mid-password. It stays
+                        reachable by Tab. */}
+                    <button
+                        type="button"
+                        className="field__reveal"
+                        aria-controls={id}
+                        aria-label={shown ? "Hide password" : "Show password"}
+                        title={shown ? "Hide password" : "Show password"}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={reveal}
+                    >
+                        {shown ? <HideIcon size={18} /> : <ShowIcon size={18} />}
+                    </button>
+                </div>
+            )}
             {said && <span className="field__said" id={id + "-said"}>{said}</span>}
         </div>
     );
@@ -234,15 +302,7 @@ function Providers({ onProblem }: { onProblem: (said: string) => void }) {
     const leave = useCallback(async (thirdPartyId: string) => {
         setGoing(thirdPartyId);
         try {
-            /* The destination is put away before we leave: the provider brings
-               the browser back to the callback with a URL of its own making,
-               and whatever was asked for originally is not in it. */
-            rememberDestination(pendingDestination(window.location.search));
-            const url = await ThirdParty.getAuthorisationURLWithQueryParamsAndSetState({
-                thirdPartyId,
-                frontendRedirectURI: siteOrigin() + PORTAL_PATH + "/callback/" + thirdPartyId,
-            });
-            window.location.assign(url);
+            await continueWithProvider(thirdPartyId);
         } catch (error) {
             setGoing(null);
             onProblem(sayProblem(error));
@@ -270,6 +330,8 @@ function Providers({ onProblem }: { onProblem: (said: string) => void }) {
 
 export function SignInUp({ mode }: { mode: "in" | "up" }) {
     const [usePassword, setUsePassword] = useState(false);
+    const [existingPassword, setExistingPassword] = useState(false);
+    const signingIn = mode === "in" || existingPassword;
     const attempted = useRef(false);
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -283,7 +345,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
     const [onPassword, setOnPassword] = useState(false);
     const { go, refused } = useLanding();
 
-    const attempt: Attempt = mode === "in" ? "sign-in" : "sign-up";
+    const attempt: Attempt = signingIn ? "sign-in" : "sign-up";
     const other = authLink(mode === "in" ? PORTAL_PATH + "/signup" : PORTAL_PATH);
 
     useEffect(() => {
@@ -306,7 +368,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
         try {
             if (authenticated) { await go(); return; }
             const formFields = [{ id: "email", value: email.trim() }, { id: "password", value: password }];
-            const answer = mode === "in"
+            const answer = signingIn
                 ? await EmailPassword.signIn({ formFields })
                 : await EmailPassword.signUp({ formFields });
 
@@ -337,16 +399,16 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
             }
             setSaid(sayProblem(error));
         }
-    }, [email, password, mode, go, attempt, authenticated]);
+    }, [email, password, signingIn, go, attempt, authenticated]);
 
     return (
         <Screen
-            title={mode === "in" ? "Welcome back" : "Make an account"}
+            title={signingIn ? "Welcome back" : "Make an account"}
             /* The left half already says what is through the door, so the
                right half does not say it again — it asks. Sign-up keeps a line
                because it is the one screen where somebody does not yet know
                what they are agreeing to do. */
-            lead={mode === "in" ? undefined : "Create your account, then hire your first AI teammate."}
+            lead={signingIn ? undefined : "Create your account, then hire your first AI teammate."}
             footer={mode === "in"
                 ? <>First time here? <a href={other}>Make an account</a></>
                 : <>Already have one? <a href={other}>Sign in</a></>}
@@ -355,24 +417,27 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
             {refused && <Refused />}
             <Providers onProblem={setSaid} />
             <p className="auth__or"><span>or</span></p>
-            {!usePassword ? <><EmailCodeForm onAttempt={() => { attempted.current = true; }} /><Problem said={said} /></> : <form onSubmit={submit} noValidate>
+            {!usePassword ? <><EmailCodeForm onAttempt={() => { attempted.current = true; }} onPassword={address => {
+                setEmail(address); setExistingPassword(true); setUsePassword(true); setSaid(null);
+            }} /><Problem said={said} /></> : <form onSubmit={submit} noValidate>
+                {existingPassword && <p className="auth__note">This account uses a password. Enter it to sign in.</p>}
                 <Field id="email" label="Email" type="email" autoComplete="email" autoFocus
                     value={email} onChange={setEmail} said={fields.email} />
                 <Field id="password" label="Password" type="password"
-                    autoComplete={mode === "in" ? "current-password" : "new-password"}
+                    autoComplete={signingIn ? "current-password" : "new-password"}
                     onFocus={() => setOnPassword(true)} onBlur={() => setOnPassword(false)}
                     value={password} onChange={setPassword} said={fields.password} />
                 <Problem said={said} />
                 <div className="screen__actions">
                     <button className="btn btn--primary" type="submit" disabled={busy}>
-                        {busy ? "One moment\u2026" : authenticated ? "Continue" : mode === "in" ? "Sign in" : "Make my account"}
+                        {busy ? "One moment\u2026" : authenticated ? "Continue" : signingIn ? "Sign in" : "Make my account"}
                     </button>
-                    {mode === "in" && <a className="screen__aside" href={authLink(PORTAL_PATH + "/reset-password")}>Forgotten your password?</a>}
+                    {signingIn && <a className="screen__aside" href={authLink(PORTAL_PATH + "/reset-password")}>Forgotten your password?</a>}
                 </div>
             </form>}
             <button className="linkish" type="button" disabled={busy} onClick={() => {
-                setUsePassword(!usePassword); setOnPassword(false); setSaid(null);
-            }}>{usePassword ? "Use an email code instead" : "Use a password instead"}</button>
+                setUsePassword(!usePassword); setExistingPassword(false); setOnPassword(false); setSaid(null);
+            }}>{usePassword ? existingPassword ? "Use another email" : "Use an email code instead" : "Use a password instead"}</button>
         </Screen>
     );
 }
