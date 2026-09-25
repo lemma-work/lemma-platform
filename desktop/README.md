@@ -266,10 +266,11 @@ Two things it deliberately does not cover, both reported rather than hidden:
 
 - **Functions.** It runs no locald, so nothing dispatches a function into a
   guest sandbox. That test skips, naming `make desktop-e2e` as the lane for it.
-- **The `.localhost` arrangement.** The embedded test skips there, because a
-  framed app genuinely cannot hold a session under a base domain whose hosts a
-  browser cannot derive a registrable domain from. Force it with
-  `LEMMA_LOCAL_DOMAIN=lemma.localhost` to see the fallback behave.
+- **Framing on `lemma.localhost`.** The embedded test skips: WebKit treats
+  every `*.localhost` host as its own site, so an app framed on its own address
+  is third-party by construction. The macOS workspace frames a same-site alias
+  from locald instead, and `make desktop-app-alias-proof` proves that in
+  WKWebView (see `desktop/e2e/app_alias_proof/README.md`).
 
 **`desktop-e2e` runs against whatever install is running** and *hard-fails*
 rather than skipping when it cannot find one. That is on purpose — a lane that

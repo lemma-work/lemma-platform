@@ -402,9 +402,91 @@ The backend bridge receives the runtime manager's configured WSL distribution
 alongside the installation's control socket and capability file. It must not
 fall back to the default distribution for a separate installation.
 
-The same `app.lemma.localhost` hostname is used for frontend and API on
-different ports to satisfy WKWebView cookie behavior. The CLI obtains endpoints
+### 6.1 Domains
+
+Everything is served under `lemma.localhost` (`locald/src/local_domain.rs`):
+
+| Host | Serves |
+| --- | --- |
+| `app.lemma.localhost:<frontend port>` | the workspace |
+| `app.lemma.localhost:<backend port>` | the API |
+| `<slug>.apps.lemma.localhost:<backend port>` | a pod app, routed by `Host` in the backend |
+| `app.lemma.localhost:<alias port>` | a pod app framed by the macOS workspace (below) |
+
+One host for the workspace and the API, on two ports, so the two are one site
+in every engine. `*.localhost` is loopback by resolver convention and resolved
+by the webview itself, so nothing here depends on DNS or on the network being
+up, no hostname leaves the machine, and every engine treats the workspace as a
+secure context over plain `http` (microphone, async clipboard, `crypto.subtle`).
+The session cookie is `Domain=lemma.localhost`, HttpOnly, SameSite=Lax, so it
+reaches the app hosts too; apps call the API through their own origin at
+`/_lemma` (`APP_API_VIA_APP_ORIGIN`, always on here). The CLI obtains endpoints
 from locald status/state.
+
+An earlier build served the public loopback wildcard `127.0.0.1.sslip.io`
+instead, which needed public DNS, showed every app hostname to a third party,
+and lost the secure context. It is gone; see 6.3.
+
+### 6.2 Pod apps
+
+The APIs return an app's canonical URL,
+`http://<slug>.apps.lemma.localhost:<backend port>`, built from
+`APP_BASE_DOMAIN` exactly as a hosted deployment builds `*.apps.lemma.work`.
+That URL works top-level everywhere, and framed in Chromium, Edge and
+WebView2, which treat `*.lemma.localhost` as one site.
+
+WebKit does not. It derives a site from CFNetwork's list of top-level domains,
+where `localhost` is not one, so every `*.localhost` *host* is its own site: an
+app on `<slug>.apps.lemma.localhost` framed by `app.lemma.localhost` is
+third-party and WebKit sends it no cookies. The same host on another port is
+same-site. So the macOS workspace frames an **alias**:
+
+1. The workspace, about to frame an app next to the agent, asks the shell
+   (`app_frame_url`, local workspace only) for the frame address.
+2. On macOS the shell asks locald (`app-alias.resolve`) and gets
+   `http://app.lemma.localhost:<alias port>/<same path>`; elsewhere it returns
+   the canonical URL unchanged.
+3. The alias port is a loopback listener in locald (`locald/src/app_alias`)
+   that forwards to `127.0.0.1:<backend port>` with `Host` rewritten to the
+   canonical app host, so the backend routes it like any app request. A
+   `Location` pointing at the canonical origin is rewritten to the alias; any
+   other `Host` is refused (421).
+4. The app's SDK has a relative `apiUrl` (`/_lemma`), so its API calls go to the
+   alias origin, and the `Domain=lemma.localhost` cookie is sent: same host,
+   same site.
+
+The shell lets only alias ports it handed out load, and only in a frame: an
+alias reaching the top frame sends the window back to the workspace and opens
+the app in its own window, and a new-window request from one opens the
+canonical app window. Alias ports live in `locald/app-aliases.json` (not
+`network.json`, which an older locald would reject and answer by reallocating
+the workspace's ports). One port per app host, taken from the OS when first
+needed and asked for again by number on the next start, so the alias -- and
+the app's origin, and its `localStorage` -- stays put; a port something else
+took meanwhile is replaced. At most 16 apps hold an alias; one more evicts the
+least recently used, whose listener closes. Where no alias can be had (an older
+shell), the app opens in its own window, top-level and signed in. `make
+desktop-app-alias-proof` proves the arrangement in WKWebView.
+
+LAN and public sharing are unchanged: the shell does not answer a shared
+origin, so a shared workspace frames canonical URLs, and alias listeners bind
+loopback only.
+
+### 6.3 Migrating from `127.0.0.1.sslip.io`
+
+- locald rewrites recorded workspace and API URLs on the retired host to
+  `app.lemma.localhost`, same port (`state.rs`).
+- The Agent Host moves a local pairing's `base_url` the same way when it loads
+  its config.
+- Before the first navigation to the workspace, the shell copies every cookie
+  its webview holds under `127.0.0.1.sslip.io` onto the matching
+  `lemma.localhost` name and deletes the original (`cookie_migration.rs`),
+  once, logged to the install log. People stay signed in.
+- `localStorage` and IndexedDB are per origin and cannot be moved: the
+  workspace's local preferences (open tabs, last pod, collapsed panes) reset
+  once.
+- `SESSION_COOKIE_OLDER_DOMAIN` stays `""`, which clears a host-only cookie an
+  install from before the `Domain` cookie may still hold.
 
 ## 7. Exact process ownership
 
@@ -500,7 +582,13 @@ Each command is granted to a webview by a capability in
   in local mode, on the origin this app navigated to, and that origin a
   shipped loopback workspace host (or the debug-only `LEMMA_DESKTOP_LOCAL_URL`)
   whose name still resolves only to loopback when the command is called.
-  Refuses the hosted site and any shared LAN or tunnel origin.
+  Refuses the hosted site, any shared LAN or tunnel origin, and a pod-app
+  alias (same host, another port).
+
+`capabilities/workspace.json` lists only the hosted site. The local workspace
+is granted the same permissions at runtime on its exact origin, port included
+(`local_workspace_capability`), when locald names it: a static file could only
+say `http://app.lemma.localhost:*`, which would also match every alias port.
 - **settings**: `require_settings_caller` — control, or local workspace.
 - **agent host**: `require_agent_host_caller` — control, the splash, or the
   workspace on the origin this app navigated to: the hosted site in hosted
@@ -525,6 +613,7 @@ Each command is granted to a webview by a capability in
 | `telemetry_status`, `set_telemetry_enabled` | control, workspace | settings | |
 | `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Onboarding and the Models suggestions |
 | `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |
+| `app_frame_url` | workspace | local workspace | The address to frame a pod app at: its locald alias on macOS, its own URL elsewhere. Refuses anything but this install's own apps; see §6.2 |
 | `open_control_center` | main, workspace | page name validated | |
 | `sharing_action` | control | control | Local settings' sharing: the same request builder and native questions as `local_sharing` |
 | `control_snapshot`, `agent_host_action`, `runtime_info`, `start`, `stop`, `restart`, `open_developer_tools`, `close_local_settings`, `confirm_destructive_action` | control (some also main) | control or native page | Local settings only |

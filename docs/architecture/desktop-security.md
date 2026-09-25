@@ -372,23 +372,44 @@ until `sandbox.ensure` next replaces them; a guest restart does.
 ## The Tauri IPC origin rule
 
 The workspace page is a remote origin to Tauri, and reaches the shell only
-through a capability that names this Mac's own local workspace hosts
-(`capabilities/workspace.json`). A shared origin — the LAN address or the
-tunnel host — is absent from that capability, and that ACL is what keeps it
-out. The Agent Host commands' Rust check (`require_agent_host_caller`) compares
-the page with the origin the app navigated to, which *while sharing is on is
-the shared origin* — so on its own it would not refuse one; it exists for a
-capability pattern written too loosely, not for sharing. The capability's `:*`
-port also matches the API port on the same host; the Rust checks pin the exact
-workspace origin, so a page served by the API is refused there.
+through a capability that names it. For the local workspace that capability is
+minted at runtime, on the workspace's exact origin with its port
+(`local_workspace_capability` in `desktop/src/workspace.rs`), once locald has
+named it; `capabilities/workspace.json` itself lists only the hosted site. A
+shared origin — the LAN address or the tunnel host — is in no capability, and
+that ACL is what keeps it out. The Agent Host commands' Rust check
+(`require_agent_host_caller`) compares the page with the origin the app
+navigated to, which *while sharing is on is the shared origin* — so on its own
+it would not refuse one; it exists for a capability written too loosely, not
+for sharing. It compares full origins, port included.
+
+Why exact, and not `http://app.lemma.localhost:*`: on macOS pod apps are framed
+through **alias ports on the workspace's own host** (see
+[Desktop architecture §6.2](desktop.md#62-pod-apps)) — user-authored code on
+`http://app.lemma.localhost:<alias port>`, inside the very window the
+capability is granted to. Tauri judges a frame's IPC by the frame's own origin,
+so a port wildcard would have matched it; the exact origin does not, and every
+Rust caller check compares the whole origin as well. The invoke key Tauri
+injects into the top frame only is a further barrier, not the one relied on.
+
+What an alias origin does share with the workspace is the *host*, and cookies
+ignore ports: a framed app can read and overwrite the workspace's non-HttpOnly,
+host-only cookies (SuperTokens' `sFrontToken`, which carries the access-token
+payload and no credential) and set cookies the API on the same host will
+receive. That is no wider than what any pod app already has: every app host is
+inside the `Domain=lemma.localhost` session cookie's scope, so an app can toss
+a cookie at the API from its canonical host too, and it acts as the signed-in
+person through `/_lemma` by design. HttpOnly session cookies stay unreadable.
+An alias listener binds loopback only, forwards only to this installation's
+app ingress, and answers 421 to any `Host` but its own, so a page that rebinds
+its own name to 127.0.0.1 gets nothing from it.
 
 The This Mac settings commands check more narrowly: local mode, the loopback
 workspace origin this app navigated to, and — asked again at the moment of the
 call — a host that resolves to loopback and nothing else
-(`page_host_is_loopback`). The last matters for the public wildcard
-`app.127.0.0.1.sslip.io`, which is loopback only because public DNS says so; a
-network that answers differently later would otherwise put its own page on the
-origin those commands trust. It is not proof against a DNS-rebinding race.
+(`page_host_is_loopback`). The shipped host is `app.lemma.localhost`, loopback
+by resolver convention, so nothing in this rule depends on DNS; the re-check
+matters only for a development override served on some other name.
 The app's own window, once sharing has moved it to the shared address, is
 refused, turns sharing off from the native Local settings, and does not try
 the shell at all (`onShellOrigin` in `lemma-frontend/src/desktop/bridge.ts`).
