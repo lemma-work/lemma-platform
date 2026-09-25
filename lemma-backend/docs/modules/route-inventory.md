@@ -207,7 +207,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/{organization_id}/invitations` | `org.invitation.list` | List Organization Invitations |
 | GET | `/organizations/{organization_id}/members` | `org.member.list` | List Organization Members |
 | GET | `/users/me` | `user.current.get` | Get Current User |
-| GET | `/users/me/installation` | `user.installation.get` | Get Installation |
 | GET | `/users/me/profile` | `user.profile.get` | Get User Profile |
 | PATCH | `/organizations/{organization_id}` | `org.update` | Update Organization |
 | PATCH | `/organizations/{organization_id}/members/{member_id}/role` | `org.member.update_role` | Update Member Role |

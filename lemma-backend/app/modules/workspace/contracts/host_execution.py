@@ -1,7 +1,7 @@
 """Host execution, as the agent module drives it.
 
 See docs/architecture/desktop-host-execution.md. The agent module decides that
-a run executes on the owner's Mac (§2); this is how it then opens the run's
+a run executes on the user's Mac (§2); this is how it then opens the run's
 host sandbox and learns its root. Tool sessions on it come from
 ``get_workspace_tool_runtime().get_host_session``.
 """

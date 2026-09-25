@@ -54,7 +54,7 @@ def _for_host_execution(
     toolsets: list[AbstractToolset[ConversationContext]],
     mode: HostExecutionMode,
 ) -> list[AbstractToolset[ConversationContext]]:
-    """The toolsets of a run whose commands execute on the owner's Mac."""
+    """The toolsets of a run whose commands execute on the user's Mac."""
     had_shell = any(is_workspace_cli_toolset(toolset) for toolset in toolsets)
     if mode == "native":
         toolsets = [t for t in toolsets if not is_workspace_cli_toolset(t)]
@@ -82,7 +82,7 @@ class RunToolAssembler:
         """Every tool this (agent, conversation) can reach.
 
         ``host_execution`` is set on a run whose commands execute on the
-        owner's Mac (docs/architecture/desktop-host-execution.md §7):
+        user's Mac (docs/architecture/desktop-host-execution.md §7):
 
         * ``"native"`` -- an Agent Host run. Lemma's command tools are withheld:
           the coding agent already has a shell and file tools in the same

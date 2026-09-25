@@ -96,9 +96,9 @@ of it renders nothing in a browser.
   An optional `focus` names the part to open at (Advanced's Google form).
 - **This Mac settings.** A third group in Settings, after You and the
   organization, named with the machine's noun: Overview, Coding agents,
-  Sharing, Updates, Advanced. Only in the app, on a local install, for the
-  installation owner, on this installation's loopback origin
-  (`thisMacAvailability` in `this-mac.ts`); a guest sees no hint of it. Each
+  Sharing, Updates, Advanced. Only in the app's own window, on a local
+  install, on this installation's loopback origin (`thisMacAvailability` in
+  `this-mac.ts`); a browser or a shared-address visitor sees no hint of it. Each
   setting is one row — its name, one line of what it does, its control — in
   `.thismac-row`; choices reuse `.theme__modes`, lists `.mgroup`/`.mrow`,
   fields `.field`/`.check`. No environment-variable names in copy.

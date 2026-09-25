@@ -131,24 +131,24 @@ def _directory_sections(
 
 
 def _host_directory_section(root: str) -> str:
-    """Where a run that executes on the owner's Mac is, and what that means.
+    """Where a run that executes on the user's Mac is, and what that means.
 
     docs/architecture/desktop-host-execution.md §7: the agent is told it is on
-    the owner's Mac, where its root is, and that the browser is a different
+    the user's Mac, where its root is, and that the browser is a different
     machine -- otherwise it reaches for the sandbox habits the VM section
     teaches, or tries to drive a browser on a computer that has none for it.
     """
     return (
         "# Working Directory\n"
-        "Your commands and files run **on the owner's own Mac**, not in a "
+        "Your commands and files run **on the user's own Mac**, not in a "
         f"sandbox. Your working directory is {_prompt_path(root)}, a real "
-        "folder on that computer; relative paths resolve there. The owner's "
+        "folder on that computer; relative paths resolve there. The user's "
         "tools are on the `PATH` as in their own terminal, and `git` and `gh` "
         "are already signed in as them -- don't configure either.\n\n"
         "You can read broadly, but writes are confined to this folder, the "
         "temporary directory and package-manager caches, and credential "
         "stores such as `~/.ssh` cannot be read at all. A refusal is that "
-        "boundary, not a bug to work around. This is the owner's machine: "
+        "boundary, not a bug to work around. This is the user's machine: "
         "don't install things globally, and don't delete what you did not "
         "create.\n\n"
         "Persistent Python sessions are not available here; run `python3` "

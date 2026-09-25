@@ -25,7 +25,7 @@ fn the_local_workspace_reaches_this_computers_settings() {
 
 #[test]
 fn a_shared_origin_is_refused_even_while_the_app_points_at_it() {
-    // Sharing moves the canonical origin, and the owner's window with it. The
+    // Sharing moves the canonical origin, and the app's window with it. The
     // workspace URL then *is* the shared one, so matching it alone would hand
     // this computer's settings to the address every visitor loads.
     for shared in [

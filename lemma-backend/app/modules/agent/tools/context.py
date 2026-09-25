@@ -56,7 +56,7 @@ class BaseAgentContext(AgentContext):
     # `/me/c/{date}/{slug}`. Relative pod tool paths resolve against this.
     pod_cwd: str | None = None
     # Set when this run's commands and files execute on the installation
-    # owner's Mac rather than in the VM (docs/architecture/
+    # user's Mac rather than in the VM (docs/architecture/
     # desktop-host-execution.md). Chosen once, when the run's context is built,
     # and carried for every tool call of the run: a run never moves between
     # the two. The browser stays in the VM whatever this says.
@@ -102,7 +102,7 @@ class BaseAgentContext(AgentContext):
 
     @property
     def host_execution_mode(self) -> Literal["native", "sandbox"] | None:
-        """How this run's commands reach the owner's Mac, if they do.
+        """How this run's commands reach the user's Mac, if they do.
 
         ``"native"``: an Agent Host run whose own tools are on the Mac.
         ``"sandbox"``: an in-process run whose ``exec_command`` runs there.

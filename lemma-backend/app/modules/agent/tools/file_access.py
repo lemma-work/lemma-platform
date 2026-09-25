@@ -120,7 +120,7 @@ async def read_workspace_file_bytes(
 def _on_the_host(deps: BaseAgentContext, path: str) -> bool:
     """On a host-execution run, whether ``path`` names a file on the Mac.
 
-    Such a run has two filesystems: its own folder on the owner's Mac, and the
+    Such a run has two filesystems: its own folder on the user's Mac, and the
     VM workspace where the browser saves screenshots. A path under the VM's home
     (``/home/user/...``) is the VM's; everything else, relative paths included,
     is the Mac's -- that is where the run's commands wrote it.

@@ -213,7 +213,7 @@ class WorkspaceToolRuntime:
         """A session on the owner's host sandbox, rooted at ``root``.
 
         None of the VM session's preparation applies: there is no runtime
-        bundle to install and no browser proxy to start on the owner's Mac, and
+        bundle to install and no browser proxy to start on the user's Mac, and
         the root already exists because opening the workspace made it. The
         environment is the same delegated one, cached the same way, so the
         owner's own `lemma` CLI works if they have it.

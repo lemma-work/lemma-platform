@@ -39,12 +39,13 @@ def build_provider(name: str | None = None):
 
 
 def _with_host_execution(provider):
-    """On a Desktop install, put the owner's Mac beside the configured fabric.
+    """On a Desktop install, put this Mac beside the configured fabric.
 
     Only host sandboxes -- ids minted by ``domain/host_execution`` for a run the
     agent module chose to execute on the host -- ever reach the second
     provider, so every other sandbox behaves exactly as before. Off Desktop
-    there is no owner and no Mac, and the configured provider is returned as-is.
+    there is no Mac beside the backend, and the configured provider is returned
+    as-is.
     """
     from app.modules.identity.contracts.installation import is_desktop_installation
 

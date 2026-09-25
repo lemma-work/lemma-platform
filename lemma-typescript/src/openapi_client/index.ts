@@ -189,7 +189,6 @@ export { ImportStatus } from './models/ImportStatus.js';
 export type { ImportStatusResponse } from './models/ImportStatusResponse.js';
 export type { InstallationBindSchema } from './models/InstallationBindSchema.js';
 export type { InstallationChoiceSchema } from './models/InstallationChoiceSchema.js';
-export { InstallationResponse } from './models/InstallationResponse.js';
 export type { InstalledAppSummary } from './models/InstalledAppSummary.js';
 export type { InstallRequestInitiateSchema } from './models/InstallRequestInitiateSchema.js';
 export type { InstallRequestResponseSchema } from './models/InstallRequestResponseSchema.js';

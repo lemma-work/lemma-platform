@@ -31,7 +31,7 @@ use super::*;
 ///
 /// The last one is the reason this exists. While sharing is on, locald moves
 /// the canonical origin -- and with it `workspace` -- to the LAN address or the
-/// tunnel host, and the owner's own window follows it there. Matching
+/// tunnel host, and the app's own window follows it there. Matching
 /// `workspace` alone would then accept that shared origin, which is the one a
 /// visitor's device loads too.
 pub(crate) fn local_settings_origin_allowed(
@@ -384,7 +384,7 @@ fn set_host_execution_impl(app: AppHandle, enabled: bool) -> Result<Value, Strin
 }
 
 #[tauri::command]
-/// "Run commands on this Mac": an owner's agent commands on the host, under
+/// "Run commands on this Mac": the paired user's agent commands on the host, under
 /// Seatbelt, instead of in the VM. A daemon round trip, so off the UI thread.
 pub(crate) async fn set_host_execution(
     window: Webview,

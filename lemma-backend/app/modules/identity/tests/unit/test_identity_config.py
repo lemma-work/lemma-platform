@@ -47,11 +47,6 @@ EXPECTED = [
     ("microsoft_client_id", "MICROSOFT_CLIENT_ID", None),
     ("microsoft_client_secret", "MICROSOFT_CLIENT_SECRET", None),
     ("microsoft_tenant_id", "MICROSOFT_TENANT_ID", None),
-    (
-        "installation_owner_reservation_seconds",
-        "INSTALLATION_OWNER_RESERVATION_SECONDS",
-        600,
-    ),
     ("organization_home_cache_ttl_seconds", "ORGANIZATION_HOME_CACHE_TTL_SECONDS", 30),
     ("session_cookie_domain", "SESSION_COOKIE_DOMAIN", None),
     ("session_cookie_older_domain", "SESSION_COOKIE_OLDER_DOMAIN", None),

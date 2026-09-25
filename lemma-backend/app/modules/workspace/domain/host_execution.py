@@ -1,8 +1,9 @@
-"""Host sandboxes: a workspace whose commands run on the owner's Mac.
+"""Host sandboxes: a workspace whose commands run on the user's Mac.
 
 See docs/architecture/desktop-host-execution.md. A host sandbox is an ordinary
 sandbox row -- same lifecycle, same state machine -- whose compute is a folder
-on the installation owner's computer, reached through their Agent Host.
+on the computer of the user a run is for, reached through the Agent Host
+paired to them.
 
 **The choice is in the id.** A host sandbox's id is a UUIDv8 carrying a fixed
 tag, derived from the conversation it serves. Nothing else this platform mints
@@ -12,7 +13,7 @@ for the life of the sandbox, and needs no lookup on the hot path. That is the
 contract's "recorded on the sandbox": an operation on a host sandbox can only
 ever go to the host, and one on any other sandbox never can.
 
-**One per conversation.** The root is per conversation (§5), and the owner's
+**One per conversation.** The root is per conversation (§5), and the user's
 ordinary VM workspace -- where their browser lives -- keeps its own id. A run
 that executes on the host therefore uses two sandboxes: this one for commands
 and files, and the VM one for the browser.

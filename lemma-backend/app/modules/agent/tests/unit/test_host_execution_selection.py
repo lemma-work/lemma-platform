@@ -30,7 +30,7 @@ from app.modules.agent.services.host_execution_selection import (
     default_folder,
     host_runs_native_commands,
     recorded_host_workspace,
-    triggered_by_owner,
+    triggered_by_run_user,
 )
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.browser.vm_browser import vm_browser_toolset
@@ -46,7 +46,9 @@ from app.modules.workspace.contracts.host_execution import (
     host_sandbox_id,
 )
 
-OWNER = uuid4()
+#: The user this Mac's Agent Host is paired to.
+PAIRED = uuid4()
+#: Somebody else on the same installation, with no host of their own.
 TEAMMATE = uuid4()
 HOST = uuid4()
 ROOT = "/Users/owner/lemma/c/2026-09-25/abc12345"
@@ -59,25 +61,25 @@ class Facts:
         self,
         *,
         desktop: bool = True,
-        owner: UUID = OWNER,
+        hosts: dict[UUID, UUID] | None = None,
         host: UUID | None = HOST,
         opens: bool = True,
     ) -> None:
         self.desktop = desktop
-        self.owner = owner
-        self.host = host
+        # Which usable host each user is paired to. `host=None` states "the
+        # paired user's host is offline, off or unavailable".
+        self.hosts = (
+            hosts if hosts is not None else ({PAIRED: host} if host else {})
+        )
         self.opens = opens
         self.opened: list[dict] = []
         self.records: dict[UUID, dict] = {}
         self.host_lookups = 0
 
     def build(self) -> HostExecutionFacts:
-        async def is_owner(user_id: UUID) -> bool:
-            return self.desktop and user_id == self.owner
-
         async def usable_host(user_id: UUID) -> UUID | None:
             self.host_lookups += 1
-            return self.host
+            return self.hosts.get(user_id)
 
         async def recorded(run_id: UUID) -> dict | None:
             return self.records.get(run_id)
@@ -95,7 +97,6 @@ class Facts:
 
         return HostExecutionFacts(
             is_desktop=lambda: self.desktop,
-            is_owner=is_owner,
             usable_host=usable_host,
             open_workspace=open_workspace,
             recorded=recorded,
@@ -103,7 +104,7 @@ class Facts:
         )
 
 
-def _conversation(user_id: UUID = OWNER, **metadata) -> Conversation:
+def _conversation(user_id: UUID = PAIRED, **metadata) -> Conversation:
     return Conversation(
         user_id=user_id,
         pod_id=uuid4(),
@@ -125,7 +126,7 @@ async def _choose(
     *,
     conversation: Conversation | None = None,
     source: str | None = "user_message",
-    user_id: UUID = OWNER,
+    user_id: UUID = PAIRED,
     run: AgentRun | None = None,
 ):
     conversation = conversation or _conversation()
@@ -140,13 +141,13 @@ async def _choose(
 # ------------------------------------------------------------- truth table
 
 
-async def test_the_owners_own_message_runs_on_their_mac():
+async def test_the_paired_users_own_message_runs_on_their_mac():
     facts = Facts()
     chosen = await _choose(facts)
 
     assert chosen is not None and chosen.root == ROOT
     assert facts.opened[0]["host_id"] == HOST
-    assert facts.opened[0]["owner_id"] == OWNER
+    assert facts.opened[0]["owner_id"] == PAIRED
     assert (facts.opened[0]["day"], facts.opened[0]["slug"]) == (
         "2026-09-25",
         "abc12345",
@@ -154,7 +155,8 @@ async def test_the_owners_own_message_runs_on_their_mac():
     assert facts.opened[0]["root_hint"] is None
 
 
-async def test_a_non_owner_never_runs_on_the_host_even_in_the_owners_install():
+async def test_a_user_with_no_paired_host_never_runs_on_the_host():
+    """Somebody else on the same installation: no pairing, no host."""
     facts = Facts()
     conversation = _conversation(user_id=TEAMMATE)
 
@@ -162,9 +164,21 @@ async def test_a_non_owner_never_runs_on_the_host_even_in_the_owners_install():
     assert facts.opened == []
 
 
-async def test_a_run_not_acting_as_the_conversations_owner_does_not_qualify():
-    """A run triggered or steered by someone else is not the owner's run."""
-    facts = Facts()
+async def test_each_user_runs_only_on_the_host_paired_to_them():
+    """No account is special: a teammate with a host of their own uses it."""
+    theirs = uuid4()
+    facts = Facts(hosts={PAIRED: HOST, TEAMMATE: theirs})
+    conversation = _conversation(user_id=TEAMMATE)
+
+    assert await _choose(facts, conversation=conversation, user_id=TEAMMATE)
+    assert facts.opened[0]["host_id"] == theirs
+    assert facts.opened[0]["owner_id"] == TEAMMATE
+
+
+async def test_a_run_not_acting_as_the_conversations_user_does_not_qualify():
+    """A run acting as someone other than the conversation's user never does,
+    even when that someone has a paired host."""
+    facts = Facts(hosts={PAIRED: HOST, TEAMMATE: uuid4()})
     assert await _choose(facts, user_id=TEAMMATE) is None
     assert facts.opened == []
 
@@ -215,14 +229,14 @@ async def test_a_hosted_deployment_never_runs_on_a_host():
         ("something_new", None, False),
     ],
 )
-def test_which_run_sources_count_as_the_owner(source, started_by, expected):
+def test_which_run_sources_count_as_the_run_user(source, started_by, expected):
     conversation = _conversation(**({"started_by": started_by} if started_by else {}))
-    assert triggered_by_owner(conversation, _run(conversation, source)) is expected
+    assert triggered_by_run_user(conversation, _run(conversation, source)) is expected
 
 
-def test_a_sub_agent_conversation_is_not_the_owner_at_the_keyboard():
+def test_a_sub_agent_conversation_is_not_a_person_at_the_keyboard():
     conversation = _conversation(is_sub_agent=True)
-    assert not triggered_by_owner(conversation, _run(conversation))
+    assert not triggered_by_run_user(conversation, _run(conversation))
 
 
 async def test_a_bound_folder_is_the_root_hint():
@@ -240,7 +254,7 @@ def test_a_conversation_without_a_dated_cwd_still_gets_a_folder():
     assert day == "2026-09-25" and slug == conversation.id.hex[:8]
 
 
-async def test_agent_host_runs_drop_lemmas_command_tools_only_for_the_owner():
+async def test_agent_host_runs_drop_lemmas_command_tools_only_with_a_paired_host():
     assert await host_runs_native_commands(_conversation(), facts=Facts().build())
     assert not await host_runs_native_commands(
         _conversation(user_id=TEAMMATE), facts=Facts().build()
@@ -305,7 +319,7 @@ def test_no_browser_tool_for_an_agent_that_never_had_a_shell():
 
 def _ctx(**fields) -> ConversationContext:
     return ConversationContext(
-        user_id=OWNER,
+        user_id=PAIRED,
         pod_id=uuid4(),
         conversation_id=uuid4(),
         workspace_cwd="/home/user/lemma/c/2026-09-25/abc12345",
@@ -313,7 +327,7 @@ def _ctx(**fields) -> ConversationContext:
     )
 
 
-def test_a_host_run_is_told_it_is_on_the_owners_mac_and_where():
+def test_a_host_run_is_told_it_is_on_the_users_mac_and_where():
     ctx = _ctx(host_workspace=HostWorkspace(sandbox_id=uuid4(), root=ROOT))
     sections = _directory_sections(
         ctx=ctx,
@@ -323,7 +337,7 @@ def test_a_host_run_is_told_it_is_on_the_owners_mac_and_where():
     )
     text = "\n".join(sections)
 
-    assert "on the owner's own Mac" in text
+    assert "on the user's own Mac" in text
     assert f"`{ROOT}`" in text
     assert "separate machine" in text and "localhost" in text
     assert "/home/user/lemma" not in sections[0]
@@ -337,7 +351,7 @@ def test_a_vm_run_keeps_its_sandbox_section():
         enabled={AgentToolset.WORKSPACE_CLI},
         runs_as_remote_process=False,
     )
-    assert "owner's own Mac" not in sections[0]
+    assert "user's own Mac" not in sections[0]
     assert "/home/user/lemma/c/2026-09-25/abc12345" in sections[0]
 
 
@@ -352,7 +366,7 @@ def test_an_agent_host_run_with_host_execution_is_not_sent_to_sandbox_tools():
 
     runtime = load_agent_host_runtime_prompt(host_execution=True)
     assert "lemma_exec_command" not in runtime
-    assert "on the owner's own Mac" in runtime
+    assert "on the user's own Mac" in runtime
     # The sections that are not about commands are the shared ones.
     assert "ends the turn and resumes later" in runtime
     assert "lemma_exec_command" in load_agent_host_runtime_prompt()

@@ -1,7 +1,7 @@
 """The Agent Host link, as the workspace module needs it for host execution.
 
 See docs/architecture/desktop-host-execution.md. The workspace's host provider
-sends each sandbox operation as an ``op`` over the owner's link; selection asks
+sends each sandbox operation as an ``op`` over the host's link; selection asks
 which of a user's hosts can take them. Both are published here rather than
 reached into, so the link's internals stay the agent module's to change.
 """

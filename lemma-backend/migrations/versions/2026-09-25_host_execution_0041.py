@@ -3,9 +3,9 @@
 See docs/architecture/desktop-host-execution.md.
 
 **`agent_hosts.capabilities`.** The host reports `host_execution: {enabled,
-platform, available}` with its `hello` (and again in a heartbeat when the owner
-flips the setting). Selection reads it to decide whether an owner's run may
-execute on their Mac. JSON rather than columns because it is the host's report
+platform, available}` with its `hello` (and again in a heartbeat when the
+setting is flipped). Selection reads it to decide whether a run of the user the
+host is paired to may execute on their Mac. JSON rather than columns because it is the host's report
 verbatim, open to fields a newer host adds.
 
 **`sandbox_host_bindings`.** A host sandbox is an ordinary `sandboxes` row whose
@@ -15,16 +15,16 @@ remembers the root the host answered with. `host_id` has no foreign key: the
 host table belongs to another module, and a revoked host is answered by an op
 failing, not by a binding vanishing mid-run.
 
-Revision ID: 0042_host_execution
-Revises: 0041_installation_owner
+Revision ID: 0041_host_execution
+Revises: 0040_agent_host_link_generation
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0042_host_execution"
-down_revision = "0041_installation_owner"
+revision = "0041_host_execution"
+down_revision = "0040_agent_host_link_generation"
 branch_labels = None
 depends_on = None
 

@@ -1,6 +1,6 @@
-"""One provider in front of two: the deployment's own, and the owner's Mac.
+"""One provider in front of two: the deployment's own, and the user's Mac.
 
-A Desktop local install runs most sandboxes in its VM and an owner's host
+A Desktop local install runs most sandboxes in its VM and a paired user's host
 sandboxes on the Mac (docs/architecture/desktop-host-execution.md). The service
 above was written for one provider per deployment and stays that way: this
 answers every provider call by routing it on the sandbox it names.

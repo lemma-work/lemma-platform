@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { REDACTED, blank, fields, isSecretName, payload, problems, unchangedSecret } from "../src/connect/schema.ts";
 import {
-    canBringOwnApp, connectRoute, connectSchema, discoveryNote, installSchema,
-    isBringYourOwn, kindNamed, needsOwnApp, urlRefusal,
+    canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName,
+    connectorProblem, installSchema, isBringYourOwn, isTenantConfigured, kindFor, kindNamed, needsOwnApp, primaryKind, urlRefusal,
     type CatalogEntry, type ConnectorKind,
 } from "../src/connect/install.ts";
 
@@ -133,6 +133,9 @@ test("the install decides how to connect, not its catalogue entry", () => {
     assert.equal(connectRoute({ id: "b", connector_id: "gmail", kind: "composio", name: "Gmail", auth_scheme: "API_KEY" }, composioManaged), "credentials");
     // Nothing said anywhere: the browser round trip is the older default.
     assert.equal(connectRoute(null, null), "redirect");
+    // No credential is still a credential post. The backend refuses a connect
+    // request for anything but OAuth, so a redirect here could never finish.
+    assert.equal(connectRoute(null, { kind: "http", auth_scheme: "NOAUTH" }), "credentials");
 });
 
 test("a toolkit Composio holds no credentials for needs the org's own app first", () => {
@@ -143,8 +146,15 @@ test("a toolkit Composio holds no credentials for needs the org's own app first"
     assert.equal(needsOwnApp(unmanaged), true);
     assert.equal(needsOwnApp(composioManaged), false);
     assert.equal(needsOwnApp(mcpKind), false);
-    assert.equal(canBringOwnApp(composioManaged), true);
+    // Only where the org's app is the way in. A managed toolkit runs on
+    // Lemma's Composio account, and the backend refuses an org-supplied one.
+    assert.equal(canBringOwnApp(unmanaged), true);
+    assert.equal(canBringOwnApp(composioManaged), false);
     assert.equal(canBringOwnApp(mcpKind), false);
+    // A native OAuth app needs endpoints from the catalogue as well as the flag.
+    const native: ConnectorKind = { kind: "http", auth_scheme: "OAUTH2", supports_org_custom_oauth: true };
+    assert.equal(canBringOwnApp(native), false);
+    assert.equal(canBringOwnApp({ ...native, oauth2_defaults: { authorization_endpoint: "https://x" } }), true);
 });
 
 test("what an organization points at itself is told apart by kind, not by id", () => {
@@ -154,6 +164,53 @@ test("what an organization points at itself is told apart by kind, not by id", (
     assert.equal(isBringYourOwn(gmail), false);
     assert.equal(isBringYourOwn(mcp), true);
     assert.equal(isBringYourOwn({ id: "x", title: "X" }), false);
+});
+
+test("http is not always an address somebody supplies", () => {
+    // GitHub is `http` with Lemma's own OAuth client; WhatsApp is `http` with a
+    // bot token and an empty install schema. "Not Composio" filed both as a
+    // server to add, and the add form asked each for an address it has not got.
+    const github: ConnectorKind = { kind: "http", auth_scheme: "OAUTH2", system_default_available: true, config_schema: { type: "object", properties: { client_id: { type: "string" } } } };
+    const whatsapp: ConnectorKind = { kind: "http", auth_scheme: "API_KEY", system_default_available: true, config_schema: { type: "object", properties: {} } };
+    const openapi: ConnectorKind = { kind: "http", auth_scheme: "API_KEY", config_schema: { type: "object", properties: { spec_url: { type: "string" } } } };
+
+    assert.equal(isTenantConfigured(github), false);
+    assert.equal(isTenantConfigured(whatsapp), false);
+    assert.equal(isTenantConfigured(openapi), true);
+    assert.equal(isBringYourOwn({ id: "github", title: "GitHub", kinds: [github] }), false);
+});
+
+test("an install is made for whoever connects first, where Lemma can make one", () => {
+    // The backend never creates an install on a connect request — it only
+    // looks one up — so the client has to know when it may create Lemma's own.
+    const unmanaged: ConnectorKind = { ...composioManaged, system_default_available: false };
+    const bot: ConnectorKind = { kind: "http", auth_scheme: "API_KEY", system_default_available: true, config_schema: { type: "object", properties: {} } };
+    const database: ConnectorKind = { kind: "sql", auth_scheme: "API_KEY", system_default_available: true, config_schema: { type: "object", required: ["host"], properties: { host: { type: "string" } } } };
+
+    assert.equal(canInstallWithDefaults(composioManaged), true);
+    assert.equal(canInstallWithDefaults(bot), true);
+    assert.equal(canInstallWithDefaults(unmanaged), false);
+    // "System default available" is set from "not OAuth" and says nothing
+    // about a database that still needs a host.
+    assert.equal(canInstallWithDefaults(database), false);
+    assert.equal(canInstallWithDefaults(null), false);
+});
+
+test("with no install yet, the kind is Composio where it is offered", () => {
+    const two: CatalogEntry = { id: "both", title: "Both", kinds: [mcpKind, composioManaged] };
+
+    assert.equal(primaryKind(two)?.kind, "composio");
+    assert.equal(kindFor(two, null)?.kind, "composio");
+    // An install names its own kind, and that is the one it runs under.
+    assert.equal(kindFor(two, { id: "i", connector_id: "both", kind: "mcp", name: "x" })?.kind, "mcp");
+});
+
+test("a second install of a connector is not given the first one's name", () => {
+    // An unnamed install is named after its connector, and names are unique
+    // per organization — so the org's own app beside Lemma's was refused.
+    assert.equal(freshInstallName("gmail", []), "gmail");
+    assert.equal(freshInstallName("gmail", ["gmail"]), "gmail-2");
+    assert.equal(freshInstallName("gmail", ["gmail", "gmail-2"]), "gmail-3");
 });
 
 test("a kind is only chosen when the choice is unambiguous", () => {
@@ -181,4 +238,33 @@ test("zero operations means three different things", () => {
 test("a refused address says which rule it broke", () => {
     assert.match(urlRefusal("Unsafe URL: host resolves to a private address") ?? "", /reachable from the internet/);
     assert.equal(urlRefusal("Something else entirely went wrong"), null);
+});
+
+/* ── coming back from the provider ──────────────────────────────────── */
+
+test("the provider's tab comes back to the completion page, carrying where it started", async () => {
+    const { completionPath, outcomeNote } = await import("../src/connect/round-trip.ts");
+    // A rooted path: the API refuses a `return_to` with a host in it, and
+    // without one the callback lands on the app root in the provider's tab.
+    const path = completionPath("/t?settings=connectors");
+    assert.equal(path, "/oauth/complete?from=%2Ft%3Fsettings%3Dconnectors");
+    assert.equal(new URLSearchParams(path.split("?")[1]).get("from"), "/t?settings=connectors");
+
+    // Only `error` is a failure; an install still to do is a working credential.
+    assert.equal(outcomeNote({ connect: "connected", connector: "gmail", account: "a", reason: null }).bad, false);
+    assert.equal(outcomeNote({ connect: "install_required", connector: "github", account: "a", reason: null }).bad, false);
+    const failed = outcomeNote({ connect: "error", connector: "gmail", account: null, reason: "access_denied" });
+    assert.equal(failed.bad, true);
+    assert.equal(failed.text, "access_denied");
+});
+
+test("the role refusal is said as the role it is", () => {
+    // Making an install needs an owner or editor; the backend tells anyone
+    // else "no connectors in organization <uuid>", which nobody can act on.
+    const refused = Object.assign(new Error("No connectors are available in organization '019d'. You may not be a member of it."), { code: "ORGANIZATION_CONNECTORS_NOT_FOUND" });
+    assert.match(connectorProblem(refused, "x"), /owner or editor/);
+    assert.match(connectorProblem(new Error("No connectors are available in organization 'x'."), "x"), /owner or editor/);
+    // Everything else passes through, and a blank failure gets the fallback.
+    assert.equal(connectorProblem(new Error("Invalid bot token"), "x"), "Invalid bot token");
+    assert.equal(connectorProblem(null, "Could not connect."), "Could not connect.");
 });

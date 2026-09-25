@@ -31,7 +31,7 @@ def host_path(path: str, *, base: str) -> str:
 
 
 class HostWorkspaceSession(SandboxWorkspaceSession):
-    """``SandboxWorkspaceSession`` rooted at a folder on the owner's Mac."""
+    """``SandboxWorkspaceSession`` rooted at a folder on the user's Mac."""
 
     def __init__(self, *, root: str, **kwargs: object) -> None:
         if not root.startswith("/"):

@@ -174,18 +174,17 @@ class IdentitySettings(BaseSettings):
     # how it is run. The two had to be separated because `ENVIRONMENT=local` is
     # shared by a developer's `make dev` stack, the load-test compose file and
     # Lemma Desktop, and only one of those is a single person's computer that a
-    # tunnel may put on the internet. Anything that follows from "this is
-    # somebody's own installation" -- the installation owner, the invite-only
-    # default -- keys off this, so a dev stack that creates a hundred users per
-    # test run is not suddenly refusing the second one.
+    # tunnel may put on the internet. What follows from "this is somebody's own
+    # installation" -- the invite-only signup default -- keys off this, so a
+    # dev stack that creates a hundred users per test run is not suddenly
+    # refusing the second one.
     deployment_kind: Literal["server", "desktop"] = Field(
         default="server",
         description=(
             "``desktop`` for a Lemma Desktop installation, ``server`` for hosted "
-            "and self-hosted deployments. Desktop records its first account as "
-            "the installation owner and defaults SIGNUP_MODE to invite_only. "
-            "Set by the Desktop host pack; nothing else needs to. Env: "
-            "``DEPLOYMENT_KIND``."
+            "and self-hosted deployments. Desktop defaults SIGNUP_MODE to "
+            "invite_only. Set by the Desktop host pack; nothing else needs to. "
+            "Env: ``DEPLOYMENT_KIND``."
         ),
     )
     signup_mode: Optional[Literal["open", "invite_only", "closed"]] = Field(
@@ -196,22 +195,9 @@ class IdentitySettings(BaseSettings):
             "organization invitation. ``closed``: nobody. Applies to every path "
             "that creates a user -- email/password, OAuth, and email-code "
             "sign-in. Unset means ``invite_only`` on a Desktop installation and "
-            "``open`` everywhere else. On Desktop the first account is always "
-            "admitted, because it is the owner and there is nobody yet to "
-            "invite it. Env: ``SIGNUP_MODE``."
-        ),
-    )
-    installation_owner_reservation_seconds: int = Field(
-        default=600,
-        ge=30,
-        description=(
-            "How long a first-signup claim on a Desktop installation holds the "
-            "owner slot before another first signup may take it over. The "
-            "claim is taken before the account exists so a concurrent second "
-            "signup is refused rather than admitted, and this bounds how long "
-            "an abandoned one (a rejected password, a closed tab) can keep "
-            "the installation ownerless. Env: "
-            "``INSTALLATION_OWNER_RESERVATION_SECONDS``."
+            "``open`` everywhere else. Whatever the mode, the first account on a "
+            "deployment with no accounts at all is admitted, because there is "
+            "nobody yet who could have invited it. Env: ``SIGNUP_MODE``."
         ),
     )
 

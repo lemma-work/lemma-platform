@@ -214,6 +214,12 @@ before acting, so the page asking is never the person agreeing.
 [Desktop architecture](desktop.md#tauri-ipc-commands-and-who-may-call-them)
 has the full table.
 
+None of these checks asks who is signed in. There is no installation owner and
+no privileged account: the boundary is the app's own window on this
+installation's loopback origin, which only the person at this Mac can drive.
+Anything account-scoped beyond that -- which user's runs this Agent Host
+serves -- follows the pairing, not the order accounts were created in.
+
 Note what those five *cannot* do. `agent_host_start` has no counterpart, and
 `agent_host_unpair` is gone: the workspace can ask this computer to be running,
 to pair, and to look for agents again — never the reverse. A remote off switch
@@ -229,7 +235,7 @@ navigated to.
 Sharing republishes the same workspace on a LAN address or tunnel host. Those
 are different origins, are deliberately absent from the capability, and fail the
 Rust-side check too — a visitor's browser can drive the shared Lemma, but never
-this Mac's Agent Host. The owner's own window moves to the shared origin while
+this Mac's Agent Host. The app's own window moves to the shared origin while
 sharing is on, so it loses the This Mac settings too; the menu's Desktop
 settings… opens Local settings then, which is where sharing is turned off.
 
@@ -386,11 +392,11 @@ revocation, a platform without Seatbelt) answers every `op` with
 `exec_server_unavailable`. The methods, parameters and failure kinds are in
 [Host execution on Desktop](desktop-host-execution.md#4-the-op-frames).
 
-`host_execution` is `{enabled, platform, available}`: whether the owner turned
+`host_execution` is `{enabled, platform, available}`: whether the machine's user turned
 host execution on, `macos`/`linux`/`windows`, and whether this machine can
 confine commands (macOS with `/usr/bin/sandbox-exec`). It rides on every
 `control` as well as `hello`, so turning it on or off reaches Lemma within
-seconds without a reconnect. Lemma routes an owner's run to the host only when
+seconds without a reconnect. Lemma routes a run of the host's paired user to it only when
 both booleans are true.
 
 The first frame on a connection is `pair` (no `Authorization` header) or

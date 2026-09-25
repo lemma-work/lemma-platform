@@ -4,7 +4,6 @@
 /* eslint-disable */
 import type { FirstWorkspaceRequest } from '../models/FirstWorkspaceRequest.js';
 import type { FirstWorkspaceResponse } from '../models/FirstWorkspaceResponse.js';
-import type { InstallationResponse } from '../models/InstallationResponse.js';
 import type { UserProfileRequest } from '../models/UserProfileRequest.js';
 import type { UserResponse } from '../models/UserResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
@@ -41,18 +40,6 @@ export class UsersService {
             errors: {
                 422: `Validation Error`,
             },
-        });
-    }
-    /**
-     * Get Installation
-     * What kind of installation this is, whether the current user owns it, and who may sign up. On a Desktop installation the owner is the first account created, and is the only user granted host-level capabilities.
-     * @returns InstallationResponse Successful Response
-     * @throws ApiError
-     */
-    public static userInstallationGet(): CancelablePromise<InstallationResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/users/me/installation',
         });
     }
     /**

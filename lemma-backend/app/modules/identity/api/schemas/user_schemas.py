@@ -1,8 +1,7 @@
 from datetime import date, datetime
-from typing import Literal
 from uuid import UUID
 
-from pydantic import EmailStr, Field, field_validator
+from pydantic import EmailStr, field_validator
 
 from app.core.api.schemas import BaseSchema
 from app.core.helpers.identifiers import normalize_mobile_e164
@@ -49,23 +48,3 @@ class UserResponse(BaseSchema):
     date_of_birth: date | None = None
     created_at: datetime
     updated_at: datetime
-
-
-class InstallationResponse(BaseSchema):
-    """What this installation is, and what the caller is to it."""
-
-    deployment: Literal["server", "desktop"] = Field(
-        description=(
-            "``desktop`` for a Lemma Desktop installation on one person's "
-            "computer, ``server`` for hosted and self-hosted deployments."
-        )
-    )
-    is_owner: bool = Field(
-        description=(
-            "Whether the caller is this installation's owner: the first account "
-            "created on a Desktop installation. Always false on ``server``."
-        )
-    )
-    signup_mode: Literal["open", "invite_only", "closed"] = Field(
-        description="Who may create a new account on this installation."
-    )

@@ -4,11 +4,11 @@ The browser the person watches is Chrome in their VM workspace, and it is
 driven with the `agent-browser` CLI. Ordinarily that is just a command line
 the agent runs through `exec_command`, which is why no typed browser tools
 exist. Host execution (docs/architecture/desktop-host-execution.md) breaks
-that assumption: the run's shell is on the owner's Mac -- `exec_command` runs
+that assumption: the run's shell is on the user's Mac -- `exec_command` runs
 there, or, for a coding agent, Lemma's shell is withheld entirely -- and
 `agent-browser` exists only in the VM.
 
-So this one tool runs exactly one `agent-browser` invocation in the owner's VM
+So this one tool runs exactly one `agent-browser` invocation in the user's VM
 workspace -- the sandbox that keeps its own id and holds the browser -- with
 the same session, clocks and output shaping `exec_command` gives. It is not a
 shell: the arguments are split and re-quoted, so nothing but `agent-browser`
