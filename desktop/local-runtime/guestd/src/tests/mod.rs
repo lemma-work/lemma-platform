@@ -7,6 +7,7 @@ mod core_data;
 mod data_binding;
 mod diagnostics;
 mod engine;
+mod firewall_model;
 mod host_gateway_firewall;
 mod host_loopback;
 mod images;
@@ -15,6 +16,7 @@ mod limits;
 mod network;
 mod protocol;
 mod pull_progress;
+mod replacement;
 mod run_contract;
 mod sandbox_tunnel;
 
