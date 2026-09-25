@@ -1334,7 +1334,13 @@ function settleAccount(): void {
    CONNECTED rather than ACTIVE). */
 const CONNECTORS: unknown[] = [
     { id: "slack", title: "Slack", description: "Messaging, channels and notifications.", icon: "/connector-logos/slack.svg", is_active: true },
-    { id: "telegram", title: "Telegram", description: "Bots and direct messages.", icon: "/connector-logos/telegram.svg", is_active: true },
+    /* With its kind, as the wire has it: a bot token over `http`, with no
+       address to supply — so the sample walks the credential form. */
+    { id: "telegram", title: "Telegram", description: "Bots and direct messages.", icon: "/connector-logos/telegram.svg", is_active: true,
+        kinds: [{ kind: "http", auth_scheme: "API_KEY", system_default_available: true,
+            config_schema: { type: "object", properties: {} },
+            credential_schema: { type: "object", required: ["bot_token"], properties: {
+                bot_token: { type: "string", title: "Bot token", description: "From @BotFather." } } } }] },
     { id: "whatsapp", title: "WhatsApp Business", description: "The number your customers already use.", icon: "/connector-logos/whatsapp.svg", is_active: true },
     { id: "teams", title: "Microsoft Teams", description: "Chat and channels in Microsoft 365.", icon: "/connector-logos/teams.svg", is_active: true },
     { id: "github", title: "GitHub", description: "Repositories, issues and pull requests.", icon: "", is_active: true },

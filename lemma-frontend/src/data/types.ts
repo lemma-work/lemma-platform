@@ -499,8 +499,9 @@ export interface PodSource {
         kind?: string,
     ): Promise<string>;
     /** Begin authorising an account with the provider. Finishing happens on
-     *  their consent page, and the account appears here afterwards. */
-    startAccount(orgId: string, connectorId: string, authConfigId?: string): Promise<AccountConnect>;
+     *  their consent page, and the account appears here afterwards.
+     *  `returnTo` is the path inside this app the provider's tab comes back to. */
+    startAccount(orgId: string, connectorId: string, authConfigId?: string, returnTo?: string): Promise<AccountConnect>;
     /** The account this authorisation produced, once it exists and is usable.
      *  Empty until then. */
     findAccount(orgId: string, connectorId: string, before: string[], authConfigId?: string): Promise<string>;

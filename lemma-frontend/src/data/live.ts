@@ -31,7 +31,8 @@ import { joinWire, orgJoinWire, readJoin, readJoinRequest, readOrgJoin, type Joi
 type JoinWire = NonNullable<
     NonNullable<Parameters<ReturnType<typeof lemma>["pods"]["update"]>[1]["config"]>["join_policy"]
 >;
-import { bestAccount, readAccount, readConnector, type Connector, type ConnectorAccount } from "./accounts";
+import { readAccount, readConnector, type Connector, type ConnectorAccount } from "./accounts";
+import { canInstallWithDefaults, primaryKind, type CatalogEntry } from "@/connect/install";
 import {
     readChoice,
     readComputer,
@@ -839,23 +840,64 @@ export const liveSource: PodSource = {
         return String(made.id ?? "");
     },
 
-    async startAccount(orgId: string, connectorId: string, authConfigId?: string): Promise<AccountConnect> {
+    async startAccount(orgId: string, connectorId: string, authConfigId?: string, returnTo?: string): Promise<AccountConnect> {
         const client = lemma();
-        /* Read what is already there first. The callback lands on the
+        /* Read what is already usable first. The callback lands on the
            provider's side, not ours, so the only way to recognise the account
-           this authorisation made is that it was not here a moment ago. */
-        const existing = (await client.connectors.accounts.list(orgId, { connectorId, limit: 100 })) as {
-            items?: { id?: string }[];
-        };
-        const before = (existing.items ?? []).map((account) => String(account.id ?? "")).filter(Boolean);
-        const request = (await client.connectors.createConnectRequest(
-            orgId,
-            /* Naming the auth config when there is one: a freshly registered
-               app is not the org's default, and connecting by connector id
-               alone would authorise the wrong one. */
-            authConfigId ? { connector_id: connectorId, auth_config_id: authConfigId } : connectorId,
-        )) as { authorization_url?: string | null };
-        return { authorizeUrl: request.authorization_url ?? "", before, authConfigId };
+           this authorisation made is that it was not usable a moment ago —
+           either new, or an existing row it just brought back to life. */
+        const existing = (await client.connectors.accounts.list(orgId, { connectorId, limit: 100 })) as Listish;
+        const before = itemsOf(existing)
+            .map(readAccount)
+            .filter((entry): entry is ConnectorAccount => entry !== null && entry.usable)
+            .map((account) => account.id);
+
+        /* An account is authorised against an install, and the backend only
+           ever *looks one up* here — a connect request by connector id alone
+           is a 404 for any connector this organization has not installed yet,
+           which is every connector the first time anybody clicks Connect. So
+           the install is settled first: the one named, else the default, else
+           Lemma's own, made now. */
+        let installId = authConfigId;
+        let madeHere: { id: string; name: string } | null = null;
+        if (!installId) {
+            const installs = (await client.connectors.authConfigs.list(orgId, { limit: 200 })).items ?? [];
+            const active = installs.filter((one) => one.connector_id === connectorId && one.status === "ACTIVE");
+            const held = active.find((one) => one.is_default) ?? active[0];
+            if (held) {
+                installId = held.id;
+            } else {
+                const entry = (await client.connectors.get(connectorId)) as CatalogEntry;
+                const kind = primaryKind(entry);
+                if (!canInstallWithDefaults(kind)) {
+                    throw new Error(entry.title + " needs setting up by an organization admin before anybody can connect it.");
+                }
+                const made = await client.connectors.authConfigs.create(orgId, {
+                    connector_id: connectorId,
+                    kind: kind?.kind,
+                    config_source: "SYSTEM_DEFAULT",
+                });
+                madeHere = { id: String(made.id), name: String(made.name) };
+                installId = madeHere.id;
+            }
+        }
+
+        try {
+            const request = (await client.connectors.createConnectRequest(orgId, {
+                auth_config_id: installId,
+                /* Without it the callback ends on the app root, in the
+                   provider's tab, with nothing to say what happened. */
+                return_to: returnTo,
+            })) as { authorization_url?: string | null };
+            return { authorizeUrl: request.authorization_url ?? "", before, authConfigId: installId };
+        } catch (problem) {
+            /* An install made moments ago with nobody on it has nothing to
+               lose, and left behind it holds the connector's name — so a retry
+               is refused, and the connector reads as set up while being
+               unreachable. */
+            if (madeHere) await client.connectors.authConfigs.delete(orgId, madeHere.name).catch(() => undefined);
+            throw problem;
+        }
     },
 
     async findAccount(orgId: string, connectorId: string, before: string[], authConfigId?: string): Promise<string> {
@@ -864,15 +906,17 @@ export const liveSource: PodSource = {
             .map(readAccount)
             .filter((entry): entry is ConnectorAccount => entry !== null);
 
-        /* Prefer the account this authorisation just made — but do not require
-           one. Re-authorising a connector the org already has can refresh the
-           existing row rather than insert a new one, and the first version of
-           this waited forever for an id that was never going to appear. */
+        /* Only an account this authorisation produced: usable now, and not
+           usable when it started. That covers a new row and an existing one
+           re-authorised back to health. It used to fall back to the best
+           account already there — which a poll answers on its first tick, so
+           the reach sheet bound whatever the organization already had before
+           anybody had signed in. Re-authorising an account that was already
+           fine changes nothing here; the round trip names that account itself
+           (see `useConnectOutcome`). */
         const seen = new Set(before);
         const eligible = accounts.filter(account => !authConfigId || account.authConfigId === authConfigId);
-        const fresh = eligible.find((account) => !seen.has(account.id) && account.usable);
-        if (fresh) return fresh.id;
-        return bestAccount(eligible, connectorId)?.id ?? "";
+        return eligible.find((account) => !seen.has(account.id) && account.usable)?.id ?? "";
     },
 
     async connectAccount(podId: string, platform: string, accountId: string): Promise<Surface> {

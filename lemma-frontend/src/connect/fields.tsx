@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { CloseIcon, PlusIcon } from "@/ui/icons";
 import { REDACTED, unchangedSecret, type Field, type Values } from "./schema";
 
@@ -25,9 +26,13 @@ export function Fields({ list, values, problems, onChange, disabled }: {
                             {field.label}{field.required && <i aria-hidden="true"> *</i>}
                         </label>
                     )}
-                    {field.description && <small>{field.description}</small>}
                     <One field={field} value={values[field.name]} disabled={disabled} onChange={onChange} />
+                    {/* Under the box rather than between it and its label:
+                        a connector's help runs to three lines, and above the
+                        input it pushed the label a paragraph away from the
+                        thing it names. */}
                     {problems[field.name] && <em role="alert">{problems[field.name]}</em>}
+                    {field.description && <small id={"f-" + field.name + "-help"}>{field.description}</small>}
                 </div>
             ))}
         </div>
@@ -40,6 +45,12 @@ function One({ field, value, disabled, onChange }: {
     disabled?: boolean;
     onChange: (name: string, value: unknown) => void;
 }) {
+    /* Whether a stored secret stood here when the form opened. Only then does
+       leaving the box empty mean "keep it": on a new connection there is
+       nothing stored, and putting the mask back wrote "********" into an empty
+       required field — which passed the required check, was dropped from the
+       payload as untouched, and reached the server as no token at all. */
+    const [stored] = useState(() => unchangedSecret(value));
     if (field.kind === "boolean") {
         return (
             <label className="connect-check">
@@ -72,6 +83,7 @@ function One({ field, value, disabled, onChange }: {
     return (
         <input
             id={"f-" + field.name}
+            aria-describedby={field.description ? "f-" + field.name + "-help" : undefined}
             type={field.kind === "secret" && !masked ? "password" : field.kind === "number" ? "number" : "text"}
             value={String(value ?? "")}
             placeholder={masked ? "" : field.placeholder}
@@ -79,7 +91,7 @@ function One({ field, value, disabled, onChange }: {
             autoComplete={field.kind === "secret" ? "off" : undefined}
             spellCheck={field.kind === "secret" ? false : undefined}
             onFocus={() => { if (masked) onChange(field.name, ""); }}
-            onBlur={(event) => { if (field.kind === "secret" && !event.target.value) onChange(field.name, REDACTED); }}
+            onBlur={(event) => { if (stored && field.kind === "secret" && !event.target.value) onChange(field.name, REDACTED); }}
             onChange={(event) => onChange(field.name, event.target.value)}
         />
     );

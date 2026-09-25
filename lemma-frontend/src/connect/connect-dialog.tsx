@@ -1,12 +1,15 @@
 import { useMemo, useState } from "react";
 import { Modal } from "@/shell/modal";
+import { LoadingIndicator } from "@/ui/loading";
 import { ExternalIcon, RefreshIcon } from "@/ui/icons";
-import { useConnector, useCreateAccount, useCreateInstall, useConnectorRefresh, useRotateCredentials } from "./queries";
+import {
+    useConnector, useCreateAccount, useCreateInstall, useConnectorRefresh, useDeleteInstall, useRotateCredentials,
+} from "./queries";
 import { Fields } from "./fields";
 import { blank, fields, payload, problems, type Values } from "./schema";
 import {
-    canBringOwnApp, connectRoute, connectSchema, installSchema, kindNamed, needsOwnApp, urlRefusal,
-    type CatalogEntry, type Install,
+    canBringOwnApp, canInstallWithDefaults, connectorProblem, connectRoute, connectSchema, freshInstallName, installSchema, kindFor,
+    kindNamed, needsOwnApp, type CatalogEntry, type Install,
 } from "./install";
 
 /** Connecting an account, by whichever of the two routes this one is on.
@@ -22,12 +25,30 @@ import {
  *    - the credential is a form to fill in;
  *    - it is a browser round trip, which is the case this app already had.
  */
-export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAuthorize }: {
+export function ConnectDialog({
+    orgId, connector, install, takenNames, mayInstall = null, authorizing = false, authorizeFailure = null,
+    onClose, onDone, onAuthorize,
+}: {
     orgId: string;
     connector: CatalogEntry;
     /** Which install to connect against, when the organization has more than
-     *  one. The API permits many installs of one connector deliberately. */
+     *  one. The API permits many installs of one connector deliberately.
+     *  Null when it has none yet — one is made on the way. */
     install: Install | null;
+    /** Every install name in the organization. Names are unique per org, and
+     *  an app of the organization's own is a second install of a connector
+     *  that usually already has one. */
+    takenNames: string[];
+    /** Owner or editor. Anyone may connect an account; only they may make the
+     *  organization's own app. */
+    mayInstall?: boolean | null;
+    /** The caller is fetching the sign-in address. Making the install and
+     *  asking the provider for a URL is a couple of round trips, and a button
+     *  that does nothing visible for that long reads as a button that failed. */
+    authorizing?: boolean;
+    /** Why the sign-in could not start. Said here, because the card the caller
+     *  would otherwise write it on is behind this dialog. */
+    authorizeFailure?: string | null;
     onClose: () => void;
     onDone: () => void;
     /** Hands the browser round trip back to the caller, which already owns it. */
@@ -35,10 +56,19 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
 }) {
     const detail = useConnector(connector.id);
     const entry = detail.data ?? connector;
-    const kind = useMemo(() => kindNamed(entry, install?.kind), [entry, install?.kind]);
+    /* An install made in this dialog — the organization's own app, when that
+       app then takes a credential rather than a sign-in. */
+    const [made, setMade] = useState<Install | null>(null);
+    const against = made ?? install;
+    /* With no install, the kind a fresh one would take. Asking only for an
+       unambiguous kind left every connector offering two — Composio and a
+       native one — at "has not described what it needs". */
+    const kind = useMemo(() => kindFor(entry, against), [entry, against]);
     const refresh = useConnectorRefresh(orgId);
 
-    const ownApp = needsOwnApp(kind);
+    /* Nothing to connect against, and Lemma cannot make it alone: the
+       organization's own app, or whatever else the install needs, comes first. */
+    const ownApp = !against && (needsOwnApp(kind) || !canInstallWithDefaults(kind));
     const [bringingApp, setBringingApp] = useState(false);
     const showingApp = ownApp || bringingApp;
 
@@ -57,14 +87,20 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
     }, [list, values]);
 
     const makeInstall = useCreateInstall(orgId);
+    const dropInstall = useDeleteInstall(orgId);
     const connectAccount = useCreateAccount(orgId);
-    const busy = makeInstall.isPending || connectAccount.isPending;
+    const busy = makeInstall.isPending || connectAccount.isPending || authorizing;
 
-    const route = connectRoute(install, kind);
+    const route = connectRoute(against, kind);
+    /* A connector that takes no credential at all is connected with an empty
+       one — the account is still what every execution resolves. */
+    const nothingToAsk = kind?.auth_scheme === "NOAUTH" || against?.auth_scheme === "NOAUTH";
+    /* An organization's own OAuth app, or merely details an install needs:
+       the same form, and not the same thing to say about it. */
+    const signsIn = kind?.auth_scheme === "OAUTH2";
 
     const fail = (problem: unknown) => {
-        const message = problem instanceof Error ? problem.message : "Couldn’t connect this account.";
-        setFailure(urlRefusal(message) ?? message);
+        setFailure(connectorProblem(problem, "Couldn’t connect this account."));
     };
 
     const submit = async () => {
@@ -76,83 +112,133 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
         try {
             if (showingApp) {
                 /* The organization's own app. It has to exist before anybody
-                   can authorise against it, so this creates the install and
-                   hands straight over to the redirect. */
-                const made = await makeInstall.mutateAsync({
-                    connectorId: entry.id, kind: kind?.kind, config: body, ownCredentials: true,
+                   can authorise against it. Named apart from the install
+                   Lemma's own app lives on, which already holds the
+                   connector's name. */
+                const created = await makeInstall.mutateAsync({
+                    connectorId: entry.id,
+                    kind: kind?.kind,
+                    name: freshInstallName(entry.id, takenNames),
+                    config: body,
+                    ownCredentials: true,
                 });
                 refresh();
-                onAuthorize(made.id ?? null);
+                if (connectRoute(created, kind) === "redirect") { onAuthorize(created.id ?? null); return; }
+                /* A credential, not a sign-in: the account is the next form,
+                   against the install just made. */
+                setMade(created);
+                setBringingApp(false);
+                setValues({});
+                setShown({});
                 return;
             }
-            if (!install) { setFailure("There is nothing to connect against yet."); return; }
-            await connectAccount.mutateAsync({ installId: install.id, credentials: body });
+            /* Lemma's own install, made now when there is none. The account
+               is authorised against an install and never against a connector;
+               this is the step the old dialog stopped at, with "there is
+               nothing to connect against yet". */
+            let installId = against?.id ?? null;
+            let madeHere: Install | null = null;
+            if (!installId) {
+                madeHere = await makeInstall.mutateAsync({ connectorId: entry.id, kind: kind?.kind });
+                installId = madeHere.id;
+            }
+            try {
+                await connectAccount.mutateAsync({ installId, credentials: body });
+            } catch (problem) {
+                /* Two calls, one act: an install made moments ago with nobody
+                   on it would otherwise hold the connector's name, and every
+                   retry would be refused. */
+                if (madeHere) await dropInstall.mutateAsync(madeHere).catch(() => undefined);
+                throw problem;
+            }
             refresh();
             onDone();
         } catch (problem) { fail(problem); }
     };
 
-    if (detail.isPending) {
+    /* Loading, not pending: a query that is switched off — sample data has no
+       catalogue to ask — is pending forever, and this would never get past it. */
+    if (detail.isLoading) {
         return <Modal title={"Connect " + connector.title} narrow onClose={onClose}>
-            <p role="status">Reading what this one needs…</p>
+            <p className="connect-lead"><LoadingIndicator inline label="Reading what this one needs" /></p>
         </Modal>;
     }
 
     return (
         <Modal
-            title={showingApp ? "Use your own " + connector.title + " app" : "Connect " + connector.title}
-            subtitle={install?.name && !showingApp ? install.name : undefined}
+            title={showingApp
+                ? signsIn ? "Use your own " + connector.title + " app" : "Set up " + connector.title
+                : "Connect " + connector.title}
+            subtitle={against?.name && !showingApp ? against.name : undefined}
             narrow
             onClose={onClose}
         >
-            {showingApp && (
-                <p className="connect-lead">
-                    {ownApp
-                        ? "Lemma holds no credentials for this one, so it connects through an app you register yourself."
-                        : "Authorisation will run against your app rather than Lemma's."}
-                </p>
-            )}
-
-            {!showingApp && route === "redirect" ? (
-                <>
+            <div className="connect-form">
+                {showingApp && (
                     <p className="connect-lead">
-                        This one signs in through {connector.title}. You will come back here once it is done.
+                        {!signsIn
+                            ? connector.title + " needs a few details from your organization before anyone can connect it."
+                            : ownApp
+                                ? "Lemma holds no credentials for this one, so it connects through an app you register yourself."
+                                : "Authorisation will run against your app rather than Lemma's."}
                     </p>
-                    <div className="record-form__actions">
-                        <button className="btn btn--primary" onClick={() => onAuthorize(install?.id ?? null)}>
-                            Continue <ExternalIcon size={13} />
-                        </button>
-                        {canBringOwnApp(kind) && !ownApp && (
-                            <button className="btn" onClick={() => { setBringingApp(true); setValues({}); }}>
-                                Use your own app
+                )}
+
+                {!showingApp && route === "redirect" ? (
+                    <>
+                        <p className="connect-lead">
+                            This one signs in through {connector.title}. You will come back here once it is done.
+                        </p>
+                        {authorizeFailure && <p className="library-problem" role="alert">{authorizeFailure}</p>}
+                        <div className="record-form__actions">
+                            <button className="btn btn--primary" disabled={busy} onClick={() => onAuthorize(against?.id ?? null)}>
+                                {authorizing
+                                    ? <LoadingIndicator inline label={"Opening " + connector.title} />
+                                    : <>Continue <ExternalIcon size={13} /></>}
                             </button>
-                        )}
-                        <button className="btn" onClick={onClose}>Cancel</button>
-                    </div>
-                </>
-            ) : list.length === 0 ? (
-                <>
-                    {/* A schema with no fields is not a form to submit. Saying
-                        so beats drawing an empty box with a Connect button
-                        under it that can only fail. */}
-                    <p role="alert" className="connect-lead">
-                        This connector has not described what it needs, so it cannot be connected from here yet.
-                    </p>
-                    <div className="record-form__actions"><button className="btn" onClick={onClose}>Close</button></div>
-                </>
-            ) : (
-                <>
-                    <Fields list={list} values={ready} problems={shown} disabled={busy}
-                        onChange={(name, value) => setValues({ ...ready, [name]: value })} />
-                    {failure && <p className="library-problem" role="alert">{failure}</p>}
-                    <div className="record-form__actions">
-                        <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
-                            {busy ? "Connecting…" : showingApp ? "Save and authorise" : "Connect"}
-                        </button>
-                        <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-                    </div>
-                </>
-            )}
+                            {canBringOwnApp(kind) && !ownApp && mayInstall !== false && (
+                                <button className="btn" disabled={busy} onClick={() => { setBringingApp(true); setValues({}); }}>
+                                    Use your own app
+                                </button>
+                            )}
+                            <button className="btn" onClick={onClose}>Cancel</button>
+                        </div>
+                    </>
+                ) : !showingApp && list.length === 0 && nothingToAsk ? (
+                    <>
+                        <p className="connect-lead">Nothing to fill in for this one.</p>
+                        {failure && <p className="library-problem" role="alert">{failure}</p>}
+                        <div className="record-form__actions">
+                            <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
+                                {busy ? <LoadingIndicator inline label="Connecting" /> : "Connect"}
+                            </button>
+                            <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+                        </div>
+                    </>
+                ) : list.length === 0 ? (
+                    <>
+                        {/* A schema with no fields is not a form to submit. Saying
+                            so beats drawing an empty box with a Connect button
+                            under it that can only fail. */}
+                        <p role="alert" className="connect-lead">
+                            This connector has not described what it needs, so it cannot be connected from here yet.
+                        </p>
+                        <div className="record-form__actions"><button className="btn" onClick={onClose}>Close</button></div>
+                    </>
+                ) : (
+                    <>
+                        <Fields list={list} values={ready} problems={shown} disabled={busy}
+                            onChange={(name, value) => setValues({ ...ready, [name]: value })} />
+                        {(failure ?? authorizeFailure) && <p className="library-problem" role="alert">{failure ?? authorizeFailure}</p>}
+                        <div className="record-form__actions">
+                            <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
+                                {busy ? <LoadingIndicator inline label="Connecting" /> : showingApp ? "Save and authorise" : "Connect"}
+                            </button>
+                            <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+                        </div>
+                    </>
+                )}
+            </div>
         </Modal>
     );
 }
@@ -199,30 +285,32 @@ export function RotateDialog({ orgId, connector, install, accountId, accountName
 
     return (
         <Modal title="Replace the credential" subtitle={accountName} narrow onClose={onClose}>
-            <p className="connect-lead">
-                Existing connections will use the replacement credential. Check that it has the access they need.
-            </p>
-            {detail.isPending ? <p role="status">Reading what this one needs…</p>
-                : list.length === 0 ? (
-                    <>
-                        <p role="alert" className="connect-lead">
-                            This connector does not describe a credential that can be replaced from here.
-                        </p>
-                        <div className="record-form__actions"><button className="btn" onClick={onClose}>Close</button></div>
-                    </>
-                ) : (
-                    <>
-                        <Fields list={list} values={ready} problems={shown} disabled={rotate.isPending}
-                            onChange={(name, value) => setValues({ ...ready, [name]: value })} />
-                        {failure && <p className="library-problem" role="alert">{failure}</p>}
-                        <div className="record-form__actions">
-                            <button className="btn btn--primary" disabled={rotate.isPending} onClick={() => void submit()}>
-                                {rotate.isPending ? "Replacing…" : <>Replace <RefreshIcon size={14} /></>}
-                            </button>
-                            <button className="btn" disabled={rotate.isPending} onClick={onClose}>Cancel</button>
-                        </div>
-                    </>
-                )}
+            <div className="connect-form">
+                <p className="connect-lead">
+                    Existing connections will use the replacement credential. Check that it has the access they need.
+                </p>
+                {detail.isLoading ? <p className="connect-lead"><LoadingIndicator inline label="Reading what this one needs" /></p>
+                    : list.length === 0 ? (
+                        <>
+                            <p role="alert" className="connect-lead">
+                                This connector does not describe a credential that can be replaced from here.
+                            </p>
+                            <div className="record-form__actions"><button className="btn" onClick={onClose}>Close</button></div>
+                        </>
+                    ) : (
+                        <>
+                            <Fields list={list} values={ready} problems={shown} disabled={rotate.isPending}
+                                onChange={(name, value) => setValues({ ...ready, [name]: value })} />
+                            {failure && <p className="library-problem" role="alert">{failure}</p>}
+                            <div className="record-form__actions">
+                                <button className="btn btn--primary" disabled={rotate.isPending} onClick={() => void submit()}>
+                                    {rotate.isPending ? <LoadingIndicator inline label="Replacing" /> : <>Replace <RefreshIcon size={14} /></>}
+                                </button>
+                                <button className="btn" disabled={rotate.isPending} onClick={onClose}>Cancel</button>
+                            </div>
+                        </>
+                    )}
+            </div>
         </Modal>
     );
 }
