@@ -101,14 +101,14 @@ if op == "sandbox.ensure":
         "host_loopback": params.get("host_loopback", "unsent"),
         "env": params.get("env"),
     }
-    ok({"status": {"state": "running", "runtime_url": "http://127.0.0.1:9999",
+    ok({"status": {"state": "running", "runtime_url": os.environ.get("RUNTIME_URL", "http://127.0.0.1:9999"),
                    "apps": _apps(params.get("apps"))},
         "provider_id": sandbox_id})
 if op == "sandbox.status":
     entry = state["sandboxes"].get(sandbox_id)
     if entry is None:
         fail("not_found", "no such sandbox", retryable=False)
-    ok({"status": {"state": entry["state"], "runtime_url": "http://127.0.0.1:9999",
+    ok({"status": {"state": entry["state"], "runtime_url": os.environ.get("RUNTIME_URL", "http://127.0.0.1:9999"),
                    "apps": _apps(entry.get("apps"))},
         "provider_id": sandbox_id})
 if op == "sandbox.release":
@@ -303,29 +303,47 @@ async def test_a_workspace_is_quiesced_before_it_is_released(
     """Chrome's profile -- the sign-ins a person made in the agent's browser
     -- is flushed before the container stops, as Docker's release does. A
     function has no browser, and is only stopped."""
-    order: list[str] = []
+    import http.server
+    import threading
 
-    class _Runtime:
-        async def quiesce(self, *, deadline_at):
-            order.append("quiesce")
+    seen: list[str] = []
 
-        async def close(self):
-            return None
+    class Runtime(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            state = json.loads(Path(os.environ["BRIDGE_STATE"]).read_text())
+            states = sorted(entry["state"] for entry in state["sandboxes"].values())
+            seen.append(f"{self.path} while {','.join(states)}")
+            body = b'{"terminated_processes": 0, "terminated_python_sessions": 0}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
-    async def runtime_client(guest_id, *, deadline_at):
-        return _Runtime()
+        def log_message(self, *args: object) -> None:
+            return
 
-    monkeypatch.setattr(provider, "_runtime_client", runtime_client)
-    workspace = await provider.create(_spec(uuid4()))
-    await provider.release(
-        workspace, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
-    )
-    order.append(_state(provider)["sandboxes"][workspace.provider_id]["state"])
-    assert order == ["quiesce", "stopped"]
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Runtime)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("RUNTIME_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    try:
+        workspace = await provider.create(_spec(uuid4()))
+        await provider.release(
+            workspace, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
+        assert seen == ["/quiesce while running"]
+        assert _state(provider)["sandboxes"][workspace.provider_id]["state"] == (
+            "stopped"
+        )
 
-    function = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
-    await provider.release(function, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
-    assert order == ["quiesce", "stopped"]
+        function = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+        await provider.release(
+            function, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+        )
+        assert seen == ["/quiesce while running"]
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 async def test_inspect_reports_absence_rather_than_failing(
