@@ -61,6 +61,7 @@ __pycache__/
 /out/
 /output/
 /tmp/
+/tests/scenarios/artifacts/
 .claude/launch.json
 
 # CodeQL databases and SARIF output from `make codeql`.
