@@ -42,8 +42,32 @@ describe("reading the server's own words", () => {
         { ok: false, status: 400 },
       ),
     );
-    await expect(emailCodeRequest("verify", {}, fetcher)).rejects.toThrow(
+    const failure = await emailCodeRequest("verify", {}, fetcher).catch(
+      (cause: unknown) => cause,
+    );
+    expect(failure).toBeInstanceOf(EmailCodeError);
+    expect((failure as EmailCodeError).message).toBe(
       "The code did not match; try again",
+    );
+    expect((failure as EmailCodeError).code).toBe("HTTP_400");
+  });
+
+  it("preserves codes from the API error envelope", async () => {
+    const fetcher = fetcherFor(
+      reply(
+        {
+          message: "This email sign-in page is not configured for this service.",
+          code: "EMAIL_LOGIN_ORIGIN_NOT_ALLOWED",
+        },
+        { ok: false, status: 403 },
+      ),
+    );
+    const failure = await emailCodeRequest("browser", {}, fetcher).catch(
+      (cause: unknown) => cause,
+    );
+    expect(failure).toBeInstanceOf(EmailCodeError);
+    expect((failure as EmailCodeError).code).toBe(
+      "EMAIL_LOGIN_ORIGIN_NOT_ALLOWED",
     );
   });
 

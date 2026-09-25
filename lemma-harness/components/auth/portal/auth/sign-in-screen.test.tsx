@@ -126,6 +126,15 @@ it("asks for a password when the account has one, in one round trip", async () =
   expect(identity.readOnly).toBe(true);
 });
 
+it("routes an address whose login method is Google to Google", async () => {
+  await continueAs("ada@example.com", {
+    method: "thirdparty",
+    provider: "google",
+  });
+  expect(redirectToProvider).toHaveBeenCalledWith("google");
+  expect(container.textContent).toContain("This email signs in with Google.");
+});
+
 it("keeps the password step after a wrong password, without signing anyone in", async () => {
   await continueAs("ada@example.com", { method: "password" });
   signIn.mockResolvedValueOnce({ status: "WRONG_CREDENTIALS_ERROR" });
@@ -171,6 +180,50 @@ it("goes straight to the code step, with no separate send", async () => {
     fetchCode.mock.calls.some((call) => String(call[0]).includes("/auth/email-code/start")),
   ).toBe(false);
   expect(button("Resend in 60s")).toBeDefined();
+});
+
+it("explains an auth-origin configuration failure without blaming the login method", async () => {
+  fetchCode.mockResolvedValueOnce({
+    ok: false,
+    status: 403,
+    headers: { get: () => null },
+    json: async () => ({
+      code: "EMAIL_LOGIN_ORIGIN_NOT_ALLOWED",
+      message: "This email sign-in page is not configured for this service. Open Lemma's auth page and try again.",
+    }),
+  });
+  await fill("sign-in-email", "ada@example.com");
+  await submit();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "not configured",
+  );
+  expect(container.querySelector('[role="alert"]')?.textContent).not.toContain(
+    "Google",
+  );
+});
+
+it("reinitializes an expired browser binding on the next Continue", async () => {
+  fetchCode.mockResolvedValueOnce(response({ nonce: "expired-nonce" }));
+  fetchCode.mockResolvedValueOnce({
+    ok: false,
+    status: 403,
+    headers: { get: () => null },
+    json: async () => ({
+      code: "EMAIL_LOGIN_EXPIRED",
+      message: "Login expired; start again in this browser.",
+    }),
+  });
+  await fill("sign-in-email", "ada@example.com");
+  await submit();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Login expired",
+  );
+
+  fetchCode.mockResolvedValueOnce(response({ nonce: "fresh-nonce" }));
+  fetchCode.mockResolvedValueOnce(response({ method: "password" }));
+  await submit();
+  expect(container.querySelector("#sign-in-password")).not.toBeNull();
+  expect(lastBody().nonce).toBe("fresh-nonce");
 });
 
 it("retires the abandoned challenge when the address is corrected", async () => {

@@ -23,16 +23,19 @@ type Fetcher = typeof fetch;
 
 export class EmailCodeError extends Error {
   readonly status: number;
+  readonly code: string | null;
   readonly retryAfterSeconds: number | null;
 
   constructor(
     message: string,
     status: number,
+    code: string | null = null,
     retryAfterSeconds: number | null = null,
   ) {
     super(message);
     this.name = "EmailCodeError";
     this.status = status;
+    this.code = code;
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
@@ -63,13 +66,33 @@ function retryAfterSeconds(response: Response): number | null {
  * separately at `/st` and does not share those handlers, and because a proxy in
  * front of the API can answer an outage in something else entirely.
  */
-function serverMessage(body: unknown): string | null {
-  if (typeof body !== "object" || body === null) return null;
-  const payload = body as { message?: unknown; detail?: unknown };
-  for (const candidate of [payload.message, payload.detail]) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate;
+function serverError(
+  body: unknown,
+): { message: string | null; code: string | null } {
+  if (typeof body !== "object" || body === null) {
+    return { message: null, code: null };
   }
-  return null;
+  const payload = body as { message?: unknown; detail?: unknown; code?: unknown };
+  const code =
+    typeof payload.code === "string" && payload.code.trim()
+      ? payload.code.trim()
+      : null;
+  for (const candidate of [payload.message, payload.detail]) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return { message: candidate, code };
+    }
+    if (typeof candidate === "object" && candidate !== null) {
+      const detail = candidate as { code?: unknown; message?: unknown };
+      const nestedCode =
+        typeof detail.code === "string" && detail.code.trim()
+          ? detail.code.trim()
+          : code;
+      if (typeof detail.message === "string" && detail.message.trim()) {
+        return { message: detail.message, code: nestedCode };
+      }
+    }
+  }
+  return { message: null, code };
 }
 
 export async function emailCodeRequest<T>(
@@ -92,12 +115,13 @@ export async function emailCodeRequest<T>(
   const result: unknown = await response.json().catch(() => ({}));
   if (!response.ok) {
     const retry = retryAfterSeconds(response);
-    const base = serverMessage(result) ?? GENERIC_FAILURE;
+    const parsed = serverError(result);
+    const base = parsed.message ?? GENERIC_FAILURE;
     const message =
       retry === null
         ? base
         : `${base.replace(/\.$/, "")}. Try again in ${formatRetryDelay(retry)}.`;
-    throw new EmailCodeError(message, response.status, retry);
+    throw new EmailCodeError(message, response.status, parsed.code, retry);
   }
   return result as T;
 }

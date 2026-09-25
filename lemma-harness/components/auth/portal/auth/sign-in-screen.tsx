@@ -6,6 +6,7 @@ import ThirdParty from "supertokens-auth-react/recipe/thirdparty";
 
 import {
   continueWithEmail,
+  EmailCodeError,
   emailCodeErrorMessage,
   mintNonce,
 } from "@/components/auth/portal/auth/email-code-client";
@@ -123,7 +124,13 @@ export function SignInScreen({
         applyContinueResult(current, binding, result, providers),
       );
     } catch (cause) {
-      setState((current) => failResolve(current, emailCodeErrorMessage(cause)));
+      setState((current) =>
+        failResolve(current, emailCodeErrorMessage(cause), {
+          clearNonce:
+            cause instanceof EmailCodeError &&
+            cause.code === "EMAIL_LOGIN_EXPIRED",
+        }),
+      );
     }
   }
 

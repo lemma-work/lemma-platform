@@ -46,6 +46,7 @@ async def test_browser_otp_requires_binding_and_creates_a_usable_session(
         headers={"origin": "https://attacker.example"},
     )
     assert refused.status_code == 403
+    assert refused.json()["code"] == "EMAIL_LOGIN_ORIGIN_NOT_ALLOWED"
     initialized = await async_client.post(
         "/auth/email-code/browser", json={}, headers=headers
     )
@@ -58,6 +59,14 @@ async def test_browser_otp_requires_binding_and_creates_a_usable_session(
     )
     assert started.status_code == 200, started.text
     challenge_id = started.json()["challenge_id"]
+    wrong_code = "000000" if mailbox.code != "000000" else "000001"
+    rejected_code = await async_client.post(
+        "/auth/email-code/verify",
+        json={"challenge_id": challenge_id, "nonce": nonce, "code": wrong_code},
+        headers=headers,
+    )
+    assert rejected_code.status_code == 400
+    assert rejected_code.json()["code"] == "EMAIL_CODE_INVALID"
     wrong_binding = await async_client.post(
         "/auth/email-code/verify",
         json={"challenge_id": challenge_id, "nonce": "x" * 43, "code": mailbox.code},
@@ -79,6 +88,20 @@ async def test_browser_otp_requires_binding_and_creates_a_usable_session(
     )
     assert workspace.status_code == 200, workspace.text
     assert workspace.json()["pod_id"] and workspace.json()["assistant_id"]
+
+
+async def test_browser_origin_normalizes_default_https_port(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        settings, "auth_frontend_url", "https://auth.example.test:443/auth"
+    )
+    response = await async_client.post(
+        "/auth/email-code/browser",
+        json={},
+        headers={"origin": "https://auth.example.test"},
+    )
+    assert response.status_code == 200, response.text
 
 
 async def test_stock_passwordless_endpoints_cannot_create_accounts(
@@ -296,6 +319,7 @@ async def test_continue_lets_a_corrected_address_past_the_binding_cooldown(
     # `{"message": ...}`, not `{"detail": ...}`: every response from the main
     # app goes through the unified envelope in `core.api.exception_handlers`.
     assert "sixty seconds" in refused.json()["message"]
+    assert refused.json()["code"] == "EMAIL_CHALLENGE_COOLDOWN"
 
     corrected = await async_client.post(
         "/auth/email-code/continue",
@@ -389,6 +413,7 @@ async def test_continue_requires_this_browser_and_lemmas_own_page(
         headers={"origin": "https://attacker.example"},
     )
     assert elsewhere.status_code == 403
+    assert elsewhere.json()["code"] == "EMAIL_LOGIN_ORIGIN_NOT_ALLOWED"
 
     forged = await async_client.post(
         "/auth/email-code/continue",
@@ -396,6 +421,7 @@ async def test_continue_requires_this_browser_and_lemmas_own_page(
         headers={"origin": origin},
     )
     assert forged.status_code == 403
+    assert forged.json()["code"] == "EMAIL_LOGIN_EXPIRED"
     assert mailbox.code == ""
 
 
@@ -435,6 +461,7 @@ async def test_continue_meters_the_method_lookup(
         statuses.append(answered.status_code)
         if answered.status_code == 429:
             assert answered.headers.get("Retry-After")
+            assert answered.json()["code"] == "EMAIL_CODE_RATE_LIMITED"
             break
 
     assert 429 in statuses, statuses

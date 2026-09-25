@@ -138,8 +138,17 @@ export function beginHandoff(
   return { ...state, step: "handoff", provider, error: null };
 }
 
-export function failResolve(state: SignInState, message: string): SignInState {
-  return { ...state, step: "identifier", error: message };
+export function failResolve(
+  state: SignInState,
+  message: string,
+  options: { clearNonce?: boolean } = {},
+): SignInState {
+  return {
+    ...state,
+    step: "identifier",
+    error: message,
+    ...(options.clearNonce ? { nonce: null } : {}),
+  };
 }
 
 export function beginPasswordSubmit(state: SignInState): SignInState {
