@@ -232,6 +232,42 @@
     color: var(--bad);
 }
 
+/* The eye, inside the password field at its end, where every other sign-in
+   page has taught people to look for it. The input keeps its full width and
+   gives the button room on the right so a long password never runs under it. */
+.field__secret {
+    position: relative;
+    display: flex;
+}
+.field__secret input {
+    flex: 1;
+    min-width: 0;
+    padding-right: 44px;
+}
+/* Edge draws its own eye on a password input; two would be one too many. */
+.field__secret input::-ms-reveal { display: none; }
+.field__reveal {
+    position: absolute;
+    top: 50%;
+    right: 5px;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+.field__reveal:hover { color: var(--ink); background: var(--chrome); }
+.field__reveal:focus-visible {
+    outline: 2px solid var(--accent-line);
+    outline-offset: -2px;
+    color: var(--ink);
+}
+
 /* ── who is waiting ──────────────────────────────────────────────────── */
 
 .waiting { display: flex; justify-content: center; }
