@@ -95,7 +95,7 @@ export function useSession(): Session {
     const signIn = useCallback(() => {
 
         sent.mark();
-        const here = window.location.pathname + window.location.search;
+        const here = window.location.pathname + window.location.search + window.location.hash;
         window.location.assign(PORTAL_PATH + "?redirect_uri=" + encodeURIComponent(here));
     }, []);
 

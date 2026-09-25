@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { asksForDestination, rawDestination, safeDestinationIn, type Where } from "../src/auth/redirects.ts";
+import { asksForDestination, rawDestination, safeDestinationIn, authLink, landing, rememberDestination, storedDestination, type Where } from "../src/auth/redirects.ts";
 
 /** Where a sign-in may put somebody down.
  *
@@ -52,6 +52,52 @@ test("the portal refuses to send anybody back into itself", () => {
     // A redirect into sign-in makes a loop that reads as a broken password.
     assert.equal(ok("/auth"), null);
     assert.equal(ok("https://app.example.test/auth"), null);
+    for (const path of ["/auth/signup", "/login", "/signup", "/verify-email", "/reset-password"]) {
+        assert.equal(ok(path), null);
+    }
+});
+
+test("the configured API is trusted for admin and connector returns", () => {
+    const where = { ...HERE, apiOrigin: "https://api.example.test/gateway/" };
+    assert.equal(ok("https://api.example.test/admin", where), "https://api.example.test/admin");
+    assert.equal(ok("https://api.example.test.evil.example/admin", where), null);
+    assert.equal(ok("https://other.example.test/admin", where), null);
+});
+
+test("auth steps preserve the destination without carrying sensitive link parameters", (t) => {
+    const values = new Map<string, string>();
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+    t.after(() => {
+        if (previous) Object.defineProperty(globalThis, "window", previous);
+        else Reflect.deleteProperty(globalThis, "window");
+    });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {
+        location: { origin: HERE.origin, search: "" },
+        sessionStorage: {
+            getItem: (key: string) => values.get(key) ?? null,
+            setItem: (key: string, value: string) => { values.set(key, value); },
+            removeItem: (key: string) => { values.delete(key); },
+        },
+    } });
+    const target = HERE.origin + "/t/example?tab=files#section";
+    const search = "?redirect_uri=" + encodeURIComponent(target) + "&token=secret&code=secret";
+    const signup = authLink("/auth/signup", search);
+    assert.equal(new URL(signup, HERE.origin).searchParams.get("redirect_uri"), target);
+    assert.equal(new URL(signup, HERE.origin).searchParams.has("token"), false);
+    assert.equal(new URL(signup, HERE.origin).searchParams.has("code"), false);
+    rememberDestination(target);
+    assert.equal(new URL(authLink("/auth", "?token=reset"), HERE.origin).searchParams.get("redirect_uri"), target);
+    assert.equal(landing(""), target);
+    assert.equal(storedDestination(), null);
+    rememberDestination(target);
+    assert.equal(landing(search), target);
+    assert.equal(storedDestination(), null);
+    rememberDestination(target);
+    assert.equal(landing("?redirect_uri=https://evil.example"), "/t");
+    assert.equal(storedDestination(), null);
+    rememberDestination(target);
+    rememberDestination(null);
+    assert.equal(landing(""), "/t");
 });
 
 test("nothing asked for is nothing honoured", () => {
