@@ -149,6 +149,32 @@ async def ensure_chat_workspace(
         )
 
 
+async def accept_chat_invitations(
+    uow_factory: UnitOfWorkFactory, *, user_id: UUID
+) -> None:
+    """Honour a recognised chat user's pending invitations before offering pods.
+
+    Somebody who already has an account and messages from a new chat is asked
+    which workspace to use; a pod they were invited to belongs on that list,
+    and accepting it is what puts it there. Only a verified address may.
+    """
+    from app.modules.identity.api.dependencies import get_organization_service
+    from app.modules.identity.services.pending_invitations import (
+        accept_pending_invitations,
+    )
+
+    async with uow_factory() as uow:
+        user = await uow.session.get(User, user_id)
+        if user is None or not user.is_verified:
+            return
+        await accept_pending_invitations(
+            uow,
+            organization_service=get_organization_service(uow),
+            user_id=user_id,
+            email=user.email,
+        )
+
+
 async def ensure_chat_organization(
     uow: SqlAlchemyUnitOfWork, *, user_id: UUID
 ) -> UUID | None:

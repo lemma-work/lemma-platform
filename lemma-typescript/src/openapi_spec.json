@@ -6510,6 +6510,7 @@
             "enum": [
               "existing",
               "surface_join",
+              "invitation",
               "domain_join",
               "new_org"
             ],
