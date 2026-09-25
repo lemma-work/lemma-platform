@@ -132,6 +132,21 @@ pub(crate) fn build(
         ]
         .concat(),
     ));
+    // The key ALTCHA challenges are signed with, and the one sign-in counters
+    // are keyed by. Always rendered, although ALTCHA is off until sharing turns
+    // it on: the sharing overlay only flips switches, and a switch flipped with
+    // no key behind it made the challenge endpoint refuse -- so the moment an
+    // installation was shared, nobody could sign in or sign up at all. Derived
+    // like the keys above, so it lives in the same owner-only secret file and
+    // is stable across restarts, which keeps a challenge issued just before a
+    // restart answerable just after it.
+    let altcha_key = URL_SAFE.encode(Sha256::digest(
+        [
+            secrets.installation_secret.as_bytes(),
+            b"lemma-auth-altcha-hmac-v1",
+        ]
+        .concat(),
+    ));
     let frontend_port = ports.frontend_port;
     let backend_port = ports.backend_port;
     let runtime_instance_id = random_hex(16)?;
@@ -357,6 +372,7 @@ pub(crate) fn build(
         ("AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED", "false".to_owned()),
         ("AUTH_ABUSE_PROTECTION_ENABLED", "false".to_owned()),
         ("AUTH_ALTCHA_ENABLED", "false".to_owned()),
+        ("AUTH_ALTCHA_HMAC_KEY", altcha_key),
         ("DESKTOP_AUTH_CREATE_LIMIT", "0".to_owned()),
         (
             "AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED",
