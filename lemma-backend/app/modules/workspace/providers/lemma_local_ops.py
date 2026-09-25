@@ -24,7 +24,7 @@ from sandbox_runtime.protocol import (
     TerminalSize,
 )
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.modules.workspace.providers.desktop_tunnel import remember_guest_address
 from app.modules.workspace.providers.profiles import FUNCTION_RUNTIME_PORT
@@ -36,13 +36,25 @@ from app.modules.workspace.providers.base import (
     ProviderRejected,
     SandboxEndpoint,
 )
-from app.modules.workspace.providers.lemma_local_config import LocalBridgeError
+from app.modules.workspace.providers.lemma_local_config import (
+    LemmaLocalProviderConfig,
+    LocalBridgeError,
+)
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeClient
 from app.modules.workspace.providers.runtime_errors import WorkspaceRuntimeError
 
 
+if TYPE_CHECKING:
+    from app.modules.workspace.providers.docker import RuntimeCredentialSigner
+
+
 class LemmaLocalOpsMixin:
     """The `SandboxOpsProvider` half of the Desktop provider."""
+
+    # Set by the provider's constructor; the credential derivation and the
+    # runtime reach below read them.
+    _config: LemmaLocalProviderConfig
+    _runtime_credentials: RuntimeCredentialSigner
 
     capabilities = frozenset(
         {ProviderCapability.PORT_REACH, ProviderCapability.SECRET_DELIVERY}
