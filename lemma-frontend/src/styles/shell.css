@@ -5330,10 +5330,32 @@ a.reach { text-decoration: none; }
 .message-actions .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
 .copy-control__button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: var(--paper); color: var(--ink-2); cursor: pointer; }
 .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
-.copy-section { margin: 12px 0; padding-top: 32px; border: 1px solid var(--line-2); border-radius: 10px; }
-.copy-section > .copy-control { position: absolute; top: 0; right: 0; }
-.copy-section pre { margin: 0; }
-.copy-section:has(table) { overflow-x: auto; }
+/* The copy button floats over the block's top-right corner instead of
+   owning a strip above it, and only shows on hover or focus (always on touch,
+   where there is no hover). */
+.copy-section { margin: 0 0 12px; min-width: 0; }
+.copy-section > .copy-control { position: absolute; top: 6px; right: 6px; z-index: 1; opacity: 0; transition: opacity .12s; }
+.copy-section:hover > .copy-control,
+.copy-section:focus-within > .copy-control { opacity: 1; }
+@media (hover: none) { .copy-section > .copy-control { opacity: 1; } }
+.copy-section > .copy-control .copy-control__button { width: 28px; height: 28px; background: var(--chrome); color: var(--ink-3); }
+.copy-section > .copy-control .copy-control__button:hover { background: var(--paper); color: var(--ink); }
+.copy-section > pre,
+.copy-section > blockquote,
+.copy-section > details { margin: 0; }
+/* Code wraps to the column rather than scrolling sideways; room is kept on
+   the right so the first line never runs under the button. */
+.copy-section > pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; padding-right: 40px; border: 0; }
+.copy-section > pre code { white-space: inherit; }
+/* Tables fit the column when they can and scroll only inside their own frame
+   when they genuinely can't. */
+.copy-section:has(> table) { overflow-x: auto; }
+.copy-section > table { width: 100%; margin: 0; border-collapse: collapse; }
+.copy-section > table th,
+.copy-section > table td { padding: 8px 12px; vertical-align: top; overflow-wrap: anywhere; min-width: 6ch; }
+.copy-section > table th { background: var(--chrome); }
+.copy-section > table th:last-child { padding-right: 40px; }
+.copy-section > table tr:last-child td { border-bottom: 0; }
 
 
 .apps-pane { padding: 28px clamp(20px, 3vw, 40px); }
