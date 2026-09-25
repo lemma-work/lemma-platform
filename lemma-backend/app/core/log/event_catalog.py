@@ -627,6 +627,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.email_login.continue_resolved': EventSpec('info', frozenset({'method'})),
     'identity.email_verification.invalid_local_user_id': EventSpec('warning', frozenset()),
     'identity.email_verification.local_user_missing': EventSpec('warning', frozenset()),
+    'identity.first_workspace.invitation_accepted': EventSpec('info', frozenset({'invitation_id', 'user_id'})),
+    'identity.first_workspace.invitation_skipped': EventSpec('warning', frozenset({'error_type', 'invitation_id'})),
     'identity.jwks_guard.install_failed.degraded': EventSpec('warning', frozenset()),
     'identity.jwks_guard.unknown_kid_cache_full.degraded': EventSpec('warning', frozenset()),
     'identity.mobile_verification.whatsapp.feedback_send_failed': EventSpec('warning', frozenset({'error_type', 'outcome'})),

@@ -54,6 +54,7 @@ from app.modules.agent_surfaces.services.personal_dm_routes import (
     prepare_personal_dm_context,
 )
 from app.modules.identity.contracts.onboarding import (
+    accept_chat_invitations,
     PENDING_TTL_SECONDS,
     active_chat_user,
 )
@@ -308,6 +309,9 @@ async def offer_workspace_choice(
             receiver_surface_ids=transport.receiver_surface_ids,
         ):
             return None
+    # A pod they were invited to is one of the answers; accepting the
+    # invitation is what makes it one.
+    await accept_chat_invitations(uows, user_id=verified_user_id)
     async with uows() as uow:
         pods = await candidate_pods(
             uow,

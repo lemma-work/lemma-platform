@@ -28,9 +28,17 @@ from app.modules.identity.infrastructure.models.organization_models import (
 )
 from app.modules.identity.infrastructure.workspace_locks import lock_workspace_selection
 from app.modules.identity.services.organization_service import OrganizationService
-from app.modules.pod.contracts.personal_workspace import ensure_personal_workspace
+from app.modules.identity.services.pending_invitations import (
+    accept_pending_invitations,
+)
+from app.modules.pod.contracts.personal_workspace import (
+    ensure_personal_workspace,
+    invited_workspace,
+)
 
-WorkspaceEntry = Literal["existing", "surface_join", "domain_join", "new_org"]
+WorkspaceEntry = Literal[
+    "existing", "surface_join", "invitation", "domain_join", "new_org"
+]
 WorkspaceStatus = Literal["ready", "organization_access_required"]
 
 
@@ -60,6 +68,7 @@ async def ensure_first_workspace(
     user = await _workspace_user(uow, user_id)
     email = user.email
     entry: WorkspaceEntry = "existing"
+    invited_pod_id: UUID | None = None
     organization_id = arrived_through_organization_id
     if organization_id is not None:
         # The installation fixes the destination even if the user belongs to
@@ -78,53 +87,33 @@ async def ensure_first_workspace(
             )
         entry = "surface_join"
     else:
-        organization_id = await uow.session.scalar(
-            select(OrganizationMember.organization_id)
-            .where(OrganizationMember.user_id == user_id)
-            .order_by(OrganizationMember.organization_id)
-            .limit(1)
+        # Invitations first: they are the one place somebody else already said
+        # where this person belongs. Only a verified address may accept one.
+        invited = (
+            await accept_pending_invitations(
+                uow,
+                organization_service=organization_service,
+                user_id=user_id,
+                email=email,
+            )
+            if user.is_verified
+            else None
         )
+        if invited is not None:
+            organization_id = invited.organization_id
+            invited_pod_id = invited.pod_id
+            entry = "invitation"
+        else:
+            organization_id = await uow.session.scalar(
+                select(OrganizationMember.organization_id)
+                .where(OrganizationMember.user_id == user_id)
+                .order_by(OrganizationMember.organization_id)
+                .limit(1)
+            )
         if organization_id is None:
-            work_domain = work_domain_from_email(email) if user.is_verified else None
-            if work_domain:
-                await lock_workspace_selection(uow.session, f"domain:{work_domain}")
-            suggested = []
-            if work_domain:
-                suggested, _ = await organization_service.list_suggested_organizations(
-                    user_id, limit=1
-                )
-            organization = None
-            if suggested:
-                try:
-                    organization = (
-                        await organization_service.join_auto_join_organization(
-                            suggested[0].id, user_id
-                        )
-                    )
-                    entry = "domain_join"
-                except OrganizationMemberLimitError:
-                    # Their company's organization is as full as its plan
-                    # allows. Signing up must not dead-end on that, so they
-                    # start one of their own -- claiming nothing, since the
-                    # company already holds the domain.
-                    work_domain = None
-            if organization is None:
-                organization = await organization_service.create_organization(
-                    OrganizationEntity(
-                        name=organization_name_candidate(
-                            email=email, work_domain=work_domain
-                        ),
-                        slug="",
-                        join_policy=OrganizationJoinPolicy.EMAIL_DOMAIN
-                        if work_domain
-                        else OrganizationJoinPolicy.INVITE_ONLY,
-                        email_domain=work_domain,
-                    ),
-                    user_id,
-                    resolve_name_conflicts=True,
-                )
-                entry = "new_org"
-            organization_id = organization.id
+            organization_id, entry = await _join_or_create_organization(
+                uow, organization_service=organization_service, user=user
+            )
 
     await lock_workspace_selection(uow.session, f"organization:{organization_id}")
     membership_id = await uow.session.scalar(
@@ -137,7 +126,15 @@ async def ensure_first_workspace(
         raise IdentityAccessDeniedError("Organization membership is required")
     pod_id = assistant_id = None
     pod_created = False
-    if with_pod:
+    invited_pod = (
+        await invited_workspace(uow, pod_id=invited_pod_id, user_id=user_id)
+        if with_pod and invited_pod_id is not None
+        else None
+    )
+    if invited_pod is not None:
+        # The chat goes where they were invited; a spare pod beside it is clutter.
+        pod_id, assistant_id = invited_pod.pod_id, invited_pod.assistant_id
+    elif with_pod:
         personal = await ensure_personal_workspace(
             uow,
             organization_id=organization_id,
@@ -160,6 +157,53 @@ async def ensure_first_workspace(
         organization_created=entry == "new_org",
         pod_created=pod_created,
     )
+
+
+async def _join_or_create_organization(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    organization_service: OrganizationService,
+    user: User,
+) -> tuple[UUID, WorkspaceEntry]:
+    """No invitation and no membership: their company's organization, or a new one."""
+    email = user.email
+    entry: WorkspaceEntry = "new_org"
+    work_domain = work_domain_from_email(email) if user.is_verified else None
+    if work_domain:
+        await lock_workspace_selection(uow.session, f"domain:{work_domain}")
+    suggested = []
+    if work_domain:
+        suggested, _ = await organization_service.list_suggested_organizations(
+            user.id, limit=1
+        )
+    organization = None
+    if suggested:
+        try:
+            organization = await organization_service.join_auto_join_organization(
+                suggested[0].id, user.id
+            )
+            entry = "domain_join"
+        except OrganizationMemberLimitError:
+            # Their company's organization is as full as its plan
+            # allows. Signing up must not dead-end on that, so they
+            # start one of their own -- claiming nothing, since the
+            # company already holds the domain.
+            work_domain = None
+    if organization is None:
+        organization = await organization_service.create_organization(
+            OrganizationEntity(
+                name=organization_name_candidate(email=email, work_domain=work_domain),
+                slug="",
+                join_policy=OrganizationJoinPolicy.EMAIL_DOMAIN
+                if work_domain
+                else OrganizationJoinPolicy.INVITE_ONLY,
+                email_domain=work_domain,
+            ),
+            user.id,
+            resolve_name_conflicts=True,
+        )
+        entry = "new_org"
+    return organization.id, entry
 
 
 async def _workspace_user(uow: SqlAlchemyUnitOfWork, user_id: UUID) -> User:
