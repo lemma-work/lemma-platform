@@ -8,6 +8,7 @@ import { authFailure, sayProblem, type Attempt } from "./errors";
 import { PORTAL_PATH, siteOrigin } from "./config";
 import { authLink, rememberDestination, pendingDestination, destinationFrom, asksForDestination } from "./redirects";
 import { accountAccess, completeAuth, completionDestination } from "./completion";
+import { continueWithProvider } from "./provider-login";
 import { EmailCodeForm } from "./email-code-form";
 import { waitingFor } from "./waiting";
 import { CharacterPuppet } from "@/shell/character-puppet";
@@ -301,15 +302,7 @@ function Providers({ onProblem }: { onProblem: (said: string) => void }) {
     const leave = useCallback(async (thirdPartyId: string) => {
         setGoing(thirdPartyId);
         try {
-            /* The destination is put away before we leave: the provider brings
-               the browser back to the callback with a URL of its own making,
-               and whatever was asked for originally is not in it. */
-            rememberDestination(pendingDestination(window.location.search));
-            const url = await ThirdParty.getAuthorisationURLWithQueryParamsAndSetState({
-                thirdPartyId,
-                frontendRedirectURI: siteOrigin() + PORTAL_PATH + "/callback/" + thirdPartyId,
-            });
-            window.location.assign(url);
+            await continueWithProvider(thirdPartyId);
         } catch (error) {
             setGoing(null);
             onProblem(sayProblem(error));
@@ -337,6 +330,8 @@ function Providers({ onProblem }: { onProblem: (said: string) => void }) {
 
 export function SignInUp({ mode }: { mode: "in" | "up" }) {
     const [usePassword, setUsePassword] = useState(false);
+    const [existingPassword, setExistingPassword] = useState(false);
+    const signingIn = mode === "in" || existingPassword;
     const attempted = useRef(false);
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -350,7 +345,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
     const [onPassword, setOnPassword] = useState(false);
     const { go, refused } = useLanding();
 
-    const attempt: Attempt = mode === "in" ? "sign-in" : "sign-up";
+    const attempt: Attempt = signingIn ? "sign-in" : "sign-up";
     const other = authLink(mode === "in" ? PORTAL_PATH + "/signup" : PORTAL_PATH);
 
     useEffect(() => {
@@ -373,7 +368,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
         try {
             if (authenticated) { await go(); return; }
             const formFields = [{ id: "email", value: email.trim() }, { id: "password", value: password }];
-            const answer = mode === "in"
+            const answer = signingIn
                 ? await EmailPassword.signIn({ formFields })
                 : await EmailPassword.signUp({ formFields });
 
@@ -404,16 +399,16 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
             }
             setSaid(sayProblem(error));
         }
-    }, [email, password, mode, go, attempt, authenticated]);
+    }, [email, password, signingIn, go, attempt, authenticated]);
 
     return (
         <Screen
-            title={mode === "in" ? "Welcome back" : "Make an account"}
+            title={signingIn ? "Welcome back" : "Make an account"}
             /* The left half already says what is through the door, so the
                right half does not say it again — it asks. Sign-up keeps a line
                because it is the one screen where somebody does not yet know
                what they are agreeing to do. */
-            lead={mode === "in" ? undefined : "Create your account, then hire your first AI teammate."}
+            lead={signingIn ? undefined : "Create your account, then hire your first AI teammate."}
             footer={mode === "in"
                 ? <>First time here? <a href={other}>Make an account</a></>
                 : <>Already have one? <a href={other}>Sign in</a></>}
@@ -422,24 +417,27 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
             {refused && <Refused />}
             <Providers onProblem={setSaid} />
             <p className="auth__or"><span>or</span></p>
-            {!usePassword ? <><EmailCodeForm onAttempt={() => { attempted.current = true; }} /><Problem said={said} /></> : <form onSubmit={submit} noValidate>
+            {!usePassword ? <><EmailCodeForm onAttempt={() => { attempted.current = true; }} onPassword={address => {
+                setEmail(address); setExistingPassword(true); setUsePassword(true); setSaid(null);
+            }} /><Problem said={said} /></> : <form onSubmit={submit} noValidate>
+                {existingPassword && <p className="auth__note">This account uses a password. Enter it to sign in.</p>}
                 <Field id="email" label="Email" type="email" autoComplete="email" autoFocus
                     value={email} onChange={setEmail} said={fields.email} />
                 <Field id="password" label="Password" type="password"
-                    autoComplete={mode === "in" ? "current-password" : "new-password"}
+                    autoComplete={signingIn ? "current-password" : "new-password"}
                     onFocus={() => setOnPassword(true)} onBlur={() => setOnPassword(false)}
                     value={password} onChange={setPassword} said={fields.password} />
                 <Problem said={said} />
                 <div className="screen__actions">
                     <button className="btn btn--primary" type="submit" disabled={busy}>
-                        {busy ? "One moment\u2026" : authenticated ? "Continue" : mode === "in" ? "Sign in" : "Make my account"}
+                        {busy ? "One moment\u2026" : authenticated ? "Continue" : signingIn ? "Sign in" : "Make my account"}
                     </button>
-                    {mode === "in" && <a className="screen__aside" href={authLink(PORTAL_PATH + "/reset-password")}>Forgotten your password?</a>}
+                    {signingIn && <a className="screen__aside" href={authLink(PORTAL_PATH + "/reset-password")}>Forgotten your password?</a>}
                 </div>
             </form>}
             <button className="linkish" type="button" disabled={busy} onClick={() => {
-                setUsePassword(!usePassword); setOnPassword(false); setSaid(null);
-            }}>{usePassword ? "Use an email code instead" : "Use a password instead"}</button>
+                setUsePassword(!usePassword); setExistingPassword(false); setOnPassword(false); setSaid(null);
+            }}>{usePassword ? existingPassword ? "Use another email" : "Use an email code instead" : "Use a password instead"}</button>
         </Screen>
     );
 }

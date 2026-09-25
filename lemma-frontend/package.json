@@ -20,7 +20,8 @@
     "check": "npm run lint && npm run check:naming && npm run check:design && npm run typecheck && npm run check:openapi-spec",
     "sync:openapi-spec": "node scripts/sync-openapi-spec.mjs",
     "check:openapi-spec": "node scripts/sync-openapi-spec.mjs --check",
-    "test:auth-browser": "node --test tests/browser/auth.test.mjs"
+    "test:auth-browser": "node --test tests/browser/auth.test.mjs",
+    "test:auth-live": "node --test tests/browser/auth-live.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.22.0",

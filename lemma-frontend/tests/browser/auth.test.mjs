@@ -41,7 +41,7 @@ async function fixture(t, { signedIn = false, verified = false } = {}) {
     const context = await browser.newContext();
     context.setDefaultTimeout(15_000);
     t.after(() => context.close());
-    const state = { signedIn, verified, sends: 0, signups: 0, verifies: 0, blockedAccess: false, failAfterSignup: false, callbacks: 0, codeSends: 0, codeVerifies: 0, nonceRequests: 0, challengeId: "first-challenge", failAfterCode: false };
+    const state = { signedIn, verified, sends: 0, signups: 0, verifies: 0, blockedAccess: false, failAfterSignup: false, callbacks: 0, codeSends: 0, codeVerifies: 0, nonceRequests: 0, method: "code", provider: "google", abandoned: null, verifyError: null, challengeId: "first-challenge", failAfterCode: false };
     const headers = () => ({
         'front-token': Buffer.from(JSON.stringify({ uid: 'test-user', ate: Date.now() + 3600_000, up: { 'st-ev': { v: state.verified, t: Date.now() } } })).toString('base64'),
     });
@@ -60,16 +60,21 @@ async function fixture(t, { signedIn = false, verified = false } = {}) {
             assert.equal(route.request().headers()['st-auth-mode'], 'cookie');
             if (path.endsWith('/browser')) { state.nonceRequests++; return json({ nonce: 'browser-binding' }); }
             assert.equal(body.nonce, 'browser-binding');
-            if (path.endsWith('/start') || path.endsWith('/resend')) {
+            if (path.endsWith('/continue')) {
+                state.abandoned = body.abandon_challenge_id;
+                if (state.method !== 'code') return json({ method: state.method, provider: state.provider });
+            }
+            if (path.endsWith('/continue') || path.endsWith('/resend')) {
                 if (path.endsWith('/resend')) {
                     assert.equal(body.challenge_id, state.challengeId);
                     state.challengeId = 'replacement-challenge';
                 }
                 state.codeSends++;
-                return json({ challenge_id: state.challengeId, expires_at: new Date(Date.now() + 600_000).toISOString() });
+                return json({ method: "code", challenge_id: state.challengeId, expires_at: new Date(Date.now() + 600_000).toISOString() });
             }
             assert.equal(body.challenge_id, state.challengeId);
             state.codeVerifies++;
+            if (state.verifyError) return json(state.verifyError, 403);
             if (body.code !== '123456') return json({ message: 'The code did not match; try again' }, 400);
             state.signedIn = true;
             state.verified = true;
@@ -241,4 +246,74 @@ test('a failed post-code account check retries completion without consuming the 
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.waitForURL(origin + '/destination?view=files#section');
     assert.equal(state.codeVerifies, 1);
+});
+
+for (const provider of ["google", "active-directory"]) {
+    test(`email lookup routes ${provider} accounts to their provider without sending a code`, async t => {
+        const { page, state } = await fixture(t, { verified: true });
+        state.method = "thirdparty"; state.provider = provider;
+        await page.goto(origin + start);
+        await page.getByLabel('Email', { exact: true }).fill('person@example.test');
+        await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+        await page.getByText(/This email signs in with/).waitFor();
+        const name = provider === "google" ? "Google" : "Microsoft";
+        await page.locator('form').getByRole('button', { name: 'Continue with ' + name }).click();
+        await page.waitForURL(origin + '/destination?view=files#section');
+        assert.equal(state.codeSends, 0);
+        assert.equal(state.callbacks, 1);
+    });
+}
+
+test('existing password account on signup signs in instead of creating a duplicate', async t => {
+    const { page, state } = await fixture(t, { verified: true });
+    state.method = 'password';
+    await page.goto(origin + '/auth/signup?redirect_uri=%2Fdestination');
+    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
+    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await page.getByLabel('Password', { exact: true }).fill('ExamplePassword123!');
+    assert.equal(await page.getByLabel('Email', { exact: true }).inputValue(), 'person@example.test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.waitForURL(origin + '/destination');
+    assert.equal(state.signups, 0); assert.equal(state.codeSends, 0);
+});
+
+test('correcting an email abandons its challenge without waiting for resend cooldown', async t => {
+    const { page, state } = await fixture(t);
+    await page.goto(origin + start);
+    await page.getByLabel('Email', { exact: true }).fill('typo@example.test');
+    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await page.getByRole('button', { name: 'Change email', exact: true }).click();
+    await page.getByLabel('Email', { exact: true }).fill('correct@example.test');
+    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await page.getByLabel('Verification code').waitFor();
+    assert.equal(state.abandoned, 'first-challenge'); assert.equal(state.codeSends, 2);
+});
+
+test('expired browser binding restarts email entry and mints a fresh nonce', async t => {
+    const { page, state } = await fixture(t);
+    await page.goto(origin + start);
+    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
+    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    state.verifyError = { code: 'EMAIL_LOGIN_EXPIRED', message: 'Login expired; start again in this browser.' };
+    await page.getByLabel('Verification code').fill('123456');
+    await page.getByRole('button', { name: 'Verify and continue' }).click();
+    await page.getByRole('alert').filter({ hasText: 'Login expired' }).waitFor();
+    assert.equal(await page.getByLabel('Email', { exact: true }).inputValue(), 'person@example.test');
+    state.verifyError = null;
+    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await page.getByLabel('Verification code').waitFor();
+    assert.equal(state.nonceRequests, 2);
+});
+
+test('a configuration refusal preserves the challenge instead of restarting on every 403', async t => {
+    const { page, state } = await fixture(t);
+    await page.goto(origin + start);
+    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
+    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    state.verifyError = { code: 'EMAIL_LOGIN_ORIGIN_NOT_ALLOWED', message: 'This email sign-in page is not configured for this service.' };
+    await page.getByLabel('Verification code').fill('123456');
+    await page.getByRole('button', { name: 'Verify and continue' }).click();
+    await page.getByRole('alert').filter({ hasText: 'not configured' }).waitFor();
+    assert.equal(await page.getByLabel('Verification code').count(), 1);
+    assert.equal(state.nonceRequests, 1);
 });
