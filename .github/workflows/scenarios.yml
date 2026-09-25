@@ -344,7 +344,7 @@ jobs:
   scenarios-reported:
     name: scenarios reported
     timeout-minutes: 10
-    needs: [journeys, sandbox, clients]
+    needs: [journeys, sandbox, clients, public-website]
     if: >-
       !cancelled() &&
       (github.event_name != 'pull_request' ||
@@ -452,5 +452,11 @@ jobs:
         working-directory: lemma-frontend
       - run: uv sync
         working-directory: tests/scenarios
-      - run: uv run pytest journeys/public_website -q
+      - run: uv run pytest journeys/public_website -q --junitxml=public-website-results.xml
         working-directory: tests/scenarios
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: scenarios-public-website
+          path: tests/scenarios/public-website-results.xml
+          retention-days: 7

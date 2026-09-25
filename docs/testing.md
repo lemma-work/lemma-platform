@@ -74,6 +74,7 @@ way a scenario says, do not edit the scenario.
 | Chat + Agent Host | `make desktop-agent-host-browser-e2e` | Same required job. Real web chat, streaming, Stop, concurrent approvals, tool approval/denial, provider failure, disconnect, and transcript reload driven by JSON ACP fixtures; no provider account. |
 | Scenario gates | `make scenarios-guards`, `make scenario-coverage` | Every pull request |
 | Scenarios (fast) | `make scenarios` | Nightly, on request, or with the `run-scenarios` label |
+| Scenarios (all local lanes) | `make scenarios-all` | Locally; runs non-live journeys, sandbox cases and client conformance, then writes one report |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
 | Scenarios (live) | `make scenarios-live` | Locally, before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
 | Protected e2e | `make test-e2e-runtime` | Weekly and on every `v*` tag, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go, and what every Desktop release gate reads. It builds nothing, so a test needing a compiled artifact belongs in the lane that builds it. |

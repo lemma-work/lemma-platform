@@ -22,6 +22,23 @@ make scenarios
 Needs Docker — the suite starts Postgres, Redis and SuperTokens, migrates the
 database, and runs the backend under uvicorn. First run pulls images.
 
+Run every scenario that can execute without real third-party credentials,
+including sandbox and shipped-client conformance, with one report:
+
+```bash
+make scenarios-all
+```
+
+This builds the sandbox images and TypeScript SDK, prepares the CLI and Python
+SDK environments, then runs the suite against one Compose-managed dependency
+stack. JUnit and Markdown reports are written to
+`tests/scenarios/artifacts/`. If `SLACK_WEBHOOK_URL` is set, the summary is also
+posted to Slack. Live provider scenarios stay separate because they need real
+accounts and credentials; run those with `make scenarios-live`.
+
+The command defaults to one worker process to match the CI scenario lanes. Set
+`SCENARIOS_WORKERS=3` to try the multi-replica worker shape locally.
+
 While writing scenarios, the guards are the fast loop — no Docker, no stack,
 about twenty milliseconds:
 
@@ -39,7 +56,7 @@ cd tests/scenarios && uv run pytest --base-url http://localhost:8710
 
 | Piece | What it does |
 |---|---|
-| `harness/stack.py` | Boots the system under test and hands back a URL |
+| `harness/stack.py` | Boots the system under test, using Docker Compose for disposable dependencies, and hands back a URL |
 | `harness/environment.py` | Asks the target what it is configured to do, and whether this run may write to it |
 | `harness/tenant.py` | Who the standing cast are, and what they are to each other |
 | `harness/provision.py` | Builds that tenant on a deployment, or puts it back |
@@ -336,18 +353,10 @@ to, no Docker, ~20ms.
 
 ### Running the whole suite locally
 
-Every journey shares one stack, which is not the shape CI runs (it shards by
-journey). Give it the replica shape the product is built for:
-
-```bash
-SCENARIOS_WORKERS=3 make scenarios
-```
-
-`SCENARIOS_WORKERS` is how many worker processes the stack boots — one unless
-asked. `schedule_poller` says "Every replica runs this. Nothing elects a leader;
-the claim decides who fires", and one worker draining several hundred queued
-agent runs through a single event loop is how a scenario ends up waiting on a
-reply that is merely behind a queue.
+Use `make scenarios-all` to run the complete local suite and write one report.
+It defaults to one worker process, matching the CI journey lanes. Increase
+`SCENARIOS_WORKERS` if you specifically want to exercise multiple worker
+replicas; `schedule_poller` is designed for that deployment shape.
 
 It is **refused above 1 when a polling receiver is on** — Telegram answers a
 second `getUpdates` for the same bot with 409 Conflict and the two pollers take
