@@ -118,6 +118,28 @@
     line-height: 1.55;
 }
 
+.portal__destination {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    max-width: 24rem;
+    box-sizing: border-box;
+    margin: 32px 0 0;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    text-align: left;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink-3);
+}
+.portal__destination strong {
+    color: var(--ink);
+    font-weight: 500;
+    overflow-wrap: anywhere;
+}
+
 /* One column under a laptop. The aside keeps the logo and the cast and drops
    the job list — on a phone that list is three lines of scrolling before
    somebody reaches the thing they came to do. */
@@ -138,6 +160,7 @@
         background: none;
     }
     .portal__brand { position: static; }
+    .portal__destination { margin: 16px 0 0; text-align: left; }
     /* Both, and they are siblings — hiding the middle alone left the job list
        sitting under the logo with its divider, which is the one piece of the
        composition that makes no sense on its own. */
