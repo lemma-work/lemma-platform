@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from uuid import UUID
 
 import pytest
 
@@ -21,18 +22,27 @@ from app.modules.identity.services.signup_gate import Admission, SignupGate
 pytestmark = pytest.mark.unit
 
 
+INVITATION = UUID("6f1d8c1e-2c2a-4b0e-9d3b-0c9a0f5e7a11")
+
+
 @dataclass
 class _Store:
     users: bool = True
     invited: set[str] = field(default_factory=set)
+    #: The id each invited address's invitation carries.
+    invitation_ids: dict[str, UUID] = field(default_factory=dict)
     user_reads: int = 0
 
     async def has_any_user(self) -> bool:
         self.user_reads += 1
         return self.users
 
-    async def has_pending_invitation(self, email: str, *, now: datetime) -> bool:
-        return email in self.invited
+    async def has_pending_invitation(
+        self, email: str, *, now: datetime, invitation_id: UUID | None = None
+    ) -> bool:
+        if email not in self.invited:
+            return False
+        return invitation_id is None or self.invitation_ids.get(email) == invitation_id
 
 
 def _gate(store: _Store, **settings: object) -> SignupGate:
@@ -119,3 +129,46 @@ async def test_a_server_may_be_made_invite_only() -> None:
     assert await gate.admit("guest@example.com") is Admission.INVITED
     with pytest.raises(SignupNotAllowedError):
         await gate.admit("stranger@example.com")
+
+
+@pytest.mark.asyncio
+async def test_an_unproven_address_must_present_its_invitation() -> None:
+    """Typing an invited person's address is not being them.
+
+    A Desktop installation shared with email verification off never checks
+    that a password sign-up owns its address. Matching the invitation by
+    address alone let anybody who knew an invitee's email take their seat.
+    """
+    store = _Store(
+        invited={"guest@example.com"},
+        invitation_ids={"guest@example.com": INVITATION},
+    )
+    gate = _gate(store, deployment_kind="desktop")
+
+    for presented in (None, "", "not-a-uuid", "00000000-0000-0000-0000-000000000000"):
+        with pytest.raises(SignupNotAllowedError) as refused:
+            await gate.admit(
+                "guest@example.com", invitation_id=presented, email_proven=False
+            )
+        assert refused.value.code == SignupNotAllowedError.INVITE_ONLY
+
+    assert (
+        await gate.admit(
+            "guest@example.com", invitation_id=str(INVITATION), email_proven=False
+        )
+        is Admission.INVITED
+    )
+    # The invitation is for one address; presenting it for another is refused.
+    with pytest.raises(SignupNotAllowedError):
+        await gate.admit(
+            "stranger@example.com", invitation_id=str(INVITATION), email_proven=False
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_proven_address_is_admitted_by_its_invitation_alone() -> None:
+    """A provider or a code already vouched for the address."""
+    store = _Store(invited={"guest@example.com"})
+    gate = _gate(store, deployment_kind="desktop")
+
+    assert await gate.admit("guest@example.com", email_proven=True) is Admission.INVITED

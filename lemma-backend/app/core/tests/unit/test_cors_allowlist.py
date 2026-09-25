@@ -22,6 +22,8 @@ import re
 
 import pytest
 
+from app.core.exposure import exposure_settings
+
 from app.core import cors
 
 
@@ -94,3 +96,26 @@ def test_a_loopback_apps_domain_still_allows_http(monkeypatch):
     pattern = cors.get_allowed_cors_origin_regex()
 
     assert re.fullmatch(pattern, "http://home-x.apps.lemma.localhost:8711")
+
+
+def test_loopback_defaults_are_dropped_while_a_local_install_is_shared(
+    _origins, monkeypatch
+):
+    """Shared Desktop is local mode with strangers on the other end."""
+    monkeypatch.setattr(cors.settings, "environment", "local")
+    monkeypatch.setattr(exposure_settings, "installation_shared", True)
+
+    origins = cors.get_allowed_cors_origins()
+
+    assert "http://localhost:3000" not in origins
+    assert "tauri://localhost" not in origins
+    assert "https://app.lemma.work" in origins
+
+
+def test_loopback_defaults_stay_for_a_local_install_nobody_else_reaches(
+    _origins, monkeypatch
+):
+    monkeypatch.setattr(cors.settings, "environment", "local")
+    monkeypatch.setattr(exposure_settings, "installation_shared", False)
+
+    assert "http://localhost:3000" in cors.get_allowed_cors_origins()

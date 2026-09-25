@@ -239,7 +239,10 @@ class OrganizationService:
         if not user:
             raise UserNotFoundError()
 
-        domain = work_domain_from_email(str(user.email))
+        # An address nobody proved is not a claim on its domain. On a Desktop
+        # installation shared with email verification off, anybody can sign up
+        # as anybody@company.com.
+        domain = work_domain_from_email(str(user.email)) if user.is_verified else None
         if domain is None:
             return [], None
 
@@ -289,6 +292,8 @@ class OrganizationService:
         if organization.join_policy == OrganizationJoinPolicy.PUBLIC:
             return True
         if organization.join_policy == OrganizationJoinPolicy.EMAIL_DOMAIN:
+            if not user.is_verified:
+                return False
             user_domain = work_domain_from_email(str(user.email))
             return bool(organization.email_domain) and (
                 user_domain == organization.email_domain
@@ -431,6 +436,13 @@ class OrganizationService:
         user = await self.user_repository.get(requester_user_id)
         if not user:
             raise UserNotFoundError()
+        # Listing is how an invitation's id -- the thing that accepts it -- is
+        # found by address alone. Somebody who never proved the address must
+        # arrive with the id instead: the invitation link. Otherwise, on a
+        # Desktop installation shared with email verification off, signing up
+        # as an invited person's address was enough to take their seat.
+        if not user.is_verified:
+            return [], None
 
         (
             invitations,

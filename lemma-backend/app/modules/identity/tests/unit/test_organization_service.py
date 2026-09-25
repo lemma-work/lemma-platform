@@ -526,7 +526,9 @@ async def test_list_user_invitations_uses_user_email(
     user_repository_mock: AsyncMock,
 ):
     user_id = uuid4()
-    user_repository_mock.get.return_value = UserEntity(email="test+invitee@example.com")
+    user_repository_mock.get.return_value = UserEntity(
+        email="test+invitee@example.com", is_verified=True
+    )
     organization_repository_mock.list_user_invitations.return_value = ([], None)
 
     await organization_service.list_user_invitations(
@@ -542,6 +544,54 @@ async def test_list_user_invitations_uses_user_email(
         limit=25,
         cursor="cursor-token",
     )
+
+
+@pytest.mark.asyncio
+async def test_an_unverified_address_is_not_shown_its_invitations(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+    user_repository_mock: AsyncMock,
+):
+    """Listing is how an invitation's id is found by address alone.
+
+    With email verification off -- a shared Desktop installation -- anybody can
+    sign up as anybody's address. The invitee arrives with the id in the link
+    they were sent; an unproven address is shown nothing to accept.
+    """
+    user_repository_mock.get.return_value = UserEntity(
+        email="test+invitee@example.com", is_verified=False
+    )
+
+    invitations, cursor = await organization_service.list_user_invitations(
+        requester_user_id=uuid4()
+    )
+
+    assert (list(invitations), cursor) == ([], None)
+    organization_repository_mock.list_user_invitations.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_unverified_address_joins_no_organization_by_its_domain(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+    user_repository_mock: AsyncMock,
+):
+    user_repository_mock.get.return_value = UserEntity(
+        email="ada@acme.io", is_verified=False
+    )
+    organization_repository_mock.get.return_value = OrganizationEntity(
+        name="Acme",
+        slug="acme",
+        join_policy=OrganizationJoinPolicy.EMAIL_DOMAIN,
+        email_domain="acme.io",
+    )
+    organization_repository_mock.get_member.return_value = None
+
+    suggested, _ = await organization_service.list_suggested_organizations(uuid4())
+    assert list(suggested) == []
+    with pytest.raises(IdentityAccessDeniedError):
+        await organization_service.join_auto_join_organization(uuid4(), uuid4())
+    organization_repository_mock.add_member.assert_not_awaited()
 
 
 @pytest.mark.asyncio
