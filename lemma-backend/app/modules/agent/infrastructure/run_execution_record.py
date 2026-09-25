@@ -80,3 +80,40 @@ async def latest_host_execution(
         )
     ).scalar_one_or_none()
     return value if isinstance(value, dict) else None
+
+
+#: How far back ``earlier_run_sources`` looks. A chain of wait wakes longer
+#: than this is treated as having no person at its start.
+EARLIER_RUNS_LIMIT = 50
+
+
+async def earlier_run_sources(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, run_id: UUID
+) -> list[str | None]:
+    """The ``source`` of each run started before ``run_id``, newest first.
+
+    What a continuation (a wait waking) continues is the work of the runs
+    before it; host execution asks who started that work.
+    """
+    this_run_created = (
+        select(AgentRunModel.created_at)
+        .where(AgentRunModel.id == run_id)
+        .scalar_subquery()
+    )
+    rows = (
+        await uow.session.execute(
+            select(AgentRunModel.run_metadata)
+            .where(
+                AgentRunModel.conversation_id == conversation_id,
+                AgentRunModel.id != run_id,
+                AgentRunModel.created_at <= this_run_created,
+            )
+            .order_by(AgentRunModel.created_at.desc())
+            .limit(EARLIER_RUNS_LIMIT)
+        )
+    ).scalars()
+    sources: list[str | None] = []
+    for metadata in rows:
+        source = metadata.get("source") if isinstance(metadata, dict) else None
+        sources.append(source if isinstance(source, str) else None)
+    return sources

@@ -22,14 +22,21 @@ host if they have one, or to the VM.
 run in it runs as that user, so (2) already names the only human who can type
 into it. What remains is *how* the run started. Only a person in Lemma's own
 app qualifies: a message, a retry, an answer to a question or an approval, or
-the queued follow-up of messages they sent. Continuations of a run that person
-started -- a ``wait_for`` waking, a reply they were waiting on -- qualify for
-the same reason, because the work they continue is theirs. Nothing a schedule
-started does, and nothing that arrived on a channel does: a Slack or email or
-Telegram sender is the platform's assertion, not the user's session, so an
-inbound channel run never executes on the host, whoever it resolved to.
-Sub-agent conversations never do either. An unknown source does not qualify --
-a new source has to be added here on purpose.
+the queued follow-up of messages they sent. A ``wait_for`` waking qualifies
+only when the work it continues was started that way: the runs before it are
+walked back past other wakes, and the first one that is not a wake has to be
+one of those person sources. Nothing a schedule or a workflow started does,
+whatever later runs in its conversation were: a conversation that carries a
+``source`` in its metadata (a workflow run, a schedule, a surface, a
+notification) or a ``workflow_run_id`` was not opened by a person in the app,
+so no run in it executes on the host. A teammate's reply to a message the
+agent sent (``message_replies``) does not qualify either: somebody else's
+words would drive commands on the user's Mac. Nothing that arrived on a
+channel does: a Slack or email or Telegram sender is the platform's
+assertion, not the user's session, so an inbound channel run never executes
+on the host, whoever it resolved to. Sub-agent conversations never do either.
+An unknown source does not qualify -- a new source has to be added here on
+purpose.
 
 **Once.** The check runs the first time the run's context is built, and the
 answer -- host or VM, and for the host which Mac and which folder -- is
@@ -66,6 +73,7 @@ from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.agent.infrastructure.run_execution_record import (
+    earlier_run_sources,
     read_run_execution,
     record_run_execution,
 )
@@ -89,30 +97,81 @@ PERSON_SOURCES = frozenset(
         "person",
     }
 )
-#: Continuing work a person started, with nobody new involved.
-CONTINUATION_SOURCES = frozenset({"agent_wait", "wait_resume", "message_replies"})
+#: Continuing earlier work in the conversation, with nobody new involved.
+#: Qualifies only through the run it continues (``origin_source``).
+CONTINUATION_SOURCES = frozenset({"agent_wait", "wait_resume"})
 
 _CWD_SUFFIX = re.compile(r"/c/(\d{4}-\d{2}-\d{2})/([A-Za-z0-9_-]{1,64})/?$")
 
 
-def triggered_by_run_user(conversation: Conversation, agent_run: AgentRun) -> bool:
-    """Whether the run's user, in Lemma's own app, started this run. See the module."""
+def opened_in_app(conversation: Conversation) -> bool:
+    """Whether a person opened this conversation in Lemma's own app.
+
+    Every conversation something else opens says so in its metadata: a
+    workflow or schedule stamps ``source`` (and ``workflow_run_id``), a surface
+    or a notification stamps ``source``; a surface also stamps
+    ``surface_platform`` and a sub-agent ``is_sub_agent``. The app stamps none.
+    """
     metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    if metadata.get("surface_platform") or metadata.get("is_sub_agent"):
-        return False
+    return not any(
+        metadata.get(key)
+        for key in (
+            "source",
+            "workflow_run_id",
+            "started_by",
+            "surface_platform",
+            "is_sub_agent",
+        )
+    )
+
+
+def run_source(agent_run: AgentRun) -> str | None:
     # Read as `brief_lines.run_source_of` does; not imported, to keep the
     # prompt-brief machinery out of this module's import graph.
     run_metadata = agent_run.metadata if isinstance(agent_run.metadata, dict) else {}
     source = run_metadata.get("source")
+    return source if isinstance(source, str) else None
+
+
+def origin_source(earlier_sources: list[str | None]) -> str | None:
+    """The source of the run a continuation continues: the newest earlier run
+    that is not itself a continuation. None when there is none."""
+    for source in earlier_sources:
+        if source not in CONTINUATION_SOURCES:
+            return source
+    return None
+
+
+def triggered_by_run_user(
+    conversation: Conversation,
+    agent_run: AgentRun,
+    *,
+    earlier_sources: list[str | None] | None = None,
+) -> bool:
+    """Whether the run's user, in Lemma's own app, started this run. See the module.
+
+    ``earlier_sources`` are the sources of the conversation's runs before this
+    one, newest first; only a continuation reads them, and without them a
+    continuation does not qualify.
+    """
+    if not opened_in_app(conversation):
+        return False
+    source = run_source(agent_run)
     if source in PERSON_SOURCES:
         return True
-    started_by_schedule = str(metadata.get("started_by") or "").upper() == "SCHEDULE"
-    return source in CONTINUATION_SOURCES and not started_by_schedule
+    if source not in CONTINUATION_SOURCES or earlier_sources is None:
+        return False
+    return origin_source(earlier_sources) in PERSON_SOURCES
 
 
 async def _recorded_choice(run_id: UUID) -> dict[str, object] | None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         return await read_run_execution(uow, run_id)
+
+
+async def _earlier_sources(conversation_id: UUID, run_id: UUID) -> list[str | None]:
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        return await earlier_run_sources(uow, conversation_id, run_id)
 
 
 async def _record_choice(run_id: UUID, value: dict[str, object]) -> None:
@@ -167,6 +226,10 @@ class HostExecutionFacts:
     open_workspace: Callable[..., Awaitable[HostWorkspace]] = open_host_workspace
     recorded: Callable[[UUID], Awaitable[dict[str, object] | None]] = _recorded_choice
     record: Callable[[UUID, dict[str, object]], Awaitable[None]] = _record_choice
+    #: ``(conversation_id, run_id) -> sources of the runs before it``.
+    earlier_sources: Callable[[UUID, UUID], Awaitable[list[str | None]]] = (
+        _earlier_sources
+    )
 
 
 FACTS = HostExecutionFacts()
@@ -272,7 +335,10 @@ async def _select(
 ) -> tuple[UUID | None, HostWorkspace | None]:
     if conversation.user_id != user_id:
         return None, None
-    if not triggered_by_run_user(conversation, agent_run):
+    earlier: list[str | None] | None = None
+    if opened_in_app(conversation) and run_source(agent_run) in CONTINUATION_SOURCES:
+        earlier = await facts.earlier_sources(conversation.id, agent_run.id)
+    if not triggered_by_run_user(conversation, agent_run, earlier_sources=earlier):
         return None, None
     host_id = await paired_host_for(user_id, conversation.id, facts=facts)
     if host_id is None:
