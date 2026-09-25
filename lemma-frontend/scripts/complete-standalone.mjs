@@ -43,7 +43,7 @@ const { fileList, warnings } = await nodeFileTrace(entries, {
     /* `next` is already in the tree, traced by Next from the routes that
        actually run -- and following `server.mjs`'s import of it would copy the
        whole compiler, which no request ever loads. */
-    ignore: (file) => /(^|\/)node_modules\/next\//.test(file),
+    ignore: (file) => /(^|[\\/])node_modules[\\/]next[\\/]/.test(file),
 });
 for (const warning of warnings) {
     /* Optional peers the SDKs probe for and cope without. A missing module
