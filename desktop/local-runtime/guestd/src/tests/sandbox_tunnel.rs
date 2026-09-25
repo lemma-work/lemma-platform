@@ -6,12 +6,18 @@ use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
 
+/// How long a read that should succeed may take before the test fails instead
+/// of hanging. Generous on purpose: it guards against a hang, not a slow
+/// machine, and a loaded shared CI runner can stall a loopback socket for
+/// seconds.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 /// A connected pair: the host's end, and the end `serve_tunnel` is given.
 fn link() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let host = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (guest, _) = listener.accept().unwrap();
-    host.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    host.set_read_timeout(Some(HANG_GUARD)).unwrap();
     (host, guest)
 }
 

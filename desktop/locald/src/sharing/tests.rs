@@ -5,6 +5,12 @@ use crate::sharing::gateway::*;
 use std::io::{Read, Write};
 use std::sync::mpsc;
 
+/// How long a read that should succeed may take before the test fails instead
+/// of hanging. Generous on purpose: it guards against a hang, not a slow
+/// machine, and a loaded shared CI runner can stall a loopback socket for
+/// seconds.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 fn read_http_head(stream: &mut std::net::TcpStream) -> Vec<u8> {
     let mut received = Vec::new();
     let mut byte = [0_u8; 1];
@@ -305,9 +311,7 @@ fn gateway_streams_sse_before_the_response_finishes_and_replaces_forwarding_head
             .unwrap();
         stream.flush().unwrap();
         first_sent.send(()).unwrap();
-        release_receive
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap();
+        release_receive.recv_timeout(HANG_GUARD).unwrap();
         stream
             .write_all(b"B\r\ndata: two\n\n\r\n0\r\n\r\n")
             .unwrap();
@@ -321,15 +325,13 @@ fn gateway_streams_sse_before_the_response_finishes_and_replaces_forwarding_head
     )
     .unwrap();
     let mut client = std::net::TcpStream::connect(gateway.address).unwrap();
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(HANG_GUARD)).unwrap();
     client
         .write_all(
             b"GET /_lemma/api/events?conversation=1 HTTP/1.1\r\nHost: shared.example\r\nX-Forwarded-For: attacker\r\nForwarded: for=attacker\r\nConnection: close\r\n\r\n",
         )
         .unwrap();
-    first_received.recv_timeout(Duration::from_secs(2)).unwrap();
+    first_received.recv_timeout(HANG_GUARD).unwrap();
     let mut observed = Vec::new();
     let mut buffer = [0_u8; 512];
     while !String::from_utf8_lossy(&observed).contains("data: one") {
@@ -432,9 +434,7 @@ fn gateway_relays_websocket_upgrades_bidirectionally() {
     )
     .unwrap();
     let mut client = std::net::TcpStream::connect(gateway.address).unwrap();
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(HANG_GUARD)).unwrap();
     client
         .write_all(
             b"GET /socket HTTP/1.1\r\nHost: shared.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n",
