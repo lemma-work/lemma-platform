@@ -10,8 +10,6 @@ from typing import Generator, Optional
 
 import psycopg
 
-from app.core.minio_test_image import MINIO_IMAGE, ensure_minio_image
-
 # Use same images as docker-compose.yml for consistency. pgvector 0.8.3 is
 # required for the halfvec vector indexes the search service now builds.
 POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg18"
@@ -25,9 +23,6 @@ SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 # wire schema as 4.9.9, so no client change is needed.
 # The -core image fetches layout/OCR models from HuggingFace on first use.
 KREUZBERG_IMAGE = "ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2"
-# Local-only credentials for a throwaway test container.
-MINIO_ROOT_USER = "minioadmin"
-MINIO_ROOT_PASSWORD = "minioadmin"
 POSTGRES_USER = "test"
 POSTGRES_PASSWORD = "test"
 POSTGRES_DB = "test"
@@ -72,8 +67,8 @@ class LemmaDockerContainer:
         command.extend(self._extra_run_args)
         command.append(self.image)
         # After the image, so this is the container's command rather than a
-        # `docker run` flag. MinIO needs `server /data`; images with a usable
-        # ENTRYPOINT supply nothing here.
+        # `docker run` flag. Images with a usable ENTRYPOINT supply nothing
+        # here.
         command.extend(self._command)
 
         result = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -372,27 +367,6 @@ def get_redis_container() -> Generator[LemmaDockerContainer, None, None]:
     with container as redis:
         _wait_for_tcp(redis, 6379, _env_int("REDIS_STARTUP_TIMEOUT_SECONDS", 120))
         yield redis
-
-
-@contextmanager
-def get_minio_container() -> Generator[LemmaDockerContainer, None, None]:
-    """Start MinIO, so multipart uploads are tested against a real part-size rule.
-
-    The local filesystem store accepts any chunk size. GCS and S3 reject a
-    non-final part under 5 MiB, and a 1 MiB chunk shipped and broke every
-    datastore file upload over 1 MiB in production. MinIO enforces the same
-    minimum, so it reproduces that failure and proves the fix.
-    """
-    ensure_minio_image()
-    container = (
-        LemmaDockerContainer(MINIO_IMAGE, 9000)
-        .with_env("MINIO_ROOT_USER", MINIO_ROOT_USER)
-        .with_env("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
-    )
-    container.with_command("server", "/data")
-    with container as minio:
-        _wait_for_tcp(minio, 9000, _env_int("MINIO_STARTUP_TIMEOUT_SECONDS", 120))
-        yield minio
 
 
 @contextmanager

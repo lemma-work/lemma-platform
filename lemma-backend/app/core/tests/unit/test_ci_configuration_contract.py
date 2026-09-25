@@ -102,7 +102,7 @@ def test_dependabot_is_monthly_grouped_and_uv_native() -> None:
 def test_backend_changes_do_not_trigger_committed_spec_codegen() -> None:
     workflow = _read(".github/workflows/ci.yml")
     codegen_filter = workflow.split("            codegen:\n", 1)[1].split(
-        "\n\n  backend-unit:", 1
+        "\n\n  backend-lint:", 1
     )[0]
 
     assert "lemma-python/lemma_sdk/openapi_spec.json" in codegen_filter

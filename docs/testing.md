@@ -66,15 +66,9 @@ way a scenario says, do not edit the scenario.
 
 ## The lanes, and what runs when
 
-The S3 multipart fixture builds MinIO and its `mc` client from official source
-commits pinned in `lemma-backend/test-images/minio/Dockerfile`. CI caches the
-built image; local tests build it on first use. Docker must be running, and a
-cold build needs network access to GitHub, the Go module proxy, and the builder
-and runtime images. Changing the Dockerfile invalidates both image caches.
-
 | Lane | Command | Runs |
 |---|---|---|
-| Backend unit | `make test-backend-unit` | Every push that touches the backend. **Required.** |
+| Backend unit | `make test-backend-unit` | Every push that touches the backend, via `e2e.yml`. **Required**, through `Backend E2E passed`. |
 | Backend e2e | `make test-e2e-fast` | Every push that touches the backend, via `e2e.yml`. **Required**, as one aggregated check. |
 | Backend + Agent Host | `make desktop-agent-host-e2e` | Backend, frontend, TypeScript SDK or desktop changes, in Desktop contracts CI. **Required.** Builds the Rust host and checks real HTTP streaming and disconnect recovery with a scripted provider. |
 | Chat + Agent Host | `make desktop-agent-host-browser-e2e` | Same required job. Real web chat, streaming, Stop, concurrent approvals, tool approval/denial, provider failure, disconnect, and transcript reload driven by JSON ACP fixtures; no provider account. |
@@ -167,9 +161,9 @@ every push buys little.
 ### What gates a merge
 
 Three checks, all of them aggregators: **`CI passed`**, **`Backend E2E passed`**
-and **`Security passed`**. Everything else reports — a red nightly, a red
-scenario lane or a red coverage gate is a thing to go and read, not a thing that
-stops you.
+and **`Security passed`**. `Backend E2E passed` covers the backend unit lane,
+the e2e shards and the coverage floor. Everything else reports — a red nightly
+or a red scenario lane is a thing to go and read, not a thing that stops you.
 
 The required list lives in the `protect-main` ruleset, which is repository
 settings and not a file here, so nothing in the tree can check it. Read it back
@@ -201,20 +195,14 @@ its `needs:` list again.
 Both workflows are path-filtered. A PR that touches only the frontend runs
 neither, and both report green.
 
-Coverage floors live in `lemma-backend/coverage-baseline.json` — one per module
-per lane, recorded from measurement rather than chosen — and are enforced by
-`lemma-backend/scripts/check_coverage_thresholds.py` from `backend-coverage.yml`,
-a separate workflow that runs after Backend E2E finishes, so it is off the
-critical path of a PR while still gating the merge through the required
-`Backend coverage passed`. Like the other two, that is an aggregator, and it
-reports success when the run is correctly skipped — a failing Backend E2E is
-blocked by its own check rather than by a coverage run that can never happen. The two lanes answer different questions: **combined**
-(unit + e2e) is how well the code is covered at all, **e2e_union** is how much
-of a module a real request reaches.
-
-`make coverage-baseline` refreshes the file after a full run. It only ever
-raises a floor, so a good run locks its gain in and a failing one cannot be
-regenerated away — the way to clear a coverage failure is to write the test.
+Coverage is one number with one floor. The `coverage` job in `e2e.yml`
+combines the unit lane with every e2e shard, from the same checkout in the same
+run, and fails if the total drops below `lemma-backend/coverage-floor.txt` **as
+it is on `main`** — so a pull request cannot lower its own bar. The floor sits
+about two points under the measured total, so a change may lose a little
+coverage and still merge. The PR comment still breaks coverage down by module
+and by lane; that table informs, it does not gate. When the total has risen for
+good, raise the floor in its own change.
 
 `CONTRIBUTING.md` names coverage below floor as a merge blocker. Run the
 command rather than quoting a number:
