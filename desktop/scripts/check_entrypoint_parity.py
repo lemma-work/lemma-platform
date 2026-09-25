@@ -47,6 +47,7 @@ ONLY_ON_THE_MAKEFILE = {
     "e2e-temp": "stands up a throwaway stack beside a running macOS install",
     "agent-host-e2e": "drives agents against a macOS install",
     "agent-host-browser-e2e": "the same, through a browser",
+    "app-alias-proof": "drives WKWebView, which exists only on macOS; WebView2 frames the canonical app URL and needs no alias",
 }
 
 # Verbs that pair with a repository-level target rather than a `desktop-` one,
