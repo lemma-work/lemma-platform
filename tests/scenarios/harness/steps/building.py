@@ -335,7 +335,7 @@ class BuildingSteps:
 
     async def is_refused_running_function(
         self, name: str, *, with_input: JSON, in_pod: JSON
-    ) -> int:
+    ) -> str:
         response = await self.api.call(
             "POST",
             f"/pods/{in_pod['id']}/functions/{name}/runs",
@@ -346,7 +346,7 @@ class BuildingSteps:
                 f"{self.label} was expected to be refused running {name!r}, "
                 f"but it was accepted ({response.status_code})"
             )
-        return response.status_code
+        return response.text
 
     async def runs_of_function(self, name: str, *, in_pod: JSON) -> list[JSON]:
         return items_of(await self.api.get(f"/pods/{in_pod['id']}/functions/{name}/runs"))
