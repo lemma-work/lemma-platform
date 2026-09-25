@@ -258,7 +258,6 @@ async def lifespan(app: FastAPI):
             # Core closers — explicit and last so they tear down after modules.
             if started:
                 logger.info("service.stopped")
-                release_startup_heap()
             for lifecycle_task in (watchdog_task, memory_task, warm_task):
                 if lifecycle_task is not None and not lifecycle_task.done():
                     lifecycle_task.cancel()
@@ -331,6 +330,9 @@ async def lifespan(app: FastAPI):
 
             await close_datastore_engine()
             shutdown_telemetry()
+            # Last: teardown above still walks what startup built.
+            if started:
+                release_startup_heap()
 
 
 #: The route label for a request that reached no FastAPI route. It is a real
