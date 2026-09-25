@@ -368,12 +368,12 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 
 | Direction | `type` | Body | Answered by |
 |---|---|---|---|
-| host → Lemma | `pair` | `pairing_code`, `display_name`, `hello` | `paired` (`host_id`, `user_id`, `host_secret`), then close |
-| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`) |
+| host → Lemma | `pair` | `pairing_code`, `display_name`, `hello`, `reenable` (default false) | `paired` (`host_id`, `user_id`, `host_secret`), then close |
+| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`, `server_time`) |
 | host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections`, `host_execution` | `control_ok` (`commands`, `refused`) |
 | host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
 | host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
-| host → Lemma | `mcp` | `run_id`, `conversation_id`, `token`, `method`, `params` | `mcp_ok` (`result`) or `error` |
+| host → Lemma | `mcp` | `run_id`, `conversation_id`, `token`, `method`, `params`, `request_id` (`tools/call`) | `mcp_ok` (`result`) or `error` |
 | host → Lemma | `interaction_wait` | `run_id`, `conversation_id`, `token`, `tool_call_id` | `interaction_ok` (`answer`), once decided |
 | host → Lemma | `revoke` | nothing | `revoked`, then close |
 | Lemma → host | `commands` | `commands` | the next `control` acknowledges them |
@@ -454,10 +454,42 @@ guarantee:
   acknowledged, and kills the host mid-turn. Every run is held to contiguous
   sequences, one terminal event, one persisted answer and one provider prompt.
 - **MCP tool calls** are re-authorized on every call against the run's own
-  token, exactly as the HTTP endpoint did. A call in flight when the socket
-  drops is retried once the link is back. A parked `ask_user` is waited on with
-  `interaction_wait`, which Lemma answers when the person decides. The bridge no
-  longer polls every 2 seconds.
+  token, exactly as the HTTP endpoint did, and a `run_id` they name must be a
+  run of the `conversation_id` they name, or the call is `UNAUTHORIZED`.
+- **A tool call executes at most once.** The host mints a `request_id`
+  (`^[A-Za-z0-9_-]{1,64}$`) for each `tools/call` and sends the same one on
+  every retry of that call, on any link. Lemma claims `(run_id, request_id)` in
+  Redis (`SET NX`); the first arrival executes the call in a task the link does
+  not own, so a socket that drops mid-call does not cancel it, and its outcome
+  -- the MCP result, or the failure -- is kept for an hour. A duplicate that
+  arrives while it runs waits for that outcome; one that arrives after is
+  answered from it. Nothing is executed twice
+  (`agent_host_link_tool_calls.py`). A call without a `request_id`, from an
+  older host, runs as it arrives and goes with its link.
+- **Only a refusal before dispatch is retryable.** Authorizing the call and
+  taking its claim can fail with `retryable: true` (an auth lookup that could
+  not answer, a full link). Once the call is dispatched, every failure is
+  `retryable: false`, `INTERNAL` and `UNAVAILABLE` included: the tool may
+  already have acted.
+- **Parked interactions.** A parked `ask_user` is waited on with
+  `interaction_wait`, which Lemma answers when the person decides. Waits have
+  their own slots on the link, apart from tool calls, so a queue of questions
+  never stalls the runs still working. A wait whose run has ended is answered
+  `TERMINAL_RUN`, not held for its full half hour. The bridge no longer polls
+  every 2 seconds.
+- **Clock skew.** `welcome` carries `server_time` (UTC). Command expiry is
+  stamped by Lemma's clock, so the host corrects by the difference rather than
+  refusing every command, `CANCEL_RUN` included, when its own clock is off.
+- **Removing a computer sticks, and ends its work.** Revoking sets
+  `revoked_at` and, in the same transaction, fails every unfinished run lease
+  on the host with `HOST_REVOKED` (the run ends with that sentence) and cancels
+  its queued and delivered commands; nothing waits for a machine that can no
+  longer connect. The row stays as a tombstone: a `pair` for that user and
+  installation is refused with `installation_revoked` ("This computer was
+  removed from this account. Connect it again from Lemma to turn it back on.")
+  and the code is left unused, so the host's automatic connection cannot undo
+  a removal. Only a `pair` with `reenable: true`, sent when the person asks
+  from the app, brings it back.
 
 **A connection closes with its last owner.** The socket's reader and writer
 tasks belong to the handles that talk on it: when the last handle is dropped

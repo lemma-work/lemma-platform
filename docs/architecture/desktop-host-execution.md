@@ -37,11 +37,17 @@ of these hold; otherwise it gets the VM sandbox, exactly as before
 2. The run acts as the conversation's user -- the workspace is theirs.
 3. The run's **triggering human** is that user, in Lemma's own app
    (`triggered_by_run_user`): their message, the queued follow-up of messages
-   they sent, a retry, an approval resume, an answer to a question, or a
-   continuation of a run they started. A run started by a schedule or by an
+   they sent, a retry, an approval resume, or an answer to a question. A
+   `wait_for` waking qualifies only when the run it continues -- the newest
+   earlier run in the conversation that is not itself a wake -- was one of
+   those. The conversation itself must have been opened in the app: one that
+   a workflow, a schedule, a surface or a notification opened carries a
+   `source` (or `workflow_run_id`, `started_by`) in its metadata, and no run
+   in it ever executes on the host, whatever later arrives in it. A teammate's
+   reply to a message the agent sent (`message_replies`) never qualifies:
+   somebody else's words would drive commands on the user's Mac. Nor does an
    inbound channel message (Slack, email, Telegram, WhatsApp -- the platform's
-   assertion, not the user's session), and every sub-agent conversation, never
-   executes on the host.
+   assertion, not the user's session), or any sub-agent conversation.
 4. The user the run is for has a paired Agent Host that is **online**, with
    **host execution turned on** (Settings → This Mac → Coding agents). The host
    reports this on `hello` and on every `control` as `host_execution: {enabled,
@@ -408,13 +414,18 @@ contract left to it.
 - **Selection** (§2) is `agent/services/host_execution_selection.py`, called
   once from `build_run_context`. "Triggering human" is read from how the run
   started: a person in Lemma's own app qualifies (`user_message`,
-  `queued_messages`, `manual_retry`, `approval_resume`, `person`), and so does
-  a continuation of such a run (`agent_wait`, `wait_resume`,
-  `message_replies`) unless a schedule started the conversation. A sub-agent
-  never does, and neither does a run in a conversation bound to a channel,
-  even when the channel resolved the sender to the paired user: that identity is
-  the platform's assertion, not the user's session. An unknown source does
-  not qualify. A Mac that cannot open the workspace at selection time gives
+  `queued_messages`, `manual_retry`, `approval_resume`, `person`). A wake
+  (`agent_wait`, `wait_resume`) qualifies only through the run it continues:
+  the conversation's earlier runs are walked back past other wakes
+  (`run_execution_record.earlier_run_sources`), and the first that is not a
+  wake has to be one of those person sources. `message_replies` -- a
+  teammate's reply -- never qualifies. A conversation whose metadata carries
+  `source`, `workflow_run_id`, `started_by`, `surface_platform` or
+  `is_sub_agent` was not opened in the app (`opened_in_app`), so no run in it
+  qualifies: that covers workflows, schedules, surfaces, notifications and
+  sub-agents, and a channel sender resolved to the paired user too, because
+  that identity is the platform's assertion, not the user's session. An
+  unknown source does not qualify. A Mac that cannot open the workspace at selection time gives
   the run the VM; nothing has run yet, so nothing moves.
 - **Where the choice is recorded.** A host sandbox's id is a UUIDv8 tagged
   `lmhost`, derived from the conversation (`workspace/domain/host_execution.py`),
@@ -423,12 +434,18 @@ contract left to it.
   never reach the VM and nothing else can reach the host. The user's VM
   workspace keeps its own id; the browser stays there. **No table records
   which host or folder**: both are derived per operation (next items).
-- **Which host an op goes to** (`agent/infrastructure/agent_host/host_execution.py`,
-  `host_for_host_sandbox`). The sandbox row's slug (`host-<conversation hex>`)
-  names the conversation and its owner the user. The op goes to the host in
-  the `execution` record of the conversation's most recent run that chose the
-  host -- whatever that host's state now, so a run never moves: offline is
-  `host_offline`, never another Mac and never the VM. A conversation no run has
+- **Which host an op goes to** (`workspace/services/host_workspace.py`,
+  `SqlHostTargets.target`). A run's ops go to the host in **that run's own**
+  `execution` record: selection stamps the chosen `host_id` on the run's
+  `HostWorkspace`, and the host session pins every client call to it
+  (`RunPinnedClient`, `run_pinned_host`), so two runs of one conversation that
+  chose different Macs never borrow each other's. Whatever that host's state
+  now, a run never moves: offline is `host_offline`, never another Mac and
+  never the VM. Only an op with no calling run (a close, a sweep) falls back
+  to the conversation: the sandbox row's slug (`host-<conversation hex>`)
+  names the conversation and its owner the user, and the op goes to the host
+  in the `execution` record of the conversation's most recent run that chose
+  the host (`host_for_host_sandbox`). A conversation no run has
   chosen the host in yet falls to the user's usable host, and with none of
   those the op is `host_offline` without being sent. Selection picks among
   the user's online hosts with host execution on and available
