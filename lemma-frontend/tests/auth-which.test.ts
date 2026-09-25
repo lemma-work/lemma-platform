@@ -12,6 +12,12 @@ test("the portal's own door is sign-in", () => {
     assert.equal(screenFor(["login"]), "sign-in");
 });
 
+test("legacy signup links open account creation", () => {
+    assert.equal(screenFor([], "?show=signup&redirect_uri=/t/example"), "sign-up");
+    assert.equal(screenFor([], "?mode=signup"), "sign-up");
+    assert.equal(screenFor(["reset-password"], "?show=signup"), "reset");
+});
+
 test("the paths the backend puts in emails resolve", () => {
     // `auth_website_base_path` + SuperTokens' conventions. Changing either of
     // these breaks links already in people's inboxes.
