@@ -243,14 +243,11 @@ class _Uow:
         return None
 
 
-async def test_host_targets_follow_the_calling_run_not_the_conversations_latest(
-    monkeypatch,
-):
+async def test_host_targets_follow_the_calling_run_not_the_conversations_latest():
     """Two runs of one conversation chose different Macs: each run's ops go to
     its own, and only an unpinned caller follows the conversation's latest."""
     from types import SimpleNamespace
 
-    from app.modules.agent.contracts import host_execution as contract
     from app.modules.workspace.services import host_workspace
 
     conversation_id = uuid4()
@@ -266,8 +263,9 @@ async def test_host_targets_follow_the_calling_run_not_the_conversations_latest(
     async def latest(*, conversation_id, user_id):
         return latest_mac, "/Users/o/latest"
 
-    monkeypatch.setattr(contract, "host_for_host_sandbox", latest)
-    targets = host_workspace.SqlHostTargets(uow_factory=lambda: _Uow(row))
+    targets = host_workspace.SqlHostTargets(
+        uow_factory=lambda: _Uow(row), conversation_host=latest
+    )
 
     with run_pinned_host(
         RunHostPin(sandbox_id=sandbox_id, host_id=run_mac, root="/Users/o/mine")
