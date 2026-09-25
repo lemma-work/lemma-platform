@@ -22,9 +22,10 @@ pub fn workspace_root() -> anyhow::Result<PathBuf> {
 /// directory these map onto — `~/lemma` in the sandbox, `~/lemma` here — so the
 /// two sides of a dispatched run are not two vocabularies.
 ///
-/// A host binary carries this constant, and there is no auto-updater, so a copy
-/// installed before this release rejects a conversation created after it. That
-/// is the cost of moving the root at all; it is paid once.
+/// A host binary carries this constant, and Desktop installs an update only when
+/// its person agrees to one, so a copy installed before this release rejects a
+/// conversation created after it until it is updated. That is the cost of
+/// moving the root at all; it is paid once.
 const SANDBOX_ROOT: &str = "/home/user/lemma/";
 
 fn suffix(cwd: &str) -> anyhow::Result<&str> {
