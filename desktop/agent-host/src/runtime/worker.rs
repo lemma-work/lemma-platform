@@ -10,8 +10,9 @@ use super::{
     Duration, EventFlusher, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL, HarnessCapabilities,
     HashMap, HostCapacity, HostConfig, HostPaths, Journal, LOCAL_CONTROL_INTERVAL, Ordering,
     OutboxSignal, OwnedTask, PathBuf, PermissionGate, RETRY_MAX, RETRY_MIN, REVOKED_REFUSALS,
-    RunCheckpoint, Semaphore, TargetConfig, TransientBackoff, Uuid, command_rejection,
-    deliver_events, mpsc, redact_error, watch,
+    RunCheckpoint, SUPERSEDED_MAX_WAIT, SUPERSEDED_SETTLED, SUPERSEDED_WARN_AFTER, Semaphore,
+    TargetConfig, TransientBackoff, Utc, Uuid, command_rejection, deliver_events, mpsc,
+    redact_error, watch,
 };
 
 /// The control updates one `control` frame carries up: command
@@ -99,6 +100,13 @@ pub(crate) struct TargetWorker {
     pub(crate) link: LinkSlot,
     /// The owner's host-execution setting, as last read from `config.json`.
     pub(crate) host_execution: bool,
+    /// How far Lemma's clock is ahead of this one, from the last `welcome`.
+    /// Command expiries and run deadlines are Lemma's times.
+    pub(crate) clock_offset: chrono::Duration,
+    /// Links in a row that another connection with this pairing superseded
+    /// within moments of opening: two hosts sharing one credential, each
+    /// taking the link from the other. Each one waits longer before trying.
+    pub(crate) superseded_streak: u32,
     /// Answers Lemma's `op` requests. `None` where host execution cannot
     /// work at all, in which case every op is answered
     /// `exec_server_unavailable` by the link itself.
@@ -197,34 +205,44 @@ impl TargetWorker {
         agents_changed: watch::Receiver<u64>,
     ) -> anyhow::Result<Self> {
         journal.register_target(target.target_id)?;
-        let draining = target.draining;
+        // Paused for another person's session counts as draining here: no new
+        // runs, and the ones in flight finish.
+        let draining = !target.takes_work();
         let flusher = Arc::new(tokio::sync::Mutex::new(EventFlusher {
             target_id: target.target_id,
             journal: journal.clone(),
             rejections: HashMap::new(),
         }));
         let (slot_owner, link) = LinkSlotOwner::new();
-        // The exec-server is this same binary, as the MCP bridge is.
+        // The exec-server is this same binary, as the MCP bridge is. Only the
+        // pairing with the Lemma installed on this computer gets one: any
+        // other pairing is a server elsewhere, and its `op` frames are
+        // answered as a host with no handler answers them.
         #[cfg(unix)]
-        let exec_relay = crate::host_exec::relay::RelayPaths::current(
-            paths.folders.clone(),
-            paths.conversation_roots.clone(),
-            target.target_id,
-        )
-        .inspect_err(|error| {
-            tracing::warn!(%error, "host execution is unavailable on this computer");
-        })
-        .ok()
-        .map(|relay_paths| {
-            crate::host_exec::relay::ExecRelay::new(
-                Arc::new(crate::host_exec::relay::ProcessLauncher {
-                    executable: mcp_bridge_executable.clone(),
-                    data_root: paths.root.clone(),
-                    sandboxed: true,
-                }),
-                relay_paths,
-            )
-        });
+        let exec_relay = target
+            .is_local_install()
+            .then(|| {
+                crate::host_exec::relay::RelayPaths::current(
+                    paths.folders.clone(),
+                    paths.conversation_roots.clone(),
+                    target.target_id,
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(%error, "host execution is unavailable on this computer");
+                })
+                .ok()
+            })
+            .flatten()
+            .map(|relay_paths| {
+                crate::host_exec::relay::ExecRelay::new(
+                    Arc::new(crate::host_exec::relay::ProcessLauncher {
+                        executable: mcp_bridge_executable.clone(),
+                        data_root: paths.root.clone(),
+                        sandboxed: true,
+                    }),
+                    relay_paths,
+                )
+            });
         Ok(Self {
             target,
             installation_id,
@@ -256,6 +274,8 @@ impl TargetWorker {
             slot_owner,
             link,
             host_execution: false,
+            clock_offset: chrono::Duration::zero(),
+            superseded_streak: 0,
             #[cfg(unix)]
             exec_relay,
         })
@@ -367,8 +387,10 @@ impl TargetWorker {
                     // A completed handshake proves the pairing is known, so
                     // any refusals before it were the transient kind.
                     self.revoked_refusals = 0;
+                    self.note_lemma_time(connected.welcome.server_time);
                     self.journal
                         .update_target_state(self.target.target_id, "ONLINE", None)?;
+                    let opened = std::time::Instant::now();
                     match self.session(connected).await? {
                         SessionEnd::Shutdown => return Ok(()),
                         SessionEnd::Lost { error, after } => {
@@ -389,6 +411,7 @@ impl TargetWorker {
                                 )
                                 .then(restart_jitter)
                             });
+                            let after = after.or_else(|| self.superseded_wait(&error, opened));
                             if let Some(after) = after {
                                 self.note_offline(&error.to_string())?;
                                 self.wait_retry(after).await;
@@ -428,16 +451,67 @@ impl TargetWorker {
                     refusals = self.revoked_refusals,
                     "Lemma does not know this pairing; retrying before dropping it"
                 );
-            } else if error.is_invalid_credential() {
-                self.cancel_all(
-                    "Lemma rejected this Agent Host; the target may have been revoked",
-                )?;
-                return Err(error.into());
             }
+            // A malformed or missing credential (4403) is retried with
+            // backoff like any other refusal Lemma may recover from: giving
+            // up for good on it disabled a pairing that a restarted or
+            // restored Lemma would have accepted again.
             self.note_offline(&error.to_string())?;
             self.wait_retry(retry).await;
             retry = (retry * 2).min(RETRY_MAX);
         }
+    }
+
+    /// Remember how far Lemma's clock is from this one.
+    pub(crate) fn note_lemma_time(&mut self, server_time: Option<chrono::DateTime<Utc>>) {
+        self.clock_offset =
+            server_time.map_or_else(chrono::Duration::zero, |lemma| lemma - Utc::now());
+        if self.clock_offset.num_seconds().abs() > 60 {
+            tracing::warn!(
+                offset_seconds = self.clock_offset.num_seconds(),
+                "this computer's clock is not Lemma's; judging deadlines by Lemma's"
+            );
+        }
+    }
+
+    /// Now, by Lemma's clock.
+    pub(crate) fn lemma_now(&self) -> chrono::DateTime<Utc> {
+        Utc::now() + self.clock_offset
+    }
+
+    /// How long to wait after this connection was superseded, when that is
+    /// what ended it. A link that lasted is an ordinary hand-over -- the app
+    /// restarted its host, say -- and is retried at once; one taken away
+    /// within moments is another host holding this pairing's credential, and
+    /// the two would otherwise take the link from each other for ever.
+    pub(crate) fn superseded_wait(
+        &mut self,
+        error: &LinkError,
+        opened: std::time::Instant,
+    ) -> Option<Duration> {
+        if !matches!(
+            error,
+            LinkError::Closed {
+                code: close::SUPERSEDED,
+                ..
+            }
+        ) {
+            self.superseded_streak = 0;
+            return None;
+        }
+        if opened.elapsed() >= SUPERSEDED_SETTLED {
+            self.superseded_streak = 0;
+            return None;
+        }
+        self.superseded_streak = self.superseded_streak.saturating_add(1);
+        if self.superseded_streak == SUPERSEDED_WARN_AFTER {
+            tracing::warn!(
+                target = %self.target.name,
+                "another Agent Host is connecting with this pairing; backing off"
+            );
+        }
+        let exponent = self.superseded_streak.min(9);
+        Some((RETRY_MIN * 2_u32.pow(exponent)).min(SUPERSEDED_MAX_WAIT))
     }
 
     /// Everything the host does while connected.
@@ -669,20 +743,6 @@ impl TargetWorker {
 
     pub(crate) fn apply_local_controls(&mut self) -> anyhow::Result<()> {
         let config = HostConfig::load_or_create(&self.paths)?;
-        if config.host_execution != self.host_execution {
-            self.host_execution = config.host_execution;
-            #[cfg(unix)]
-            if let Some(relay) = &self.exec_relay {
-                relay.set_enabled(config.host_execution);
-            }
-            // Lemma routes on this, so it hears now rather than at the next
-            // heartbeat: a `control` carries it.
-            self.events_ready.notify_control();
-            tracing::info!(
-                enabled = config.host_execution,
-                "host execution setting changed"
-            );
-        }
         let Some(current) = config
             .targets
             .iter()
@@ -690,12 +750,30 @@ impl TargetWorker {
         else {
             return Ok(());
         };
-        self.draining = current.draining;
+        // This pairing's own switch, and only if it is the local one.
+        let host_execution = current.runs_host_commands();
+        if host_execution != self.host_execution {
+            self.host_execution = host_execution;
+            #[cfg(unix)]
+            if let Some(relay) = &self.exec_relay {
+                relay.set_enabled(host_execution);
+            }
+            // Lemma routes on this, so it hears now rather than at the next
+            // heartbeat: a `control` carries it.
+            self.events_ready.notify_control();
+            tracing::info!(
+                enabled = host_execution,
+                target = %self.target.name,
+                "host execution setting changed"
+            );
+        }
+        self.draining = !current.takes_work();
         if current.refresh_generation != self.target.refresh_generation {
             self.refresh_due = std::time::Instant::now();
             self.force_probe = true;
         }
         self.target.draining = current.draining;
+        self.target.session_paused = current.session_paused;
         self.target.refresh_generation = current.refresh_generation;
         Ok(())
     }

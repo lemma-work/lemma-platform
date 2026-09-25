@@ -226,9 +226,11 @@ state. The remote device must then be revoked from Lemma separately.
 
 ## Host execution
 
-On macOS the host can also run the installation owner's Lemma agent commands
-on this computer, inside a Seatbelt sandbox, instead of in the VM. It is off
-until the owner turns it on (Settings, or the CLI):
+On macOS the host can also run the paired user's Lemma agent commands on this
+computer, inside a Seatbelt sandbox, instead of in the VM -- for the pairing
+with the Lemma installed on this computer only (plain HTTP to loopback), never
+for a hosted workspace or anybody else's install. It is off until the user
+turns it on (Settings, or the CLI, which acts on that local pairing):
 
 ```bash
 lemma-agent-host host-execution enable        # needs macOS and /usr/bin/sandbox-exec
@@ -237,7 +239,9 @@ lemma-agent-host host-execution refresh-environment   # after changing ~/.zshrc 
 lemma-agent-host host-execution disable       # also stops everything running
 ```
 
-The setting is `host_execution` in `config.json`; a running host re-reads it
+The setting is `host_execution` on the local pairing's target in
+`config.json` (an older host-wide `host_execution` is moved there when the
+config is read); a running host re-reads it
 within five seconds and reports it on its next `control` frame. Lemma sends
 `op` frames on the link; the host starts one **exec-server** per open workspace
 -- this same binary, `lemma-agent-host exec-server`, under

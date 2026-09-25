@@ -50,9 +50,19 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         Command::Connect {
             url,
             pairing_code,
+            pairing_code_stdin,
             name,
             allow_insecure_http,
+            reenable,
         } => {
+            let pairing_code = if pairing_code_stdin {
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                line.trim().to_owned()
+            } else {
+                pairing_code.unwrap_or_default()
+            };
+            anyhow::ensure!(!pairing_code.is_empty(), "a pairing code is required");
             let config = HostConfig::load_or_create(&paths)?;
             // Deliberately does not install adapters. Pairing is one exchange
             // on the link with a single-use code and needs none of them, but it used to wait
@@ -60,12 +70,13 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             // took minutes and why nothing appeared to be happening while it
             // did. `serve` warms the cache when the app opens instead, and a
             // harness that is not cached yet reports itself as installing.
-            let target = lemma_agent_host::link::pair(
+            let target = lemma_agent_host::link::pair_reenabling(
                 url,
                 &pairing_code,
                 &name,
                 &config.installation_id,
                 allow_insecure_http,
+                reenable,
             )
             .await?;
             // One target per Lemma server. Keying this on host_id alone was
@@ -104,6 +115,10 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                         "url": target.base_url,
                         "enabled": target.enabled,
                         "host_id": target.host_id,
+                        "user_id": target.user_id,
+                        "local": target.is_local_install(),
+                        "host_execution": target.runs_host_commands(),
+                        "session_paused": target.session_paused,
                         "journal": status,
                     }))
                 })
@@ -117,6 +132,13 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                 }),
                 json,
             );
+            Ok(())
+        }
+        Command::Session { url, user } => {
+            let changed =
+                HostConfig::mutate(&paths, |config| Ok(config.apply_session(&url, user) > 0))?;
+            tracing::info!(signed_in = user.is_some(), %url, "the app's signed-in person changed");
+            drop(changed);
             Ok(())
         }
         Command::Disconnect {
@@ -349,10 +371,22 @@ pub(crate) async fn run() -> anyhow::Result<()> {
 async fn host_execution(paths: &HostPaths, action: HostExecutionAction) -> anyhow::Result<()> {
     use lemma_agent_host::host_exec::env::EnvironmentSnapshot;
     use lemma_agent_host::host_exec::wire::HostExecutionStatus;
+    // The switch belongs to the pairing with the Lemma installed on this
+    // computer; no other pairing may run commands here.
     let set = |enabled: bool| {
         HostConfig::mutate(paths, |config| {
-            let changed = config.host_execution != enabled;
-            config.host_execution = enabled;
+            let mut local = 0;
+            let mut changed = false;
+            for target in config.local_targets_mut() {
+                local += 1;
+                changed |= target.host_execution != enabled;
+                target.host_execution = enabled;
+            }
+            anyhow::ensure!(
+                local > 0 || !enabled,
+                "this computer is not paired with the Lemma installed on it; host execution is \
+                 only for that pairing"
+            );
             Ok(changed)
         })
     };
@@ -375,7 +409,7 @@ async fn host_execution(paths: &HostPaths, action: HostExecutionAction) -> anyho
         }
         HostExecutionAction::Status { json } => {
             let config = HostConfig::load_or_create(paths)?;
-            let status = HostExecutionStatus::current(config.host_execution);
+            let status = HostExecutionStatus::current(config.host_execution());
             let snapshot = EnvironmentSnapshot::cached(&paths.root);
             print_value(
                 &serde_json::json!({

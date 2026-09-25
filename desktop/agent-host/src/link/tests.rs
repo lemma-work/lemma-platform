@@ -73,6 +73,7 @@ async fn concurrent_requests_each_get_their_own_answer() {
         token: "token".into(),
         method: method.into(),
         params: json!({}),
+        request_id: None,
     };
     let (list, call) = (body("tools/list"), body("tools/call"));
     let (listed, called) = tokio::join!(link.mcp(&list), link.mcp(&call));

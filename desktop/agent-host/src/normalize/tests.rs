@@ -230,7 +230,17 @@ fn opencode_lemma_tools_are_recognised_and_lookalikes_are_not() {
     );
     let unpublished = normalizer.session_update_value(&open("b", "lemma_tools_lemma_rm_rf"));
     let unpublished = tool(&unpublished[0]);
-    assert_eq!(unpublished.tool.source, ToolSource::Native);
+    // Nobody's tool this host knows: reported verbatim, claimed by no card.
+    assert_eq!(unpublished.tool.source, ToolSource::Mcp);
+    assert_eq!(unpublished.tool.name, "lemma_tools_lemma_rm_rf");
+    // Somebody else's server whose joined name spells one of Lemma's tools
+    // is not Lemma's tool.
+    let lookalike = normalizer.session_update_value(&open("c", "web_search"));
+    let lookalike = tool(&lookalike[0]);
+    assert_eq!(
+        (lookalike.tool.name.as_str(), lookalike.tool.source),
+        ("web_search", ToolSource::Mcp)
+    );
 }
 
 /// A permission request is the adapter saying the input is final: the call it

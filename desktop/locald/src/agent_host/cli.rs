@@ -31,6 +31,12 @@ pub(crate) fn summarize_target(target: &Value) -> Value {
     json!({
         "target_id": target.get("target_id"),
         "host_id": target.get("host_id"),
+        // Whose pairing it is: the app treats one belonging to anybody but
+        // the person signed in as not this workspace's.
+        "user_id": target.get("user_id"),
+        "local": target.get("local"),
+        "host_execution": target.get("host_execution"),
+        "session_paused": target.get("session_paused"),
         "name": target.get("name"),
         "url": target.get("url"),
         "enabled": target.get("enabled"),
@@ -104,6 +110,16 @@ pub(crate) fn redact_secrets(detail: &str, arguments: &[&str]) -> String {
 
 impl AgentHostSupervisor {
     pub(crate) fn run_cli(&self, arguments: &[&str]) -> io::Result<String> {
+        self.run_cli_with_input(arguments, None)
+    }
+
+    /// `run_cli`, writing `input` to the command's stdin: for a secret, which
+    /// on the argument list any process on this computer could read.
+    pub(crate) fn run_cli_with_input(
+        &self,
+        arguments: &[&str],
+        input: Option<&str>,
+    ) -> io::Result<String> {
         let executable = self.executable.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -117,7 +133,11 @@ impl AgentHostSupervisor {
             .arg("--data-dir")
             .arg(&self.data_dir)
             .args(arguments)
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]
@@ -133,6 +153,14 @@ impl AgentHostSupervisor {
         // Nothing below may return without reaping. `Child::drop` neither kills
         // nor waits, and two of the lines that follow used `?`.
         let mut child = Reaped(Some(command.spawn()?));
+        if let Some(input) = input {
+            if let Some(mut stdin) = child.get().stdin.take() {
+                use std::io::Write;
+                // One line, then EOF.
+                stdin.write_all(input.as_bytes())?;
+                stdin.write_all(b"\n")?;
+            }
+        }
 
         let deadline = Instant::now() + cli_timeout(arguments[0]);
         loop {
@@ -155,9 +183,13 @@ impl AgentHostSupervisor {
             return Err(io::Error::other(if detail.is_empty() {
                 format!("Agent Host `{}` failed", arguments[0])
             } else {
-                // stderr can quote the argument list, and one of those
-                // arguments may be a live pairing code.
-                redact_secrets(detail, arguments)
+                // stderr can quote the argument list or what came on stdin,
+                // and either may be a live pairing code.
+                let redacted = redact_secrets(detail, arguments);
+                match input.map(str::trim).filter(|input| !input.is_empty()) {
+                    Some(secret) => redacted.replace(secret, "[redacted]"),
+                    None => redacted,
+                }
             }));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())

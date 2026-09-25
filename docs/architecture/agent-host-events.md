@@ -246,7 +246,7 @@ overwrite `title` with a description, so the host keeps the first one.
 | `webfetch` | `web_fetch` | |
 | `todowrite` | `update_plan` | |
 | `lemma_tools_lemma_<tool>` | `<tool>`, source `lemma` | OpenCode joins server and tool with `_` |
-| anything else | verbatim | OpenCode's joined name for a third-party MCP tool cannot be split without knowing the server, so it is reported as native |
+| any name with `_`, or none of the above | verbatim, source `mcp`, no server | OpenCode's own tools are single words; an underscore is its join of a third-party MCP server and tool, which cannot be split without knowing the server. Reported as `mcp` so no Lemma card claims it — a server `web` with a tool `search` arrives as `web_search`, which as `native` was drawn as Lemma's web-search card over a payload it had never seen |
 
 ### Cursor (`cursor-agent acp`)
 

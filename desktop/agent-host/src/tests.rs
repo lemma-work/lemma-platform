@@ -31,10 +31,45 @@ fn connect_preserves_url_safe_pairing_codes_and_following_flags() {
         else {
             panic!("expected connect command");
         };
-        assert_eq!(pairing_code, code);
+        assert_eq!(pairing_code.as_deref(), Some(code));
         assert_eq!(name, "Test computer");
         assert!(allow_insecure_http);
     }
+}
+
+/// The code can come on stdin instead, so it is not in the process list,
+/// and a re-enable is only ever asked for explicitly.
+#[test]
+fn connect_reads_the_code_from_stdin_when_asked() {
+    let cli = Cli::try_parse_from([
+        "lemma-agent-host",
+        "connect",
+        "--url",
+        "http://127.0.0.1:8710",
+        "--pairing-code-stdin",
+        "--reenable",
+    ])
+    .expect("stdin replaces --pairing-code");
+    let Command::Connect {
+        pairing_code,
+        pairing_code_stdin,
+        reenable,
+        ..
+    } = cli.command
+    else {
+        panic!("expected connect command");
+    };
+    assert!(pairing_code.is_none() && pairing_code_stdin && reenable);
+    assert!(
+        Cli::try_parse_from([
+            "lemma-agent-host",
+            "connect",
+            "--url",
+            "http://127.0.0.1:8710"
+        ])
+        .is_err(),
+        "one of the two is required"
+    );
 }
 
 /// The console streams, rather than showing an answer in bursts.

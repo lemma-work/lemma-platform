@@ -53,11 +53,22 @@ of these hold; otherwise it gets the VM sandbox, exactly as before
    reports this on `hello` and on every `control` as `host_execution: {enabled,
    platform, available}`; Lemma routes here only when `enabled` and
    `available` are both true. `available` is macOS with
-   `/usr/bin/sandbox-exec`. The setting is `host_execution` in the Agent Host's
-   `config.json`, toggled by `lemma-agent-host host-execution enable|disable`
-   or locald's `agent-host.host-execution` (`{"enabled": bool}`); a running
-   host notices within five seconds and says so on its next `control`, without
-   a reconnect.
+   `/usr/bin/sandbox-exec`. The setting is `host_execution` on the **local
+   pairing** in the Agent Host's `config.json` -- the pairing with the Lemma
+   installed on this Mac, plain HTTP to loopback (`TargetConfig::
+   is_local_install`) -- toggled by `lemma-agent-host host-execution
+   enable|disable` or locald's `agent-host.host-execution` (`{"enabled":
+   bool}`), both of which act on that pairing only. A running host notices
+   within five seconds and says so on its next `control`, without a reconnect.
+   **Only the local pairing runs `op` frames at all**: every other pairing on
+   the Mac -- a hosted workspace, a teammate's shared install -- has no exec
+   relay, reports `enabled: false`, and answers an `op` as a host without
+   host execution. A server elsewhere asking this Mac to `process.start` is
+   exactly what the switch must never mean. An older host kept one host-wide
+   `host_execution`; it is moved onto the local pairing when the config is
+   read and never written again. The local pairing is also paused -- no host
+   commands, no new runs -- while somebody other than its person, or nobody,
+   is signed in to the app ([Agent Host](agent-host.md)).
 
 A user with more than one usable host is routed to the one the conversation's
 most recent host run used, and otherwise to the most recently seen. Somebody

@@ -161,12 +161,16 @@ pub struct HostConfig {
     pub targets: Vec<TargetConfig>,
     #[serde(default = "default_max_runs")]
     pub max_runs: u16,
-    /// Whether an owner's Lemma agents may run commands on this computer,
-    /// under Seatbelt. Off until the owner turns it on in Settings, or with
-    /// `lemma-agent-host host-execution enable`. Host-wide rather than per
-    /// pairing: it is a decision about this machine.
-    #[serde(default)]
-    pub host_execution: bool,
+    /// The host-wide switch older builds wrote. It applied to every pairing
+    /// -- a hosted workspace's and a teammate's shared install's included --
+    /// so it is read once, moved onto the local pairing (`TargetConfig::
+    /// host_execution`), and never written again.
+    #[serde(
+        default,
+        rename = "host_execution",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub legacy_host_execution: bool,
 }
 
 /// Drop targets this build cannot read, rather than failing the whole config.
@@ -223,6 +227,48 @@ pub struct TargetConfig {
     pub draining: bool,
     #[serde(default)]
     pub refresh_generation: u64,
+    /// Someone other than this pairing's person is signed in to the app, or
+    /// nobody is: take no new runs and run no commands until they are back.
+    /// Set by the app (`session`), not by the person; `draining` is theirs.
+    #[serde(default)]
+    pub session_paused: bool,
+    /// Whether the owner's Lemma agents may run commands on this computer for
+    /// this pairing, under Seatbelt. Off until the owner turns it on (Settings,
+    /// or `lemma-agent-host host-execution enable`), and only ever honoured on
+    /// the local pairing: see `is_local_install`.
+    #[serde(default)]
+    pub host_execution: bool,
+}
+
+impl TargetConfig {
+    /// Whether this pairing is the Lemma installed on this computer: plain
+    /// HTTP, which pairing and `HostConfig::validate` allow only to a
+    /// loopback address and only when opted into. Not resolved again here: a
+    /// name like `api.127.0.0.1.sslip.io` needs the network to resolve, and
+    /// being offline must not turn the local pairing into a remote one.
+    ///
+    /// Host execution is offered on this pairing alone. Every other pairing --
+    /// a hosted workspace, a teammate's shared install -- is a server
+    /// somewhere else, and a server somewhere else sending `process.start` to
+    /// this Mac is exactly what the switch must never mean.
+    #[must_use]
+    pub fn is_local_install(&self) -> bool {
+        self.allow_insecure_http && self.base_url.scheme() == "http"
+    }
+
+    /// Whether host execution is on for this pairing and this pairing can
+    /// have it.
+    #[must_use]
+    pub fn runs_host_commands(&self) -> bool {
+        self.host_execution && self.is_local_install() && !self.session_paused
+    }
+
+    /// Whether this pairing takes new runs: neither drained by its person nor
+    /// paused because somebody else is signed in to the app.
+    #[must_use]
+    pub fn takes_work(&self) -> bool {
+        !self.draining && !self.session_paused
+    }
 }
 
 const fn default_max_runs() -> u16 {
@@ -237,17 +283,62 @@ impl HostConfig {
     pub fn load_or_create(paths: &HostPaths) -> anyhow::Result<Self> {
         paths.ensure()?;
         if paths.config.exists() {
-            let value = serde_json::from_slice(&std::fs::read(&paths.config)?)?;
+            let mut value: Self = serde_json::from_slice(&std::fs::read(&paths.config)?)?;
+            value.migrate_host_execution();
             return Ok(value);
         }
         let config = Self {
             installation_id: Uuid::new_v4().to_string(),
             targets: Vec::new(),
             max_runs: default_max_runs(),
-            host_execution: false,
+            legacy_host_execution: false,
         };
         config.save(paths)?;
         Ok(config)
+    }
+
+    /// Move the host-wide switch an older build wrote onto the local pairing.
+    /// In memory; the next save writes it that way.
+    fn migrate_host_execution(&mut self) {
+        if !std::mem::take(&mut self.legacy_host_execution) {
+            return;
+        }
+        for target in &mut self.targets {
+            if target.is_local_install() {
+                target.host_execution = true;
+            }
+        }
+    }
+
+    /// Record who is signed in to the app on `url`: pause that server's
+    /// pairings of anybody else, and resume that person's own. Nobody signed in
+    /// pauses them all. Returns how many changed.
+    pub fn apply_session(&mut self, url: &Url, user: Option<Uuid>) -> usize {
+        let mut changed = 0;
+        for target in &mut self.targets {
+            if target.base_url.origin() != url.origin() {
+                continue;
+            }
+            let paused = user != Some(target.user_id);
+            if target.session_paused != paused {
+                target.session_paused = paused;
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// The local pairings, whose host-execution switch is this machine's.
+    pub fn local_targets_mut(&mut self) -> impl Iterator<Item = &mut TargetConfig> {
+        self.targets
+            .iter_mut()
+            .filter(|target| target.is_local_install())
+    }
+
+    /// Whether host execution is on for any pairing that can have it.
+    #[must_use]
+    pub fn host_execution(&self) -> bool {
+        self.targets.iter().any(TargetConfig::runs_host_commands)
     }
 
     /// Change the config under the write lock, so no other writer can lose it.
@@ -366,6 +457,8 @@ mod tests {
                             allow_insecure_http: false,
                             draining: false,
                             refresh_generation: 0,
+                            session_paused: false,
+                            host_execution: false,
                         });
                         Ok(true)
                     })
@@ -469,7 +562,7 @@ mod tests {
     #[test]
     fn rejects_a_capacity_the_backend_would_refuse_on_every_poll() {
         let config = |max_runs| HostConfig {
-            host_execution: false,
+            legacy_host_execution: false,
             installation_id: "installation".into(),
             max_runs,
             targets: Vec::new(),
@@ -488,7 +581,7 @@ mod tests {
     #[test]
     fn rejects_remote_plain_http() {
         let config = HostConfig {
-            host_execution: false,
+            legacy_host_execution: false,
             installation_id: "installation".into(),
             max_runs: 1,
             targets: vec![TargetConfig {
@@ -502,9 +595,104 @@ mod tests {
                 allow_insecure_http: true,
                 draining: false,
                 refresh_generation: 0,
+                session_paused: false,
+                host_execution: false,
             }],
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn the_old_host_wide_switch_moves_onto_the_local_pairing_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = HostPaths::under(directory.path());
+        paths.ensure().unwrap();
+        let target = |name: &str, url: &str, insecure: bool| {
+            serde_json::json!({
+                "target_id": Uuid::new_v4(),
+                "name": name,
+                "base_url": url,
+                "host_id": Uuid::new_v4(),
+                "user_id": Uuid::new_v4(),
+                "host_secret": "secret",
+                "allow_insecure_http": insecure,
+            })
+        };
+        let written = serde_json::json!({
+            "installation_id": "installation",
+            "host_execution": true,
+            "targets": [
+                target("this Mac", "http://127.0.0.1:8710/", true),
+                target("hosted", "https://api.lemma.work/", false),
+            ],
+        });
+        std::fs::write(&paths.config, serde_json::to_vec(&written).unwrap()).unwrap();
+
+        let config = HostConfig::load_or_create(&paths).unwrap();
+        assert!(config.targets[0].runs_host_commands());
+        assert!(!config.targets[1].host_execution);
+        assert!(!config.targets[1].is_local_install());
+        assert!(config.host_execution());
+
+        config.save(&paths).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&paths.config).unwrap()).unwrap();
+        assert!(saved.get("host_execution").is_none(), "{saved}");
+        assert_eq!(saved["targets"][0]["host_execution"], true);
+    }
+
+    #[test]
+    fn only_the_signed_in_persons_pairing_takes_work() {
+        let url = Url::parse("http://127.0.0.1:8710/").unwrap();
+        let pairing = |user: Uuid| TargetConfig {
+            target_id: Uuid::new_v4(),
+            name: "this Mac".into(),
+            base_url: url.clone(),
+            host_id: Uuid::new_v4(),
+            user_id: user,
+            host_secret: "secret".into(),
+            enabled: true,
+            allow_insecure_http: true,
+            draining: false,
+            refresh_generation: 0,
+            session_paused: false,
+            host_execution: true,
+        };
+        let (me, them) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut config = HostConfig {
+            installation_id: "installation".into(),
+            targets: vec![pairing(me), pairing(them)],
+            max_runs: 1,
+            legacy_host_execution: false,
+        };
+        assert_eq!(config.apply_session(&url, Some(me)), 1);
+        assert!(config.targets[0].takes_work() && config.targets[0].runs_host_commands());
+        assert!(!config.targets[1].takes_work() && !config.targets[1].runs_host_commands());
+        // Signing out pauses the rest; another server's pairings are untouched.
+        let elsewhere = Url::parse("https://lemma.example/").unwrap();
+        assert_eq!(config.apply_session(&elsewhere, None), 0);
+        assert_eq!(config.apply_session(&url, None), 1);
+        assert!(!config.targets[0].takes_work());
+    }
+
+    #[test]
+    fn a_remote_pairing_never_runs_host_commands_whatever_it_says() {
+        let mut target: TargetConfig = serde_json::from_value(serde_json::json!({
+            "target_id": Uuid::new_v4(),
+            "name": "shared",
+            "base_url": "https://teammate.example/",
+            "host_id": Uuid::new_v4(),
+            "user_id": Uuid::new_v4(),
+            "host_secret": "secret",
+            "host_execution": true,
+        }))
+        .unwrap();
+        assert!(!target.runs_host_commands());
+        target.allow_insecure_http = true;
+        assert!(
+            !target.runs_host_commands(),
+            "https is never the local install"
+        );
     }
 
     #[test]

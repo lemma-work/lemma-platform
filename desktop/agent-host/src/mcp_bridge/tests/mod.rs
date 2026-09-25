@@ -3,3 +3,4 @@
 pub(super) use crate::mcp_bridge::*;
 
 mod parked_tests;
+mod relay_client_tests;

@@ -59,8 +59,57 @@ fn the_host_execution_setting_is_read_from_the_hosts_config_and_defaults_off() {
     let home = tempdir().unwrap();
     let config = home.path().join("agent-host/config.json");
     assert!(!crate::agent_host::pairing::host_execution_enabled(&config));
-    write(&config, r#"{"targets": [], "host_execution": true}"#);
+    let local = r#"{"base_url": "http://api.127.0.0.1.sslip.io:61000/", "allow_insecure_http": true, "host_execution": true}"#;
+    let hosted = r#"{"base_url": "https://api.lemma.work/", "host_execution": true}"#;
+    write(&config, &format!(r#"{{"targets": [{local}]}}"#));
     assert!(crate::agent_host::pairing::host_execution_enabled(&config));
-    write(&config, r#"{"targets": []}"#);
+    // Only the local pairing's switch counts.
+    write(&config, &format!(r#"{{"targets": [{hosted}]}}"#));
     assert!(!crate::agent_host::pairing::host_execution_enabled(&config));
+    // The host-wide switch an older host wrote means the local pairing's.
+    write(
+        &config,
+        r#"{"host_execution": true, "targets": [{"base_url": "http://127.0.0.1:8710/", "allow_insecure_http": true}]}"#,
+    );
+    assert!(crate::agent_host::pairing::host_execution_enabled(&config));
+    write(&config, r#"{"targets": [], "host_execution": true}"#);
+    assert!(!crate::agent_host::pairing::host_execution_enabled(&config));
+    // Paused while somebody else is signed in.
+    let paused = local.replace("}", r#", "session_paused": true}"#);
+    write(&config, &format!(r#"{{"targets": [{paused}]}}"#));
+    assert!(!crate::agent_host::pairing::host_execution_enabled(&config));
+}
+
+/// The pairing code goes to the host on stdin: on the argument list, any
+/// process on this computer can read it while the exchange runs.
+#[cfg(unix)]
+#[test]
+fn the_pairing_code_never_reaches_the_argument_list() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempdir().unwrap();
+    let record = home.path().join("record");
+    let fake = home.path().join("fake-agent-host");
+    write(
+        &fake,
+        &format!(
+            "#!/bin/sh\necho \"$@\" > {record}.args\nread code\necho \"$code\" > {record}.stdin\n\
+             echo \"refused $code\" >&2\nexit 1\n",
+            record = record.display()
+        ),
+    );
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+    supervisor.executable = Some(fake);
+    let error = supervisor
+        .pair("http://127.0.0.1:8710", "s3cret-code", "My Mac", true)
+        .expect_err("the fake host refuses");
+    let args = std::fs::read_to_string(record.with_extension("args")).unwrap();
+    assert!(!args.contains("s3cret-code"), "{args}");
+    assert!(
+        args.contains("--pairing-code-stdin") && args.contains("--reenable"),
+        "{args}"
+    );
+    let stdin = std::fs::read_to_string(record.with_extension("stdin")).unwrap();
+    assert_eq!(stdin.trim(), "s3cret-code");
+    assert!(!error.to_string().contains("s3cret-code"), "{error}");
 }
