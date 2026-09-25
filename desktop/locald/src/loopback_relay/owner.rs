@@ -346,6 +346,7 @@ mod tests {
     /// process opens is found on its port and attributed to this process, a
     /// connected socket is not a listener, and a child's listener is the
     /// child's.
+    #[cfg(unix)]
     #[cfg(target_os = "macos")]
     #[test]
     fn a_socket_of_our_own_is_found_where_we_bound_it() {
