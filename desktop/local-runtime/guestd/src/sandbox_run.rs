@@ -334,6 +334,7 @@ impl<E: Engine + 'static> GuestService<E> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
             .mode(0o600)
             .open(&path)
             .map_err(|error| GuestError::engine(error.to_string()))?;
@@ -341,9 +342,14 @@ impl<E: Engine + 'static> GuestService<E> {
             .map_err(|error| GuestError::engine(error.to_string()))?;
         file.sync_all()
             .map_err(|error| GuestError::engine(error.to_string()))?;
-        let path_bytes = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-            .map_err(|_| GuestError::invalid("runtime token path contains NUL"))?;
-        let result = unsafe { libc::chown(path_bytes.as_ptr(), 10_001, 10_001) };
+        // The descriptor, never the path. The directory is the sandbox's (it
+        // is mounted into the container, owned by its user), so between this
+        // open and a `chown(path)` the sandbox could swap `token` for a
+        // symlink -- and `chown` follows symlinks, handing a guest file of its
+        // choosing to uid 10001.
+        use std::os::fd::AsRawFd;
+        // SAFETY: a descriptor this scope owns, for the duration of the call.
+        let result = unsafe { libc::fchown(file.as_raw_fd(), 10_001, 10_001) };
         if result != 0 {
             return Err(GuestError::engine(io::Error::last_os_error().to_string()));
         }

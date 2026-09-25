@@ -661,3 +661,50 @@ fn a_running_sandbox_whose_relay_grant_changed_is_replaced() {
         ExistingContainer::Replace
     );
 }
+
+/// A guestd that died mid-replacement left the old container running under
+/// `…-replaced`. On the next start it is removed where the new one exists and
+/// put back where it does not; and `sandbox.list` never reports one.
+#[test]
+fn an_interrupted_replacement_is_settled_on_startup_and_never_listed() {
+    let (_root, service) = swap_service(vec![
+        output(
+            true,
+            "lemma-sandbox-w-a\nlemma-sandbox-w-a-replaced\nlemma-sandbox-w-b-replaced\n",
+        ),
+        output(true, ""),
+        output(true, ""),
+    ]);
+    assert_eq!(service.recover_interrupted_replacements().unwrap(), 2);
+    let commands = service.engine.commands();
+    assert_eq!(
+        commands[1],
+        strings(&["rm", "--force", "lemma-sandbox-w-a-replaced"])
+    );
+    assert_eq!(
+        commands[2],
+        strings(&["rename", "lemma-sandbox-w-b-replaced", "lemma-sandbox-w-b"])
+    );
+
+    let (_root, service) = swap_service(vec![output(true, "lemma-sandbox-w-a-replaced\n")]);
+    assert_eq!(service.list().unwrap(), json!({"sandboxes": []}));
+    assert_eq!(
+        service.engine.commands().len(),
+        1,
+        "the leftover was inspected"
+    );
+}
+
+/// The token's directory is mounted into the sandbox and owned by its user,
+/// so the sandbox can swap the file for a symlink at any moment. Ownership is
+/// given by descriptor, never by path, and the open does not follow one.
+#[test]
+fn the_runtime_token_is_handed_over_by_descriptor_not_by_path() {
+    let source = include_str!("../sandbox_run.rs");
+    let start = source.find("fn write_runtime_token").unwrap();
+    let body = &source[start..];
+    let body = &body[..body.find("fn remove_runtime_token").unwrap()];
+    assert!(body.contains("libc::fchown(file.as_raw_fd()"), "{body}");
+    assert!(body.contains("O_NOFOLLOW"), "{body}");
+    assert!(!body.contains("chown(path_bytes"), "{body}");
+}

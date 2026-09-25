@@ -36,6 +36,10 @@ pub(crate) enum ExistingContainer {
 /// 2: `--pids-limit`, `--oom-score-adj` and a stable `--hostname`.
 pub(crate) const SANDBOX_HARDENING_VERSION: u64 = 2;
 
+/// What `replace_and_run` renames a running container to while its
+/// replacement starts.
+pub(crate) const REPLACED_SUFFIX: &str = "-replaced";
+
 /// The grants a container is made with, as `sandbox.ensure` asks for them and
 /// as `snapshot_from_inspect` reads them back off its labels.
 ///
@@ -313,6 +317,10 @@ impl<E: Engine + 'static> GuestService<E> {
         for name in output
             .lines()
             .filter(|line| line.starts_with(CONTAINER_PREFIX))
+            // An old container set aside by a replacement is not a sandbox of
+            // its own; reported as one, the sweep saw a `w-…-replaced` it
+            // could not map to anything.
+            .filter(|line| !line.trim().ends_with(REPLACED_SUFFIX))
         {
             let sandbox_id = name.trim().trim_start_matches(CONTAINER_PREFIX);
             if validate_sandbox_id(sandbox_id).is_ok() {
@@ -394,7 +402,7 @@ impl<E: Engine + 'static> GuestService<E> {
             self.run_checked(&["rm".into(), "--force".into(), container.into()])?;
             return self.run_checked(arguments).map(|_| ());
         }
-        let aside = format!("{container}-replaced");
+        let aside = format!("{container}{REPLACED_SUFFIX}");
         // A leftover from an earlier replacement that died half-way; absent
         // is the ordinary case, so its failure means nothing.
         let _ = self.run_checked(&["rm".into(), "--force".into(), aside.clone()]);
@@ -415,6 +423,43 @@ impl<E: Engine + 'static> GuestService<E> {
                 Err(error)
             }
         }
+    }
+
+    /// Settle any replacement a previous guestd died in the middle of.
+    ///
+    /// `replace_and_run` renames the running container aside, starts the new
+    /// one, and removes the old. Killed between those, it left the old one
+    /// running under `…-replaced` for good -- still holding its memory, still
+    /// on the network -- and, with no new one started, a sandbox that no
+    /// longer answered to its own name. So on startup: where the new one
+    /// exists the old one goes; where it does not, the old one is put back.
+    ///
+    /// Run by the resident guest when it starts serving (Linux only).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn recover_interrupted_replacements(&self) -> Result<usize, GuestError> {
+        let output = self.run_checked(&[
+            "ps".into(),
+            "--all".into(),
+            "--filter".into(),
+            format!("label={MANAGED_LABEL}"),
+            "--format".into(),
+            "{{.Names}}".into(),
+        ])?;
+        let names: Vec<&str> = output.lines().map(str::trim).collect();
+        let mut settled = 0;
+        for aside in names
+            .iter()
+            .filter(|name| name.starts_with(CONTAINER_PREFIX) && name.ends_with(REPLACED_SUFFIX))
+        {
+            let primary = aside.trim_end_matches(REPLACED_SUFFIX);
+            if names.contains(&primary) {
+                self.run_checked(&["rm".into(), "--force".into(), (*aside).into()])?;
+            } else {
+                self.run_checked(&["rename".into(), (*aside).into(), primary.into()])?;
+            }
+            settled += 1;
+        }
+        Ok(settled)
     }
 
     pub(crate) fn snapshot_optional(&self, sandbox_id: &str) -> Result<Option<Value>, GuestError> {
