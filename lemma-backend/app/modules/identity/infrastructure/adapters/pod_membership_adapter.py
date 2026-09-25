@@ -20,6 +20,7 @@ from app.modules.identity.domain.ports import PodMembershipPort
 from app.modules.pod.contracts.members import (
     add_pod_member,
     pod_invitation_details,
+    pod_member_id,
     pod_organization_id,
 )
 
@@ -35,6 +36,9 @@ class SqlAlchemyPodMembershipAdapter(PodMembershipPort):
         self, pod_id: UUID
     ) -> tuple[str, str | None, UUID] | None:
         return await pod_invitation_details(self._uow, pod_id)
+
+    async def is_pod_member(self, *, pod_id: UUID, user_id: UUID) -> bool:
+        return await pod_member_id(self._uow, pod_id, user_id) is not None
 
     async def add_member_to_pod(
         self,

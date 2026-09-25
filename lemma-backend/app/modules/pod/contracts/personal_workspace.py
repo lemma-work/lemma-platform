@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts.provisioning import ensure_pod_default_agent
 from app.modules.pod.api.dependencies import get_pod_service
+from app.modules.pod.contracts.members import pod_member_id
 from app.modules.pod.domain.errors import PodLimitReachedError
 from app.modules.pod.domain.pod_entities import PodEntity, PodJoinPolicy
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
@@ -97,6 +98,24 @@ async def ensure_personal_workspace(
         uow, pod_id=pod.id, user_id=owner_user_id
     )
     return PersonalWorkspace(pod.id, assistant_id, True)
+
+
+async def invited_workspace(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID
+) -> PersonalWorkspace | None:
+    """A pod the person was invited into, with the assistant that answers there.
+
+    ``None`` when the pod has gone or they are not in it after all: the caller
+    falls back to a workspace of their own rather than routing nowhere.
+    """
+    live = await uow.session.scalar(
+        select(Pod.id).where(Pod.id == pod_id, Pod.is_deleted.is_(False))
+    )
+    member = await pod_member_id(uow, pod_id, user_id) if live else None
+    if member is None:
+        return None
+    assistant_id = await ensure_pod_default_agent(uow, pod_id=pod_id, user_id=user_id)
+    return PersonalWorkspace(pod_id, assistant_id, False)
 
 
 async def create_named_workspace(
