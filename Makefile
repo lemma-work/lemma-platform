@@ -120,13 +120,15 @@ PUBLIC_TUNNEL_READY_TIMEOUT  ?= 30
 
 DEV_BACKEND_PORT      ?= 8710
 DEV_FRONTEND_PORT     ?= 3710
+DEV_WORKSPACE_PORT    ?= 3000
 DEV_POSTGRES_PORT     ?= 5432
 DEV_REDIS_PORT        ?= 6379
 DEV_SUPERTOKENS_PORT  ?= 3567
 
 DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
-DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
+DEV_WORKSPACE_URL     := http://localhost:$(DEV_WORKSPACE_PORT)
+DEV_AUTH_FRONTEND_URL := $(DEV_WORKSPACE_URL)
 DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 # A sandbox browser needs an origin, not a path: the dashboard is a Next.js
 # app whose assets are all absolute. `*.localhost` resolves without any DNS
@@ -222,7 +224,7 @@ COMMON_DEV_ENV := \
 	DEV_SUPERTOKENS_PORT=$(DEV_SUPERTOKENS_PORT)
 
 BACKEND_API_URL                 ?= $(DEV_BACKEND_URL)
-BACKEND_FRONTEND_URL            ?= $(DEV_FRONTEND_URL)
+BACKEND_FRONTEND_URL            ?= $(DEV_WORKSPACE_URL)
 BACKEND_AUTH_FRONTEND_URL       ?= $(DEV_AUTH_FRONTEND_URL)
 BACKEND_CLI_API_URL             ?= $(DEV_BACKEND_URL)
 BACKEND_CLI_AUTH_FRONTEND_URL   ?= $(DEV_AUTH_FRONTEND_URL)
@@ -525,7 +527,7 @@ _init-backend-env:
 			echo "LOG_LEVEL=$(DEV_LOG_LEVEL)"; \
 			echo "JSON_LOGS_ENABLED=$(DEV_JSON_LOGS_ENABLED)"; \
 			echo "API_URL=$(DEV_BACKEND_URL)"; \
-			echo "FRONTEND_URL=$(DEV_FRONTEND_URL)"; \
+			echo "FRONTEND_URL=$(DEV_WORKSPACE_URL)"; \
 			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 			echo "CLI_API_URL=$(DEV_BACKEND_URL)"; \
 			echo "CLI_AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
@@ -584,7 +586,7 @@ _ensure-backend-env-keys:
 		append LOG_LEVEL $(DEV_LOG_LEVEL); \
 		append JSON_LOGS_ENABLED $(DEV_JSON_LOGS_ENABLED); \
 		append API_URL '$(DEV_BACKEND_URL)'; \
-		append FRONTEND_URL '$(DEV_FRONTEND_URL)'; \
+		append FRONTEND_URL '$(DEV_WORKSPACE_URL)'; \
 		append AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
 		append CLI_API_URL '$(DEV_BACKEND_URL)'; \
 		append CLI_AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
@@ -2145,8 +2147,8 @@ migrate:
 
 .PHONY: dev-frontend test-workspace _init-workspace-env
 
-dev-frontend:
-	@cd $(WORKSPACE_DIR) && npm run dev
+dev-frontend: _init-workspace-env
+	@cd $(WORKSPACE_DIR) && npm run dev -- --port $(DEV_WORKSPACE_PORT)
 
 test-workspace:
 	@cd $(WORKSPACE_DIR) && npm test
