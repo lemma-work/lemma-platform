@@ -451,3 +451,44 @@ fn every_control_module_is_read_by_the_guards() {
         "add the new module to CONTROL in src/tests/mod.rs"
     );
 }
+
+/// Reset Data is offered from Recovery, so it has to work from Recovery.
+///
+/// `ensure_locald` refuses while Recovery pauses services, and the reset went
+/// through it unchanged -- after it had already cleared the session. Asserted
+/// on the source because the path needs a live AppHandle and a daemon.
+#[test]
+fn reset_data_leaves_recovery_and_signs_out_only_once_the_reset_is_accepted() {
+    let source = include_str!("../local_recovery.rs").replace("\r\n", "\n");
+    let body = function_body(&source, "pub(crate) fn reset_local_data_impl(");
+    let leave = body
+        .find("recovery_mode.swap(false")
+        .expect("the reset leaves Recovery before it needs the daemon");
+    let ensure = body
+        .find("ensure_locald(&app)")
+        .expect("the reset starts the daemon");
+    let send = body
+        .find("\"local.reset-data\"")
+        .expect("the reset is sent");
+    let clear = body
+        .find("clear_local_session_data(&app)")
+        .expect("the session is still cleared");
+    assert!(leave < ensure, "{body}");
+    assert!(
+        send < clear,
+        "the session must survive a reset that never started: {body}"
+    );
+    assert!(
+        body.contains("recovery_mode.store(true"),
+        "a reset that cannot start must put Recovery back: {body}"
+    );
+}
+
+/// locald outlives the app by design, so it must not share the app's process
+/// group: launchd reaps a LaunchAgent job's whole group when the app exits.
+#[test]
+fn the_daemon_is_spawned_into_its_own_process_group() {
+    let source = include_str!("../locald_process.rs").replace("\r\n", "\n");
+    let spawn = function_body(&source, "pub(crate) fn spawn_locald(");
+    assert!(spawn.contains("command.process_group(0)"), "{spawn}");
+}

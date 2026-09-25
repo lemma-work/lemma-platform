@@ -194,6 +194,15 @@ pub(crate) fn spawn_locald() -> Result<Child, String> {
             bundled_vz().ok_or("bundled lemma-vz helper is missing")?,
         );
     }
+    // Its own process group. The daemon outlives the app by design, but a
+    // launch by the Start-at-Login LaunchAgent puts the app at the head of a
+    // launchd job, and launchd reaps the job's whole process group when the
+    // app exits -- as does a terminal's Ctrl-C in a dev run.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     command
         .no_console_window()
         .spawn()

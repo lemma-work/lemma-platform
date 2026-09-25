@@ -463,7 +463,7 @@ pub(crate) fn exit_disposition(
 ) -> ExitDisposition {
     // `AppHandle::restart` ignores `prevent_exit`, so treating a restart as a
     // quit only raced a stop -- and a quit prompt -- against the relaunch.
-    // Restart into Recovery and Restart Now after an update both come here.
+    // Restart into Recovery and the restart that finishes an update both come here.
     if restarting {
         return ExitDisposition::Allow;
     }

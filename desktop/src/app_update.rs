@@ -302,7 +302,7 @@ pub(crate) async fn install_app_update(
     // for the reason given at the restart question below.
     let consent = format!(
         "Lemma {} will be downloaded and installed. Lemma's local runtime stops \
-         while it installs.",
+         while it installs, and Lemma restarts as soon as it is installed.",
         update.version
     );
     let handle = app.clone();
@@ -376,28 +376,14 @@ pub(crate) async fn install_app_update(
         return Ok(());
     }
 
-    // Off the async runtime. `confirm_destructive_action_impl` waits on a
-    // channel until the user answers, and the user may never answer -- so
-    // calling it from this async command parked a tokio worker on a dialog for
-    // as long as the window was left open.
-    let message = format!(
-        "Lemma {} is installed. Restarting now finishes the update; it downloads \
-         its runtime once afterwards.",
+    // Not a question any more. The stack was stopped above and the bundle on
+    // disk is now the new version: "Later" left the old shell running over a
+    // stopped stack it could only restart from the *new* locald binary, which
+    // then met the old guest -- a mixed-version runtime nobody tested. The
+    // consent above says the restart is part of installing.
+    append_install_log(&format!(
+        "update: Lemma {} installed; restarting to finish",
         update.version
-    );
-    let handle = app.clone();
-    let restart = tauri::async_runtime::spawn_blocking(move || {
-        confirm_destructive_action_impl(
-            handle,
-            "Restart to finish updating?".into(),
-            message,
-            "Restart Now".into(),
-        )
-    })
-    .await
-    .map_err(|join| join.to_string())??;
-    if restart {
-        app.restart();
-    }
-    Ok(())
+    ));
+    app.restart();
 }

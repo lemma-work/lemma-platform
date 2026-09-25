@@ -94,6 +94,16 @@ avoided on Apple Silicon; see the same disk-cache workaround in
 setup binds persistent paths for PostgreSQL, Redis, SuperTokens, containerd,
 and sandbox workspaces from that disk. Ephemeral runtime paths use tmpfs.
 
+The guest formats the disk only when it has no filesystem signature *and* the
+host says it is new. "New" is `data-disk-never-mounted` beside `data.raw`:
+written before the disk is created and removed only when a boot first reaches
+health, so a first boot interrupted before `mkfs` stays formattable instead of
+reporting that it needs repair. At boot `e2fsck -p` repairs a dirty filesystem;
+damage it declines to fix gets one `e2fsck -f -y` pass before the guest reports
+`needs-repair` and the app offers a reset. The VM does not start with less than
+2 GiB free on the Mac, because the sparse disk grows underneath the guest and a
+full Mac fails its writes -- Postgres's among them.
+
 The build creates a 2 GiB maximum ext4 image, populates it with numeric
 ownership preserved, shrinks it to minimum contents, and verifies the final
 logical size. Boot files ship separately from the immutable root; the root
@@ -181,7 +191,9 @@ after a grace interval.
 
 Recovery is available from the welcome screen, desktop settings, and the tray,
 including cloud mode and daemon failures. Restart into Recovery pauses automatic
-service startup and runtime downloads. Force cleanup requires an app-owned
+service startup and runtime downloads. Reset Data from Recovery leaves Recovery (it
+starts local services to perform the reset) and clears the workspace session
+only once the daemon has accepted the reset. Force cleanup requires an app-owned
 confirmation with Cancel focused. It deletes this installation's local data,
 credentials, runtime downloads, Agent Host pairings and managed working folders;
 external project folders and cloud data are retained. It is separate from updates
@@ -480,7 +492,7 @@ Each command is granted to a webview by a capability in
 | `prepare_sandbox_image` | workspace | local workspace | |
 | `open_logs`, `diagnostic_logs` | main, control, workspace | native page, or local workspace | Log tails are redacted |
 | `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
-| `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown |
+| `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown; once installed the app restarts without asking again, because the stack is already stopped and the bundle replaced |
 | `telemetry_status`, `set_telemetry_enabled` | control, workspace | settings | |
 | `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Onboarding and the Models suggestions |
 | `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |

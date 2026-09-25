@@ -690,7 +690,8 @@ a shipped artifact.
     refused as busy, and the loser must touch nothing.
 26. **Update.** Install v(N-1) from its DMG into Applications, complete first
     run, create a workspace. Publish v(N) and confirm This Mac → Updates offers it
-    with the real runtime download size. Update, restart, and confirm the
+    with the real runtime download size. Update (Lemma restarts itself once
+    installed; there is no "Later"), and confirm the
     workspace returns with its data, that `pgrep -a lemma-locald` shows nothing
     from the previous bundle, and that the relaunched app does not bounce off
     its own single-instance lock. Repeat with Lemma in a non-writable location
