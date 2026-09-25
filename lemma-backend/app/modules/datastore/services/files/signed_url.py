@@ -62,9 +62,8 @@ from contextlib import suppress
 import asyncio
 import math
 import secrets
-import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from uuid import UUID, uuid7
 
@@ -157,7 +156,7 @@ redis.call('HSET', KEYS[1],
   'budget_bytes', ARGV[9],
   'spent_bytes', 0
 )
-redis.call('EXPIRE', KEYS[1], ARGV[10])
+redis.call('PEXPIRE', KEYS[1], ARGV[10])
 return 1
 """
 
@@ -254,9 +253,10 @@ class SignedUrlStore:
         max_active = datastore_settings.datastore_signed_url_max_active_per_user
 
         code = secrets.token_urlsafe(datastore_settings.datastore_signed_url_code_bytes)
-        expires_at = datetime.fromtimestamp(
-            int(time.time()) + expires_seconds, tz=timezone.utc
-        )
+        # To the microsecond, not whole seconds. Truncating `now` took up to a
+        # second off every link, so one minted with `expires_seconds=1` could
+        # have milliseconds to live and be 404 by the time its URL was fetched.
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_seconds)
 
         # The durable record first, deliberately. If Redis then fails the link
         # still resolves — the next fetch rehydrates from this row. The other
@@ -327,16 +327,15 @@ class SignedUrlStore:
         Called on mint and again whenever a fetch finds nothing cached, which is
         what makes a lost Redis a slow first request rather than a dead link.
         """
-        # Rounded up, not truncated. `expires_at` is whole seconds while `now`
-        # is not, so a link with under a second left floored to a TTL of 0 and
-        # was dropped rather than cached — and with `expires_seconds=1` that
-        # happened on the mint itself, which answered 201 with a URL that was
-        # already 404. Expiry is still enforced by the row and by this key's own
-        # TTL; what this avoids is discarding a link that has not expired yet.
+        # In milliseconds, rounded up. A TTL in whole seconds either floored a
+        # link with under a second left to 0 -- dropped rather than cached, so
+        # a one-second link was 404 on the mint itself -- or, rounded up,
+        # served it for most of a second past its `expires_at`. The key is the
+        # enforcement on the fast path, so it has to lapse when the row does.
         remaining = (link.expires_at - datetime.now(timezone.utc)).total_seconds()
         if remaining <= 0:
             return
-        ttl = max(1, math.ceil(remaining))
+        ttl_ms = max(1, math.ceil(remaining * 1000))
         redis = await self._get_redis()
         # One script, because checking the tombstone and then writing in a
         # separate pipeline is the same check-then-act this tombstone exists to
@@ -360,7 +359,7 @@ class SignedUrlStore:
             # a link that is exhausted before its first fetch. Expiry still
             # bounds such a link.
             link.size_bytes * link.max_hits,
-            ttl,
+            ttl_ms,
         )
 
     async def peek_claims(self, code: str) -> SignedUrlClaims:
