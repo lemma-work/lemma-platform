@@ -1,4 +1,4 @@
-"""Opening an owner's host workspace, and the plumbing the host provider needs.
+"""Opening a paired user's host workspace, and the plumbing the host provider needs.
 
 See docs/architecture/desktop-host-execution.md. The selection itself -- is
 this run the owner's, is their Mac there -- belongs to the agent module, which

@@ -20,7 +20,7 @@ pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result
             }
         })?;
 
-    // The owner's browser reaching the Mac's loopback. Bound before the control
+    // The paired user's browser reaching the Mac's loopback. Bound before the control
     // port listens, so the socket exists before any sandbox that mounts it can
     // be started. A guest that cannot bind it still serves everything else:
     // the fall-through is a convenience, the control channel is not.

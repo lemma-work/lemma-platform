@@ -3,7 +3,7 @@
 import "@/styles/desktop.css";
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lemma } from "@/session/client";
+import { isLocalDeployment } from "@/site/config";
 import { ComputerIcon, DownloadIcon, RefreshIcon, TerminalIcon, WarningIcon } from "@/ui/icons";
 import { useDesktopBridge } from "./bridge";
 import { openSettings } from "./open-settings";
@@ -13,7 +13,7 @@ import { readStatus, useAgentHost } from "./agent-host";
 import {
     channelLine, friendlyError, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin,
     sandboxWording, updateOffer, sharingBusy, thisMac, thisMacAvailability,
-    type Installation, type ThisMacAvailability, type ThisMacSnapshot,
+    type ThisMacAvailability, type ThisMacSnapshot,
 } from "./this-mac";
 import { ThisMacSharing } from "./this-mac-sharing";
 import { ThisMacAdvanced } from "./this-mac-advanced";
@@ -26,9 +26,10 @@ import { ThisMacAdvanced } from "./this-mac-advanced";
  *  most people never opened. What is left of that window is what has to work
  *  when this page cannot load: health, recovery and diagnostics.
  *
- *  Shown only in the app, on a local install, to its owner. The shell checks
- *  who is calling on every command anyway (`workspace_settings.rs`); the gate
- *  here is so nobody else is shown a machine's settings they cannot use. */
+ *  Shown only in the app's own window, on a local install's loopback origin.
+ *  The shell checks where every command comes from anyway
+ *  (`workspace_settings.rs`); the gate here is so nobody is shown a machine's
+ *  settings they cannot use. */
 
 export type ThisMacSection = "this-mac" | "this-mac-agents" | "this-mac-sharing" | "this-mac-updates" | "this-mac-advanced";
 
@@ -40,31 +41,13 @@ export function isThisMacSection(section: string): section is ThisMacSection {
     return (THIS_MAC_SECTIONS as readonly string[]).includes(section);
 }
 
-/** What this installation is, and whether you own it. Asked once a session:
- *  neither answer changes while the page is open. */
-export function useInstallation(enabled: boolean) {
-    return useQuery({
-        queryKey: ["installation"],
-        queryFn: async () => (await lemma().users.installation()) as Installation,
-        enabled,
-        staleTime: Infinity,
-        retry: 1,
-    });
-}
-
 export function useThisMacAvailability(): ThisMacAvailability {
     const bridge = useDesktopBridge();
-    const installation = useInstallation(bridge);
     /* Read after mount: the server has no hostname to compare, and a group
        that appears one commit later is better than one the server invented. */
-    const [localOrigin, setLocalOrigin] = useState(false);
+    const [localOrigin, setLocalOrigin] = useState<boolean | null>(null);
     useEffect(() => setLocalOrigin(onLocalWorkspaceOrigin()), []);
-    return thisMacAvailability({
-        bridge,
-        localOrigin,
-        installation: installation.data,
-        loading: installation.isPending && bridge,
-    });
+    return thisMacAvailability({ bridge, localDeployment: isLocalDeployment(), localOrigin });
 }
 
 /** The daemon's picture of this installation. Polled quickly while sharing is

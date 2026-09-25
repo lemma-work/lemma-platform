@@ -7,7 +7,7 @@
 //! guest's own addresses (the bridge gateway, the DHCP address) is delivered
 //! locally: it traverses `INPUT` arriving on the bridge interface. So without
 //! a rule, code running in any sandbox -- including one belonging to somebody
-//! the owner invited onto a shared installation -- could open the database
+//! invited onto a shared installation -- could open the database
 //! every account lives in, and SuperTokens' core, which has no API key here
 //! and will mint a session for any user id it is asked to.
 //!
@@ -37,7 +37,7 @@
 //! from the sandbox bridge to the gateway passes a chain that returns for
 //! replies, those ports and DNS, and rejects the rest.
 //!
-//! One rule for every sandbox, the owner's included: the owner's way onto the
+//! One rule for every sandbox, the paired user's included: the paired user's way onto the
 //! Mac's loopback is the relay socket (`host_loopback`), never the gateway.
 //! Because the rule is the same for every container it is keyed on the bridge
 //! rather than on each container's address, which nerdctl assigns at run

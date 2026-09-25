@@ -1,4 +1,4 @@
-"""A sandbox whose compute is a folder on the installation owner's Mac.
+"""A sandbox whose compute is a folder on the paired user's Mac.
 
 See docs/architecture/desktop-host-execution.md. Every operation is one ``op``
 request to the owner's Agent Host, which runs it inside ``lemma-agent-host

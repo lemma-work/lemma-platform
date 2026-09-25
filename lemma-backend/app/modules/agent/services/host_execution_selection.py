@@ -1,27 +1,34 @@
-"""Whether a run executes on the installation owner's Mac. Decided once per run.
+"""Whether a run executes on the Mac of the user it runs for. Decided once per run.
 
-See docs/architecture/desktop-host-execution.md §2. A run gets host execution
-only when **all** of these hold, and otherwise the owner-agnostic VM sandbox,
-exactly as before:
+See docs/architecture/desktop-host-execution.md §2. There is no installation
+owner: a run is routed by the **Agent Host pairing**. It gets host execution
+only when **all** of these hold, and otherwise the VM sandbox, exactly as
+before:
 
-1. this is a Desktop local install;
-2. the workspace -- the conversation's user -- is the installation owner;
-3. the run's triggering human is the owner (below);
-4. the owner has an online paired Agent Host with host execution on and
-   available, and it opens the workspace when asked.
+1. this is a Desktop local install (the backend runs beside the hosts it
+   would route to; a hosted deployment never routes a run to a machine);
+2. the run acts as the conversation's user -- the workspace is theirs;
+3. the run's triggering human is that user, in Lemma's own app (below);
+4. that user -- the one the host is paired to -- has an online Agent Host
+   with host execution on and available, and it opens the workspace when
+   asked.
+
+A host is paired to exactly one user, and only that user's runs are ever
+routed to it: somebody else's run on the same installation goes to their own
+host if they have one, or to the VM.
 
 **Who triggered the run.** A conversation here belongs to one user, and every
 run in it runs as that user, so (2) already names the only human who can type
 into it. What remains is *how* the run started. Only a person in Lemma's own
 app qualifies: a message, a retry, an answer to a question or an approval, or
-the queued follow-up of messages they sent. Continuations of a run the owner
+the queued follow-up of messages they sent. Continuations of a run that person
 started -- a ``wait_for`` waking, a reply they were waiting on -- qualify for
-the same reason, because the work they continue is the owner's. Nothing a
-schedule started does, and nothing that arrived on a channel does: a Slack or
-email or Telegram sender is the platform's assertion, not an owner's session,
-so an inbound channel run never executes on the host, whoever it resolved to.
-An unknown source does not qualify -- a new source has to be added here on
-purpose.
+the same reason, because the work they continue is theirs. Nothing a schedule
+started does, and nothing that arrived on a channel does: a Slack or email or
+Telegram sender is the platform's assertion, not the user's session, so an
+inbound channel run never executes on the host, whoever it resolved to.
+Sub-agent conversations never do either. An unknown source does not qualify --
+a new source has to be added here on purpose.
 
 **Once.** The check runs the first time the run's context is built, and the
 answer -- host or VM -- is written on the run (``run_execution_record``). A
@@ -59,10 +66,7 @@ from app.modules.agent.infrastructure.run_execution_record import (
     record_run_execution,
 )
 from app.modules.agent.services.workspace_location import resolve_workspace_location
-from app.modules.identity.contracts.installation import (
-    is_desktop_installation,
-    is_installation_owner,
-)
+from app.modules.identity.contracts.installation import is_desktop_installation
 from app.modules.workspace.contracts.host_execution import (
     HostWorkspace,
     open_host_workspace,
@@ -71,7 +75,7 @@ from app.modules.workspace.contracts.host_execution import (
 logger = get_logger(__name__)
 
 #: A person, in Lemma, on this turn.
-OWNER_SOURCES = frozenset(
+PERSON_SOURCES = frozenset(
     {
         "user_message",
         "queued_messages",
@@ -86,8 +90,8 @@ CONTINUATION_SOURCES = frozenset({"agent_wait", "wait_resume", "message_replies"
 _CWD_SUFFIX = re.compile(r"/c/(\d{4}-\d{2}-\d{2})/([A-Za-z0-9_-]{1,64})/?$")
 
 
-def triggered_by_owner(conversation: Conversation, agent_run: AgentRun) -> bool:
-    """Whether a person in Lemma's own app started this run. See the module."""
+def triggered_by_run_user(conversation: Conversation, agent_run: AgentRun) -> bool:
+    """Whether the run's user, in Lemma's own app, started this run. See the module."""
     metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
     if metadata.get("surface_platform") or metadata.get("is_sub_agent"):
         return False
@@ -95,7 +99,7 @@ def triggered_by_owner(conversation: Conversation, agent_run: AgentRun) -> bool:
     # prompt-brief machinery out of this module's import graph.
     run_metadata = agent_run.metadata if isinstance(agent_run.metadata, dict) else {}
     source = run_metadata.get("source")
-    if source in OWNER_SOURCES:
+    if source in PERSON_SOURCES:
         return True
     started_by_schedule = str(metadata.get("started_by") or "").upper() == "SCHEDULE"
     return source in CONTINUATION_SOURCES and not started_by_schedule
@@ -140,13 +144,12 @@ def workspace_from_choice(value: dict[str, object]) -> HostWorkspace | None:
 class HostExecutionFacts:
     """Where each rule's answer comes from; injected, so a test can state them.
 
-    Each is a question another part of the system owns: the deployment kind and
-    the owner are identity's, the host's state is the link's, and opening the
+    Each is a question another part of the system owns: the deployment kind is
+    identity's, the paired host's state is the link's, and opening the
     workspace is the workspace module's.
     """
 
     is_desktop: Callable[[], bool] = is_desktop_installation
-    is_owner: Callable[[UUID], Awaitable[bool]] = is_installation_owner
     usable_host: Callable[[UUID], Awaitable[UUID | None]] = host_execution_host_id
     open_workspace: Callable[..., Awaitable[HostWorkspace]] = open_host_workspace
     recorded: Callable[[UUID], Awaitable[dict[str, object] | None]] = _recorded_choice
@@ -156,13 +159,15 @@ class HostExecutionFacts:
 FACTS = HostExecutionFacts()
 
 
-async def owner_may_execute_on_host(
+async def paired_host_for(
     user_id: UUID, *, facts: HostExecutionFacts = FACTS
 ) -> UUID | None:
-    """Rules 1, 2 and 4's first half: the owner's usable host, if any."""
+    """Rules 1 and 4's first half: the usable host paired to this user, if any.
+
+    Hosts are looked up by the user they are paired to, so a host is only ever
+    found for its own user.
+    """
     if not facts.is_desktop():
-        return None
-    if not await facts.is_owner(user_id):
         return None
     return await facts.usable_host(user_id)
 
@@ -234,9 +239,9 @@ async def _select(
 ) -> HostWorkspace | None:
     if conversation.user_id != user_id:
         return None
-    if not triggered_by_owner(conversation, agent_run):
+    if not triggered_by_run_user(conversation, agent_run):
         return None
-    host_id = await owner_may_execute_on_host(user_id, facts=facts)
+    host_id = await paired_host_for(user_id, facts=facts)
     if host_id is None:
         return None
     day, slug = default_folder(conversation)
@@ -270,12 +275,10 @@ async def _select(
 async def host_runs_native_commands(
     conversation: Conversation, *, facts: HostExecutionFacts = FACTS
 ) -> bool:
-    """§7: an owner's coding-agent run with host execution on.
+    """§7: a coding-agent run whose user's paired host has host execution on.
 
     Not gated on who triggered the run: the coding agent already runs on the
     Mac whoever asked, so the question is only whether Lemma's command tools
     would duplicate the ones it has there.
     """
-    return (
-        await owner_may_execute_on_host(conversation.user_id, facts=facts) is not None
-    )
+    return await paired_host_for(conversation.user_id, facts=facts) is not None

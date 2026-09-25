@@ -7,35 +7,27 @@ Windows). This page is the threat model for that arrangement — who can reach
 it, what each of them gets, and which mechanism holds each line. The process
 layout itself is in [Desktop architecture](desktop.md).
 
-## The installation owner
+## Who is the person at this Mac
 
-The **installation owner** is the first account created on a Desktop
-installation. It is the person whose computer this is, and it is the only
-account that will be granted anything outside the VM.
+There is no installation owner, and no account on a Desktop installation is
+special. Every account -- the first one included -- is an ordinary member,
+exactly as on hosted Lemma. What belongs to *the person at this Mac* is decided
+by **where a request comes from**, never by who is signed in:
 
-- Recorded once, in the one-row `installation_owner` table (identity module,
-  migration `0041`). The primary key is a boolean pinned to `true` by a check
-  constraint, so a second owner is a statement the database refuses rather
-  than a race someone has to lose.
-- The slot is **reserved before the account exists**. Two simultaneous first
-  signups both try to insert the reservation; one succeeds and proceeds as the
-  owner, the other is treated as an ordinary signup and meets the signup mode.
-  The reservation is bound to the user in the same transaction that creates the
-  user row. A reservation abandoned mid-signup (a rejected password, a closed
-  tab) can be taken over after `INSTALLATION_OWNER_RESERVATION_SECONDS`.
-- An installation that already had accounts when it was upgraded makes its
-  **oldest** account the owner, the first time anything asks.
-- A deleted owner leaves the slot *taken* (`ON DELETE SET NULL`). Ownership is
-  never handed to whoever signs up next.
-- Ownership exists only when `DEPLOYMENT_KIND=desktop`, which the Desktop host
-  pack sets. A hosted or self-hosted deployment has no owner; the check does not
-  consult the table there at all.
+- **This Mac settings** (sharing, updates, credentials, repair) answer only the
+  desktop app's own main window, in local mode, on this installation's loopback
+  workspace origin. The shell checks that on every command
+  (`require_local_settings_caller` in `desktop/src/workspace_settings.rs`); the
+  frontend only mirrors it to decide what to draw (`thisMacAvailability`). A
+  browser, a LAN visitor or anyone on the tunnel never reaches the shell, so
+  they never see or reach those settings, whatever account they hold.
+- **Anything that runs on this Mac outside the VM** follows the **Agent Host
+  pairing**. The Agent Host on this Mac is paired to one account, from the
+  app's own window; see [Agent Host](agent-host.md).
 
-The frontend reads it from `GET /users/me/installation`:
-
-```json
-{ "deployment": "desktop", "is_owner": true, "signup_mode": "invite_only" }
-```
+So two people who both sign in to the Desktop app on this Mac both see This
+Mac -- they are both at this Mac. Someone who reaches the same Lemma from a
+browser or a phone does not.
 
 ## Who can reach the installation
 
@@ -46,7 +38,7 @@ workspace. It is enforced by locald's gateway and, for Public, by the tunnel.
 | --- | --- | --- |
 | This computer | This Mac only | Services bind loopback; abuse controls off |
 | Local network | The selected private IPv4 interface | HTTP, host-only cookies; meant for trusted Wi-Fi |
-| Public | The internet, through the owner's ngrok or Cloudflare account | HTTPS at the tunnel, secure cookies |
+| Public | The internet, through this Mac's own ngrok or Cloudflare account | HTTPS at the tunnel, secure cookies |
 
 Leaving This computer applies an environment overlay to the backend
 (`sharing_environment()` in `desktop/locald/src/daemon/environment.rs`): it
@@ -71,12 +63,17 @@ email-code completion used by browser email sign-in and chat onboarding
 | `invite_only` | Only an address with a pending, unexpired organization invitation |
 | `closed` | Nobody |
 
-On Desktop the first account is admitted whatever the mode — there is nobody
-yet who could have invited it. People who already have an account sign in
-regardless of the mode. A refusal reaches the auth screen as a sentence, not a
-status: *"This Lemma is invite-only. Ask its owner for an invitation."*
-(`SIGNUP_INVITE_ONLY`), or *"This Lemma is not accepting new accounts."*
-(`SIGNUP_CLOSED`).
+The **first account on a deployment with no accounts at all** is admitted
+whatever the mode -- there is nobody yet who could have invited it. Nothing is
+recorded about it: it is an ordinary account from then on. The check is a read,
+not a reservation, so two signups racing on an empty database could both get
+in. On Desktop that race cannot happen: the app and API listen on loopback
+only, sharing is the only way anybody else reaches them, and onboarding creates
+the first account before sharing can be turned on. People who already have an
+account sign in regardless of the mode. A refusal reaches the auth screen as a
+sentence, not a status: *"This Lemma is invite-only. Ask someone already on it
+for an invitation."* (`SIGNUP_INVITE_ONLY`), or *"This Lemma is not accepting
+new accounts."* (`SIGNUP_CLOSED`).
 
 Defaults: `open` for hosted and self-hosted deployments (the behaviour before
 the setting existed), `invite_only` for Desktop. Sharing carries its own
@@ -88,11 +85,11 @@ in force. Enabling Public from the workspace is confirmed in a native dialog
 the shell raises itself (`local_sharing`); the page cannot set the consent
 flag.
 
-## What a non-owner gets
+## What a member gets
 
-An invited member — or anyone at all, if the owner chose `open` — gets what a
+An invited member — or anyone at all, if who can join is `open` — gets what a
 member of any Lemma gets: a personal workspace, pods they are invited to, and
-**a sandbox container inside the owner's VM**. That container is the boundary,
+**a sandbox container inside this Mac's VM**. That container is the boundary,
 and it is hardened accordingly:
 
 - **No capabilities.** `--cap-drop ALL` and `--security-opt no-new-privileges`
@@ -107,16 +104,9 @@ and it is hardened accordingly:
   starts any sandbox, and refuses to start one if the rules cannot be installed
   (`sandbox_firewall.rs`). Internet access, the backend's connections into a
   sandbox (published ports) and callbacks to the host are all unaffected.
-- **Nothing on the host.** Non-owners never get host command execution.
+- **Nothing on the host.** A sandbox never runs anything outside the VM.
 
 A function sandbox is additionally read-only with a `noexec` `/tmp`.
-
-## What the owner will get
-
-The next change adds command execution on the host itself — outside the VM —
-for the installation owner only, gated on `is_installation_owner`. This page
-will describe that boundary when it exists; everything above is the
-prerequisite for it being safe to add.
 
 ## The host alias
 
@@ -124,8 +114,8 @@ Every sandbox can reach the host through `host.lemma.internal`, which guestd
 adds to the container's hosts file pointing at the VM's host gateway. locald
 runs two callback forwarders there — the backend's and the frontend's ports,
 relayed to the Mac's loopback — and the workspace runtime's callbacks and the
-function gateway use them, so every sandbox, the owner's and an invited
-person's alike, needs the alias.
+function gateway use them, so every sandbox, whoever's it is, needs the
+alias.
 
 It is an explicit per-sandbox flag, `host_access` on `sandbox.ensure`
 (`ProviderCreateSpec.host_access` in the backend, passed through the bridge
@@ -134,7 +124,8 @@ when it is `false`, so a guest that predates the flag keeps working.
 
 The alias is **not** a way onto the Mac's own loopback: a server on the Mac's
 `127.0.0.1` is not reachable at the gateway address. That is the loopback
-relay, below, and only the owner's sandbox has it.
+relay, below, and only the workspace of the user this Mac's Agent Host is
+paired to has it.
 
 The flag controls a name, not a route. What a sandbox can reach at the gateway
 address is decided by guestd's firewall, below.
@@ -155,9 +146,9 @@ so a refused connection fails at once rather than timing out).
   `run/callback-ports.json` so a restarted guestd still knows them. A guest
   that has never been told refuses to start a sandbox rather than start one
   that can reach nothing it needs.
-- **The same rule for every sandbox**, the owner's and an invited person's
-  alike. The owner reaches the Mac's loopback through the relay socket, never
-  through the gateway, so the owner's sandbox needs no wider rule. Because the
+- **The same rule for every sandbox**, whoever's it is. The one sandbox that
+  reaches the Mac's loopback does so through the relay socket, never through
+  the gateway, so it needs no wider rule. Because the
   rule does not vary by container it is keyed on the bridge rather than on
   each container's address.
 - **Replaced without a gap.** The chain is named after its contents. New ports
@@ -175,32 +166,44 @@ interface answers there. The core ports inside the guest are a separate rule,
 
 ## The loopback relay
 
-With [host execution](desktop-host-execution.md) the owner's agent starts
-`npm run dev` on the Mac, where it listens on `127.0.0.1:3000`, and checks the
-result with a browser that runs in the owner's workspace sandbox in the guest.
+With [host execution](desktop-host-execution.md) a user's agent starts
+`npm run dev` on their Mac, where it listens on `127.0.0.1:3000`, and checks the
+result with a browser that runs in that user's workspace sandbox in the guest.
 The loopback relay is how that browser reaches the Mac's loopback:
 
 ```
 Chrome ─proxy─► host_fallback ─unix─► guestd ─vsock 42413─► lemma-vz ─unix─► locald ─tcp─► 127.0.0.1:<port>
-(owner's workspace sandbox)      (relay.sock)                (HostLoopbackBridge)  (loopback_relay)
+(paired user's workspace)        (relay.sock)                (HostLoopbackBridge)  (loopback_relay)
 ```
 
-- **Per request, not per port.** Chrome in the owner's sandbox is pointed at
+- **Per request, not per port.** Chrome in that sandbox is pointed at
   `sandbox_runtime.host_fallback` (`--proxy-server` plus
   `--proxy-bypass-list=<-loopback>`; a PAC is ignored for loopback). A loopback
   port the sandbox is serving stays the sandbox's, so an agent previewing what
   it built there is unaffected. Only a port nothing in the sandbox answers on
   is asked for through the relay.
-- **Only the owner's browser sandbox.** The backend decides, at provision time
-  (`host_loopback_policy.is_owner_browser_sandbox`): a workspace, owned by a
-  person, on a Desktop install, whose owner is the installation owner. It
-  sends `host_loopback: true` on `sandbox.ensure` for that sandbox and no
-  other. guestd then bind-mounts its relay directory into that container at
-  `/run/lemma-host-loopback` (and refuses the grant for a function sandbox).
-  The socket exists only in containers it is mounted into, so there is no
-  address an invited person's sandbox could dial. The directory is root's and
-  not writable from inside, so the owner's sandbox can use the socket but not
-  replace it. This is a separate grant from `host_access`.
+- **Only the workspace of the user this Mac's Agent Host is paired to.** There
+  is no installation owner; the relay leads to *this* Mac, so it follows *this*
+  Mac's Agent Host. The backend decides at provision time
+  (`host_loopback_policy.is_local_host_users_browser_sandbox`): a workspace,
+  owned by a person, on a Desktop install, whose user holds a live (unrevoked)
+  pairing with this Mac's Agent Host. locald hands the backend the path of
+  that host's config (`DESKTOP_AGENT_HOST_CONFIG_PATH`), and the backend reads
+  only `targets[].host_id` from it, each time. A host id is minted by this
+  backend at pairing and handed only to the host that paired, so any other
+  host -- a teammate's own Mac paired to this Lemma, or an Agent Host somebody
+  ran inside their own sandbox -- holds a different id and cannot present this
+  Mac's; its user gets host execution on *their* machine but never this Mac's
+  loopback. Whether the host is online or switched on is not part of the grant
+  (both change while a container lives); locald checks the switch on every
+  connection, below. The backend sends `host_loopback: true` on
+  `sandbox.ensure` for that sandbox and no other. guestd then bind-mounts its
+  relay directory into that container at `/run/lemma-host-loopback` (and
+  refuses the grant for a function sandbox). The socket exists only in
+  containers it is mounted into, so there is no address anyone else's sandbox
+  could dial. The directory is root's and not writable from inside, so the
+  sandbox can use the socket but not replace it. This is a separate grant from
+  `host_access`.
 - **Only while "Run commands on this Mac" is on.** locald reads the Agent
   Host's `host_execution` setting on every connection, as it does the deny
   list, and admits nothing while it is off: there is then no server of the
@@ -221,18 +224,22 @@ Chrome ─proxy─► host_fallback ─unix─► guestd ─vsock 42413─► le
 - **Nothing in lemma-vz decides anything.** It carries bytes between guest
   vsock streams and locald's socket (`run/host-loopback.sock`, mode 0600).
 
-**What it does not cover.** While the switch is on, the owner's VM browser —
-and any page it loads — can reach any non-Lemma server on the Mac's loopback,
-the same exposure the owner's own browser on the Mac has. Every run in the
-owner's workspace shares that sandbox, including a run started by an inbound
-channel message that resolved to the owner: such a run cannot execute on the
+**What it does not cover.** While the switch is on, the paired user's VM
+browser — and any page it loads — can reach any non-Lemma server on the Mac's
+loopback, the same exposure their own browser on the Mac has. Every run in
+that user's workspace shares that sandbox, including a run started by an
+inbound channel message that resolved to them: such a run cannot execute on the
 host, but its browser can use the relay while the switch is on. A `curl localhost:3000` in the sandbox's shell does
 not go through the relay: the fall-through is Chrome's proxy, not the shell's.
 
 **Windows.** The WSL guest runs guestd per request and never binds the relay
-socket, so the owner's sandbox finds no socket, the fall-through is not
+socket, so the sandbox finds no socket, the fall-through is not
 started, and `localhost` stays the sandbox's. Before the relay, a loopback miss
 was retried on the host alias; that path is gone on every platform.
+
+A grant is fixed when the container is created: pairing this Mac's host to a
+different account takes effect for a workspace the next time `sandbox.ensure`
+replaces its container, while locald's switch check applies at once.
 
 **Containers created before this** keep the arguments they were created with
 until `sandbox.ensure` next replaces them; a guest restart does.
@@ -244,7 +251,7 @@ through a capability that names this Mac's own local origin. A shared origin —
 the LAN address or the tunnel host — is deliberately absent from that
 capability and fails the Rust-side caller check too. The This Mac settings
 commands check more narrowly still: local mode, the loopback workspace origin
-this app navigated to, and nothing else — so the owner's own window, once
+this app navigated to, and nothing else — so the app's own window, once
 sharing has moved it to the shared address, is refused as well, and turns
 sharing off from the native Local settings instead. A visitor's browser can
 drive the shared Lemma; it can never invoke the desktop shell, the Agent Host

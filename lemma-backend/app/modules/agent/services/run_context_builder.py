@@ -162,8 +162,9 @@ async def build_run_context(
         delegate_model_configured=vision_delegate_available(),
     )
     # Where this run's commands execute, decided once, here, for the whole run.
-    # See `host_execution_selection`; imported here to keep it (and identity's
-    # installation owner) out of every process's startup import graph.
+    # See `host_execution_selection`; imported here to keep it (and the
+    # workspace module's host provider) out of every process's startup import
+    # graph.
     from app.modules.agent.services.host_execution_selection import (
         choose_host_workspace,
         host_runs_native_commands,

@@ -69,7 +69,7 @@ pub struct ManagedRuntimeController {
     pending_auth: Mutex<Option<thread::JoinHandle<io::Result<()>>>>,
     pending_images: Mutex<Option<thread::JoinHandle<()>>>,
     cancellation: lemma_desktop_process::Cancellation,
-    /// The owner's loopback relay and the ports it refuses. See
+    /// The paired user's loopback relay and the ports it refuses. See
     /// `host_loopback`.
     host_loopback: HostLoopbackState,
 }

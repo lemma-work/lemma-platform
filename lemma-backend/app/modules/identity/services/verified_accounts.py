@@ -42,7 +42,7 @@ from app.modules.identity.services.email_challenges import (
     EmailChallengeService,
     _binding_hash,
 )
-from app.modules.identity.services.installation import get_signup_gate
+from app.modules.identity.services.signup_gate import get_signup_gate
 
 #: Raises `SignupNotAllowedError` to refuse a new account. Injected so a test
 #: stands a gate in front of this function rather than patching the real one.

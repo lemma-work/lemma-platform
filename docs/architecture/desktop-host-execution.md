@@ -9,43 +9,58 @@
 ## 1. What it is for
 
 On Desktop, every command a Lemma agent ran used to execute inside a container
-in the guest VM. That is the right boundary for anyone the installation owner
-invites, and the wrong one for the owner: their `gh` login, git credentials,
-Homebrew tools and checked-out repositories are on the Mac, and the VM cannot
-see any of them.
+in the guest VM. That is the right boundary for a Lemma shared with other
+people, and the wrong one for the person whose Mac it is: their `gh` login,
+git credentials, Homebrew tools and checked-out repositories are on the Mac,
+and the VM cannot see any of them.
 
-Host execution runs the owner's agent commands **on the Mac**, inside an OS
+Host execution runs a user's agent commands **on their own Mac** -- the one
+whose Agent Host is paired to them -- inside an OS
 sandbox modelled on Claude Code's, so `gh pr create` or `npm run dev` just
 works. The browser stays in the VM. The VM reaching a server the agent started
 on the Mac is a separate piece, the
-[loopback relay](desktop-security.md#the-loopback-relay): the owner's VM
-browser asks for `localhost:3000`, and when nothing in the sandbox serves it
+[loopback relay](desktop-security.md#the-loopback-relay): the VM browser of
+the user this Mac's Agent Host is paired to asks for `localhost:3000`, and when nothing in the sandbox serves it
 the request reaches port 3000 on the Mac's own loopback.
 
 ## 2. Who gets it
 
-A run executes on the host only when **all** of these hold. Otherwise it gets
-the owner-agnostic VM sandbox, exactly as before.
+There is no installation owner and no privileged account. A run is routed by
+the **Agent Host pairing**: a host is paired to exactly one user, and only that
+user's runs are ever routed to it. A run executes on the host only when **all**
+of these hold; otherwise it gets the VM sandbox, exactly as before
+(`app/modules/agent/services/host_execution_selection.py`).
 
-1. The deployment is a Desktop local install (`DEPLOYMENT_KIND=desktop`).
-2. The workspace belongs to the **installation owner** (`installation_owner`).
-3. The run's **triggering human** is the installation owner. A run started by
-   a teammate, steered by a teammate, or started by an inbound channel message
-   from anyone else never executes on the host, even inside the owner's pod.
-4. The owner has a paired Agent Host that is **online**, with **host execution
-   turned on** (Settings → This Mac → Coding agents). The host reports this on
-   `hello` and on every `control` as `host_execution: {enabled, platform,
-   available}`; Lemma routes here only when `enabled` and `available` are both
-   true. `available` is macOS with `/usr/bin/sandbox-exec`. The setting is
-   `host_execution` in the Agent Host's `config.json`, toggled by
-   `lemma-agent-host host-execution enable|disable` or locald's
-   `agent-host.host-execution` (`{"enabled": bool}`); a running host notices
-   within five seconds and says so on its next `control`, without a
-   reconnect.
+1. The deployment is a Desktop local install (`DEPLOYMENT_KIND=desktop`): the
+   backend runs beside the hosts it routes to. A hosted deployment never routes
+   a run to a machine.
+2. The run acts as the conversation's user -- the workspace is theirs.
+3. The run's **triggering human** is that user, in Lemma's own app
+   (`triggered_by_run_user`): their message, the queued follow-up of messages
+   they sent, a retry, an approval resume, an answer to a question, or a
+   continuation of a run they started. A run started by a schedule or by an
+   inbound channel message (Slack, email, Telegram, WhatsApp -- the platform's
+   assertion, not the user's session), and every sub-agent conversation, never
+   executes on the host.
+4. The user the run is for has a paired Agent Host that is **online**, with
+   **host execution turned on** (Settings → This Mac → Coding agents). The host
+   reports this on `hello` and on every `control` as `host_execution: {enabled,
+   platform, available}`; Lemma routes here only when `enabled` and
+   `available` are both true. `available` is macOS with
+   `/usr/bin/sandbox-exec`. The setting is `host_execution` in the Agent Host's
+   `config.json`, toggled by `lemma-agent-host host-execution enable|disable`
+   or locald's `agent-host.host-execution` (`{"enabled": bool}`); a running
+   host notices within five seconds and says so on its next `control`, without
+   a reconnect.
+
+Somebody else on the same installation is routed to their own paired host if
+they have one, and to the VM otherwise. Whoever controls a host's machine
+chooses whether it runs anything at all: the switch lives on that machine.
 
    In the app it is the "Run commands on this Mac" switch under Settings →
    This Mac → Coding agents. The switch calls the Tauri command
-   `set_host_execution`, which only the owner's own local workspace may call
+   `set_host_execution`, which only the app's own window on this installation's
+loopback origin may call
    (`require_local_settings_caller`) and which sends locald nothing but the
    boolean. It reads its state from the Agent Host status locald reports,
    `host_execution: {enabled, available}`, and is disabled with the reason
@@ -73,7 +88,7 @@ backend (on the Mac)                      lemma-agent-host (on the Mac)
 
 - **The provider** (`app/modules/workspace/providers/agent_host.py`) implements
   `SandboxProvider` and `SandboxOpsProvider`. Each operation becomes one `op`
-  request to the owner's host.
+  request to the host paired to the run's user.
 - **Routing.** Only one replica holds a host's socket (newest connection wins),
   and the provider may be running on another replica. The provider publishes
   the request on the host's notice channel with a one-off reply channel. The
@@ -187,7 +202,7 @@ in `wire_contract.json` under `host_execution`, which both sides test against.
 `ProviderCapability.PORT_REACH`. Persistent Python sessions raise
 `SandboxCapabilityUnsupported` with a sentence that tells the agent to run
 `python3` through `exec_command`. There is no Python runtime we can rely on on
-the owner's Mac.
+the user's Mac.
 
 ## 5. Paths
 
@@ -196,15 +211,15 @@ absolute paths. The provider never rewrites a command string. The agent is told
 its working directory from the sandbox, not from a hard-coded `/workspace`:
 
 - If the conversation is bound to a folder (the folder chip, or an Agent Host
-  run's cwd), the root is that folder. The owner's native tools and Lemma's
+  run's cwd), the root is that folder. The user's native tools and Lemma's
   tools then see the same files.
 - Otherwise it is `~/lemma/c/<yyyy-mm-dd>/<conversation-slug>`, the same folder
   an Agent Host run would use: `date` and `slug` from `workspace.open`
   (`date` defaults to today, `slug` to the conversation id; the backend should
   send both so a reopen on another day finds the same folder).
 
-**The backend naming a folder is not the owner choosing it.** The host uses a
-`root_hint` or a grant only if it is a folder the owner bound this
+**The backend naming a folder is not the user choosing it.** The host uses a
+`root_hint` or a grant only if it is a folder the user bound this
 conversation to on this machine (the desktop shell records those from a native
 folder dialog, in `conversation-folders.json`; see `conversation_folders.rs`),
 or a folder under `~/lemma` -- and never the home folder or anything
@@ -212,7 +227,7 @@ containing it. Any other `root_hint` is ignored in favour of the default root,
 which `workspace.open`'s `root` reports; any other grant is dropped.
 
 A path in a file op must resolve, after following symlinks, inside the root,
-`$TMPDIR`, or a folder the owner granted; otherwise `outside_workspace`. This
+`$TMPDIR`, or a folder the user granted; otherwise `outside_workspace`. This
 is the exec-server's own check, and Seatbelt enforces it again underneath.
 Commands are not path-checked, only sandboxed.
 
@@ -250,10 +265,10 @@ the ways out of a sandbox that are not files at all -- `launchctl submit`,
 - **Processes:** fork and exec are allowed. Children inherit the profile and
   cannot drop it. Setuid programs (`ps`, `sudo`) cannot run under any
   sandbox profile.
-- **Environment:** a snapshot of the owner's login shell (`$SHELL -lic env`,
+- **Environment:** a snapshot of the user's login shell (`$SHELL -lic env`,
   taken once, cached, refreshed from Settings). `LEMMA_*`, `AGENT_HOST_*`,
   `*_TOKEN`, `*_SECRET`, `*_API_KEY` and `AWS_*` are removed. `PATH` is kept
-  whole, so Homebrew, nvm and asdf tools resolve as they do in the owner's
+  whole, so Homebrew, nvm and asdf tools resolve as they do in the user's
   terminal.
 
 The profile is data and is tested as data: `desktop/agent-host/tests/seatbelt.rs`
@@ -267,7 +282,7 @@ processes (§8).
   `exec_command` and file tools. Two tools that do the same thing in the same
   folder only confuse the model. Browser, pod, connector, `ask_user`,
   `display_resource` and the rest stay.
-- **The prompt** tells the agent it is on the owner's Mac, names the root, and
+- **The prompt** tells the agent it is on the user's Mac, names the root, and
   says the browser is a separate machine that reaches the Mac's `localhost`
   through the relay.
 
@@ -278,8 +293,8 @@ processes (§8).
 | Rust unit (`make desktop-test`) | exec-server op handling, output ring and sequences, chunked write and digest, path policy including symlink escape, env scrubbing (`src/host_exec/`) |
 | Rust, macOS only (`tests/seatbelt.rs`) | under the real profile, with a test-made `HOME`: `cat ~/.ssh/x` denied, `touch ~/x` denied, write in the root and `~/.npm` allowed, grants, `git init` plus a commit in the root, `curl` to loopback; and the real exec-server binary under `sandbox-exec`, driven through the relay |
 | Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, root-hint admissibility, a waiting read not blocking other ops |
-| Backend unit | provider maps every op and every failure kind; selection truth table (owner, non-owner, steered, inbound, host offline, toggle off, cloud); tool filtering for Agent Host runs |
-| Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for an owner's run on the host, and a non-owner's run lands in the VM |
+| Backend unit | provider maps every op and every failure kind; selection truth table (paired user, user with no host, another user's own host, steered, inbound, host offline, toggle off, cloud); tool filtering for Agent Host runs |
+| Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for the paired user's run on the host, and a run of a user with no host lands in the VM |
 
 ## 9. The backend half
 
@@ -293,15 +308,15 @@ contract left to it.
   a continuation of such a run (`agent_wait`, `wait_resume`,
   `message_replies`) unless a schedule started the conversation. A sub-agent
   never does, and neither does a run in a conversation bound to a channel,
-  even when the channel resolved the sender to the owner: that identity is
-  the platform's assertion, not an owner's session. An unknown source does
+  even when the channel resolved the sender to the paired user: that identity is
+  the platform's assertion, not the user's session. An unknown source does
   not qualify. A Mac that cannot open the workspace at selection time gives
   the run the VM; nothing has run yet, so nothing moves.
 - **Where the choice is recorded.** A host sandbox's id is a UUIDv8 tagged
   `lmhost`, derived from the conversation (`workspace/domain/host_execution.py`),
   and its instance rows record provider `agent_host`. `HostRoutingProvider`
   sends a call to the host provider only for such an id, so a host sandbox can
-  never reach the VM and nothing else can reach the host. The owner's VM
+  never reach the VM and nothing else can reach the host. The user's VM
   workspace keeps its own id; the browser stays there.
   `sandbox_host_bindings` records the host, the root hint, `date` and `slug`,
   and the `root` the host answered.
@@ -330,7 +345,7 @@ contract left to it.
   `exec_command` now runs on the Mac, where `agent-browser` does not exist. Both
   are given the `browser` tool instead (`tools/browser/vm_browser.py`), offered
   only when the agent has the workspace CLI: one `agent-browser` invocation per
-  call in the owner's VM workspace, with `exec_command`'s session and output
+  call in the user's VM workspace, with `exec_command`'s session and output
   shaping. The arguments are split and re-quoted, so nothing but
   `agent-browser` runs through it. On a host run `view_image` reads a path under
   `/home/user/` from the VM (where screenshots land) and any other path from
@@ -342,6 +357,6 @@ contract left to it.
   the paused run's record, so neither can land in the VM when the run was on
   the host. A recorded host whose Mac is offline fails the op with
   `host_offline`.
-- **`grants`** are always empty: the backend has no notion of folders an owner
+- **`grants`** are always empty: the backend has no notion of folders a user
   granted. The folder chip's binding lives in the desktop shell, which the
   host reads from `conversation_id` itself.

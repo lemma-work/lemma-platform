@@ -12,12 +12,6 @@ import { desktopBridgeAvailable, invoke } from "./bridge";
 
 /* ── who sees it ───────────────────────────────────────────────────── */
 
-export interface Installation {
-    deployment: "server" | "desktop" | string;
-    is_owner: boolean;
-    signup_mode: "open" | "invite_only" | "closed" | string;
-}
-
 /** The loopback hosts a local install serves its workspace on.
  *
  *  Kept in step with `TRUSTED_LOCAL_BASES` in `desktop/src/main.rs` and the
@@ -31,32 +25,34 @@ export function onLocalWorkspaceOrigin(): boolean {
     return LOCAL_WORKSPACE_HOSTS.includes(window.location?.hostname ?? "");
 }
 
-/** What the This Mac group should be, for this person on this page.
+/** What the This Mac group should be, on this page.
  *
- *  - `hidden`: a browser, a hosted workspace, a server deployment, or someone
- *    who is not the installation's owner. Nothing is drawn, not even a hint:
- *    a machine's settings are not a thing a guest should learn exist.
- *  - `elsewhere`: the owner, in the app, on a shared origin. The shell will
- *    not answer here, so the group says where the settings are instead of
- *    offering controls that would fail.
- *  - `shown`: the owner, in the app, on this installation's own origin.
- *  - `pending`: the installation has not answered yet. */
+ *  There is no account check. Who may change this computer is decided by where
+ *  the page is, not who is signed in: the desktop app's own window, on this
+ *  installation's loopback origin, is the person at this Mac -- the same rule
+ *  the shell enforces on every command (`workspace_settings.rs`).
+ *
+ *  - `hidden`: a browser, a hosted workspace, or anything that is not a local
+ *    install. Nothing is drawn, not even a hint: a machine's settings are not
+ *    a thing a visitor should learn exist.
+ *  - `elsewhere`: in the app, on a local install, but on a shared origin. The
+ *    shell will not answer here, so the group says where the settings are
+ *    instead of offering controls that would fail.
+ *  - `shown`: in the app, on this installation's own loopback origin.
+ *  - `pending`: the origin has not been read yet (it is read after mount). */
 export type ThisMacAvailability = "hidden" | "pending" | "elsewhere" | "shown";
 
 export function thisMacAvailability({
     bridge,
+    localDeployment,
     localOrigin,
-    installation,
-    loading,
 }: {
     bridge: boolean;
-    localOrigin: boolean;
-    installation: Installation | null | undefined;
-    loading: boolean;
+    localDeployment: boolean;
+    localOrigin: boolean | null;
 }): ThisMacAvailability {
-    if (!bridge) return "hidden";
-    if (!installation) return loading ? "pending" : "hidden";
-    if (installation.deployment !== "desktop" || !installation.is_owner) return "hidden";
+    if (!bridge || !localDeployment) return "hidden";
+    if (localOrigin === null) return "pending";
     return localOrigin ? "shown" : "elsewhere";
 }
 

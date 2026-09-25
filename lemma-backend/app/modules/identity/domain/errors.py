@@ -109,7 +109,7 @@ class OrganizationLimitError(DomainError):
 
 _SIGNUP_INVITE_ONLY = "SIGNUP_INVITE_ONLY"
 _SIGNUP_INVITE_ONLY_MESSAGE = (
-    "This Lemma is invite-only. Ask its owner for an invitation."
+    "This Lemma is invite-only. Ask someone already on it for an invitation."
 )
 _SIGNUP_CLOSED_MESSAGE = "This Lemma is not accepting new accounts."
 

@@ -1,6 +1,6 @@
 //! Which of this Mac's loopback ports are Lemma's, for the loopback relay.
 //!
-//! The relay (`crate::loopback_relay`) refuses them so the owner's VM browser
+//! The relay (`crate::loopback_relay`) refuses them so the paired user's VM browser
 //! cannot be pointed at Lemma itself. The managed runtime knows its own
 //! ports; this adds the ones only the daemon can see, each read when a relay
 //! connection asks rather than once at startup, because sharing and the Agent

@@ -104,10 +104,11 @@ class ProviderCreateSpec:
     # an older guest would refuse even a `True`.
     host_access: bool = True
     # Whether the sandbox gets the loopback relay: a socket through which its
-    # browser reaches a port on the Mac's own `127.0.0.1` -- the owner's dev
-    # server, started by host execution. True for exactly one sandbox, the
-    # installation owner's own workspace (see `host_loopback_policy`); never
-    # for an invited person's. Only the Desktop guest acts on it, and
+    # browser reaches a port on the Mac's own `127.0.0.1` -- a dev server
+    # started by host execution. True only for the workspace of the user this
+    # Mac's own Agent Host is paired to, while it has host execution on (see
+    # `host_loopback_policy`); never for anyone else's. Only the Desktop guest
+    # acts on it, and
     # `lemma_local` sends it only when True, for the same older-guest reason.
     host_loopback: bool = False
 

@@ -142,8 +142,8 @@ pub(crate) fn build(
         ("ENVIRONMENT", "local".to_owned()),
         // `ENVIRONMENT=local` is also every developer's `make dev` stack, so it
         // cannot be what tells the backend it is somebody's own computer. This
-        // is: the first account becomes the installation owner, and signup
-        // defaults to invite-only.
+        // is: signup defaults to invite-only (the first account on an empty
+        // installation is always admitted).
         ("DEPLOYMENT_KIND", "desktop".to_owned()),
         ("DEBUG", "true".to_owned()),
         ("LOG_LEVEL", "INFO".to_owned()),

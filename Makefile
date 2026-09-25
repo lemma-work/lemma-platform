@@ -1332,7 +1332,7 @@ desktop-exe:
 # The real backend and Rust host share the same HTTP path as a browser chat.
 # A scripted ACP provider makes streaming and disconnects deterministic without
 # using installed agent accounts. Testcontainers owns the disposable services.
-# Host execution rides along: the same built binary runs an owner's commands
+# Host execution rides along: the same built binary runs a paired user's commands
 # under Seatbelt (macOS only; the module skips elsewhere). So does chaos: the
 # backend, the host and the link each fail mid-answer, and every run must still
 # end exactly once with every event delivered once.

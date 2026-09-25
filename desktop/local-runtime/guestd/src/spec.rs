@@ -87,7 +87,7 @@ pub(crate) struct EnsureParameters {
     /// runtime's callbacks to the backend and the function gateway both go
     /// through that name, to the two callback forwarders locald runs on the
     /// host gateway. It is *not* a way onto the Mac's own loopback -- that is
-    /// `host_loopback`, below, which only the owner's sandbox is given.
+    /// `host_loopback`, below, which only the paired user's sandbox is given.
     ///
     /// A name, not a wall: what a sandbox can reach at the gateway address,
     /// with or without the name, is `sandbox_firewall`'s host-gateway chain --
@@ -99,7 +99,7 @@ pub(crate) struct EnsureParameters {
     /// `host_loopback`.
     ///
     /// The backend decides, and sends it for exactly one sandbox: the
-    /// installation owner's own workspace, where their browser runs. Nothing
+    /// workspace of the user this Mac's Agent Host is paired to, where their browser runs. Nothing
     /// else can reach the relay, because the socket exists only in the
     /// containers it is mounted into -- there is no address to dial.
     /// Defaulted to false, so a caller that does not know about it grants

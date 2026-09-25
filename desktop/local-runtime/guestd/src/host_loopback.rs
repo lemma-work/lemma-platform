@@ -1,8 +1,8 @@
-//! The owner's browser reaching a port on the Mac's own loopback, over vsock.
+//! The paired user's browser reaching a port on the Mac's own loopback, over vsock.
 //!
-//! On Desktop the owner's agent can run commands on the Mac itself (host
+//! On Desktop the paired user's agent can run commands on the Mac itself (host
 //! execution), so `npm run dev` listens on the Mac's `127.0.0.1:3000`. The
-//! browser stays in the guest, in the owner's workspace sandbox, where
+//! browser stays in the guest, in the paired user's workspace sandbox, where
 //! `localhost` is the container. `sandbox_runtime.host_fallback` in that
 //! sandbox answers a loopback port nothing there is serving by asking this
 //! relay for the same port on the Mac.
@@ -15,7 +15,7 @@
 //! **Who can use it** is decided by where the socket is, not by who asks. It
 //! lives in a directory that `sandbox.ensure` bind-mounts into a container
 //! only when the backend granted `host_loopback` -- which it does for the
-//! installation owner's own workspace and nothing else. Every other sandbox
+//! workspace of the user this Mac's Agent Host is paired to and nothing else. Every other sandbox
 //! has no path to it: there is no address to dial and no file to open.
 //!
 //! **What it can reach** is decided on the Mac, by locald, which knows which

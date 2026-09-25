@@ -35,7 +35,7 @@ INVALID_ANSWER = "invalid_answer"
 #: The deadline passed with the request taken and unanswered.
 TIMEOUT = "timeout"
 
-#: What an agent is told when the owner's Mac is not there to answer. Written
+#: What an agent is told when the user's Mac is not there to answer. Written
 #: as the sentence the contract promises, because it reaches the model as-is.
 HOST_OFFLINE_MESSAGE = (
     "This Mac is not connected, so the command did not run. Lemma Desktop's "

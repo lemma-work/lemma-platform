@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn compose_backend_environment(
     mut operator: HashMap<String, String>,
     infrastructure: Option<HashMap<String, String>>,
+    agent_host_config: &Path,
 ) -> HashMap<String, String> {
     if let Some(infrastructure) = infrastructure {
         // Infrastructure endpoints describe the currently running private
@@ -11,6 +12,16 @@ pub(super) fn compose_backend_environment(
         // these addresses.
         operator.extend(infrastructure);
     }
+    // Where this Mac's own Agent Host keeps its config. The backend reads the
+    // host ids of its pairings from it -- and nothing else -- to tell this
+    // machine's host apart from any other host paired to it: only a user
+    // paired to *this* host gets the loopback relay onto this Mac. A path,
+    // not the ids, because the host writes them when it pairs, which is
+    // usually after the backend started.
+    operator.insert(
+        "DESKTOP_AGENT_HOST_CONFIG_PATH".into(),
+        agent_host_config.to_string_lossy().into_owned(),
+    );
     operator
 }
 
@@ -91,7 +102,7 @@ pub(crate) fn sharing_environment(
             SHARED_DESKTOP_AUTH_CREATE_LIMIT.to_string(),
         ),
         ("DEBUG".into(), "false".into()),
-        // Who may create an account, now that somebody other than the owner
+        // Who may create an account, now that somebody other than this Mac's user
         // can reach the sign-up page. Written in both directions rather than
         // only when narrowing: the backend's own Desktop default is already
         // invite-only, but an explicit value is what makes this overlay the

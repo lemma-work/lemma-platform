@@ -18,7 +18,7 @@ from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import SignupNotAllowedError
 from app.modules.identity.domain.user_entities import UserEntity
-from app.modules.identity.services.installation import get_signup_gate
+from app.modules.identity.services.signup_gate import get_signup_gate
 from app.modules.identity.infrastructure.supertokens_auth.provider_profile import (
     names_from_provider,
 )

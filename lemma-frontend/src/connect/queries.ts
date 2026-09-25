@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
 import { live } from "@/usage/queries";
 import type { CatalogEntry, Install } from "./install";
+import { canManage } from "@/org/membership";
 
 /** Reading and writing installs and accounts.
  *
@@ -27,6 +28,35 @@ export function useConnector(connectorId: string | null) {
         staleTime: 10 * 60_000,
         retry: false,
     });
+}
+
+/** Whether this person may create or change installs here.
+ *
+ *  Connecting an account needs only membership; making an install needs an
+ *  owner or an editor. The backend answers a member who tries with a 404 about
+ *  "no connectors in organization <uuid>" — true to its rule of not saying who
+ *  is in what, and useless on a button. So the page asks first.
+ *
+ *  Found the way the People panel finds it, from the same cached reads: the
+ *  members list is the only thing that says what I am here. `null` when that
+ *  cannot be told — nothing is withheld on a guess, and the backend still
+ *  refuses what it must. */
+export function useMayInstall(orgId: string | null): boolean | null {
+    const me = useQuery({
+        queryKey: ["current-user"],
+        queryFn: () => lemma().users.current(),
+        enabled: live(),
+        staleTime: 5 * 60_000,
+    });
+    const members = useQuery({
+        queryKey: ["org-members", orgId ?? ""],
+        queryFn: () => lemma().organizations.members.list(orgId!, { limit: 100 }),
+        enabled: live() && Boolean(orgId),
+    });
+    const listed = members.data as { items?: { user_id?: string; role?: string }[] } | undefined;
+    const mine = listed?.items?.find((member) => member.user_id === me.data?.id);
+    if (!mine) return null;
+    return canManage(mine.role);
 }
 
 /** Every install this organization has, across every connector. */
@@ -83,6 +113,19 @@ export function useCreateInstall(orgId: string) {
     });
 }
 
+/** Make an install the one a bare connector id resolves to.
+ *
+ *  An organization holding two of one connector — two Slack apps, a Gmail on
+ *  Lemma's client and one on its own — is otherwise stuck with whichever it
+ *  created first, for every caller that names the connector and not the
+ *  install. */
+export function useMakeDefaultInstall(orgId: string) {
+    return useMutation({
+        mutationFn: (install: Install) =>
+            lemma().connectors.authConfigs.update(orgId, install.name || install.id, { is_default: true }),
+    });
+}
+
 export function useDeleteInstall(orgId: string) {
     return useMutation({
         mutationFn: (install: Install) => lemma().connectors.authConfigs.delete(orgId, install.name || install.id),
@@ -114,6 +157,50 @@ export function useCreateAccount(orgId: string) {
             });
             return made as unknown as { id?: string };
         },
+    });
+}
+
+/** One GitHub installation an account could speak for. */
+export interface InstallationChoice {
+    installation_id: string;
+    account_login?: string | null;
+    account_type?: string | null;
+    repository_selection?: string | null;
+}
+
+/** What finishing an install came to: nothing left to do, a choice to make,
+ *  or GitHub's install page to go to. */
+export type InstallStep = { done: true } | { choices: InstallationChoice[] } | { url: string };
+
+/** Finish an authorised-but-not-installed account — a GitHub App's.
+ *
+ *  Signing in to a GitHub App yields a token that reaches only repositories
+ *  the App is *installed* on, so the account is connected and can read nothing
+ *  until somebody installs it. Reconnecting cannot fix that, which is all this
+ *  page used to offer. GitHub is asked first: somebody who installed it from
+ *  GitHub's own page is already done, and sending them to install again is
+ *  wrong. The install link is minted last, because its state is single-use and
+ *  expires. */
+export function useFinishInstall(orgId: string, returnTo: () => string) {
+    return useMutation({
+        mutationFn: async (accountId: string): Promise<InstallStep> => {
+            const client = lemma().connectors;
+            const found = (await client.accountInstallations(orgId, accountId, true)) as {
+                install_state?: string | null; choices?: InstallationChoice[] | null;
+            };
+            if (found.install_state === "READY") return { done: true };
+            if (found.install_state === "CHOOSE_INSTALL") return { choices: found.choices ?? [] };
+            const request = await client.createInstallRequest(orgId, accountId, returnTo());
+            return { url: String((request as { authorization_url?: string | null }).authorization_url ?? "") };
+        },
+    });
+}
+
+/** Settle which installation an account speaks for, when it reaches several. */
+export function useBindInstallation(orgId: string) {
+    return useMutation({
+        mutationFn: (input: { accountId: string; installationId: string }) =>
+            lemma().connectors.bindAccountInstallation(orgId, input.accountId, input.installationId),
     });
 }
 

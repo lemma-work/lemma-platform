@@ -6,7 +6,7 @@ import Foundation
 ///
 /// The other direction from `ServiceBridge`: there the host connects and the
 /// bridge dials the guest; here the guest connects over vsock -- guestd's
-/// loopback relay, on behalf of the owner's browser sandbox -- and the bridge
+/// loopback relay, on behalf of the paired user's browser sandbox -- and the bridge
 /// dials locald's `loopback_relay` socket. It carries bytes and nothing else.
 /// Which ports may be reached is locald's decision, made on the first line of
 /// each stream; keeping the VM helper out of it means the policy lives in one

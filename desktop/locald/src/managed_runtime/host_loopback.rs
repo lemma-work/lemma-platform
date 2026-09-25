@@ -1,4 +1,4 @@
-//! The owner's loopback relay, started and stopped with the other routes.
+//! The paired user's loopback relay, started and stopped with the other routes.
 //!
 //! The relay itself is `crate::loopback_relay`. What lives here is its place
 //! in the managed runtime's lifecycle -- it is a route the VM helper uses,
@@ -16,7 +16,7 @@ pub(crate) struct HostLoopbackState {
     /// Ports other parts of the daemon own -- the sharing gateway, the Agent
     /// Host's relays -- supplied by the daemon, which can see them.
     lemma_ports: Arc<Mutex<Option<LemmaPorts>>>,
-    /// The owner's "Run commands on this Mac" switch, supplied by the daemon,
+    /// The paired user's "Run commands on this Mac" switch, supplied by the daemon,
     /// which owns the Agent Host. Unset means off: the relay admits nothing
     /// until it is told otherwise.
     host_execution: Arc<Mutex<Option<HostExecution>>>,

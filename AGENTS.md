@@ -57,10 +57,10 @@ wrong interpreter does not fail with "module not found", it reports a
   [Desktop test matrix](CONTRIBUTING.md#desktop-test-matrix) says which lane a
   change extends and which document it updates. The documents:
   [desktop.md](docs/architecture/desktop.md) (processes, lifecycle, IPC),
-  [desktop-security.md](docs/architecture/desktop-security.md) (installation
-  owner, sharing, origins),
+  [desktop-security.md](docs/architecture/desktop-security.md) (who counts as
+  the person at this Mac, sharing, origins, the loopback relay),
   [desktop-host-execution.md](docs/architecture/desktop-host-execution.md)
-  (an owner's commands on their Mac, under Seatbelt),
+  (a user's commands on their own Mac, by Agent Host pairing, under Seatbelt),
   [agent-host.md](docs/architecture/agent-host.md) (supervision, pairing, the
   link) and [agent-host-events.md](docs/architecture/agent-host-events.md)
   (normalized run events and golden transcripts).

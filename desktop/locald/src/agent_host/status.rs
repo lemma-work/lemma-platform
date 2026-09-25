@@ -90,7 +90,7 @@ impl AgentHostSupervisor {
         mcp_relay_ports(&self.data_dir.join("mcp-relay"))
     }
 
-    /// The owner's "Run commands on this Mac" switch, read from the host's
+    /// The paired user's "Run commands on this Mac" switch, read from the host's
     /// config now -- the loopback relay asks on every connection.
     pub(crate) fn host_execution_enabled(&self) -> bool {
         super::pairing::host_execution_enabled(&self.data_dir.join("config.json"))

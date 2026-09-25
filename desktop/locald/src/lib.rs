@@ -4,7 +4,7 @@ pub mod daemon;
 pub mod host_process;
 mod lifecycle;
 pub mod local_domain;
-// The Mac's end of the owner's loopback relay; served on macOS only, where the
+// The Mac's end of the paired user's loopback relay; served on macOS only, where the
 // VM helper can reach it. See `ManagedRuntimeController::ensure_forwarders`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod loopback_relay;

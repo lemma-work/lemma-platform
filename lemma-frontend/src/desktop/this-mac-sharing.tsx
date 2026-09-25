@@ -16,7 +16,7 @@ import { SettingRow, useThisMacSnapshot } from "./this-mac-settings";
 /** Who can reach this installation, and who may make an account once they do.
  *
  *  The flows are Local settings' own, moved: the local network binds one
- *  private interface; Public goes through the owner's ngrok or Cloudflare
+ *  private interface; Public goes through this Mac's own ngrok or Cloudflare
  *  account, which Lemma never installs or signs into. What changed is who
  *  asks the Public question — the shell, natively, after this page asks for
  *  it — so the consent is the person's and not this page's.

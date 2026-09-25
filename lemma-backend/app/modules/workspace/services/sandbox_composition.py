@@ -15,7 +15,7 @@ from app.modules.workspace.domain.sandbox import (
     SandboxOwnerKind,
 )
 from app.modules.workspace.services.host_loopback_policy import (
-    is_owner_browser_sandbox,
+    is_local_host_users_browser_sandbox,
 )
 from app.modules.workspace.services.interfaces import ISandbox
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
@@ -39,7 +39,7 @@ def get_sandbox_service() -> SandboxService:
     _service = SandboxService(
         provider=build_provider(),
         uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-        host_loopback=is_owner_browser_sandbox,
+        host_loopback=is_local_host_users_browser_sandbox,
     )
     _service_key = key
     return _service

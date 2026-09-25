@@ -25,7 +25,7 @@ one monolithic provider class is not required or preferred.
 
 | Capability | Docker | Kubernetes | E2B | Agent Host |
 | --- | --- | --- | --- | --- |
-| Workspace files survive release | Named volume | Per-workspace PVC | Native sandbox persistence | The owner's own folder |
+| Workspace files survive release | Named volume | Per-workspace PVC | Native sandbox persistence | The user's own folder on their Mac |
 | Process/Python state survives release | No contract | No | Not exposed as a contract | No |
 | Function persistent storage | Forbidden | Forbidden | Forbidden | No function sandboxes |
 | Native foreground/background exec | Engine exec | Pods exec | Commands API | `process.*` ops |
@@ -35,7 +35,7 @@ one monolithic provider class is not required or preferred.
 | Native file API | Archive API is insufficient | No | Yes | `file.*` ops, 1 MiB chunks |
 | Workspace control runtime required | Yes | Yes | No | No (exec-server) |
 | Provider-native auto-resume | No | No | Disabled; lifecycle is explicit | Re-opens on `workspace_not_open` |
-| Strong production isolation | No | With approved RuntimeClass | Managed microVM boundary | Seatbelt profile, owner only |
+| Strong production isolation | No | With approved RuntimeClass | Managed microVM boundary | Seatbelt profile, the paired user only |
 | Public ingress for functions | Disabled | Disabled | Disabled | n/a |
 | Port reach (`PORT_REACH`) | Yes | Yes | Yes | No; the VM reaches the Mac's loopback through the relay |
 | Provider create rate admission | Configured local limit | Configured pool/resource limit | E2B project limit | None |
@@ -566,7 +566,7 @@ a UUIDv8 tagged `lmhost`, derived from the conversation
 (`domain/host_execution.host_sandbox_id`). Nothing else the platform mints is a
 v8, so the route needs no lookup and can never change for the life of the
 sandbox. Its instance rows record provider `agent_host`. One conversation has
-one host sandbox; the owner's VM workspace keeps its own id, and the browser
+one host sandbox; the user's VM workspace keeps its own id, and the browser
 stays there.
 
 `sandbox_host_bindings` records which Agent Host a host sandbox runs on, how

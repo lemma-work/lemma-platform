@@ -14,9 +14,6 @@ from app.modules.identity.domain.errors import UserConflictError, UserNotFoundEr
 from app.modules.identity.domain.ports import UserRepositoryPort
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.domain.user_preferences import UserPreferences
-from app.modules.identity.infrastructure.installation_owner_store import (
-    bind_installation_owner,
-)
 from app.modules.identity.infrastructure.mobile_number_claims import (
     acquire_mobile_number_claim_lock,
     get_other_mobile_number_owner_id,
@@ -70,13 +67,6 @@ class UserRepository(UserRepositoryPort):
             if "uq_users_verified_mobile_e164" in error:
                 raise UserConflictError("This mobile number is already in use") from exc
             raise
-        # Here rather than in each signup path, because this is the one place
-        # every path that creates a user goes through; a path that skipped it
-        # would leave the installation's first account reserved but never
-        # bound, and ownerless until the reservation went stale.
-        await bind_installation_owner(
-            self.session, user_id=instance.id, email=instance.email
-        )
         self._collect_events(entity)
         return instance.to_entity()
 

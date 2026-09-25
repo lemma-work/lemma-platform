@@ -10,6 +10,7 @@ really there is settled by the op itself: nothing picking the request up within
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -65,3 +66,28 @@ async def host_execution_host_id(user_id: UUID) -> UUID | None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         host = await host_execution_host(uow, user_id=user_id)
         return host.id if host is not None else None
+
+
+async def is_paired_to_any_of(user_id: UUID, host_ids: Collection[UUID]) -> bool:
+    """Whether ``user_id`` holds a live (unrevoked) pairing among ``host_ids``.
+
+    ``host_ids`` are the hosts one machine's Agent Host holds pairings for, as
+    its own ``config.json`` records them. A host id is minted by this backend
+    at pairing and handed only to the host that paired, so no other machine can
+    claim one. Whether that host is online, or has host execution switched on,
+    is deliberately not asked: those change while a sandbox lives, and the
+    loopback relay's other end checks the switch on every connection.
+    """
+    if not host_ids:
+        return False
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        found = await uow.session.scalar(
+            select(AgentHostModel.id)
+            .where(
+                AgentHostModel.id.in_(list(host_ids)),
+                AgentHostModel.user_id == user_id,
+                AgentHostModel.revoked_at.is_(None),
+            )
+            .limit(1)
+        )
+        return found is not None

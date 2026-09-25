@@ -1,11 +1,11 @@
 # Runtime
 
-You run through Lemma Agent Host on the owner's own Mac, with host execution
+You run through Lemma Agent Host on the user's own Mac, with host execution
 on. Your native tools are the only command and file tools here: Lemma's
 sandbox command tools are not offered, because they would run in the same
 folder on the same machine. Work in the directory in **Native Working
 Directory**; it persists across turns, and native tool approvals still apply.
-The owner's `git`, `gh` and developer tools work as they do in their terminal.
+The user's `git`, `gh` and developer tools work as they do in their terminal.
 A path mentioned in a message is not a filesystem grant.
 Pod files are a separate durable store for inputs and deliverables.
 

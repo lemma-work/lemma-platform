@@ -181,7 +181,7 @@ def _run(conversation: Conversation) -> AgentRun:
 
 
 @pytest.mark.asyncio
-async def test_the_real_binary_runs_an_owners_command_on_the_host(
+async def test_the_real_binary_runs_the_paired_users_command_on_the_host(
     scenario: E2EScenario, backend_server: dict[str, str], tmp_path: Path
 ) -> None:
     minted = await scenario.owner_client.post(
@@ -222,19 +222,15 @@ async def test_the_real_binary_runs_an_owners_command_on_the_host(
         async def recall(run_id: UUID) -> dict | None:
             return recorded.get(run_id)
 
-        async def is_owner(user_id: UUID) -> bool:
-            return user_id == owner_id
-
         facts = HostExecutionFacts(
             is_desktop=lambda: True,
-            is_owner=is_owner,
             usable_host=host_execution_host_id,
             open_workspace=partial(open_host_workspace, service=service),
             recorded=recall,
             record=record,
         )
 
-        # --- a non-owner's run lands in the VM, and routes there -------------
+        # --- a user with no paired host lands in the VM, and routes there ----
         teammate = uuid4()
         teammates = _conversation(teammate)
         assert (
@@ -248,7 +244,7 @@ async def test_the_real_binary_runs_an_owners_command_on_the_host(
         )
         assert routing.for_sandbox(teammate) is routing.default
 
-        # --- the owner's run opens a workspace on the Mac --------------------
+        # --- the paired user's run opens a workspace on the Mac --------------
         mine = _conversation(owner_id)
         workspace = await choose_host_workspace(
             conversation=mine, agent_run=_run(mine), user_id=owner_id, facts=facts

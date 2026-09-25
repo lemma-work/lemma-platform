@@ -1,13 +1,21 @@
 import { LoadingIndicator } from "@/ui/loading";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { accountName, accountTrouble, type Connector, type ConnectorAccount } from "@/data";
 import { CheckCircleIcon, ExternalIcon, PlusIcon, RefreshIcon, SearchIcon, WarningIcon } from "@/ui/icons";
 import { ConnectDialog, RotateDialog } from "@/connect/connect-dialog";
 import { AddConnector } from "@/connect/add-connector";
-import { useConnectorRefresh, useDeleteInstall, useInstalls, useRefreshOperations } from "@/connect/queries";
-import { discoveryNote, isBringYourOwn, type CatalogEntry, type Install } from "@/connect/install";
+import {
+    completionPath, hereWith, openAuthorization, outcomeNote, useConnectOutcome, type ConnectOutcome,
+} from "@/connect/round-trip";
+import {
+    useBindInstallation, useConnectorRefresh, useDeleteInstall, useFinishInstall, useInstalls, useMakeDefaultInstall,
+    useMayInstall, useRefreshOperations, type InstallationChoice,
+} from "@/connect/queries";
+import {
+    connectorProblem, connectRoute, discoveryNote, isBringYourOwn, kindFor, type CatalogEntry, type Install,
+} from "@/connect/install";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
 import { oauthFormForConnector } from "@/desktop/this-mac";
 
@@ -38,6 +46,8 @@ function AccountRow({
     orgId,
     onGone,
     onRotate,
+    onReconnect,
+    reconnecting = false,
 }: {
     account: ConnectorAccount;
     connector: Connector;
@@ -46,6 +56,12 @@ function AccountRow({
     /** Replace the credential in place. Absent where the connector has no
      *  credential to replace — an OAuth account is re-authorised, not retyped. */
     onRotate?: () => void;
+    /** Sign in again on the same install. Only for an OAuth account whose
+     *  token stopped working: the backend refreshes the existing row by the
+     *  provider's own id, so the account and everything pinned to it stay. */
+    onReconnect?: () => void;
+    /** Fetching the sign-in address for this account. */
+    reconnecting?: boolean;
 }) {
     const [confirming, setConfirming] = useState(false);
     const drop = useMutation({
@@ -53,6 +69,29 @@ function AccountRow({
         onSuccess: onGone,
     });
     const trouble = accountTrouble(account);
+    const dead = ["REAUTH_REQUIRED", "DISCONNECTED"].includes(account.status.toUpperCase());
+    /* Connected and reaching nothing: a GitHub App authorised but not
+       installed, or installed in more than one place. Reconnecting cannot
+       help either; installing, or choosing, can. */
+    const unfinished = account.status.toUpperCase() === "CONNECTED"
+        && ["INSTALL_REQUIRED", "CHOOSE_INSTALL"].includes(account.installState.toUpperCase());
+    const finish = useFinishInstall(orgId, () => completionPath(hereWith({ settings: "connectors" })));
+    const bind = useBindInstallation(orgId);
+    const [choices, setChoices] = useState<InstallationChoice[] | null>(null);
+    const [installNote, setInstallNote] = useState<string | null>(null);
+    const startFinish = () => {
+        setInstallNote(null);
+        finish.mutate(account.id, {
+            onSuccess: (step) => {
+                if ("done" in step) { setInstallNote("Installation found."); onGone(); }
+                else if ("choices" in step) setChoices(step.choices);
+                else if (!step.url) setInstallNote("GitHub offered no install page.");
+                else if (openAuthorization(step.url)) setInstallNote("Finish in the GitHub tab…");
+                else window.location.assign(step.url);
+            },
+            onError: (problem) => setInstallNote(connectorProblem(problem, "The installation could not be started.")),
+        });
+    };
 
     return (
         <li className="acct">
@@ -67,8 +106,23 @@ function AccountRow({
             {/* Four states, not a boolean: each unfinished one needs a
                 different thing from the person, and "reconnect" is advice
                 that cannot succeed when you are waiting on an owner. */}
-            {trouble && <span className="acct__trouble"><WarningIcon size={13} /> {trouble}</span>}
-            {confirming ? (
+            {trouble && !installNote && <span className="acct__trouble"><WarningIcon size={13} /> {trouble}</span>}
+            {installNote && <span className="acct__trouble acct__trouble--quiet" role="status">{installNote}</span>}
+            {choices ? (
+                <span className="acct__confirm">
+                    {choices.length === 0 && <span className="acct__trouble acct__trouble--quiet">No installations to choose from.</span>}
+                    {choices.map((choice) => (
+                        <button key={choice.installation_id} className="btn" disabled={bind.isPending}
+                            onClick={() => bind.mutate({ accountId: account.id, installationId: choice.installation_id }, {
+                                onSuccess: () => { setChoices(null); onGone(); },
+                                onError: (problem) => setInstallNote(connectorProblem(problem, "That installation could not be used.")),
+                            })}>
+                            {choice.account_login || choice.installation_id}
+                        </button>
+                    ))}
+                    <button className="linkish" onClick={() => setChoices(null)}>Cancel</button>
+                </span>
+            ) : confirming ? (
                 <span className="acct__confirm">
                     <button className="btn reachrow__drop" disabled={drop.isPending} onClick={() => drop.mutate()}>
                         {drop.isPending ? "Removing…" : "Remove"}
@@ -77,6 +131,17 @@ function AccountRow({
                 </span>
             ) : (
                 <span className="acct__acts">
+                    {unfinished && (
+                        <button className="linkish reachrow__quiet" disabled={finish.isPending} onClick={startFinish}>
+                            {finish.isPending ? <LoadingIndicator inline label="Checking the installation" />
+                                : account.installState.toUpperCase() === "CHOOSE_INSTALL" ? "Choose installation" : "Install"}
+                        </button>
+                    )}
+                    {dead && onReconnect && (
+                        <button className="linkish reachrow__quiet" disabled={reconnecting} onClick={onReconnect}>
+                            {reconnecting ? <LoadingIndicator inline label="Opening sign-in" /> : "Reconnect"}
+                        </button>
+                    )}
                     {/* Before Remove, and worded as the smaller act it is: a
                         rotated credential keeps the account, and a removed one
                         takes every schedule and surface pinned to it. */}
@@ -94,46 +159,83 @@ function AccountRow({
     );
 }
 
-/** One install of a connector this organization points somewhere itself.
+/** One install of a connector — an auth config, in the API's words.
  *
- *  Only shown for the entries that stand for many servers. `mcp` is one
- *  catalogue row for every MCP server anybody adds, so the card alone says
- *  nothing about what is actually connected — the installs under it are the
- *  real list, and their names are the only thing telling one from another.
+ *  A connector is a catalogue row; an install is this organization's copy of
+ *  it, with its own OAuth app or its own address; accounts hang off an install
+ *  and never off the connector. `mcp` is one catalogue row for every MCP server
+ *  anybody adds, and an organization may hold Gmail twice — on Lemma's app and
+ *  on its own — so where there is more than one, or where the install *is* the
+ *  thing somebody set up, the installs are the real list.
  */
-function InstallRow({ install, orgId, onChanged }: { install: Install; orgId: string; onChanged: () => void }) {
+function InstallRow({ install, orgId, addressed, manage, needsSignIn, signingIn = false, onConnect, onChanged }: {
+    install: Install;
+    /** Fetching the sign-in address for this install. */
+    signingIn?: boolean;
+    orgId: string;
+    /** May change the install itself — owners and editors. Anybody may
+     *  connect an account on it. */
+    manage: boolean;
+    /** Pointed somewhere by the organization: its operations are discovered
+     *  per install, so re-reading them means something. */
+    addressed: boolean;
+    /** Signed into through a browser, with nobody signed in yet. */
+    needsSignIn: boolean;
+    /** Connect an account against this install in particular. */
+    onConnect?: () => void;
+    onChanged: () => void;
+}) {
     const [said, setSaid] = useState<string | null>(null);
     const [confirming, setConfirming] = useState(false);
     const reread = useRefreshOperations(orgId);
     const drop = useDeleteInstall(orgId);
+    const promote = useMakeDefaultInstall(orgId);
+    const off = install.status === "DISABLED";
 
     return (
         <li className="acct">
-            <span className={"acct__dot" + (install.status === "DISABLED" ? "" : " acct__dot--ok")} aria-hidden="true" />
+            <span className={"acct__dot" + (off || needsSignIn ? "" : " acct__dot--ok")} aria-hidden="true" />
             <span className="acct__who">
                 {install.name || install.id}
-                <span className="acct__ref">{install.kind}</span>
+                <span className="acct__ref">{install.config_source === "ORG_CUSTOM" && !addressed ? "your app" : install.kind}</span>
                 {install.is_default && <span className="pill">default</span>}
             </span>
+            {needsSignIn && !said && <span className="acct__trouble"><WarningIcon size={13} /> Nobody has signed in yet</span>}
             {said && <span className="acct__trouble acct__trouble--quiet" role="status">{said}</span>}
             {confirming ? (
                 <span className="acct__confirm">
                     <button className="btn reachrow__drop" disabled={drop.isPending}
                         onClick={() => drop.mutate(install, { onSuccess: onChanged })}>
-                        {drop.isPending ? "Removing…" : "Remove"}
+                        {drop.isPending ? "Removing…" : "Remove, with its accounts"}
                     </button>
                     <button className="linkish" onClick={() => setConfirming(false)}>Keep</button>
                 </span>
             ) : (
                 <span className="acct__acts">
-                    <button className="linkish reachrow__quiet" disabled={reread.isPending}
-                        onClick={() => reread.mutate(install, {
-                            onSuccess: (answer) => { setSaid(discoveryNote(answer.status, answer.operation_count, answer.error)); onChanged(); },
-                            onError: () => setSaid("Its operations could not be read just now."),
-                        })}>
-                        {reread.isPending ? "Reading…" : "Re-read operations"}
-                    </button>
-                    <button className="linkish reachrow__quiet" onClick={() => setConfirming(true)}>Remove</button>
+                    {onConnect && !off && (
+                        <button className="linkish reachrow__quiet" disabled={signingIn} onClick={onConnect}>
+                            {signingIn ? <LoadingIndicator inline label="Opening sign-in" /> : needsSignIn ? "Sign in" : "Connect an account"}
+                        </button>
+                    )}
+                    {manage && !install.is_default && !off && (
+                        <button className="linkish reachrow__quiet" disabled={promote.isPending}
+                            onClick={() => promote.mutate(install, {
+                                onSuccess: onChanged,
+                                onError: () => setSaid("It could not be made the default just now."),
+                            })}>
+                            Make default
+                        </button>
+                    )}
+                    {manage && addressed && (
+                        <button className="linkish reachrow__quiet" disabled={reread.isPending}
+                            onClick={() => reread.mutate(install, {
+                                onSuccess: (answer) => { setSaid(discoveryNote(answer.status, answer.operation_count, answer.error)); onChanged(); },
+                                onError: () => setSaid("Its operations could not be read just now."),
+                            })}>
+                            {reread.isPending ? "Reading…" : "Re-read operations"}
+                        </button>
+                    )}
+                    {manage && <button className="linkish reachrow__quiet" onClick={() => setConfirming(true)}>Remove</button>}
                 </span>
             )}
         </li>
@@ -144,19 +246,33 @@ function ConnectorCard({
     connector,
     accounts,
     installs,
+    takenNames,
     orgId,
+    returned,
+    mayInstall,
     onChanged, onAdd, brief = false }: {
     connector: Connector;
     accounts: ConnectorAccount[];
     /** This organization's installs of this connector. */
     installs: Install[];
+    /** Every install name in the organization, for naming a new one. */
+    takenNames: string[];
     orgId: string;
+    /** Bumped each time a round trip reports back, so a card still waiting
+     *  on its provider stops waiting. */
+    returned: number;
+    /** Owner or editor: may make an install. `null` when that is not known,
+     *  which offers everything and lets the backend decide. */
+    mayInstall: boolean | null;
     onChanged: () => void;
     /** Opens the add flow. An entry that stands for many servers has nothing
      *  to connect against until one exists, so for those this is the button. */
     onAdd: () => void;
     brief?: boolean }) {
-    const [link, setLink] = useState<{ authorizeUrl: string; before: string[] } | null>(null);
+    /* The provider's page, once asked for. `opened` is whether it is already
+       open in a tab; when the browser refused, the link is the way there. */
+    const [link, setLink] = useState<{ authorizeUrl: string; opened: boolean } | null>(null);
+    useEffect(() => { if (returned) setLink(null); }, [returned]);
     const [error, setError] = useState<string | null>(null);
     /* Opening the dialog rather than starting a flow: which of the two routes
        this connector is on is a question about its kinds, and the dialog is
@@ -166,13 +282,27 @@ function ConnectorCard({
     const [rotating, setRotating] = useState<ConnectorAccount | null>(null);
 
     const start = useMutation({
-        mutationFn: (installId: string | null) => source.startAccount(orgId, connector.id, installId ?? undefined),
+        mutationFn: (installId: string | null) => source.startAccount(
+            orgId, connector.id, installId ?? undefined,
+            /* Back to this panel, whichever way the tab comes home. */
+            completionPath(hereWith({ settings: "connectors" })),
+        ),
         onSuccess: (started) => {
             setConnecting(undefined);
-            setLink(started);
-            if (!started.authorizeUrl) setError("This one offered no way to sign in. It may need an app of your own first.");
+            if (!started.authorizeUrl) {
+                setLink(null);
+                setError("This one offered no way to sign in. It may need an app of your own first.");
+            } else {
+                /* Straight there. The link it used to show was a second click
+                   for the same intent, and it opened with `noreferrer` — so the
+                   finished tab could not report back and the app reloaded
+                   inside it. */
+                setLink({ authorizeUrl: started.authorizeUrl, opened: openAuthorization(started.authorizeUrl) });
+            }
+            /* An install may have been made on the way. */
+            onChanged();
         },
-        onError: (problem) => setError(problem instanceof Error ? problem.message : "That could not be started."),
+        onError: (problem) => setError(connectorProblem(problem, "That could not be started.")),
     });
 
     /* The catalogue entry, in the shape the dialog reads. The two models are
@@ -180,16 +310,35 @@ function ConnectorCard({
        and a logo, and the dialog wants the kinds. */
     const entry: CatalogEntry = {
         id: connector.id, title: connector.title, description: connector.description, icon: connector.icon,
+        kinds: connector.kinds,
     };
-    /* Installs are worth listing where the catalogue entry stands for many
-       servers, and noise where it stands for one: nobody needs to be told
-       their Gmail account has a Gmail install behind it. */
-    const showInstalls = installs.length > 0 && accounts.length === 0;
     /* `mcp` is a catalogue row, not a server. Until this organization has
-       pointed it somewhere there is nothing to authorise against, and
-       "Connect" would open a dialog whose only honest answer is that the
-       connector has not described what it needs. */
-    const needsAdding = isBringYourOwn(connector) && installs.length === 0;
+       pointed it somewhere there is nothing to authorise against, and adding
+       another means another server — never a second account on the first,
+       which would point it at the first one's address. */
+    const addressed = isBringYourOwn(entry);
+    const installFor = (account: ConnectorAccount) => installs.find((one) => one.id === account.authConfigId) ?? null;
+    const credentialed = (install: Install | null) => connectRoute(install, kindFor(entry, install)) === "credentials";
+    /* Grouped by install where the installs are worth naming: several of
+       them, or ones the organization set up itself. One Gmail install behind
+       one Gmail account is noise. */
+    const grouped = addressed || installs.length > 1;
+
+    const accountRow = (account: ConnectorAccount) => {
+        const install = installFor(account);
+        return (
+            <AccountRow
+                key={account.id}
+                account={account}
+                connector={connector}
+                orgId={orgId}
+                onGone={onChanged}
+                onRotate={install && credentialed(install) ? () => setRotating(account) : undefined}
+                onReconnect={install && !credentialed(install) ? () => start.mutate(install.id) : undefined}
+                reconnecting={start.isPending && start.variables === install?.id}
+            />
+        );
+    };
 
     return (
         <div className={"connector" + (brief ? " connector--brief" : "")} data-on={accounts.length > 0 || installs.length > 0 ? "" : undefined}>
@@ -200,23 +349,29 @@ function ConnectorCard({
                 {error && <span className="reachrow__error">{error}</span>}
             </div>
             <div className="connector__acts">
-                {link?.authorizeUrl ? (
+                {link ? (
                     <>
-                        <a
-                            className="btn btn--primary"
-                            href={link.authorizeUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={() => window.setTimeout(onChanged, 4000)}
-                        >
-                            Authorise <ExternalIcon size={13} />
-                        </a>
+                        {link.opened ? (
+                            <span className="acct__trouble acct__trouble--quiet" role="status">
+                                Finish in the {connector.title} tab…
+                            </span>
+                        ) : (
+                            <button className="btn btn--primary"
+                                onClick={() => setLink({ ...link, opened: openAuthorization(link.authorizeUrl) })}>
+                                Authorise <ExternalIcon size={13} />
+                            </button>
+                        )}
                         <button className="linkish" onClick={() => { setLink(null); onChanged(); }}>
                             <RefreshIcon size={13} /> Done?
                         </button>
                     </>
-                ) : needsAdding ? (
-                    <button className="btn" onClick={onAdd}>Add one</button>
+                ) : mayInstall === false && (addressed || !installs.some((one) => one.status !== "DISABLED")) ? (
+                    /* Nothing this person can connect against, and not theirs
+                       to make. Said up front rather than as the 404 a click
+                       would earn. */
+                    <span className="acct__trouble acct__trouble--quiet">An owner or editor has to set this up</span>
+                ) : addressed ? (
+                    <button className="btn" onClick={onAdd}>{installs.length > 0 ? "Add another" : "Add one"}</button>
                 ) : (
                     <>
                         {/* Beside Connect rather than instead of it: an
@@ -225,7 +380,7 @@ function ConnectorCard({
                             offered only while that form is empty. */}
                         {accounts.length === 0 && <SetUpOnThisMac form={oauthFormForConnector(connector.id)} compact />}
                         <button className="btn" disabled={start.isPending}
-                            onClick={() => { setError(null); setConnecting(installs.find((one) => one.is_default) ?? installs[0] ?? null); }}>
+                            onClick={() => { setError(null); setConnecting(installs.find((one) => one.is_default && one.status !== "DISABLED") ?? installs.find((one) => one.status !== "DISABLED") ?? null); }}>
                             {start.isPending ? <LoadingIndicator inline label="Loading" /> : accounts.length > 0 ? "Add another" : "Connect"}
                         </button>
                     </>
@@ -236,30 +391,43 @@ function ConnectorCard({
                 middle column: nested in the body, an account's actions stopped
                 where the description stopped, which is a couple of hundred
                 pixels short of the button they sit under. */}
-            {accounts.length > 0 && (
-                <ul className="accts">
-                    {accounts.map((account) => (
-                        <AccountRow
-                            key={account.id}
-                            account={account}
-                            connector={connector}
-                            orgId={orgId}
-                            onGone={onChanged}
-                            onRotate={
-                                installs.find((one) => one.id === account.authConfigId)?.auth_scheme === "API_KEY"
-                                    ? () => setRotating(account)
-                                    : undefined
-                            }
-                        />
-                    ))}
-                </ul>
-            )}
-            {showInstalls && (
-                <ul className="accts">
-                    {installs.map((install) => (
-                        <InstallRow key={install.id} install={install} orgId={orgId} onChanged={onChanged} />
-                    ))}
-                </ul>
+            {grouped ? (
+                <>
+                    {installs.map((install) => {
+                        const on = accounts.filter((account) => account.authConfigId === install.id);
+                        const signIn = !credentialed(install) && !on.some((account) => account.usable);
+                        return (
+                            <ul className="accts" key={install.id}>
+                                <InstallRow
+                                    install={install}
+                                    orgId={orgId}
+                                    addressed={addressed}
+                                    manage={mayInstall !== false}
+                                    needsSignIn={addressed && signIn}
+                                    signingIn={start.isPending && start.variables === install.id && connecting === undefined}
+                                    onConnect={
+                                        /* An addressed install connects its
+                                           one account when it is added; the
+                                           only thing left to do is sign in. */
+                                        addressed
+                                            ? signIn ? () => start.mutate(install.id) : undefined
+                                            : () => { setError(null); setConnecting(install); }
+                                    }
+                                    onChanged={onChanged}
+                                />
+                                {on.map(accountRow)}
+                            </ul>
+                        );
+                    })}
+                    {/* Accounts whose install is not in the list — an install
+                        read before it was made, most likely. Shown, not
+                        dropped: they are real and can be removed. */}
+                    {accounts.some((account) => !installFor(account)) && (
+                        <ul className="accts">{accounts.filter((account) => !installFor(account)).map(accountRow)}</ul>
+                    )}
+                </>
+            ) : accounts.length > 0 && (
+                <ul className="accts">{accounts.map(accountRow)}</ul>
             )}
 
             {connecting !== undefined && (
@@ -267,6 +435,10 @@ function ConnectorCard({
                     orgId={orgId}
                     connector={entry}
                     install={connecting}
+                    takenNames={takenNames}
+                    mayInstall={mayInstall}
+                    authorizing={start.isPending}
+                    authorizeFailure={error}
                     onClose={() => setConnecting(undefined)}
                     onDone={() => { setConnecting(undefined); onChanged(); }}
                     onAuthorize={(installId) => start.mutate(installId)}
@@ -276,7 +448,7 @@ function ConnectorCard({
                 <RotateDialog
                     orgId={orgId}
                     connector={entry}
-                    install={installs.find((one) => one.id === rotating.authConfigId) ?? installs[0] ?? null}
+                    install={installFor(rotating) ?? installs[0] ?? null}
                     accountId={rotating.id}
                     accountName={accountName(rotating, connector.title)}
                     onClose={() => setRotating(null)}
@@ -303,10 +475,13 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
     const [slice, setSlice] = useState<Slice | null>(null);
 
     const [adding, setAdding] = useState(false);
+    const [heard, setHeard] = useState<ConnectOutcome | null>(null);
+    const [returned, setReturned] = useState(0);
 
     const connectors = useQuery({ queryKey: ["connectors"], queryFn: () => source.listConnectors() });
     const accounts = useQuery({ queryKey: ["accounts", orgId], queryFn: () => source.listAccounts(orgId) });
     const installs = useInstalls(orgId);
+    const mayInstall = useMayInstall(orgId);
     const invalidate = useConnectorRefresh(orgId);
 
     const refresh = () => {
@@ -314,6 +489,11 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
         void queryClient.invalidateQueries({ queryKey: ["accounts", orgId] });
         void queryClient.invalidateQueries({ queryKey: ["connectors"] });
     };
+
+    useConnectOutcome(
+        (outcome) => { setHeard(outcome); setReturned((n) => n + 1); refresh(); },
+        refresh,
+    );
 
     const byInstall = useMemo(() => {
         const map = new Map<string, Install[]>();
@@ -332,12 +512,20 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
     }, [accounts.data]);
 
     const all = connectors.data ?? [];
-    /* An install counts as connected even with no account behind it. A server
-       this organization added *is* the connection — there is no second act of
-       signing in, which is why counting accounts alone filed every MCP server
-       and every database under "available". */
+    const takenNames = useMemo(() => (installs.data ?? []).map((install) => install.name), [installs.data]);
+    /* Connected means an account, with one exception: a server this
+       organization added *is* the connection, so for the entries pointed
+       somewhere an install counts on its own — counting accounts alone filed
+       every MCP server and database under "available".
+
+       Only for those. An install of Canva or Gmail with nobody on it is an app
+       that was enabled, not one anybody connected: a sign-in abandoned
+       half-way leaves exactly that behind, and counting it filled this list
+       with rows whose only button was "Connect". */
     const has = (connector: Connector) =>
-        (byConnector.get(connector.id)?.length ?? 0) > 0 || (byInstall.get(connector.id)?.length ?? 0) > 0;
+        (byConnector.get(connector.id)?.length ?? 0) > 0
+        || (isBringYourOwn(connector)
+            && (byInstall.get(connector.id) ?? []).some((install) => install.status !== "DISABLED"));
     const connected = all.filter(has);
     const unconnected = all.filter((connector) => !has(connector));
     const ailing = all.filter((connector) =>
@@ -368,6 +556,20 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
                     : ""}
             </p>
 
+            {/* What the provider's tab said on its way back. Said here because
+                the tab it happened in has closed. */}
+            {heard && (() => {
+                const note = outcomeNote(heard);
+                const named = all.find((connector) => connector.id === heard.connector)?.title;
+                return (
+                    <p className={"connect-result" + (note.bad ? " connect-result--warn" : "")} role="status">
+                        {note.bad ? <WarningIcon size={16} /> : <CheckCircleIcon size={16} />}
+                        {" "}{named ? named + ": " : ""}{note.text}
+                        <button className="linkish" onClick={() => setHeard(null)}>Dismiss</button>
+                    </p>
+                );
+            })()}
+
             {(connectors.isPending || accounts.isPending) && <p className="empty-row">Reading…</p>}
             {(connectors.isError || accounts.isError) && (
                 <p className="empty-row">Couldn’t load connectors.</p>
@@ -387,7 +589,7 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
                         {/* Only where there is something to point at. The
                             kinds are catalogue data, and a deployment without
                             them should not offer a door to nothing. */}
-                        {all.some(isBringYourOwn) && (
+                        {all.some(isBringYourOwn) && mayInstall !== false && (
                             <button className="btn" onClick={() => setAdding(true)}>
                                 <PlusIcon size={15} /> Add your own
                             </button>
@@ -440,6 +642,9 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
                                     connector={connector}
                                     accounts={byConnector.get(connector.id) ?? []}
                                     installs={byInstall.get(connector.id) ?? []}
+                                    takenNames={takenNames}
+                                    returned={returned}
+                                    mayInstall={mayInstall}
                                     onAdd={() => setAdding(true)}
                                     orgId={orgId}
                                     onChanged={refresh}

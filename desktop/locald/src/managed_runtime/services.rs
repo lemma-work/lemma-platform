@@ -223,7 +223,7 @@ impl ManagedRuntimeController {
                 }
             }
         }
-        // The owner's browser in the guest reaching this Mac's loopback. Only
+        // The paired user's browser in the guest reaching this Mac's loopback. Only
         // the VM helper connects to it, and only macOS has one.
         #[cfg(target_os = "macos")]
         self.ensure_loopback_relay();

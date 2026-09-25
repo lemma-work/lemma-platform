@@ -15,7 +15,7 @@ import { useThisMacAvailability } from "./this-mac-settings";
  *  is the person reading. So the screen that needed the credential offers the
  *  form, opened at the right place, instead of a dead end.
  *
- *  Only for the owner in the app on this installation's own origin, and only
+ *  Only in the app's own window on this installation's loopback origin, and only
  *  while that form is actually empty: a link to set up something already set
  *  up sends people to check work that was done. */
 export function SetUpOnThisMac({ form, compact = false }: { form: CredentialForm | null; compact?: boolean }) {

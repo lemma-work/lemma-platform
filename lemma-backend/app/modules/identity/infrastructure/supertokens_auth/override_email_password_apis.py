@@ -39,7 +39,7 @@ from app.modules.identity.services.email_policy import (
     EmailPolicyError,
     validate_auth_email,
 )
-from app.modules.identity.services.installation import get_signup_gate
+from app.modules.identity.services.signup_gate import get_signup_gate
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import func, select
@@ -194,10 +194,9 @@ def override_emailpassword_apis(
                     get_thirdparty_conflict_reason(conflicting_thirdparty_id)
                 )
 
-        # Last, after every check that can refuse without a database write:
-        # on a Desktop installation's first signup this reserves the owner
-        # slot, and a reservation taken for a request that was then refused
-        # for a bad address would hold the slot for nothing.
+        # Last, after the checks that refuse on the address alone: a malformed
+        # or conflicting address is answered with its own reason rather than
+        # with the signup mode's, which would not tell the person what to fix.
         try:
             await admit_signup(email)
         except SignupNotAllowedError as refused:

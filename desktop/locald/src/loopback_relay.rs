@@ -1,7 +1,7 @@
-//! The Mac's end of the loopback relay: the owner's VM browser reaching a
+//! The Mac's end of the loopback relay: the paired user's VM browser reaching a
 //! server on this computer's `127.0.0.1`.
 //!
-//! With host execution the owner's agent runs `npm run dev` on the Mac, and the
+//! With host execution the paired user's agent runs `npm run dev` on the Mac, and the
 //! browser it checks the result with runs in a sandbox in the guest. The
 //! sandbox's `host_fallback` proxy sends a loopback port nothing in the sandbox
 //! serves to guestd, which forwards it over vsock to `lemma-vz`, which connects
@@ -14,8 +14,8 @@
 //!
 //! What it will connect to:
 //!
-//! - **Nothing, unless the owner has turned on "Run commands on this Mac".**
-//!   The relay exists so the owner's agent can check a server it started on
+//! - **Nothing, unless "Run commands on this Mac" is on for this Mac's Agent Host.**
+//!   The relay exists so the paired user's agent can check a server it started on
 //!   the Mac; with host execution off there is no such server to check, and
 //!   the relay admits nothing. Read from the Agent Host's config on every
 //!   connection (see [`HostExecution`]), so turning the switch off closes the
@@ -29,7 +29,7 @@
 //!   service forwards, the sharing gateway and its tunnel's local API, the
 //!   Agent Host's MCP relays -- asked for afresh on every connection (see
 //!   [`LemmaPorts`]), because several are chosen at run time and one that
-//!   starts after this relay must still be refused. The owner's own sandbox is
+//!   starts after this relay must still be refused. The paired user's own sandbox is
 //!   still a place web content runs, and a page that could make it fetch
 //!   `localhost:<backend>` would be talking to Lemma with nobody's session.
 
@@ -74,7 +74,7 @@ pub(crate) const FIRST_UNPRIVILEGED_PORT: u16 = 1024;
 /// with it, and the Agent Host opens an MCP relay per paired workspace.
 pub(crate) type LemmaPorts = Arc<dyn Fn() -> BTreeSet<u16> + Send + Sync>;
 
-/// Whether the owner has host execution on, as of now.
+/// Whether this Mac's Agent Host has host execution on, as of now.
 pub(crate) type HostExecution = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// What every connection is judged against, each part asked for afresh.

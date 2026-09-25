@@ -1,4 +1,4 @@
-"""Routing between the VM and the owner's Mac, by the sandbox id alone.
+"""Routing between the VM and the user's Mac, by the sandbox id alone.
 
 The choice is recorded in a host sandbox's id, so these assert that the id is
 unmistakable, that every call on a host sandbox reaches the host and every

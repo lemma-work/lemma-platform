@@ -133,7 +133,7 @@ async def get_workspace_session(
         runtime = get_workspace_tool_runtime()
     host_workspace = getattr(ctx, "host_workspace", None)
     if host_workspace is not None:
-        # The owner's Mac, chosen for this whole run; see
+        # The user's Mac, chosen for this whole run; see
         # `host_execution_selection`. Never the VM for this run, whatever the
         # host is doing now -- a host that went away says so in the result.
         return await runtime.get_host_session(
@@ -315,7 +315,7 @@ async def exec_command_internal(
             project_notice = await prepare_project(
                 ctx,
                 workspace_session,
-                # On the owner's Mac, `git` and `gh` are already theirs: no
+                # On the user's Mac, `git` and `gh` are already theirs: no
                 # clone into a VM path, no credential bridge.
                 wanted=getattr(ctx, "host_workspace", None) is None
                 and (
