@@ -103,6 +103,32 @@ are shown with a retry action rather than an indefinite loading message.
 
 ---
 
+### PS-ONB-006 — Authentication resumes the person's requested destination
+**Status:** manual
+
+> **Verified by:** opening a workspace or app link while signed out, switching
+> to sign-up, completing email verification, and continuing to the original
+> destination. Repeat with password reset and provider sign-in. Browser
+> regressions use `npm run test:auth-browser` in `lemma-frontend`; real provider
+> consent and email delivery require a configured deployment.
+
+- Sign-in and sign-up shall preserve the requested path, query, and fragment.
+- Switching auth screens or completing a provider round trip shall retain the
+  destination. Completing a flow shall clear its saved destination.
+- When verification is required, the portal shall send a verification email
+  and let the person resend or retry without creating another account.
+- Sign-in and sign-up shall offer email code by default, with password and
+  provider options available. A verified code shall resume the requested
+  destination without an additional email-verification step.
+- A waiting tab shall recognize verification completed in another tab and let
+  the person continue to its saved destination. A separate browser without a
+  saved destination shall use the workspace default after sign-in.
+- An authenticated visitor shall continue without entering credentials again.
+- Auth routes and untrusted origins shall not be accepted as destinations.
+  A refused destination shall not revive a previously saved destination.
+
+---
+
 ## Capability: Create an organization
 
 ### PS-ONB-010 — The person who creates an organization owns it
