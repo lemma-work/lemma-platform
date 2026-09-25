@@ -1797,6 +1797,31 @@ button svg, a svg { flex-shrink:0; }
 .verify__strip-head { display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%; }
 .verify__strip-error { color:var(--bad); }
 
+/* The first-profile step. The same transaction a third time, in a dialog: the
+   QR sits beside one sentence and one button, because this is the only place
+   somebody meets it without having gone looking for it. */
+.firstprofile__phone {
+    display:flex;flex-direction:column;gap:10px;margin:0 0 16px;
+    border:1px solid var(--line-2);border-radius:var(--r-md);
+    background:var(--chrome);padding:13px 15px;
+}
+.firstprofile__phone-head { display:flex;align-items:center;justify-content:space-between;gap:10px; }
+.firstprofile__phone-head b { display:inline-flex;align-items:center;gap:7px;font-weight:500;font-size:13.5px;color:var(--ink); }
+.firstprofile__phone-head em { font-style:normal;font-size:12px;color:var(--ink-3); }
+.firstprofile__send { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:start; }
+.firstprofile__lines { display:flex;flex-direction:column;gap:9px;min-width:0; }
+.firstprofile__lines p { margin:0;font-size:13px;line-height:1.5;color:var(--ink-2); }
+.firstprofile__lines .firstprofile__small { font-size:11.5px;color:var(--ink-3); }
+.firstprofile__small .verify__code { font-size:11.5px; }
+.firstprofile__number { white-space:nowrap; }
+.firstprofile .profile-form__verified { margin:0; }
+.firstprofile .modal__acts { margin-top:0; }
+.firstprofile > .profile-form__problem { margin:0 0 12px; }
+
+@media(max-width:560px) {
+    .firstprofile__send { grid-template-columns:minmax(0,1fr); }
+}
+
 @media (max-width: 767px) {
     /* Keep attribution above the message instead of reserving an empty avatar column. */
     .convo-host { --turn-indent: 0px }

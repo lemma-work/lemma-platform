@@ -9,6 +9,7 @@ import { readableName } from "@/library/reading";
 import { RecordView } from "@/library/record-view";
 import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
+import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
 import { ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -1212,6 +1213,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
             </main>
 
             {reaching && pod && <ReachSheet pod={pod} onClose={() => setReaching(false)} />}
+
+            {/* Here rather than on the arrival screen: this branch is the
+                first render that has somewhere to belong, whichever of the
+                ways in somebody took. */}
+            <FirstProfileStep />
 
             {addingPeople && pod && (
                 <Modal
