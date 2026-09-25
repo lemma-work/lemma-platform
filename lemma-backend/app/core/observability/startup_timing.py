@@ -22,6 +22,9 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
+# Lifespans in this process that froze the heap and have not released it.
+_frozen_holders = 0
+
 
 @asynccontextmanager
 async def startup_step(step: str, *, service: str) -> AsyncIterator[None]:
@@ -55,8 +58,10 @@ def finish_startup(boot_started: float) -> tuple[float, int]:
     grows with what it has to walk. Call once, after startup, before serving,
     and pair it with :func:`release_startup_heap` when the lifespan ends.
     """
+    global _frozen_holders
     gc.collect()
     gc.freeze()
+    _frozen_holders += 1
     return round((time.monotonic() - boot_started) * 1000, 1), gc.get_freeze_count()
 
 
@@ -67,5 +72,12 @@ def release_startup_heap() -> None:
     start several apps in one process, an API with an embedded worker -- what
     the ended lifespan built would otherwise stay frozen, and a cycle among it
     would never be collected.
+
+    Counted: an API with an embedded worker freezes twice, and the worker ends
+    first. Unfreezing only when the last holder ends keeps the API's objects
+    frozen until its own teardown has finished with them.
     """
-    gc.unfreeze()
+    global _frozen_holders
+    _frozen_holders = max(0, _frozen_holders - 1)
+    if _frozen_holders == 0:
+        gc.unfreeze()

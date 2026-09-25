@@ -159,7 +159,11 @@ class ConnectorOperationRepository(
         search path that is fanned out across every install in the org.
         """
         stmt = select(func.count()).select_from(ConnectorOperation)
-        stmt = stmt.where(ConnectorOperation.connector_id == connector_id)
+        stmt = stmt.where(
+            ConnectorOperation.connector_id == connector_id,
+            # Same exclusion as the listing, so "N of M" counts what it lists.
+            ConnectorOperation.kind.in_(_KNOWN_KINDS),
+        )
         if kind is not None:
             stmt = stmt.where(ConnectorOperation.kind == kind)
         result = await self.session.execute(stmt)

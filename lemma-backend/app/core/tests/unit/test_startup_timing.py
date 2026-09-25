@@ -65,3 +65,17 @@ def test_startup_freezes_the_heap_and_a_lifespan_end_releases_it() -> None:
     finally:
         release_startup_heap()
     assert gc.get_freeze_count() == 0
+
+
+def test_an_embedded_worker_ending_first_does_not_unfreeze_the_api() -> None:
+    import gc
+    import time
+
+    finish_startup(time.monotonic())  # API
+    finish_startup(time.monotonic())  # embedded worker
+    try:
+        release_startup_heap()  # worker ends first
+        assert gc.get_freeze_count() > 0
+    finally:
+        release_startup_heap()  # API ends
+    assert gc.get_freeze_count() == 0
