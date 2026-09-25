@@ -78,9 +78,7 @@ class HostWorkspaceSession(SandboxWorkspaceSession):
             # latest host run decides, which may be another run's.
             self.client = RunPinnedClient(
                 self.client,
-                RunHostPin(
-                    sandbox_id=self.logical_id, host_id=host_id, root=self.root
-                ),
+                RunHostPin(sandbox_id=self.logical_id, host_id=host_id, root=self.root),
             )
 
     async def exec_command(

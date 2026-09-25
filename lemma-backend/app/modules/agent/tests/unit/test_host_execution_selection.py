@@ -260,9 +260,7 @@ def test_which_run_sources_count_as_the_run_user(source, expected):
 def test_a_wake_qualifies_only_through_the_run_it_continues(source, earlier, expected):
     conversation = _conversation()
     run = _run(conversation, source)
-    assert (
-        triggered_by_run_user(conversation, run, earlier_sources=earlier) is expected
-    )
+    assert triggered_by_run_user(conversation, run, earlier_sources=earlier) is expected
     # Without the earlier runs, a wake never qualifies.
     assert not triggered_by_run_user(conversation, run)
 
