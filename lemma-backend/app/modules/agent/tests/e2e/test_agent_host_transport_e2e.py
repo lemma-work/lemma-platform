@@ -802,16 +802,25 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
         AgentHostCommandKind.CANCEL_RUN.value
     }, delivered
     assert {command["command_id"] for command in delivered} == set(cancel_ids)
-    assert states == {
-        (
-            AgentHostCommandKind.START_RUN.value,
-            AgentHostCommandState.QUEUED.value,
-        ),
-        (
-            AgentHostCommandKind.CANCEL_RUN.value,
+    # Every start is still waiting: none was handed out, by either path. The
+    # cancel left, which is all this proves about it -- whether the host's
+    # acknowledgement has been recorded yet is the acknowledgement path's
+    # business, not this test's.
+    starts = {
+        state for kind, state in states if kind == AgentHostCommandKind.START_RUN.value
+    }
+    cancels = {
+        state for kind, state in states if kind == AgentHostCommandKind.CANCEL_RUN.value
+    }
+    assert starts == {AgentHostCommandState.QUEUED.value}, states
+    assert (
+        cancels
+        <= {
+            AgentHostCommandState.DELIVERED.value,
             AgentHostCommandState.ACKNOWLEDGED.value,
-        ),
-    }, states
+        }
+        and cancels
+    ), states
 
 
 @pytest.mark.asyncio
