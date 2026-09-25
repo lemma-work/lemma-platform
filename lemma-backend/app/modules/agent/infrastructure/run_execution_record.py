@@ -96,11 +96,11 @@ async def earlier_run_sources(
     What a continuation (a wait waking) continues is the work of the runs
     before it; host execution asks who started that work.
     """
-    this_run_created = (
-        select(AgentRunModel.created_at)
-        .where(AgentRunModel.id == run_id)
-        .scalar_subquery()
+    this_run_created = await uow.session.scalar(
+        select(AgentRunModel.created_at).where(AgentRunModel.id == run_id)
     )
+    if this_run_created is None:
+        return []
     rows = (
         await uow.session.execute(
             select(AgentRunModel.run_metadata)

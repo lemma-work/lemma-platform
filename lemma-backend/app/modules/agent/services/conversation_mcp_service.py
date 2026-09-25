@@ -354,7 +354,7 @@ class ConversationMCPService:
             run = None
             if agent_run_id is not None:
                 run = await conversation_repo.get_agent_run(agent_run_id)
-                if run is not None and run.conversation_id != conversation_id:
+                if run is not None and str(run.conversation_id) != str(conversation_id):
                     # `authorize` refuses this first; kept so no caller can
                     # build a context from another conversation's run.
                     raise ValueError(

@@ -342,6 +342,10 @@ class WelcomeBody(BaseModel):
     #: the difference instead of refusing every command (CANCEL_RUN included)
     #: as expired or not yet valid.
     server_time: datetime = Field(default_factory=_utc_now)
+    #: This server executes a ``tools/call`` carrying a ``request_id`` at most
+    #: once (``agent_host_link_tool_calls``), so the host may resend one after
+    #: a dropped link. A server without this field would run it twice.
+    idempotent_tool_calls: bool = True
 
 
 class RefusedUpdate(BaseModel):

@@ -163,6 +163,8 @@ async def test_welcome_names_the_host_and_the_heartbeat():
         "user_id": str(link.store.user_id),
         "protocol_version": 3,
         "heartbeat_ms": 20_000,
+        # The host resends a named tools/call after a drop only when told so.
+        "idempotent_tool_calls": True,
     }
     # The host corrects its command-expiry checks by this; it is UTC and now.
     assert server_time.utcoffset() == timedelta(0)

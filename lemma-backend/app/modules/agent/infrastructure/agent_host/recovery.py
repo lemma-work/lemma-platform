@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.domain.agent_host import (
@@ -322,25 +322,28 @@ async def terminalize_revoked_host(
     own runs when its link closes as revoked.
     """
     timestamp = now or utcnow()
-    leases = await session.execute(
-        select(AgentHostRunLeaseModel)
+    # Two UPDATEs rather than reading the rows: the host's own row is locked
+    # by the revoke, so nothing adds to either set while this runs.
+    ended = await session.execute(
+        update(AgentHostRunLeaseModel)
         .where(
             AgentHostRunLeaseModel.host_id == host_id,
             AgentHostRunLeaseModel.state.in_(_NON_TERMINAL_HOST_RUN_STATES),
         )
-        .with_for_update()
+        .values(
+            state=AgentHostRunState.FAILED.value,
+            error_code="HOST_REVOKED",
+            error_detail=HOST_REVOKED_DETAIL,
+            terminal_at=timestamp,
+            lease_expires_at=timestamp,
+            updated_at=timestamp,
+        )
+        .returning(AgentHostRunLeaseModel.run_id)
+        .execution_options(synchronize_session=False)
     )
-    ended: list[UUID] = []
-    for lease in leases.scalars():
-        lease.state = AgentHostRunState.FAILED.value
-        lease.error_code = "HOST_REVOKED"
-        lease.error_detail = HOST_REVOKED_DETAIL
-        lease.terminal_at = timestamp
-        lease.lease_expires_at = timestamp
-        lease.updated_at = timestamp
-        ended.append(lease.run_id)
-    commands = await session.execute(
-        select(AgentHostCommandModel)
+    run_ids = list(ended.scalars())
+    await session.execute(
+        update(AgentHostCommandModel)
         .where(
             AgentHostCommandModel.host_id == host_id,
             AgentHostCommandModel.state.in_(
@@ -350,12 +353,10 @@ async def terminalize_revoked_host(
                 ]
             ),
         )
-        .with_for_update()
+        .values(state=AgentHostCommandState.CANCELLED.value)
+        .execution_options(synchronize_session=False)
     )
-    for command in commands.scalars():
-        command.state = AgentHostCommandState.CANCELLED.value
-    await session.flush()
-    return ended
+    return run_ids
 
 
 async def cleanup_retained_state(
