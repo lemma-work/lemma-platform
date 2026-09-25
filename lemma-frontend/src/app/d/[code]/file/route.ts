@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { configuredApiUrl, MISSING_API_URL } from "@/session/origins";
+import { sharedFileHeaders } from "@/site/shared-file-headers";
 
 /** The bytes, proxied.
  *
@@ -38,17 +39,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cod
         });
     }
 
-    const headers = new Headers();
-    headers.set("content-type", upstream.headers.get("content-type") ?? "application/octet-stream");
-    const length = upstream.headers.get("content-length");
-    if (length) headers.set("content-length", length);
-    /* The reader's browser may cache it; nothing shared may. A capability
-       code is the whole of the permission, so a shared cache holding these
-       bytes would be handing them to whoever asked next. */
-    headers.set("cache-control", "private, max-age=60");
-    if (save) {
-        const disposition = upstream.headers.get("content-disposition");
-        headers.set("content-disposition", disposition ? disposition.replace(/^inline/i, "attachment") : "attachment");
-    }
+    /* The API's rendering decision travels with the bytes; see
+       `sharedFileHeaders` for what dropping it cost. */
+    const headers = sharedFileHeaders(upstream.headers, save);
     return new Response(upstream.body, { status: 200, headers });
 }

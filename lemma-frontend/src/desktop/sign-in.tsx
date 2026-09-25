@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Screen } from "@/auth/screens";
-import { PORTAL_PATH, siteOrigin } from "@/auth/config";
+import { onApi, PORTAL_PATH, siteOrigin } from "@/auth/config";
 import { landing } from "@/auth/redirects";
 import { Session } from "@/auth/supertokens";
 import { LoadingIndicator } from "@/ui/loading";
@@ -12,6 +12,7 @@ import {
     completeRequest,
     dropPending,
     dropRequestId,
+    handoffCode,
     heldRequestId,
     startHandoff,
     type PendingHandoff,
@@ -21,6 +22,7 @@ import {
  *  their browser, wait. `auth-handoff.ts` has the whole exchange. */
 export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
     const [pending, setPending] = useState<PendingHandoff | null>(null);
+    const [code, setCode] = useState<string | null>(null);
     const [said, setSaid] = useState<string | null>(null);
     /* The browser is opened once per request on its own; after that only when
        asked. A reload of this page resumes the request without a second tab. */
@@ -41,6 +43,7 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
                 const handoff = await startHandoff(siteOrigin(), PORTAL_PATH, mode === "up");
                 if (cancelled) return;
                 setPending(handoff);
+                setCode(await handoffCode(handoff.requestId));
                 openBrowser(handoff);
                 const outcome = await awaitSession(handoff, () => cancelled);
                 if (outcome === "signed-in") window.location.replace(landing(window.location.search));
@@ -72,6 +75,12 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
             title="Sign in with your browser"
             lead="Your browser handles account security. Lemma comes back here on its own when you are done."
         >
+            {code && (
+                <p className="auth__note">
+                    Your browser will ask you to confirm this code: <strong className="auth__code">{code}</strong>.
+                    Confirm only if it matches.
+                </p>
+            )}
             <p className="auth__note" role="status">
                 {pending ? "Waiting for your browser…" : <LoadingIndicator inline label="Starting sign-in" />}
             </p>
@@ -84,10 +93,33 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
     );
 }
 
-/** The browser's side: signed in, tell the backend which app asked, then wake
- *  the app. Reached at `/auth/desktop` from `landing()` while a request is held. */
+/** The account this browser is signed in as, for the confirmation to name. */
+async function signedInEmail(fetcher: typeof fetch = fetch): Promise<string | null> {
+    try {
+        const response = await fetcher(onApi("/users/me"), { credentials: "include", cache: "no-store" });
+        if (!response.ok) return null;
+        const body = (await response.json()) as { email?: unknown };
+        return typeof body.email === "string" ? body.email : null;
+    } catch {
+        return null;
+    }
+}
+
+/** The browser's side: signed in, ask, tell the backend which app asked, then
+ *  wake the app. Reached at `/auth/desktop` from `landing()` while a request
+ *  is held.
+ *
+ *  Never on its own. A request id arrives in a URL, and a URL can be sent by
+ *  anybody: completing whatever request a signed-in browser was pointed at
+ *  handed the sender's app this person's session. So the request's code is
+ *  shown here, beside the account it will sign in, and nothing is completed
+ *  until the person — having checked it against the app in front of them —
+ *  says so. */
 export function DesktopReturn() {
-    const [state, setState] = useState<"handing" | "done" | "failed">("handing");
+    const [state, setState] = useState<"reading" | "asking" | "handing" | "done" | "declined" | "failed">("reading");
+    const [code, setCode] = useState<string | null>(null);
+    const [email, setEmail] = useState<string | null>(null);
+    const request = useRef<string | null>(null);
 
     useEffect(() => {
         const requestId = heldRequestId();
@@ -95,6 +127,7 @@ export function DesktopReturn() {
             window.location.replace(PORTAL_PATH);
             return;
         }
+        request.current = requestId;
         let cancelled = false;
         void (async () => {
             try {
@@ -104,13 +137,11 @@ export function DesktopReturn() {
                     window.location.replace(PORTAL_PATH);
                     return;
                 }
-                await completeRequest(requestId);
-                dropRequestId();
+                const [shown, who] = await Promise.all([handoffCode(requestId), signedInEmail()]);
                 if (cancelled) return;
-                setState("done");
-                /* A beat, so "you're signed in" is on screen before the browser
-                   asks whether to open Lemma. */
-                window.setTimeout(() => window.location.assign(appReturnUrl(requestId)), 350);
+                setCode(shown);
+                setEmail(who);
+                setState("asking");
             } catch {
                 if (!cancelled) setState("failed");
             }
@@ -120,6 +151,27 @@ export function DesktopReturn() {
         };
     }, []);
 
+    const confirm = async () => {
+        const requestId = request.current;
+        if (!requestId) return;
+        setState("handing");
+        try {
+            await completeRequest(requestId);
+            dropRequestId();
+            setState("done");
+            /* A beat, so "you're signed in" is on screen before the browser
+               asks whether to open Lemma. */
+            window.setTimeout(() => window.location.assign(appReturnUrl(requestId)), 350);
+        } catch {
+            setState("failed");
+        }
+    };
+
+    const decline = () => {
+        dropRequestId();
+        setState("declined");
+    };
+
     if (state === "failed") {
         return (
             <Screen
@@ -128,12 +180,40 @@ export function DesktopReturn() {
             />
         );
     }
+    if (state === "declined") {
+        return (
+            <Screen
+                title="Nothing was signed in"
+                lead="Lemma Desktop was not given your account. If you did not start this, you can close this tab."
+            />
+        );
+    }
+    if (state === "asking") {
+        return (
+            <Screen
+                title={email ? "Sign in to Lemma Desktop as " + email + "?" : "Sign in to Lemma Desktop with this account?"}
+                lead="Only continue if you started signing in from the Lemma app on this computer, and it shows this code."
+            >
+                <p className="auth__note">
+                    Code: <strong className="auth__code">{code}</strong>
+                </p>
+                <div className="screen__actions">
+                    <button className="btn btn--primary" onClick={() => void confirm()}>
+                        The codes match · sign in
+                    </button>
+                    <button className="btn" onClick={decline}>
+                        Cancel
+                    </button>
+                </div>
+            </Screen>
+        );
+    }
     return (
         <Screen
             title={state === "done" ? "You’re signed in" : "Signing in to Lemma Desktop…"}
             lead="Lemma Desktop comes to the front and opens your workspace. You can close this tab."
         >
-            {state === "handing" && <LoadingIndicator label="Handing your session to Lemma Desktop" />}
+            {state !== "done" && <LoadingIndicator label={state === "reading" ? "Checking this sign-in" : "Handing your session to Lemma Desktop"} />}
         </Screen>
     );
 }

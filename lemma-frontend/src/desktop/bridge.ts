@@ -82,10 +82,27 @@ export const WORKSPACE_COMMANDS = [
 
 export type WorkspaceCommand = (typeof WORKSPACE_COMMANDS)[number];
 
+/** Whether this page is on an origin the shell grants its commands to.
+ *
+ *  On a local deployment that is the loopback workspace host alone. While the
+ *  installation is shared, the app's own window moves to the LAN address or the
+ *  tunnel host, where the shell still injects its globals but the capability
+ *  grants nothing — so every call was refused, the automatic Agent Host
+ *  connection failed on each page load, and the "This computer" card showed
+ *  the error. There is no shell to talk to from there; saying so is the fix. */
+export function onShellOrigin(): boolean {
+    if (typeof window === "undefined" || !isLocalDeployment()) return true;
+    const host = (window.location?.hostname ?? "").toLowerCase();
+    return host === "localhost"
+        || host === "127.0.0.1"
+        || host.endsWith(".localhost")
+        || host.endsWith(".127.0.0.1.sslip.io");
+}
+
 function shellInvoke(): ShellInvoke | null {
     if (typeof window === "undefined") return null;
     const invoke = window.__TAURI__?.core?.invoke;
-    return typeof invoke === "function" ? invoke : null;
+    return typeof invoke === "function" && onShellOrigin() ? invoke : null;
 }
 
 /** Whether this page is running inside the Lemma desktop app at all.
