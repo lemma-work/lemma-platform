@@ -259,6 +259,7 @@ DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "semrush",
     "sentry",
     "servicenow",
+    "shopify",
     "spotify",
     "square",
     "stripe",

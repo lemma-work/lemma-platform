@@ -267,7 +267,12 @@ export const useCreateConnectRequest = (organizationId?: string) => {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async (data: { connectorId: string; authConfigId?: string; returnTo?: string }) => {
+        mutationFn: async (data: {
+            connectorId: string;
+            authConfigId?: string;
+            returnTo?: string;
+            connectionFields?: Record<string, unknown>;
+        }) => {
             if (!organizationId) throw new Error('organizationId is required to connect an app');
             const response = await getLemmaClient().connectors.createConnectRequest(
                 organizationId,
@@ -280,6 +285,7 @@ export const useCreateConnectRequest = (organizationId?: string) => {
                     // scoped to an organisation, so the flow cannot work out
                     // this path on its own.
                     return_to: data.returnTo,
+                    ...(data.connectionFields ? { connection_fields: data.connectionFields } : {}),
                 },
             );
             return response;

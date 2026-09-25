@@ -24,6 +24,10 @@ import {
  *    - the organization has to bring its own OAuth app first;
  *    - the credential is a form to fill in;
  *    - it is a browser round trip, which is the case this app already had.
+ *
+ *  A browser round trip can still need a form first. Signing in says who the
+ *  person is, not which tenant they mean: Shopify needs the store name before
+ *  there is anywhere to send them. Those fields ride along to `onAuthorize`.
  */
 export function ConnectDialog({
     orgId, connector, install, takenNames, mayInstall = null, authorizing = false, authorizeFailure = null,
@@ -52,7 +56,7 @@ export function ConnectDialog({
     onClose: () => void;
     onDone: () => void;
     /** Hands the browser round trip back to the caller, which already owns it. */
-    onAuthorize: (installId: string | null) => void;
+    onAuthorize: (installId: string | null, connectionFields?: Record<string, unknown>) => void;
 }) {
     const detail = useConnector(connector.id);
     const entry = detail.data ?? connector;
@@ -123,13 +127,22 @@ export function ConnectDialog({
                     ownCredentials: true,
                 });
                 refresh();
-                if (connectRoute(created, kind) === "redirect") { onAuthorize(created.id ?? null); return; }
-                /* A credential, not a sign-in: the account is the next form,
-                   against the install just made. */
+                if (connectRoute(created, kind) === "redirect" && fields(connectSchema(kind)).length === 0) {
+                    onAuthorize(created.id ?? null);
+                    return;
+                }
+                /* A credential, or a sign-in that needs a question answered
+                   first (Shopify's store): the next form, against the install
+                   just made. */
                 setMade(created);
                 setBringingApp(false);
                 setValues({});
                 setShown({});
+                return;
+            }
+            if (route === "redirect") {
+                /* The sign-in's own fields, answered: on to the provider. */
+                onAuthorize(against?.id ?? null, body);
                 return;
             }
             /* Lemma's own install, made now when there is none. The account
@@ -184,7 +197,7 @@ export function ConnectDialog({
                     </p>
                 )}
 
-                {!showingApp && route === "redirect" ? (
+                {!showingApp && route === "redirect" && list.length === 0 ? (
                     <>
                         <p className="connect-lead">
                             This one signs in through {connector.title}. You will come back here once it is done.
@@ -227,12 +240,18 @@ export function ConnectDialog({
                     </>
                 ) : (
                     <>
+                        {!showingApp && route === "redirect" && (
+                            <p className="connect-lead">
+                                This one signs in through {connector.title}, once it knows which account you mean.
+                            </p>
+                        )}
                         <Fields list={list} values={ready} problems={shown} disabled={busy}
                             onChange={(name, value) => setValues({ ...ready, [name]: value })} />
                         {(failure ?? authorizeFailure) && <p className="library-problem" role="alert">{failure ?? authorizeFailure}</p>}
                         <div className="record-form__actions">
                             <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
-                                {busy ? <LoadingIndicator inline label="Connecting" /> : showingApp ? "Save and authorise" : "Connect"}
+                                {busy ? <LoadingIndicator inline label="Connecting" /> : showingApp ? "Save and authorise"
+                                    : route === "redirect" ? <>Continue <ExternalIcon size={13} /></> : "Connect"}
                             </button>
                             <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
                         </div>

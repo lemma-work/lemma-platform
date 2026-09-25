@@ -58,6 +58,10 @@ from app.modules.connectors.infrastructure.repositories.auth_config_repository i
 )
 from app.modules.connectors.services.account_credentials import (
     validated_account_credentials,
+    validated_connection_fields,
+)
+from app.modules.connectors.services.upstream_error_details import (
+    upstream_error_details,
 )
 from app.modules.connectors.services.account_identity import (
     resolve_account_identity,
@@ -137,28 +141,8 @@ class ConnectorService:
         self.auth_config_operation_repository = auth_config_operation_repository
         self._kind_dispatcher = None
 
-    #: How much of a vendor's error text to carry back. Long enough for the
-    #: sentence that names the cause, short enough that a stack trace or an HTML
-    #: error page cannot ride out in an API response.
-    _UPSTREAM_MESSAGE_LIMIT = 400
-
-    def _exception_details(self, exc: Exception) -> dict | None:
-        details: dict[str, object] = {"error_type": type(exc).__name__}
-        status_code = getattr(exc, "status_code", None)
-        if isinstance(status_code, int):
-            details["upstream_status"] = status_code
-        code = getattr(exc, "code", None)
-        if isinstance(code, str) and len(code) <= 100:
-            details["upstream_code"] = code
-        # The one thing worth reading, and it used to be dropped. A Composio
-        # auth-config failure answers "Composio does not have managed
-        # credentials for this toolkit" -- the whole explanation, in one
-        # sentence -- and the caller saw `error_type` and a status code. This is
-        # the vendor's own API error, not anything a user typed.
-        message = str(exc).strip()
-        if message:
-            details["upstream_message"] = message[: self._UPSTREAM_MESSAGE_LIMIT]
-        return details
+    def _exception_details(self, exc: Exception) -> dict[str, object] | None:
+        return upstream_error_details(exc)
 
     async def _fetch_account_profile(
         self,
@@ -623,6 +607,7 @@ class ConnectorService:
         connector_id: str | None = None,
         auth_config_id: UUID | None = None,
         return_to: str | None = None,
+        connection_fields: dict[str, object] | None = None,
     ) -> ConnectRequestEntity:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
         auth_config = await self._resolve_auth_config(
@@ -648,6 +633,12 @@ class ConnectorService:
                     "Credential-managed Composio accounts must be connected with the accounts API."
                 )
 
+        # Before any provider call: a missing store name must come back as a
+        # 400 naming the field, not as Composio's refusal wrapped in a 502.
+        connection_fields = validated_connection_fields(
+            connector, auth_config.kind, connection_fields
+        )
+
         # Multiple accounts are allowed per auth config, so a new connect request
         # is always permitted. The OAuth callback dedups by provider account id:
         # re-authing an existing identity updates it, a new identity is created.
@@ -669,6 +660,7 @@ class ConnectorService:
                 state=state,
                 redirect_uri=redirect_uri,
                 code_verifier=code_verifier,
+                connection_fields=connection_fields,
             )
         except DomainError:
             raise

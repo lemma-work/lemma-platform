@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+import hashlib
+from typing import TYPE_CHECKING, Any, Callable
+
+import httpx
 
 from app.core.concurrency.offload import run_blocking
 from app.modules.connectors.config import connector_settings
@@ -15,13 +18,97 @@ from app.modules.connectors.domain.errors import (
     OperationExecutionUnauthorizedError,
     OperationExecutionValidationError,
 )
+from app.modules.connectors.domain.file_input import MaterializedFile
 from app.modules.connectors.domain.ports import (
     AppOperationGatewayPort,
     OperationDetailsPort,
 )
 
 
+if TYPE_CHECKING:
+    from composio import Composio
+
 ComposioClientFactory = Callable[[], Any]
+
+_STAGE_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
+
+
+def _has_files(value: object) -> bool:
+    if isinstance(value, MaterializedFile):
+        return True
+    if isinstance(value, dict):
+        return any(_has_files(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_files(item) for item in value)
+    return False
+
+
+def _replace_files(
+    value: object, stage: Callable[[MaterializedFile], dict[str, str]]
+) -> object:
+    if isinstance(value, MaterializedFile):
+        return stage(value)
+    if isinstance(value, dict):
+        return {key: _replace_files(item, stage) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_files(item, stage) for item in value]
+    return value
+
+
+def stage_files(
+    composio: Composio, tool_slug: str, payload: dict[str, object]
+) -> dict[str, object]:
+    """Upload each file argument to Composio's storage; pass its ``s3key``.
+
+    A Composio file argument is ``{name, mimetype, s3key}`` naming an object in
+    Composio's own storage, which nothing but Composio can mint -- so the files
+    the caller named, already read under their authorization, are staged here.
+
+    The SDK can do this itself (``dangerously_allow_auto_upload_download_files``)
+    but only from a *local path*, which means writing every attachment to the
+    container's disk first; and turning it on turns on the download half too,
+    which writes results there. Neither is wanted, so this uses the same two
+    public calls the SDK does -- presign, then PUT -- with the bytes in hand.
+
+    Synchronous: runs inside the gateway's offloaded thread.
+    """
+    if not _has_files(payload):
+        return payload
+    # The presign is scoped to a toolkit; the tool knows which one it belongs to.
+    toolkit_slug = composio.client.tools.retrieve(tool_slug).toolkit.slug
+
+    def stage(file: MaterializedFile) -> dict[str, str]:
+        presigned = composio.client.files.create_presigned_url(
+            filename=file.filename,
+            md5=hashlib.md5(file.content, usedforsecurity=False).hexdigest(),
+            mimetype=file.media_type,
+            tool_slug=tool_slug,
+            toolkit_slug=toolkit_slug,
+        )
+        headers = {"Content-Type": file.media_type}
+        backend = getattr(getattr(presigned, "metadata", None), "storage_backend", None)
+        if backend == "azure_blob_storage":
+            headers["x-ms-blob-type"] = "BlockBlob"
+        response = httpx.put(
+            presigned.new_presigned_url,
+            content=file.content,
+            headers=headers,
+            timeout=_STAGE_TIMEOUT,
+        )
+        if response.status_code >= 300:
+            raise OperationExecutionInfrastructureError(
+                f"Could not stage {file.filename!r} for Composio "
+                f"(storage answered {response.status_code}).",
+                details={"provider": "composio", "reason": "file_staging_failed"},
+            )
+        return {
+            "name": file.filename,
+            "mimetype": file.media_type,
+            "s3key": presigned.key,
+        }
+
+    staged = _replace_files(payload, stage)
+    return staged if isinstance(staged, dict) else payload
 
 
 class _UnsupportedComposioDetails(OperationDetailsPort):
@@ -94,9 +181,10 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             )
             try:
                 composio = self._composio_client_factory()
+                arguments = stage_files(composio, operation_name, payload or {})
                 response = composio.tools.execute(
                     operation_name,
-                    payload or {},
+                    arguments,
                     connected_account_id=connection_id,
                     dangerously_skip_version_check=True,
                 )

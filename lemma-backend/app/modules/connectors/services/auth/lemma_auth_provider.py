@@ -52,7 +52,13 @@ class LemmaAuthProvider(AuthProviderInterface):
         state: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        connection_fields: dict[str, object] | None = None,
     ) -> Tuple[str, str]:
+        if connection_fields:
+            # No native OAuth install declares any, so the service's schema
+            # check refuses them first. Refused here too so a caller that skips
+            # the service cannot have a tenant choice silently dropped.
+            raise ConnectorValidationError("This connector takes no connection fields.")
         if not install.oauth2:
             raise ConnectorValidationError(
                 "OAuth2 configuration not found for connector"

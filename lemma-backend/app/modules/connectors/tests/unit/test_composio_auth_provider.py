@@ -221,7 +221,7 @@ async def test_connect_with_credentials_initiates_api_key_connection():
         create=MagicMock(return_value=SimpleNamespace(id="ac_created"))
     )
     composio = SimpleNamespace(
-        connected_accounts=SimpleNamespace(initiate=initiate),
+        connected_accounts=SimpleNamespace(initiate=initiate, link=initiate),
         auth_configs=auth_configs,
     )
     provider = ComposioAuthProvider(
@@ -269,7 +269,7 @@ async def test_connect_with_credentials_creates_custom_auth_config():
     initiate = MagicMock(return_value=SimpleNamespace(id="ca_created"))
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(create=create),
-        connected_accounts=SimpleNamespace(initiate=initiate),
+        connected_accounts=SimpleNamespace(initiate=initiate, link=initiate),
     )
     provider = ComposioAuthProvider(
         connector_repository=AsyncMock(),
@@ -423,7 +423,7 @@ async def test_an_unmanaged_toolkit_signs_in_with_the_orgs_own_oauth_client():
     )
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(create=create),
-        connected_accounts=SimpleNamespace(initiate=initiate),
+        connected_accounts=SimpleNamespace(initiate=initiate, link=initiate),
     )
     provider = ComposioAuthProvider(
         connector_repository=AsyncMock(),
@@ -458,7 +458,7 @@ async def test_a_managed_toolkit_still_uses_lemmas_composio_credentials():
     )
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(create=create),
-        connected_accounts=SimpleNamespace(initiate=initiate),
+        connected_accounts=SimpleNamespace(initiate=initiate, link=initiate),
     )
     provider = ComposioAuthProvider(
         connector_repository=AsyncMock(),
@@ -494,7 +494,7 @@ async def test_nested_oauth2_credentials_reach_composio_flattened():
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(create=create),
         connected_accounts=SimpleNamespace(
-            initiate=MagicMock(
+            link=MagicMock(
                 return_value=SimpleNamespace(id="ca", redirect_url="https://x")
             )
         ),
@@ -535,7 +535,7 @@ async def test_an_org_custom_install_with_no_credentials_is_refused_before_compo
     create = MagicMock()
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(create=create),
-        connected_accounts=SimpleNamespace(initiate=MagicMock()),
+        connected_accounts=SimpleNamespace(initiate=MagicMock(), link=MagicMock()),
     )
     provider = ComposioAuthProvider(
         connector_repository=AsyncMock(),

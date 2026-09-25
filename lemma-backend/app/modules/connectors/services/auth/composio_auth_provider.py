@@ -314,6 +314,7 @@ class ComposioAuthProvider(AuthProviderInterface):
         state: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        connection_fields: dict[str, object] | None = None,
     ) -> Tuple[str, str]:
         # Accepted and ignored. Composio runs the OAuth dance itself and hands
         # back a connection, so there is no authorization request of ours to
@@ -328,14 +329,33 @@ class ComposioAuthProvider(AuthProviderInterface):
 
         redirect_url = f"{redirect_uri}?state={state}"
 
-        connection_request = await run_blocking(
-            lambda: composio.connected_accounts.initiate(
+        # Shopify's OAuth mode needs the store before Composio can build the
+        # authorization URL -- `subdomain` becomes `{subdomain}.myshopify.com`.
+        # Only sent when the kind declared such a field, so every other toolkit
+        # makes exactly the call it made before.
+        if connection_fields:
+            from composio.types import auth_scheme as composio_auth_scheme
+
+            config = composio_auth_scheme.oauth2(dict(connection_fields))
+            start = lambda: composio.connected_accounts.initiate(  # noqa: E731
                 user_id=str(user_id),
                 auth_config_id=auth_config_id,
                 callback_url=redirect_url,
-            ),
-            limiter="external_http",
-        )
+                config=config,
+            )
+        else:
+            # `link()`, not `initiate()`: Composio is retiring `initiate()` for
+            # redirect sign-ins on its managed auth configs, and says so with a
+            # Sunset header on every call. Same connected-account id, same
+            # redirect. `initiate()` stays for the connect that carries fields,
+            # because `link()` takes none.
+            start = lambda: composio.connected_accounts.link(  # noqa: E731
+                user_id=str(user_id),
+                auth_config_id=auth_config_id,
+                callback_url=redirect_url,
+            )
+
+        connection_request = await run_blocking(start, limiter="external_http")
 
         if not connection_request.redirect_url:
             raise ConnectorValidationError("No redirect URL found for Composio app")

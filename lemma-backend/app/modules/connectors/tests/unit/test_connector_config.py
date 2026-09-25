@@ -66,6 +66,12 @@ EXPECTED = [
         64 * 1024 * 1024,
         4096,
     ),
+    (
+        "connector_file_input_max_bytes",
+        "CONNECTOR_FILE_INPUT_MAX_BYTES",
+        25 * 1024 * 1024,
+        4096,
+    ),
     ("connector_encryption_key", "CONNECTOR_ENCRYPTION_KEY", None, "sentinel"),
     ("connector_breaker_enabled", "CONNECTOR_BREAKER_ENABLED", True, False),
     (
