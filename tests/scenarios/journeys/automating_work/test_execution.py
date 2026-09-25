@@ -91,14 +91,13 @@ async def test_a_mismatched_input_is_refused(pod):
     alice, the_pod = pod
     function = await alice.creates_a_function(in_pod=the_pod)
 
-    run = await alice.runs_function(
+    reason = await alice.is_refused_running_function(
         function["name"], with_input={"value": "not a number"}, in_pod=the_pod
     )
 
-    assert run["status"] == "FAILED", (
-        f"a function declaring `value: int` must not accept a string: {run}"
+    assert "value" in reason and "integer" in reason, (
+        f"a function declaring `value: int` must say which input did not match: {reason}"
     )
-    assert run.get("error"), "a failed run has to say why"
 
 
 @scenario("A person changes a function's code and the next run uses it")
