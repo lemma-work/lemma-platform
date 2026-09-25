@@ -6,6 +6,10 @@ a worker reclaiming it after a crash, an approved tool being executed after a
 pause -- so the choice has to live somewhere those can read it back. It lives
 under one key of the run's own metadata, written with ``jsonb_set`` so no
 other key is disturbed.
+
+The same record is what a host sandbox's operations are routed by: the host a
+conversation's most recent host run chose is the host its sandbox is on
+(``latest_host_execution``), so there is no table saying so separately.
 """
 
 from __future__ import annotations
@@ -19,8 +23,9 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 
 #: The run-metadata key. Its value is ``{"target": "vm"}`` or ``{"target":
-#: "host", "sandbox_id": ..., "root": ...}``.
+#: "host", "host_id": ..., "sandbox_id": ..., "root": ...}``.
 EXECUTION_METADATA_KEY = "execution"
+HOST_TARGET = "host"
 
 
 async def read_run_execution(
@@ -52,3 +57,26 @@ async def record_run_execution(
             )
         )
     )
+
+
+async def latest_host_execution(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> dict[str, object] | None:
+    """The record of the conversation's most recent run that chose the host.
+
+    Walks ``ix_agent_run_conversation_created`` newest first; a run that chose
+    the VM, or has not chosen yet, is passed over.
+    """
+    execution = AgentRunModel.run_metadata[EXECUTION_METADATA_KEY]
+    value = (
+        await uow.session.execute(
+            select(execution)
+            .where(
+                AgentRunModel.conversation_id == conversation_id,
+                execution["target"].astext == HOST_TARGET,
+            )
+            .order_by(AgentRunModel.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return value if isinstance(value, dict) else None

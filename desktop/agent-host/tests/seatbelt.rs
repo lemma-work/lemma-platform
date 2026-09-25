@@ -225,6 +225,7 @@ async fn the_exec_server_runs_confined() {
             home: sandbox.home.clone(),
             tmp: sandbox.confinement.tmp.clone(),
             folders: sandbox.home.join("no-folders.json"),
+            roots: sandbox.home.join("agent-host-data/conversation-roots.json"),
         },
     );
     relay.set_enabled(true);

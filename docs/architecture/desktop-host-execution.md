@@ -53,7 +53,9 @@ of these hold; otherwise it gets the VM sandbox, exactly as before
    host notices within five seconds and says so on its next `control`, without
    a reconnect.
 
-Somebody else on the same installation is routed to their own paired host if
+A user with more than one usable host is routed to the one the conversation's
+most recent host run used, and otherwise to the most recently seen. Somebody
+else on the same installation is routed to their own paired host if
 they have one, and to the VM otherwise. Whoever controls a host's machine
 chooses whether it runs anything at all: the switch lives on that machine.
 
@@ -66,8 +68,9 @@ loopback origin may call
    `host_execution: {enabled, available}`, and is disabled with the reason
    when `available` is false.
 
-This check happens once, when a run's sandbox is chosen, and the choice is
-recorded on the sandbox. A run never moves between the two mid-flight. If the
+This check happens once, when a run's sandbox is chosen, and the choice --
+VM, or which host and which folder -- is recorded on the run. A run never
+moves between the two mid-flight, nor between two Macs. If the
 host goes offline, an operation fails with a sentence the agent can act on
 ("This Mac is not connected"). It does not fall back to the VM, because a
 command half-run in two places is worse than one that clearly did not run.
@@ -218,6 +221,25 @@ its working directory from the sandbox, not from a hard-coded `/workspace`:
   (`date` defaults to today, `slug` to the conversation id; the backend should
   send both so a reopen on another day finds the same folder).
 
+**The Mac remembers the folder.** It owns the disk, so the host -- not Lemma --
+keeps which root each conversation's workspace opened in
+(`conversation-roots.json` beside the Agent Host's `config.json`, written by
+the host; `host_exec/roots.rs`). An open with a `conversation_id` chooses, in
+order:
+
+1. `root_hint`, when it is the folder the user bound this conversation to (the
+   user choosing, now);
+2. the root this conversation opened in before, while it is still admissible
+   (below) -- a default folder that was deleted is made again;
+3. `root_hint`, when it is a folder under `~/lemma`;
+4. the default folder above;
+
+and records what it chose. So a re-open -- after the host restarted and forgot
+every open workspace, or by a later run -- lands in the folder the
+conversation already works in whatever day, slug or `~/lemma` hint Lemma
+sends. The `root` in the answer stays authoritative; Lemma stores nothing about
+folders but the root a run recorded (§9).
+
 **The backend naming a folder is not the user choosing it.** The host uses a
 `root_hint` or a grant only if it is a folder the user bound this
 conversation to on this machine (the desktop shell records those from a native
@@ -292,9 +314,9 @@ processes (§8).
 |---|---|
 | Rust unit (`make desktop-test`) | exec-server op handling, output ring and sequences, chunked write and digest, path policy including symlink escape, env scrubbing (`src/host_exec/`) |
 | Rust, macOS only (`tests/seatbelt.rs`) | under the real profile, with a test-made `HOME`: `cat ~/.ssh/x` denied, `touch ~/x` denied, write in the root and `~/.npm` allowed, grants, `git init` plus a commit in the root, `curl` to loopback; and the real exec-server binary under `sandbox-exec`, driven through the relay |
-| Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, root-hint admissibility, a waiting read not blocking other ops |
+| Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, root-hint admissibility, a conversation re-opening in the folder it remembers (and a folder the owner binds later winning), a waiting read not blocking other ops |
 | Backend unit | provider maps every op and every failure kind; selection truth table (paired user, user with no host, another user's own host, steered, inbound, host offline, toggle off, cloud); tool filtering for Agent Host runs |
-| Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for the paired user's run on the host, and a run of a user with no host lands in the VM |
+| Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for the paired user's run on the host, and a run of a user with no host lands in the VM; after the binary restarts, the next command re-opens the workspace in the same folder with nothing about the folder stored by Lemma. Over the link: a `control` without `host_execution` keeps the stored report; a host sandbox follows the conversation's latest host run |
 
 ## 9. The backend half
 
@@ -317,13 +339,27 @@ contract left to it.
   and its instance rows record provider `agent_host`. `HostRoutingProvider`
   sends a call to the host provider only for such an id, so a host sandbox can
   never reach the VM and nothing else can reach the host. The user's VM
-  workspace keeps its own id; the browser stays there.
-  `sandbox_host_bindings` records the host, the root hint, `date` and `slug`,
-  and the `root` the host answered.
-- **`workspace.open`** is sent with `conversation_id`, `root_hint` (the folder
-  an Agent Host run in the conversation last reported, else null), `date` and
-  `slug` from the conversation's own `c/<date>/<slug>` directory, and no
-  grants.
+  workspace keeps its own id; the browser stays there. **No table records
+  which host or folder**: both are derived per operation (next items).
+- **Which host an op goes to** (`agent/infrastructure/agent_host/host_execution.py`,
+  `host_for_host_sandbox`). The sandbox row's slug (`host-<conversation hex>`)
+  names the conversation and its owner the user. The op goes to the host in
+  the `execution` record of the conversation's most recent run that chose the
+  host -- whatever that host's state now, so a run never moves: offline is
+  `host_offline`, never another Mac and never the VM. A conversation no run has
+  chosen the host in yet falls to the user's usable host, and with none of
+  those the op is `host_offline` without being sent. Selection picks among
+  the user's online hosts with host execution on and available
+  (`host_execution_host_id`): the conversation's last host if it is one of
+  them, else the most recently seen.
+- **`workspace.open`** is sent by selection, to the host it chose, with
+  `conversation_id`, `root_hint` (the folder an Agent Host run in the
+  conversation last reported, else null), `date` and `slug` from the
+  conversation's own `c/<date>/<slug>` directory, and no grants. A re-open --
+  the host answered `workspace_not_open` -- sends the same inputs read again
+  from the conversation, with the root the run recorded as the hint; the Mac's
+  own memory (§5) is what makes it land in the same folder. `create` opens
+  nothing.
 - **Routing** (§3). The notice is `{type: "op", op_id, reply, workspace,
   method, params, deadline_ms}` on the host's notice channel. The link session
   first claims it (`SET NX` on the op id, so two links open across a reconnect
@@ -331,7 +367,10 @@ contract left to it.
   host answers, `{type: "result", result}` or `{type: "result", error: {code,
   message, retryable, kind}}` on the reply channel.
 - **Capabilities.** `host_execution` from `hello` and every `control` is kept
-  on the host row (`agent_hosts.capabilities`).
+  under the `host_execution` key of the host row's `capacity` (the wire is
+  unchanged: it is still its own field on both frames). A `control` without it
+  keeps the stored report, and a report never replaces the run slots
+  (`repository._stored_capacity`).
 - **Failures.** `detail.kind` maps as in
   [provider adapters §8.3](sandbox/provider-adapters.md#83-failures);
   `host_offline` -- nothing picked the op up -- reaches the agent as "This Mac
@@ -351,7 +390,7 @@ contract left to it.
   `/home/user/` from the VM (where screenshots land) and any other path from
   the Mac.
 - **Recorded on the run.** The choice -- `{"target": "vm"}` or `{"target":
-  "host", "sandbox_id", "root"}` -- is written under `execution` in the run's
+  "host", "host_id", "sandbox_id", "root"}` -- is written under `execution` in the run's
   metadata the first time its context is built. A reclaimed run reads it back
   instead of selecting again, and an approved tool executed after a pause uses
   the paused run's record, so neither can land in the VM when the run was on

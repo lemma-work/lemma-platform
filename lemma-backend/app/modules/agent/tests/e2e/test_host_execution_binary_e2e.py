@@ -18,7 +18,7 @@ import hashlib
 import os
 import platform
 import shutil
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import partial
@@ -81,10 +81,37 @@ class _VmProvider:
         raise AssertionError(f"a host sandbox reached the VM provider: {attribute}")
 
 
+class _Host:
+    """The paired binary's ``serve``, which the test may stop and start."""
+
+    def __init__(self, start: Callable[[], Awaitable[asyncio.subprocess.Process]]):
+        self._start = start
+        self._server: asyncio.subprocess.Process | None = None
+
+    async def start(self) -> None:
+        self._server = await self._start()
+
+    async def stop(self) -> None:
+        server, self._server = self._server, None
+        if server is None or server.returncode is not None:
+            return
+        server.terminate()
+        try:
+            async with asyncio.timeout(10):
+                await server.wait()
+        except TimeoutError:
+            server.kill()
+            await server.wait()
+
+    async def restart(self) -> None:
+        await self.stop()
+        await self.start()
+
+
 @asynccontextmanager
 async def _running_host(
     root: Path, base_url: str, pairing_code: SecretStr
-) -> AsyncIterator[Path]:
+) -> AsyncIterator[tuple[Path, _Host]]:
     """Pair and serve the real binary with host execution turned on.
 
     Built and located exactly as ``test_agent_host_process_e2e`` does: the
@@ -135,27 +162,25 @@ async def _running_host(
         )
         # Writes `host_execution: true` into the host's config.json.
         await run("host-execution", "enable")
-        server = await asyncio.create_subprocess_exec(
-            str(binary),
-            "--data-dir",
-            str(data),
-            "serve",
-            env=environment,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-        )
+
+        async def serve() -> asyncio.subprocess.Process:
+            return await asyncio.create_subprocess_exec(
+                str(binary),
+                "--data-dir",
+                str(data),
+                "serve",
+                env=environment,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+            )
+
+        host = _Host(serve)
+        await host.start()
         try:
-            yield workspaces
+            yield workspaces, host
         finally:
-            if server.returncode is None:
-                server.terminate()
-                try:
-                    async with asyncio.timeout(10):
-                        await server.wait()
-                except TimeoutError:
-                    server.kill()
-                    await server.wait()
+            await host.stop()
 
 
 def _conversation(user_id: UUID) -> Conversation:
@@ -186,7 +211,10 @@ async def test_the_real_binary_runs_the_paired_users_command_on_the_host(
     pairing_code = SecretStr(minted.json()["pairing_code"])
     base_url = backend_server["host_base_url"]
 
-    async with _running_host(tmp_path, base_url, pairing_code) as workspaces:
+    async with _running_host(tmp_path, base_url, pairing_code) as (
+        workspaces,
+        host_process,
+    ):
         async with httpx.AsyncClient(
             base_url=base_url, headers=scenario.owner_client.headers, timeout=30
         ) as client:
@@ -293,5 +321,30 @@ async def test_the_real_binary_runs_the_paired_users_command_on_the_host(
             assert not escapee.exists()
         finally:
             escapee.unlink(missing_ok=True)
+
+        # --- the Mac restarts: it forgot every open workspace ---------------
+        # The next op is answered `workspace_not_open`; the provider re-opens
+        # on the host the conversation's run chose, and the Mac puts it back
+        # in the folder it remembers for the conversation -- here with no
+        # conversation row for Lemma to read folder inputs from at all.
+        # Nothing about the folder is stored on Lemma's side.
+        await host_process.restart()
+
+        async def after_restart() -> dict | None:
+            # The row can still read "online" from before the restart; until
+            # the new link is up an op is "This Mac is not connected".
+            try:
+                return await session.exec_command(cmd="pwd && cat f.txt", timeout=60)
+            except SandboxError:
+                return None
+
+        after = await eventually(
+            label="a command on the restarted host",
+            probe=after_restart,
+            done=lambda ran: ran is not None and ran.get("exit_code") == 0,
+            timeout_seconds=60,
+        )
+        assert after is not None and after["exit_code"] == 0, after
+        assert after["stdout"].splitlines() == [str(root.resolve()), "hi"], after
 
         await service.release(workspace.sandbox_id)

@@ -14,6 +14,8 @@ mod process;
 #[cfg(unix)]
 pub mod relay;
 pub mod ring;
+#[cfg(unix)]
+pub mod roots;
 pub mod seatbelt;
 #[cfg(unix)]
 pub mod server;

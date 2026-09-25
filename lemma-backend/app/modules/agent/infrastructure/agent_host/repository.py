@@ -53,22 +53,52 @@ def _negotiated_status(
     )
 
 
+#: The ``capacity`` key host execution's report is kept under. See
+#: docs/architecture/desktop-host-execution.md §2.
+HOST_EXECUTION_CAPACITY_KEY = "host_execution"
+
+
+def _stored_capacity(
+    previous: dict | None,
+    capacity: dict[str, object],
+    host_execution: dict[str, object] | None,
+) -> dict[str, object]:
+    """The row's ``capacity``: this heartbeat's run slots, and host execution.
+
+    The two arrive separately -- run slots on every frame, host execution on a
+    ``hello`` and on the ``control`` frames that carry it -- and share one
+    column. So neither replaces the other: ``None`` host execution keeps what
+    the row already said.
+    """
+    stored = {
+        key: value
+        for key, value in capacity.items()
+        if key != HOST_EXECUTION_CAPACITY_KEY
+    }
+    kept = (
+        host_execution
+        if host_execution is not None
+        else (previous or {}).get(HOST_EXECUTION_CAPACITY_KEY)
+    )
+    if kept is not None:
+        stored[HOST_EXECUTION_CAPACITY_KEY] = kept
+    return stored
+
+
 def _row_already_says(
     host: AgentHostModel,
     *,
     protocol: int | None,
     host_release: str,
     status: AgentHostStatus,
-    capacity: dict[str, int],
-    capabilities: dict[str, object] | None,
+    capacity: dict[str, object],
 ) -> bool:
-    """Whether a heartbeat would write nothing new. ``None`` capabilities: kept."""
+    """Whether a heartbeat would write nothing new."""
     return (
         host.protocol_version == protocol
         and host.host_release == host_release
         and host.status == status.value
         and (host.capacity or {}) == capacity
-        and (capabilities is None or (host.capabilities or {}) == capabilities)
     )
 
 
@@ -241,13 +271,15 @@ class AgentHostRepository:
         host_id: UUID,
         hello: HostHello,
         capacity: dict,
-        capabilities: dict[str, object] | None = None,
+        host_execution: dict[str, object] | None = None,
         now: datetime | None = None,
     ) -> AgentHostModel:
         """Record one heartbeat, rewriting the row only when something changed.
 
         ``control`` frames arrive at least every 20s; skipping no-op writes
         keeps an idle host from producing a locked row update on every one.
+        ``host_execution`` is stored inside ``capacity``; ``None`` keeps the
+        report already there (see ``_stored_capacity``).
         """
         timestamp = now or utcnow()
         host = await self.require(host_id)
@@ -265,8 +297,7 @@ class AgentHostRepository:
             protocol=protocol,
             host_release=hello.host_release,
             status=status,
-            capacity=capacity,
-            capabilities=capabilities,
+            capacity=_stored_capacity(host.capacity, capacity, host_execution),
         ):
             return host
 
@@ -275,9 +306,9 @@ class AgentHostRepository:
             raise AgentHostProtocolViolation("Agent Host is revoked")
         host.protocol_version = protocol
         host.host_release = hello.host_release
-        host.capacity = capacity
-        if capabilities is not None:
-            host.capabilities = capabilities
+        # Merged against the row as locked, so a report written by another
+        # replica between the two reads is the one kept.
+        host.capacity = _stored_capacity(host.capacity, capacity, host_execution)
         host.status = status.value
         host.last_seen_at = timestamp
         await self.session.flush()

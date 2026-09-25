@@ -21,7 +21,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
-from app.modules.workspace.domain.host_execution import HostBinding
 from app.modules.workspace.domain.sandbox import (
     Sandbox,
     SandboxDesiredState,
@@ -175,42 +174,4 @@ class SandboxInstanceModel(UUIDAuditBase):
             ready_at=self.ready_at,
             released_at=self.released_at,
             created_at=self.created_at,
-        )
-
-
-class SandboxHostBindingModel(UUIDAuditBase):
-    """Which Agent Host a host sandbox runs on, and how its root is chosen.
-
-    One row per host sandbox; see ``domain/host_execution``. ``host_id`` names
-    an ``agent_hosts`` row but carries no foreign key: the two tables belong to
-    different modules, and a revoked host is answered by the op failing with
-    "This Mac is not connected", not by the binding disappearing under a run.
-    """
-
-    __tablename__ = "sandbox_host_bindings"
-    __table_args__ = (
-        UniqueConstraint("sandbox_id", name="uq_sandbox_host_bindings_sandbox"),
-    )
-
-    sandbox_id: Mapped[UUID] = mapped_column(
-        ForeignKey("sandboxes.id", ondelete="CASCADE"), nullable=False
-    )
-    host_id: Mapped[UUID] = mapped_column(nullable=False)
-    owner_id: Mapped[UUID] = mapped_column(nullable=False)
-    conversation_id: Mapped[UUID] = mapped_column(nullable=False)
-    slug: Mapped[str] = mapped_column(String(128), nullable=False)
-    day: Mapped[str] = mapped_column(String(10), nullable=False)
-    root_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
-    root: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    def to_entity(self) -> HostBinding:
-        return HostBinding(
-            sandbox_id=self.sandbox_id,
-            host_id=self.host_id,
-            owner_id=self.owner_id,
-            conversation_id=self.conversation_id,
-            slug=self.slug,
-            day=self.day,
-            root_hint=self.root_hint,
-            root=self.root,
         )

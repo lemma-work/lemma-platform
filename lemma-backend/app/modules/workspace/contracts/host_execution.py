@@ -11,6 +11,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.modules.workspace.domain.host_execution import (
+    HostFolder,
     HostWorkspace,
     host_sandbox_id,
     is_host_sandbox_id,
@@ -45,6 +46,7 @@ async def open_host_workspace(
 
 
 __all__ = [
+    "HostFolder",
     "HostWorkspace",
     "host_sandbox_id",
     "is_host_sandbox_id",

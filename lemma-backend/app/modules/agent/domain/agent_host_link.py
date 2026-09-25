@@ -228,7 +228,9 @@ class HostExecutionCapability(BaseModel):
     See docs/architecture/desktop-host-execution.md. ``enabled`` is the owner's
     toggle (Settings, This Mac, Coding agents); ``available`` is whether the
     exec-server could actually be started under its sandbox profile right now.
-    Both have to hold before a run is sent here.
+    Both have to hold before a run is sent here. The host sends it as its own
+    field on ``hello`` and on every ``control``; Lemma keeps it under
+    ``host_execution`` in the host row's ``capacity``.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -240,21 +242,6 @@ class HostExecutionCapability(BaseModel):
     @property
     def usable(self) -> bool:
         return self.enabled and self.available
-
-
-class HostCapabilities(BaseModel):
-    """What a host can do beyond running agents, as Lemma stores it.
-
-    The host sends ``host_execution`` as its own field on ``hello`` and on every
-    ``control``; this is the shape it is kept in on the host row, open to what
-    a later host reports beside it.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    host_execution: HostExecutionCapability = Field(
-        default_factory=HostExecutionCapability
-    )
 
 
 class HelloBody(BaseModel):

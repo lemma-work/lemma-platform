@@ -328,6 +328,13 @@ impl HostedWorkspace {
     }
 }
 
+/// Whether `root` is the folder the owner bound the conversation to.
+fn is_bound(root: &Path, bound: &[PathBuf]) -> bool {
+    bound
+        .iter()
+        .any(|folder| std::fs::canonicalize(folder).is_ok_and(|folder| folder == root))
+}
+
 /// Where the relay finds things on this machine.
 #[derive(Clone, Debug)]
 pub struct RelayPaths {
@@ -337,11 +344,14 @@ pub struct RelayPaths {
     pub tmp: PathBuf,
     /// The desktop shell's record of folders the owner bound conversations to.
     pub folders: PathBuf,
+    /// This host's own record of the folder each conversation opened in.
+    /// See `roots`.
+    pub roots: PathBuf,
 }
 
 impl RelayPaths {
     /// This machine's, as the Agent Host sees them.
-    pub fn current(folders: PathBuf) -> anyhow::Result<Self> {
+    pub fn current(folders: PathBuf, roots: PathBuf) -> anyhow::Result<Self> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
@@ -350,6 +360,7 @@ impl RelayPaths {
             home,
             tmp: std::env::temp_dir(),
             folders,
+            roots,
         })
     }
 }
@@ -511,7 +522,7 @@ impl ExecRelay {
     fn launch_spec(&self, workspace: &str, params: &OpenParams) -> Result<LaunchSpec, OpFailure> {
         let bound = self.bound_folders(params.conversation_id);
         let paths = &self.paths;
-        let chosen = params.root_hint.as_deref().and_then(|hint| {
+        let hinted = params.root_hint.as_deref().and_then(|hint| {
             let admitted = admissible(Path::new(hint), &paths.root_base, &paths.home, &bound);
             if admitted.is_none() {
                 // The backend naming a folder is not the owner choosing it.
@@ -522,6 +533,15 @@ impl ExecRelay {
             }
             admitted
         });
+        // §5, in order: the folder the owner bound this conversation to, when
+        // Lemma names it (the owner choosing, now); else the folder this
+        // conversation already opened in, as this Mac remembers it -- so a
+        // re-open lands where the run works whatever else Lemma sends; else
+        // a folder under the root base Lemma names; else the default.
+        let owner_bound = hinted.clone().filter(|root| is_bound(root, &bound));
+        let chosen = owner_bound
+            .or_else(|| self.remembered_root(params.conversation_id, &bound))
+            .or(hinted);
         let root = if let Some(root) = chosen {
             root
         } else {
@@ -530,6 +550,13 @@ impl ExecRelay {
                 .map_err(|error| OpFailure::io(&error, &root))?;
             std::fs::canonicalize(&root).map_err(|error| OpFailure::io(&error, &root))?
         };
+        if let Some(conversation) = params.conversation_id
+            && let Err(error) = super::roots::remember(&paths.roots, conversation, &root)
+        {
+            // The workspace still opens; only a later re-open loses the
+            // memory, and it still has the backend's inputs.
+            tracing::warn!(%error, "could not record the conversation's folder");
+        }
         let mut grants = Vec::new();
         for grant in &params.grants {
             match admissible(Path::new(grant), &paths.root_base, &paths.home, &bound) {
@@ -554,6 +581,24 @@ impl ExecRelay {
                 grants,
             },
         })
+    }
+
+    /// The folder this conversation's workspace opened in before, while it is
+    /// still one a workspace may be given. A default folder that was deleted
+    /// is made again; a bound folder that was unbound or removed is not reused.
+    fn remembered_root(
+        &self,
+        conversation: Option<uuid::Uuid>,
+        bound: &[PathBuf],
+    ) -> Option<PathBuf> {
+        let paths = &self.paths;
+        let remembered = super::roots::remembered(&paths.roots, conversation?)?;
+        let under_base = std::fs::canonicalize(&paths.root_base)
+            .is_ok_and(|base| remembered.starts_with(&base) && remembered != base);
+        if under_base && !remembered.exists() {
+            super::server::create_private_dir(&remembered).ok()?;
+        }
+        admissible(&remembered, &paths.root_base, &paths.home, bound)
     }
 
     /// The folders the owner bound on this machine: the conversation's own

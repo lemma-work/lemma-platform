@@ -1,9 +1,11 @@
 """The Agent Host link, as the workspace module needs it for host execution.
 
 See docs/architecture/desktop-host-execution.md. The workspace's host provider
-sends each sandbox operation as an ``op`` over the host's link; selection asks
-which of a user's hosts can take them, and the loopback relay asks whether a
-user is paired to this Mac's own host. All are published here rather than
+sends each sandbox operation as an ``op`` over the host's link, to the host
+``host_for_host_sandbox`` names, re-opening with ``host_folder_for`` when the
+host has forgotten the workspace; selection asks which of a user's hosts can
+take them, and the loopback relay asks whether a user is paired to this Mac's
+own host. All are published here rather than
 reached into, so the link's internals stay the agent module's to change.
 """
 
@@ -16,9 +18,11 @@ from app.modules.agent.domain.agent_host_ops import (
 )
 from app.modules.agent.infrastructure.agent_host.host_execution import (
     host_execution_host_id,
+    host_for_host_sandbox,
     is_paired_to_any_of,
 )
 from app.modules.agent.services.agent_host_ops import AgentHostOpClient
+from app.modules.agent.services.host_execution_selection import host_folder_for
 
 
 __all__ = [
@@ -27,5 +31,7 @@ __all__ = [
     "AgentHostOpClient",
     "AgentHostOpError",
     "host_execution_host_id",
+    "host_folder_for",
+    "host_for_host_sandbox",
     "is_paired_to_any_of",
 ]

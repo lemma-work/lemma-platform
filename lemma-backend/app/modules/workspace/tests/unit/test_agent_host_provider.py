@@ -36,8 +36,11 @@ from sandbox_runtime.protocol import (
 )
 
 from app.modules.workspace.domain.host_execution import (
-    HostBinding,
+    HostFolder,
+    HostTarget,
+    conversation_of_host_sandbox_slug,
     host_sandbox_id,
+    host_sandbox_slug,
 )
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
@@ -97,18 +100,22 @@ class FakeTransport:
         return [call[3] for call in self.calls if call[2] == method]
 
 
-class FakeBindings:
-    def __init__(self, binding: HostBinding | None) -> None:
-        self.binding = binding
-        self.roots: list[str] = []
+class FakeTargets:
+    """Which host each sandbox's ops go to, as the run records would say."""
 
-    async def get(self, sandbox_id: UUID) -> HostBinding | None:
-        if self.binding is None or self.binding.sandbox_id != sandbox_id:
-            return None
-        return self.binding
+    def __init__(
+        self,
+        targets: dict[UUID, HostTarget] | None = None,
+        folder: HostFolder | None = None,
+    ) -> None:
+        self.targets = targets or {}
+        self._folder = folder
 
-    async def set_root(self, sandbox_id: UUID, root: str) -> None:
-        self.roots.append(root)
+    async def target(self, sandbox_id: UUID) -> HostTarget | None:
+        return self.targets.get(sandbox_id)
+
+    async def folder(self, conversation_id: UUID) -> HostFolder | None:
+        return self._folder
 
 
 @pytest.fixture
@@ -131,24 +138,24 @@ def transport() -> FakeTransport:
     return FakeTransport()
 
 
+FOLDER = HostFolder(day="2026-09-25", slug="abc12345")
+
+
 @pytest.fixture
-def bindings(sandbox_id, host_id, conversation_id) -> FakeBindings:
-    return FakeBindings(
-        HostBinding(
-            sandbox_id=sandbox_id,
-            host_id=host_id,
-            owner_id=uuid4(),
-            conversation_id=conversation_id,
-            slug="abc12345",
-            day="2026-09-25",
-            root_hint=None,
-        )
+def targets(sandbox_id, host_id, conversation_id) -> FakeTargets:
+    return FakeTargets(
+        {
+            sandbox_id: HostTarget(
+                host_id=host_id, conversation_id=conversation_id, root=ROOT
+            )
+        },
+        FOLDER,
     )
 
 
 @pytest.fixture
-def provider(transport, bindings) -> AgentHostSandboxProvider:
-    return AgentHostSandboxProvider(transport, bindings)
+def provider(transport, targets) -> AgentHostSandboxProvider:
+    return AgentHostSandboxProvider(transport, targets)
 
 
 @pytest.fixture
@@ -160,8 +167,76 @@ def instance(sandbox_id) -> ProviderInstance:
 # ----------------------------------------------------------------- lifecycle
 
 
-async def test_create_opens_the_workspace_and_records_the_root(
-    provider, transport, bindings, instance, sandbox_id, host_id, conversation_id
+def test_the_sandbox_row_names_its_conversation(conversation_id):
+    """How a host sandbox's host is found without a table: row -> conversation."""
+    slug = host_sandbox_slug(conversation_id)
+    assert conversation_of_host_sandbox_slug(slug) == conversation_id
+    assert conversation_of_host_sandbox_slug("default") is None
+    assert conversation_of_host_sandbox_slug("host-nothex") is None
+
+
+async def test_opening_sends_the_chosen_host_the_conversations_folder(
+    provider, transport, sandbox_id, host_id, conversation_id
+):
+    chosen = uuid4()
+    root = await provider.open_workspace(
+        sandbox_id,
+        host_id=chosen,
+        conversation_id=conversation_id,
+        folder=HostFolder(day="2026-09-25", slug="abc12345", root_hint="/Users/o/x"),
+        deadline_at=_deadline(),
+    )
+
+    assert root == ROOT
+    # The host selection chose, not whatever a lookup would say.
+    assert transport.calls == [
+        (
+            chosen,
+            sandbox_id,
+            "workspace.open",
+            {
+                "root_hint": "/Users/o/x",
+                "grants": [],
+                "conversation_id": str(conversation_id),
+                "date": "2026-09-25",
+                "slug": "abc12345",
+            },
+        )
+    ]
+
+
+async def test_a_host_that_answers_no_folder_is_refused(
+    provider, transport, sandbox_id, conversation_id
+):
+    transport.answers["workspace.open"] = {"root": "relative"}
+    with pytest.raises(ProviderRejected, match="which folder"):
+        await provider.open_workspace(
+            sandbox_id,
+            host_id=uuid4(),
+            conversation_id=conversation_id,
+            folder=FOLDER,
+            deadline_at=_deadline(),
+        )
+
+
+async def test_opening_on_a_mac_that_is_not_connected_is_refused_in_words(
+    provider, transport, sandbox_id, conversation_id
+):
+    transport.refusals["workspace.open"] = [
+        HostOpRefused("host_offline", "This Mac is not connected, so ...")
+    ]
+    with pytest.raises(SandboxRejected, match="This Mac is not connected"):
+        await provider.open_workspace(
+            sandbox_id,
+            host_id=uuid4(),
+            conversation_id=conversation_id,
+            folder=FOLDER,
+            deadline_at=_deadline(),
+        )
+
+
+async def test_create_provisions_nothing_and_asks_nothing(
+    provider, transport, instance, sandbox_id
 ):
     created = await provider.create(
         ProviderCreateSpec(
@@ -177,60 +252,7 @@ async def test_create_opens_the_workspace_and_records_the_root(
     )
 
     assert created.running and created.name == instance.name
-    assert transport.calls == [
-        (
-            host_id,
-            sandbox_id,
-            "workspace.open",
-            {
-                "root_hint": None,
-                "grants": [],
-                "conversation_id": str(conversation_id),
-                "date": "2026-09-25",
-                "slug": "abc12345",
-            },
-        )
-    ]
-    assert bindings.roots == [ROOT]
-
-
-async def test_create_without_a_binding_is_refused(transport, instance):
-    provider = AgentHostSandboxProvider(transport, FakeBindings(None))
-    with pytest.raises(ProviderRejected):
-        await provider.create(
-            ProviderCreateSpec(
-                sandbox_id=host_sandbox_id(uuid4()),
-                kind=SandboxKind.WORKSPACE,
-                epoch=1,
-                name=instance.name,
-                image="",
-                profile_name="p",
-                profile_digest="d",
-                deadline_at=_deadline(),
-            )
-        )
     assert transport.calls == []
-
-
-async def test_create_on_a_mac_that_is_not_connected_is_refused_in_words(
-    provider, transport, instance, sandbox_id
-):
-    transport.refusals["workspace.open"] = [
-        HostOpRefused("host_offline", "This Mac is not connected, so ...")
-    ]
-    with pytest.raises(ProviderRejected, match="This Mac is not connected"):
-        await provider.create(
-            ProviderCreateSpec(
-                sandbox_id=sandbox_id,
-                kind=SandboxKind.WORKSPACE,
-                epoch=1,
-                name=instance.name,
-                image="",
-                profile_name="p",
-                profile_digest="d",
-                deadline_at=_deadline(),
-            )
-        )
 
 
 async def test_release_and_destroy_close_the_workspace(provider, transport, instance):
@@ -656,7 +678,7 @@ async def test_host_offline_reaches_the_agent_as_the_contract_sentence(
 
 
 async def test_a_host_that_forgot_the_workspace_is_reopened_once(
-    provider, transport, bindings, instance
+    provider, transport, instance, host_id, conversation_id
 ):
     transport.refusals["file.stat"] = [HostOpRefused("workspace_not_open", "?")]
     transport.answers["file.stat"] = _stat(f"{ROOT}/a")
@@ -664,6 +686,55 @@ async def test_a_host_that_forgot_the_workspace_is_reopened_once(
     await provider.stat_file(instance, path=f"{ROOT}/a", deadline_at=_deadline())
 
     assert transport.methods() == ["file.stat", "workspace.open", "file.stat"]
+    # Every op went to the recorded host, and the re-open hints the root the
+    # run recorded, beside the folder inputs the first open sent.
+    assert {call[0] for call in transport.calls} == {host_id}
+    assert transport.params("workspace.open") == [
+        {
+            "root_hint": ROOT,
+            "grants": [],
+            "conversation_id": str(conversation_id),
+            "date": "2026-09-25",
+            "slug": "abc12345",
+        }
+    ]
+
+
+async def test_a_reopen_before_any_run_recorded_a_root_hints_the_bound_folder(
+    transport, instance, sandbox_id, host_id, conversation_id
+):
+    provider = AgentHostSandboxProvider(
+        transport,
+        FakeTargets(
+            {sandbox_id: HostTarget(host_id=host_id, conversation_id=conversation_id)},
+            HostFolder(day="2026-09-25", slug="abc12345", root_hint="/Users/o/x"),
+        ),
+    )
+    transport.refusals["file.stat"] = [HostOpRefused("workspace_not_open", "?")]
+    transport.answers["file.stat"] = _stat(f"{ROOT}/a")
+
+    await provider.stat_file(instance, path=f"{ROOT}/a", deadline_at=_deadline())
+
+    assert transport.params("workspace.open")[0]["root_hint"] == "/Users/o/x"
+
+
+async def test_a_reopen_of_a_vanished_conversation_leaves_the_folder_to_the_mac(
+    transport, instance, sandbox_id, host_id, conversation_id
+):
+    provider = AgentHostSandboxProvider(
+        transport,
+        FakeTargets(
+            {sandbox_id: HostTarget(host_id=host_id, conversation_id=conversation_id)}
+        ),
+    )
+    transport.refusals["file.stat"] = [HostOpRefused("workspace_not_open", "?")]
+    transport.answers["file.stat"] = _stat(f"{ROOT}/a")
+
+    await provider.stat_file(instance, path=f"{ROOT}/a", deadline_at=_deadline())
+
+    assert transport.params("workspace.open") == [
+        {"root_hint": None, "grants": [], "conversation_id": str(conversation_id)}
+    ]
 
 
 async def test_reopening_is_tried_once_only(provider, transport, instance):
@@ -676,15 +747,24 @@ async def test_reopening_is_tried_once_only(provider, transport, instance):
     assert transport.methods().count("workspace.open") == 1
 
 
-async def test_an_op_for_a_sandbox_with_no_binding_is_refused(transport):
-    provider = AgentHostSandboxProvider(transport, FakeBindings(None))
+async def test_an_op_for_a_sandbox_with_no_host_is_host_offline_not_the_vm(
+    transport,
+):
+    provider = AgentHostSandboxProvider(transport, FakeTargets())
     name = naming.container_name(host_sandbox_id(uuid4()), SandboxKind.WORKSPACE, 1)
-    with pytest.raises(SandboxRejected, match="no Mac recorded"):
+    with pytest.raises(SandboxRejected, match="This Mac is not connected"):
         await provider.stat_file(
             ProviderInstance(provider_id=name, name=name),
             path="/x",
             deadline_at=_deadline(),
         )
+    assert transport.calls == []
+
+
+async def test_closing_a_sandbox_with_no_host_is_already_done(transport):
+    provider = AgentHostSandboxProvider(transport, FakeTargets())
+    name = naming.container_name(host_sandbox_id(uuid4()), SandboxKind.WORKSPACE, 1)
+    await provider.destroy(name, deadline_at=_deadline())
     assert transport.calls == []
 
 

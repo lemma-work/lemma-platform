@@ -569,15 +569,19 @@ sandbox. Its instance rows record provider `agent_host`. One conversation has
 one host sandbox; the user's VM workspace keeps its own id, and the browser
 stays there.
 
-`sandbox_host_bindings` records which Agent Host a host sandbox runs on, how
-its root is chosen (`root_hint`, or `~/lemma/c/<date>/<slug>`), and the root the
-host answered with.
+Nothing stores which Agent Host a host sandbox runs on or which folder it
+opened. The host is the one the conversation's most recent host run recorded
+choosing (in that run's `execution` metadata), read per operation through the
+agent module's `host_for_host_sandbox`; the sandbox row's slug names the
+conversation. The folder is the Mac's to remember: it keeps each
+conversation's root on its own disk and prefers it on every re-open. See
+[desktop host execution §5 and §9](../desktop-host-execution.md#9-the-backend-half).
 
 ### 8.2 Mapping
 
 | Provider call | Op |
 | --- | --- |
-| `create` | `workspace.open` (root recorded on the binding) |
+| `create` | none: selection opens the workspace on the host it chose (`open_workspace`), and an op answered `workspace_not_open` re-opens it once |
 | `wait_ready`, `inspect` | none: open is synchronous, and the next op is the liveness check |
 | `release`, `destroy` | `workspace.close`; offline counts as closed |
 | volumes, `list_objects` | none: there is nothing to adopt or reclaim |

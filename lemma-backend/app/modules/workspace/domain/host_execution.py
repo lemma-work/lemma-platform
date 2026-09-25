@@ -50,23 +50,58 @@ def host_sandbox_slug(conversation_id: UUID) -> str:
     return f"host-{conversation_id.hex}"
 
 
-@dataclass(frozen=True, slots=True)
-class HostBinding:
-    """Which host a host sandbox runs on, and how its root is chosen.
+def conversation_of_host_sandbox_slug(slug: str) -> UUID | None:
+    """The conversation a host sandbox row serves, read back from its slug."""
+    prefix = "host-"
+    if not slug.startswith(prefix):
+        return None
+    try:
+        return UUID(hex=slug[len(prefix) :])
+    except ValueError:
+        return None
 
-    ``root_hint`` is the folder the conversation is bound to, if Lemma knows
-    one; otherwise the host makes ``~/lemma/c/<day>/<slug>``. ``root`` is what
-    the host answered ``workspace.open`` with, once it has.
+
+@dataclass(frozen=True, slots=True)
+class HostTarget:
+    """Where a host sandbox's operations go. Nothing stores this; see
+    ``services/host_workspace.SqlHostTargets``.
+
+    ``root`` is the folder the conversation's last host run opened, when one
+    has; it is sent back as the hint on a re-open.
     """
 
-    sandbox_id: UUID
     host_id: UUID
-    owner_id: UUID
     conversation_id: UUID
-    slug: str
-    day: str
-    root_hint: str | None = None
     root: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HostFolder:
+    """What names a conversation's default folder, ``~/lemma/c/<day>/<slug>``.
+
+    ``root_hint`` is the folder the conversation is bound to, if Lemma knows
+    one. The Mac decides (§5) and remembers what it decided, per conversation.
+    """
+
+    day: str
+    slug: str
+    root_hint: str | None = None
+
+
+def workspace_open_params(
+    conversation_id: UUID, folder: HostFolder | None, *, root_hint: str | None
+) -> dict[str, object]:
+    """``workspace.open``'s params (§4). ``date`` is the conversation's own
+    day, not today's, so a first open on another day finds the same folder."""
+    params: dict[str, object] = {
+        "root_hint": root_hint,
+        "grants": [],
+        "conversation_id": str(conversation_id),
+    }
+    if folder is not None:
+        params["date"] = folder.day
+        params["slug"] = folder.slug
+    return params
 
 
 @dataclass(frozen=True, slots=True)

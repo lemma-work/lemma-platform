@@ -22,8 +22,9 @@ from app.modules.agent.domain.prompt_directories import _directory_sections
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.infrastructure.agent_host.host_execution import (
-    host_capabilities,
+    host_execution_of,
 )
+from app.modules.agent.infrastructure.agent_host.repository import _stored_capacity
 from app.modules.agent.services.host_execution_selection import (
     HostExecutionFacts,
     choose_host_workspace,
@@ -72,11 +73,13 @@ class Facts:
         self.opens = opens
         self.opened: list[dict] = []
         self.records: dict[UUID, dict] = {}
-        self.host_lookups = 0
+        self.host_lookups: list[tuple[UUID, UUID | None]] = []
 
     def build(self) -> HostExecutionFacts:
-        async def usable_host(user_id: UUID) -> UUID | None:
-            self.host_lookups += 1
+        async def usable_host(
+            user_id: UUID, conversation_id: UUID | None
+        ) -> UUID | None:
+            self.host_lookups.append((user_id, conversation_id))
             return self.hosts.get(user_id)
 
         async def recorded(run_id: UUID) -> dict | None:
@@ -277,8 +280,27 @@ async def test_agent_host_runs_drop_lemmas_command_tools_only_with_a_paired_host
     ids=["on", "toggle-off", "not-available", "old-host", "malformed"],
 )
 def test_a_stored_host_report_is_usable_only_when_on_and_available(stored, usable):
-    host = SimpleNamespace(capabilities=stored)
-    assert host_capabilities(host).host_execution.usable is usable
+    host = SimpleNamespace(capacity={"max_runs": 1, **stored})
+    assert host_execution_of(host).usable is usable
+
+
+def test_run_slots_and_the_host_execution_report_share_capacity_without_clobbering():
+    on = {"enabled": True, "platform": "macos", "available": True}
+    slots = {"max_runs": 1, "active_runs": 0, "available_runs": 1}
+
+    hello = _stored_capacity({}, slots, on)
+    assert hello == {**slots, "host_execution": on}
+
+    # A control frame without the report: new slots, the report kept.
+    busier = {"max_runs": 1, "active_runs": 1, "available_runs": 0}
+    assert _stored_capacity(hello, busier, None) == {**busier, "host_execution": on}
+
+    # With it: the report replaced, the slots as sent.
+    off = {**on, "enabled": False}
+    assert _stored_capacity(hello, slots, off) == {**slots, "host_execution": off}
+
+    # A host too old to report it stores slots alone.
+    assert _stored_capacity(None, slots, None) == slots
 
 
 # ------------------------------------------------------------- tool filtering
@@ -383,6 +405,8 @@ async def test_the_choice_is_recorded_on_the_run_either_way():
 
     assert facts.records[on_host.id] == {
         "target": "host",
+        # The record is what later routes the sandbox's ops to this Mac.
+        "host_id": str(HOST),
         "sandbox_id": str(host_sandbox_id(conversation.id)),
         "root": ROOT,
     }
@@ -401,7 +425,16 @@ async def test_a_reclaimed_run_reuses_its_choice_even_with_the_mac_gone():
 
     assert again == first
     assert len(facts.opened) == 1
-    assert facts.host_lookups == 1
+    assert len(facts.host_lookups) == 1
+
+
+async def test_the_host_is_asked_for_with_the_conversation_so_it_can_keep_its_mac():
+    """With several Macs, the conversation's last one is preferred; the lookup
+    is told which conversation (host_execution_host_id)."""
+    facts = Facts()
+    conversation = _conversation()
+    await _choose(facts, conversation=conversation)
+    assert facts.host_lookups == [(PAIRED, conversation.id)]
 
 
 async def test_a_reclaimed_vm_run_stays_in_the_vm_when_the_mac_appears():
@@ -426,7 +459,7 @@ async def test_an_approved_tool_runs_where_its_paused_run_ran():
     # A run with nothing recorded selects nothing here: the approval path never
     # decides afresh.
     assert await recorded_host_workspace(uuid4(), facts=facts.build()) is None
-    assert facts.host_lookups == 1
+    assert len(facts.host_lookups) == 1
 
 
 async def test_an_unreadable_host_record_is_refused_not_read_as_the_vm():

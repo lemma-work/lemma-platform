@@ -282,6 +282,7 @@ mod host_execution {
                 home,
                 tmp,
                 folders: directory.path().join("conversation-folders.json"),
+                roots: directory.path().join("conversation-roots.json"),
             },
         );
         relay.set_enabled(enabled);
@@ -548,6 +549,92 @@ mod host_execution {
                 .to_str()
                 .unwrap()
         );
+    }
+
+    /// §5: the Mac remembers the folder a conversation opened in. A re-open --
+    /// after a restart forgot every workspace -- lands there whatever day,
+    /// slug or under-`~/lemma` hint Lemma sends now, and a default folder
+    /// deleted in between is made again rather than replaced.
+    #[tokio::test]
+    async fn a_conversation_reopens_in_the_folder_it_already_opened() {
+        let setup = setup(true).await;
+        let conversation = uuid::Uuid::new_v4();
+        let first = setup
+            .ok(
+                "workspace.open",
+                json!({ "conversation_id": conversation, "slug": "first", "date": "2026-09-25" }),
+            )
+            .await["root"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(first.ends_with("lemma/c/2026-09-25/first"), "{first}");
+
+        // A restart: nothing is open any more.
+        setup.relay.close_all().await;
+        assert_eq!(setup.relay.open_workspaces().await, 0);
+        let elsewhere = setup.directory.path().join("home/lemma/c/2026-09-26/other");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let reopened = setup
+            .ok(
+                "workspace.open",
+                json!({
+                    "conversation_id": conversation,
+                    "slug": "renamed",
+                    "date": "2026-09-26",
+                    "root_hint": elsewhere,
+                }),
+            )
+            .await;
+        assert_eq!(reopened["root"].as_str().unwrap(), first);
+
+        setup.relay.close_all().await;
+        std::fs::remove_dir(&first).unwrap();
+        let recreated = setup
+            .ok("workspace.open", json!({ "conversation_id": conversation }))
+            .await;
+        assert_eq!(recreated["root"].as_str().unwrap(), first);
+        assert!(std::path::Path::new(&first).is_dir());
+    }
+
+    /// The owner binding the conversation to a folder is the owner choosing:
+    /// the next open goes there, remembered folder or not, and is remembered.
+    #[tokio::test]
+    async fn a_folder_the_owner_binds_later_wins_over_the_remembered_one() {
+        let setup = setup(true).await;
+        let conversation = uuid::Uuid::new_v4();
+        setup
+            .ok(
+                "workspace.open",
+                json!({ "conversation_id": conversation, "slug": "first" }),
+            )
+            .await;
+        setup.relay.close_all().await;
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            setup.directory.path().join("conversation-folders.json"),
+            serde_json::to_vec(&json!({ conversation.to_string(): project.path() })).unwrap(),
+        )
+        .unwrap();
+        let canonical = std::fs::canonicalize(project.path()).unwrap();
+
+        let opened = setup
+            .ok(
+                "workspace.open",
+                json!({ "conversation_id": conversation, "root_hint": project.path() }),
+            )
+            .await;
+        assert_eq!(
+            opened["root"].as_str().unwrap(),
+            canonical.to_str().unwrap()
+        );
+
+        // And it is what a later re-open without the hint finds.
+        setup.relay.close_all().await;
+        let again = setup
+            .ok("workspace.open", json!({ "conversation_id": conversation }))
+            .await;
+        assert_eq!(again["root"].as_str().unwrap(), canonical.to_str().unwrap());
     }
 }
 

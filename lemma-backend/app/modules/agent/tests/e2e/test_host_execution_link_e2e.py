@@ -146,6 +146,20 @@ async def test_hello_capabilities_decide_whether_the_host_can_take_commands(
     on = await connected_host(app_of(async_client), machine, host_execution=_ON)
     try:
         assert await host_execution_host_id(user_id) == UUID(machine["host_id"])
+        # A control frame without the field changes run slots, not the report:
+        # both live in the row's `capacity`, and neither overwrites the other.
+        answer = await on.request(
+            "control",
+            {"capacity": {"max_runs": 2, "active_runs": 1, "available_runs": 1}},
+        )
+        assert answer["type"] == "control_ok", answer
+        assert await host_execution_host_id(user_id) == UUID(machine["host_id"])
+        listed = await authenticated_client.get("/me/runtime/agent-hosts")
+        (row,) = [
+            item for item in listed.json()["items"] if item["id"] == machine["host_id"]
+        ]
+        assert row["capacity"]["max_runs"] == 2
+        assert row["capacity"]["host_execution"]["enabled"] is True
         # Turned off mid-connection: the heartbeat carries it.
         answer = await on.request(
             "control",
@@ -197,3 +211,67 @@ async def test_the_choice_is_written_on_the_run_and_read_back(db_session, scenar
     await db_session.refresh(run)
     # Written beside what was there, not over it.
     assert run.run_metadata["source"] == "user_message"
+
+
+@pytest.mark.asyncio
+async def test_a_host_sandbox_follows_the_conversations_latest_host_run(
+    db_session, scenario
+):
+    """Which Mac a host sandbox is on is read off the runs, not stored (§2).
+
+    The newest run that chose the host names it; a run that chose the VM since
+    does not move the sandbox, and a later host run does.
+    """
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent.infrastructure.models import AgentRunModel
+    from app.modules.agent.infrastructure.run_execution_record import (
+        latest_host_execution,
+        record_run_execution,
+    )
+
+    await scenario.create_org_with_pod(name_prefix="HostExec")
+    created = await scenario.owner_client.post(
+        f"/pods/{scenario.pod_id}/conversations", json={"title": "e2e"}
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+    assert await latest_host_execution(uow, conversation_id) is None
+
+    start = datetime.now(timezone.utc)
+    first, second = str(uuid4()), str(uuid4())
+    choices = [
+        {"target": "host", "host_id": first, "sandbox_id": "s", "root": "/a"},
+        {"target": "vm"},
+    ]
+    for offset, choice in enumerate(choices):
+        run = AgentRunModel(
+            conversation_id=conversation_id,
+            status="COMPLETED",
+            started_at=start,
+            created_at=start + timedelta(seconds=offset),
+            run_metadata={"source": "user_message"},
+        )
+        db_session.add(run)
+        await db_session.flush()
+        await record_run_execution(uow, run.id, choice)
+
+    assert (await latest_host_execution(uow, conversation_id) or {})["host_id"] == first
+
+    later = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        started_at=start,
+        created_at=start + timedelta(seconds=5),
+        run_metadata={"source": "user_message"},
+    )
+    db_session.add(later)
+    await db_session.flush()
+    await record_run_execution(
+        uow,
+        later.id,
+        {"target": "host", "host_id": second, "sandbox_id": "s", "root": "/a"},
+    )
+    assert (await latest_host_execution(uow, conversation_id) or {})[
+        "host_id"
+    ] == second

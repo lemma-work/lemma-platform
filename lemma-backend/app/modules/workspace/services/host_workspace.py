@@ -3,8 +3,9 @@
 See docs/architecture/desktop-host-execution.md. The selection itself -- is
 this run the owner's, is their Mac there -- belongs to the agent module, which
 knows about runs. This module is told the answer and does what a workspace
-does with it: make the sandbox row, record which host it is bound to, open it,
-and hand back the root the host chose.
+does with it: make the sandbox row, open it on that host, and hand back the
+root the host chose. The run records both (``run_execution_record``); nothing
+here stores which host a sandbox is on or which folder it opened.
 """
 
 from __future__ import annotations
@@ -16,14 +17,16 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.workspace.domain.host_execution import (
-    HostBinding,
+    HostFolder,
+    HostTarget,
     HostWorkspace,
+    conversation_of_host_sandbox_slug,
     host_sandbox_id,
     host_sandbox_slug,
 )
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
-from app.modules.workspace.infrastructure.host_binding_repository import (
-    HostBindingRepository,
+from app.modules.workspace.infrastructure.sandbox_repository import (
+    SandboxRepository,
 )
 from app.modules.workspace.providers.agent_host import (
     AgentHostSandboxProvider,
@@ -72,27 +75,42 @@ class LinkTransport:
             raise HostOpRefused(exc.kind, exc.message, retryable=exc.retryable) from exc
 
 
-class SqlHostBindingStore:
+class SqlHostTargets:
+    """A host sandbox's host, derived rather than stored.
+
+    The sandbox row names the conversation (its slug) and the user (its
+    owner); the agent module answers which of that user's hosts the
+    conversation's runs chose. See ``agent.contracts.host_execution``.
+    """
+
     def __init__(self, uow_factory=None) -> None:
         self._uow_factory = uow_factory or SessionUnitOfWorkFactory(async_session_maker)
 
-    async def get(self, sandbox_id: UUID) -> HostBinding | None:
-        async with self._uow_factory() as uow:
-            return await HostBindingRepository(uow).get(sandbox_id)
+    async def target(self, sandbox_id: UUID) -> HostTarget | None:
+        from app.modules.agent.contracts.host_execution import host_for_host_sandbox
 
-    async def set_root(self, sandbox_id: UUID, root: str) -> None:
         async with self._uow_factory() as uow:
-            await HostBindingRepository(uow).set_root(sandbox_id, root)
-            await uow.commit()
+            sandbox = await SandboxRepository(uow).get(sandbox_id)
+        conversation_id = (
+            conversation_of_host_sandbox_slug(sandbox.slug) if sandbox else None
+        )
+        if sandbox is None or conversation_id is None:
+            return None
+        host_id, root = await host_for_host_sandbox(
+            conversation_id=conversation_id, user_id=sandbox.owner_id
+        )
+        if host_id is None:
+            return None
+        return HostTarget(host_id=host_id, conversation_id=conversation_id, root=root)
 
-    async def bind(self, binding: HostBinding) -> None:
-        async with self._uow_factory() as uow:
-            await HostBindingRepository(uow).bind(binding)
-            await uow.commit()
+    async def folder(self, conversation_id: UUID) -> HostFolder | None:
+        from app.modules.agent.contracts.host_execution import host_folder_for
+
+        return await host_folder_for(conversation_id)
 
 
 def build_host_provider() -> AgentHostSandboxProvider:
-    return AgentHostSandboxProvider(LinkTransport(), SqlHostBindingStore())
+    return AgentHostSandboxProvider(LinkTransport(), SqlHostTargets())
 
 
 def host_provider_of(service) -> AgentHostSandboxProvider | None:
@@ -110,9 +128,8 @@ async def open_host_workspace(
     slug: str,
     root_hint: str | None,
     service=None,
-    bindings: SqlHostBindingStore | None = None,
 ) -> HostWorkspace:
-    """Bind a conversation's host sandbox to this host, open it, name its root.
+    """Make a conversation's host sandbox, open it on this host, name its root.
 
     Raises a ``sandbox_runtime`` error when the Mac cannot open it -- which,
     at selection time, is the caller's cue to run in the VM instead: nothing
@@ -136,20 +153,12 @@ async def open_host_workspace(
         slug=host_sandbox_slug(conversation_id),
         sandbox_id=sandbox_id,
     )
-    await (bindings or SqlHostBindingStore()).bind(
-        HostBinding(
-            sandbox_id=sandbox_id,
-            host_id=host_id,
-            owner_id=owner_id,
-            conversation_id=conversation_id,
-            slug=slug,
-            day=day,
-            root_hint=root_hint,
-        )
-    )
     handle = await service.ensure(sandbox_id)
     root = await provider.open_workspace(
         handle.sandbox_id,
+        host_id=host_id,
+        conversation_id=conversation_id,
+        folder=HostFolder(day=day, slug=slug, root_hint=root_hint),
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=_OPEN_SECONDS),
     )
     logger.info(
@@ -164,7 +173,7 @@ async def open_host_workspace(
 __all__ = [
     "HostOpRefused",
     "LinkTransport",
-    "SqlHostBindingStore",
+    "SqlHostTargets",
     "build_host_provider",
     "host_provider_of",
     "open_host_workspace",

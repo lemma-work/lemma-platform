@@ -11,7 +11,8 @@ before:
 3. the run's triggering human is that user, in Lemma's own app (below);
 4. that user -- the one the host is paired to -- has an online Agent Host
    with host execution on and available, and it opens the workspace when
-   asked.
+   asked. With several, the one the conversation last ran on, else the most
+   recently seen (``host_execution_host_id``).
 
 A host is paired to exactly one user, and only that user's runs are ever
 routed to it: somebody else's run on the same installation goes to their own
@@ -31,13 +32,15 @@ Sub-agent conversations never do either. An unknown source does not qualify --
 a new source has to be added here on purpose.
 
 **Once.** The check runs the first time the run's context is built, and the
-answer -- host or VM -- is written on the run (``run_execution_record``). A
+answer -- host or VM, and for the host which Mac and which folder -- is
+written on the run (``run_execution_record``). A
 context rebuilt for the same run -- a worker reclaiming it, an approved tool
 executing after a pause -- reads that answer back instead of deciding again,
 so a run never moves. The host sandbox's id records the fabric, so its
-operations can only ever go to the host; a host that goes away mid-run fails
-the next operation with "This Mac is not connected", and nothing falls back
-to the VM.
+operations can only ever go to the host, and the record names the host, so
+they go to that one; a host that goes away mid-run fails the next operation
+with "This Mac is not connected", and nothing falls back to the VM or to
+another Mac.
 
 **Agent Host runs** (Claude Code, Codex, ...) are not given a host sandbox:
 they already run on the Mac. What they get instead is ``host_runs_native_
@@ -61,6 +64,7 @@ from app.modules.agent.infrastructure.agent_host.host_execution import (
 )
 from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
+from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.agent.infrastructure.run_execution_record import (
     read_run_execution,
     record_run_execution,
@@ -68,6 +72,7 @@ from app.modules.agent.infrastructure.run_execution_record import (
 from app.modules.agent.services.workspace_location import resolve_workspace_location
 from app.modules.identity.contracts.installation import is_desktop_installation
 from app.modules.workspace.contracts.host_execution import (
+    HostFolder,
     HostWorkspace,
     open_host_workspace,
 )
@@ -116,11 +121,16 @@ async def _record_choice(run_id: UUID, value: dict[str, object]) -> None:
         await uow.commit()
 
 
-def _choice_value(workspace: HostWorkspace | None) -> dict[str, object]:
-    if workspace is None:
+def _choice_value(
+    workspace: HostWorkspace | None, host_id: UUID | None
+) -> dict[str, object]:
+    if workspace is None or host_id is None:
         return {"target": "vm"}
     return {
         "target": "host",
+        # Where this conversation's host sandbox is from now on: its
+        # operations are routed by the latest of these (host_for_host_sandbox).
+        "host_id": str(host_id),
         "sandbox_id": str(workspace.sandbox_id),
         "root": workspace.root,
     }
@@ -150,7 +160,10 @@ class HostExecutionFacts:
     """
 
     is_desktop: Callable[[], bool] = is_desktop_installation
-    usable_host: Callable[[UUID], Awaitable[UUID | None]] = host_execution_host_id
+    #: ``(user_id, conversation_id) -> host_id``.
+    usable_host: Callable[[UUID, UUID | None], Awaitable[UUID | None]] = (
+        host_execution_host_id
+    )
     open_workspace: Callable[..., Awaitable[HostWorkspace]] = open_host_workspace
     recorded: Callable[[UUID], Awaitable[dict[str, object] | None]] = _recorded_choice
     record: Callable[[UUID, dict[str, object]], Awaitable[None]] = _record_choice
@@ -160,7 +173,10 @@ FACTS = HostExecutionFacts()
 
 
 async def paired_host_for(
-    user_id: UUID, *, facts: HostExecutionFacts = FACTS
+    user_id: UUID,
+    conversation_id: UUID | None = None,
+    *,
+    facts: HostExecutionFacts = FACTS,
 ) -> UUID | None:
     """Rules 1 and 4's first half: the usable host paired to this user, if any.
 
@@ -169,7 +185,7 @@ async def paired_host_for(
     """
     if not facts.is_desktop():
         return None
-    return await facts.usable_host(user_id)
+    return await facts.usable_host(user_id, conversation_id)
 
 
 def host_folder_hint(conversation: Conversation) -> str | None:
@@ -196,6 +212,23 @@ def default_folder(conversation: Conversation) -> tuple[str, str]:
     return conversation.created_at.date().isoformat(), conversation.id.hex[:8]
 
 
+async def host_folder_for(conversation_id: UUID) -> HostFolder | None:
+    """What re-opening a conversation's host sandbox sends the Mac.
+
+    The same folder inputs its first open sent, read again from the
+    conversation. They matter only to a Mac that has lost its own record of
+    the conversation's root (§5): the Mac keeps that record and prefers it, so
+    a reopen lands where the run already works whatever these say.
+    """
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        row = await uow.session.get(ConversationModel, conversation_id)
+        if row is None:
+            return None
+        conversation = row.to_entity()
+    day, slug = default_folder(conversation)
+    return HostFolder(day=day, slug=slug, root_hint=host_folder_hint(conversation))
+
+
 async def choose_host_workspace(
     *,
     conversation: Conversation,
@@ -213,10 +246,10 @@ async def choose_host_workspace(
     recorded = await facts.recorded(agent_run.id)
     if recorded is not None:
         return workspace_from_choice(recorded)
-    workspace = await _select(
+    host_id, workspace = await _select(
         conversation=conversation, agent_run=agent_run, user_id=user_id, facts=facts
     )
-    await facts.record(agent_run.id, _choice_value(workspace))
+    await facts.record(agent_run.id, _choice_value(workspace, host_id))
     return workspace
 
 
@@ -236,14 +269,14 @@ async def _select(
     agent_run: AgentRun,
     user_id: UUID,
     facts: HostExecutionFacts,
-) -> HostWorkspace | None:
+) -> tuple[UUID | None, HostWorkspace | None]:
     if conversation.user_id != user_id:
-        return None
+        return None, None
     if not triggered_by_run_user(conversation, agent_run):
-        return None
-    host_id = await paired_host_for(user_id, facts=facts)
+        return None, None
+    host_id = await paired_host_for(user_id, conversation.id, facts=facts)
     if host_id is None:
-        return None
+        return None, None
     day, slug = default_folder(conversation)
     try:
         workspace = await facts.open_workspace(
@@ -262,14 +295,14 @@ async def _select(
             host_id=str(host_id),
             exc_info=True,
         )
-        return None
+        return None, None
     logger.info(
         "agent.host_execution.chosen",
         conversation_id=str(conversation.id),
         agent_run_id=str(agent_run.id),
         host_id=str(host_id),
     )
-    return workspace
+    return host_id, workspace
 
 
 async def host_runs_native_commands(
@@ -281,4 +314,7 @@ async def host_runs_native_commands(
     Mac whoever asked, so the question is only whether Lemma's command tools
     would duplicate the ones it has there.
     """
-    return await paired_host_for(conversation.user_id, facts=facts) is not None
+    return (
+        await paired_host_for(conversation.user_id, conversation.id, facts=facts)
+        is not None
+    )

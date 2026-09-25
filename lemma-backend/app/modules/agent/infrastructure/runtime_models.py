@@ -93,13 +93,10 @@ class AgentHostModel(UUIDAuditBase):
     )
     protocol_version: Mapped[int | None] = mapped_column(nullable=True)
     host_release: Mapped[str] = mapped_column(String(128), nullable=False)
+    # The host's run slots, and under ``host_execution`` whether it runs its
+    # owner's Lemma commands on the machine itself. See
+    # docs/architecture/desktop-host-execution.md §2.
     capacity: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    # What the host reported it can do beyond running agents, as the `hello`
-    # carried it -- today only `host_execution`. See
-    # docs/architecture/desktop-host-execution.md.
-    capabilities: Mapped[dict[str, object]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
-    )
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

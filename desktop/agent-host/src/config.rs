@@ -19,6 +19,9 @@ pub struct HostPaths {
     /// See `conversation_folders` for why the path is recorded here rather than
     /// carried on the run.
     pub folders: PathBuf,
+    /// The folder each conversation's host workspace opened in, written by
+    /// this process. See `host_exec::roots`.
+    pub conversation_roots: PathBuf,
 }
 
 /// Proof that this process is the only Agent Host for its data directory.
@@ -71,6 +74,7 @@ impl HostPaths {
             lock: root.join("agent-host.lock"),
             config_lock: root.join("config.lock"),
             folders: root.join("conversation-folders.json"),
+            conversation_roots: root.join("conversation-roots.json"),
             root,
         }
     }

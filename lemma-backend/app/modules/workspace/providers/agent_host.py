@@ -7,17 +7,26 @@ itself; it speaks the op vocabulary (§4) and turns the host's refusals into the
 ``sandbox_runtime`` errors every other fabric raises, so the session and the
 tools above it do not know which fabric they are on.
 
-Lifecycle is small because there is nothing to provision. ``create`` is
-``workspace.open`` -- the host picks and creates the root (§5) and answers with
-its absolute path, which is recorded on the binding. ``release`` and
-``destroy`` are ``workspace.close``. There are no volumes and nothing for an
-orphan sweep to find: the files are the owner's, in the owner's folder, and
-outlive every sandbox that was ever opened on them.
+**Which host.** Nothing here stores it. ``HostTargets`` answers per
+operation from what already exists: the host the conversation's most recent
+host run recorded choosing (a run never moves, so an offline host is "This Mac
+is not connected", never another Mac or the VM). See
+``agent.infrastructure.agent_host.host_execution``.
+
+Lifecycle is small because there is nothing to provision. Selection opens the
+workspace (``open_workspace``, with the host it chose) -- the host picks and
+creates the root (§5), remembers it for the conversation, and answers with its
+absolute path, which the run records. ``create`` opens nothing: the next op
+does, if the host needs it. ``release`` and ``destroy`` are
+``workspace.close``. There are no volumes and nothing for an orphan sweep to
+find: the files are the owner's, in the owner's folder, and outlive every
+sandbox that was ever opened on them.
 
 A host that restarted has forgotten which workspaces were open. Its answer to
-the next op is ``workspace_not_open``, and the provider re-opens from the
-binding and tries once more, so a restart costs one round trip rather than a
-failed tool call.
+the next op is ``workspace_not_open``, and the provider re-opens and tries
+once more, so a restart costs one round trip rather than a failed tool call.
+The folder is the Mac's to remember: it keeps each conversation's root on its
+own disk and prefers it, and the re-open also hints the root the run recorded.
 """
 
 from __future__ import annotations
@@ -38,7 +47,9 @@ from sandbox_runtime.errors import (
 from app.core.log.log import get_logger
 from app.modules.workspace.domain.host_execution import (
     HOST_EXECUTION_PROVIDER,
-    HostBinding,
+    HostFolder,
+    HostTarget,
+    workspace_open_params,
 )
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
@@ -56,6 +67,15 @@ logger = get_logger(__name__)
 #: ``kind`` values raised on the Lemma side of the link rather than by the host.
 HOST_OFFLINE = "host_offline"
 WORKSPACE_NOT_OPEN = "workspace_not_open"
+
+#: What an op on a host sandbox with no host to go to says: the sentence the
+#: link gives (``agent_host_ops.HOST_OFFLINE_MESSAGE``) when the host is not
+#: connected, repeated rather than imported so this module keeps to a shape.
+HOST_OFFLINE_SENTENCE = (
+    "This Mac is not connected, so the command did not run. Lemma Desktop's "
+    "Agent Host has to be running and signed in for commands to run on this "
+    "computer. Nothing was started; try again once it is connected."
+)
 
 #: How long lifecycle ops may take. ``workspace.open`` makes a directory.
 _LIFECYCLE_SECONDS = 30.0
@@ -87,10 +107,14 @@ class HostOpTransport(Protocol):
     ) -> dict[str, object]: ...
 
 
-class HostBindingStore(Protocol):
-    async def get(self, sandbox_id: UUID) -> HostBinding | None: ...
+class HostTargets(Protocol):
+    async def target(self, sandbox_id: UUID) -> HostTarget | None:
+        """The host this sandbox's ops go to; None when it has none."""
+        ...
 
-    async def set_root(self, sandbox_id: UUID, root: str) -> None: ...
+    async def folder(self, conversation_id: UUID) -> HostFolder | None:
+        """The folder inputs a re-open sends; None for a vanished conversation."""
+        ...
 
 
 _CONFLICT_KINDS = frozenset(
@@ -149,49 +173,71 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
     storage_kind = ProviderStorageKind.SANDBOX_NATIVE
     resumes_stopped_instances = True
 
-    def __init__(self, transport: HostOpTransport, bindings: HostBindingStore) -> None:
+    def __init__(self, transport: HostOpTransport, targets: HostTargets) -> None:
         self._transport = transport
-        self._bindings = bindings
+        self._targets = targets
 
     # ------------------------------------------------------------ transport
 
-    async def _binding(self, sandbox_id: UUID) -> HostBinding:
-        binding = await self._bindings.get(sandbox_id)
-        if binding is None:
-            raise SandboxRejected(
-                "This conversation has no Mac recorded to run on, so the "
-                "command did not run."
+    async def _target(self, sandbox_id: UUID) -> HostTarget:
+        target = await self._targets.target(sandbox_id)
+        if target is None:
+            raise sandbox_error(
+                HostOpRefused(HOST_OFFLINE, HOST_OFFLINE_SENTENCE),
+                method="workspace.open",
             )
-        return binding
+        return target
 
-    async def _open(self, binding: HostBinding, *, deadline_at: datetime) -> str:
+    async def _open(
+        self,
+        sandbox_id: UUID,
+        *,
+        host_id: UUID,
+        params: dict[str, object],
+        deadline_at: datetime,
+    ) -> str:
         result = await self._transport.request(
-            host_id=binding.host_id,
-            workspace=binding.sandbox_id,
+            host_id=host_id,
+            workspace=sandbox_id,
             method="workspace.open",
-            params={
-                "root_hint": binding.root_hint,
-                "grants": [],
-                "conversation_id": str(binding.conversation_id),
-                # The conversation's own date, not today's, so a reopen on
-                # another day finds the same folder.
-                "date": binding.day,
-                "slug": binding.slug,
-            },
+            params=params,
             deadline_at=deadline_at,
         )
         root = result.get("root")
         if not isinstance(root, str) or not root.startswith("/"):
             raise ProviderRejected("the Mac did not say which folder it opened")
-        if root != binding.root:
-            await self._bindings.set_root(binding.sandbox_id, root)
         return root
 
-    async def open_workspace(self, sandbox_id: UUID, *, deadline_at: datetime) -> str:
-        """Open (or re-open) a host sandbox and return the root the Mac chose."""
-        binding = await self._binding(sandbox_id)
+    async def _reopen(
+        self, sandbox_id: UUID, target: HostTarget, *, deadline_at: datetime
+    ) -> str:
+        folder = await self._targets.folder(target.conversation_id)
+        params = workspace_open_params(
+            target.conversation_id,
+            folder,
+            root_hint=target.root or (folder.root_hint if folder else None),
+        )
+        return await self._open(
+            sandbox_id, host_id=target.host_id, params=params, deadline_at=deadline_at
+        )
+
+    async def open_workspace(
+        self,
+        sandbox_id: UUID,
+        *,
+        host_id: UUID,
+        conversation_id: UUID,
+        folder: HostFolder,
+        deadline_at: datetime,
+    ) -> str:
+        """Open a host sandbox on the host a run chose; the root the Mac chose."""
+        params = workspace_open_params(
+            conversation_id, folder, root_hint=folder.root_hint
+        )
         try:
-            return await self._open(binding, deadline_at=deadline_at)
+            return await self._open(
+                sandbox_id, host_id=host_id, params=params, deadline_at=deadline_at
+            )
         except HostOpRefused as exc:
             raise sandbox_error(exc, method="workspace.open") from exc
 
@@ -204,11 +250,11 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
         deadline_at: datetime,
     ) -> dict[str, object]:
         """One op on this sandbox's host, re-opening once if it forgot us."""
-        binding = await self._binding(sandbox_id)
+        target = await self._target(sandbox_id)
         for attempt in range(2):
             try:
                 return await self._transport.request(
-                    host_id=binding.host_id,
+                    host_id=target.host_id,
                     workspace=sandbox_id,
                     method=method,
                     params=params,
@@ -223,7 +269,7 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
                     method=method,
                 )
                 try:
-                    await self._open(binding, deadline_at=deadline_at)
+                    await self._reopen(sandbox_id, target, deadline_at=deadline_at)
                 except HostOpRefused as reopen:
                     raise sandbox_error(reopen, method="workspace.open") from reopen
         raise AssertionError("unreachable: the second attempt returns or raises")
@@ -243,15 +289,12 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
     # ------------------------------------------------------------ lifecycle
 
     async def create(self, spec: ProviderCreateSpec) -> ProviderInstance:
-        binding = await self._bindings.get(spec.sandbox_id)
-        if binding is None:
-            raise ProviderRejected("no Mac is recorded for this host sandbox")
-        try:
-            await self._open(binding, deadline_at=spec.deadline_at)
-        except HostOpRefused as exc:
-            raise ProviderRejected(
-                str(sandbox_error(exc, method="workspace.open"))
-            ) from exc
+        """Nothing to provision, and nothing opened here.
+
+        Selection opens the workspace on the host it chose, before any op; a
+        host that has since forgotten it is re-opened by the next op. Opening
+        here would need a host before a run has recorded one.
+        """
         return ProviderInstance(provider_id=spec.name, name=spec.name, running=True)
 
     async def wait_ready(
@@ -288,12 +331,12 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
         success here -- the same as "already gone" for every other fabric.
         """
         sandbox_id = _sandbox_id(name)
-        binding = await self._bindings.get(sandbox_id)
-        if binding is None:
+        target = await self._targets.target(sandbox_id)
+        if target is None:
             return
         try:
             await self._transport.request(
-                host_id=binding.host_id,
+                host_id=target.host_id,
                 workspace=sandbox_id,
                 method="workspace.close",
                 params={},

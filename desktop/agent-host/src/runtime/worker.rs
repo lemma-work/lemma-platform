@@ -206,21 +206,24 @@ impl TargetWorker {
         let (slot_owner, link) = LinkSlotOwner::new();
         // The exec-server is this same binary, as the MCP bridge is.
         #[cfg(unix)]
-        let exec_relay = crate::host_exec::relay::RelayPaths::current(paths.folders.clone())
-            .inspect_err(|error| {
-                tracing::warn!(%error, "host execution is unavailable on this computer");
-            })
-            .ok()
-            .map(|relay_paths| {
-                crate::host_exec::relay::ExecRelay::new(
-                    Arc::new(crate::host_exec::relay::ProcessLauncher {
-                        executable: mcp_bridge_executable.clone(),
-                        data_root: paths.root.clone(),
-                        sandboxed: true,
-                    }),
-                    relay_paths,
-                )
-            });
+        let exec_relay = crate::host_exec::relay::RelayPaths::current(
+            paths.folders.clone(),
+            paths.conversation_roots.clone(),
+        )
+        .inspect_err(|error| {
+            tracing::warn!(%error, "host execution is unavailable on this computer");
+        })
+        .ok()
+        .map(|relay_paths| {
+            crate::host_exec::relay::ExecRelay::new(
+                Arc::new(crate::host_exec::relay::ProcessLauncher {
+                    executable: mcp_bridge_executable.clone(),
+                    data_root: paths.root.clone(),
+                    sandboxed: true,
+                }),
+                relay_paths,
+            )
+        });
         Ok(Self {
             target,
             installation_id,
