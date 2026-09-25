@@ -75,6 +75,7 @@ way a scenario says, do not edit the scenario.
 | Desktop launch smoke | `desktop/e2e/launch_smoke.py` | Desktop, frontend, TypeScript SDK or backend agent-module changes, as CI's `Desktop launch smoke` on macOS. Not yet in `CI passed`. Builds the debug app, launches it in hosted mode against this checkout's stack, and walks sign-up, pairing, one Agent Host conversation and This Mac's status. No VM: local mode is not covered. The script's docstring lists what it proves and skips. |
 | Scenario gates | `make scenarios-guards`, `make scenario-coverage` | Every pull request |
 | Scenarios (fast) | `make scenarios` | Nightly, on request, or with the `run-scenarios` label |
+| Scenarios (all local lanes) | `make scenarios-all` | Locally; runs non-live journeys, sandbox cases and client conformance, then writes one report |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
 | Scenarios (live) | `make scenarios-live` | Locally, before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
 | Protected e2e | `make test-e2e-runtime` | Weekly and on every `v*` tag, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go, and what every Desktop release gate reads. It builds nothing, so a test needing a compiled artifact belongs in the lane that builds it. |
