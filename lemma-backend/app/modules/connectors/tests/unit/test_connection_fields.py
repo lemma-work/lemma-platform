@@ -100,7 +100,7 @@ def _composio_with(initiate: MagicMock) -> ComposioAuthProvider:
         auth_configs=SimpleNamespace(
             create=MagicMock(return_value=SimpleNamespace(id="ac_shop"))
         ),
-        connected_accounts=SimpleNamespace(initiate=initiate),
+        connected_accounts=SimpleNamespace(initiate=initiate, link=initiate),
     )
     return ComposioAuthProvider(
         connector_repository=AsyncMock(), composio_client_factory=lambda: composio
@@ -141,16 +141,30 @@ async def test_composio_receives_the_store_as_oauth2_connection_state():
 
 
 @pytest.mark.asyncio
-async def test_without_fields_composio_is_called_exactly_as_before():
-    initiate = MagicMock(
+async def test_a_sign_in_without_fields_uses_link_not_the_retiring_initiate():
+    """Composio is retiring `initiate()` for redirect sign-ins and warns on each
+    call; `link()` returns the same connected-account id and redirect."""
+    link = MagicMock(
         return_value=SimpleNamespace(id="ca_g", redirect_url="https://g/oauth")
     )
+    initiate = MagicMock()
+    composio = SimpleNamespace(
+        auth_configs=SimpleNamespace(
+            create=MagicMock(return_value=SimpleNamespace(id="ac_g"))
+        ),
+        connected_accounts=SimpleNamespace(initiate=initiate, link=link),
+    )
+    provider = ComposioAuthProvider(
+        connector_repository=AsyncMock(), composio_client_factory=lambda: composio
+    )
 
-    await _composio_with(initiate).get_authorization_url(
+    url, provider_state = await provider.get_authorization_url(
         install=_shopify_install(),
         user_id=uuid4(),
         state="s",
         redirect_uri="https://lemma/callback",
     )
 
-    assert "config" not in initiate.call_args.kwargs
+    assert (url, provider_state) == ("https://g/oauth", "ca_g")
+    assert link.call_args.kwargs["callback_url"] == "https://lemma/callback?state=s"
+    initiate.assert_not_called()

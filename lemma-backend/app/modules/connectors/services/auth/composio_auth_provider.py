@@ -333,21 +333,29 @@ class ComposioAuthProvider(AuthProviderInterface):
         # authorization URL -- `subdomain` becomes `{subdomain}.myshopify.com`.
         # Only sent when the kind declared such a field, so every other toolkit
         # makes exactly the call it made before.
-        config = None
         if connection_fields:
             from composio.types import auth_scheme as composio_auth_scheme
 
             config = composio_auth_scheme.oauth2(dict(connection_fields))
-
-        connection_request = await run_blocking(
-            lambda: composio.connected_accounts.initiate(
+            start = lambda: composio.connected_accounts.initiate(  # noqa: E731
                 user_id=str(user_id),
                 auth_config_id=auth_config_id,
                 callback_url=redirect_url,
-                **({"config": config} if config is not None else {}),
-            ),
-            limiter="external_http",
-        )
+                config=config,
+            )
+        else:
+            # `link()`, not `initiate()`: Composio is retiring `initiate()` for
+            # redirect sign-ins on its managed auth configs, and says so with a
+            # Sunset header on every call. Same connected-account id, same
+            # redirect. `initiate()` stays for the connect that carries fields,
+            # because `link()` takes none.
+            start = lambda: composio.connected_accounts.link(  # noqa: E731
+                user_id=str(user_id),
+                auth_config_id=auth_config_id,
+                callback_url=redirect_url,
+            )
+
+        connection_request = await run_blocking(start, limiter="external_http")
 
         if not connection_request.redirect_url:
             raise ConnectorValidationError("No redirect URL found for Composio app")
