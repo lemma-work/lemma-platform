@@ -14,6 +14,12 @@ from app.modules.connectors.domain.connector_operation import (
 )
 from app.modules.connectors.domain.ports import ConnectorOperationRepositoryPort
 from app.modules.connectors.infrastructure.models import ConnectorOperation
+from app.modules.connectors.domain.connector import ConnectorKind
+
+# Rows of a removed kind are excluded in SQL, not only skipped after the fetch:
+# this list takes a bare `limit` with no cursor, so a skipped row would have
+# silently cost the caller a result it could never page to.
+_KNOWN_KINDS = tuple(kind.value for kind in ConnectorKind)
 
 
 def _normalize_search_query(query: str) -> str:
@@ -50,7 +56,8 @@ class ConnectorOperationRepository(
         every row, with every JSONB schema, to return twenty summaries.
         """
         stmt = select(ConnectorOperation).where(
-            ConnectorOperation.connector_id == connector_id
+            ConnectorOperation.connector_id == connector_id,
+            ConnectorOperation.kind.in_(_KNOWN_KINDS),
         )
         if kind is not None:
             stmt = stmt.where(ConnectorOperation.kind == kind)
@@ -92,6 +99,7 @@ class ConnectorOperationRepository(
             stmt = (
                 select(ConnectorOperation, exact_match_rank, ts_rank)
                 .where(ConnectorOperation.connector_id == connector_id)
+                .where(ConnectorOperation.kind.in_(_KNOWN_KINDS))
                 .where(
                     or_(
                         ts_vector.op("@@")(ts_query),

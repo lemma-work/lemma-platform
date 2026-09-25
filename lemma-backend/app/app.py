@@ -150,7 +150,8 @@ async def lifespan(app: FastAPI):
         from app.core.observability.loop_watchdog import loop_lag_watchdog
         from app.core.observability.memory_sampler import memory_sampler
         from app.core.observability.startup_timing import (
-            freeze_startup_heap,
+            finish_startup,
+            release_startup_heap,
             startup_step,
         )
         from app.warm_imports import warm_modules, warm_tokenizer
@@ -247,20 +248,17 @@ async def lifespan(app: FastAPI):
                 # CLOUD_MODULES) is stashed on app.state by create_app.
                 modules = getattr(app.state, "lemma_modules", OSS_MODULES)
                 await assembly.enter_api_lifespans(module_stack, modules, app)
-                frozen = freeze_startup_heap()  # see its docstring: GC stalls
                 # Emit only after every core and module lifespan has entered.
                 # service.version and release.sha come from LEMMA_RELEASE_SHA.
-                logger.info(
-                    "service.started",
-                    startup_ms=round((time.monotonic() - boot_started) * 1000, 1),
-                    gc_frozen_objects=frozen,
-                )
+                ms, frozen = finish_startup(boot_started)
+                logger.info("service.started", startup_ms=ms, gc_frozen_objects=frozen)
                 started = True
                 yield
         finally:
             # Core closers — explicit and last so they tear down after modules.
             if started:
                 logger.info("service.stopped")
+                release_startup_heap()
             for lifecycle_task in (watchdog_task, memory_task, warm_task):
                 if lifecycle_task is not None and not lifecycle_task.done():
                     lifecycle_task.cancel()

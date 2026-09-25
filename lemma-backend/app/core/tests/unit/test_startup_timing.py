@@ -11,7 +11,11 @@ import logging
 
 import pytest
 
-from app.core.observability.startup_timing import freeze_startup_heap, startup_step
+from app.core.observability.startup_timing import (
+    finish_startup,
+    release_startup_heap,
+    startup_step,
+)
 
 
 def _steps(caplog) -> list[dict]:
@@ -50,11 +54,14 @@ async def test_a_failing_step_is_still_logged_and_still_raises(caplog) -> None:
     assert entry["ok"] is False
 
 
-def test_freezing_moves_live_objects_out_of_the_collector() -> None:
+def test_startup_freezes_the_heap_and_a_lifespan_end_releases_it() -> None:
     import gc
+    import time
 
     try:
-        assert freeze_startup_heap() > 0
-        assert gc.get_freeze_count() > 0
+        startup_ms, frozen = finish_startup(time.monotonic())
+        assert frozen > 0
+        assert startup_ms >= 0
     finally:
-        gc.unfreeze()
+        release_startup_heap()
+    assert gc.get_freeze_count() == 0

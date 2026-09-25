@@ -45,16 +45,27 @@ async def startup_step(step: str, *, service: str) -> AsyncIterator[None]:
         )
 
 
-def freeze_startup_heap() -> int:
-    """Move everything allocated during startup out of the collector's reach.
+def finish_startup(boot_started: float) -> tuple[float, int]:
+    """Freeze the startup heap; return (startup ms, frozen object count).
 
     Modules, routes, schemas and clients live as long as the process, yet every
     full collection rescans them. The dominant multi-second loop stall in
     production was exactly that -- ``sqlalchemy ... _target_gced`` on top of the
     stack, a weakref callback fired mid-collection -- and a collection's cost
-    grows with what it has to walk. Call once, after startup, before serving.
-    Returns how many objects were frozen.
+    grows with what it has to walk. Call once, after startup, before serving,
+    and pair it with :func:`release_startup_heap` when the lifespan ends.
     """
     gc.collect()
     gc.freeze()
-    return gc.get_freeze_count()
+    return round((time.monotonic() - boot_started) * 1000, 1), gc.get_freeze_count()
+
+
+def release_startup_heap() -> None:
+    """Hand frozen objects back to the collector when a lifespan ends.
+
+    In production the process exits with it. Where it does not -- tests that
+    start several apps in one process, an API with an embedded worker -- what
+    the ended lifespan built would otherwise stay frozen, and a cycle among it
+    would never be collected.
+    """
+    gc.unfreeze()
