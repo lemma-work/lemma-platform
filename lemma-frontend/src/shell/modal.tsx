@@ -2,6 +2,14 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CloseIcon } from "@/ui/icons";
 
+/** Open dialogs, innermost last.
+ *
+ *  Each dialog listens on the document, and a dialog opened from inside
+ *  another — Connect over Settings — used to hear Escape alongside its parent:
+ *  `stopPropagation` does not stop a second listener on the same node, so one
+ *  keypress closed both. Only the innermost answers the keyboard now. */
+const open: symbol[] = [];
+
 export function Modal({ title, subtitle, narrow, wide, flush, onClose, children }: {
     title: string; subtitle?: string; narrow?: boolean; wide?: boolean; flush?: boolean;
     onClose: () => void; children: ReactNode;
@@ -11,11 +19,14 @@ export function Modal({ title, subtitle, narrow, wide, flush, onClose, children 
     close.current = onClose;
     const titleId = useId();
     useEffect(() => {
+        const me = Symbol("modal");
+        open.push(me);
         const previous = document.activeElement as HTMLElement | null;
         const overflow = document.body.style.overflow;
         document.body.style.overflow = "hidden";
         panel.current?.focus();
         const onKey = (event: KeyboardEvent) => {
+            if (open.at(-1) !== me) return;
             if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close.current(); }
             if (event.key !== "Tab") return;
             const focusable = Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select, textarea, [tabindex="0"]') ?? []).filter(el => el.getClientRects().length > 0);
@@ -26,6 +37,7 @@ export function Modal({ title, subtitle, narrow, wide, flush, onClose, children 
         };
         document.addEventListener("keydown", onKey, true);
         return () => {
+            open.splice(open.indexOf(me), 1);
             document.body.style.overflow = overflow;
             document.removeEventListener("keydown", onKey, true);
             if (previous?.isConnected) previous.focus();

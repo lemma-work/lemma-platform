@@ -17,6 +17,8 @@
  *  Pure, because both of those were the kind of thing a test catches and a
  *  screenshot does not. */
 
+import type { ConnectorKind } from "@/connect/install";
+
 export interface Connector {
     id: string;
     title: string;
@@ -25,12 +27,13 @@ export interface Connector {
     active: boolean;
     /** How this one can be installed.
      *
-     *  Carried from the list rather than fetched per connector, because it is
-     *  what separates the brokered catalogue from the entries an organization
-     *  points somewhere itself — and that decision is made while drawing the
-     *  list, over hundreds of rows. The heavy schemas are not here; the detail
-     *  endpoint has those, and only a form needs them. */
-    kinds: { kind: string }[];
+     *  Carried whole from the list, schemas included. Whether a connector is
+     *  one an organization points somewhere itself, signs into, or hands a
+     *  token to is read off its auth scheme and install schema — the kind name
+     *  alone cannot say, because `http` is GitHub and WhatsApp as well as every
+     *  OpenAPI spec. Stripped to the name, every one of those was drawn as a
+     *  server to add. */
+    kinds: ConnectorKind[];
 }
 
 export interface ConnectorAccount {
@@ -71,7 +74,7 @@ export function readConnector(raw: unknown): Connector | null {
         description?: string | null;
         icon?: string | null;
         is_active?: boolean;
-        kinds?: { kind?: string }[];
+        kinds?: unknown[];
     };
     const id = asString(entry.id);
     if (!id) return null;
@@ -84,8 +87,8 @@ export function readConnector(raw: unknown): Connector | null {
         icon: asString(entry.icon),
         active: entry.is_active !== false,
         kinds: (Array.isArray(entry.kinds) ? entry.kinds : [])
-            .map((one) => ({ kind: asString(one?.kind) }))
-            .filter((one) => one.kind !== ""),
+            .filter((one): one is ConnectorKind =>
+                Boolean(one) && typeof one === "object" && asString((one as { kind?: unknown }).kind) !== ""),
     };
 }
 

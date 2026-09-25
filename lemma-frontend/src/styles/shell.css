@@ -2152,6 +2152,15 @@
     box-shadow: var(--shadow-lift);
     outline: none;
 }
+/* The panel takes focus so a dialog opens with the keyboard inside it, and
+   every click on its blank space focuses it again. It is not a control: the
+   blanket `[tabindex]:focus-visible` ring outranked the line above and drew a
+   bright outline round the whole dialog on each click, which read as an input
+   grabbing focus. Specific enough to win whatever order the sheets load in. */
+.modal__panel[tabindex]:focus,
+.modal__panel[tabindex]:focus-visible {
+    outline: none;
+}
 .modal__panel--narrow {
     width: min(100%, 412px);
 }
