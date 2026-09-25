@@ -281,6 +281,4 @@ async def host_runs_native_commands(
     Mac whoever asked, so the question is only whether Lemma's command tools
     would duplicate the ones it has there.
     """
-    return (
-        await paired_host_for(conversation.user_id, facts=facts) is not None
-    )
+    return await paired_host_for(conversation.user_id, facts=facts) is not None

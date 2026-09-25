@@ -68,9 +68,7 @@ class Facts:
         self.desktop = desktop
         # Which usable host each user is paired to. `host=None` states "the
         # paired user's host is offline, off or unavailable".
-        self.hosts = (
-            hosts if hosts is not None else ({PAIRED: host} if host else {})
-        )
+        self.hosts = hosts if hosts is not None else ({PAIRED: host} if host else {})
         self.opens = opens
         self.opened: list[dict] = []
         self.records: dict[UUID, dict] = {}
