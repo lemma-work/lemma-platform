@@ -16,11 +16,22 @@ pub(crate) enum Mutation {
 pub(crate) enum ExistingContainer {
     /// Running, and exactly what was asked for.
     Reuse,
-    /// Stopped, or running with different grants: removed and made again.
+    /// Stopped, or running with different grants or older hardening: made
+    /// again, and the old one removed only once the new one's preflight has
+    /// passed (`GuestService::replace_and_run`).
     Replace,
     /// Running a different generation (image or metadata): refused.
     Conflict,
 }
+
+/// The run-time hardening every sandbox container is created with, as a
+/// number: `--cap-drop ALL`, `no-new-privileges`, and the isolation chain
+/// installed before any sandbox starts. Stamped on the container as
+/// `lemma.work/hardening`, and raised whenever what `build_run_arguments`
+/// hardens changes, so a running container made before that change is
+/// replaced on its next ensure rather than reused with the old, weaker
+/// arguments. A container with no label predates all of it and reads as 0.
+pub(crate) const SANDBOX_HARDENING_VERSION: u64 = 1;
 
 /// The grants a container is made with, as `sandbox.ensure` asks for them and
 /// as `snapshot_from_inspect` reads them back off its labels.
@@ -40,14 +51,17 @@ pub(crate) fn existing_container_verdict(
     if snapshot["status"]["status"] != "RUNNING" {
         return ExistingContainer::Replace;
     }
-    if snapshot["metadata"] != json!(parameters.metadata) || snapshot["image"] != parameters.image
-    {
+    if snapshot["metadata"] != json!(parameters.metadata) || snapshot["image"] != parameters.image {
         return ExistingContainer::Conflict;
     }
     // Same generation. A grant is not part of it -- it is who may reach what,
     // not what runs -- so a change is applied by making the container again
-    // rather than refused.
+    // rather than refused. Nor is hardening: a container made before the
+    // current hardening is replaced, never reused.
     if snapshot["grants"] != requested_grants(parameters) {
+        return ExistingContainer::Replace;
+    }
+    if snapshot["hardening"].as_u64().unwrap_or(0) < SANDBOX_HARDENING_VERSION {
         return ExistingContainer::Replace;
     }
     ExistingContainer::Reuse
@@ -81,9 +95,12 @@ impl<E: Engine + 'static> GuestService<E> {
         }
 
         let container = container_name(&parameters.sandbox_id);
-        let should_create = match self.snapshot_optional(&parameters.sandbox_id)? {
+        // What is there now, and so what has to happen. Nothing is removed
+        // here: a replacement only takes the old container away once
+        // everything that can fail before `run` has passed.
+        let existing = match self.snapshot_optional(&parameters.sandbox_id)? {
             Some(snapshot) => match existing_container_verdict(&snapshot, &parameters) {
-                ExistingContainer::Reuse => false,
+                ExistingContainer::Reuse => None,
                 ExistingContainer::Conflict => {
                     return Err(GuestError {
                         code: "generation_conflict".into(),
@@ -92,18 +109,20 @@ impl<E: Engine + 'static> GuestService<E> {
                         status_code: 409,
                     });
                 }
-                ExistingContainer::Replace => {
-                    self.run_checked(&["rm".into(), "--force".into(), container.clone()])?;
-                    true
-                }
+                ExistingContainer::Replace => Some(Some(snapshot["status"]["status"] == "RUNNING")),
             },
-            None => true,
+            None => Some(None),
         };
-        if should_create {
+        if let Some(replacing) = existing {
             if self.sandbox_isolation {
                 ensure_sandbox_isolation(&run_iptables)?;
             }
-            self.admit_sandbox_memory(requested_memory)?;
+            // A running container being replaced is a swap, not another
+            // sandbox: counting it against the ceiling would refuse exactly
+            // the replacement that keeps the machine at the same count.
+            if replacing != Some(true) {
+                self.admit_sandbox_memory(requested_memory)?;
+            }
             self.ensure_sandbox_image_for_start(&parameters.image, parameters.workload_kind)?;
             let workspace = match parameters.workload_kind {
                 WorkloadKind::Workspace => Some(self.workspace(&parameters.sandbox_id)?),
@@ -121,7 +140,10 @@ impl<E: Engine + 'static> GuestService<E> {
                 &env_file,
                 &self.host_gateway,
             );
-            let result = self.run_checked(&arguments);
+            let result = match replacing {
+                None => self.run_checked(&arguments).map(|_| ()),
+                Some(running) => self.replace_and_run(&container, &arguments, running),
+            };
             let _ = fs::remove_file(&env_file);
             result?;
         }
@@ -139,9 +161,9 @@ impl<E: Engine + 'static> GuestService<E> {
         // Most starts finish well inside this window, so the common case still
         // returns ready in one round trip. A slower one is handed back as
         // retryable rather than waited out, and re-entry is cheap: a container
-        // that is RUNNING with matching metadata and image takes the
-        // `should_create == false` path above, skipping creation, the image
-        // check and the admission check, and lands straight back here.
+        // that is RUNNING with matching metadata, image, grants and hardening
+        // is reused above, skipping creation, the image check and the
+        // admission check, and lands straight back here.
         let deadline = Instant::now() + SANDBOX_READY_POLL_BUDGET;
         let mut last_snapshot = None;
         let mut applications_healthy = false;
@@ -308,6 +330,47 @@ impl<E: Engine + 'static> GuestService<E> {
                 self.purge_workspace(&sandbox_id)?;
                 self.remove_runtime_token(&sandbox_id)?;
                 Ok(json!({"purged": existing.is_some()}))
+            }
+        }
+    }
+
+    /// Replace `container` with a new one made from `arguments`, without
+    /// ever leaving the sandbox with neither.
+    ///
+    /// Called only after every fallible preflight has passed. A running
+    /// container is renamed aside, not removed, so that when `run` fails the
+    /// user's sandbox is put back exactly as it was; it is removed only once
+    /// the new one exists. A stopped container has nothing running to keep,
+    /// and is removed immediately before `run`.
+    pub(crate) fn replace_and_run(
+        &self,
+        container: &str,
+        arguments: &[String],
+        running: bool,
+    ) -> Result<(), GuestError> {
+        if !running {
+            self.run_checked(&["rm".into(), "--force".into(), container.into()])?;
+            return self.run_checked(arguments).map(|_| ());
+        }
+        let aside = format!("{container}-replaced");
+        // A leftover from an earlier replacement that died half-way; absent
+        // is the ordinary case, so its failure means nothing.
+        let _ = self.run_checked(&["rm".into(), "--force".into(), aside.clone()]);
+        self.run_checked(&["rename".into(), container.into(), aside.clone()])?;
+        match self.run_checked(arguments) {
+            Ok(_) => {
+                // The new one is up; the old one is only in the way now, and
+                // a failure to remove it leaves a stray container rather than
+                // a broken sandbox. The next replacement removes it first.
+                let _ = self.run_checked(&["rm".into(), "--force".into(), aside]);
+                Ok(())
+            }
+            Err(error) => {
+                // Whatever `run` left behind under the name, then the old one
+                // back under it.
+                let _ = self.run_checked(&["rm".into(), "--force".into(), container.into()]);
+                self.run_checked(&["rename".into(), aside, container.into()])?;
+                Err(error)
             }
         }
     }
