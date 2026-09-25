@@ -216,6 +216,34 @@ impl<E: Engine + 'static> GuestService<E> {
         })
     }
 
+    /// Where mutations take their cross-process lock.
+    pub(crate) fn mutation_lock_path(&self) -> PathBuf {
+        self.state_root.join("run/mutations.lock")
+    }
+
+    /// An exclusive `flock` held for one mutation, waiting for any other
+    /// process's. Released by the kernel when the file is dropped or its
+    /// holder dies, so a guestd killed mid-request never leaves it held.
+    pub(crate) fn lock_mutations_across_processes(&self) -> Result<fs::File, GuestError> {
+        use std::os::fd::AsRawFd;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(self.mutation_lock_path())
+            .map_err(|error| GuestError::engine(format!("mutation lock: {error}")))?;
+        loop {
+            // SAFETY: a descriptor this scope owns, for the call's duration.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(file);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(GuestError::engine(format!("mutation lock: {error}")));
+            }
+        }
+    }
+
     pub fn handle(&self, request: GuestRequest) -> GuestResponse {
         match self.try_handle(request) {
             Ok(result) => GuestResponse::success(result),
@@ -252,14 +280,21 @@ impl<E: Engine + 'static> GuestService<E> {
         // guest for far longer. When one queue served both, that wait timed
         // the probe out, the host concluded the runtime was gone, and it tore
         // down the database forwarders under a running backend.
+        //
+        // And across processes. On Windows each request is its own guestd
+        // (`wsl.exe --exec lemma-guestd request`), so the in-process mutex
+        // above serialised nothing there: two `sandbox.ensure`s for the same
+        // sandbox, or an ensure beside a `core.stop`, ran side by side. The
+        // file lock is what does it on that transport, and is harmless on the
+        // resident one.
         let _serialised = if is_observation(&request.operation) {
             None
         } else {
-            Some(
-                self.mutations
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            )
+            let in_process = self
+                .mutations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Some((in_process, self.lock_mutations_across_processes()?))
         };
         if !is_observation(&request.operation) {
             refuse_unbound_data()?;
