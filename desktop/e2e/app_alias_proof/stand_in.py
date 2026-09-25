@@ -85,15 +85,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def cors(self):
         origin = self.headers.get("Origin")
-        return [("Access-Control-Allow-Origin", origin), ("Access-Control-Allow-Credentials", "true")] if origin else []
+        return (
+            [
+                ("Access-Control-Allow-Origin", origin),
+                ("Access-Control-Allow-Credentials", "true"),
+            ]
+            if origin
+            else []
+        )
 
     def do_OPTIONS(self):
-        self.send(204, "", headers=self.cors() + [("Access-Control-Allow-Methods", "POST, GET")])
+        self.send(
+            204,
+            "",
+            headers=self.cors() + [("Access-Control-Allow-Methods", "POST, GET")],
+        )
 
     def do_POST(self):
         if self.path == "/signin":
             cookie = f"{SESSION}={TOKEN}; Domain=lemma.localhost; Path=/; HttpOnly; SameSite=Lax"
-            self.send(200, "{}", "application/json", self.cors() + [("Set-Cookie", cookie)])
+            self.send(
+                200, "{}", "application/json", self.cors() + [("Set-Cookie", cookie)]
+            )
             return
         self.send(404, "no")
 
@@ -120,7 +133,8 @@ def main() -> None:
     for port in ports:
         server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-    print("ready", flush=True)
+    sys.stdout.write("ready\n")
+    sys.stdout.flush()
     sys.stdin.read()
 
 
