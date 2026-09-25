@@ -11,6 +11,48 @@ pub(crate) enum Mutation {
     PurgeExact,
 }
 
+/// What `sandbox.ensure` does with a container that already exists.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ExistingContainer {
+    /// Running, and exactly what was asked for.
+    Reuse,
+    /// Stopped, or running with different grants: removed and made again.
+    Replace,
+    /// Running a different generation (image or metadata): refused.
+    Conflict,
+}
+
+/// The grants a container is made with, as `sandbox.ensure` asks for them and
+/// as `snapshot_from_inspect` reads them back off its labels.
+///
+/// Compared on every ensure, because a grant is fixed into the container when
+/// it is created: reusing a running one made with a different grant would
+/// silently keep the old reach -- the alias it was meant to lose, or lack the
+/// one it was meant to gain.
+pub(crate) fn requested_grants(parameters: &EnsureParameters) -> Value {
+    json!({"host_access": parameters.host_access})
+}
+
+pub(crate) fn existing_container_verdict(
+    snapshot: &Value,
+    parameters: &EnsureParameters,
+) -> ExistingContainer {
+    if snapshot["status"]["status"] != "RUNNING" {
+        return ExistingContainer::Replace;
+    }
+    if snapshot["metadata"] != json!(parameters.metadata) || snapshot["image"] != parameters.image
+    {
+        return ExistingContainer::Conflict;
+    }
+    // Same generation. A grant is not part of it -- it is who may reach what,
+    // not what runs -- so a change is applied by making the container again
+    // rather than refused.
+    if snapshot["grants"] != requested_grants(parameters) {
+        return ExistingContainer::Replace;
+    }
+    ExistingContainer::Reuse
+}
+
 impl<E: Engine + 'static> GuestService<E> {
     pub(crate) fn ensure(&self, value: Value) -> Result<Value, GuestError> {
         let parameters: EnsureParameters = serde_json::from_value(value)
@@ -40,25 +82,21 @@ impl<E: Engine + 'static> GuestService<E> {
 
         let container = container_name(&parameters.sandbox_id);
         let should_create = match self.snapshot_optional(&parameters.sandbox_id)? {
-            Some(snapshot)
-                if snapshot["status"]["status"] == "RUNNING"
-                    && snapshot["metadata"] == json!(parameters.metadata)
-                    && snapshot["image"] == parameters.image =>
-            {
-                false
-            }
-            Some(snapshot) if snapshot["status"]["status"] == "RUNNING" => {
-                return Err(GuestError {
-                    code: "generation_conflict".into(),
-                    message: "Sandbox generation changed while it is running".into(),
-                    retryable: false,
-                    status_code: 409,
-                });
-            }
-            Some(_) => {
-                self.run_checked(&["rm".into(), "--force".into(), container.clone()])?;
-                true
-            }
+            Some(snapshot) => match existing_container_verdict(&snapshot, &parameters) {
+                ExistingContainer::Reuse => false,
+                ExistingContainer::Conflict => {
+                    return Err(GuestError {
+                        code: "generation_conflict".into(),
+                        message: "Sandbox generation changed while it is running".into(),
+                        retryable: false,
+                        status_code: 409,
+                    });
+                }
+                ExistingContainer::Replace => {
+                    self.run_checked(&["rm".into(), "--force".into(), container.clone()])?;
+                    true
+                }
+            },
             None => true,
         };
         if should_create {
