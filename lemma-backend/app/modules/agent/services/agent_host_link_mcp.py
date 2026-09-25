@@ -212,8 +212,8 @@ class AgentHostLinkMcp:
             # link that drops takes the call with it, as it always did.
             return await self._dispatched(body)
         key = tool_call_key(body.run_id, body.request_id)
-        if not await self._ledger.claim(key):
-            return self._answer_from(await self._ledger.wait(key))
+        if not await self._ledger.claim_call(key):
+            return self._answer_from(await self._ledger.wait_for_outcome(key))
         execution = asyncio.ensure_future(self._execute_and_record(body, key))
         keep_executing(execution)
         # Shielded: the link closing cancels this await, never the call.
@@ -271,7 +271,7 @@ class AgentHostLinkMcp:
 
     async def _record(self, key: str, outcome: ToolCallOutcome) -> None:
         try:
-            await self._ledger.record(key, outcome)
+            await self._ledger.record_outcome(key, outcome)
         except _TRANSIENT:
             # The caller on this link still gets its answer; only a retry of
             # the same call would find the claim and not the outcome, and it

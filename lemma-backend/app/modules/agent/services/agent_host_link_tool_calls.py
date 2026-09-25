@@ -95,16 +95,16 @@ class ToolCallLedger:
             self._redis = get_redis(url=settings.redis_url)
         return self._redis
 
-    async def claim(self, key: str) -> bool:
+    async def claim_call(self, key: str) -> bool:
         """Take the call for this arrival; False when another already has it."""
         return bool(
             await self._client().set(key, _RUNNING, nx=True, ex=self._ttl_seconds)
         )
 
-    async def record(self, key: str, outcome: ToolCallOutcome) -> None:
+    async def record_outcome(self, key: str, outcome: ToolCallOutcome) -> None:
         await self._client().set(key, outcome.model_dump_json(), ex=self._ttl_seconds)
 
-    async def read(self, key: str) -> ToolCallOutcome | None:
+    async def read_outcome(self, key: str) -> ToolCallOutcome | None:
         raw = await self._client().get(key)
         if raw is None:
             return None
@@ -113,7 +113,7 @@ class ToolCallLedger:
         except ValidationError:
             return None
 
-    async def wait(self, key: str) -> ToolCallOutcome | None:
+    async def wait_for_outcome(self, key: str) -> ToolCallOutcome | None:
         """The call's finished outcome, once the arrival executing it records it.
 
         None when the record vanished or the wait ran out: the call may or may
@@ -123,7 +123,7 @@ class ToolCallLedger:
         deadline = loop.time() + self._wait_seconds
         pause = _POLL_FIRST_SECONDS
         while True:
-            outcome = await self.read(key)
+            outcome = await self.read_outcome(key)
             if outcome is None or outcome.state != "running":
                 return outcome
             remaining = deadline - loop.time()
