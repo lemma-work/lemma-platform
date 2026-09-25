@@ -25,6 +25,7 @@ from sandbox_runtime.protocol import (
 from typing import Any
 
 from app.modules.workspace.providers.desktop_tunnel import remember_guest_address
+from app.modules.workspace.providers.profiles import FUNCTION_RUNTIME_PORT
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     ProviderCapability,
@@ -223,8 +224,13 @@ class LemmaLocalOpsMixin:
 
         The guest publishes only the ports declared as apps when the sandbox was
         created, so a port nobody declared is refused here rather than dialled
-        and timed out. The address is loopback inside the user's own machine:
-        no header opens it and nothing else can reach it.
+        and timed out.
+
+        A function sandbox's runtime also wants its credential. Every sandbox
+        in the guest shares one bridge, and the runtime executes what it is
+        sent, so it takes calls only with the per-sandbox token delivered to it
+        at create (`function_runtime_env`) -- and this is how the caller the
+        lease is handed to gets it.
         """
         snapshot = await self._status(instance.provider_id, deadline_at=deadline_at)
         apps = _status_object(snapshot).get("apps")
@@ -234,7 +240,17 @@ class LemmaLocalOpsMixin:
             if isinstance(value, dict) and value.get("port") == port:
                 url = value.get("private_url")
                 if isinstance(url, str) and url:
-                    return SandboxEndpoint(url=url)
+                    headers = (
+                        {
+                            "X-Lemma-Runtime-Token": self._runtime_credentials.token(
+                                instance.provider_id
+                            )
+                        }
+                        if port == FUNCTION_RUNTIME_PORT
+                        and instance.provider_id.startswith("f-")
+                        else {}
+                    )
+                    return SandboxEndpoint(url=url, headers=headers)
         raise ProviderRejected(f"managed runtime does not expose sandbox port {port}")
 
     async def deliver_secret(

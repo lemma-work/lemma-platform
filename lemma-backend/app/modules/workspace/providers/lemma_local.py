@@ -29,6 +29,7 @@ import shutil
 from datetime import datetime
 from time import monotonic
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 
 
@@ -128,11 +129,27 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         return f"{prefix}-{sandbox_id.hex}"
 
     def _guest_id_from_name(self, name: str) -> tuple[str, SandboxKind] | None:
+        """The guest id a name refers to, whichever of the two names it is.
+
+        The service names a sandbox by its fenced container name; the sweep
+        hands back what `list_objects` reported, which is the guest id itself
+        (the guest has no other name for it). Accepting only the first made
+        every orphan the sweep found survive it: `destroy` parsed nothing out
+        of `w-<hex>`, returned as if it had succeeded, and the sweep logged the
+        sandbox reclaimed while it went on running.
+        """
         parsed = naming.parse_container_name(name)
-        if parsed is None:
+        if parsed is not None:
+            sandbox_id, kind, _ = parsed
+            return self._guest_id(sandbox_id, kind), kind
+        sandbox_id = _sandbox_id_from_guest_id(name)
+        if sandbox_id is None:
             return None
-        sandbox_id, kind, _ = parsed
-        return self._guest_id(sandbox_id, kind), kind
+        kind = SandboxKind.WORKSPACE if name.startswith("w-") else SandboxKind.FUNCTION
+        # Only the canonical spelling, so a name that merely parses is not
+        # treated as one this provider minted.
+        guest_id = self._guest_id(sandbox_id, kind)
+        return (guest_id, kind) if guest_id == name else None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -186,7 +203,10 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                     # running sandbox. The guest validates every entry and
                     # rejects the whole ensure on a bad one, which is the
                     # behaviour a caller that starts setting it will want.
-                    "env": dict(spec.env),
+                    "env": {
+                        **dict(spec.env),
+                        **({} if workspace else self.function_runtime_env(guest_id)),
+                    },
                     "runtime_token": (
                         self._runtime_credentials.token(guest_id) if workspace else None
                     ),
@@ -227,6 +247,28 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             running=_is_running(snapshot),
             storage_adopted=existed,
         )
+
+    def function_runtime_env(self, guest_id: str) -> dict[str, str]:
+        """What a function sandbox's runtime is started with to guard itself.
+
+        Its credential, which it then requires on every call but the readiness
+        probe -- every sandbox in the guest shares one bridge, and the runtime
+        runs whatever artifact it is sent -- and the one gateway it may fetch
+        artifacts from and report to: the backend's callback address, which is
+        also what the function dispatcher names. `reach_port` hands the
+        credential to the caller the lease goes to.
+        """
+        env = {
+            "LEMMA_FUNCTION_RUNTIME_TOKEN": self._runtime_credentials.token(guest_id)
+        }
+        gateway = (
+            urlsplit(self._config.callback_url).hostname
+            if self._config.callback_url
+            else None
+        )
+        if gateway:
+            env["LEMMA_FUNCTION_GATEWAY_HOSTS"] = gateway
+        return env
 
     async def inspect(
         self, name: str, *, deadline_at: datetime

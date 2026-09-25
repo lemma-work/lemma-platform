@@ -287,3 +287,109 @@ async def test_schema_route_forwards_same_function_token() -> None:
     assert response.status_code == 200
     assert observed["function_token"] == "delegated-function-token"
     assert observed["revision_hash"] == revision_hash
+
+
+async def test_a_configured_runtime_refuses_every_call_without_its_credential(
+    monkeypatch,
+) -> None:
+    """Another sandbox on the bridge can reach this port. Without the
+    per-sandbox credential it can neither run code here nor cancel a run;
+    only the readiness probe is open."""
+
+    monkeypatch.setenv("LEMMA_FUNCTION_RUNTIME_TOKEN", "sandbox-credential")
+    function_id = uuid4()
+    run_id = uuid4()
+    invoked: list[str] = []
+
+    class _Runtime:
+        async def invoke(self, **kwargs):
+            invoked.append("invoke")
+            return _report()
+
+        async def cancel(self, *_args):
+            invoked.append("cancel")
+            return True
+
+        async def close(self):
+            return None
+
+    app = create_app(max_workers=1, max_cached_revisions=1)
+    assert "LEMMA_FUNCTION_RUNTIME_TOKEN" not in __import__("os").environ, (
+        "the credential must not be inherited by the workers that run user code"
+    )
+    app.state.runtime = _Runtime()
+    headers = {
+        "Authorization": "Bearer any-function-token",
+        "If-Match": f'"sha256:{"a" * 64}"',
+        "X-Lemma-Gateway-Url": "https://gateway.lemma.test",
+    }
+    body = _invocation(function_id).model_dump(mode="json")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://runtime.test"
+    ) as client:
+        for credential in (None, "wrong", ""):
+            extra = {} if credential is None else {"X-Lemma-Runtime-Token": credential}
+            run = await client.post(
+                f"/functions/{function_id}/runs/{run_id}",
+                headers={**headers, **extra},
+                json=body,
+            )
+            assert run.status_code == 401, credential
+            schemas = await client.post(
+                f"/functions/{function_id}/schemas", headers={**headers, **extra}
+            )
+            assert schemas.status_code == 401, credential
+            cancel = await client.post(
+                f"/functions/{function_id}/runs/{run_id}:cancel", headers=extra
+            )
+            assert cancel.status_code == 401, credential
+        assert invoked == []
+
+        assert (await client.get("/healthz")).status_code == 200
+        allowed = await client.post(
+            f"/functions/{function_id}/runs/{run_id}",
+            headers={**headers, "X-Lemma-Runtime-Token": "sandbox-credential"},
+            json=body,
+        )
+        assert allowed.status_code == 200
+        cancel = await client.post(
+            f"/functions/{function_id}/runs/{run_id}:cancel",
+            headers={"X-Lemma-Runtime-Token": "sandbox-credential"},
+        )
+        assert cancel.status_code == 202
+    assert invoked == ["invoke", "cancel"]
+
+
+async def test_a_gateway_outside_the_allowlist_is_refused(monkeypatch) -> None:
+    """The artifact is fetched from, and verified against, whatever gateway
+    the caller names -- so the provider names the only one allowed."""
+
+    monkeypatch.setenv("LEMMA_FUNCTION_GATEWAY_HOSTS", "host.lemma.internal")
+    function_id = uuid4()
+    app = create_app(max_workers=1, max_cached_revisions=1)
+
+    class _Runtime:
+        async def invoke(self, **kwargs):
+            return _report()
+
+        async def close(self):
+            return None
+
+    app.state.runtime = _Runtime()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://runtime.test"
+    ) as client:
+        for gateway, status in (
+            ("http://attacker.example:8080", 422),
+            ("http://host.lemma.internal:8711", 200),
+        ):
+            response = await client.post(
+                f"/functions/{function_id}/runs/{uuid4()}",
+                headers={
+                    "Authorization": "Bearer any-function-token",
+                    "If-Match": f'"sha256:{"a" * 64}"',
+                    "X-Lemma-Gateway-Url": gateway,
+                },
+                json=_invocation(function_id).model_dump(mode="json"),
+            )
+            assert response.status_code == status, gateway
