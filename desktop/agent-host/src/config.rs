@@ -243,8 +243,7 @@ pub struct TargetConfig {
 impl TargetConfig {
     /// Whether this pairing is the Lemma installed on this computer: plain
     /// HTTP, which pairing and `HostConfig::validate` allow only to a
-    /// loopback address and only when opted into. Not resolved again here: a
-    /// name like `api.127.0.0.1.sslip.io` needs the network to resolve, and
+    /// loopback address and only when opted into. Not resolved again here:
     /// being offline must not turn the local pairing into a remote one.
     ///
     /// Host execution is offered on this pairing alone. Every other pairing --
@@ -285,6 +284,7 @@ impl HostConfig {
         if paths.config.exists() {
             let mut value: Self = serde_json::from_slice(&std::fs::read(&paths.config)?)?;
             value.migrate_host_execution();
+            value.migrate_retired_local_hosts();
             return Ok(value);
         }
         let config = Self {
@@ -306,6 +306,33 @@ impl HostConfig {
         for target in &mut self.targets {
             if target.is_local_install() {
                 target.host_execution = true;
+            }
+        }
+    }
+
+    /// Move a local pairing off a hostname Lemma Desktop no longer serves.
+    ///
+    /// Desktop served itself on the public loopback wildcard
+    /// `app.127.0.0.1.sslip.io` for a while, and now serves `app.lemma.localhost`
+    /// on the same ports. A pairing recorded under the old name still reached
+    /// the same backend, but only while public DNS answered -- and the app now
+    /// matches pairings against its own origin, so the old spelling read as a
+    /// pairing with somebody else. Only the local pairing, and only the host:
+    /// scheme, port and path are kept exactly. In memory; the next save writes
+    /// it that way.
+    pub(crate) fn migrate_retired_local_hosts(&mut self) {
+        const RETIRED: [&str; 3] = [
+            "app.127.0.0.1.sslip.io",
+            "api.127.0.0.1.sslip.io",
+            "127.0.0.1.sslip.io",
+        ];
+        for target in &mut self.targets {
+            let retired = target
+                .base_url
+                .host_str()
+                .is_some_and(|host| RETIRED.contains(&host.to_ascii_lowercase().as_str()));
+            if retired && target.is_local_install() {
+                let _ = target.base_url.set_host(Some("app.lemma.localhost"));
             }
         }
     }
@@ -477,6 +504,53 @@ mod tests {
                 .iter()
                 .map(|target| &target.name)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_local_pairing_moves_off_the_retired_loopback_wildcard() {
+        let target = |url: &str, insecure: bool| TargetConfig {
+            target_id: Uuid::new_v4(),
+            name: url.into(),
+            base_url: url::Url::parse(url).unwrap(),
+            host_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            host_secret: "secret".into(),
+            enabled: true,
+            allow_insecure_http: insecure,
+            draining: false,
+            refresh_generation: 0,
+            session_paused: false,
+            host_execution: false,
+        };
+        let mut config = HostConfig {
+            installation_id: Uuid::new_v4().to_string(),
+            targets: vec![
+                target("http://app.127.0.0.1.sslip.io:61000/", true),
+                target("http://api.127.0.0.1.sslip.io:61001/x", true),
+                // Not a local pairing: plain http was never opted into.
+                target("http://app.127.0.0.1.sslip.io:61002/", false),
+                target("https://api.lemma.work/", false),
+                target("http://app.10.0.0.7.sslip.io:61003/", true),
+            ],
+            max_runs: default_max_runs(),
+            legacy_host_execution: false,
+        };
+        config.migrate_retired_local_hosts();
+        let urls: Vec<&str> = config
+            .targets
+            .iter()
+            .map(|target| target.base_url.as_str())
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                "http://app.lemma.localhost:61000/",
+                "http://app.lemma.localhost:61001/x",
+                "http://app.127.0.0.1.sslip.io:61002/",
+                "https://api.lemma.work/",
+                "http://app.10.0.0.7.sslip.io:61003/",
+            ]
         );
     }
 

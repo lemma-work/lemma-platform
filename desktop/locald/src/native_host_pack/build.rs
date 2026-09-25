@@ -329,27 +329,14 @@ pub(crate) fn build(
         // Removable once no install can still be carrying v0.7.0 cookies.
         ("SESSION_COOKIE_OLDER_DOMAIN", String::new()),
         // The other half, and only meaningful together with the domain above:
-        // apps call the API through their own origin so the request is
-        // first-party. Off by default in the backend, because on a real domain
-        // an app subdomain and the API host are already same-site and this
-        // would widen the refresh cookie for nothing.
-        // Only where the app host and the API host are *not* already same-site.
-        //
-        // On `*.localhost` a browser can derive no registrable domain, so those
-        // two are different sites and an app's call to the API is third-party --
-        // hence the same-origin `/_lemma` door, and the widened refresh cookie
-        // that makes it work. On a real registrable domain they are same-site
-        // already and the door buys nothing but a whole-API alias on the origin
-        // that renders user-authored HTML.
-        (
-            "APP_API_VIA_APP_ORIGIN",
-            if domain.frames_carry_cookies() {
-                "false"
-            } else {
-                "true"
-            }
-            .to_owned(),
-        ),
+        // apps call the API through their own origin (`/_lemma`) so the
+        // request is first-party. Always on here: WebKit derives no site
+        // wider than the host from `*.localhost`, so an app host calling the
+        // API host is cross-site. It is also what makes the macOS alias work
+        // with no special case -- the SDK's `apiUrl` is relative, so an app
+        // framed through `app.lemma.localhost:<alias port>` calls that same
+        // origin, which forwards to the backend like every other request.
+        ("APP_API_VIA_APP_ORIGIN", "true".to_owned()),
         (
             "APP_BASE_DOMAIN",
             format!("{}:{backend_port}", domain.apps_domain()),

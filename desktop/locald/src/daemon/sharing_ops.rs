@@ -515,7 +515,7 @@ impl Daemon {
             .map(|(_, backend_port)| {
                 format!(
                     "http://{}:{backend_port}",
-                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                    crate::local_domain::LocalDomain::current().frontend_host()
                 )
             })
             .unwrap_or_else(|| state.api_url.clone());

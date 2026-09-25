@@ -66,8 +66,8 @@ fn detailed_status_reports_reachability_not_just_liveness() {
 #[test]
 fn plain_http_is_opted_into_only_on_loopback() {
     use crate::local_domain::LocalDomain;
-    let sslip = LocalDomain::parse(Some("sslip"));
-    let is_loopback_http = |url: &str| is_loopback_http_for(url, &sslip);
+    let domain = LocalDomain::current();
+    let is_loopback_http = |url: &str| is_loopback_http_for(url, &domain);
 
     assert!(is_loopback_http("http://localhost:8710"));
     assert!(is_loopback_http("http://127.0.0.1:8710/api"));
@@ -80,21 +80,8 @@ fn plain_http_is_opted_into_only_on_loopback() {
     assert!(is_loopback_http(
         "http://apps.lemma.localhost:52502/internal"
     ));
-    // And the hostname it serves itself on now. A shipped install resolves
-    // to the loopback wildcard, because a browser derives no registrable
-    // domain from `*.localhost` and a framed pod app needs one. This is the
-    // same failure as the line above, one domain later: pairing died
-    // silently and onboarding sat on "Connecting this computer" for ever.
-    assert!(is_loopback_http("http://app.127.0.0.1.sslip.io:61624"));
-    assert!(is_loopback_http(
-        "http://apps.127.0.0.1.sslip.io:61624/internal"
-    ));
     // A LAN or public address over plain HTTP stays refused.
-    // Somebody else's sslip host is somebody else's machine, not ours.
-    assert!(!is_loopback_http("http://app.10.0.0.7.sslip.io:61624"));
-    assert!(!is_loopback_http(
-        "http://app.127.0.0.1.sslip.io.evil:61624"
-    ));
+    assert!(!is_loopback_http("http://app.lemma.localhost.evil:61624"));
     assert!(!is_loopback_http("http://192.168.1.10:8710"));
     assert!(!is_loopback_http("http://localhost.evil.example:8710"));
     // ".localhost" must be the suffix, not a substring someone else owns.

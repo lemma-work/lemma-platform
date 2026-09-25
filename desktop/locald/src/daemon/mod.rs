@@ -12,6 +12,7 @@ use interprocess::local_socket::{prelude::*, ListenerOptions};
 use serde_json::{json, Value};
 
 use crate::agent_host::AgentHostSupervisor;
+use crate::app_alias::AppAliasService;
 use crate::config_operations::{ConfigOperation, ConfigOperations};
 use crate::host_process::HostProcessManager;
 use crate::lifecycle::Lifecycle;
@@ -36,7 +37,7 @@ use crate::PROTOCOL_VERSION;
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Bump whenever Desktop must replace a durable daemon even when the public
 // app/host-pack release has not changed (for example, a test-build hotfix).
-const DAEMON_API_REVISION: u64 = 7;
+const DAEMON_API_REVISION: u64 = 8;
 
 /// Broadcasts held for a subscriber that is not keeping up.
 ///
@@ -65,6 +66,9 @@ pub struct Daemon {
     operator_config: Arc<OperatorConfigStore>,
     config_operations: Option<ConfigOperations>,
     sharing: Option<Arc<SharingController>>,
+    /// Same-site aliases for pod apps the macOS workspace frames. Present
+    /// wherever the backend's port is known; see `crate::app_alias`.
+    app_aliases: Option<Arc<AppAliasService>>,
     lifecycle: Lifecycle,
     agent_lifecycle: Lifecycle,
     shutdown_running: AtomicBool,
@@ -158,11 +162,11 @@ impl Daemon {
                 // Every daemon launch starts from the private canonical origin.
                 state.url = format!(
                     "http://{}:{frontend_port}",
-                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                    crate::local_domain::LocalDomain::current().frontend_host()
                 );
                 state.api_url = format!(
                     "http://{}:{backend_port}",
-                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                    crate::local_domain::LocalDomain::current().frontend_host()
                 );
                 remember_derived_origin(&state, &paths.state, &mut healed);
             }
@@ -210,6 +214,17 @@ impl Daemon {
                     })
             })
             .transpose()?;
+        let app_aliases = host_processes
+            .as_ref()
+            .and_then(|manager| manager.application_ports())
+            .map(|(frontend_port, backend_port)| {
+                let log_path = paths.log.clone();
+                let log: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |line: &str| {
+                    let _ = crate::protocol::append_bounded_daemon_log(&log_path, line);
+                });
+                AppAliasService::new(&paths.root, frontend_port, backend_port, log).map(Arc::new)
+            })
+            .transpose()?;
         let agent_host = Arc::new(AgentHostSupervisor::discover(&paths.root));
         let config_operations = match ConfigOperations::load(
             paths.root.join("config-operations.json"),
@@ -246,6 +261,7 @@ impl Daemon {
             runtime.set_lemma_ports(loopback_ports::daemon_lemma_ports(
                 host_processes.clone(),
                 sharing.clone(),
+                app_aliases.clone(),
                 Arc::clone(&agent_host),
             ));
             let owner_switch = Arc::clone(&agent_host);
@@ -268,6 +284,7 @@ impl Daemon {
             operator_config,
             config_operations,
             sharing,
+            app_aliases,
             lifecycle: Lifecycle::default(),
             agent_lifecycle: Lifecycle::default(),
             shutdown_running: AtomicBool::new(false),
@@ -287,6 +304,11 @@ impl Daemon {
         self.prime_backend_environment();
         self.start_host_status_monitor();
         self.start_agent_host_monitor();
+        if let Some(aliases) = self.app_aliases.clone() {
+            // Off the accept loop: rebinding a dozen ports is quick, but the
+            // shell is polling this socket and should never wait on it.
+            thread::spawn(move || aliases.restore());
+        }
 
         for connection in listener.incoming() {
             match connection {

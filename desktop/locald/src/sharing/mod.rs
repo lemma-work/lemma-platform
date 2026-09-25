@@ -75,7 +75,7 @@ pub enum SharingMode {
 
 mod cloudflare;
 mod files;
-mod gateway;
+pub(crate) mod gateway;
 mod interfaces;
 mod ngrok;
 mod process;

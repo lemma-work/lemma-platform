@@ -130,13 +130,13 @@ fn renders_packaged_managed_runtime_without_compatibility_supervisor() {
     // every pod app load unauthenticated; see the note beside the value.
     assert_eq!(
         manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"],
-        LocalDomain::from_env().cookie_domain()
+        LocalDomain::current().cookie_domain()
     );
     assert_eq!(
         manifest["services"][0]["env"]["API_URL"],
         format!(
             "http://{}:{backend_port}",
-            LocalDomain::from_env().frontend_host()
+            LocalDomain::current().frontend_host()
         )
     );
     // And the browser-visible one is NOT widened with it. These cookies are
@@ -150,7 +150,7 @@ fn renders_packaged_managed_runtime_without_compatibility_supervisor() {
         manifest["services"][1]["env"]["NEXT_PUBLIC_API_URL"],
         format!(
             "http://{}:{backend_port}",
-            LocalDomain::from_env().frontend_host()
+            LocalDomain::current().frontend_host()
         )
     );
     assert_eq!(

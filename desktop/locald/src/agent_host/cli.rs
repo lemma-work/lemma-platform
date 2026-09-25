@@ -51,15 +51,10 @@ pub(crate) fn summarize_target(target: &Value) -> Value {
 /// Loopback HTTP is the one plain-HTTP case the host accepts, and only when
 /// asked. A development backend is served that way.
 pub(crate) fn is_loopback_http(url: &str) -> bool {
-    is_loopback_http_for(url, &crate::local_domain::LocalDomain::from_env())
+    is_loopback_http_for(url, &crate::local_domain::LocalDomain::current())
 }
 
-/// The check with the install's domain handed in.
-///
-/// Split so the tests can state which domain they mean. `from_env` probes DNS
-/// and caches the answer for the process, so a test that leaned on it would
-/// assert one thing on a machine with a network and the opposite on one
-/// without -- and a gate that flips with the weather gets switched off.
+/// The check with the install's domain handed in, so a test states it.
 pub(crate) fn is_loopback_http_for(url: &str, domain: &crate::local_domain::LocalDomain) -> bool {
     let Some(rest) = url.strip_prefix("http://") else {
         return false;
@@ -69,23 +64,11 @@ pub(crate) fn is_loopback_http_for(url: &str, domain: &crate::local_domain::Loca
         Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
         _ => authority,
     };
-    // Twice now. `.localhost` is reserved to loopback by RFC 6761, and matching
-    // only the three literal spellings meant this flag was never passed for a
-    // desktop install's own URL, so the host refused to pair with the very
-    // workspace that asked it to. Adding `.localhost` fixed that -- and then the
-    // base domain stopped being `.localhost`.
-    //
-    // An install now serves itself under whatever `LocalDomain` resolved,
-    // because a browser derives no registrable domain from `*.localhost` and a
-    // pod app framed by the workspace needs one. On such an install the URL is
-    // `app.127.0.0.1.sslip.io:<port>`: loopback in every way that matters --
-    // the name resolves to 127.0.0.1 and the backend binds there -- and matched
-    // by none of the spellings above. Pairing failed silently, and the
-    // onboarding step sat on "Connecting this computer" for ever.
-    //
-    // So the question this asks is the one it always meant: is this address
-    // this installation's own? Asking `LocalDomain` means the next time the
-    // domain moves, this moves with it.
+    // `.localhost` is reserved to loopback by RFC 6761, and matching only the
+    // three literal spellings meant this flag was never passed for a desktop
+    // install's own URL, so the host refused to pair with the very workspace
+    // that asked it to. Asking `LocalDomain` as well keeps this in step with
+    // whatever domain this installation serves under.
     matches!(host, "localhost" | "127.0.0.1" | "[::1]")
         || host.ends_with(".localhost")
         || domain.owns_host(host)

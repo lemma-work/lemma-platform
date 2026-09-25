@@ -59,7 +59,7 @@ fn the_host_execution_setting_is_read_from_the_hosts_config_and_defaults_off() {
     let home = tempdir().unwrap();
     let config = home.path().join("agent-host/config.json");
     assert!(!crate::agent_host::pairing::host_execution_enabled(&config));
-    let local = r#"{"base_url": "http://api.127.0.0.1.sslip.io:61000/", "allow_insecure_http": true, "host_execution": true}"#;
+    let local = r#"{"base_url": "http://app.lemma.localhost:61000/", "allow_insecure_http": true, "host_execution": true}"#;
     let hosted = r#"{"base_url": "https://api.lemma.work/", "host_execution": true}"#;
     write(&config, &format!(r#"{{"targets": [{local}]}}"#));
     assert!(crate::agent_host::pairing::host_execution_enabled(&config));
