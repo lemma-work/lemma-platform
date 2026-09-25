@@ -14,7 +14,7 @@ import {
   normalizeAssistantMarkdown,
   prepareMessagesForDisplay,
 } from "../core/agent/display.js";
-import { normalizeAgentToolName } from "../core/agent/tool-names.js";
+import { isThirdPartyMcpTool, normalizeAgentToolName } from "../core/agent/tool-names.js";
 import { parseAssistantStreamEvent } from "../assistant-events.js";
 import type { AssistantRenderableMessage } from "../core/agent/renderable.js";
 
@@ -107,6 +107,29 @@ describe("normalizeAgentToolName", () => {
     expect(normalizeAgentToolName("mcp__lemma-corp__delete_everything")).toBe(
       "mcp__lemma-corp__delete_everything",
     );
+  });
+});
+
+describe("isThirdPartyMcpTool", () => {
+  it("believes the Agent Host's source over the name", () => {
+    // A third-party tool arrives under its own bare name, which reads exactly
+    // like one of Lemma's; only the metadata says whose it is.
+    expect(isThirdPartyMcpTool("web_search", { tool_source: "mcp", tool_server: "exa" })).toBe(true);
+    expect(isThirdPartyMcpTool("exec_command", { tool_source: "lemma" })).toBe(false);
+    expect(isThirdPartyMcpTool("exec_command", { tool_source: "native" })).toBe(false);
+  });
+
+  it("reads a namespace Lemma does not own as someone else's", () => {
+    expect(isThirdPartyMcpTool("mcp__github__web_search")).toBe(true);
+    expect(isThirdPartyMcpTool("mcp.exa.web_search")).toBe(true);
+    expect(isThirdPartyMcpTool("mcp__lemma-corp__exec_command")).toBe(true);
+  });
+
+  it("keeps Lemma's own legacy spellings Lemma's", () => {
+    expect(isThirdPartyMcpTool("mcp__lemma_tools__lemma_exec_command")).toBe(false);
+    expect(isThirdPartyMcpTool("lemma_tools_lemma_web_search")).toBe(false);
+    expect(isThirdPartyMcpTool("web_search")).toBe(false);
+    expect(isThirdPartyMcpTool("web_search", null)).toBe(false);
   });
 });
 

@@ -3,6 +3,7 @@ import { source } from "@/data";
 import type { SharedLink } from "@/data";
 import { CheckIcon, CopyIcon, ExternalIcon } from "@/ui/icons";
 import { Modal } from "@/shell/modal";
+import { copyText } from "@/desktop/clipboard";
 
 /** Sharing a document.
  *
@@ -49,8 +50,7 @@ function Copyable({ url, label }: { url: string; label: string }) {
             <button
                 className="btn"
                 onClick={() => {
-                    navigator.clipboard
-                        ?.writeText(url)
+                    copyText(url)
                         .then(() => {
                             setCopied(true);
                             window.setTimeout(() => setCopied(false), 1400);

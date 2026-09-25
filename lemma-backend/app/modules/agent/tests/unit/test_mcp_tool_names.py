@@ -14,7 +14,6 @@ import pytest
 from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
     exported_tool_name,
-    is_provider_scoped_lemma_mcp_tool_name,
     normalize_local_mcp_tool_name,
 )
 
@@ -53,7 +52,6 @@ class TestNamespacesLemmaDoesNotOwn:
             normalize_local_mcp_tool_name("mcp__github__create_issue")
             == "mcp__github__create_issue"
         )
-        assert not is_provider_scoped_lemma_mcp_tool_name("mcp__github__create_issue")
 
     def test_someone_elses_server_named_after_us_is_still_theirs(self) -> None:
         """The server name is matched whole. `lemma-corp` is not `lemma`."""
@@ -61,15 +59,15 @@ class TestNamespacesLemmaDoesNotOwn:
             normalize_local_mcp_tool_name("mcp__lemma-corp__delete_everything")
             == "mcp__lemma-corp__delete_everything"
         )
-        assert not is_provider_scoped_lemma_mcp_tool_name(
-            "lemma-corp.delete_everything"
+        assert (
+            normalize_local_mcp_tool_name("lemma-corp.delete_everything")
+            == "lemma-corp.delete_everything"
         )
 
     def test_a_word_starting_with_lemma_is_not_a_namespace(self) -> None:
         """The server name has to be followed by a separator. Without that check
         `lemmatize_text` reads as the `lemma` server's `tize_text`."""
         assert normalize_local_mcp_tool_name("lemmatize_text") == "lemmatize_text"
-        assert not is_provider_scoped_lemma_mcp_tool_name("lemmatize_text")
 
     def test_a_native_tool_is_left_alone(self) -> None:
         for native in ("WebSearch", "Bash", "read_file"):

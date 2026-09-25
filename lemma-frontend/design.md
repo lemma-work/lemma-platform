@@ -59,3 +59,39 @@ and prepare an editable composer draft without sending it.
 Messages expose Copy on hover or keyboard focus (always on touch screens). Code
 blocks, quotes and tables have separate copy controls with success or failure feedback.
 Email links use the configured mail handler in the current browsing context.
+
+## Desktop
+
+The workspace also runs inside the Lemma desktop app, which loads it from a
+local or hosted origin. Everything the app adds lives in `src/desktop/`, and all
+of it renders nothing in a browser.
+
+- **One door to the shell.** Call it only through `invoke` in
+  `src/desktop/bridge.ts`, which accepts the commands in `WORKSPACE_COMMANDS`
+  and nothing else. Each one must be granted in
+  `desktop/capabilities/workspace.json` and registered in `desktop/src/app.rs`;
+  `tests/desktop-ipc.test.ts` reads both. Never read `__TAURI__` elsewhere.
+- **Gate by what you need.** `isDesktop()` for "in the app at all" (hosted or
+  local); `desktopBridgeAvailable()` for commands that act on this installation
+  (local deployment and the shell). Read either through its hook
+  (`useIsDesktop`, `useDesktopBridge`) during render, so the server's "browser"
+  answer is reconciled rather than kept.
+- **Clipboard.** The local workspace is `http://*.localhost`, not a secure
+  context, so `navigator.clipboard` is absent there. Always copy with
+  `copyText` from `src/desktop/clipboard.ts`, and keep the call site's
+  success and failure feedback.
+- **External links.** Open with `openExternal`; for a URL that arrives after
+  an await, `openExternalWhenReady`. The shell decides where it lands: a pod
+  app gets its own window, anything else the system browser. Never treat a
+  `null` from `window.open` as "blocked".
+- **Report, don't prompt.** This computer connects itself; the Models page
+  shows one ranked state with Try again only after a real failure. Background
+  work (the sandbox download) gets one quiet corner notice, never a modal.
+- **Name the machine.** "This Mac", "This PC", or "This computer" from
+  `this-computer.ts`; never "this Mac" on every platform.
+- **Pod apps on macOS** open in their own window where a frame would load
+  signed out (`crossSiteFramesCarryCookies`), with a panel in the frame's place.
+- **Settings from the shell.** The menu and tray raise
+  `lemma:open-settings` with `{ section }`; the shell opens Settings there.
+- Desktop styles live in `src/styles/desktop.css`, built from the Models
+  page's own pieces, under the same token and weight rules as everything else.

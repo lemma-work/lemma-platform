@@ -41,16 +41,20 @@ from app.modules.agent.services.conversation_approvals import (
 )
 
 _PAYLOAD = {
-    "toolCall": {
-        "toolCallId": "call-9",
+    "request_id": "call-9",
+    "tool_call_id": "call-9",
+    "tool": {
+        "name": "exec_command",
+        "source": "native",
         "title": "Run rm -rf build",
         "kind": "execute",
     },
+    "input": {"cmd": "rm -rf build"},
     "message": "The local agent asked for permission to use a native tool.",
     "options": [
-        {"optionId": "reject", "kind": "reject_once", "name": "No"},
-        {"optionId": "once", "kind": "allow_once", "name": "Allow once"},
-        {"optionId": "always", "kind": "allow_always", "name": "Always allow"},
+        {"option_id": "reject", "kind": "reject_once", "name": "No"},
+        {"option_id": "once", "kind": "allow_once", "name": "Allow once"},
+        {"option_id": "always", "kind": "allow_always", "name": "Always allow"},
     ],
 }
 
@@ -69,7 +73,7 @@ class TestApprovalShape:
         args = permission_approval_tool_args(_PAYLOAD, request_id="call-9")
 
         assert args["title"] == "Run rm -rf build"
-        assert args["tool_name"] == "execute"
+        assert args["tool_name"] == "exec_command"
         assert "asked for permission" in str(args["reason"])
 
     def test_no_args_key_because_lemma_executes_nothing(self) -> None:

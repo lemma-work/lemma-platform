@@ -1,16 +1,17 @@
 //! The Rust half of the wire contract in `fixtures/wire_contract.json`.
 //!
 //! `lemma-backend` asserts the same file from Python. Neither side can move
-//! alone: the enum has to name the same events, and the two text extractors
-//! have to agree character for character, because the host accumulates streamed
-//! text with one and the backend re-accumulates it with the other. The run
-//! spec is the third: both sides declare its fields, and only the fixture says
+//! alone: the two text extractors have to agree character for character,
+//! because the host accumulates streamed text with one and the backend
+//! re-accumulates it with the other; the tool events the backend turns into
+//! conversation messages have to be ones this host sends; and the run spec
+//! has to carry the same fields on both sides, with only the fixture saying
 //! which of them the backend adds as it hands the command over.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec};
+use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec, ToolCallPayload, ToolResultPayload};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -21,136 +22,69 @@ fn contract() -> Value {
     serde_json::from_str(&raw).expect("the wire contract is valid JSON")
 }
 
-/// Every `EventType` this host can emit, as it appears on the wire.
-fn every_event_type() -> Vec<EventType> {
-    vec![
-        EventType::RunState,
-        EventType::UserMessage,
-        EventType::AgentMessageChunk,
-        EventType::AgentMessageUpsert,
-        EventType::AgentThoughtChunk,
-        EventType::AgentThoughtUpsert,
-        EventType::PlanUpsert,
-        EventType::ToolCallUpsert,
-        EventType::ToolCallUpdate,
-        EventType::UsageUpdate,
-        EventType::ConfigUpdate,
-        EventType::PermissionRequest,
-        EventType::Terminal,
-    ]
-}
+// The event types, the wire enums and the link's frame vocabulary and close
+// codes are held to this same file by unit tests next to their declarations:
+// `protocol::tests::the_wire_enums_match_the_contract_exactly` and
+// `link::protocol::tests`. They read the names from serde and from the
+// declarations themselves, which a list written out here could only repeat.
 
-#[test]
-fn the_event_type_enum_matches_the_contract() {
-    let declared = contract()["event_types"]
-        .as_array()
-        .expect("event_types is a list")
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .expect("an event type is a string")
-                .to_owned()
-        })
-        .collect::<BTreeSet<_>>();
-
-    let ours = every_event_type()
-        .into_iter()
-        .map(|event_type| {
-            serde_json::to_value(event_type)
-                .expect("an event type serializes")
-                .as_str()
-                .expect("as a string")
-                .to_owned()
-        })
-        .collect::<BTreeSet<_>>();
-
-    assert_eq!(
-        ours, declared,
-        "an event one side emits and the other does not know is an event that \
-         reaches the backend and is dropped"
-    );
-}
-
-/// Guards `every_event_type` against a variant added without being listed —
-/// which would let a new event pass this file without either side agreeing.
-#[test]
-fn every_event_type_is_exhaustive() {
-    fn assert_covered(event_type: EventType) {
-        match event_type {
-            EventType::RunState
-            | EventType::UserMessage
-            | EventType::AgentMessageChunk
-            | EventType::AgentMessageUpsert
-            | EventType::AgentThoughtChunk
-            | EventType::AgentThoughtUpsert
-            | EventType::PlanUpsert
-            | EventType::ToolCallUpsert
-            | EventType::ToolCallUpdate
-            | EventType::UsageUpdate
-            | EventType::ConfigUpdate
-            | EventType::PermissionRequest
-            | EventType::Terminal => {}
-        }
-    }
-    for event_type in every_event_type() {
-        assert_covered(event_type);
-    }
-}
-
-/// The host must hand every field of a tool-call update through untouched.
+/// Tool events as the contract pins them are events this host can have sent.
 ///
-/// This side owns only half the promise — the backend reads the arguments and
-/// the result back out of what lands here, and asserts that half against the
-/// same fixture. What the host has to guarantee is that nothing is dropped on
-/// the way: `rawInput` on a refining update is the only place a streamed call's
-/// arguments ever appear, so an update this normalizer declined to forward
-/// would leave them unrecoverable no matter what the backend did.
+/// The fixture's `tool_events` are the backend's half: it asserts the
+/// conversation message it makes of each. That is only worth anything while
+/// those events are ones this side produces, so each payload has to read as
+/// the host's own type and write back out unchanged -- a field renamed,
+/// dropped or added on either side fails here rather than as a tool call the
+/// backend silently cannot read. Whether the host produces them from real
+/// adapter output is the golden transcripts' job (`normalize_golden.rs`).
 #[test]
-fn tool_call_updates_survive_normalization() {
-    for case in contract()["tool_calls"]
+fn tool_events_are_ones_the_host_emits() {
+    for case in contract()["tool_events"]
         .as_array()
-        .expect("tool_calls is a list")
+        .expect("tool_events is a list")
     {
         let name = case["name"].as_str().unwrap_or("unnamed");
-        for update in case["updates"].as_array().expect("updates is a list") {
-            let parsed = serde_json::from_value(update.clone())
-                .unwrap_or_else(|error| panic!("case {name:?}: unparseable update: {error}"));
-            let (_, object_id, payload) = lemma_agent_host::acp::normalize_session_update(&parsed)
-                .unwrap_or_else(|| panic!("case {name:?}: {update} was dropped"));
-
-            assert_eq!(
-                object_id.as_deref(),
-                update["toolCallId"].as_str(),
-                "case {name:?}: the call's id did not survive"
+        let events = case["events"].as_array().expect("events is a list");
+        let mut opened = None;
+        for event in events {
+            let event_type: EventType = serde_json::from_value(event["type"].clone())
+                .unwrap_or_else(|error| panic!("case {name:?}: unknown event type: {error}"));
+            let object_id = event["object_id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("case {name:?}: a tool event names its call"));
+            assert!(
+                object_id.len() <= 255,
+                "case {name:?}: object_id exceeds the column the backend stores it in"
             );
-            for field in ["rawInput", "rawOutput", "title"] {
-                let Some(expected) = update.get(field) else {
-                    continue;
-                };
-                assert_eq!(
-                    payload.get(field),
-                    Some(expected),
-                    "case {name:?}: {field} did not survive normalization"
-                );
-            }
-            // `status` is the exception, and only in one direction. ACP makes
-            // `pending` the default and serde skips defaults, so an opening
-            // call arrives with no status at all — which is fine, because
-            // "pending" tells the backend nothing it does not already know from
-            // the call opening. A *terminal* status is the opposite: it is the
-            // only signal that the call is closed and its result is final, so
-            // losing one would leave the call open forever and the run would
-            // synthesize a return saying it never finished.
-            if let Some(status) = update["status"].as_str()
-                && status != "pending"
-            {
-                assert_eq!(
-                    payload.get("status").and_then(Value::as_str),
-                    Some(status),
-                    "case {name:?}: a terminal status did not survive normalization"
-                );
-            }
+            let payload = &event["payload"];
+            let round_trip = match event_type {
+                EventType::ToolCall => {
+                    let call: ToolCallPayload = serde_json::from_value(payload.clone())
+                        .unwrap_or_else(|error| {
+                            panic!("case {name:?}: not a tool_call payload: {error}")
+                        });
+                    opened = Some(object_id.to_owned());
+                    serde_json::to_value(call).unwrap()
+                }
+                EventType::ToolCallResult => {
+                    assert_eq!(
+                        opened.as_deref(),
+                        Some(object_id),
+                        "case {name:?}: a result follows the call it closes"
+                    );
+                    let result: ToolResultPayload = serde_json::from_value(payload.clone())
+                        .unwrap_or_else(|error| {
+                            panic!("case {name:?}: not a tool_call_result payload: {error}")
+                        });
+                    serde_json::to_value(result).unwrap()
+                }
+                EventType::ToolCallProgress => payload.clone(),
+                other => panic!("case {name:?}: {other:?} is not a tool event"),
+            };
+            assert_eq!(
+                &round_trip, payload,
+                "case {name:?}: the host would not send this payload as written"
+            );
         }
     }
 }
@@ -182,8 +116,9 @@ fn chunk_text_matches_the_contract() {
 ///
 /// Exceeding one is not a graceful degradation. An `object_id` over the column
 /// length gets its whole batch refused, which the host reads as the run's fault
-/// and answers by discarding the transcript; a `max_runs` over the cap makes
-/// every poll 422, so the host reports itself offline indefinitely. Both were
+/// and answers by discarding the transcript; a `max_runs` over the cap made
+/// every poll 422, and now fails every frame that reports the host's capacity,
+/// so the host reports itself offline indefinitely. Both were
 /// unbounded here, and neither limit was written down anywhere both sides read.
 #[test]
 fn the_host_respects_the_bounds_the_backend_enforces() {

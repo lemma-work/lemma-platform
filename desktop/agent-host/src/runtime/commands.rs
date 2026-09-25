@@ -196,6 +196,7 @@ impl TargetWorker {
             // between fails exactly like this one. The refresh reschedules
             // itself on the normal interval, so this cannot compound.
             self.refresh_due = std::time::Instant::now();
+            self.force_probe = true;
             // Both revisions in the detail, not only in this log line. The
             // detail is what reaches Lemma on the rejection and is stored with
             // the command, and "how far behind was it?" is the first question
@@ -417,7 +418,7 @@ impl TargetWorker {
                 provider_seen: AtomicBool::new(true),
                 dispatched: AtomicBool::new(true),
                 stream_segments: std::sync::Mutex::new(segments),
-                events_ready: Arc::clone(&self.events_ready),
+                events_ready: self.events_ready.clone(),
             }
             .flush_stream_segments()?;
             if run.prompt_dispatched {

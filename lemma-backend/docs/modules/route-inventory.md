@@ -25,10 +25,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
 | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.update` | Update Pod Conversation |
-| POST | `/agent-host/events/append` | `agent.host.events.append` | Append Agent Host Events |
-| POST | `/agent-host/pairings/complete` | `agent.host.pairing.complete` | Complete Agent Host Pairing |
-| POST | `/agent-host/poll` | `agent.host.poll` | Poll Agent Host Commands |
-| POST | `/agent-host/revoke` | `agent.host.self_revoke` | Self Revoke Agent Host |
 | POST | `/me/runtime/agent-host-pairings` | `agent.host.pairing.create` | Create Agent Host Pairing |
 | POST | `/organizations/{organization_id}/agent-runtime/profiles` | `agent.runtime.profiles.create` | Create Agent Runtime Profile |
 | POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore` | `agent.runtime.profiles.restore` | Restore Agent Runtime Profile |
@@ -42,7 +38,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token` | `widget.embed_token` | Mint Widget Embed URL |
 | POST | `/tools/report-feedback` | `agent.tool.report_feedback` | Agent Report Feedback |
 | POST | `/tools/web-search` | `agent.tool.web_search` | Agent Web Search |
-| PUT | `/agent-host/harnesses` | `agent.host.harnesses.publish` | Publish Agent Host Harnesses |
 | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.replace` | Replace Agent Resource Permissions |
 
 ## agent_surfaces

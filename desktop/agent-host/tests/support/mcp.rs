@@ -1,152 +1,122 @@
-//! A stand-in for the workspace's MCP endpoint.
+//! A stand-in for the workspace's MCP tools.
+//!
+//! The agent's Lemma tool calls travel over the link now: the `mcp-bridge`
+//! the adapter spawns hands them to the host's relay, which sends each
+//! `tools/list` and `tools/call` as an `mcp` frame and waits on a parked call
+//! with `interaction_wait`. So this stand-in serves no HTTP. It answers those
+//! frames, reached through [`ControlPlane::serve_mcp`], with the result objects
+//! `app/mcp_server.py` produces, and records every request the way Lemma sees
+//! it: which run, which conversation, which credential.
 
 use super::*;
 
-// ---------------------------------------------------------------------------
-// Stand-in Lemma MCP endpoint.
-// ---------------------------------------------------------------------------
-
+/// One `mcp` frame, as Lemma received it.
 #[derive(Clone, Debug)]
 pub struct McpRequestRecord {
     pub conversation_id: String,
+    pub run_id: String,
+    /// The run's own credential, which Lemma authorizes every call against.
+    pub token: String,
     pub method: String,
     pub params: Value,
-    pub authorization: Option<String>,
-    pub agent_run_id: Option<String>,
-    pub protocol_version: Option<String>,
-    pub session_id: Option<String>,
-    pub accept: Option<String>,
-}
-
-#[derive(Clone)]
-pub struct LemmaMcpEndpoint {
-    pub url: String,
-    pub conversation_id: Uuid,
-    requests: Arc<Mutex<Vec<McpRequestRecord>>>,
-    deletes: Arc<Mutex<Vec<Option<String>>>>,
-    transport: McpTransport,
-    accepted: Arc<Mutex<Vec<String>>>,
-    scripted: Arc<Mutex<Vec<ScriptedFailure>>>,
-    polls: Arc<Mutex<u32>>,
 }
 
 /// A failure to serve instead of the next real answer.
 ///
-/// The endpoint could not fail at all before this: it answered 200, 202, or
-/// 401 and nothing else, so the bridge's own behaviour on a restarting backend
-/// -- the case that took every Lemma tool away from a running agent -- had no
-/// way to be exercised.
+/// The endpoint could not fail at all once: it answered and nothing else, so
+/// the bridge's own behaviour on a restarting backend -- the case that took
+/// every Lemma tool away from a running agent -- had no way to be exercised.
 #[derive(Clone, Debug)]
 pub enum ScriptedFailure {
-    /// Answer with this HTTP status and no useful body.
-    Status(StatusCode),
-    /// Answer 200 with a JSON-RPC error, the shape a dead run token really
-    /// takes: Lemma authorizes inside the handler, so the refusal never
-    /// reaches the status line.
+    /// Answer with a retryable `UNAVAILABLE` error, as a Lemma that cannot
+    /// reach its own dependencies does.
+    Unavailable,
+    /// Answer with `UNAUTHORIZED`, the shape a dead run token takes.
     Unauthorized,
+    /// Close the link without answering, as a replica restarting under the
+    /// request does. Whether the request ran is then unknowable to the host.
+    DropLink,
 }
 
-/// Which of the two wire shapes the bridge must cope with. Lemma mounts
-/// `FastMCP` with `json_response=True, stateless_http=True`, but the same bridge is the
-/// only client for any future streaming deployment, so both are covered.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum McpTransport {
-    /// `application/json` bodies and no `mcp-session-id`, i.e. what Lemma mounts.
-    StatelessJson,
-    /// `text/event-stream` bodies plus a session id the client must echo back.
-    ServerSentEvents,
+/// How a request is refused, for the control plane to deliver.
+pub(crate) enum McpFailure {
+    Refused {
+        code: &'static str,
+        message: String,
+        retryable: bool,
+    },
+    DropLink,
 }
 
 /// The tool that parks, and the durable id it parks under.
 pub const PARK_TOOL: &str = "lemma_park";
 pub const PARK_CALL_ID: &str = "parked-call-1";
-const PARKED_POLLS_BEFORE_DECISION: u32 = 2;
-
-async fn interaction_poll(
-    axum::extract::State(state): axum::extract::State<McpState>,
-    axum::extract::Path((_conversation_id, tool_call_id)): axum::extract::Path<(String, String)>,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    let mut polls = state.polls.lock().unwrap();
-    *polls += 1;
-    let answered = *polls > PARKED_POLLS_BEFORE_DECISION;
-    drop(polls);
-    if !answered {
-        return axum::http::StatusCode::NO_CONTENT.into_response();
-    }
-    axum::Json(json!({
-        "success": true,
-        "answers": {"Pick one": "Blue"},
-        "decided_for": tool_call_id,
-    }))
-    .into_response()
-}
+/// How long a person takes to decide, unless a test decides for them.
+///
+/// Long enough that an answer cannot have been sitting there before the wait
+/// was asked for, short enough not to slow the suite.
+const DEFAULT_DECISION_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Clone)]
+pub struct LemmaMcpEndpoint {
+    pub conversation_id: Uuid,
+    inner: Arc<McpState>,
+}
+
 struct McpState {
-    polls: Arc<Mutex<u32>>,
-    requests: Arc<Mutex<Vec<McpRequestRecord>>>,
-    deletes: Arc<Mutex<Vec<Option<String>>>>,
-    transport: McpTransport,
-    /// Bearers this endpoint will serve. More than one because a run's
+    requests: Mutex<Vec<McpRequestRecord>>,
+    /// Tokens this endpoint will serve. More than one because a run's
     /// credential is rotated in flight, and a real Lemma accepts the
     /// replacement it just issued alongside the one still in use.
-    accepted: Arc<Mutex<Vec<String>>>,
-    scripted: Arc<Mutex<Vec<ScriptedFailure>>>,
+    accepted: Mutex<Vec<String>>,
+    scripted: Mutex<Vec<ScriptedFailure>>,
+    waits: Mutex<u32>,
+    /// Whether decisions wait for [`LemmaMcpEndpoint::decide`] rather than
+    /// arriving on their own after [`DEFAULT_DECISION_DELAY`].
+    held: AtomicBool,
+    decided: tokio::sync::watch::Sender<bool>,
+}
+
+impl Default for LemmaMcpEndpoint {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LemmaMcpEndpoint {
-    /// How many times the bridge asked whether the parked call was decided.
-    pub fn interaction_polls(&self) -> u32 {
-        *self.polls.lock().unwrap()
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            conversation_id: Uuid::new_v4(),
+            inner: Arc::new(McpState {
+                requests: Mutex::new(Vec::new()),
+                accepted: Mutex::new(vec![MCP_BEARER.to_owned()]),
+                scripted: Mutex::new(Vec::new()),
+                waits: Mutex::new(0),
+                held: AtomicBool::new(false),
+                decided: tokio::sync::watch::channel(false).0,
+            }),
+        }
     }
 
+    /// How many times a parked call was waited on.
+    ///
     /// # Panics
-    /// If the listener cannot bind.
-    pub async fn start(transport: McpTransport) -> Self {
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let deletes = Arc::new(Mutex::new(Vec::new()));
-        let accepted = Arc::new(Mutex::new(vec![format!("Bearer {MCP_BEARER}")]));
-        let scripted = Arc::new(Mutex::new(Vec::new()));
-        let polls = Arc::new(Mutex::new(0u32));
-        let state = McpState {
-            polls: Arc::clone(&polls),
-            requests: Arc::clone(&requests),
-            deletes: Arc::clone(&deletes),
-            transport,
-            accepted: Arc::clone(&accepted),
-            scripted: Arc::clone(&scripted),
-        };
-        let app = Router::new()
-            .route(
-                "/agent-runtime/conversations/{conversation_id}/mcp",
-                post(mcp_post).delete(mcp_delete),
-            )
-            // What Lemma answers a bridge that is holding a parked tool
-            // response open: 204 while the person is still deciding, then the
-            // decision. Two 204s first, so the test proves the bridge actually
-            // waits rather than happening to ask once after the answer landed.
-            .route(
-                "/agent-runtime/conversations/{conversation_id}/interactions/{tool_call_id}",
-                axum::routing::get(interaction_poll),
-            )
-            .with_state(state);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        let conversation_id = Uuid::new_v4();
-        Self {
-            url: format!("http://{address}/agent-runtime/conversations/{conversation_id}/mcp"),
-            conversation_id,
-            requests,
-            deletes,
-            transport,
-            accepted,
-            scripted,
-            polls,
-        }
+    /// If the mutex is poisoned.
+    #[must_use]
+    pub fn interaction_waits(&self) -> u32 {
+        *self.inner.waits.lock().unwrap()
+    }
+
+    /// Hold every decision until [`Self::decide`], so a test can prove the
+    /// wait was already open when the person answered.
+    pub fn hold_decisions(&self) {
+        self.inner.held.store(true, Ordering::SeqCst);
+    }
+
+    /// The person answers.
+    pub fn decide(&self) {
+        self.inner.decided.send_replace(true);
     }
 
     /// Fail the next calls in order, then serve normally again.
@@ -154,25 +124,26 @@ impl LemmaMcpEndpoint {
     /// # Panics
     /// If the mutex is poisoned.
     pub fn fail_next(&self, failures: impl IntoIterator<Item = ScriptedFailure>) {
-        self.scripted.lock().unwrap().extend(failures);
+        self.inner.scripted.lock().unwrap().extend(failures);
     }
 
-    /// Also serve `authorization`, as Lemma does for a credential it has just
+    /// Also serve `token`, as Lemma does for a credential it has just
     /// re-issued for a run that is still in flight.
     ///
     /// # Panics
     /// If the mutex is poisoned.
-    pub fn also_accept(&self, authorization: &str) {
-        self.accepted.lock().unwrap().push(authorization.to_owned());
+    pub fn also_accept(&self, token: &str) {
+        self.inner.accepted.lock().unwrap().push(token.to_owned());
     }
 
     /// The `mcp` object Lemma puts in the encrypted `START_RUN` payload.
+    ///
+    /// No URL: the host reaches Lemma's tools over its link, and the relay
+    /// reads the run's `token` and `conversation_id` from here on every call.
     #[must_use]
     pub fn run_configuration(&self) -> Value {
         json!({
             "server_name": "lemma_tools",
-            "url": self.url,
-            "authorization": format!("Bearer {MCP_BEARER}"),
             "token": MCP_BEARER,
             "conversation_id": self.conversation_id,
         })
@@ -182,7 +153,7 @@ impl LemmaMcpEndpoint {
     /// If the recording mutex is poisoned.
     #[must_use]
     pub fn requests(&self) -> Vec<McpRequestRecord> {
-        self.requests.lock().unwrap().clone()
+        self.inner.requests.lock().unwrap().clone()
     }
 
     /// # Panics
@@ -195,94 +166,65 @@ impl LemmaMcpEndpoint {
             .collect()
     }
 
-    /// # Panics
-    /// If the recording mutex is poisoned.
-    #[must_use]
-    pub fn deletes(&self) -> Vec<Option<String>> {
-        self.deletes.lock().unwrap().clone()
-    }
-}
-
-pub(crate) fn header(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-}
-
-async fn mcp_post(
-    State(state): State<McpState>,
-    AxumPath(conversation_id): AxumPath<String>,
-    headers: HeaderMap,
-    Json(request): Json<Value>,
-) -> Response {
-    let method = request
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    state.requests.lock().unwrap().push(McpRequestRecord {
-        conversation_id,
-        method: method.clone(),
-        params: request.get("params").cloned().unwrap_or(Value::Null),
-        authorization: header(&headers, "authorization"),
-        agent_run_id: header(&headers, "x-lemma-agent-run-id"),
-        protocol_version: header(&headers, "mcp-protocol-version"),
-        session_id: header(&headers, "mcp-session-id"),
-        accept: header(&headers, "accept"),
-    });
-    let scripted = {
-        let mut scripted = state.scripted.lock().unwrap();
-        if scripted.is_empty() {
-            None
+    fn authorized(&self, body: &Value) -> Result<(), McpFailure> {
+        let presented = body["token"].as_str().unwrap_or_default();
+        if self
+            .inner
+            .accepted
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|allowed| allowed == presented)
+        {
+            Ok(())
         } else {
-            Some(scripted.remove(0))
+            Err(McpFailure::Refused {
+                code: "UNAUTHORIZED",
+                message: "Unauthorized MCP token".to_owned(),
+                retryable: false,
+            })
         }
-    };
-    match scripted {
-        Some(ScriptedFailure::Status(status)) => {
-            return (status, "scripted failure").into_response();
-        }
-        Some(ScriptedFailure::Unauthorized) => {
-            return Json(json!({
-                "jsonrpc": "2.0",
-                "id": request.get("id").cloned().unwrap_or(Value::Null),
-                "error": {"code": -32603, "message": "Unauthorized MCP token"},
-            }))
-            .into_response();
-        }
-        None => {}
     }
-    let presented = header(&headers, "authorization");
-    if !state
-        .accepted
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|allowed| Some(allowed.as_str()) == presented.as_deref())
-    {
-        return (StatusCode::UNAUTHORIZED, "bad token").into_response();
-    }
-    let Some(id) = request.get("id").cloned() else {
-        // Notifications (`notifications/initialized`) have no id; FastMCP
-        // answers 202 with no body and the bridge must not forward anything.
-        return StatusCode::ACCEPTED.into_response();
-    };
-    let body = match method.as_str() {
-        "initialize" => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {"tools": {"listChanged": false}},
-                "serverInfo": {"name": "lemma_tools", "version": "1.0.0"},
-                "instructions": "Lemma tools for the current conversation.",
-            },
-        }),
-        "tools/list" => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {"tools": [{
+
+    /// Answer one `mcp` frame's body with its result object.
+    pub(crate) fn answer(&self, body: &Value) -> Result<Value, McpFailure> {
+        let method = body["method"].as_str().unwrap_or_default().to_owned();
+        let params = body.get("params").cloned().unwrap_or(Value::Null);
+        self.inner.requests.lock().unwrap().push(McpRequestRecord {
+            conversation_id: body["conversation_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            run_id: body["run_id"].as_str().unwrap_or_default().to_owned(),
+            token: body["token"].as_str().unwrap_or_default().to_owned(),
+            method: method.clone(),
+            params: params.clone(),
+        });
+        let scripted = {
+            let mut scripted = self.inner.scripted.lock().unwrap();
+            (!scripted.is_empty()).then(|| scripted.remove(0))
+        };
+        match scripted {
+            Some(ScriptedFailure::Unavailable) => {
+                return Err(McpFailure::Refused {
+                    code: "UNAVAILABLE",
+                    message: "Lemma is restarting".to_owned(),
+                    retryable: true,
+                });
+            }
+            Some(ScriptedFailure::Unauthorized) => {
+                return Err(McpFailure::Refused {
+                    code: "UNAUTHORIZED",
+                    message: "Unauthorized MCP token".to_owned(),
+                    retryable: false,
+                });
+            }
+            Some(ScriptedFailure::DropLink) => return Err(McpFailure::DropLink),
+            None => {}
+        }
+        self.authorized(body)?;
+        match method.as_str() {
+            "tools/list" => Ok(json!({"tools": [{
                 "name": ECHO_TOOL,
                 "description": "Echo text back through Lemma.",
                 "inputSchema": {
@@ -296,89 +238,63 @@ async fn mcp_post(
                 // agent cannot call a tool it was never shown, which is exactly
                 // how the first real-provider run of this failed.
                 "name": PARK_TOOL,
-                "description":
-                    "Ask the user a question and wait for their answer.",
+                "description": "Ask the user a question and wait for their answer.",
                 "inputSchema": {"type": "object", "properties": {}},
                 "_meta": {"lemma_tool_name": "ask_user"},
-            }]},
-        }),
-        "tools/call" => {
-            let name = request
-                .pointer("/params/name")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let text = request
-                .pointer("/params/arguments/text")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if name == PARK_TOOL {
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
+            }]})),
+            "tools/call" => {
+                let name = params["name"].as_str().unwrap_or_default();
+                let text = params
+                    .pointer("/arguments/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                Ok(if name == PARK_TOOL {
+                    json!({
                         "content": [{"type": "text", "text": "{\"parked\":true}"}],
                         "structuredContent": {
                             "success": true,
                             "parked_tool_call_id": PARK_CALL_ID,
                         },
                         "isError": false,
-                    },
-                })
-            } else if name == ECHO_TOOL {
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
+                    })
+                } else if name == ECHO_TOOL {
+                    json!({
                         "content": [{"type": "text", "text": format!("lemma-echo:{text}")}],
                         "structuredContent": {"echoed": text},
                         "isError": false,
-                    },
-                })
-            } else {
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
+                    })
+                } else {
+                    json!({
                         "content": [{"type": "text", "text": format!("unknown tool {name}")}],
                         "isError": true,
-                    },
+                    })
                 })
             }
+            other => Err(McpFailure::Refused {
+                code: "INVALID_FRAME",
+                message: format!("unsupported method {other}"),
+                retryable: false,
+            }),
         }
-        other => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": {"code": -32601, "message": format!("unsupported method {other}")},
-        }),
-    };
-    match state.transport {
-        McpTransport::StatelessJson => (
-            StatusCode::OK,
-            [("content-type", "application/json")],
-            serde_json::to_string(&body).unwrap(),
-        )
-            .into_response(),
-        McpTransport::ServerSentEvents => (
-            StatusCode::OK,
-            [
-                ("content-type", "text/event-stream"),
-                ("mcp-session-id", "hermetic-mcp-session"),
-            ],
-            format!("event: message\ndata: {body}\n\n"),
-        )
-            .into_response(),
     }
-}
 
-async fn mcp_delete(
-    State(state): State<McpState>,
-    AxumPath(_conversation_id): AxumPath<String>,
-    headers: HeaderMap,
-) -> StatusCode {
-    state
-        .deletes
-        .lock()
-        .unwrap()
-        .push(header(&headers, "mcp-session-id"));
-    StatusCode::NO_CONTENT
+    /// Answer one `interaction_wait` once the person has decided.
+    ///
+    /// Lemma holds the wait open rather than answering "not yet", so the
+    /// bridge asks once and nothing polls.
+    pub(crate) async fn wait_for_decision(&self, body: &Value) -> Result<Value, McpFailure> {
+        self.authorized(body)?;
+        *self.inner.waits.lock().unwrap() += 1;
+        if self.inner.held.load(Ordering::SeqCst) {
+            let mut decided = self.inner.decided.subscribe();
+            let _ = decided.wait_for(|decided| *decided).await;
+        } else {
+            tokio::time::sleep(DEFAULT_DECISION_DELAY).await;
+        }
+        Ok(json!({
+            "success": true,
+            "answers": {"Pick one": "Blue"},
+            "decided_for": body["tool_call_id"],
+        }))
+    }
 }

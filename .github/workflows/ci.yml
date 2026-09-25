@@ -108,7 +108,7 @@ jobs:
               # triggered it.
               - 'desktop/**'
               - 'lemma-stack/**'
-              - 'lemma-harness/lib/education/concepts.ts'
+              - 'lemma-frontend/src/site/education/concepts.ts'
               - 'scripts/prepare_desktop_test_runtime.py'
               - 'scripts/build_local_guest_runtime.sh'
               - '.github/actions/setup-apple-signing/**'
@@ -151,8 +151,9 @@ jobs:
             # desktop CI steps finally runs something desktop-shaped.
             desktop_contract:
               - 'lemma-backend/**'
-              - 'lemma-harness/**'
+              - 'lemma-frontend/**'
               - 'lemma-typescript/**'
+              - 'desktop/runtime/frontend-launcher.mjs'
               - 'Makefile'
               - 'scripts/build_local_host_pack.py'
               - 'scripts/build_local_guest_runtime.sh'
@@ -767,7 +768,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             lemma-typescript/package-lock.json
-            lemma-harness/package-lock.json
+            lemma-frontend/package-lock.json
             desktop/ui-tests/package-lock.json
 
       # Chromium is ~150 MB and byte-identical between runs; the only thing
@@ -789,7 +790,7 @@ jobs:
       - name: Install chat UI test dependencies
         run: |
           npm ci --prefix lemma-typescript
-          npm ci --prefix lemma-harness
+          npm ci --prefix lemma-frontend
           npm ci --prefix desktop/ui-tests
           # The browser first, from the cache above, with no apt involved.
           npm exec --prefix desktop/ui-tests -- playwright install chromium

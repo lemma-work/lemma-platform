@@ -425,25 +425,20 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
         assert command.payload["model_name"] is None
         assert command.state == AgentHostCommandState.QUEUED.value
 
-    async def test_an_escalating_policy_value_still_fails_the_run(self) -> None:
-        """The one carried-over value that must not survive a re-aim.
-
-        Harnesses enumerate their own permission modes, so `bypassPermissions`
-        is a legal member of the option's list; the deny-list is what stops a
-        stored profile turning off the approval gate. "The harness changed" is
-        not a reason to stop enforcing that.
-        """
+    async def test_an_escalating_value_the_host_no_longer_offers_is_dropped(
+        self,
+    ) -> None:
+        """A profile saved with a value that turns off approvals cannot carry
+        it into a re-aimed run: the host publishes only the values it allows,
+        so the stored one is not a member and is dropped, and the run goes
+        ahead on the harness's own safe default. The host refuses it again at
+        session setup in any case."""
         session, command, lease, rejection, host_id = self._stale(
             config_options=[
                 {
-                    "id": "permission_mode",
-                    "category": "mode",
-                    "options": [{"value": "default"}, {"value": "bypassPermissions"}],
-                },
-                {
                     "id": "approval",
                     "category": "approval",
-                    "options": [{"value": "ask"}, {"value": "bypassPermissions"}],
+                    "options": [{"value": "ask"}],
                 },
             ],
             selections={"approval": "bypassPermissions"},
@@ -451,8 +446,8 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
 
         await apply_rejection(session, host_id=host_id, rejection=rejection)
 
-        assert command.state == AgentHostCommandState.ACKNOWLEDGED.value
-        assert lease.state == AgentHostRunState.FAILED.value
+        assert command.state == AgentHostCommandState.QUEUED.value
+        assert "approval" not in command.payload["config_selections"]
 
     async def test_an_unready_harness_keeps_its_own_reason(self) -> None:
         """Re-aiming at a harness that cannot take work loses the sentence.

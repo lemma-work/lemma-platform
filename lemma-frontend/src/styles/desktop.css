@@ -1,0 +1,131 @@
+/* ── Desktop ───────────────────────────────────────────────────────────
+   What only the Lemma desktop app draws. Every rule here belongs to a
+   component under `src/desktop/`, and every one of those renders nothing in
+   a browser — so this file costs a browser some bytes and no layout.
+   Built from the Models page's own pieces (`.mgroup`, `.mrow__state`) where
+   one exists, so this computer reads as one more computer, not a widget. */
+
+/* This computer, heading its own group on the Models page. */
+.thismac__body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 11px 13px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-top: 0;
+}
+.thismac__body:last-child { border-radius: 0 0 var(--r-md) var(--r-md); }
+.thismac__detail {
+    flex: 1 1 240px;
+    min-width: 0;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink-3);
+    overflow-wrap: anywhere;
+}
+.thismac__acts { display: flex; align-items: center; gap: 12px; flex: none; }
+.thismac__acts .btn { display: inline-flex; align-items: center; gap: 6px; }
+.thismac__problem { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--bad); }
+.thismac .mgroup__empty,
+.thismac .mlist { border-top: 1px solid var(--line); }
+
+/* The sandbox download: one quiet card in the corner, above the work and
+   out of the composer's way. */
+.desk-notice {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 60;
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+    width: min(360px, calc(100vw - 32px));
+    padding: 12px 8px 12px 14px;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    box-shadow: var(--depth-raise);
+    animation: desk-notice-in 160ms ease-out;
+}
+.desk-notice__mark { display: grid; place-items: center; min-width: 20px; min-height: 20px; color: var(--ink-3); }
+.desk-notice[data-kind="ready"] .desk-notice__mark { color: var(--ok); }
+.desk-notice[data-kind="unavailable"] .desk-notice__mark { color: var(--wait); }
+.desk-notice__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.desk-notice__body b { font-weight: 500; font-size: 13px; }
+.desk-notice__body span { font-size: 12px; line-height: 1.45; color: var(--ink-3); }
+.desk-notice__close { width: 32px; height: 32px; }
+@keyframes desk-notice-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .desk-notice { animation: none; } }
+
+/* Which folder on this computer a conversation works in. Sits on the
+   composer's own gutter, as quiet as its note line. */
+.folder-chip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    width: min(100%, calc(var(--reading-w) + var(--gutter) * 2));
+    padding: 0 var(--gutter) 6px;
+    font-size: var(--t-meta);
+    color: var(--ink-3);
+}
+.folder-chip__pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 280px;
+    min-height: 28px;
+    padding: 3px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    cursor: pointer;
+}
+.folder-chip__pick span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-chip__pick:hover { background: var(--chrome); color: var(--ink); }
+.folder-chip__clear { width: 28px; height: 28px; }
+.folder-chip__problem { flex-basis: 100%; color: var(--bad); }
+@media (max-width: 767px) {
+    .folder-chip { padding-inline: 10px; }
+    .folder-chip__pick, .folder-chip__clear { min-height: 44px; }
+    .folder-chip__clear { width: 44px; }
+}
+
+/* An app that has to open in its own window, standing where its frame
+   would be. */
+.app-window {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: var(--canvas);
+}
+.app-window[hidden] { display: none; }
+.app-window__card {
+    width: min(420px, 100%);
+    padding: 22px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--depth-rest);
+}
+.app-window__mark {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+    background: var(--chrome);
+    color: var(--ink-2);
+}
+.app-window__card h3 { margin: 0 0 6px; font-size: 15px; font-weight: 500; }
+.app-window__card p { margin: 0 0 16px; font-size: 13px; line-height: 1.5; color: var(--ink-3); }
+.app-window__card .btn { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }

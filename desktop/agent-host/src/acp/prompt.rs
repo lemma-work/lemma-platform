@@ -1,9 +1,6 @@
 //! What the agent is asked, and how its updates are read back.
 
-use super::{
-    ContentBlock, Digest, Duration, EventType, Future, JsonMap, Map, RunSpec, Sha256, TextContent,
-    Value,
-};
+use super::{ContentBlock, Duration, Future, Map, RunSpec, TextContent, Value};
 
 /// The prompt as ACP content blocks.
 ///
@@ -167,52 +164,6 @@ pub(crate) fn extract_text(value: &Value) -> Option<String> {
     }
 }
 
-/// One ACP session update as the event Lemma stores.
-///
-/// Public so `tests/wire_contract.rs` can hold it to the same shared fixture
-/// the backend's tool-call reader is held to. The two halves are separable and
-/// both load-bearing: this one promises that nothing an adapter reported is
-/// dropped on the way, and the backend's promises that it is read back out of
-/// the fields it landed in.
-#[must_use]
-pub fn normalize_session_update(
-    update: &agent_client_protocol::schema::v1::SessionUpdate,
-) -> Option<(EventType, Option<String>, JsonMap)> {
-    let mut value = serde_json::to_value(update).ok()?;
-    let object = value.as_object_mut()?;
-    let update_type = object.remove("sessionUpdate")?.as_str()?.to_owned();
-    let event_type = match update_type.as_str() {
-        "user_message_chunk" => EventType::UserMessage,
-        "agent_message_chunk" => EventType::AgentMessageChunk,
-        "agent_thought_chunk" => EventType::AgentThoughtChunk,
-        "tool_call" => EventType::ToolCallUpsert,
-        "tool_call_update" => EventType::ToolCallUpdate,
-        "plan" | "plan_update" => EventType::PlanUpsert,
-        "usage_update" => EventType::UsageUpdate,
-        "config_option_update" | "current_mode_update" => EventType::ConfigUpdate,
-        "available_commands_update" | "session_info_update" => EventType::RunState,
-        _ => return None,
-    };
-    if event_type == EventType::ToolCallUpsert {
-        // ACP omits its default Pending status during serialization. The
-        // backend must still know that absent arguments are not final yet.
-        object
-            .entry("status")
-            .or_insert_with(|| Value::String("pending".to_owned()));
-    }
-    flatten_content_text(object);
-    let object_id = find_string(object, &["toolCallId", "tool_call_id", "id", "contentId"])
-        .map(shorten_object_id);
-    Some((
-        event_type,
-        object_id,
-        object
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect(),
-    ))
-}
-
 /// How long each request made before the prompt may take.
 ///
 /// `initialize`, `session/new` and `session/load` are the three round trips
@@ -237,53 +188,6 @@ pub(crate) async fn before_prompt_deadline<T>(
                 SETUP_REQUEST_TIMEOUT.as_secs()
             )),
         ),
-    }
-}
-
-/// The backend stores an event's `object_id` in a 255-character column, and
-/// nothing stopped an adapter's tool-call id from being longer.
-///
-/// The cost was out of all proportion to the cause: the batch carrying that id
-/// is refused as malformed, the host reads a refusal as the run's own fault,
-/// replays once, and then discards the whole transcript. One verbose id from an
-/// adapter and the user's entire conversation turn disappears.
-///
-/// Truncating alone would collide -- ids that share a long prefix are exactly
-/// the shape adapters generate -- so the tail becomes a hash of the original.
-/// The id only has to be stable and unique within a run, which this is.
-pub(crate) fn shorten_object_id(id: String) -> String {
-    const LIMIT: usize = 255;
-    if id.len() <= LIMIT {
-        return id;
-    }
-    let digest = Sha256::digest(id.as_bytes());
-    let suffix = format!("-{digest:x}");
-    // Cut the kept prefix on a character boundary, so a multi-byte id does not
-    // panic here on its way to being reported.
-    let mut keep = LIMIT - suffix.len();
-    while keep > 0 && !id.is_char_boundary(keep) {
-        keep -= 1;
-    }
-    format!("{}{suffix}", &id[..keep])
-}
-
-pub(crate) fn flatten_content_text(object: &mut Map<String, Value>) {
-    let text = object
-        .get("content")
-        .and_then(|content| {
-            content
-                .as_object()
-                .and_then(|content| content.get("text"))
-                .and_then(Value::as_str)
-        })
-        .map(str::to_owned);
-    if let Some(text) = text {
-        object.insert("text".to_owned(), Value::String(text));
-    }
-    if let Some(Value::Object(tool_call)) = object.get("toolCall").cloned() {
-        for (key, value) in tool_call {
-            object.entry(key).or_insert(value);
-        }
     }
 }
 

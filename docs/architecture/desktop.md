@@ -21,7 +21,7 @@ lemma-locald ─────────────── process ledger / netw
   ├─ optional canonical-origin sharing gateway
   ├─ optional exact-owned ngrok or cloudflared child
   ├─ all-in-one Python backend (API + worker + scheduler + sandboxes + documents)
-  ├─ Next.js frontend
+  ├─ lemma-frontend (Next.js behind its own server.mjs)
   └─ lemma-runtime bridge
        └─ private Linux runtime
             ├─ PostgreSQL: lemma + sandbox databases
@@ -236,6 +236,73 @@ Health endpoints:
 Capability health is separate from core readiness. AI and embeddings may be
 preparing/degraded without making account creation or core workspace access
 unhealthy.
+
+### 5.1 Frontend hosting and runtime configuration
+
+The frontend is `lemma-frontend`, the same app hosted Lemma serves, built once
+per release and shipped in the host pack as Next's standalone output:
+
+```text
+frontend/
+  node/                      packed Node runtime
+  frontend-launcher.mjs      desktop/runtime/frontend-launcher.mjs
+  lemma-frontend/
+    server.mjs               the custom server locald starts (voice gateways)
+    server.js                Next's generated server; not started
+    server/ node_modules/ .next/ public/ content/
+```
+
+`scripts/build_local_host_pack.py` runs `LEMMA_STANDALONE=1 npm run build`
+(standalone output is opt-in in `next.config.ts`) and then
+`lemma-frontend/scripts/complete-standalone.mjs`, which traces `server.mjs`,
+its gateways and their dependencies with Next's own tracer and copies them,
+`public/` and `.next/static` into the tree. `server.mjs` recognises a
+standalone tree by Next's `server.js` beside it and then loads the config Next
+serialised into `.next/required-server-files.json` through
+`__NEXT_PRIVATE_STANDALONE_CONFIG`, exactly as the generated server does. The
+layout both sides probe is pinned by `desktop/contracts/host-pack-layout.json`.
+
+locald starts `node frontend-launcher.mjs <server.mjs>`. Source mode
+(`dev-local.sh --source`) starts `node frontend-launcher.mjs --dev
+lemma-frontend`, which runs `server.mjs --dev` from the checkout. The launcher:
+
+- refuses to start without `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SITE_URL`,
+  and defaults `NEXT_PUBLIC_AUTH_URL` to the site's `/auth`;
+- writes `public/runtime-config.js`, whose body contains the runtime
+  instance id — the frontend health check;
+- maps locald's `HOSTNAME` to `LEMMA_FRONTEND_HOST`, so the server listens on
+  loopback only. Sharing puts the gateway in front of it; the server itself
+  never answers on the LAN.
+
+Everything that differs per deployment is read when the server **starts**, not
+when it is built. `GET /site-config.js` (never cached) answers
+`window.__LEMMA_SITE__ = {...}` from the server's own environment, falling
+back to each value's build-time `NEXT_PUBLIC_*` only when it is unset; the
+root layout loads it before the app hydrates, and server rendering reads the
+same values (`lemma-frontend/src/site/runtime.ts`):
+
+| Field | Variable |
+|---|---|
+| `apiUrl` | `NEXT_PUBLIC_API_URL` |
+| `authUrl` | `NEXT_PUBLIC_AUTH_URL` |
+| `siteUrl` | `NEXT_PUBLIC_SITE_URL` |
+| `sessionTokenDomain` | `NEXT_PUBLIC_SESSION_TOKEN_DOMAIN` |
+| `appsDomainSuffix` | `NEXT_PUBLIC_APPS_DOMAIN_SUFFIX` |
+| `deployment` | `NEXT_PUBLIC_LEMMA_DEPLOYMENT` (`local` for Desktop) |
+| `analyticsKey`, `analyticsHost` | `NEXT_PUBLIC_ANALYTICS_KEY`, `NEXT_PUBLIC_ANALYTICS_HOST` |
+| `desktopDownloadUrl` | `NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL` (`null` when unset) |
+| `voiceProvider` | `NEXT_PUBLIC_VOICE_PROVIDER` |
+| `authEmailVerificationRequired` | `NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED` |
+| `runtimeInstanceId` | `NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID` |
+
+So LAN or Public activation (7.2) needs no rebuild: locald restarts the
+frontend with the rewritten `NEXT_PUBLIC_*` values and the next page load
+reads them. `deployment: local` sends `/` and `/download` to `/t`, turns off
+analytics and the consent banner, hides the Plan and Billing settings, and
+hides download links. The auth portal honours `show=signup`, `redirect_uri`
+and the shell's injected `window.__LEMMA_AUTH_CONFIG__`, whose
+`AUTH_EMAIL_VERIFICATION_REQUIRED` wins over the site config. Fonts are
+self-hosted by `next/font` at build time, so the workspace renders offline.
 
 ## 6. Ports and routing
 

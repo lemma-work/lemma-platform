@@ -17,6 +17,7 @@ import { ConnectorsSection } from "@/org/connectors";
 import { ModelsSection } from "@/org/models";
 import { OrgUsageSection } from "@/org/org-usage";
 import { Modal } from "@/shell/modal";
+import { isLocalDeployment } from "@/site/config";
 import {
     RefreshIcon, SignOutIcon, EmailIcon, ProfileIcon, AppearanceIcon,
     UsageIcon, PeopleIcon, ConnectorIcon, KeyIcon, OrgIcon, CardIcon, ReceiptIcon,
@@ -64,6 +65,16 @@ const THEIRS: Entry[] = [
         blurb: "What this organization pays for, how many seats it has bought, and who may change that." },
 ];
 
+/** Sections about paying, which a local installation has nothing to say in:
+ *  it runs the open-source backend on somebody's own machine, with no plans
+ *  to pick and no seats to buy. Hidden rather than shown empty, because an
+ *  empty Plan page reads as "billing is broken", not "there is no billing". */
+const BILLING: ReadonlySet<SettingsSection> = new Set(["plan", "team-billing"]);
+
+function offered(entries: Entry[]): Entry[] {
+    return isLocalDeployment() ? entries.filter((entry) => !BILLING.has(entry.key)) : entries;
+}
+
 export function SettingsModal({
     orgs,
     activeOrgId,
@@ -77,7 +88,11 @@ export function SettingsModal({
     initial?: SettingsSection;
     onClose: () => void;
 }) {
-    const [section, setSection] = useState<SettingsSection>(initial);
+    const yours = offered(YOURS);
+    const theirs = offered(THEIRS);
+    const [section, setSection] = useState<SettingsSection>(
+        [...yours, ...theirs].some((entry) => entry.key === initial) ? initial : "account",
+    );
     const session = useSession();
     const [leaving, setLeaving] = useState(false);
     const [signOutError, setSignOutError] = useState<string | null>(null);
@@ -93,7 +108,7 @@ export function SettingsModal({
     });
 
     const name = sample ? "Sample user" : displayName(user.data);
-    const here = [...YOURS, ...THEIRS].find((entry) => entry.key === section) ?? YOURS[0];
+    const here = [...yours, ...theirs].find((entry) => entry.key === section) ?? yours[0];
 
     function nav(entry: Entry) {
         return (
@@ -121,11 +136,11 @@ export function SettingsModal({
                             onChange={(event) => setSection(event.target.value as SettingsSection)}
                         >
                             <optgroup label="You">
-                                {YOURS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+                                {yours.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
                             </optgroup>
                             {org && (
                                 <optgroup label={org.name}>
-                                    {THEIRS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+                                    {theirs.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
                                 </optgroup>
                             )}
                         </select>
@@ -145,7 +160,7 @@ export function SettingsModal({
 
                 <nav className="settings-nav" aria-label="Settings">
                     <span className="settings-nav__label">You</span>
-                    {YOURS.map(nav)}
+                    {yours.map(nav)}
 
                     {org && <>
                         {/* Which organization these are the settings of — a
@@ -165,7 +180,7 @@ export function SettingsModal({
                                 ))}
                             </select>
                         </label>
-                        {THEIRS.map(nav)}
+                        {theirs.map(nav)}
                     </>}
                 </nav>
 

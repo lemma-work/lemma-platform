@@ -13,7 +13,10 @@ twice across the two languages and nothing used to check that the copies agree:
 * the ``RunSpec`` field list — a field added on one side and not the other is
   either a spec the host silently ignores or one this process cannot see, and
   the fixture is also where ``mcp``'s deliberate absence from this side is
-  written down so nobody closes the gap by declaring it here.
+  written down so nobody closes the gap by declaring it here;
+* the wire enums and the link's frames, close codes and error codes -- the
+  host branches on every one of them, and a value only one side knows is a
+  request nobody answers or a close the host misreads.
 """
 
 from __future__ import annotations
@@ -27,9 +30,26 @@ from uuid import uuid7
 from app.modules.agent.domain.agent_host import (
     AGENT_HOST_PROTOCOL_VERSION,
     AgentHostCapacity,
+    AgentHostCommandKind,
     AgentHostEvent,
     AgentHostEventType,
+    AgentHostHarnessHealth,
+    AgentHostRejectionCode,
     AgentHostRunSpec,
+    AgentHostRunState,
+    AgentHostStatus,
+    AgentHostToolCallPayload,
+    AgentHostToolResultPayload,
+    AgentHostToolSource,
+    AgentHostToolStatus,
+)
+from app.modules.agent.domain.agent_host_link import (
+    AGENT_HOST_LINK_HEARTBEAT_MS,
+    AGENT_HOST_LINK_PATH,
+    LINK_CLOSE_CODES,
+    HostFrameType,
+    LinkErrorCode,
+    ServerFrameType,
 )
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure.harnesses.agent_host.events import (
@@ -86,37 +106,31 @@ def test_event_text_matches_the_contract(case: dict) -> None:
 
 @pytest.mark.parametrize(
     "case",
-    CONTRACT["tool_calls"],
-    ids=[case["name"] for case in CONTRACT["tool_calls"]],
+    CONTRACT["tool_events"],
+    ids=[case["name"] for case in CONTRACT["tool_events"]],
 )
-def test_a_tool_call_arrives_with_its_arguments_and_its_result(case: dict) -> None:
-    """The other half of the tool-call contract.
+def test_normalized_tool_events_map_to_the_messages_the_contract_names(
+    case: dict,
+) -> None:
+    """The backend's half of the tool contract: map, never reinterpret.
 
-    The host's half, asserted in ``wire_contract.rs``, is that nothing an
-    adapter reported is dropped on the way here. This half is that what arrived
-    is actually read: the arguments out of whichever field carried them, and an
-    MCP result out of the envelope around it. Both halves are needed and
-    neither is sufficient — the arguments did reach this process, in
-    ``rawInput`` on a status-less update, and were thrown away on arrival.
+    The host's half, asserted in ``wire_contract.rs``, is that it emits these
+    normalized events. This half is that each becomes exactly one call and one
+    return, under the host's name, with its input verbatim and its output --
+    plus ``success``/``error`` when it did not complete -- and nothing guessed
+    in between. The backend used to read raw ACP here and got the name wrong
+    for every Codex MCP call.
     """
     normalizer = AgentHostEventNormalizer(agent_run_id=uuid7(), model_name="test")
     messages = [
         event
-        for sequence, update in enumerate(case["updates"], start=1)
+        for sequence, raw in enumerate(case["events"], start=1)
         for event in normalizer.normalize(
             AgentHostEventEnvelope(
                 sequence=sequence,
-                type=(
-                    AgentHostEventType.TOOL_CALL_UPSERT.value
-                    if update["sessionUpdate"] == "tool_call"
-                    else AgentHostEventType.TOOL_CALL_UPDATE.value
-                ),
-                object_id=update.get("toolCallId"),
-                payload={
-                    key: value
-                    for key, value in update.items()
-                    if key not in {"sessionUpdate", "toolCallId"}
-                },
+                type=AgentHostEventType(raw["type"]).value,
+                object_id=raw["object_id"],
+                payload=raw["payload"],
             )
         )
         if event.type is AgentEventType.MESSAGE
@@ -126,8 +140,23 @@ def test_a_tool_call_arrives_with_its_arguments_and_its_result(case: dict) -> No
     returns = [m for m in messages if m.data.kind is MessageKind.TOOL_RETURN]
     assert len(calls) == 1, "one tool use must render as exactly one call"
     assert len(returns) == 1, "one tool use must render as exactly one return"
+    assert calls[0].data.tool_name == case["tool_name"]
+    assert returns[0].data.tool_name == case["tool_name"]
     assert calls[0].data.tool_args == case["tool_args"]
     assert returns[0].data.tool_result == case["tool_result"]
+
+
+def test_the_tool_event_payloads_are_the_ones_this_side_models() -> None:
+    """Each fixture payload validates against the typed model the mapper
+    reads, so a field renamed on one side fails here rather than as a card
+    with no name."""
+    models = {
+        AgentHostEventType.TOOL_CALL.value: AgentHostToolCallPayload,
+        AgentHostEventType.TOOL_CALL_RESULT.value: AgentHostToolResultPayload,
+    }
+    for case in CONTRACT["tool_events"]:
+        for raw in case["events"]:
+            models[raw["type"]].model_validate(raw["payload"])
 
 
 def test_the_declared_limits_are_the_ones_this_side_enforces() -> None:
@@ -191,3 +220,57 @@ def test_the_run_spec_declares_the_fields_the_contract_names() -> None:
             f"{field} is added when the command is delivered; declaring it here "
             f"would let the plaintext be persisted with the command"
         )
+
+
+_ENUMS = {
+    "run_state": AgentHostRunState,
+    "host_status": AgentHostStatus,
+    "harness_health": AgentHostHarnessHealth,
+    "rejection_code": AgentHostRejectionCode,
+    "command_kind": AgentHostCommandKind,
+    "tool_source": AgentHostToolSource,
+    "tool_status": AgentHostToolStatus,
+}
+
+
+@pytest.mark.parametrize("name", sorted(_ENUMS))
+def test_each_wire_enum_matches_the_contract(name: str) -> None:
+    """Compared as sets, in both directions.
+
+    A value only the host knows is one this process rejects when it arrives; a
+    value only this process knows is one the host drops when it is sent.
+    """
+    assert {member.value for member in _ENUMS[name]} == set(CONTRACT["enums"][name])
+
+
+def test_every_contract_enum_is_asserted_here() -> None:
+    """A new enum in the fixture must not go unchecked on this side."""
+    assert set(CONTRACT["enums"]) == set(_ENUMS)
+
+
+def test_the_link_frames_are_the_ones_the_host_speaks() -> None:
+    """A frame one side sends and the other does not know is never answered."""
+    link = CONTRACT["link"]
+    assert {member.value for member in HostFrameType} == set(link["host_frames"])
+    assert {member.value for member in ServerFrameType} == set(link["server_frames"])
+
+
+def test_the_link_close_codes_are_the_ones_the_host_branches_on() -> None:
+    """The host's whole vocabulary for why a socket closed.
+
+    Getting one wrong is not cosmetic: three 4401s in a row make the host drop
+    its pairing, and a 4426 stops it until Desktop updates it.
+    """
+    assert LINK_CLOSE_CODES == CONTRACT["link"]["close_codes"]
+
+
+def test_the_link_error_codes_are_the_ones_the_host_acts_on() -> None:
+    assert {member.value for member in LinkErrorCode} == set(
+        CONTRACT["link"]["error_codes"]
+    )
+
+
+def test_the_link_path_and_heartbeat_are_shared() -> None:
+    link = CONTRACT["link"]
+    assert AGENT_HOST_LINK_PATH == link["path"]
+    assert AGENT_HOST_LINK_HEARTBEAT_MS == link["heartbeat_ms"]

@@ -15,6 +15,9 @@ import { OwnBot } from "./own-bot";
 import { ChannelIcon, channelKey, channelName } from "./channels";
 import { Modal } from "./modal";
 import { Mark } from "./mark";
+import { completionPath, hereWith, openAuthorization, useConnectOutcome } from "@/connect/round-trip";
+import { connectorProblem } from "@/connect/install";
+import { copyText } from "@/desktop/clipboard";
 
 /** Giving a teammate a way to be reached.
  *
@@ -58,8 +61,7 @@ function Handle({ surface }: { surface: Surface }) {
             title="Copy"
             onClick={() => {
                 clearTimeout(timer.current);
-                navigator.clipboard
-                    ?.writeText(surface.email ?? surface.handle)
+                copyText(surface.email ?? surface.handle)
                     .then(() => {
                         setCopied(true);
                         timer.current = setTimeout(() => setCopied(false), 1600);
@@ -177,7 +179,7 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
                         .startGuided(pod.id, "TELEGRAM")
                         .then(next => { setSetup(next); if (next.status === "COMPLETE" || next.status === "READY") onDone(); })
                         .catch((problem) =>
-                            setError(problem instanceof Error ? problem.message : "That could not be started."),
+                            setError(connectorProblem(problem, "That could not be started.")),
                         )
                         .finally(() => setStarting(false));
                 }}
@@ -263,13 +265,25 @@ function Account({
     const [error, setError] = useState<string | null>(null);
     const name = entry.title || channelName(entry.platform);
     const [pendingAccount, setPendingAccount] = useState<string | null>(null);
+    /* The account the provider's tab named on its way back. The only answer
+       for an account that was already fine and was simply signed into again —
+       nothing about it changes that a poll could notice. */
+    const [named, setNamed] = useState<string | null>(null);
+    useConnectOutcome((outcome) => {
+        if (outcome.connect === "connected" && outcome.account) setNamed(outcome.account);
+        else if (outcome.connect === "error") setError(outcome.reason || "The account was not connected.");
+    }, () => undefined);
 
     useEffect(() => {
         if (!link || stage !== "waiting") return;
         let stop = false;
+        const look = () => named
+            ? Promise.resolve(named)
+            /* Scoped to the install this authorisation ran against, so an
+               account on another install of the same connector is not it. */
+            : source.findAccount(pod.orgId, entry.connectorId, link.before, link.authConfigId);
         const tick = window.setInterval(() => {
-            source
-                .findAccount(pod.orgId, entry.connectorId, link.before)
+            look()
                 .then(async (accountId) => {
                     if (stop || !accountId) return;
                     stop = true;
@@ -294,7 +308,7 @@ function Account({
             stop = true;
             window.clearInterval(tick);
         };
-    }, [link, stage, pod.orgId, pod.id, entry.connectorId, entry.platform, onDone]);
+    }, [link, stage, named, pod.orgId, pod.id, entry.connectorId, entry.platform, onDone]);
 
     if (pendingAccount && stage !== "binding") return <div className="guided">
         <p role="alert">{error}</p>
@@ -316,9 +330,12 @@ function Account({
     if (link && link.authorizeUrl) {
         return (
             <div className="guided">
-                <a className="btn btn--primary" href={link.authorizeUrl} target="_blank" rel="noreferrer">
+                {/* A button, not a `noreferrer` link: the finished tab reports
+                    back to its opener and closes, rather than loading the app
+                    a second time inside itself. */}
+                <button className="btn btn--primary" onClick={() => openAuthorization(link.authorizeUrl)}>
                     Authorise {name} <ExternalIcon size={14} />
-                </a>
+                </button>
                 <p>{name} asks whether Lemma may act for you. This page notices when you are done.</p>
                 <span className="guided__wait"><RefreshIcon size={13} /> Waiting for {name}…</span>
             </div>
@@ -334,7 +351,12 @@ function Account({
                     setStage("starting");
                     setError(null);
                     source
-                        .startAccount(pod.orgId, entry.connectorId)
+                        .startAccount(
+                            pod.orgId, entry.connectorId, undefined,
+                            /* Back to this sheet. It polls for the account
+                               anyway; this is where the tab lands. */
+                            completionPath(hereWith({ reach: "1" })),
+                        )
                         .then((started) => {
                             setLink(started);
                             /* No URL means this deployment cannot start the
@@ -345,7 +367,7 @@ function Account({
                         })
                         .catch((problem) => {
                             setStage("idle");
-                            setError(problem instanceof Error ? problem.message : "That could not be started.");
+                            setError(connectorProblem(problem, "That could not be started."));
                         });
                 }}
             >

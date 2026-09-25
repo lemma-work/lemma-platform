@@ -8,21 +8,24 @@
  *  session rather than as a missing variable. Unset is a configuration error
  *  and is reported as one — a screen that names the variable, not a stack
  *  trace and not a wrong host.
- *
- *  No dependencies and no browser APIs, so the server routes that proxy a
- *  share code can read the same value as the shell without pulling the SDK in
- *  behind it.
  */
+
+import { siteRuntime } from "@/site/runtime";
 
 export const MISSING_API_URL =
     "NEXT_PUBLIC_API_URL is not set. Copy .env.example to .env.local and point it at your Lemma API.";
 
-/** Written out rather than destructured: Next inlines `NEXT_PUBLIC_*` by
- *  matching this exact expression at build time, and a variable holding
- *  `process.env` is left for a browser to resolve, where it is `undefined`. */
+/** The environment this server was started with, handed to the browser by
+ *  `/site-config.js`, and what the build was given only when neither exists
+ *  -- see `site/runtime.ts`. Read at run time because the desktop app ships
+ *  one build to every machine and learns its API origin only when it starts,
+ *  and learns another one when sharing is turned on.
+ *
+ *  `site/runtime.ts` has no dependencies and no browser APIs beyond an
+ *  optional `window`, so the server routes that proxy a share code still read
+ *  it without pulling the SDK in. */
 function fromEnvironment(): string | null {
-    const raw = process.env.NEXT_PUBLIC_API_URL;
-    const trimmed = typeof raw === "string" ? raw.trim() : "";
+    const trimmed = siteRuntime().apiUrl.trim();
     return trimmed ? trimmed.replace(/\/+$/, "") : null;
 }
 

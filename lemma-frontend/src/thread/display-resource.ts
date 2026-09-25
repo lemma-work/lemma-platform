@@ -1,3 +1,5 @@
+import { toolKey } from "./tool-name";
+
 export type DisplayResourceType =
     | "FILE"
     | "TABLE"
@@ -37,11 +39,10 @@ function str(value: unknown): string | undefined {
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-/** An agent may namespace the tool, so `mcp_display_resource` counts too. */
-export function isDisplayResourceTool(toolName: unknown): boolean {
-    if (typeof toolName !== "string") return false;
-    const normalized = toolName.toLowerCase().replace(/[.:\-\s]/g, "_").replace(/^.*__/, "");
-    return normalized === "display_resource" || normalized === "mcp_display_resource";
+/** Through the one tool-name reading, so a third-party `display_resource`
+ *  is not drawn as one of Lemma's resource cards. */
+export function isDisplayResourceTool(toolName: unknown, metadata?: Record<string, unknown> | null): boolean {
+    return toolKey(toolName, metadata) === "display_resource";
 }
 
 export function parseDisplayResource(args: unknown): DisplayResource | null {
