@@ -207,9 +207,11 @@ impl Harness {
         highest
     }
 
+    /// Every event the journal still owes Lemma for `run_id` -- all of them,
+    /// not one delivery pass's worth.
     fn pending(&self, run_id: Uuid) -> Vec<u64> {
         self.journal
-            .pending_events(self.target_id, 1024)
+            .pending_events(self.target_id, usize::MAX)
             .unwrap()
             .into_iter()
             .flat_map(|batch| batch.events)
