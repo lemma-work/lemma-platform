@@ -214,6 +214,25 @@ The exit watchdog must exceed the combined sharing, handshake, graceful stop,
 and verified VM/process fallback deadlines. A shorter watchdog can terminate
 the cleanup worker itself and leave this installation's processes running.
 
+Quits macOS issues itself -- Dock → Quit, log out, restart, shut down -- take
+the same path. The shell adds `applicationShouldTerminate:` to tao's
+application delegate, answers `NSTerminateLater`, runs the ordinary quit, and
+replies once the stack is down (or the person declined). A logout, restart or
+shutdown is not asked about. `AppHandle::restart` (Restart into Recovery,
+restart after an update) is never treated as a quit. The daemon handles
+`SIGTERM`, `SIGINT` and `SIGHUP` by running the same shutdown as
+`shutdown-daemon`, so a session ending without the app still stops the VM
+rather than cutting it off. A shutdown that fails part-way exits the daemon
+anyway -- its admission is already closed -- and the next start reclaims what
+is left by identity. "Quit Anyway" escalates the stop already requested rather
+than sending a second one. A SIGTERM'd VM helper is given the guest's declared
+stop budget (75s) plus a margin before it is killed, by the shell and by the
+runtime manager's reclaim alike.
+
+Only one daemon runs per installation root: `lemma-locald serve` takes an
+exclusive lock on `<root>/locald.lock` before it reclaims anything, so a second
+daemon exits without touching the first one's services.
+
 ## 5. Host process contract
 
 The host-pack manifest requires exactly:

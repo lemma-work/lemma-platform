@@ -27,6 +27,7 @@ mod menus;
 mod native_assets;
 mod navigation;
 mod operator_settings;
+mod os_quit;
 mod pod_windows;
 mod prompts;
 mod quitting;
@@ -56,6 +57,7 @@ use locald_events::*;
 use locald_process::*;
 use menus::*;
 use navigation::*;
+use os_quit::*;
 use pod_windows::*;
 use prompts::*;
 use quitting::*;
@@ -352,13 +354,18 @@ const QUIT_STOP_BUDGET: Duration = Duration::from_secs(45);
 /// The watchdog must outlive the verified VM-stop fallback. Exiting the shell
 /// earlier kills its cleanup worker and leaves the VM and daemon orphaned.
 /// This work runs off the UI thread; the app remains responsive throughout.
-const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(70);
+const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(150);
 const LOCALD_HANDSHAKE_BUDGET: Duration = Duration::from_secs(3);
 const LOCALD_EXIT_POLL: Duration = Duration::from_millis(100);
 const QUIT_DAEMON_GRACE_ATTEMPTS: usize = 30;
 const LOCALD_FORCE_EXIT_ATTEMPTS: usize = 150;
+/// How long a SIGTERM'd `lemma-vz` gets before it is killed. SIGTERM is a
+/// graceful guest power-off, and the guest may spend its whole declared stop
+/// budget (`GUEST_STOP_WORST_CASE_SECONDS` in lemma-runtime-manager, 75s)
+/// stopping containers -- the database last. Killing it at 25s cut Postgres
+/// off mid-checkpoint on exactly the stops that were slow.
 #[cfg(any(target_os = "macos", test))]
-const VM_STOP_GRACE_BUDGET: Duration = Duration::from_secs(25);
+const VM_STOP_GRACE_BUDGET: Duration = Duration::from_secs(90);
 #[cfg(any(target_os = "macos", test))]
 const VM_STOP_REAP_BUDGET: Duration = Duration::from_secs(5);
 

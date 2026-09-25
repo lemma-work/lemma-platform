@@ -114,8 +114,11 @@ pub(crate) fn request_quit(app: &AppHandle) {
             "Stop and Quit".into(),
         ) {
             Ok(true) => stop_then_quit(&handle),
-            Ok(false) => {}
-            Err(error) => report_action_failure(&handle, "Quit Lemma", &error),
+            Ok(false) => answer_os_quit(&handle, false),
+            Err(error) => {
+                answer_os_quit(&handle, false);
+                report_action_failure(&handle, "Quit Lemma", &error);
+            }
         }
     });
 }
@@ -150,12 +153,14 @@ pub(crate) fn stop_then_quit(app: &AppHandle) {
     ) {
         shell.quit_after_stop.store(false, Ordering::Release);
         shell.quit_confirmed.store(false, Ordering::Release);
+        answer_os_quit(app, false);
         // Confirming "Stop and Quit" and then getting neither, silently, is the
         // worst version of this. Say why the quit did not happen; the dialog
         // also tells the user that trying again is the next move.
         report_action_failure(app, "Stop Lemma and quit", &error);
         return;
     }
+    shell.daemon_stop_requested.store(true, Ordering::Release);
     show_splash_with_intent(app, "quit");
     // Nothing else bounds this. `quit_after_stop` is consumed only by a `done`
     // event that says the stop succeeded, so any other outcome -- including no
@@ -263,7 +268,7 @@ pub(crate) fn finish_quit(app: &AppHandle) {
     let exiting = app.clone();
     shell.shutdown.start(
         move || shut_down_gracefully(&worker),
-        move || exiting.exit(0),
+        move || leave_app(&exiting),
         QUIT_DAEMON_BUDGET,
     );
 }
@@ -293,9 +298,17 @@ pub(crate) fn finish_quit_after_daemon(app: &AppHandle) {
                 leave_nothing_running(&worker);
             }
         },
-        move || exiting.exit(0),
+        move || leave_app(&exiting),
         QUIT_DAEMON_BUDGET,
     );
+}
+
+/// The last step of every quit: release a terminate macOS is holding, if any,
+/// and exit. Replying first matters -- while AppKit waits on the reply it runs
+/// a modal loop that tao's own `stop:` cannot end.
+fn leave_app(app: &AppHandle) {
+    answer_os_quit(app, true);
+    app.exit(0);
 }
 
 /// Quit has to mean quit.
@@ -338,8 +351,21 @@ pub(crate) fn leave_nothing_running(app: &AppHandle) {
     // it shuts down, and a writer belonging to a window that is going away is
     // one more thing that can block the exit.
     disconnect_locald(app);
-    let outcome = connect_locald()
-        .and_then(|connection| stop_locald(connection, "quitting", QUIT_DAEMON_GRACE_ATTEMPTS));
+    let already_asked = app
+        .state::<Shell>()
+        .daemon_stop_requested
+        .load(Ordering::Acquire);
+    let outcome = connect_locald().and_then(|connection| {
+        if already_asked {
+            let pid = connection.hello["pid"]
+                .as_u64()
+                .ok_or("the local service manager did not report its process identity")?;
+            drop(connection);
+            finish_locald_stop(pid, "quitting", QUIT_DAEMON_GRACE_ATTEMPTS)
+        } else {
+            stop_locald(connection, "quitting", QUIT_DAEMON_GRACE_ATTEMPTS)
+        }
+    });
     match outcome {
         Ok(()) => append_install_log("[quit] the local service manager stopped"),
         // Not fatal, and deliberately not a dialog. The user has asked to
@@ -430,10 +456,17 @@ pub(crate) enum ExitDisposition {
 }
 
 pub(crate) fn exit_disposition(
+    restarting: bool,
     swapping_window: bool,
     may_exit: bool,
     quit_confirmed: bool,
 ) -> ExitDisposition {
+    // `AppHandle::restart` ignores `prevent_exit`, so treating a restart as a
+    // quit only raced a stop -- and a quit prompt -- against the relaunch.
+    // Restart into Recovery and Restart Now after an update both come here.
+    if restarting {
+        return ExitDisposition::Allow;
+    }
     // A server switch closes one window and opens another. In between there
     // are no windows, which looks exactly like the last one closing -- so the
     // exit is held rather than asked about or taken.

@@ -526,25 +526,37 @@ fn periodic_stopped_status_keeps_an_active_startup_phase_visible() {
 #[test]
 fn an_exit_is_allowed_held_or_turned_into_a_quit() {
     // The shutdown worker has finished. This is the exit it earned.
-    assert_eq!(exit_disposition(false, true, false), ExitDisposition::Allow);
+    assert_eq!(
+        exit_disposition(false, false, true, false),
+        ExitDisposition::Allow
+    );
 
     // A server switch closes one window before opening the next, and no
     // windows looks exactly like the last one closing.
-    assert_eq!(exit_disposition(true, false, false), ExitDisposition::Hold);
     assert_eq!(
-        exit_disposition(true, false, true),
+        exit_disposition(false, true, false, false),
+        ExitDisposition::Hold
+    );
+    assert_eq!(
+        exit_disposition(false, true, false, true),
         ExitDisposition::Hold,
         "a swap outranks everything: there is nothing to quit about"
     );
 
     // Already quitting. Starting a second one is how a confirmed quit gets a
     // second dialog put in front of it.
-    assert_eq!(exit_disposition(false, false, true), ExitDisposition::Hold);
+    assert_eq!(
+        exit_disposition(false, false, false, true),
+        ExitDisposition::Hold
+    );
 
     // Nothing else is true, so this is the gesture that starts the quit --
     // whether or not there is anything to warn about, because the daemon
     // outlives the app and has to be stopped either way.
-    assert_eq!(exit_disposition(false, false, false), ExitDisposition::Quit);
+    assert_eq!(
+        exit_disposition(false, false, false, false),
+        ExitDisposition::Quit
+    );
 }
 
 /// A swap must never be mistaken for an exit that may proceed.
@@ -555,5 +567,8 @@ fn an_exit_is_allowed_held_or_turned_into_a_quit() {
 /// there quits the app in the middle of changing servers.
 #[test]
 fn a_window_swap_outranks_a_finished_shutdown() {
-    assert_eq!(exit_disposition(true, true, false), ExitDisposition::Hold);
+    assert_eq!(
+        exit_disposition(false, true, true, false),
+        ExitDisposition::Hold
+    );
 }

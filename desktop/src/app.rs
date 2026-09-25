@@ -149,6 +149,9 @@ fn setup(
     build_main_window(&handle, mode, initial_url(mode, resume.as_ref()), true)?;
     launch_trace("window shown");
 
+    // After tao has installed its application delegate, which `build` did.
+    install_os_quit_handler(&handle);
+
     app.set_menu(build_app_menu(&handle)?)?;
     app.on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()));
 
@@ -395,9 +398,10 @@ fn on_run_event(app: &AppHandle, event: tauri::RunEvent) {
         // items the app draws itself. Fail-safe by construction: an exit is
         // only ever held once, and only when there is something running to say
         // so about.
-        tauri::RunEvent::ExitRequested { api, .. } => {
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
             let shell: State<Shell> = app.state();
             match exit_disposition(
+                code == Some(tauri::RESTART_EXIT_CODE),
                 shell.swapping_window.load(Ordering::Acquire),
                 shell.shutdown.may_exit(),
                 shell.quit_confirmed.load(Ordering::Acquire),

@@ -96,6 +96,7 @@ mod loopback_ports;
 mod monitors;
 mod reset_ops;
 mod sharing_ops;
+mod signals;
 mod stack_ops;
 mod startup_state;
 mod supervisor;

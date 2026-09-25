@@ -6,6 +6,11 @@ use super::*;
 #[cfg(target_os = "macos")]
 pub(crate) const VM_PROCESS_MARKER_SCHEMA_VERSION: u64 = 1;
 
+/// How long a verified, SIGTERM'd VM helper is given before SIGKILL.
+#[cfg(target_os = "macos")]
+pub(crate) const VM_HELPER_STOP_GRACE: Duration =
+    Duration::from_secs(crate::request::GUEST_STOP_WORST_CASE_SECONDS + 15);
+
 #[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -65,7 +70,9 @@ pub(crate) fn terminate_verified_process(pid: u32) -> io::Result<()> {
         }
         return Err(error);
     }
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // SIGTERM is a graceful guest power-off, which may take the guest's whole
+    // declared stop budget. Ten seconds killed a stopping database.
+    let deadline = Instant::now() + VM_HELPER_STOP_GRACE;
     while Instant::now() < deadline {
         // SAFETY: signal zero only checks whether this exact PID still exists.
         if unsafe { libc::kill(pid, 0) } != 0 {

@@ -324,6 +324,19 @@ pub(crate) fn stop_locald(
         .ok_or("the previous local service manager did not report its process identity")?;
     request_locald_replacement(&mut connection)?;
     drop(connection);
+    finish_locald_stop(original_pid, reason, graceful_attempts)
+}
+
+/// Wait for a daemon that has already been asked to stop, then force it.
+///
+/// Split from `stop_locald` so a quit that already sent `shutdown-daemon` --
+/// the "Quit Anyway" path -- escalates that stop instead of racing it with a
+/// second request the daemon refuses as "already stopping".
+pub(crate) fn finish_locald_stop(
+    original_pid: u64,
+    reason: &str,
+    graceful_attempts: usize,
+) -> Result<(), String> {
     if wait_for_locald_exit(graceful_attempts, reason).is_ok() {
         return Ok(());
     }
