@@ -293,3 +293,6 @@ def test_an_all_digit_hash_prefix_past_the_column_range_is_a_prefix() -> None:
     assert parse_revision_ref("267180378462") == (None, "267180378462")
     assert parse_revision_ref("r12") == (12, None)
     assert parse_revision_ref("2147483647") == (2147483647, None)
+    # Past Python's int-string conversion limit: still a prefix, never raises.
+    huge = "9" * 5000
+    assert parse_revision_ref(huge) == (None, huge)

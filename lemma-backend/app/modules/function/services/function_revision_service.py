@@ -62,7 +62,13 @@ def parse_revision_ref(ref: str) -> tuple[int | None, str | None]:
     # A hash prefix can be all decimal digits. Past the column's range it can
     # only be a prefix: as a number it fails the query ("value out of int32
     # range") before the prefix fallback in the lookup ever runs.
-    if numeric.isdigit() and int(numeric) <= _MAX_REVISION_NUMBER:
+    # Length first: `int()` of a digit string past Python's conversion limit
+    # (4300 digits) raises instead of returning a number to compare.
+    if (
+        numeric.isdigit()
+        and len(numeric) <= len(str(_MAX_REVISION_NUMBER))
+        and int(numeric) <= _MAX_REVISION_NUMBER
+    ):
         return int(numeric), None
     return None, candidate.removeprefix("sha256:")
 
