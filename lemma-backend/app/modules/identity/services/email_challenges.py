@@ -33,9 +33,10 @@ ChallengePurpose = Literal["browser_login", "chat_onboarding"]
 
 
 class ChallengeRejected(ValueError):
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, code: str = "EMAIL_CHALLENGE_REJECTED") -> None:
         super().__init__(message)
         self.message = message
+        self.code = code
 
 
 class ChallengeEmailSender(Protocol):
@@ -103,7 +104,8 @@ class EmailChallengeService:
                     and newest + timedelta(seconds=RESEND_COOLDOWN_SECONDS) > now
                 ):
                     raise ChallengeRejected(
-                        "Wait sixty seconds before requesting another code"
+                        "Wait sixty seconds before requesting another code",
+                        code="EMAIL_CHALLENGE_COOLDOWN",
                     )
                 # One statement retires the live challenges and names them: the
                 # provider-side codes to revoke come back from the UPDATE that
@@ -147,7 +149,10 @@ class EmailChallengeService:
                 await self.cancel_challenge(
                     challenge_id=receipt.id, binding=binding, purpose=purpose
                 )
-                raise ChallengeRejected("The code could not be delivered; retry")
+                raise ChallengeRejected(
+                    "The code could not be delivered; retry",
+                    code="EMAIL_CODE_DELIVERY_FAILED",
+                )
             await lease.require_ownership()
             return receipt
 
@@ -165,7 +170,10 @@ class EmailChallengeService:
             self._require_bound(row, digest, purpose, allow_revoked=True)
             assert row is not None
             if row.verified_at is not None:
-                raise ChallengeRejected("Verification is already complete")
+                raise ChallengeRejected(
+                    "Verification is already complete",
+                    code="EMAIL_CHALLENGE_ALREADY_COMPLETE",
+                )
             email = row.email
         return await self.start_challenge(
             email=email, binding=binding, purpose=purpose, sender_key=sender_key
@@ -191,7 +199,8 @@ class EmailChallengeService:
                 if row.verified_at is not None:
                     if row.verified_at + timedelta(seconds=PENDING_TTL_SECONDS) <= now:
                         raise ChallengeRejected(
-                            "Verification expired; request another code"
+                            "Verification expired; request another code",
+                            code="EMAIL_CHALLENGE_EXPIRED",
                         )
                     operation = VerifiedEmailOperation(
                         row.id, row.email, row.completed_user_id
@@ -204,11 +213,13 @@ class EmailChallengeService:
                     code = parse_code_reply(submitted_code)
                     if code is None:
                         raise ChallengeRejected(
-                            "Enter the six-digit code from your email"
+                            "Enter the six-digit code from your email",
+                            code="EMAIL_CODE_INVALID_FORMAT",
                         )
                     if row.expires_at <= now or row.attempts >= MAX_CODE_ATTEMPTS:
                         raise ChallengeRejected(
-                            "Code expired or attempts exhausted; request another code"
+                            "Code expired or attempts exhausted; request another code",
+                            code="EMAIL_CODE_EXPIRED",
                         )
                     row.attempts += 1
                     pending_check = (row.pre_auth_session_id, row.device_id, code)
@@ -226,7 +237,10 @@ class EmailChallengeService:
                 )
                 await lease.require_ownership()
                 if not accepted:
-                    raise ChallengeRejected("The code did not match; try again")
+                    raise ChallengeRejected(
+                        "The code did not match; try again",
+                        code="EMAIL_CODE_INVALID",
+                    )
                 async with self._sessions() as session:
                     row = await session.get(
                         EmailChallenge, challenge_id, with_for_update=True
@@ -234,7 +248,10 @@ class EmailChallengeService:
                     self._require_bound(row, digest, purpose)
                     assert row is not None
                     if row.expires_at <= datetime.now(timezone.utc):
-                        raise ChallengeRejected("Code expired; request another code")
+                        raise ChallengeRejected(
+                            "Code expired; request another code",
+                            code="EMAIL_CODE_EXPIRED",
+                        )
                     row.verified_at = datetime.now(timezone.utc)
                     await session.commit()
             # Verification is durable before revocation. A failed revocation is
@@ -285,4 +302,7 @@ class EmailChallengeService:
             or not hmac.compare_digest(row.binding_hash, digest)
             or (row.revoked_at is not None and not allow_revoked)
         ):
-            raise ChallengeRejected("Verification is no longer available; start again")
+            raise ChallengeRejected(
+                "Verification is no longer available; start again",
+                code="EMAIL_CHALLENGE_UNAVAILABLE",
+            )

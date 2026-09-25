@@ -4,6 +4,7 @@ import { TRANSCRIPT_ROW_ATTRIBUTE, useTranscriptScroll } from "./use-transcript-
 import { transcriptState } from "./transcript-state";
 import { ConversationLoading } from "./conversation-loading";
 import { Prose } from "./markdown";
+import { ClampedProse } from "./clamped-prose";
 import { CopyButton } from "./copy-button";
 import { Mark } from "@/shell/mark";
 import { ResourceCard } from "./resource-card";
@@ -229,7 +230,7 @@ export function Transcript({
                             <div key={turn.id} {...{ [TRANSCRIPT_ROW_ATTRIBUTE]: "" }}>
                                 {turn.day && <div className="day">{turn.day}</div>}
 
-                                {turn.notice && <div className="notice">{turn.notice}</div>}
+                                {turn.notice && <div className="notice"><ClampedProse text={turn.notice} /></div>}
 
                                 {/* Attribution above the surface, the same as a
                                     reply — a name tucked *inside* the block made
