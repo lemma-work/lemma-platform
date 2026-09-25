@@ -122,6 +122,13 @@ pub(crate) fn snapshot_from_inspect_with(
         .and_then(|value| value.get("lemma.work/host-access"))
         .and_then(Value::as_str)
         .is_none_or(|value| value != "false");
+    // Which hardening this container was made with; see
+    // `SANDBOX_HARDENING_VERSION`. No label is a container from before any.
+    let hardening = labels
+        .and_then(|value| value.get("lemma.work/hardening"))
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
     let ports = inspect
         .get("NetworkSettings")
         .and_then(Value::as_object)
@@ -172,6 +179,7 @@ pub(crate) fn snapshot_from_inspect_with(
         "image": image,
         "metadata": metadata,
         "grants": {"host_access": host_access},
+        "hardening": hardening,
         "status": {
             "id": sandbox_id,
             "ready": ready,
