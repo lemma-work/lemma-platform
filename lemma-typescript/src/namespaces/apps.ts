@@ -61,11 +61,18 @@ export class AppsNamespace {
   async allReleases(name: string, pageSize = 200) {
     const items: AppReleaseResponse[] = [];
     let pageToken: string | null | undefined;
+    const seen = new Set<string>();
     for (;;) {
       const page = await this.releases(name, { limit: pageSize, pageToken });
       items.push(...(page.items ?? []));
       pageToken = page.next_page_token;
       if (typeof pageToken !== "string" || !pageToken) return items;
+      // The loop ends only when the server says so. A cursor it has already
+      // handed out would page forever, accumulating the same rows each time.
+      if (seen.has(pageToken)) {
+        throw new Error(`Release pages for app "${name}" repeated page token "${pageToken}"; stopping.`);
+      }
+      seen.add(pageToken);
     }
   }
 
