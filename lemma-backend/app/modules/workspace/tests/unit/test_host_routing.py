@@ -227,6 +227,15 @@ async def test_a_session_without_a_recorded_host_is_not_pinned():
 
 
 class _Uow:
+    """A unit of work whose session holds one host sandbox row."""
+
+    def __init__(self, row) -> None:
+        self.session = self
+        self._row = row
+
+    async def get(self, _model, _sandbox_id):
+        return self._row
+
     async def __aenter__(self):
         return self
 
@@ -248,21 +257,17 @@ async def test_host_targets_follow_the_calling_run_not_the_conversations_latest(
     sandbox_id = host_sandbox_id(conversation_id)
     run_mac, latest_mac = uuid4(), uuid4()
 
-    class Repo:
-        def __init__(self, _uow) -> None:
-            pass
-
-        async def get(self, _sandbox_id):
-            return SimpleNamespace(
-                slug=host_sandbox_slug(conversation_id), owner_id=uuid4()
-            )
+    row = SimpleNamespace(
+        to_entity=lambda: SimpleNamespace(
+            slug=host_sandbox_slug(conversation_id), owner_id=uuid4()
+        )
+    )
 
     async def latest(*, conversation_id, user_id):
         return latest_mac, "/Users/o/latest"
 
-    monkeypatch.setattr(host_workspace, "SandboxRepository", Repo)
     monkeypatch.setattr(contract, "host_for_host_sandbox", latest)
-    targets = host_workspace.SqlHostTargets(uow_factory=_Uow)
+    targets = host_workspace.SqlHostTargets(uow_factory=lambda: _Uow(row))
 
     with run_pinned_host(
         RunHostPin(sandbox_id=sandbox_id, host_id=run_mac, root="/Users/o/mine")
