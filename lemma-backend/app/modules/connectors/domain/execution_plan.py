@@ -46,3 +46,6 @@ class ResolvedConnectorExecution:
     #: through an account somebody else connected, and analytics wants the person
     #: who acted, not the person who set it up.
     acting_user_id: UUID | None = None
+    #: Where a file *result* should land in the pod. Lemma's argument, not the
+    #: provider's, so it is split out of ``payload`` before dispatch.
+    requested_output_path: str | None = None

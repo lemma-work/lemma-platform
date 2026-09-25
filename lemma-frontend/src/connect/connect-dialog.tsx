@@ -21,6 +21,10 @@ import {
  *    - the organization has to bring its own OAuth app first;
  *    - the credential is a form to fill in;
  *    - it is a browser round trip, which is the case this app already had.
+ *
+ *  A browser round trip can still need a form first. Signing in says who the
+ *  person is, not which tenant they mean: Shopify needs the store name before
+ *  there is anywhere to send them. Those fields ride along to `onAuthorize`.
  */
 export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAuthorize }: {
     orgId: string;
@@ -31,7 +35,7 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
     onClose: () => void;
     onDone: () => void;
     /** Hands the browser round trip back to the caller, which already owns it. */
-    onAuthorize: (installId: string | null) => void;
+    onAuthorize: (installId: string | null, connectionFields?: Record<string, unknown>) => void;
 }) {
     const detail = useConnector(connector.id);
     const entry = detail.data ?? connector;
@@ -40,7 +44,11 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
 
     const ownApp = needsOwnApp(kind);
     const [bringingApp, setBringingApp] = useState(false);
-    const showingApp = ownApp || bringingApp;
+    /* The install just registered from the own-app form, once there is one.
+       From then on the dialog is on the sign-in half, even for a toolkit that
+       always needs an app of its own. */
+    const [madeInstall, setMadeInstall] = useState<string | null>(null);
+    const showingApp = (ownApp || bringingApp) && madeInstall === null;
 
     const list = useMemo(
         () => fields(showingApp ? installSchema(kind) : connectSchema(kind)),
@@ -61,6 +69,7 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
     const busy = makeInstall.isPending || connectAccount.isPending;
 
     const route = connectRoute(install, kind);
+    const authorizeAs = madeInstall ?? install?.id ?? null;
 
     const fail = (problem: unknown) => {
         const message = problem instanceof Error ? problem.message : "Couldn’t connect this account.";
@@ -82,7 +91,18 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
                     connectorId: entry.id, kind: kind?.kind, config: body, ownCredentials: true,
                 });
                 refresh();
+                if (fields(connectSchema(kind)).length > 0) {
+                    /* Still something to ask before the sign-in can start. */
+                    setMadeInstall(made.id ?? null);
+                    setValues({});
+                    setShown({});
+                    return;
+                }
                 onAuthorize(made.id ?? null);
+                return;
+            }
+            if (route === "redirect") {
+                onAuthorize(authorizeAs, body);
                 return;
             }
             if (!install) { setFailure("There is nothing to connect against yet."); return; }
@@ -113,13 +133,13 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
                 </p>
             )}
 
-            {!showingApp && route === "redirect" ? (
+            {!showingApp && route === "redirect" && list.length === 0 ? (
                 <>
                     <p className="connect-lead">
                         This one signs in through {connector.title}. You will come back here once it is done.
                     </p>
                     <div className="record-form__actions">
-                        <button className="btn btn--primary" onClick={() => onAuthorize(install?.id ?? null)}>
+                        <button className="btn btn--primary" onClick={() => onAuthorize(authorizeAs)}>
                             Continue <ExternalIcon size={13} />
                         </button>
                         {canBringOwnApp(kind) && !ownApp && (
@@ -142,12 +162,18 @@ export function ConnectDialog({ orgId, connector, install, onClose, onDone, onAu
                 </>
             ) : (
                 <>
+                    {!showingApp && route === "redirect" && (
+                        <p className="connect-lead">
+                            This one signs in through {connector.title}, once it knows which account you mean.
+                        </p>
+                    )}
                     <Fields list={list} values={ready} problems={shown} disabled={busy}
                         onChange={(name, value) => setValues({ ...ready, [name]: value })} />
                     {failure && <p className="library-problem" role="alert">{failure}</p>}
                     <div className="record-form__actions">
                         <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
-                            {busy ? "Connecting…" : showingApp ? "Save and authorise" : "Connect"}
+                            {busy ? "Connecting…" : showingApp ? "Save and authorise"
+                                : route === "redirect" ? <>Continue <ExternalIcon size={13} /></> : "Connect"}
                         </button>
                         <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
                     </div>

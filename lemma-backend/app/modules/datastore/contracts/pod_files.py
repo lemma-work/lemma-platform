@@ -60,6 +60,29 @@ async def read_pod_file(
     )
 
 
+async def read_pod_file_by_id(
+    uow, *, pod_id: UUID, file_id: UUID, ctx: Context
+) -> PodFileContent:
+    """The same, for a file named by id.
+
+    An id is stable across renames and means the same file to everyone, where
+    ``/me/...`` resolves against whoever asks -- which is why a caller handing a
+    file to someone else's automation would rather pass one. Authorization is
+    the by-path check, on the file's own path, and a file in another pod is
+    reported missing rather than read.
+    """
+    service = build_file_service(uow)
+    entity = await service.get_file(file_id, ctx)
+    if entity.pod_id != pod_id:
+        from app.modules.datastore.domain.errors import DatastoreFileNotFoundError
+
+        raise DatastoreFileNotFoundError(f"File {file_id} not found")
+    _, content = await service.download_file_content_by_path(pod_id, entity.path, ctx)
+    return PodFileContent(
+        content=content, media_type=entity.mime_type, name=entity.name
+    )
+
+
 async def write_pod_file(
     uow,
     *,
@@ -78,10 +101,31 @@ async def write_pod_file(
         directory_path=directory or "/",
     )
     return StoredPodFile(
-        pod_path=entity.path,
+        pod_path=_as_requester_path(entity.path, ctx.user_id),
         size_bytes=entity.size_bytes,
         media_type=entity.mime_type,
     )
 
 
-__all__ = ["PodFileContent", "StoredPodFile", "read_pod_file", "write_pod_file"]
+def _as_requester_path(path: str, user_id: object) -> str:
+    """``/{user_id}/x`` as ``/me/x``: the form the caller wrote, and can reuse.
+
+    The entity carries the raw storage path. Handing that back put a user id in
+    a connector result, which a caller then had to translate before passing the
+    same file to the next operation.
+    """
+    root = f"/{user_id}"
+    if path == root:
+        return "/me"
+    if path.startswith(f"{root}/"):
+        return f"/me{path.removeprefix(root)}"
+    return path
+
+
+__all__ = [
+    "PodFileContent",
+    "StoredPodFile",
+    "read_pod_file",
+    "read_pod_file_by_id",
+    "write_pod_file",
+]

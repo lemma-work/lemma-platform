@@ -643,20 +643,46 @@ def refresh_auth_config_operations(
     emit(state, result if result is not None else {"ok": True})
 
 
+def _key_value_pairs(pairs: list[str], *, option: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            raise typer.BadParameter(
+                f"expected KEY=VALUE, got {pair!r}", param_hint=option
+            )
+        values[key.strip()] = value
+    return values
+
+
 @connect_requests_app.command("create")
 def create_connect_request(
     ctx: typer.Context,
     connector: str = typer.Argument(...),
     auth_config_id: str | None = typer.Option(None, "--auth-config-id"),
+    field: list[str] = typer.Option(
+        [],
+        "--field",
+        help=(
+            "A per-connection value as KEY=VALUE, repeatable -- e.g. "
+            "--field subdomain=acme for a Shopify store."
+        ),
+    ),
 ) -> None:
     """Start an account connect request."""
     state = state_from_ctx(ctx)
+    connection_fields = _key_value_pairs(field, option="--field")
     result = run_with_client(
         ctx,
         lambda client, s: (
             client.connectors.connect_request(
                 connector,
                 auth_config_id=auth_config_id,
+                **(
+                    {"connection_fields": connection_fields}
+                    if connection_fields
+                    else {}
+                ),
             )
             if hasattr(client.connectors, "connect_request")
             else client.connectors.create_connect_request(
@@ -929,6 +955,94 @@ def _resolve_account(client: Any, state: Any, account: str | None) -> str | None
     )
 
 
+_ATTACH_HELP = (
+    "Attach a file to an argument, as FIELD=PATH (repeatable; repeat a FIELD "
+    "for a list). A pod path such as /me/q3.pdf is read server-side; "
+    "@./local.pdf is uploaded to /me/connector-uploads/ first. FIELD may be "
+    "dotted, e.g. body.file."
+)
+
+
+def _attach_files(client: Any, state: Any, body: dict, attach: list[str]) -> dict:
+    """Put each ``--attach FIELD=PATH`` into ``body`` as a file reference.
+
+    A connector file argument takes a reference the server reads with the
+    caller's own access -- ``{"pod_path": ...}`` -- so a local file goes into
+    the pod first. ``@`` marks a local path the way curl does, because an
+    absolute local path and a pod path otherwise look the same.
+    """
+    if not attach:
+        return body
+    body = dict(body)
+    seen: dict[str, list[dict]] = {}
+    for spec in attach:
+        field, sep, target = spec.partition("=")
+        if not sep or not field.strip() or not target.strip():
+            raise typer.BadParameter(
+                f"expected FIELD=PATH, got {spec!r}", param_hint="--attach"
+            )
+        seen.setdefault(field.strip(), []).append(
+            _file_reference(client, state, target.strip())
+        )
+    for field, refs in seen.items():
+        *parents, leaf = field.split(".")
+        target_dict = body
+        for key in parents:
+            nested = target_dict.get(key)
+            target_dict[key] = dict(nested) if isinstance(nested, dict) else {}
+            target_dict = target_dict[key]
+        target_dict[leaf] = refs[0] if len(refs) == 1 else refs
+    return body
+
+
+def _file_reference(client: Any, state: Any, target: str) -> dict:
+    if not target.startswith("@"):
+        return {"pod_path": target}
+    local = Path(target[1:]).expanduser()
+    if not local.is_file():
+        raise typer.BadParameter(f"no such local file: {local}", param_hint="--attach")
+    from datetime import datetime, timezone
+
+    from ..sdk import pod_client
+
+    day = datetime.now(timezone.utc).date().isoformat()
+
+    uploaded = to_plain(
+        pod_client(client, state).files.upload(
+            local,
+            directory_path=f"/me/connector-uploads/{day}",
+            search_enabled=False,
+        )
+    )
+    return {"pod_path": str(uploaded.get("path") or f"/me/{local.name}")}
+
+
+def _names_pod_files(value: Any) -> bool:
+    if isinstance(value, dict):
+        if "pod_path" in value or "file_id" in value:
+            return True
+        return any(_names_pod_files(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_names_pod_files(item) for item in value)
+    return False
+
+
+def _pod_for_files(client: Any, state: Any, body: dict) -> str | None:
+    """The selected pod, when this call reads or writes pod files.
+
+    Connector operations are organization-level, so a person's call carries no
+    pod and ``/me/...`` would have nothing to resolve against. Sent only when a
+    file is involved, so every other call is exactly the call it was.
+    """
+    if not (_names_pod_files(body) or body.get("output_path")):
+        return None
+    from ..context import selected_pod
+    from ..sdk import _ensure_pod_uuid
+
+    pod = selected_pod(state, required=False)
+    return _ensure_pod_uuid(client, state, pod) if pod else None
+
+
 def _execute_operation(
     client: Any,
     state: Any,
@@ -937,12 +1051,18 @@ def _execute_operation(
     operation: str,
     payload: dict,
     account: str | None,
+    attach: list[str] | None = None,
 ) -> Any:
     account_id = _resolve_account(client, state, account or payload.get("account_id"))
-    body = payload.get("payload", payload)
+    body = _attach_files(client, state, payload.get("payload", payload), attach or [])
     if hasattr(client.connectors, "execute"):
+        pod_id = _pod_for_files(client, state, body)
         return client.connectors.execute(
-            auth_config, operation, payload=body, account_id=account_id
+            auth_config,
+            operation,
+            payload=body,
+            account_id=account_id,
+            **({"pod_id": pod_id} if pod_id else {}),
         )
     return client.connectors.execute_operation(
         auth_config,
@@ -984,6 +1104,7 @@ def execute_operation(
         "--metadata-only",
         help="Strip large HTML body fields from the response.",
     ),
+    attach: list[str] = typer.Option([], "--attach", help=_ATTACH_HELP),
 ) -> None:
     """Execute a connector operation.
 
@@ -1008,6 +1129,7 @@ def execute_operation(
             operation=name,
             payload=payload,
             account=account,
+            attach=attach,
         )
 
     result = run_with_client(ctx, run)
@@ -1317,6 +1439,7 @@ def run_connector_operation(
         "--metadata-only",
         help="Strip large HTML body fields from the response.",
     ),
+    attach: list[str] = typer.Option([], "--attach", help=_ATTACH_HELP),
 ) -> None:
     """Run a connector operation in ONE call: resolve, check, execute.
 
@@ -1331,10 +1454,12 @@ def run_connector_operation(
 
         lemma connectors run gmail "list recent emails" --dry-run
         lemma connectors run gmail gmail_list_messages -d '{"max_results": 5}'
+        lemma connectors run gmail send_message \
+            -d '{"to": "ada@example.com", "subject": "Q3"}' --attach attachments=/me/q3.pdf
     """
     payload = read_json(json_payload, file, required=False)
     state = state_from_ctx(ctx)
-    gave_payload = json_payload is not None or file is not None
+    gave_payload = json_payload is not None or file is not None or bool(attach)
 
     def run(client, s):  # type: ignore[no-untyped-def]
         auth_config = _resolve_auth_config(client, connector)
@@ -1383,6 +1508,7 @@ def run_connector_operation(
             operation=name,
             payload=payload,
             account=account,
+            attach=attach,
         )
         typer.echo(
             f"Ran {auth_config} / {name}"

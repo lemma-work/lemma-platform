@@ -164,7 +164,8 @@ function ConnectorCard({
     const [rotating, setRotating] = useState<ConnectorAccount | null>(null);
 
     const start = useMutation({
-        mutationFn: (installId: string | null) => source.startAccount(orgId, connector.id, installId ?? undefined),
+        mutationFn: ({ installId, connectionFields }: { installId: string | null; connectionFields?: Record<string, unknown> }) =>
+            source.startAccount(orgId, connector.id, installId ?? undefined, connectionFields),
         onSuccess: (started) => {
             setConnecting(undefined);
             setLink(started);
@@ -260,7 +261,7 @@ function ConnectorCard({
                     install={connecting}
                     onClose={() => setConnecting(undefined)}
                     onDone={() => { setConnecting(undefined); onChanged(); }}
-                    onAuthorize={(installId) => start.mutate(installId)}
+                    onAuthorize={(installId, connectionFields) => start.mutate({ installId, connectionFields })}
                 />
             )}
             {rotating && (

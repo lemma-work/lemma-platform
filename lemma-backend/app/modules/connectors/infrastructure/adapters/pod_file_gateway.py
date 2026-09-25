@@ -27,6 +27,7 @@ from app.modules.datastore.contracts.pod_files import (
     PodFileContent,
     StoredPodFile,
     read_pod_file,
+    read_pod_file_by_id,
     write_pod_file,
 )
 
@@ -42,16 +43,26 @@ class DatastorePodFileGateway(PodFileGatewayPort):
         uow: object,
         *,
         read_file: PodFileReader = read_pod_file,
+        read_file_by_id: PodFileReader = read_pod_file_by_id,
         write_file: PodFileWriter = write_pod_file,
     ) -> None:
         self._uow = uow
         self._read_file = read_file
+        self._read_file_by_id = read_file_by_id
         self._write_file = write_file
 
     async def read_bytes(
         self, *, pod_id: UUID, path: str, ctx: Context
     ) -> Tuple[bytes, Optional[str], Optional[str]]:
         file = await self._read_file(self._uow, pod_id=pod_id, path=path, ctx=ctx)
+        return file.content, file.media_type, file.name
+
+    async def read_bytes_by_id(
+        self, *, pod_id: UUID, file_id: UUID, ctx: Context
+    ) -> Tuple[bytes, Optional[str], Optional[str]]:
+        file = await self._read_file_by_id(
+            self._uow, pod_id=pod_id, file_id=file_id, ctx=ctx
+        )
         return file.content, file.media_type, file.name
 
     async def write_bytes(

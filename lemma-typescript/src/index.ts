@@ -228,6 +228,7 @@ export type {
 } from "./datastore-query.js";
 
 export { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
+export { podFile, podFileById, type PodFileRef } from "./file-refs.js";
 
 // Namespace types (for advanced usage)
 export type { AgentHostNamespace } from "./namespaces/agent-host.js";

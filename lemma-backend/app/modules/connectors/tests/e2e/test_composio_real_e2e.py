@@ -484,3 +484,109 @@ async def test_composio_oauth_connect_and_reconnect_human(
         await _run_smoke_op(original_account_id)
     finally:
         _cleanup_user_accounts(fixed_test_user["id"])
+
+
+@pytest.mark.provider
+@pytest.mark.human
+@pytest.mark.timeout(900)
+@pytest.mark.asyncio
+async def test_shopify_connects_through_the_orgs_own_app_human(
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session,
+):
+    """Shopify end to end: the org's own app, the store name, one consent.
+
+    Two things Shopify needs that no other default toolkit does. Composio holds
+    no Shopify credentials, so the install carries the org's client id and
+    secret. And signing in does not say which store, so the connect request
+    carries the store's ``subdomain`` -- the field that had no way through to
+    Composio, which left Shopify impossible to connect at all.
+
+    Needs a Shopify Dev Dashboard app whose redirect URLs include
+    ``https://backend.composio.dev/api/v1/auth-apps/add``, and a store to
+    install it on::
+
+        RUN_HUMAN_OAUTH=1 SHOPIFY_CLIENT_ID=... SHOPIFY_CLIENT_SECRET=... \\
+        SHOPIFY_STORE=acme pytest -m "provider and human" -k shopify -s \\
+            app/modules/connectors/tests/e2e/test_composio_real_e2e.py
+    """
+    if not _human_oauth_enabled():
+        pytest.skip("Set RUN_HUMAN_OAUTH=1 to run the human-in-the-loop OAuth test.")
+    client_id = _env_value("SHOPIFY_CLIENT_ID")
+    client_secret = _env_value("SHOPIFY_CLIENT_SECRET")
+    store = _env_value("SHOPIFY_STORE")
+    if not (client_id and client_secret and store):
+        pytest.skip("Needs SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET and SHOPIFY_STORE.")
+    composio = _composio_client()
+
+    org_id = fixed_test_org["id"]
+    await _reseed_composio_app(db_session, "shopify")
+
+    install = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/auth-configs",
+        json={
+            "connector_id": "shopify",
+            "kind": "composio",
+            "config_source": "ORG_CUSTOM",
+            "name": f"shopify-{uuid4().hex[:8]}",
+            "config": {"client_id": client_id, "client_secret": client_secret},
+        },
+    )
+    assert install.status_code == 200, install.text
+    auth_config = install.json()
+    cr_url = f"/organizations/{org_id}/connectors/connect-requests"
+
+    try:
+        # Without the store there is nowhere to send anybody: refused up
+        # front, naming the field, before Composio is asked for anything.
+        missing = await authenticated_client.post(
+            cr_url, json={"auth_config_id": auth_config["id"]}
+        )
+        assert missing.status_code == 400, missing.text
+        assert "subdomain" in missing.text
+
+        resp = await authenticated_client.post(
+            cr_url,
+            json={
+                "auth_config_id": auth_config["id"],
+                "connection_fields": {"subdomain": store},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        row = await db_session.get(ConnectRequest, UUID(body["id"]))
+        assert row is not None
+        attributes = row.attributes or {}
+
+        print("\n\n=== HUMAN ACTION REQUIRED: install the app on your store ===")
+        print(body["authorization_url"])
+        try:
+            webbrowser.open(body["authorization_url"])
+        except Exception:
+            pass
+
+        connection_id = attributes["provider_state"]
+        _wait_for_active_connection(composio, connection_id)
+        callback = await authenticated_client.get(
+            "/connectors/connect-requests/oauth/callback",
+            params={
+                "state": attributes["state"],
+                "connectedAccountId": connection_id,
+                "format": "json",
+            },
+        )
+        assert callback.status_code == 200, callback.text
+        account = callback.json()
+        assert account["status"] == AccountStatus.CONNECTED.value
+
+        shop = await authenticated_client.post(
+            f"/organizations/{org_id}/connectors/{auth_config['name']}/operations/"
+            "SHOPIFY_GET_SHOP_DETAILS/execute",
+            json={"payload": {}, "account_id": account["id"]},
+        )
+        assert shop.status_code == 200, shop.text
+        assert store in json.dumps(shop.json())
+    finally:
+        _cleanup_user_accounts(fixed_test_user["id"])

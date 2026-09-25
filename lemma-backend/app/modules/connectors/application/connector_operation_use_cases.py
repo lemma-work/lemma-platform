@@ -10,6 +10,7 @@ from a function routes through here), exhausting the pool under load.
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from typing import Any, Callable
 from uuid import UUID
@@ -17,13 +18,19 @@ from uuid import UUID
 import httpx
 from fastapi import Request
 
-from app.core.authorization.scope import current_context_scope, uow_scope
+from app.core.authorization.scope import (
+    UowContext,
+    current_context_scope,
+    pod_context_scope,
+    uow_scope,
+)
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
 )
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
+    ConnectorValidationError,
     OperationExecutionAccessDeniedError,
     OperationExecutionInfrastructureError,
     OperationExecutionTimeoutError,
@@ -45,6 +52,21 @@ from app.modules.connectors.services.connector_operation_service import (
     ConnectorOperationService,
     ResolvedConnectorExecution,
 )
+
+
+def _pod_for_files(context_pod: UUID | None, requested: UUID | None) -> UUID | None:
+    """The pod file references resolve in: the delegated one, or the named one.
+
+    A pod function's delegated token already fixes its pod; naming a different
+    one there is refused rather than quietly preferred, since it would read the
+    files of a pod the token was never issued for.
+    """
+    if requested is not None and context_pod is not None and requested != context_pod:
+        raise ConnectorValidationError(
+            "pod_id does not match the pod this call is running in.",
+            details={"reason": "pod_mismatch"},
+        )
+    return context_pod or requested
 
 
 class ConnectorOperationUseCases:
@@ -73,6 +95,7 @@ class ConnectorOperationUseCases:
         user_id: UUID,
         request: Request,
         account_id: UUID | None = None,
+        pod_id: UUID | None = None,
     ) -> OperationExecutionResponse:
         # Phase 1 (short scope): build + bind the request Context (org/delegation
         # aware), resolve all DB state + authorize + resolve credentials. The
@@ -90,6 +113,15 @@ class ConnectorOperationUseCases:
                 actor=scope.ctx,
                 account_id=account_id,
             )
+            pod_id = _pod_for_files(getattr(scope.ctx, "pod_id", None), pod_id)
+
+        # Phase 1b: read the files the arguments name, as the caller, in their
+        # pod. Skipped outright -- no scope, no read -- when there are none,
+        # which is nearly every call.
+        resolved = await self._materialize_file_inputs(
+            resolved, user_id=user_id, request=request, pod_id=pod_id
+        )
+        output_path = resolved.requested_output_path
 
         # Phase 2: the external operation call, with NO pooled connection held.
         # ``execute_resolved`` issues no DB I/O -- the gateway's connector
@@ -131,20 +163,63 @@ class ConnectorOperationUseCases:
         # for something large. Its own short scope, after the external call.
         return await self._capture_binary_output(
             response,
-            payload=payload,
+            output_path=output_path,
             user_id=user_id,
             request=request,
             connector_id=resolved.connector_id,
+            pod_id=pod_id,
         )
+
+    def _scope(
+        self, *, request: Request, user_id: UUID, pod_id: UUID | None
+    ) -> AbstractAsyncContextManager[UowContext]:
+        """The caller's context, in the pod the call named when it named one.
+
+        An org-level call made by a person carries no pod, so `/me/...` had
+        nothing to resolve against. Naming one builds the pod context, which is
+        also where the person's membership of that pod is checked.
+        """
+        if pod_id is not None:
+            return pod_context_scope(
+                self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+            )
+        return current_context_scope(
+            self._uow_factory, request=request, user_id=user_id
+        )
+
+    async def _materialize_file_inputs(
+        self,
+        resolved: ResolvedConnectorExecution,
+        *,
+        user_id: UUID,
+        request: Request,
+        pod_id: UUID | None,
+    ) -> ResolvedConnectorExecution:
+        from app.modules.connectors.services.files.operation_files import (
+            OperationFiles,
+            needs_file_inputs,
+            split_lemma_arguments,
+        )
+
+        resolved = split_lemma_arguments(resolved)
+        if not needs_file_inputs(resolved):
+            return resolved
+        async with self._scope(
+            request=request, user_id=user_id, pod_id=pod_id
+        ) as scope:
+            return await OperationFiles(
+                self._pod_file_gateway_factory(scope.uow), pod_id=pod_id, ctx=scope.ctx
+            ).prepare(resolved)
 
     async def _capture_binary_output(
         self,
         response: OperationExecutionResponse,
         *,
-        payload: dict[str, Any],
+        output_path: str | None,
         user_id: UUID,
         request: Request,
         connector_id: str,
+        pod_id: UUID | None,
     ) -> OperationExecutionResponse:
         """Return a usable file, whatever shape the provider wrapped it in.
 
@@ -153,34 +228,26 @@ class ConnectorOperationUseCases:
         in Composio's own envelope -- now resolves at all. Persisting is decided
         by size; ``output_path`` only chooses the destination.
         """
-        from app.modules.connectors.services.files.capture_writer import (
-            BinaryResultWriter,
+        from app.modules.connectors.services.files.operation_files import (
+            OperationFiles,
+            find_file_result,
         )
 
-        result = getattr(response, "result", None)
-        # Resolve BEFORE opening a session. Finding the binary walks and
+        # Found BEFORE opening a session. Finding the binary walks and
         # base64-decodes the whole third-party response, and for a URL-sourced
         # result it downloads the file too — seconds of work proportional to
         # something we do not control. Only persisting it needs the database.
-        writer = BinaryResultWriter(None)
-        resolved = await writer.resolve(result)
-        if resolved is None:
+        found = await find_file_result(response)
+        if found is None:
             return response
-
-        async with current_context_scope(
-            self._uow_factory, request=request, user_id=user_id
+        async with self._scope(
+            request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
-            captured = await BinaryResultWriter(
-                self._pod_file_gateway_factory(scope.uow)
+            return await OperationFiles(
+                self._pod_file_gateway_factory(scope.uow), pod_id=pod_id, ctx=scope.ctx
             ).capture(
-                result,
-                connector_id=connector_id,
-                pod_id=getattr(scope.ctx, "pod_id", None),
-                ctx=scope.ctx,
-                output_path=(payload or {}).get("output_path"),
-                resolved=resolved,
+                response, found, connector_id=connector_id, output_path=output_path
             )
-        return OperationExecutionResponse(result=captured)
 
     async def _attempt_with_credential_refresh(
         self,

@@ -839,7 +839,10 @@ export const liveSource: PodSource = {
         return String(made.id ?? "");
     },
 
-    async startAccount(orgId: string, connectorId: string, authConfigId?: string): Promise<AccountConnect> {
+    async startAccount(
+        orgId: string, connectorId: string, authConfigId?: string,
+        connectionFields?: Record<string, unknown>,
+    ): Promise<AccountConnect> {
         const client = lemma();
         /* Read what is already there first. The callback lands on the
            provider's side, not ours, so the only way to recognise the account
@@ -853,7 +856,13 @@ export const liveSource: PodSource = {
             /* Naming the auth config when there is one: a freshly registered
                app is not the org's default, and connecting by connector id
                alone would authorise the wrong one. */
-            authConfigId ? { connector_id: connectorId, auth_config_id: authConfigId } : connectorId,
+            authConfigId || connectionFields
+                ? {
+                    connector_id: connectorId,
+                    ...(authConfigId ? { auth_config_id: authConfigId } : {}),
+                    ...(connectionFields ? { connection_fields: connectionFields } : {}),
+                }
+                : connectorId,
         )) as { authorization_url?: string | null };
         return { authorizeUrl: request.authorization_url ?? "", before, authConfigId };
     },

@@ -314,6 +314,7 @@ class ComposioAuthProvider(AuthProviderInterface):
         state: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        connection_fields: dict[str, object] | None = None,
     ) -> Tuple[str, str]:
         # Accepted and ignored. Composio runs the OAuth dance itself and hands
         # back a connection, so there is no authorization request of ours to
@@ -328,11 +329,22 @@ class ComposioAuthProvider(AuthProviderInterface):
 
         redirect_url = f"{redirect_uri}?state={state}"
 
+        # Shopify's OAuth mode needs the store before Composio can build the
+        # authorization URL -- `subdomain` becomes `{subdomain}.myshopify.com`.
+        # Only sent when the kind declared such a field, so every other toolkit
+        # makes exactly the call it made before.
+        config = None
+        if connection_fields:
+            from composio.types import auth_scheme as composio_auth_scheme
+
+            config = composio_auth_scheme.oauth2(dict(connection_fields))
+
         connection_request = await run_blocking(
             lambda: composio.connected_accounts.initiate(
                 user_id=str(user_id),
                 auth_config_id=auth_config_id,
                 callback_url=redirect_url,
+                **({"config": config} if config is not None else {}),
             ),
             limiter="external_http",
         )

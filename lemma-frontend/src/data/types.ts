@@ -499,8 +499,13 @@ export interface PodSource {
         kind?: string,
     ): Promise<string>;
     /** Begin authorising an account with the provider. Finishing happens on
-     *  their consent page, and the account appears here afterwards. */
-    startAccount(orgId: string, connectorId: string, authConfigId?: string): Promise<AccountConnect>;
+     *  their consent page, and the account appears here afterwards.
+     *  `connectionFields` carries what the sign-in cannot — Shopify's store
+     *  `subdomain` — for the few connectors that declare any. */
+    startAccount(
+        orgId: string, connectorId: string, authConfigId?: string,
+        connectionFields?: Record<string, unknown>,
+    ): Promise<AccountConnect>;
     /** The account this authorisation produced, once it exists and is usable.
      *  Empty until then. */
     findAccount(orgId: string, connectorId: string, before: string[], authConfigId?: string): Promise<string>;

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Any
 
+from app.modules.connectors.domain.file_input import FILE_MARKER
 from app.modules.connectors.infrastructure.openapi.spec_helpers import (
     build_parameter_entry,
     build_tool_name,
@@ -72,6 +73,7 @@ def _clean_description(text: str | None, fallback: str) -> str:
 def _file_input_schema(description: str) -> dict[str, Any]:
     """A file argument: a pod datastore path, inline base64, or raw text."""
     return {
+        FILE_MARKER: True,
         "description": description,
         "oneOf": [
             {

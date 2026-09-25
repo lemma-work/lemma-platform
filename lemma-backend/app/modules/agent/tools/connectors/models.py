@@ -42,7 +42,11 @@ class RunConnectorOperationRequest(BaseModel):
     # it server-side.
     arguments: JsonObject = Field(
         default_factory=dict,
-        description="Operation arguments, matching its input_schema.",
+        description=(
+            "Operation arguments, matching its input_schema. A file argument "
+            'takes a pod file: {"pod_path": "/me/report.pdf"}, or '
+            '{"file_id": "..."}.'
+        ),
     )
     account_id: str | None = Field(
         default=None,

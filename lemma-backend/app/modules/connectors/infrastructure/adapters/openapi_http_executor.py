@@ -13,8 +13,6 @@ optionally persist. It has no database, pod, or datastore dependency.
 
 from __future__ import annotations
 
-import base64
-import binascii
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -22,6 +20,12 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from app.modules.connectors.domain.results import BinaryContentResult
+from app.modules.connectors.infrastructure.adapters.openapi_http_bodies import (
+    OpenApiHttpExecutionError,
+    build_body,
+    raw_body,
+    scalar,
+)
 
 from app.core.log.log import get_logger
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url, request_guarded
@@ -32,77 +36,7 @@ logger = get_logger(__name__)
 # Redirect hops an OpenAPI-described call may follow. Each one is re-validated
 # against the URL guard, so this bounds the work rather than the risk.
 _MAX_REDIRECTS = 3
-_MAX_FILE_BYTES = 100 * 1024 * 1024
 _DEFAULT_USER_AGENT = "lemma-connectors"
-
-
-class OpenApiHttpExecutionError(Exception):
-    """HTTP-layer failure carrying status + provider detail.
-
-    Shaped so ``LemmaOperationGateway._translate_execution_error`` classifies it
-    like the vendored-package execution path (reads ``status_code`` + ``details``).
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        status_code: int | None = None,
-        details: dict | None = None,
-    ):
-        super().__init__(message)
-        self.status_code = status_code
-        self.details = details or {}
-
-
-def _scalar(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-def _coerce_file_bytes(value: Any) -> tuple[bytes, str | None]:
-    """Resolve a file argument to raw bytes.
-
-    Accepts raw bytes (already resolved upstream), ``{"base64": ...}``,
-    ``{"text": ...}``, or a plain string. A leftover ``{"pod_path": ...}`` means
-    the datastore pre-resolution did not run (no pod context) — surface clearly.
-    """
-    if isinstance(value, (bytes, bytearray)):
-        data = bytes(value)
-        filename = None
-    elif isinstance(value, str):
-        data, filename = value.encode("utf-8"), None
-    elif isinstance(value, dict):
-        filename = value.get("filename")
-        if "bytes" in value and isinstance(value["bytes"], (bytes, bytearray)):
-            data = bytes(value["bytes"])
-        elif "base64" in value:
-            try:
-                data = base64.b64decode(value["base64"], validate=True)
-            except (binascii.Error, ValueError) as exc:
-                raise OpenApiHttpExecutionError(
-                    f"Invalid base64 file input: {exc}"
-                ) from exc
-        elif "text" in value:
-            data = str(value["text"]).encode("utf-8")
-        elif "pod_path" in value:
-            raise OpenApiHttpExecutionError(
-                "File input references a pod path but no pod context was available "
-                'to resolve it; pass {"base64": ...} or run within a pod.'
-            )
-        else:
-            raise OpenApiHttpExecutionError(
-                "File input object must contain 'pod_path', 'base64', or 'text'."
-            )
-    else:
-        raise OpenApiHttpExecutionError(f"Unsupported file input type: {type(value)!r}")
-
-    if len(data) > _MAX_FILE_BYTES:
-        raise OpenApiHttpExecutionError(
-            f"File input exceeds the {_MAX_FILE_BYTES // (1024 * 1024)}MB limit."
-        )
-    return data, filename
 
 
 def _raw_url(base_url: str, path: str) -> str:
@@ -129,39 +63,10 @@ def _flatten_query(query: dict[str, Any]) -> list[tuple[str, str]]:
         if value is None:
             continue
         if isinstance(value, list):
-            params.extend((name, _scalar(item)) for item in value)
+            params.extend((name, scalar(item)) for item in value)
         else:
-            params.append((name, _scalar(value)))
+            params.append((name, scalar(value)))
     return params
-
-
-def _multipart_body(
-    body: dict[str, Any],
-    *,
-    binary_fields: list[str],
-    form_fields: list[str],
-) -> dict[str, Any]:
-    files: dict[str, tuple[str, bytes]] = {}
-    data: dict[str, str] = {}
-    for name in binary_fields:
-        value = body.get(name)
-        if value is not None:
-            raw, filename = _coerce_file_bytes(value)
-            files[name] = (filename or name, raw)
-    for name in form_fields:
-        value = body.get(name)
-        if value is not None:
-            data[name] = _scalar(value)
-    return {"files": files, "data": data}
-
-
-def _raw_body(body: Any) -> dict[str, Any]:
-    if body is None:
-        return {}
-    if isinstance(body, dict) and ({"base64", "pod_path", "text", "bytes"} & set(body)):
-        data, _ = _coerce_file_bytes(body)
-        return {"content": data}
-    return {"json": body}
 
 
 async def _assert_safe_base_url(base_url: str) -> None:
@@ -198,7 +103,7 @@ def _substitute_path(
             raise OpenApiHttpExecutionError(
                 f"Missing required path parameter '{name}'."
             )
-        value = _scalar(supplied)
+        value = scalar(supplied)
         if name in multi_segment:
             # Keeping `/` literal also keeps `..` literal, which would let a
             # parameter climb out of the endpoint it belongs to.
@@ -445,7 +350,7 @@ class OpenApiHttpExecutor:
         headers = dict(default_headers)
         for name in execution.get("header_params", []):
             if name in payload and payload[name] is not None:
-                headers[name] = _scalar(payload[name])
+                headers[name] = scalar(payload[name])
         headers.update(auth_headers)
 
         req = self._build_body(execution.get("request_body"), payload, headers)
@@ -471,10 +376,10 @@ class OpenApiHttpExecutor:
 
         headers = dict(default_headers)
         for name, value in (payload.get("headers") or {}).items():
-            headers[name] = _scalar(value)
+            headers[name] = scalar(value)
         headers.update(auth_headers)
 
-        return method, url, params, headers, _raw_body(payload.get("body"))
+        return method, url, params, headers, raw_body(payload.get("body"))
 
     def _encode_query(
         self, name: str, value: Any, spec: dict[str, Any]
@@ -483,10 +388,10 @@ class OpenApiHttpExecutor:
             explode = spec.get("explode")
             style = spec.get("style") or "form"
             if style == "form" and explode is False:
-                return [(name, ",".join(_scalar(v) for v in value))]
+                return [(name, ",".join(scalar(v) for v in value))]
             # default form/explode=true → repeat the key
-            return [(name, _scalar(v)) for v in value]
-        return [(name, _scalar(value))]
+            return [(name, scalar(v)) for v in value]
+        return [(name, scalar(value))]
 
     def _build_body(
         self,
@@ -494,45 +399,7 @@ class OpenApiHttpExecutor:
         payload: dict[str, Any],
         headers: dict[str, str],
     ) -> dict[str, Any]:
-        if not request_body:
-            return {}
-        body = payload.get(request_body.get("field", "body"))
-        if body is None:
-            return {}
-        content_type = (
-            (request_body.get("content_type") or "application/json")
-            .split(";", 1)[0]
-            .strip()
-            .lower()
-        )
-        binary_fields = request_body.get("binary_fields") or []
-
-        if content_type == "application/json" and not binary_fields:
-            return {"json": body}
-
-        if content_type == "application/x-www-form-urlencoded":
-            # httpx sets the Content-Type itself for `data=`, and drops the keys
-            # the caller left out rather than sending empty values for them.
-            fields = body if isinstance(body, dict) else {}
-            return {
-                "data": {
-                    name: _scalar(value)
-                    for name, value in fields.items()
-                    if value is not None
-                }
-            }
-
-        if content_type == "multipart/form-data":
-            return _multipart_body(
-                body if isinstance(body, dict) else {},
-                binary_fields=binary_fields,
-                form_fields=request_body.get("form_fields") or [],
-            )
-
-        # Single-blob body (octet-stream / */*): send raw bytes.
-        raw, _ = _coerce_file_bytes(body)
-        headers.setdefault("Content-Type", content_type or "application/octet-stream")
-        return {"content": raw}
+        return build_body(request_body, payload, headers)
 
     # --- response handling --------------------------------------------------
 

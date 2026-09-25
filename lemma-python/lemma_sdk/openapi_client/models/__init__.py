@@ -137,6 +137,7 @@ _NAME_TO_MODULE = {
     'ColumnSchema': 'column_schema',
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
     'ConnectRequestInitiateSchema': 'connect_request_initiate_schema',
+    'ConnectRequestInitiateSchemaConnectionFieldsType0': 'connect_request_initiate_schema_connection_fields_type_0',
     'ConnectRequestResponseSchema': 'connect_request_response_schema',
     'ConnectedAccountSummary': 'connected_account_summary',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete': 'connector_auth_config_delete_response_connector_auth_config_delete',
@@ -694,6 +695,7 @@ if TYPE_CHECKING:
     from .column_schema import ColumnSchema
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
     from .connect_request_initiate_schema import ConnectRequestInitiateSchema
+    from .connect_request_initiate_schema_connection_fields_type_0 import ConnectRequestInitiateSchemaConnectionFieldsType0
     from .connect_request_response_schema import ConnectRequestResponseSchema
     from .connected_account_summary import ConnectedAccountSummary
     from .connector_auth_config_delete_response_connector_auth_config_delete import ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete
@@ -1264,6 +1266,7 @@ __all__ = [
     'ColumnSchema',
     'ColumnSchemaTypeParamsType0',
     'ConnectRequestInitiateSchema',
+    'ConnectRequestInitiateSchemaConnectionFieldsType0',
     'ConnectRequestResponseSchema',
     'ConnectedAccountSummary',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete',

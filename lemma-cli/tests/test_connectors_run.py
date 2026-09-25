@@ -128,12 +128,17 @@ def _fake_client(captured: dict):
             self.accounts = Accounts()
             self.auth_configs = AuthConfigs()
 
-        def execute(self, auth_config, operation, *, payload, account_id=None):
+        def connect_request(self, connector, *, auth_config_id=None, **extra):
+            captured["connect_request"] = {"connector": connector, **extra}
+            return {"authorization_url": "https://acme.myshopify.com/admin/oauth"}
+
+        def execute(self, auth_config, operation, *, payload, account_id=None, **extra):
             captured["execute"] = {
                 "auth_config": auth_config,
                 "operation": operation,
                 "payload": payload,
                 "account_id": account_id,
+                **extra,
             }
             return {"result": {"ok": True}}
 
@@ -421,3 +426,89 @@ def test_naming_a_write_operation_explicitly_is_not_gated(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert captured["execute"]["operation"] == "gmail_add_label_to_email"
+
+
+def test_attach_turns_pod_paths_into_file_references(monkeypatch):
+    """A connector file argument is a reference the server reads as the
+    caller. Repeating a field makes a list, and a dotted field nests."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+    monkeypatch.setenv("LEMMA_POD_ID", "11111111-1111-1111-1111-111111111111")
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "workspace-gmail",
+            "gmail_send_email",
+            "-d",
+            '{"to": "ada@example.com"}',
+            "--attach",
+            "attachments=/me/a.pdf",
+            "--attach",
+            "attachments=/me/b.pdf",
+            "--attach",
+            "body.file=/shared/c.csv",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    sent = captured["execute"]
+    assert sent["payload"] == {
+        "to": "ada@example.com",
+        "attachments": [{"pod_path": "/me/a.pdf"}, {"pod_path": "/me/b.pdf"}],
+        "body": {"file": {"pod_path": "/shared/c.csv"}},
+    }
+    # The pod the paths resolve in, sent only because a pod file is named.
+    assert sent["pod_id"] == "11111111-1111-1111-1111-111111111111"
+
+
+def test_a_call_without_files_sends_no_pod(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+    monkeypatch.setenv("LEMMA_POD_ID", "11111111-1111-1111-1111-111111111111")
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "workspace-gmail",
+            "gmail_list_messages",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "pod_id" not in captured["execute"]
+
+
+def test_connect_request_passes_connection_fields(monkeypatch):
+    """Shopify cannot start a sign-in without the store name."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "connect-requests",
+            "create",
+            "shopify",
+            "--field",
+            "subdomain=acme",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["connect_request"] == {
+        "connector": "shopify",
+        "connection_fields": {"subdomain": "acme"},
+    }
+
+    refused = runner.invoke(
+        app, ["connectors", "connect-requests", "create", "shopify", "--field", "acme"]
+    )
+    assert refused.exit_code != 0

@@ -123,6 +123,19 @@ export const getCredentialSchema = (capability: ConnectorKindSpec | null): JsonS
     return null;
 };
 
+/**
+ * What a browser sign-in needs asked first. Signing in says who the person is,
+ * not which tenant they mean: Composio's Shopify OAuth mode needs the store's
+ * `subdomain` before there is an authorization URL to send anybody to. Only a
+ * Composio OAuth kind has such fields, carried on its `config_schema`.
+ */
+export const getConnectionFieldsSchema = (capability: ConnectorKindSpec | null): JsonSchemaLike | null => {
+    if (!capability || capability.kind !== KIND.COMPOSIO) return null;
+    if (usesDirectCredentials(capability)) return null;
+    const schema = capability.config_schema;
+    return isRecord(schema) ? (schema as JsonSchemaLike) : null;
+};
+
 export const schemaHasFields = (schema: JsonSchemaLike | null): boolean =>
     buildSchemaFormFields(schema).length > 0;
 

@@ -13789,7 +13789,11 @@ var LemmaClient = (() => {
           ));
         },
         execute: (scope, operationName, payload, accountId) => {
-          const body = { payload, account_id: accountId };
+          const body = {
+            payload,
+            account_id: accountId,
+            ...scope.podId ? { pod_id: scope.podId } : {}
+          };
           return this.client.request(() => ConnectorsService.connectorOperationExecute(
             scope.organizationId,
             scope.authConfigName,

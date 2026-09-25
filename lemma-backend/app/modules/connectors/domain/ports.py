@@ -159,6 +159,10 @@ class PodFileGatewayPort(Protocol):
         self, *, pod_id: UUID, path: str, ctx: Context
     ) -> Tuple[bytes, Optional[str], Optional[str]]: ...
 
+    async def read_bytes_by_id(
+        self, *, pod_id: UUID, file_id: UUID, ctx: Context
+    ) -> Tuple[bytes, Optional[str], Optional[str]]: ...
+
     async def write_bytes(
         self,
         *,
@@ -234,6 +238,7 @@ class AuthProviderPort(Protocol):
         state: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        connection_fields: dict[str, object] | None = None,
     ) -> tuple[str, str]: ...
 
     async def exchange_code_for_credentials(
