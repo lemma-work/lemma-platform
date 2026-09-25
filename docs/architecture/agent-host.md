@@ -369,7 +369,7 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 | Direction | `type` | Body | Answered by |
 |---|---|---|---|
 | host → Lemma | `pair` | `pairing_code`, `display_name`, `hello`, `reenable` (default false) | `paired` (`host_id`, `user_id`, `host_secret`), then close |
-| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`, `server_time`) |
+| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`, `server_time`, `idempotent_tool_calls`) |
 | host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections`, `host_execution` | `control_ok` (`commands`, `refused`) |
 | host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
 | host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
@@ -464,8 +464,10 @@ guarantee:
   -- the MCP result, or the failure -- is kept for an hour. A duplicate that
   arrives while it runs waits for that outcome; one that arrives after is
   answered from it. Nothing is executed twice
-  (`agent_host_link_tool_calls.py`). A call without a `request_id`, from an
-  older host, runs as it arrives and goes with its link.
+  (`agent_host_link_tool_calls.py`). `welcome` says so with
+  `idempotent_tool_calls: true`, and a host resends a `tools/call` after a drop
+  only to a server that said it. A call without a `request_id`, from an older
+  host, runs as it arrives and goes with its link.
 - **Only a refusal before dispatch is retryable.** Authorizing the call and
   taking its claim can fail with `retryable: true` (an auth lookup that could
   not answer, a full link). Once the call is dispatched, every failure is
