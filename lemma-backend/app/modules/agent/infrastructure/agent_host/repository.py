@@ -37,6 +37,41 @@ from app.modules.agent.infrastructure.runtime_models import (
 _SEEN_WRITE_INTERVAL_SECONDS = 20
 
 
+def _negotiated_status(
+    hello: HostHello, capacity: dict[str, int]
+) -> tuple[int | None, AgentHostStatus]:
+    """The protocol a heartbeat negotiates, and the status it puts the host in."""
+    try:
+        protocol = hello.negotiate()
+    except ValueError:
+        return None, AgentHostStatus.UPGRADE_REQUIRED
+    explicitly_draining = capacity.get("available_runs") == 0 and capacity.get(
+        "active_runs", 0
+    ) < capacity.get("max_runs", 0)
+    return protocol, (
+        AgentHostStatus.DRAINING if explicitly_draining else AgentHostStatus.ONLINE
+    )
+
+
+def _row_already_says(
+    host: AgentHostModel,
+    *,
+    protocol: int | None,
+    host_release: str,
+    status: AgentHostStatus,
+    capacity: dict[str, int],
+    capabilities: dict[str, object] | None,
+) -> bool:
+    """Whether a heartbeat would write nothing new. ``None`` capabilities: kept."""
+    return (
+        host.protocol_version == protocol
+        and host.host_release == host_release
+        and host.status == status.value
+        and (host.capacity or {}) == capacity
+        and (capabilities is None or (host.capabilities or {}) == capabilities)
+    )
+
+
 class AgentHostRepository:
     def __init__(self, uow: SqlAlchemyUnitOfWork):
         self.uow = uow
@@ -206,6 +241,7 @@ class AgentHostRepository:
         host_id: UUID,
         hello: HostHello,
         capacity: dict,
+        capabilities: dict[str, object] | None = None,
         now: datetime | None = None,
     ) -> AgentHostModel:
         """Record one heartbeat, rewriting the row only when something changed.
@@ -220,30 +256,18 @@ class AgentHostRepository:
         if host.installation_id != hello.installation_id:
             raise AgentHostProtocolViolation("installation identity changed")
 
-        try:
-            protocol = hello.negotiate()
-            explicitly_draining = capacity.get("available_runs") == 0 and capacity.get(
-                "active_runs", 0
-            ) < capacity.get("max_runs", 0)
-            status = (
-                AgentHostStatus.DRAINING
-                if explicitly_draining
-                else AgentHostStatus.ONLINE
-            )
-        except ValueError:
-            protocol = None
-            status = AgentHostStatus.UPGRADE_REQUIRED
-
+        protocol, status = _negotiated_status(hello, capacity)
         recently_seen = host.last_seen_at is not None and host.last_seen_at > (
             timestamp - timedelta(seconds=_SEEN_WRITE_INTERVAL_SECONDS)
         )
-        unchanged = (
-            host.protocol_version == protocol
-            and host.host_release == hello.host_release
-            and host.status == status.value
-            and (host.capacity or {}) == capacity
-        )
-        if recently_seen and unchanged:
+        if recently_seen and _row_already_says(
+            host,
+            protocol=protocol,
+            host_release=hello.host_release,
+            status=status,
+            capacity=capacity,
+            capabilities=capabilities,
+        ):
             return host
 
         host = await self.require(host_id, for_update=True)
@@ -252,6 +276,8 @@ class AgentHostRepository:
         host.protocol_version = protocol
         host.host_release = hello.host_release
         host.capacity = capacity
+        if capabilities is not None:
+            host.capabilities = capabilities
         host.status = status.value
         host.last_seen_at = timestamp
         await self.session.flush()

@@ -1,6 +1,7 @@
 # Sandbox provider adapters
 
-**Status:** Docker and E2B implemented and verified; Kubernetes deferred
+**Status:** Docker and E2B implemented and verified; Agent Host (Desktop host
+execution) implemented against the op contract; Kubernetes deferred
 
 **Parent:** [Sandbox fabric](README.md)
 
@@ -22,21 +23,22 @@ one monolithic provider class is not required or preferred.
 
 ## 2. Capability matrix
 
-| Capability | Docker | Kubernetes | E2B |
-| --- | --- | --- | --- |
-| Workspace files survive release | Named volume | Per-workspace PVC | Native sandbox persistence |
-| Process/Python state survives release | No contract | No | Not exposed as a contract |
-| Function persistent storage | Forbidden | Forbidden | Forbidden |
-| Native foreground/background exec | Engine exec | Pods exec | Commands API |
-| Native reconnectable process handle | Partial | No | Yes |
-| Native PTY reconnect | Partial | Connection-scoped | Yes |
-| Native stateful Python contexts | No | No | Yes |
-| Native file API | Archive API is insufficient | No | Yes |
-| Workspace control runtime required | Yes | Yes | No |
-| Provider-native auto-resume | No | No | Disabled; lifecycle is explicit |
-| Strong production isolation | No | With approved RuntimeClass | Managed microVM boundary |
-| Public ingress for functions | Disabled | Disabled | Disabled |
-| Provider create rate admission | Configured local limit | Configured pool/resource limit | E2B project limit |
+| Capability | Docker | Kubernetes | E2B | Agent Host |
+| --- | --- | --- | --- | --- |
+| Workspace files survive release | Named volume | Per-workspace PVC | Native sandbox persistence | The user's own folder on their Mac |
+| Process/Python state survives release | No contract | No | Not exposed as a contract | No |
+| Function persistent storage | Forbidden | Forbidden | Forbidden | No function sandboxes |
+| Native foreground/background exec | Engine exec | Pods exec | Commands API | `process.*` ops |
+| Native reconnectable process handle | Partial | No | Yes | Yes, by `process_id` |
+| Native PTY reconnect | Partial | Connection-scoped | Yes | Yes |
+| Native stateful Python contexts | No | No | Yes | No (`SandboxCapabilityUnsupported`) |
+| Native file API | Archive API is insufficient | No | Yes | `file.*` ops, 1 MiB chunks |
+| Workspace control runtime required | Yes | Yes | No | No (exec-server) |
+| Provider-native auto-resume | No | No | Disabled; lifecycle is explicit | Re-opens on `workspace_not_open` |
+| Strong production isolation | No | With approved RuntimeClass | Managed microVM boundary | Seatbelt profile, the paired user only |
+| Public ingress for functions | Disabled | Disabled | Disabled | n/a |
+| Port reach (`PORT_REACH`) | Yes | Yes | Yes | No; the VM reaches the Mac's loopback through the relay |
+| Provider create rate admission | Configured local limit | Configured pool/resource limit | E2B project limit | None |
 
 The portable contract is the intersection required by the selected profile, not the
 lowest capability of every provider. Provider-only capabilities are implementation
@@ -545,7 +547,63 @@ Provider project concurrency and create rate are sandbox-runtime admission input
 responses update one distributed provider-scope `blocked_until`; adapter-local retry
 loops are forbidden. See [E2B billing and limits](https://e2b.dev/docs/billing).
 
-## 8. Provider conformance declarations
+## 8. Agent Host adapter (Desktop host execution)
+
+See [Host execution on Desktop](../desktop-host-execution.md) for who gets it
+and why. This section is the adapter.
+
+### 8.1 Where it sits
+
+`build_provider` wraps the configured provider in `HostRoutingProvider` on a
+Desktop install (`DEPLOYMENT_KIND=desktop`) and returns it unchanged anywhere
+else. The router sends a call to `AgentHostSandboxProvider`
+(`app/modules/workspace/providers/agent_host.py`) only for a **host sandbox**,
+and everything else -- every VM workspace, every function sandbox, every sweep
+-- to the configured provider as before.
+
+A host sandbox is recognised by its id, which is where the choice is recorded:
+a UUIDv8 tagged `lmhost`, derived from the conversation
+(`domain/host_execution.host_sandbox_id`). Nothing else the platform mints is a
+v8, so the route needs no lookup and can never change for the life of the
+sandbox. Its instance rows record provider `agent_host`. One conversation has
+one host sandbox; the user's VM workspace keeps its own id, and the browser
+stays there.
+
+`sandbox_host_bindings` records which Agent Host a host sandbox runs on, how
+its root is chosen (`root_hint`, or `~/lemma/c/<date>/<slug>`), and the root the
+host answered with.
+
+### 8.2 Mapping
+
+| Provider call | Op |
+| --- | --- |
+| `create` | `workspace.open` (root recorded on the binding) |
+| `wait_ready`, `inspect` | none: open is synchronous, and the next op is the liveness check |
+| `release`, `destroy` | `workspace.close`; offline counts as closed |
+| volumes, `list_objects` | none: there is nothing to adopt or reclaim |
+| processes | `process.start` / `read` / `input` / `resize` / `terminate` / `list` |
+| files | `file.stat` / `list` / `mkdir` / `read` / `write` / `move` / `delete` |
+| `deliver_secret` | `secret.deliver` |
+| Python sessions, `reach_port` | `SandboxCapabilityUnsupported` |
+
+Reads and writes move in chunks of at most 1 MiB. A write sends every chunk
+under one `upload_id` and only the last with `final` and the digest.
+
+### 8.3 Failures
+
+`detail.kind` maps to `SandboxPathNotFound` (`not_found`), `SandboxPathConflict`
+(`already_exists`, `not_a_directory`, `is_a_directory`, `digest_mismatch`),
+`SandboxProcessNotFound` (`process_not_found`), `SandboxUnavailable`
+(`exec_server_unavailable` and anything the host marks retryable),
+`SandboxOperationAmbiguous` (`timeout`, and a link that closed mid-op), and
+`SandboxRejected` for the rest (`permission_denied`, `outside_workspace`,
+`too_large`, `invalid_request`, `io_error`), including `host_offline` -- "This
+Mac is not connected" -- which is definitive for the call rather than waited
+out. `timeout` is retryable on the host's word but may have taken effect, so
+it is reported as ambiguous rather than retried.
+`workspace_not_open` re-opens from the binding and retries once.
+
+## 9. Provider conformance declarations
 
 Adapters do not self-assert production capability. A release manifest records the
 conformance evidence for each `(provider, profile digest, protocol version)`:

@@ -333,6 +333,26 @@ def resumes_stopped_instances(provider: object) -> bool:
     return bool(getattr(provider, "resumes_stopped_instances", True))
 
 
+def provider_name_for(provider: object, sandbox_id: UUID) -> str:
+    """The fabric this sandbox runs on, for the instance row and the handle.
+
+    A provider that fronts several (``HostRoutingProvider``) answers per
+    sandbox; every other provider is one fabric and answers with its name.
+    """
+    name_for = getattr(provider, "name_for", None)
+    if callable(name_for):
+        return str(name_for(sandbox_id))
+    return str(getattr(provider, "name"))
+
+
+def storage_kind_for(provider: object, sandbox_id: UUID) -> ProviderStorageKind:
+    """Where this sandbox's files live; see ``ProviderStorageKind``."""
+    kind_for = getattr(provider, "storage_kind_for", None)
+    if callable(kind_for):
+        return kind_for(sandbox_id)
+    return getattr(provider, "storage_kind", ProviderStorageKind.VOLUME)
+
+
 def require_capability(provider: object, capability: ProviderCapability) -> None:
     """Refuse, in words, before calling something this fabric cannot do.
 

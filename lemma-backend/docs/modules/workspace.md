@@ -26,7 +26,8 @@ breaking migration described in the rollout document.
 | --- | --- |
 | `sandboxes` | A named sandbox's stable identity, independent of any running container: kind, owner, profile name/digest, desired state, epoch, storage generation, mounts, and the timestamps the idle sweep reads. `owner_id` is a user id for workspaces and a pod id for function runtimes, so it carries no foreign key |
 | `sandbox_instances` | One concrete provider object backing a sandbox at a given epoch, unique per `(sandbox_id, epoch)`. Kept as its own row rather than columns on the sandbox so the destroy of an old container can be driven to completion while a new epoch is already serving |
+| `sandbox_host_bindings` | For a sandbox that runs on the user's own machine rather than in a provider container: which Agent Host it runs on, the owner and conversation it belongs to, and the slug, day and root (hint and resolved) its working directory is chosen from. One row per host sandbox. `host_id` names an `agent_hosts` row without a foreign key, since that table belongs to another module and a revoked host fails the op rather than removing the binding |
 
-These two rows are the durable half. Live process, session, and credential
+These rows are the durable half. Live process, session, and credential
 state belongs to the sandbox runtime and Redis, and the lifecycle rules that
 move a row between states are in the canonical design set above, not here.

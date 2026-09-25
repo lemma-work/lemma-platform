@@ -142,6 +142,12 @@ impl Daemon {
                         .agent_host
                         .unpair((!target.is_empty()).then_some(target.as_str()))
                 }
+                "agent-host.host-execution" => daemon.agent_host.set_host_execution(
+                    request
+                        .get("enabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                ),
                 _ => daemon.agent_host.refresh(),
             };
             let outcome = result.map(|()| daemon.agent_host.detailed_status());

@@ -59,6 +59,14 @@ test("every command this app can invoke is registered by the shell", async () =>
     assert.deepEqual(missing, [], `not registered in desktop/src/app.rs: ${missing.join(", ")}`);
 });
 
+test("Run commands on this Mac is one of them, granted and registered", async () => {
+    /* Named here as well as by the list, so dropping it from the list does
+       not quietly drop it from the contract. */
+    assert.ok((WORKSPACE_COMMANDS as readonly string[]).includes("set_host_execution"));
+    assert.ok((await workspaceGrants()).has("set_host_execution"));
+    assert.ok((await registered()).has("set_host_execution"));
+});
+
 test("the check fails when a command is missing from either file", () => {
     /* A contract test that cannot fail is documentation. Prove both readers
        notice an absence rather than, say, matching everything. */

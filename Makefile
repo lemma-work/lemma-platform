@@ -1334,10 +1334,14 @@ desktop-exe:
 # The real backend and Rust host share the same HTTP path as a browser chat.
 # A scripted ACP provider makes streaming and disconnects deterministic without
 # using installed agent accounts. Testcontainers owns the disposable services.
+# Host execution rides along: the same built binary runs a paired user's commands
+# under Seatbelt (macOS only; the module skips elsewhere).
 desktop-agent-host-e2e:
 	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
 	@cd lemma-backend && uv run pytest \
-		app/modules/agent/tests/e2e/test_agent_host_process_e2e.py -m 'not agent_host_browser' --no-showlocals
+		app/modules/agent/tests/e2e/test_agent_host_process_e2e.py \
+		app/modules/agent/tests/e2e/test_host_execution_binary_e2e.py \
+		-m 'not agent_host_browser' --no-showlocals
 
 desktop-agent-host-browser-e2e:
 	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked

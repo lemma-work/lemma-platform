@@ -198,7 +198,7 @@ through a capability naming its URL. `capabilities/workspace.json` grants
 the conversation-folder commands, `discover_provider_models` and
 `configure_ai_provider` — and, for Settings → This Mac, the commands that
 change this computer's own settings: `local_settings_snapshot`,
-`apply_local_settings`, `local_sharing`, `set_start_at_login`,
+`apply_local_settings`, `local_sharing`, `set_start_at_login`, `set_host_execution`,
 `repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
 `check_for_app_update`, `install_app_update`, `telemetry_status` and
 `set_telemetry_enabled`. Nothing destructive is granted: resetting data,
@@ -369,8 +369,8 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 | Direction | `type` | Body | Answered by |
 |---|---|---|---|
 | host → Lemma | `pair` | `pairing_code`, `display_name`, `hello` | `paired` (`host_id`, `user_id`, `host_secret`), then close |
-| host → Lemma | `hello` | `hello`, `capacity` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`) |
-| host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections` | `control_ok` (`commands`, `refused`) |
+| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`) |
+| host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections`, `host_execution` | `control_ok` (`commands`, `refused`) |
 | host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
 | host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
 | host → Lemma | `mcp` | `run_id`, `conversation_id`, `token`, `method`, `params` | `mcp_ok` (`result`) or `error` |
@@ -378,7 +378,26 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 | host → Lemma | `revoke` | nothing | `revoked`, then close |
 | Lemma → host | `commands` | `commands` | the next `control` acknowledges them |
 | Lemma → host | `reconnect` | `after_ms` | the host reconnects after that delay |
-| either | `error` | `code`, `message`, `retryable` | nothing |
+| Lemma → host | `op` (with `id`) | `workspace`, `method`, `params`, `deadline_ms` | host `op_ok` (`result`) or `error` (`OP_FAILED`, `detail.kind`) |
+| either | `error` | `code`, `message`, `retryable`, `detail` (optional) | nothing |
+
+`op` is the one request Lemma makes of the host: a host-execution operation,
+answered with `re` set to its `id`. Lemma's ids and the host's are separate
+namespaces; each side matches `re` only against requests it sent. The host
+runs each `op` in a task of its own, at most `MAX_CONCURRENT_OPS` (32) at once,
+so a `process.read` long-waiting for output never holds up the reader, the
+heartbeat, or another op. An op with no answer by its `deadline_ms` is answered
+`timeout` by the host itself. A link opened without host execution (pairing,
+revocation, a platform without Seatbelt) answers every `op` with
+`exec_server_unavailable`. The methods, parameters and failure kinds are in
+[Host execution on Desktop](desktop-host-execution.md#4-the-op-frames).
+
+`host_execution` is `{enabled, platform, available}`: whether the machine's user turned
+host execution on, `macos`/`linux`/`windows`, and whether this machine can
+confine commands (macOS with `/usr/bin/sandbox-exec`). It rides on every
+`control` as well as `hello`, so turning it on or off reaches Lemma within
+seconds without a reconnect. Lemma routes a run of the host's paired user to it only when
+both booleans are true.
 
 The first frame on a connection is `pair` (no `Authorization` header) or
 `hello` (with `Authorization: Bearer <host secret>`). Anything else first is a

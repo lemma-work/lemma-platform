@@ -38,6 +38,8 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.domain.agent_host_link import (
     AgentHostHarnessRecord,
+    HostCapabilities,
+    HostExecutionCapability,
     PairBody,
 )
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
@@ -79,6 +81,17 @@ class ControlUpdates:
     acknowledged_command_ids: list[UUID]
     checkpoints: list[AgentHostRunCheckpoint]
     rejections: list[AgentHostCommandRejection]
+    #: None when the frame did not carry it, which means "unchanged".
+    host_execution: HostExecutionCapability | None = None
+
+
+def _stored_capabilities(
+    host_execution: HostExecutionCapability | None,
+) -> dict[str, object]:
+    """The host row's ``capabilities``, from what a frame reported."""
+    return HostCapabilities(
+        host_execution=host_execution or HostExecutionCapability()
+    ).model_dump(mode="json")
 
 
 def is_deadlock(exc: DBAPIError) -> bool:
@@ -123,6 +136,7 @@ class AgentHostLinkStore:
         secret: str,
         hello: HostHello,
         capacity: AgentHostCapacity,
+        host_execution: HostExecutionCapability | None = None,
     ) -> LinkedHost | None:
         """Authenticate a ``hello`` and record it as a heartbeat.
 
@@ -140,6 +154,9 @@ class AgentHostLinkStore:
                 host_id=host.id,
                 hello=hello,
                 capacity=capacity.model_dump(mode="json"),
+                # A hello always states it: a host too old to know the field
+                # is a host without host execution, not "unchanged".
+                capabilities=_stored_capabilities(host_execution),
             )
             status = AgentHostStatus(host.status)
             # Claimed in the same transaction that authenticated the hello, so
@@ -211,6 +228,11 @@ class AgentHostLinkStore:
                 host_id=host_id,
                 hello=hello,
                 capacity=updates.capacity.model_dump(mode="json"),
+                capabilities=(
+                    _stored_capabilities(updates.host_execution)
+                    if updates.host_execution is not None
+                    else None
+                ),
             )
             commands = await AgentHostDispatchRepository(uow).poll_commands(
                 host_id=host_id,

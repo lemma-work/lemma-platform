@@ -54,6 +54,7 @@ from app.modules.workspace.providers.base import (
     ProviderInstance,
     ProviderNotReady,
     ProviderRejected,
+    provider_name_for,
     resumes_stopped_instances,
 )
 from app.modules.workspace.providers.profiles import profile_for, profile_is_stale
@@ -71,8 +72,7 @@ _ENSURE_TIMEOUT_SECONDS = 300.0
 # pulling an image and booting a sandbox, short enough that a provisioner that
 # died does not strand the sandbox.
 _CLAIM_TIMEOUT_SECONDS = 180.0
-# Spans one tool call's sequential operations. Not a warmth mechanism: that is
-# the idle release window, two orders of magnitude longer.
+# Spans one tool call's sequential operations; not the (far longer) idle window.
 _ENSURE_REUSE_SECONDS = 5.0
 
 
@@ -413,7 +413,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             name = naming.container_name(sandbox.id, sandbox.kind, epoch)
             instance = await repository.begin_instance(
                 sandbox_id=sandbox.id,
-                provider=self._provider.name,
+                provider=provider_name_for(self._provider, sandbox.id),
                 provider_id=name,
                 provider_volume_id=volume_name,
                 epoch=epoch,
