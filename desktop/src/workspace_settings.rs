@@ -76,6 +76,12 @@ pub(crate) fn require_local_settings_caller(
             "only the Lemma workspace on {THIS_COMPUTER} can change {THIS_COMPUTER}'s settings"
         ));
     }
+    if !page_host_is_loopback(&page, resolve_host) {
+        return Err(format!(
+            "the workspace's address no longer points at {THIS_COMPUTER}, so its settings \
+             stay closed"
+        ));
+    }
     Ok(())
 }
 
@@ -152,15 +158,89 @@ pub(crate) fn workspace_section_allowed(payload: &Value) -> Result<(), String> {
     }
 }
 
-/// A sharing request from the workspace, before anything is sent.
+/// A question the person at this Mac answers natively before a change is made.
 ///
-/// The one field the page does not get to set is the Public consent. It is
-/// forced false here and set only by the native confirmation below, so a page
-/// that simply writes `true` has not agreed to anything.
+/// The page asking is not the person agreeing. Every change here that lets
+/// somebody else in -- onto this Mac's network address, the internet, account
+/// creation, commands on the host itself, or the credentials its connectors
+/// and bots act with -- is put to the person in a window the page cannot draw
+/// or dismiss, in words built from the request that will actually be sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeConsent {
+    pub(crate) title: String,
+    pub(crate) message: String,
+    pub(crate) confirm: String,
+}
+
+impl NativeConsent {
+    fn new(title: &str, message: String, confirm: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            message,
+            confirm: confirm.to_owned(),
+        }
+    }
+
+    /// Ask, natively. `Ok(false)` is a considered no.
+    pub(crate) fn ask(&self, app: &AppHandle) -> Result<bool, String> {
+        confirm_destructive_action_impl(
+            app.clone(),
+            self.title.clone(),
+            self.message.clone(),
+            self.confirm.clone(),
+        )
+    }
+}
+
+/// The join policy an enable request will run with, as locald names it.
+///
+/// Written into the request rather than left to the daemon's saved preference,
+/// so the sentence the person agrees to and the policy the backend enforces are
+/// read from the same value. The consent used to be worded from the saved
+/// preference while the request itself carried `who_can_join: "open"`.
+fn requested_who_can_join<'a>(payload: &'a Value, saved: &'a str) -> Result<&'a str, String> {
+    let who = match payload.get("who_can_join") {
+        None | Some(Value::Null) => saved,
+        Some(Value::String(who)) => who.as_str(),
+        Some(_) => return Err("who can join must be \"open\" or \"invite_only\"".into()),
+    };
+    match who {
+        "open" | "invite_only" => Ok(who),
+        other => Err(format!("unknown join policy: {other}")),
+    }
+}
+
+/// locald's sentence for a public link under this policy (`sharing::public_warning`).
+pub(crate) fn public_join_sentence(who_can_join: &str) -> &'static str {
+    if who_can_join == "open" {
+        "Anyone with this link can create an account and use this Lemma installation."
+    } else {
+        "Anyone with this link can reach this Lemma's sign-in page. \
+         Only people you invite can create an account."
+    }
+}
+
+/// locald's sentence for the local network under this policy (`sharing::local_join_warning`).
+pub(crate) fn local_join_sentence(who_can_join: &str) -> &'static str {
+    if who_can_join == "open" {
+        "Anyone on this network can create an account."
+    } else {
+        "Only people you invite can create an account."
+    }
+}
+
+/// A sharing request from a page, and what to ask before sending it.
+///
+/// The Public consent flag is forced false here and set only after the native
+/// confirmation answers yes, so a page that writes `true` has agreed to
+/// nothing. `saved_who_can_join` is the daemon's current preference, used when
+/// an enable request names none; it is then written into the request.
 pub(crate) fn workspace_sharing_request(
     action: &str,
     payload: Option<Value>,
-) -> Result<(Value, bool), String> {
+    saved_who_can_join: &str,
+    id: Option<String>,
+) -> Result<(Value, Option<NativeConsent>), String> {
     if !matches!(
         action,
         "snapshot" | "preflight" | "enable" | "disable" | "access"
@@ -169,30 +249,54 @@ pub(crate) fn workspace_sharing_request(
     }
     let mut request = json!({
         "cmd": format!("sharing.{action}"),
-        "id": operation_id("workspace-sharing"),
+        "id": id.unwrap_or_else(|| operation_id("workspace-sharing")),
     });
-    let mut needs_public_consent = false;
+    let mut consent = None;
     if let Some(mut payload) = payload {
         if action == "preflight" {
             if let Some(provider) = payload.get("provider") {
                 request["provider"] = provider.clone();
             }
         } else {
-            if action == "enable" {
-                needs_public_consent =
-                    payload.get("mode").and_then(Value::as_str) == Some("public");
-                if payload.is_object() {
-                    payload["public_warning_confirmed"] = Value::Bool(false);
-                }
+            if action == "enable" && payload.is_object() {
+                let who = requested_who_can_join(&payload, saved_who_can_join)?.to_owned();
+                payload["who_can_join"] = Value::String(who.clone());
+                payload["public_warning_confirmed"] = Value::Bool(false);
+                consent = match payload.get("mode").and_then(Value::as_str) {
+                    Some("public") => Some(NativeConsent::new(
+                        "Create a public link?",
+                        public_consent_message(public_join_sentence(&who)),
+                        "I understand · create link",
+                    )),
+                    Some("local_network") => Some(NativeConsent::new(
+                        "Share on this network?",
+                        local_network_consent_message(local_join_sentence(&who)),
+                        "Share on this network",
+                    )),
+                    _ => None,
+                };
+            }
+            if action == "access"
+                && payload.get("who_can_join").and_then(Value::as_str) == Some("open")
+            {
+                consent = Some(NativeConsent::new(
+                    "Let anyone create an account?",
+                    format!(
+                        "While this Lemma is shared, anyone who can reach it can create an \
+                         account and use it -- including running agents in a sandbox on \
+                         {THIS_COMPUTER}. Choose invite-only again at any time."
+                    ),
+                    "Let anyone join",
+                ));
             }
             request["payload"] = payload;
         }
     }
-    Ok((request, needs_public_consent))
+    Ok((request, consent))
 }
 
-/// What the native Public confirmation says. The daemon's own sentence about
-/// who may join leads, because it is the one it enforces.
+/// What the native Public confirmation says. The sentence about who may join
+/// leads, because it is the one the backend will enforce.
 pub(crate) fn public_consent_message(who_can_join_sentence: &str) -> String {
     format!(
         "{who_can_join_sentence} The workspace, sign-in, files, chat, tools and webhook callbacks \
@@ -200,6 +304,133 @@ pub(crate) fn public_consent_message(who_can_join_sentence: &str) -> String {
          window reopens at the public address, where {THIS_COMPUTER}'s settings open from the \
          menu bar."
     )
+}
+
+/// What the native local-network confirmation says.
+pub(crate) fn local_network_consent_message(who_can_join_sentence: &str) -> String {
+    format!(
+        "Anyone on the network you choose can reach this Lemma's sign-in page until you turn \
+         sharing off or quit Lemma. {who_can_join_sentence} Use this only on a private Wi-Fi \
+         network that you trust."
+    )
+}
+
+/// The join policy locald has saved, read only when an enable needs it.
+fn saved_who_can_join(action: &str) -> Result<String, String> {
+    if action != "enable" {
+        return Ok("invite_only".into());
+    }
+    let current = locald_request(
+        json!({"cmd": "sharing.snapshot", "id": operation_id("workspace-sharing-consent")}),
+        Duration::from_secs(15),
+    )?;
+    Ok(current
+        .pointer("/sharing/who_can_join")
+        .and_then(Value::as_str)
+        .unwrap_or("invite_only")
+        .to_owned())
+}
+
+/// Build a sharing request, ask what it needs asked, and return it ready to send.
+///
+/// `None` when the person declined. Shared by the workspace's This Mac page and
+/// Local settings, so neither is a way around the other's question.
+pub(crate) fn consented_sharing_request(
+    app: &AppHandle,
+    action: &str,
+    payload: Option<Value>,
+    id: Option<String>,
+) -> Result<Option<Value>, String> {
+    let saved = saved_who_can_join(action)?;
+    let (mut request, consent) = workspace_sharing_request(action, payload, &saved, id)?;
+    if let Some(consent) = consent {
+        if !consent.ask(app)? {
+            return Ok(None);
+        }
+        if request.pointer("/payload/mode").and_then(Value::as_str) == Some("public") {
+            request["payload"]["public_warning_confirmed"] = Value::Bool(true);
+        }
+    }
+    Ok(Some(request))
+}
+
+/// The credentials a settings change would replace or remove, by name.
+///
+/// Setting one for the first time asks nothing: there is nothing of the
+/// person's to lose, and it is what the page is for. Changing one that is
+/// already there does -- it silently re-points this Mac's connectors or bots
+/// at somebody else's app. `operator` is the daemon's current operator block.
+pub(crate) fn credential_replacements(operator: &Value, payload: &Value) -> Vec<String> {
+    let mut replaced = Vec::new();
+    let Some(section) = payload.pointer("/section/name").and_then(Value::as_str) else {
+        return replaced;
+    };
+    let label = |key: &str| key.rsplit('.').next().unwrap_or(key).replace('_', " ");
+    if let Some(secrets) = payload.get("secrets").and_then(Value::as_object) {
+        for (key, intent) in secrets {
+            let action = intent.get("action").and_then(Value::as_str);
+            let stored = operator
+                .pointer("/secrets")
+                .and_then(|secrets| secrets.get(key))
+                .and_then(Value::as_bool)
+                == Some(true);
+            if stored && matches!(action, Some("replace" | "remove")) {
+                replaced.push(label(key));
+            }
+        }
+    }
+    if let Some(values) = payload.pointer("/section/value").and_then(Value::as_object) {
+        let current = operator
+            .pointer("/config")
+            .and_then(|config| config.get(section));
+        for (key, next) in values {
+            let Some(before) = current
+                .and_then(|current| current.get(key))
+                .and_then(Value::as_str)
+                .filter(|before| !before.trim().is_empty())
+            else {
+                continue;
+            };
+            if next.as_str() != Some(before) {
+                replaced.push(label(key));
+            }
+        }
+    }
+    replaced.sort();
+    replaced.dedup();
+    replaced
+}
+
+/// What replacing credentials asks.
+pub(crate) fn credential_consent(replaced: &[String]) -> Option<NativeConsent> {
+    (!replaced.is_empty()).then(|| {
+        NativeConsent::new(
+            "Replace saved credentials?",
+            format!(
+                "This changes credentials {THIS_COMPUTER}'s connectors and channels already \
+                 run with: {}. Accounts connected through the old ones may stop working, and \
+                 the new ones decide who receives your users' authorizations.",
+                replaced.join(", ")
+            ),
+            "Replace",
+        )
+    })
+}
+
+/// What turning on host execution asks.
+pub(crate) fn host_execution_consent(enabled: bool) -> Option<NativeConsent> {
+    enabled.then(|| {
+        NativeConsent::new(
+            "Run agents' commands on this Mac?",
+            format!(
+                "Your agents' commands will run directly on {THIS_COMPUTER} instead of in \
+                 Lemma's virtual machine, confined by macOS's sandbox to the folders you \
+                 connect. Teammates' runs stay in the virtual machine. Turn this off at any \
+                 time in Settings."
+            ),
+            "Run on this Mac",
+        )
+    })
 }
 
 fn local_settings_snapshot_impl(app: AppHandle) -> Result<Value, String> {
@@ -226,6 +457,16 @@ fn local_settings_snapshot_impl(app: AppHandle) -> Result<Value, String> {
 fn apply_local_settings_impl(app: AppHandle, payload: Value) -> Result<Value, String> {
     workspace_section_allowed(&payload)?;
     ensure_locald(&app)?;
+    let current = locald_request(
+        json!({"cmd": "control.snapshot", "id": operation_id("workspace-apply-consent")}),
+        Duration::from_secs(15),
+    )?;
+    let operator = workspace_settings_view(&current)["operator"].clone();
+    if let Some(consent) = credential_consent(&credential_replacements(&operator, &payload)) {
+        if !consent.ask(&app)? {
+            return Ok(json!({ "cancelled": true }));
+        }
+    }
     // Blocking on the daemon's answer rather than its event stream: the
     // workspace is granted named commands, not events, and a save it cannot
     // hear finish is one it would have to guess about. Apply restarts the
@@ -246,31 +487,10 @@ fn local_sharing_impl(
     if current_mode(&app) != "local" {
         return Err("sharing is available only for a local workspace".into());
     }
-    let (mut request, needs_public_consent) = workspace_sharing_request(&action, payload)?;
     ensure_locald(&app)?;
-    if needs_public_consent {
-        // Native and in Rust, not a dialog the page draws: the page asking is
-        // not the person agreeing, and this is the one setting here that puts
-        // the installation on the internet.
-        let current = locald_request(
-            json!({"cmd": "sharing.snapshot", "id": operation_id("workspace-sharing-consent")}),
-            Duration::from_secs(15),
-        )?;
-        let sentence = current
-            .pointer("/sharing/public_confirmation")
-            .and_then(Value::as_str)
-            .unwrap_or("Anyone with this link can reach this Lemma's sign-in page.");
-        let agreed = confirm_destructive_action_impl(
-            app.clone(),
-            "Create a public link?".into(),
-            public_consent_message(sentence),
-            "I understand · create link".into(),
-        )?;
-        if !agreed {
-            return Ok(json!({ "cancelled": true }));
-        }
-        request["payload"]["public_warning_confirmed"] = Value::Bool(true);
-    }
+    let Some(request) = consented_sharing_request(&app, &action, payload, None)? else {
+        return Ok(json!({ "cancelled": true }));
+    };
     // The answer is the first event about this request: the snapshot for a
     // read, the first progress report for an enable, and the change itself for
     // a disable or an access change. An enable keeps going after this returns;
@@ -375,6 +595,11 @@ fn set_host_execution_impl(app: AppHandle, enabled: bool) -> Result<Value, Strin
         return Err(format!(
             "{THIS_COMPUTER} cannot run agents' commands in a sandbox, so they stay in the VM"
         ));
+    }
+    if let Some(consent) = host_execution_consent(enabled) {
+        if !consent.ask(&app)? {
+            return agent_host_ui::agent_host_status_impl(app);
+        }
     }
     ensure_agent_host_daemon(&app)?;
     agent_host_request(&app, host_execution_request(enabled))?;

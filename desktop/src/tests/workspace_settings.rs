@@ -184,47 +184,239 @@ fn repair_from_the_workspace_is_asked_natively() {
 
 #[test]
 fn the_page_cannot_agree_to_a_public_link_on_its_own_behalf() {
-    let (request, needs_consent) = workspace_sharing_request(
+    let (request, consent) = workspace_sharing_request(
         "enable",
         Some(json!({"mode": "public", "provider": "ngrok", "public_warning_confirmed": true})),
+        "invite_only",
+        None,
     )
     .expect("a valid request");
-    assert!(needs_consent);
+    assert!(consent.is_some());
     assert_eq!(request["cmd"], "sharing.enable");
-    assert_eq!(request["payload"]["public_warning_confirmed"], false);
-
-    // The local network needs no consent dialog, and gets none either way.
-    let (request, needs_consent) = workspace_sharing_request(
-        "enable",
-        Some(json!({"mode": "local_network", "interface": "192.168.1.20", "public_warning_confirmed": true})),
-    )
-    .expect("a valid request");
-    assert!(!needs_consent);
     assert_eq!(request["payload"]["public_warning_confirmed"], false);
 
     // The consent is set only after the native confirmation answers yes.
     let source = include_str!("../workspace_settings.rs").replace("\r\n", "\n");
-    let body = function_body(&source, "fn local_sharing_impl(");
-    let asked = body.find("confirm_destructive_action_impl").expect("asks");
+    let body = function_body(&source, "pub(crate) fn consented_sharing_request(");
+    let asked = body.find("consent.ask(app)?").expect("asks");
     let set = body
         .find("[\"public_warning_confirmed\"] = Value::Bool(true)")
         .expect("sets consent");
     assert!(asked < set);
 }
 
+/// Every change that lets somebody else in is asked natively, not only Public.
+#[test]
+fn sharing_on_the_local_network_and_opening_signup_are_asked_natively() {
+    let (request, consent) = workspace_sharing_request(
+        "enable",
+        Some(json!({"mode": "local_network", "interface": "192.168.1.20", "public_warning_confirmed": true})),
+        "invite_only",
+        None,
+    )
+    .expect("a valid request");
+    let consent = consent.expect("the local network is asked about");
+    assert_eq!(request["payload"]["public_warning_confirmed"], false);
+    assert!(consent.message.contains(local_join_sentence("invite_only")));
+
+    let (_, consent) = workspace_sharing_request(
+        "access",
+        Some(json!({"who_can_join": "open"})),
+        "invite_only",
+        None,
+    )
+    .unwrap();
+    assert!(consent.is_some(), "opening signup went unasked");
+    // Narrowing who can join takes nothing from anybody.
+    let (_, consent) = workspace_sharing_request(
+        "access",
+        Some(json!({"who_can_join": "invite_only"})),
+        "open",
+        None,
+    )
+    .unwrap();
+    assert!(consent.is_none());
+    for action in ["snapshot", "disable"] {
+        assert!(workspace_sharing_request(action, None, "open", None)
+            .unwrap()
+            .1
+            .is_none());
+    }
+}
+
+/// The sentence agreed to is the policy enforced, read from the request.
+///
+/// The Public dialog was worded from the saved preference while the request
+/// itself could carry `who_can_join: "open"`: the person read "only people you
+/// invite", and the link went live with open signup.
+#[test]
+fn the_consent_describes_the_join_policy_the_request_carries() {
+    let (request, consent) = workspace_sharing_request(
+        "enable",
+        Some(json!({"mode": "public", "provider": "ngrok", "who_can_join": "open"})),
+        "invite_only",
+        None,
+    )
+    .unwrap();
+    assert_eq!(request["payload"]["who_can_join"], "open");
+    assert!(consent
+        .unwrap()
+        .message
+        .starts_with(public_join_sentence("open")));
+
+    // Absent from the request: the saved policy is written into it, so the
+    // daemon cannot apply anything but what was described.
+    let (request, consent) = workspace_sharing_request(
+        "enable",
+        Some(json!({"mode": "public", "provider": "ngrok"})),
+        "open",
+        None,
+    )
+    .unwrap();
+    assert_eq!(request["payload"]["who_can_join"], "open");
+    assert!(consent
+        .unwrap()
+        .message
+        .starts_with(public_join_sentence("open")));
+
+    assert!(workspace_sharing_request(
+        "enable",
+        Some(json!({"mode": "public", "who_can_join": "everyone"})),
+        "invite_only",
+        None,
+    )
+    .is_err());
+}
+
+/// The shell restates locald's sentences; they must say the same thing.
+#[test]
+fn the_shells_join_sentences_are_the_daemons() {
+    use lemma_locald::sharing::{local_join_warning, public_warning, WhoCanJoin};
+    for (name, who) in [
+        ("open", WhoCanJoin::Open),
+        ("invite_only", WhoCanJoin::InviteOnly),
+    ] {
+        assert_eq!(public_join_sentence(name), public_warning(who));
+        assert_eq!(local_join_sentence(name), local_join_warning(who));
+    }
+}
+
+/// Local settings takes the same path, so the bundled page is no way around it.
+#[test]
+fn local_settings_sharing_goes_through_the_same_consent() {
+    let source = include_str!("../operator_settings.rs").replace("\r\n", "\n");
+    let body = function_body(&source, "pub(crate) fn sharing_action_impl(");
+    assert!(body.contains("consented_sharing_request(&app, &action, payload, Some(id))?"));
+    assert!(!body.contains("request[\"payload\"] = payload"));
+}
+
+#[test]
+fn replacing_a_credential_is_asked_and_setting_a_first_one_is_not() {
+    let operator = json!({
+        "config": {"integrations": {"google_client_id": "ours.apps", "slack_client_id": ""}},
+        "secrets": {"integrations.google_client_secret": true},
+    });
+    // First-time values: nothing of the person's is lost.
+    let first = json!({
+        "section": {"name": "integrations", "value": {"google_client_id": "ours.apps", "slack_client_id": "new"}},
+        "secrets": {"integrations.slack_client_secret": {"action": "replace", "value": "s"}},
+    });
+    assert!(credential_replacements(&operator, &first).is_empty());
+    assert!(credential_consent(&[]).is_none());
+
+    let replacing = json!({
+        "section": {"name": "integrations", "value": {"google_client_id": "theirs.apps"}},
+        "secrets": {
+            "integrations.google_client_secret": {"action": "replace", "value": "x"},
+        },
+    });
+    assert_eq!(
+        credential_replacements(&operator, &replacing),
+        ["google client id", "google client secret"]
+    );
+    let removing = json!({
+        "section": {"name": "integrations", "value": {"google_client_id": "ours.apps"}},
+        "secrets": {"integrations.google_client_secret": {"action": "remove"}},
+    });
+    assert_eq!(
+        credential_replacements(&operator, &removing),
+        ["google client secret"]
+    );
+
+    let source = include_str!("../workspace_settings.rs").replace("\r\n", "\n");
+    let body = function_body(&source, "fn apply_local_settings_impl(");
+    let asked = body.find("consent.ask(&app)?").expect("asks");
+    let applied = body.find("\"config.apply\"").expect("applies");
+    assert!(asked < applied);
+}
+
+#[test]
+fn turning_host_execution_on_is_asked_and_turning_it_off_is_not() {
+    assert!(host_execution_consent(true).is_some());
+    assert!(host_execution_consent(false).is_none());
+    let source = include_str!("../workspace_settings.rs").replace("\r\n", "\n");
+    let body = function_body(&source, "fn set_host_execution_impl(");
+    let asked = body.find("consent.ask(&app)?").expect("asks");
+    let sent = body
+        .find("agent_host_request(&app, host_execution_request(enabled))")
+        .expect("sends");
+    assert!(asked < sent);
+}
+
 #[test]
 fn sharing_requests_are_limited_to_the_known_actions() {
-    assert!(workspace_sharing_request("snapshot", None).is_ok());
-    let (preflight, _) =
-        workspace_sharing_request("preflight", Some(json!({"provider": "cloudflare"}))).unwrap();
+    assert!(workspace_sharing_request("snapshot", None, "invite_only", None).is_ok());
+    let (preflight, _) = workspace_sharing_request(
+        "preflight",
+        Some(json!({"provider": "cloudflare"})),
+        "invite_only",
+        None,
+    )
+    .unwrap();
     assert_eq!(preflight["provider"], "cloudflare");
     assert!(preflight.get("payload").is_none());
     for refused in ["reset", "sharing.enable", ""] {
         assert!(
-            workspace_sharing_request(refused, None).is_err(),
+            workspace_sharing_request(refused, None, "invite_only", None).is_err(),
             "{refused}"
         );
     }
+    let (with_id, _) =
+        workspace_sharing_request("snapshot", None, "invite_only", Some("control-7".into()))
+            .unwrap();
+    assert_eq!(with_id["id"], "control-7");
+}
+
+#[test]
+fn a_page_on_a_host_that_stopped_resolving_to_this_mac_is_refused() {
+    use std::net::{IpAddr, Ipv4Addr};
+    let loopback = |_: &str| vec![IpAddr::V4(Ipv4Addr::LOCALHOST)];
+    let hostile = |_: &str| vec![IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5))];
+    let mixed = |_: &str| {
+        vec![
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)),
+        ]
+    };
+    let nothing = |_: &str| Vec::new();
+    let sslip = url("http://app.127.0.0.1.sslip.io:52413/t");
+    assert!(page_host_is_loopback(&sslip, loopback));
+    assert!(!page_host_is_loopback(&sslip, hostile));
+    assert!(!page_host_is_loopback(&sslip, mixed));
+    assert!(!page_host_is_loopback(&sslip, nothing));
+    // `*.localhost` is loopback by convention and never asks a resolver.
+    assert!(page_host_is_loopback(
+        &url("http://app.lemma.localhost:52413/"),
+        hostile
+    ));
+    assert!(page_host_is_loopback(
+        &url("http://127.0.0.1:3000/"),
+        hostile
+    ));
+
+    let source = include_str!("../workspace_settings.rs").replace("\r\n", "\n");
+    let body = function_body(&source, "pub(crate) fn require_local_settings_caller(");
+    assert!(body.contains("page_host_is_loopback(&page, resolve_host)"));
 }
 
 #[test]

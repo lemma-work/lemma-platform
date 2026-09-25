@@ -195,6 +195,78 @@ pub(crate) fn navigation_disposition(
     }
 }
 
+/// Whether a top-level page load takes a local workspace's window off to
+/// somebody else's site, and should go to the browser instead.
+///
+/// `navigation_disposition` allows those, and has to: it is asked about every
+/// frame, and an embedded video or document preview is an iframe on another
+/// host. But the window a local workspace lives in is the one holding its IPC
+/// grant, its session and its look, and a top-level page there reads as Lemma
+/// whatever it says. Hosted mode is left alone -- its sign-in and billing
+/// round trips are top-level visits to other hosts by design.
+pub(crate) fn main_frame_leaves_app(
+    url: &tauri::Url,
+    mode: &str,
+    app_base: &str,
+    api_base: &str,
+) -> bool {
+    mode == "local"
+        && matches!(url.scheme(), "http" | "https")
+        && !trusted_native_asset_url(url)
+        && !is_desktop_browser_auth_url(url)
+        && !same_origin(url, app_base)
+        && !same_origin(url, api_base)
+        && !owned_published_app(url, api_base)
+        && !local_destination(url, api_base)
+}
+
+/// Whether the main window may open the inspector.
+pub(crate) fn main_window_devtools(debug_build: bool, requested: Option<&str>) -> bool {
+    debug_build || requested == Some("1")
+}
+
+/// Whether a set of resolved addresses is loopback and nothing else.
+pub(crate) fn loopback_only(addresses: &[IpAddr]) -> bool {
+    !addresses.is_empty() && addresses.iter().all(IpAddr::is_loopback)
+}
+
+/// Whether the page's host is this Mac, asked now rather than trusted from launch.
+///
+/// A `*.localhost` host is loopback by the resolver convention WebKit applies
+/// itself. Any other workspace host -- the public wildcard `127.0.0.1.sslip.io`
+/// -- is only loopback because somebody else's DNS says so, and it was asked
+/// once, at startup. A network that answers differently later (a hostile Wi-Fi,
+/// a poisoned resolver) would put its own page on the very origin this app
+/// grants its IPC to. So a privileged command asks again, at the moment it is
+/// called, and refuses unless every answer is loopback. Not proof against a
+/// rebinding race -- the page was already loaded -- but it closes the plain
+/// "the name now points elsewhere" case.
+pub(crate) fn page_host_is_loopback(
+    page: &tauri::Url,
+    resolve: impl Fn(&str) -> Vec<IpAddr>,
+) -> bool {
+    let Some(host) = page.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(address) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
+        return address.is_loopback();
+    }
+    loopback_only(&resolve(&host))
+}
+
+/// The system resolver's current answer for `host`.
+pub(crate) fn resolve_host(host: &str) -> Vec<IpAddr> {
+    use std::net::ToSocketAddrs;
+    (host, 80)
+        .to_socket_addrs()
+        .map(|found| found.map(|address| address.ip()).collect())
+        .unwrap_or_default()
+}
+
 pub(crate) fn new_window_disposition(
     url: &tauri::Url,
     mode: &str,
