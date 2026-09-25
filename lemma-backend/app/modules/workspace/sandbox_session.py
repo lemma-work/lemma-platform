@@ -16,6 +16,7 @@ from sandbox_runtime.protocol import (
     TerminalSize,
     WorkloadKind,
 )
+from app.core.bounded import BoundedDict
 from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
@@ -64,9 +65,13 @@ _LIVENESS_PROBE_SECONDS = 8.0
 # rather than the storage generation: a kernel is memory, so it dies with the
 # container hosting it -- the mirror image of a workspace directory, which lives
 # on the volume and survives exactly that.
-_python_sessions_observed: dict[tuple[UUID, UUID, int], float] = {}
 _PYTHON_SESSION_OBSERVED_SECONDS = 60.0
 _PYTHON_SESSION_CACHE_MAX = 512
+# Values are monotonic stamps written on every set, so evicting the least
+# recently set key is evicting the oldest observation.
+_python_sessions_observed: BoundedDict[tuple[UUID, UUID, int], float] = BoundedDict(
+    _PYTHON_SESSION_CACHE_MAX, name="workspace.python_sessions_observed"
+)
 _tracer = trace.get_tracer("app.modules.workspace.tool_phases")
 
 
@@ -478,12 +483,6 @@ class SandboxWorkspaceSession(SandboxFileOperationsMixin):
             )
             self._python_session_observed = True
             if key is not None:
-                if len(_python_sessions_observed) >= _PYTHON_SESSION_CACHE_MAX:
-                    for stale in sorted(
-                        _python_sessions_observed,
-                        key=lambda entry: _python_sessions_observed[entry],
-                    )[: len(_python_sessions_observed) - _PYTHON_SESSION_CACHE_MAX + 1]:
-                        _python_sessions_observed.pop(stale, None)
                 _python_sessions_observed[key] = time.monotonic()
 
         with _tracer.start_as_current_span("lemma.workspace.python_session"):

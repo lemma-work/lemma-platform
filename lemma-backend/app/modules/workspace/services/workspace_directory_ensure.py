@@ -22,6 +22,7 @@ from uuid import UUID
 
 from sandbox_runtime.errors import SandboxError, SandboxUnauthorized, SandboxUnavailable
 
+from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from app.modules.workspace.contracts import SandboxInfo
@@ -85,7 +86,7 @@ class WorkspaceDirectoryEnsureMixin:
     what it reaches for.
     """
 
-    _ready_directories: dict[tuple[int, UUID, str, int, str], float]
+    _ready_directories: BoundedDict[tuple[int, UUID, str, int, str], float]
     _inflight_directories: dict[
         tuple[int, UUID, str, int, str], "asyncio.Task[SandboxInfo]"
     ]

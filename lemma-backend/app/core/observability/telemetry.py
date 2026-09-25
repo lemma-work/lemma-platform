@@ -58,6 +58,11 @@ from app.core.observability.otel_logging import (
     quiet_otlp_export_logs,
     setup_otel_logs,
 )
+from app.core.observability.span_limits import (
+    GENERAL_SPAN_LIMITS,
+    MAX_SPAN_CONTENT_CHARS as _MAX_SPAN_CONTENT_CHARS,
+    general_span_processor,
+)
 from app.core.observability.span_sanitizer import (
     METRIC_ATTRIBUTE_KEYS,
     SanitizingSpanExporter,
@@ -263,13 +268,6 @@ def agent_run_telemetry_context(
         yield attributes
     finally:
         _agent_run_context.reset(token)
-
-
-# Phoenix renders these in full, so the cap is about what a span is allowed to
-# weigh on the wire rather than about what is readable. A run's transcript can
-# be megabytes; the OTLP batch it would ride in is not the place to find that
-# out.
-_MAX_SPAN_CONTENT_CHARS = 8_192
 
 
 def record_span_input(span: Any, value: Any) -> None:
@@ -570,12 +568,13 @@ def _setup_tracing(service_name: str) -> TracerProvider | None:
     provider = TracerProvider(
         resource=_build_resource(service_name),
         sampler=_build_sampler(settings),
+        span_limits=GENERAL_SPAN_LIMITS,  # truncate at record time
     )
 
     provider.add_span_processor(AgentRunSpanEnricher())
 
     provider.add_span_processor(
-        BatchSpanProcessor(
+        general_span_processor(
             SanitizingSpanExporter(
                 _build_span_exporter(
                     traces_endpoint,
@@ -676,8 +675,9 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
     # `logger_provider`/`event_mode` are gone as of pydantic-ai 2.x: instrumentation
     # now always writes content into span attributes rather than log records, which
     # is exactly what NoOpLoggerProvider + event_mode="attributes" used to force.
-    # `version=2` is still honoured and is kept deliberately — the span shape here
-    # is what the LLM-review tooling reads.
+    # `version=5` (2-4 warn on every boot). Through OpenInference it yields v2's
+    # attributes; only span names change (`invoke_agent`, `execute_tool`), which
+    # nothing keys on -- the sanitizer and filter read `openinference.span.kind`.
     # Imported here rather than at module scope, which is where it was.
     #
     # This module is reached from `app.app` line 18, through
@@ -694,7 +694,7 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
             meter_provider=NoOpMeterProvider(),
             include_content=True,
             include_binary_content=False,
-            version=2,
+            version=5,
             use_aggregated_usage_attribute_names=True,
         )
     )

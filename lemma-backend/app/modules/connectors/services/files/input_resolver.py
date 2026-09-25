@@ -30,6 +30,7 @@ import httpx
 
 from app.core.authorization.context import Context
 from app.core.domain.errors import DomainError
+from app.version import MIN_CLI_VERSION
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.file_input import MaterializedFile
@@ -232,7 +233,9 @@ class FileInputResolver:
             raise _refused(
                 f"File input at {path} names a pod file, but this call has no pod. "
                 "Run it from a pod (pass pod_id, or use pod.connectors.execute), "
-                "or pass the file inline as base64.",
+                "or pass the file inline as base64. "
+                "If you are using the lemma CLI, update it (`lemma update`): "
+                f"versions before {MIN_CLI_VERSION} do not send pod_id.",
                 field=path,
                 reason="file_input_needs_pod",
             )

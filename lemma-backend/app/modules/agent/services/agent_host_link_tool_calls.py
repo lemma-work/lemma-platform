@@ -136,7 +136,7 @@ class ToolCallLedger:
 #: Calls executing for some link, held here so that neither link teardown nor
 #: garbage collection can end them: a task nothing references can be collected
 #: mid-flight, and the session's own task set is cancelled when it closes.
-_EXECUTING: set[asyncio.Task[JsonObject]] = set()
+_EXECUTING: set[asyncio.Task[JsonObject]] = set()  # memory: bounded -- in flight only
 
 
 #: Failures already reported where they were raised.

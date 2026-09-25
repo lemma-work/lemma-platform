@@ -3,6 +3,9 @@ from typing import Optional, Sequence
 
 from sqlalchemy import case, desc, func, or_, select
 
+from app.modules.connectors.infrastructure.repositories.catalog_rows import (
+    convert_valid_rows,
+)
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -11,6 +14,12 @@ from app.modules.connectors.domain.connector_operation import (
 )
 from app.modules.connectors.domain.ports import ConnectorOperationRepositoryPort
 from app.modules.connectors.infrastructure.models import ConnectorOperation
+from app.modules.connectors.domain.connector import ConnectorKind
+
+# Rows of a removed kind are excluded in SQL, not only skipped after the fetch:
+# this list takes a bare `limit` with no cursor, so a skipped row would have
+# silently cost the caller a result it could never page to.
+_KNOWN_KINDS = tuple(kind.value for kind in ConnectorKind)
 
 
 def _normalize_search_query(query: str) -> str:
@@ -47,7 +56,8 @@ class ConnectorOperationRepository(
         every row, with every JSONB schema, to return twenty summaries.
         """
         stmt = select(ConnectorOperation).where(
-            ConnectorOperation.connector_id == connector_id
+            ConnectorOperation.connector_id == connector_id,
+            ConnectorOperation.kind.in_(_KNOWN_KINDS),
         )
         if kind is not None:
             stmt = stmt.where(ConnectorOperation.kind == kind)
@@ -89,6 +99,7 @@ class ConnectorOperationRepository(
             stmt = (
                 select(ConnectorOperation, exact_match_rank, ts_rank)
                 .where(ConnectorOperation.connector_id == connector_id)
+                .where(ConnectorOperation.kind.in_(_KNOWN_KINDS))
                 .where(
                     or_(
                         ts_vector.op("@@")(ts_query),
@@ -118,8 +129,10 @@ class ConnectorOperationRepository(
 
         result = await self.session.execute(stmt)
         if normalized_query:
-            return [row[0].to_entity() for row in result.all()]
-        return [instance.to_entity() for instance in result.scalars().all()]
+            return convert_valid_rows(
+                (row[0] for row in result.all()), ConnectorOperation.to_entity
+            )
+        return convert_valid_rows(result.scalars().all(), ConnectorOperation.to_entity)
 
     async def list_by_connector_kind(
         self,
@@ -146,7 +159,11 @@ class ConnectorOperationRepository(
         search path that is fanned out across every install in the org.
         """
         stmt = select(func.count()).select_from(ConnectorOperation)
-        stmt = stmt.where(ConnectorOperation.connector_id == connector_id)
+        stmt = stmt.where(
+            ConnectorOperation.connector_id == connector_id,
+            # Same exclusion as the listing, so "N of M" counts what it lists.
+            ConnectorOperation.kind.in_(_KNOWN_KINDS),
+        )
         if kind is not None:
             stmt = stmt.where(ConnectorOperation.kind == kind)
         result = await self.session.execute(stmt)
@@ -225,7 +242,7 @@ class ConnectorOperationRepository(
         if kind is not None:
             statement = statement.where(ConnectorOperation.kind == kind)
         result = await self.session.execute(statement)
-        return [instance.to_entity() for instance in result.scalars().all()]
+        return convert_valid_rows(result.scalars().all(), ConnectorOperation.to_entity)
 
     async def get_by_connector_kind_and_name(
         self,

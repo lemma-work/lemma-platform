@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from faststream.redis import RedisBroker
 from redis.exceptions import RedisError
 
+from app.core.bounded import BoundedDict
 from app.core.config import settings
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.stream_subscriber import (
@@ -140,7 +141,11 @@ class _KeyedReportThrottle:
 
     def __init__(self, interval_seconds: float) -> None:
         self._interval_seconds = interval_seconds
-        self._seen: dict[tuple[str, str, str | None], tuple[float, int]] = {}
+        # Keys carry stream/group names, which grow with traffic; forgetting
+        # one only lets an extra report through.
+        self._seen: BoundedDict[tuple[str, str, str | None], tuple[float, int]] = (
+            BoundedDict(1024, name="events.trim_report_throttle")
+        )
 
     def should_report(
         self, key: tuple[str, str, str | None], now: float
@@ -150,7 +155,8 @@ class _KeyedReportThrottle:
         `now` is monotonic, so a corrected wall clock cannot push the next
         report into the far future.
         """
-        last_at, suppressed = self._seen.get(key, (None, 0))
+        seen = self._seen.get(key)
+        last_at, suppressed = seen if seen is not None else (None, 0)
         if last_at is not None and now - last_at < self._interval_seconds:
             self._seen[key] = (last_at, suppressed + 1)
             return False, suppressed + 1

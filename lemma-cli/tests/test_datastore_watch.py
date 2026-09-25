@@ -261,3 +261,22 @@ def test_a_4401_close_with_an_environment_token_stops_at_once(
         asyncio.run(watch_module._run(state, "POD", None, None))
 
     assert attempts["n"] == 1
+
+
+@pytest.mark.parametrize("code", [4403, 4404])
+def test_a_forbidden_or_not_found_close_stops_without_retrying(
+    monkeypatch, tmp_path, code
+) -> None:
+    """4403/4404 cannot be fixed by retrying; reconnecting would spin forever."""
+    import asyncio
+
+    from lemma_cli.cli_core import watch as watch_module
+
+    attempts = _closing_server(monkeypatch, code=code, give_up_after=5)
+    state = _rotated_session_state(tmp_path)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        asyncio.run(watch_module._run(state, "POD", None, None))
+
+    assert excinfo.value.exit_code != 0
+    assert attempts["n"] == 1

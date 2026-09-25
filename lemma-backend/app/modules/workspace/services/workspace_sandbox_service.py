@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from opentelemetry import trace
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.core.bounded import BoundedDict
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
@@ -96,7 +97,11 @@ class WorkspaceSandboxService(
     # trip to mkdir a directory that had existed since the first command. The
     # key carries the storage generation, so a disk reset misses while a mere
     # container recreate keeps what is still on the volume.
-    _ready_directories: dict[tuple[int, UUID, str, int, str], float] = {}
+    # Bounded: an entry only goes when read after expiry or its user's sandbox
+    # is forgotten, and keys include arbitrary paths.
+    _ready_directories: BoundedDict[tuple[int, UUID, str, int, str], float] = (
+        BoundedDict(4096, name="workspace.ready_directories")
+    )
     _stopping: dict[tuple[int, UUID], asyncio.Event] = {}
 
     def __init__(

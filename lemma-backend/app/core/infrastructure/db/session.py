@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.observability.connection_scope import attach_connection_scope_monitor
+from app.core.observability.memory_sampler import watch_compiled_cache
 from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
@@ -155,6 +156,7 @@ def get_engine():
         # is what lets the ordinary test suite catch a held connection without
         # needing a real pool.
         attach_connection_scope_monitor(engine)
+        watch_compiled_cache("primary", engine)
     return engine
 
 
