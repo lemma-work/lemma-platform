@@ -70,6 +70,10 @@ pub struct HostSetupSpec {
     pub max_attempts: usize,
     #[serde(default = "default_setup_retry_backoff")]
     pub retry_backoff_seconds: u64,
+    /// End the setup early only after this long with nothing written to its
+    /// log. `timeout_seconds` is then the ceiling rather than the budget.
+    #[serde(default)]
+    pub idle_timeout_seconds: Option<u64>,
     /// Whether failing this step should stop the whole stack from starting.
     ///
     /// Migrations are not optional: a backend running against a schema it does

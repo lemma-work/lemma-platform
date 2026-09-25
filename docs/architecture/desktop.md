@@ -253,6 +253,21 @@ The host-pack manifest requires exactly:
 - service: `backend`;
 - service: `frontend`.
 
+Setups are skipped when their recorded stamp matches. On macOS a stamp is bound
+to the data disk's identity (inode and birth time of `data.raw`), so a disk
+that was replaced reruns its migrations instead of skipping them against an
+empty database. `migrations` runs under a one-hour ceiling but is ended early
+only after fifteen minutes with nothing written to its log. While it runs,
+`update.json` records the `migrating` phase; a failed run stays recorded, and
+the next start reports it and migrates forward again. Before migrating a
+database that has been migrated before, locald takes an APFS clone of the data
+disk to `runtime/macos/data.raw.before-migration` (one copy, replaced each time,
+removed by a data reset) -- restoring it is a manual support step. `schema-release`
+records the release that last completed migrations. When Alembic reports that it
+cannot locate the database's revision -- data from a newer Lemma, after a
+downgrade or a nightly-to-stable switch -- the start fails once, naming the
+release to install, instead of retrying a generic setup error.
+
 The backend environment selects the all-in-one app, local auth settings,
 background embedding initialization, private service addresses, dynamic local
 origins, and sandbox bridge. Frontend follows the backend dependency.

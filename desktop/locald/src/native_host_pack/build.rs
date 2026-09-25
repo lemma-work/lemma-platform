@@ -484,8 +484,12 @@ pub(crate) fn build(
                 "command": argv(&bindings.python, &["-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]),
                 "cwd": path_text(&backend_dir)?,
                 "env": backend_env.clone(),
-                "timeout_seconds": 300,
-                "max_attempts": 5,
+                // A ceiling, not a budget: the migration is ended early only
+                // after fifteen minutes with nothing in its log. Five minutes
+                // flat killed long migrations mid-way and retried them.
+                "timeout_seconds": 3600,
+                "idle_timeout_seconds": 900,
+                "max_attempts": 3,
                 "retry_backoff_seconds": 3,
                 // Migrations ship inside the pack, so the pack's identity is
                 // exactly what decides whether there is anything new to apply.
