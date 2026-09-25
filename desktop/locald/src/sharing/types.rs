@@ -23,10 +23,11 @@ pub enum CloudflareSetup {
 /// A preference rather than part of a mode, because it is a decision about
 /// people and a mode is a decision about networks: somebody sharing on the LAN
 /// with their family and somebody sharing publicly with one colleague want the
-/// same answer here. Invite-only by default -- the installation owner is always
-/// admitted, and anyone they invite from inside Lemma can join -- because the
-/// failure the other default produces is a stranger with an account and a
-/// sandbox on the owner's computer, discovered after the fact.
+/// same answer here. Invite-only by default -- the installation's first account
+/// already exists by the time sharing can be turned on, and anyone invited from
+/// inside Lemma can join -- because the failure the other default produces is
+/// a stranger with an account and a sandbox on this computer, discovered after
+/// the fact.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WhoCanJoin {

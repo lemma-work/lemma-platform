@@ -91,7 +91,7 @@ pub(crate) fn sharing_environment(
             SHARED_DESKTOP_AUTH_CREATE_LIMIT.to_string(),
         ),
         ("DEBUG".into(), "false".into()),
-        // Who may create an account, now that somebody other than the owner
+        // Who may create an account, now that somebody other than this Mac's user
         // can reach the sign-up page. Written in both directions rather than
         // only when narrowing: the backend's own Desktop default is already
         // invite-only, but an explicit value is what makes this overlay the

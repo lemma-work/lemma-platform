@@ -498,16 +498,19 @@ one — email and password, an OAuth provider, and email-code sign-in:
 - `open` — anyone who reaches the sign-up page. The default for hosted and
   self-hosted deployments, and what they did before the setting existed.
 - `invite_only` — only an address holding a pending, unexpired organization
-  invitation. Anyone else is told "This Lemma is invite-only. Ask its owner for
-  an invitation."
+  invitation. Anyone else is told "This Lemma is invite-only. Ask someone
+  already on it for an invitation."
 - `closed` — nobody.
 
-People who already have an account sign in whatever the mode is.
+People who already have an account sign in whatever the mode is, and the first
+account on a deployment with no accounts at all is admitted whatever the mode —
+there is nobody yet who could have invited it. That check is a read, not a
+reservation: two signups racing on an empty database could both get in, so a
+server that wants a closed door from the first request should create its first
+account before exposing the sign-up page.
 
 `DEPLOYMENT_KIND=desktop` is set by Lemma Desktop's host pack and nothing else
-should set it. It makes the first account created the *installation owner* —
-recorded once, race-free — admits that first account whatever the mode, and
-changes the unset default to `invite_only`. Desktop's sharing settings set
+should set it. It changes the unset default to `invite_only`. Desktop's sharing settings set
 `SIGNUP_MODE` for you; see [Desktop security](architecture/desktop-security.md).
 
 **Resend is not a transport.** To send through Resend, leave

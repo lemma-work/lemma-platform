@@ -1,9 +1,7 @@
-"""The installation owner and the signup modes, against real Postgres and Core.
+"""The signup modes and the first-account rule, against real Postgres and Core.
 
-The owner slot's guarantee is a database one -- a singleton key and an
-`ON CONFLICT DO NOTHING` -- so the race is run against Postgres rather than
-reasoned about. It gets a database of its own: "the first signup" only means
-anything on an installation with no accounts, and the shared per-worker
+The first-account rule gets a database of its own: "the first signup" only
+means anything on a deployment with no accounts, and the shared per-worker
 database has as many as every other test left behind.
 
 The signup modes are driven through the real sign-up routes, because the gate
@@ -12,7 +10,6 @@ is only worth anything if every door that creates a user calls it.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -45,20 +42,16 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationInvitationStatus,
     OrganizationRole,
 )
-from app.modules.identity.infrastructure.installation_owner_store import (
-    SqlInstallationOwnerStore,
-    bind_installation_owner,
-)
 from app.modules.identity.infrastructure.models import (
-    InstallationOwner,
     OrganizationInvitation,
     User,
 )
+from app.modules.identity.infrastructure.signup_store import SqlSignupStore
 from app.modules.identity.infrastructure.supertokens_auth.override_thirdparty import (
     override_thirdparty_functions,
 )
 from app.modules.identity.services.email_challenges import EmailChallengeService
-from app.modules.identity.services.installation import Admission, SignupGate
+from app.modules.identity.services.signup_gate import Admission, SignupGate
 from app.modules.identity.tests.e2e.test_email_challenges_e2e import (
     Mailbox,
     allow_test_delivery,
@@ -66,20 +59,18 @@ from app.modules.identity.tests.e2e.test_email_challenges_e2e import (
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
-_TTL = timedelta(minutes=10)
-
 
 # ---------------------------------------------------------------------------
-# An installation with nobody on it yet
+# A deployment with nobody on it yet
 # ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture
-async def empty_installation(
+async def empty_deployment(
     test_database_url: str,
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    """A fresh database holding only the tables the owner slot touches."""
-    name = f"installation_{uuid4().hex[:12]}"
+    """A fresh database holding only the users table."""
+    name = f"signup_{uuid4().hex[:12]}"
     server = make_url(test_database_url)
     admin = await asyncpg.connect(
         user=server.username,
@@ -95,10 +86,7 @@ async def empty_installation(
     engine = create_async_engine(server.set(database=name))
     try:
         async with engine.begin() as connection:
-            await connection.run_sync(
-                Base.metadata.create_all,
-                tables=[User.__table__, InstallationOwner.__table__],
-            )
+            await connection.run_sync(Base.metadata.create_all, tables=[User.__table__])
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()
@@ -115,129 +103,22 @@ async def empty_installation(
             await admin.close()
 
 
-async def _create_user(sessions: async_sessionmaker[AsyncSession], email: str) -> UUID:
-    """A user row and its owner binding, in one transaction as production does."""
-    user_id = uuid4()
-    async with sessions() as session, session.begin():
-        session.add(User(id=user_id, email=email))
-        await session.flush()
-        await bind_installation_owner(session, user_id=user_id, email=email)
-    return user_id
-
-
-async def test_two_concurrent_first_signups_make_exactly_one_owner(
-    empty_installation: async_sessionmaker[AsyncSession],
+async def test_the_first_account_gets_in_through_a_closed_door_and_nobody_after(
+    empty_deployment: async_sessionmaker[AsyncSession],
 ) -> None:
-    store = SqlInstallationOwnerStore(empty_installation)
-    now = datetime.now(timezone.utc)
-    emails = [f"first-{index}@example.com" for index in range(8)]
-
-    admitted = await asyncio.gather(
-        *(
-            store.reserve_first_signup(email, now=now, reservation_ttl=_TTL)
-            for email in emails
-        )
+    # Closed, so the refusal below needs no invitation lookup -- this database
+    # holds only the users table -- and so the first account is seen getting
+    # in through a mode that admits nobody else.
+    gate = SignupGate(
+        settings=IdentitySettings(deployment_kind="desktop", signup_mode="closed"),
+        store=SqlSignupStore(empty_deployment),
     )
 
-    assert admitted.count(True) == 1, admitted
-    winner = emails[admitted.index(True)]
-    winner_id = await _create_user(empty_installation, winner)
-    # A loser that got an account some other way (an open-mode signup) is a
-    # member, and binding its account must not move the owner.
-    loser_id = await _create_user(empty_installation, emails[admitted.index(False)])
-
-    desktop = SignupGate(
-        settings=IdentitySettings(deployment_kind="desktop"), store=store
-    )
-    assert await desktop.is_installation_owner(winner_id) is True
-    assert await desktop.is_installation_owner(loser_id) is False
-    async with empty_installation() as session:
-        rows = (await session.scalars(select(InstallationOwner))).all()
-    assert [(row.email, row.user_id) for row in rows] == [(winner, winner_id)]
-    # And once it is bound, nobody is ever "first" again.
-    assert not await store.reserve_first_signup(
-        "late@example.com", now=datetime.now(timezone.utc), reservation_ttl=_TTL
-    )
-
-
-async def test_the_same_address_retrying_keeps_its_reservation(
-    empty_installation: async_sessionmaker[AsyncSession],
-) -> None:
-    """A first signup refused by the password policy and resubmitted is still first."""
-    store = SqlInstallationOwnerStore(empty_installation)
-    now = datetime.now(timezone.utc)
-
-    assert await store.reserve_first_signup(
-        "me@example.com", now=now, reservation_ttl=_TTL
-    )
-    assert not await store.reserve_first_signup(
-        "someone@example.com", now=now, reservation_ttl=_TTL
-    )
-    assert await store.reserve_first_signup(
-        "me@example.com", now=now, reservation_ttl=_TTL
-    )
-
-
-async def test_an_abandoned_reservation_is_taken_over_once_it_is_stale(
-    empty_installation: async_sessionmaker[AsyncSession],
-) -> None:
-    store = SqlInstallationOwnerStore(empty_installation)
-    then = datetime.now(timezone.utc) - _TTL - timedelta(seconds=1)
-
-    assert await store.reserve_first_signup(
-        "gone@example.com", now=then, reservation_ttl=_TTL
-    )
-    assert await store.reserve_first_signup(
-        "me@example.com", now=datetime.now(timezone.utc), reservation_ttl=_TTL
-    )
-    me = await _create_user(empty_installation, "me@example.com")
-
-    assert (
-        await store.owner_user_id(now=datetime.now(timezone.utc), reservation_ttl=_TTL)
-        == me
-    )
-
-
-async def test_an_abandoned_reservation_does_not_leave_the_installation_ownerless(
-    empty_installation: async_sessionmaker[AsyncSession],
-) -> None:
-    """Somebody got in (open mode) while the first signup was abandoned."""
-    store = SqlInstallationOwnerStore(empty_installation)
-    then = datetime.now(timezone.utc) - _TTL - timedelta(seconds=1)
-    assert await store.reserve_first_signup(
-        "gone@example.com", now=then, reservation_ttl=_TTL
-    )
-    member = await _create_user(empty_installation, "member@example.com")
-
-    assert (
-        await store.owner_user_id(now=datetime.now(timezone.utc), reservation_ttl=_TTL)
-        == member
-    )
-
-
-async def test_an_installation_upgraded_with_accounts_makes_its_oldest_the_owner(
-    empty_installation: async_sessionmaker[AsyncSession],
-) -> None:
-    """No backfill runs in the migration; the first question asked settles it."""
-    oldest = uuid4()
-    async with empty_installation() as session, session.begin():
-        session.add(
-            User(
-                id=oldest,
-                email="oldest@example.com",
-                created_at=datetime.now(timezone.utc) - timedelta(days=30),
-            )
-        )
-        session.add(User(id=uuid4(), email="newer@example.com"))
-    store = SqlInstallationOwnerStore(empty_installation)
-
-    assert not await store.reserve_first_signup(
-        "stranger@example.com", now=datetime.now(timezone.utc), reservation_ttl=_TTL
-    )
-    assert (
-        await store.owner_user_id(now=datetime.now(timezone.utc), reservation_ttl=_TTL)
-        == oldest
-    )
+    assert await gate.admit("me@example.com") is Admission.FIRST_ACCOUNT
+    async with empty_deployment() as session, session.begin():
+        session.add(User(id=uuid4(), email="me@example.com"))
+    with pytest.raises(SignupNotAllowedError):
+        await gate.admit("stranger@example.com")
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +206,7 @@ async def test_oauth_sign_up_obeys_the_mode_and_sign_in_does_not(
     assert db_session.bind is not None
     gate = SignupGate(
         settings=IdentitySettings(signup_mode="invite_only"),
-        store=SqlInstallationOwnerStore(
+        store=SqlSignupStore(
             async_sessionmaker(db_session.bind, expire_on_commit=False)
         ),
     )
@@ -368,8 +249,13 @@ async def test_an_email_code_cannot_create_an_account_invite_only_refuses(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
     test_app: FastAPI,
+    fixed_test_user: dict[str, str],
 ) -> None:
-    """A verified code proves a mailbox; it is not an invitation."""
+    """A verified code proves a mailbox; it is not an invitation.
+
+    `fixed_test_user` is here for its row: on a database with no accounts at
+    all, the first one is admitted whatever the mode.
+    """
     assert db_session.bind is not None
     mailbox = Mailbox()
     service = EmailChallengeService(
@@ -408,34 +294,3 @@ async def test_an_email_code_cannot_create_an_account_invite_only_refuses(
     assert verified.status_code == 400, verified.text
     assert SignupNotAllowedError.INVITE_ONLY_MESSAGE in verified.text
     assert await db_session.scalar(select(User.id).where(User.email == email)) is None
-
-
-async def test_the_installation_endpoint_reports_the_callers_standing(
-    authenticated_client: AsyncClient,
-) -> None:
-    response = await authenticated_client.get("/users/me/installation")
-
-    assert response.status_code == 200, response.text
-    assert response.json() == {
-        "deployment": "server",
-        "is_owner": False,
-        "signup_mode": "open",
-    }
-
-
-async def test_the_gate_admits_the_first_desktop_account_as_owner(
-    empty_installation: async_sessionmaker[AsyncSession],
-) -> None:
-    # Closed, so the refusal below needs no invitation lookup -- this database
-    # holds only the owner's tables -- and so the owner is seen getting in
-    # through a mode that admits nobody else.
-    gate = SignupGate(
-        settings=IdentitySettings(deployment_kind="desktop", signup_mode="closed"),
-        store=SqlInstallationOwnerStore(empty_installation),
-    )
-
-    assert await gate.admit("me@example.com") is Admission.OWNER
-    me = await _create_user(empty_installation, "me@example.com")
-    with pytest.raises(SignupNotAllowedError):
-        await gate.admit("stranger@example.com")
-    assert (await gate.view_for(me)).is_owner is True

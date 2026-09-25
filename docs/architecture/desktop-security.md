@@ -7,35 +7,27 @@ Windows). This page is the threat model for that arrangement — who can reach
 it, what each of them gets, and which mechanism holds each line. The process
 layout itself is in [Desktop architecture](desktop.md).
 
-## The installation owner
+## Who is the person at this Mac
 
-The **installation owner** is the first account created on a Desktop
-installation. It is the person whose computer this is, and it is the only
-account that will be granted anything outside the VM.
+There is no installation owner, and no account on a Desktop installation is
+special. Every account -- the first one included -- is an ordinary member,
+exactly as on hosted Lemma. What belongs to *the person at this Mac* is decided
+by **where a request comes from**, never by who is signed in:
 
-- Recorded once, in the one-row `installation_owner` table (identity module,
-  migration `0041`). The primary key is a boolean pinned to `true` by a check
-  constraint, so a second owner is a statement the database refuses rather
-  than a race someone has to lose.
-- The slot is **reserved before the account exists**. Two simultaneous first
-  signups both try to insert the reservation; one succeeds and proceeds as the
-  owner, the other is treated as an ordinary signup and meets the signup mode.
-  The reservation is bound to the user in the same transaction that creates the
-  user row. A reservation abandoned mid-signup (a rejected password, a closed
-  tab) can be taken over after `INSTALLATION_OWNER_RESERVATION_SECONDS`.
-- An installation that already had accounts when it was upgraded makes its
-  **oldest** account the owner, the first time anything asks.
-- A deleted owner leaves the slot *taken* (`ON DELETE SET NULL`). Ownership is
-  never handed to whoever signs up next.
-- Ownership exists only when `DEPLOYMENT_KIND=desktop`, which the Desktop host
-  pack sets. A hosted or self-hosted deployment has no owner; the check does not
-  consult the table there at all.
+- **This Mac settings** (sharing, updates, credentials, repair) answer only the
+  desktop app's own main window, in local mode, on this installation's loopback
+  workspace origin. The shell checks that on every command
+  (`require_local_settings_caller` in `desktop/src/workspace_settings.rs`); the
+  frontend only mirrors it to decide what to draw (`thisMacAvailability`). A
+  browser, a LAN visitor or anyone on the tunnel never reaches the shell, so
+  they never see or reach those settings, whatever account they hold.
+- **Anything that runs on this Mac outside the VM** follows the **Agent Host
+  pairing**. The Agent Host on this Mac is paired to one account, from the
+  app's own window; see [Agent Host](agent-host.md).
 
-The frontend reads it from `GET /users/me/installation`:
-
-```json
-{ "deployment": "desktop", "is_owner": true, "signup_mode": "invite_only" }
-```
+So two people who both sign in to the Desktop app on this Mac both see This
+Mac -- they are both at this Mac. Someone who reaches the same Lemma from a
+browser or a phone does not.
 
 ## Who can reach the installation
 
@@ -46,7 +38,7 @@ workspace. It is enforced by locald's gateway and, for Public, by the tunnel.
 | --- | --- | --- |
 | This computer | This Mac only | Services bind loopback; abuse controls off |
 | Local network | The selected private IPv4 interface | HTTP, host-only cookies; meant for trusted Wi-Fi |
-| Public | The internet, through the owner's ngrok or Cloudflare account | HTTPS at the tunnel, secure cookies |
+| Public | The internet, through this Mac's own ngrok or Cloudflare account | HTTPS at the tunnel, secure cookies |
 
 Leaving This computer applies an environment overlay to the backend
 (`sharing_environment()` in `desktop/locald/src/daemon/environment.rs`): it
@@ -71,12 +63,17 @@ email-code completion used by browser email sign-in and chat onboarding
 | `invite_only` | Only an address with a pending, unexpired organization invitation |
 | `closed` | Nobody |
 
-On Desktop the first account is admitted whatever the mode — there is nobody
-yet who could have invited it. People who already have an account sign in
-regardless of the mode. A refusal reaches the auth screen as a sentence, not a
-status: *"This Lemma is invite-only. Ask its owner for an invitation."*
-(`SIGNUP_INVITE_ONLY`), or *"This Lemma is not accepting new accounts."*
-(`SIGNUP_CLOSED`).
+The **first account on a deployment with no accounts at all** is admitted
+whatever the mode -- there is nobody yet who could have invited it. Nothing is
+recorded about it: it is an ordinary account from then on. The check is a read,
+not a reservation, so two signups racing on an empty database could both get
+in. On Desktop that race cannot happen: the app and API listen on loopback
+only, sharing is the only way anybody else reaches them, and onboarding creates
+the first account before sharing can be turned on. People who already have an
+account sign in regardless of the mode. A refusal reaches the auth screen as a
+sentence, not a status: *"This Lemma is invite-only. Ask someone already on it
+for an invitation."* (`SIGNUP_INVITE_ONLY`), or *"This Lemma is not accepting
+new accounts."* (`SIGNUP_CLOSED`).
 
 Defaults: `open` for hosted and self-hosted deployments (the behaviour before
 the setting existed), `invite_only` for Desktop. Sharing carries its own
@@ -88,11 +85,11 @@ in force. Enabling Public from the workspace is confirmed in a native dialog
 the shell raises itself (`local_sharing`); the page cannot set the consent
 flag.
 
-## What a non-owner gets
+## What a member gets
 
-An invited member — or anyone at all, if the owner chose `open` — gets what a
+An invited member — or anyone at all, if who can join is `open` — gets what a
 member of any Lemma gets: a personal workspace, pods they are invited to, and
-**a sandbox container inside the owner's VM**. That container is the boundary,
+**a sandbox container inside this Mac's VM**. That container is the boundary,
 and it is hardened accordingly:
 
 - **No capabilities.** `--cap-drop ALL` and `--security-opt no-new-privileges`
@@ -107,16 +104,9 @@ and it is hardened accordingly:
   starts any sandbox, and refuses to start one if the rules cannot be installed
   (`sandbox_firewall.rs`). Internet access, the backend's connections into a
   sandbox (published ports) and callbacks to the host are all unaffected.
-- **Nothing on the host.** Non-owners never get host command execution.
+- **Nothing on the host.** A sandbox never runs anything outside the VM.
 
 A function sandbox is additionally read-only with a `noexec` `/tmp`.
-
-## What the owner will get
-
-The next change adds command execution on the host itself — outside the VM —
-for the installation owner only, gated on `is_installation_owner`. This page
-will describe that boundary when it exists; everything above is the
-prerequisite for it being safe to add.
 
 ## The host alias
 
@@ -129,7 +119,7 @@ It is now an explicit per-sandbox flag, `host_access` on `sandbox.ensure`
 (`ProviderCreateSpec.host_access` in the backend, passed through the bridge
 and hostctl unchanged). It defaults to `true`, and the backend sends it only
 when it is `false`, so a guest that predates the flag keeps working. A later
-change can restrict it to the owner's own browser sandbox.
+change can restrict it to the paired user's own browser sandbox.
 
 The flag controls a name, not a route: without the alias a container can still
 dial the gateway by address. Closing that needs a per-container firewall rule,
@@ -142,7 +132,7 @@ through a capability that names this Mac's own local origin. A shared origin —
 the LAN address or the tunnel host — is deliberately absent from that
 capability and fails the Rust-side caller check too. The This Mac settings
 commands check more narrowly still: local mode, the loopback workspace origin
-this app navigated to, and nothing else — so the owner's own window, once
+this app navigated to, and nothing else — so the app's own window, once
 sharing has moved it to the shared address, is refused as well, and turns
 sharing off from the native Local settings instead. A visitor's browser can
 drive the shared Lemma; it can never invoke the desktop shell, the Agent Host

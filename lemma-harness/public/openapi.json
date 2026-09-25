@@ -8523,42 +8523,6 @@
         "title": "InstallationChoiceSchema",
         "type": "object"
       },
-      "InstallationResponse": {
-        "description": "What this installation is, and what the caller is to it.",
-        "properties": {
-          "deployment": {
-            "description": "``desktop`` for a Lemma Desktop installation on one person's computer, ``server`` for hosted and self-hosted deployments.",
-            "enum": [
-              "server",
-              "desktop"
-            ],
-            "title": "Deployment",
-            "type": "string"
-          },
-          "is_owner": {
-            "description": "Whether the caller is this installation's owner: the first account created on a Desktop installation. Always false on ``server``.",
-            "title": "Is Owner",
-            "type": "boolean"
-          },
-          "signup_mode": {
-            "description": "Who may create a new account on this installation.",
-            "enum": [
-              "open",
-              "invite_only",
-              "closed"
-            ],
-            "title": "Signup Mode",
-            "type": "string"
-          }
-        },
-        "required": [
-          "deployment",
-          "is_owner",
-          "signup_mode"
-        ],
-        "title": "InstallationResponse",
-        "type": "object"
-      },
       "InstalledAppSummary": {
         "properties": {
           "connector_id": {
@@ -36123,35 +36087,6 @@
           "resource": "users",
           "result": "entity",
           "verb": "ensure_first_workspace"
-        }
-      }
-    },
-    "/users/me/installation": {
-      "get": {
-        "description": "What kind of installation this is, whether the current user owns it, and who may sign up. On a Desktop installation the owner is the first account created, and is the only user granted host-level capabilities.",
-        "operationId": "user.installation.get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InstallationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Get Installation",
-        "tags": [
-          "Users"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "user.installation",
-          "result": "entity",
-          "verb": "get"
         }
       }
     },

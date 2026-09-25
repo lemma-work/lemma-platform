@@ -16748,18 +16748,6 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Get Installation
-     * What kind of installation this is, whether the current user owns it, and who may sign up. On a Desktop installation the owner is the first account created, and is the only user granted host-level capabilities.
-     * @returns InstallationResponse Successful Response
-     * @throws ApiError
-     */
-    static userInstallationGet() {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/users/me/installation"
-      });
-    }
-    /**
      * Get User Profile
      * Get the current user's profile
      * @returns UserResponse Successful Response
@@ -16798,10 +16786,6 @@ var LemmaClient = (() => {
     }
     current() {
       return this.client.request(() => UsersService.userCurrentGet());
-    }
-    /** What this installation is, whether the caller owns it, and who may sign up. */
-    installation() {
-      return this.client.request(() => UsersService.userInstallationGet());
     }
     ensureFirstWorkspace(payload = {}) {
       return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));

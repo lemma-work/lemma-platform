@@ -384,10 +384,12 @@ process. Only one gateway/tunnel transition may run at a time.
 
 A person changes this computer's settings in the workspace's own Settings,
 under a **This Mac** group (This PC on Windows), next to *You* and the
-organization. The group is drawn only in the desktop app, on a local
-install, for the installation owner (`GET /users/me/installation` →
-`is_owner`), and only while the page is on this installation's loopback
-origin. On a shared origin the owner sees one line saying where the settings
+organization. The group is drawn only in the desktop app's own window, on a
+local install (`NEXT_PUBLIC_LEMMA_DEPLOYMENT=local`), and only while the page
+is on this installation's loopback origin -- whoever is signed in. There is no
+account check: the shell's `require_local_settings_caller` decides by where
+the call comes from, and the frontend mirrors that (`thisMacAvailability`).
+On a shared origin the app's window shows one line saying where the settings
 are instead of controls the shell would refuse.
 
 | Section | Owns | Data source |
@@ -422,7 +424,7 @@ services (Reconcile, Restart), what is exposed with a *Return to This
 computer* button, updating the app, This computer's Agent Host (the only
 settings a cloud workspace has on the machine), Recovery (restart into
 recovery, stop, reset data, force cleanup) and Diagnostics. Stopping sharing
-stays native because sharing moves the owner's window to the shared origin,
+stays native because sharing moves the app's window to the shared origin,
 where the workspace is deliberately given nothing. Page names that moved
 (`ai`, `sharing`, `integrations`, `channels`, `runtime`, `updates`) still
 resolve, to Overview.

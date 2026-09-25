@@ -585,8 +585,10 @@ Acceptance flow:
 7. Press ⌘, and use the tray's **Desktop settings…**: both open Settings at
    **This Mac** in the workspace, without remounting it. Stop the stack and
    press ⌘, again: Local settings opens instead, with Overview, Recovery and
-   Diagnostics. Sign in as a second, non-owner account and confirm This Mac
-   is not shown at all.
+   Diagnostics. Sign in to the app as a second account and confirm This Mac
+   is still shown -- it follows the app's own window on the loopback origin,
+   not the account. Open the same workspace in a browser, and from a LAN
+   device while sharing, and confirm This Mac is not shown at all.
 8. With Ollama and LM Studio running, open **Settings → Models** and confirm
    each is offered as **Add as provider** with its models; add one and verify
    thinking and structured tool calls. If this install had an AI provider set

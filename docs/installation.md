@@ -86,8 +86,9 @@ shows its stage without invented byte counts. Interrupted downloads resume,
 verified archives are reused, and failed staging directories are never
 activated.
 
-Select **Create account** after Lemma reports Ready. The first account becomes
-the installation's owner. Local signup stays inside the Desktop window. Local-only configuration disables email verification and
+Select **Create account** after Lemma reports Ready. The first account on an
+installation is always admitted, and is an ordinary account like any other.
+Local signup stays inside the Desktop window. Local-only configuration disables email verification and
 internet-facing auth throttles; SMTP is not required. Hosted Lemma sign-in
 continues to use the system browser.
 
@@ -166,8 +167,8 @@ opens the native Local settings, whose Overview turns sharing off.
 
 **Who can join** decides who may create an account once the installation is
 shared. It is **invite-only** by default: the first account on the installation
-— its owner — is always admitted, and after that only an address you have
-invited to an organization can sign up; anyone else is told the Lemma is
+is always admitted (onboarding creates it before sharing can be turned on), and
+after that only an address you have invited to an organization can sign up; anyone else is told the Lemma is
 invite-only. Set to **open**, it lets anyone who reaches the address make an
 account. Every public activation asks you to confirm what the link will allow.
 Cloudflare Quick Tunnels are not available.

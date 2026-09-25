@@ -5,7 +5,7 @@ import {
     detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, joinPolicyCopy,
     oauthFormForConnector, onLocalWorkspaceOrigin, operatorProvider, postgresMajorChangeMessage, readSnapshot,
     sandboxWording, sectionPayloads, sharingBusy, thisMac, thisMacAvailability, thisMacReachable, updateOffer,
-    type AppUpdateStatus, type Installation, type ThisMacSnapshot,
+    type AppUpdateStatus, type ThisMacSnapshot,
 } from "../src/desktop/this-mac.ts";
 import { requestedFocus, requestedSection } from "../src/desktop/open-settings.ts";
 
@@ -47,8 +47,6 @@ afterEach(() => {
     delete (globalThis as { window?: unknown }).window;
 });
 
-const OWNER: Installation = { deployment: "desktop", is_owner: true, signup_mode: "invite_only" };
-
 /** A snapshot as the shell sends it, with whatever a test overrides. */
 function snapshot(overrides: Record<string, unknown> = {}): ThisMacSnapshot {
     return readSnapshot({
@@ -76,23 +74,19 @@ function snapshot(overrides: Record<string, unknown> = {}): ThisMacSnapshot {
 
 /* ── who sees it ───────────────────────────────────────────────────── */
 
-test("a browser, a hosted workspace, a server and a guest see no This Mac at all", () => {
+test("a browser and a hosted workspace see no This Mac at all", () => {
     // No shell: a browser, or a LAN visitor on a local deployment.
-    assert.equal(thisMacAvailability({ bridge: false, localOrigin: true, installation: OWNER, loading: false }), "hidden");
-    // A self-hosted or hosted deployment has no owner and no machine to set.
-    assert.equal(thisMacAvailability({
-        bridge: true, localOrigin: true, installation: { ...OWNER, deployment: "server", is_owner: false }, loading: false,
-    }), "hidden");
-    // Someone else signed in on the owner's Desktop.
-    assert.equal(thisMacAvailability({ bridge: true, localOrigin: true, installation: { ...OWNER, is_owner: false }, loading: false }), "hidden");
-    // The installation did not answer at all.
-    assert.equal(thisMacAvailability({ bridge: true, localOrigin: true, installation: null, loading: false }), "hidden");
+    assert.equal(thisMacAvailability({ bridge: false, localDeployment: true, localOrigin: true }), "hidden");
+    // The desktop app signed in to a hosted workspace: no machine to set.
+    assert.equal(thisMacAvailability({ bridge: true, localDeployment: false, localOrigin: false }), "hidden");
+    assert.equal(thisMacAvailability({ bridge: true, localDeployment: false, localOrigin: null }), "hidden");
 });
 
-test("the owner sees it on this installation's origin, and a note on a shared one", () => {
-    assert.equal(thisMacAvailability({ bridge: true, localOrigin: true, installation: OWNER, loading: false }), "shown");
-    assert.equal(thisMacAvailability({ bridge: true, localOrigin: false, installation: OWNER, loading: false }), "elsewhere");
-    assert.equal(thisMacAvailability({ bridge: true, localOrigin: true, installation: undefined, loading: true }), "pending");
+test("the app's own window sees it on the loopback origin, whoever is signed in", () => {
+    // No account enters into it: the rule is the page's origin, as in the shell.
+    assert.equal(thisMacAvailability({ bridge: true, localDeployment: true, localOrigin: true }), "shown");
+    assert.equal(thisMacAvailability({ bridge: true, localDeployment: true, localOrigin: false }), "elsewhere");
+    assert.equal(thisMacAvailability({ bridge: true, localDeployment: true, localOrigin: null }), "pending");
 });
 
 test("only the loopback workspace hosts count as this installation's origin", () => {
