@@ -85,6 +85,30 @@ impl OutputRing {
         self.next_sequence
     }
 
+    /// What follows `after_sequence`, up to `max_bytes` of data -- always at
+    /// least one chunk when there is one. When it stops short,
+    /// `next_sequence` is the first chunk it left out, so a reader continuing
+    /// from the last chunk it got carries on where it should.
+    #[must_use]
+    pub fn read_at_most(&self, after_sequence: u64, max_bytes: usize) -> Snapshot {
+        let mut snapshot = self.read(after_sequence);
+        let mut total = 0_usize;
+        let keep = snapshot
+            .chunks
+            .iter()
+            .take_while(|chunk| {
+                let first = total == 0;
+                total += chunk.data.len();
+                first || total <= max_bytes
+            })
+            .count();
+        if keep < snapshot.chunks.len() {
+            snapshot.next_sequence = snapshot.chunks[keep].sequence;
+            snapshot.chunks.truncate(keep);
+        }
+        snapshot
+    }
+
     /// Everything after `after_sequence`, which is exclusive.
     #[must_use]
     pub fn read(&self, after_sequence: u64) -> Snapshot {
@@ -144,6 +168,22 @@ mod tests {
             [b"34".to_vec(), b"56".to_vec()]
         );
         assert_eq!(snapshot.next_sequence, 4);
+    }
+
+    #[test]
+    fn a_read_stops_at_its_byte_budget_and_says_where_to_go_on() {
+        let mut ring = OutputRing::new(1024);
+        for data in [b"aaaa", b"bbbb", b"cccc"] {
+            ring.push(Stream::Stdout, data.to_vec());
+        }
+        let first = ring.read_at_most(0, 6);
+        assert_eq!(first.chunks.len(), 1);
+        assert_eq!(first.next_sequence, 2);
+        let rest = ring.read_at_most(1, 8);
+        assert_eq!(rest.chunks.len(), 2);
+        assert_eq!(rest.next_sequence, 4);
+        // A chunk bigger than the budget still goes, alone.
+        assert_eq!(ring.read_at_most(0, 1).chunks.len(), 1);
     }
 
     #[test]

@@ -4,8 +4,8 @@ import "@/styles/desktop.css";
 import { useState, type ReactNode } from "react";
 import { apiUrl, hasApiUrl } from "@/session/client";
 import { ComputerIcon, RefreshIcon, TerminalIcon } from "@/ui/icons";
-import { agentHost, useAgentHost } from "./agent-host";
-import { useAutoConnectThisComputer } from "./auto-connect";
+import { agentHost } from "./agent-host";
+import { useAutoConnectThisComputer, wasRemoved } from "./auto-connect";
 import { capitalised, describeThisComputer, selectWorkspaceTarget, useThisComputer } from "./this-computer";
 
 function workspace(): string | null {
@@ -17,9 +17,9 @@ function workspace(): string | null {
  *  `targets[].host_id` is the id `/me/runtime/agent-hosts` returns, so this is
  *  a join rather than a guess by name — two laptops can both be "My Mac". */
 export function useThisHostId(): string | null {
-    const { status } = useAgentHost();
+    const { status, userId } = useAutoConnectThisComputer();
     if (!status) return null;
-    return selectWorkspaceTarget(status.targets, workspace())?.host_id ?? null;
+    return selectWorkspaceTarget(status.targets, workspace(), userId)?.host_id ?? null;
 }
 
 /** This computer, on the Models page, in the desktop app.
@@ -36,9 +36,9 @@ export function useThisHostId(): string | null {
  *  machine are the same object. */
 export function ThisComputerCard({ release, children }: { release?: string; children?: ReactNode }) {
     const noun = useThisComputer();
-    const { status, error, connectError, retryConnect, refetch } = useAutoConnectThisComputer();
+    const { status, error, connectError, retryConnect, refetch, userId } = useAutoConnectThisComputer();
     const [logProblem, setLogProblem] = useState<string | null>(null);
-    const described = describeThisComputer(status, error, workspace(), connectError, noun);
+    const described = describeThisComputer(status, error, workspace(), connectError, noun, userId);
 
     const openLog = async () => {
         setLogProblem(null);
@@ -65,7 +65,7 @@ export function ThisComputerCard({ release, children }: { release?: string; chil
                 <div className="thismac__acts">
                     {described.retry && (
                         <button className="btn" onClick={() => { retryConnect(); void refetch(); }}>
-                            <RefreshIcon size={13} /> Try again
+                            <RefreshIcon size={13} /> {wasRemoved(connectError) ? "Connect again" : "Try again"}
                         </button>
                     )}
                     {status?.available && (

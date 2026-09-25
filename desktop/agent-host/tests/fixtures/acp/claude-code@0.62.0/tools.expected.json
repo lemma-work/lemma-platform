@@ -1,0 +1,725 @@
+[
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "commands": [
+        "recorded"
+      ]
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39224,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": "Plan ("
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": "I"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " don"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": "'t have a todo tool,"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " so here"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " it is as"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " text):\n1. echo →"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " 2. create"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " notes.txt → 3"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": ". edit → 4. read"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " → 5. gl"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": "ob → 6. grep →"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " 7. MCP ex"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": "ec → 8. MCP"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGCzvL2cBv3iGDQXuZc",
+    "payload": {
+      "text": " display → 9. done"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01MzqNwTjzrfsN6ckcs4pBFG",
+    "payload": {
+      "input": {
+        "cmd": "echo hello-lemma",
+        "description": "Print test string"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "echo hello-lemma",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01MzqNwTjzrfsN6ckcs4pBFG",
+    "payload": {
+      "error": null,
+      "output": {
+        "stdout": "hello-lemma"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01JxRx97SX1VifGBKG1m7wRV",
+    "payload": {
+      "input": {
+        "query": "select:mcp__lemma_tools__lemma_exec_command,mcp__lemma_tools__lemma_display_resource",
+        "max_results": 2
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "tool_search",
+        "source": "native",
+        "server": null,
+        "title": "ToolSearch",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39629,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39629,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01JxRx97SX1VifGBKG1m7wRV",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "Tool: mcp__lemma_tools__lemma_exec_command\nTool: mcp__lemma_tools__lemma_display_resource"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39958,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01M5PcAXVqKiX3Pran4omoC6",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "content": "one"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "write_file",
+        "source": "native",
+        "server": null,
+        "title": "Write notes.txt",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40074,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "toolu_01M5PcAXVqKiX3Pran4omoC6",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "content": "one"
+      },
+      "tool": {
+        "name": "write_file",
+        "source": "native",
+        "server": null,
+        "title": "Write notes.txt",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01M5PcAXVqKiX3Pran4omoC6",
+    "payload": {
+      "error": null,
+      "output": {
+        "message": "File created successfully at: /workspace/fixture/notes.txt (file state is current in your context — no need to Read it back)",
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "add",
+            "old_text": null,
+            "new_text": "one"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40207,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_0157Ef5hXTcjcc4qGgxdJiz4",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "old_string": "one",
+        "new_string": "two",
+        "replace_all": false,
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "update",
+            "old_text": "one",
+            "new_text": "two"
+          }
+        ]
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "edit_file",
+        "source": "native",
+        "server": null,
+        "title": "Edit notes.txt",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40349,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_0157Ef5hXTcjcc4qGgxdJiz4",
+    "payload": {
+      "error": null,
+      "output": {
+        "message": "The file /workspace/fixture/notes.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "update",
+            "old_text": "one\n No newline at end of file\n No newline at end of file",
+            "new_text": " No newline at end of file\ntwo\n No newline at end of file"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40485,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_017ejYXsvHtNGzAzTdz81orm",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "read_file",
+        "source": "native",
+        "server": null,
+        "title": "Read notes.txt",
+        "kind": "read"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_017ejYXsvHtNGzAzTdz81orm",
+    "payload": {
+      "error": null,
+      "output": {
+        "content": "```\n1\ttwo\n```"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40580,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40663,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGE1aYi3ub5UsJ1NUNp",
+    "payload": {
+      "text": "I don't have a glob or"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGE1aYi3ub5UsJ1NUNp",
+    "payload": {
+      "text": " grep tool, so I'"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGE1aYi3ub5UsJ1NUNp",
+    "payload": {
+      "text": "m"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGE1aYi3ub5UsJ1NUNp",
+    "payload": {
+      "text": " using the"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGE1aYi3ub5UsJ1NUNp",
+    "payload": {
+      "text": " shell for steps 6–"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGE1aYi3ub5UsJ1NUNp",
+    "payload": {
+      "text": "7."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_018TBCR1SQ1QPTYad4gKVxiT",
+    "payload": {
+      "input": {
+        "cmd": "find . -name \"*.txt\"",
+        "description": "Find .txt files"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "find . -name \"*.txt\"",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40724,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_018TBCR1SQ1QPTYad4gKVxiT",
+    "payload": {
+      "error": null,
+      "output": {
+        "stdout": "./notes.txt"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40775,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01Qv7SC2iGjoHhVwgwn1DPEL",
+    "payload": {
+      "input": {
+        "cmd": "grep -rn \"two\" .",
+        "description": "Search file contents for \"two\""
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "grep -rn \"two\" .",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01Qv7SC2iGjoHhVwgwn1DPEL",
+    "payload": {
+      "error": null,
+      "output": {
+        "stdout": "notes.txt:1:two"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40843,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40913,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01B1namT7AQoJmnSc9GGWs2U",
+    "payload": {
+      "input": {
+        "cmd": "echo from-mcp"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp__lemma_tools__lemma_exec_command",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "toolu_01B1namT7AQoJmnSc9GGWs2U",
+    "payload": {
+      "input": {
+        "cmd": "echo from-mcp"
+      },
+      "tool": {
+        "name": "exec_command",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp__lemma_tools__lemma_exec_command",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40952,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01B1namT7AQoJmnSc9GGWs2U",
+    "payload": {
+      "error": null,
+      "output": {
+        "exit_code": 0,
+        "stdout": "from-mcp\n",
+        "stderr": ""
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 41042,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_019giD5m55mU5oYXYw1W5zqV",
+    "payload": {
+      "input": {
+        "type": "MARKDOWN",
+        "content": "# recorded"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "display_resource",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp__lemma_tools__lemma_display_resource",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "toolu_019giD5m55mU5oYXYw1W5zqV",
+    "payload": {
+      "input": {
+        "type": "MARKDOWN",
+        "content": "# recorded"
+      },
+      "tool": {
+        "name": "display_resource",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp__lemma_tools__lemma_display_resource",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 41103,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_019giD5m55mU5oYXYw1W5zqV",
+    "payload": {
+      "error": null,
+      "output": {
+        "success": true,
+        "resource_id": "resource-1"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 41154,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGEYLyTa6pqEiboHkzk",
+    "payload": {
+      "text": "done"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 41154,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.2513818,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  {
+    "type": "usage",
+    "object_id": null,
+    "payload": {
+      "cached_input_tokens": 344349,
+      "input_tokens": 18,
+      "output_tokens": 1176,
+      "total_tokens": 365408
+    }
+  }
+]

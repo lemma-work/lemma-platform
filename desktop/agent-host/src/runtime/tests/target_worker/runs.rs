@@ -209,3 +209,56 @@ fn start_command(harness_id: Uuid, expires_at: chrono::DateTime<Utc>) -> Command
         payload: serde_json::to_value(&spec).unwrap(),
     }
 }
+
+/// Command expiries are Lemma's times. A host whose clock runs ahead judged a
+/// fresh command expired -- every command, a cancel included -- until the
+/// clock was fixed; it judges by the time Lemma's `welcome` gave instead.
+#[tokio::test]
+async fn a_command_is_judged_by_lemmas_clock_not_this_ones() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    // This clock is ten minutes ahead of Lemma's.
+    harness
+        .worker
+        .note_lemma_time(Some(Utc::now() - chrono::Duration::minutes(10)));
+    let refreshed = serde_json::json!({"token": "refreshed"});
+    harness
+        .worker
+        .handle_command(&Command {
+            command_id: Uuid::new_v4(),
+            kind: CommandKind::RefreshCredential,
+            created_at: Utc::now() - chrono::Duration::minutes(10),
+            // Lemma's "in one minute", which this clock reads as nine ago.
+            expires_at: Utc::now() - chrono::Duration::minutes(9),
+            run_id: Some(run_id),
+            lease_epoch: Some(1),
+            payload: serde_json::json!({"mcp": refreshed.clone()}),
+        })
+        .expect("a command Lemma has not expired is not refused as expired");
+    assert_eq!(
+        harness
+            .journal
+            .get_run(harness.target_id, run_id)
+            .unwrap()
+            .unwrap()
+            .spec
+            .mcp,
+        refreshed
+    );
+}
+
+/// Stopping late is still stopping: a cancel is never refused as expired.
+#[tokio::test]
+async fn a_late_cancel_is_still_obeyed() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let mut cancel = super::cancel_command(run_id);
+    cancel.expires_at = Utc::now() - chrono::Duration::minutes(30);
+    harness.worker.handle_command(&cancel).unwrap();
+    let run = harness
+        .journal
+        .get_run(harness.target_id, run_id)
+        .unwrap()
+        .unwrap();
+    assert!(run.state.is_terminal(), "{:?}", run.state);
+}

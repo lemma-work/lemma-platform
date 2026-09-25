@@ -3,6 +3,7 @@ import { buildTurns } from "@/thread/turns";
 import { resourceLabel } from "@/thread/display-resource";
 import { NEW_CONVERSATION } from "@/data/types";
 import { classifyCall, type ConversationSnapshot, type RouterState, type VoiceEvent } from "./routing";
+import { newId } from "./ids";
 
 export const running = (status: string) => ["RUNNING", "IN_PROGRESS", "PROCESSING", "STOP_REQUESTED"].includes(status.toUpperCase());
 export function snapshotOf(record: Conversation, messages: ConversationMessage[]): ConversationSnapshot {
@@ -265,7 +266,7 @@ export class ConversationRouter {
                                 const text = snapshotText(current);
                                 if (this.publishedProgress.get(id) !== text) {
                                     this.publishedProgress.set(id, text);
-                                    this.emit({ id: crypto.randomUUID(), conversationId: id, kind: "progress", speak: false, text });
+                                    this.emit({ id: newId(), conversationId: id, kind: "progress", speak: false, text });
                                 }
                             }
                         }, 6000));
@@ -287,14 +288,14 @@ export class ConversationRouter {
         }
         if (epoch === this.epoch && !controller.signal.aborted) {
             this.pendingRuns.delete(id);
-            this.emit({ id: crypto.randomUUID(), conversationId: id, kind: "failed", speak: true,
+            this.emit({ id: newId(), conversationId: id, kind: "failed", speak: true,
                 text: "The work stream disconnected. The call is still active; work may still be running." });
         }
     }
     private async selectEvent(id: string, kind: VoiceEvent["kind"], epoch: number) {
         const snapshot = this.snapshots.get(id);
         if (!snapshot) return;
-        const event: VoiceEvent = { id: crypto.randomUUID(), conversationId: id, kind, responseTo: this.responseRequests.get(id), speak: false, text: snapshotText(snapshot) };
+        const event: VoiceEvent = { id: newId(), conversationId: id, kind, responseTo: this.responseRequests.get(id), speak: false, text: snapshotText(snapshot) };
         let delivery: "speak" | "context" | "ignore" = kind === "progress" ? "context" : "speak";
         try { delivery = (await this.classify(this.state("", event), this.controller.signal)).delivery; } catch { /* Deliver verified terminal state even if selection fails. */ }
         if (epoch === this.epoch && delivery !== "ignore") this.emit({ ...event, speak: delivery === "speak" && !!event.responseTo });

@@ -54,6 +54,7 @@ export const WORKSPACE_COMMANDS = [
     "agent_host_status",
     "agent_host_start",
     "agent_host_pair",
+    "agent_host_session",
     "agent_host_refresh",
     "agent_host_open_log",
     "sandbox_image_status",
@@ -61,6 +62,9 @@ export const WORKSPACE_COMMANDS = [
     "bind_conversation_folder",
     "unbind_conversation_folder",
     "adopt_conversation_folder",
+    /* The address to frame a pod app at: an alias on the workspace's own
+       host on macOS, the app's own URL elsewhere. See `pod-apps.ts`. */
+    "app_frame_url",
     /* Settings → This Mac. Each also refuses in Rust unless the caller is
        this installation's own workspace on its loopback origin, so the hosted
        site and a shared origin reach none of them. */
@@ -82,10 +86,26 @@ export const WORKSPACE_COMMANDS = [
 
 export type WorkspaceCommand = (typeof WORKSPACE_COMMANDS)[number];
 
+/** Whether this page is on an origin the shell grants its commands to.
+ *
+ *  On a local deployment that is the loopback workspace host alone. While the
+ *  installation is shared, the app's own window moves to the LAN address or the
+ *  tunnel host, where the shell still injects its globals but the capability
+ *  grants nothing — so every call was refused, the automatic Agent Host
+ *  connection failed on each page load, and the "This computer" card showed
+ *  the error. There is no shell to talk to from there; saying so is the fix. */
+export function onShellOrigin(): boolean {
+    if (typeof window === "undefined" || !isLocalDeployment()) return true;
+    const host = (window.location?.hostname ?? "").toLowerCase();
+    return host === "localhost"
+        || host === "127.0.0.1"
+        || host.endsWith(".localhost");
+}
+
 function shellInvoke(): ShellInvoke | null {
     if (typeof window === "undefined") return null;
     const invoke = window.__TAURI__?.core?.invoke;
-    return typeof invoke === "function" ? invoke : null;
+    return typeof invoke === "function" && onShellOrigin() ? invoke : null;
 }
 
 /** Whether this page is running inside the Lemma desktop app at all.
@@ -141,31 +161,33 @@ export function useDesktopBridge(): boolean {
     return useSyncExternalStore(subscribeNothing, desktopBridgeAvailable, () => false);
 }
 
-/** Whether an app embedded in an iframe would still be signed in.
+/** How the workspace should put a pod app beside the agent.
  *
- *  On macOS it is not, and no cookie attribute changes that. `localhost` is
- *  not in the Public Suffix List, so WebKit derives no registrable domain and
- *  treats every `*.lemma.localhost` host as its own site: an app framed from
- *  `<slug>.apps.lemma.localhost` into `app.lemma.localhost` is third-party, its
- *  storage is blocked outright, and it loads permanently signed out while its
- *  SDK refreshes for ever. The same host at top level gets the session, which
- *  is why the answer is a window rather than a redesign.
+ *  - `direct`: frame the app's own URL. Browsers, WebView2 and a hosted
+ *    workspace all treat the workspace and its apps as one site, so the frame
+ *    is first-party and signed in.
+ *  - `alias`: the macOS app on a local install. WebKit derives no site wider
+ *    than the host from `*.localhost`, so `<slug>.apps.lemma.localhost` framed
+ *    by `app.lemma.localhost` is third-party and gets no cookies -- measured,
+ *    and no cookie attribute changes it. The same host on another port is
+ *    same-site, so the shell hands back an alias on the workspace's own host
+ *    (`app_frame_url`) and that is framed instead.
+ *  - `window`: macOS on `*.localhost` without a shell that can alias -- one too
+ *    old to say its platform, or reached from somewhere it will not answer.
+ *    The app opens in its own window, top-level and signed in.
  *
- *  Derived, not configured, from two things that never go stale: `platform`
- *  and the hostname. It corrects itself the moment local hostnames move to a
- *  real registrable domain. Chromium and WebView2 treat `*.localhost` as
- *  same-site, so browsers and the Windows build keep their iframes. */
-export function crossSiteFramesCarryCookies(): boolean {
-    if (typeof window === "undefined") return true;
+ *  Derived from `platform` and the hostname, which never go stale. */
+export type AppFrameMode = "direct" | "alias" | "window";
+
+export function appFrameMode(): AppFrameMode {
+    if (typeof window === "undefined") return "direct";
     const info = window.__LEMMA_DESKTOP__;
-    if (!info) return true;
-    if (info.platform && info.platform !== "macos") return true;
-    /* macOS, or a shell too old to say. Assuming the permissive case there
-       brings back a signed-out iframe that retries for ever; the restrictive
-       one costs a window. */
-    return !window.location.hostname.endsWith(".localhost");
+    if (!info) return "direct";
+    if (info.platform && info.platform !== "macos") return "direct";
+    if (!window.location.hostname.endsWith(".localhost")) return "direct";
+    return info.platform === "macos" && desktopBridgeAvailable() ? "alias" : "window";
 }
 
-export function useCrossSiteFramesCarryCookies(): boolean {
-    return useSyncExternalStore(subscribeNothing, crossSiteFramesCarryCookies, () => true);
+export function useAppFrameMode(): AppFrameMode {
+    return useSyncExternalStore(subscribeNothing, appFrameMode, () => "direct");
 }

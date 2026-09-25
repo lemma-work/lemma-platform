@@ -173,6 +173,10 @@ impl HostRuntime {
         let (agents_changed, agents_changed_rx) = watch::channel(0_u64);
         let mut installed_fingerprint = InstalledAgents::default();
         let mut cleanup_due = std::time::Instant::now() + JOURNAL_CLEANUP_INTERVAL;
+        // While any run holds a slot, this computer stays awake: a Mac that
+        // sleeps stops the heartbeat its runs' leases hang on.
+        let mut awake = super::awake::KeepAwake::new(super::awake::Assertion::system());
+        let run_slots = usize::from(self.config.max_runs);
         let shutdown = shutdown_signal();
         tokio::pin!(shutdown);
         loop {
@@ -183,6 +187,7 @@ impl HostRuntime {
                     break;
                 }
                 _ = scan.tick() => {
+                    awake.hold(global_capacity.available_permits() < run_slots);
                     if std::time::Instant::now() >= cleanup_due {
                         // Retention is housekeeping. Letting a transient
                         // journal error out of this loop ends `serve`, and
@@ -250,9 +255,9 @@ impl HostRuntime {
                             match handle.join().await {
                                 Ok(Ok(())) => {}
                                 Ok(Err(error)) => {
-                                    // A rejected credential never recovers by
-                                    // retrying: the workspace has revoked this
-                                    // host, or its row is gone. Restarting the
+                                    // A pairing Lemma no longer knows never
+                                    // recovers by retrying: the workspace has
+                                    // revoked this host, or its row is gone. Restarting the
                                     // worker just re-authenticates and fails
                                     // again, forever, once per scan. Turn the
                                     // target off so the loop ends and the
@@ -260,10 +265,7 @@ impl HostRuntime {
                                     // pairing again re-enables it.
                                     if error
                                         .downcast_ref::<crate::link::LinkError>()
-                                        .is_some_and(|error| {
-                                            error.is_invalid_credential()
-                                                || error.is_revoked_or_missing()
-                                        })
+                                        .is_some_and(crate::link::LinkError::is_revoked_or_missing)
                                     {
                                         tracing::warn!(
                                             %target_id,

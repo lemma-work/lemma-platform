@@ -38,6 +38,10 @@ RUN apt-get update \
     && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy \
     && rm -rf /var/lib/apt/lists/*
 
+# The second module loop is what guestd's sandbox firewall loads or matches on
+# (br_netfilter, conntrack, REJECT, ip6tables). Missing, the firewall fails
+# closed and no sandbox ever starts -- better found here, at build time, than
+# on somebody's Mac.
 RUN if [ "$GUEST_PLATFORM" = macos-aarch64 ]; then \
       apt-get update \
       && apt-get install -y --no-install-recommends initramfs-tools kmod \
@@ -46,6 +50,9 @@ RUN if [ "$GUEST_PLATFORM" = macos-aarch64 ]; then \
       && printf '%s\n' rtc-pl031 virtiofs vmw_vsock_virtio_transport \
           >> /etc/initramfs-tools/modules \
       && for module in rtc-pl031 virtiofs vmw_vsock_virtio_transport; do \
+           modinfo -k "$UBUNTU_KERNEL_RELEASE" "$module" >/dev/null || exit 1; \
+         done \
+      && for module in br_netfilter xt_conntrack ipt_REJECT ip6table_filter; do \
            modinfo -k "$UBUNTU_KERNEL_RELEASE" "$module" >/dev/null || exit 1; \
          done \
       && update-initramfs -u -k "$UBUNTU_KERNEL_RELEASE" \

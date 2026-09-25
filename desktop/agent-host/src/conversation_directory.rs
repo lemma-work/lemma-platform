@@ -22,9 +22,10 @@ pub fn workspace_root() -> anyhow::Result<PathBuf> {
 /// directory these map onto — `~/lemma` in the sandbox, `~/lemma` here — so the
 /// two sides of a dispatched run are not two vocabularies.
 ///
-/// A host binary carries this constant, and there is no auto-updater, so a copy
-/// installed before this release rejects a conversation created after it. That
-/// is the cost of moving the root at all; it is paid once.
+/// A host binary carries this constant, and Desktop installs an update only when
+/// its person agrees to one, so a copy installed before this release rejects a
+/// conversation created after it until it is updated. That is the cost of
+/// moving the root at all; it is paid once.
 const SANDBOX_ROOT: &str = "/home/user/lemma/";
 
 fn suffix(cwd: &str) -> anyhow::Result<&str> {
@@ -132,11 +133,8 @@ fn overlapping_owners(
     Ok(found)
 }
 
-/// Bind paths to a paired workspace before opening an agent. Conversations
-/// within the same workspace can share their parent's cwd, just as in a VM.
-/// This registry prevents accidental collisions; it is not an OS sandbox.
-pub fn prepare(root: &Path, target: Uuid, cwd: &str) -> anyhow::Result<PathBuf> {
-    let relative = suffix(cwd)?;
+/// The registry under `root`, created if it is not there yet.
+fn open_registry(root: &Path) -> anyhow::Result<rusqlite::Connection> {
     anyhow::ensure!(root.is_absolute(), "Lemma workspace root must be absolute");
     directory(root)?;
     let state = root.join(".lemma");
@@ -148,9 +146,75 @@ pub fn prepare(root: &Path, target: Uuid, cwd: &str) -> anyhow::Result<PathBuf> 
             "invalid directory registry"
         );
     }
-    let mut connection = rusqlite::Connection::open(database)?;
+    let connection = rusqlite::Connection::open(database)?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     connection.execute_batch(REGISTRY_SCHEMA)?;
+    Ok(connection)
+}
+
+/// `path` relative to `root`, when it is a folder a conversation may own
+/// there: beneath it, and not in a hidden folder such as the registry's own.
+fn owned_relative(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?.to_str()?;
+    (!relative.is_empty()
+        && relative
+            .split('/')
+            .all(|part| !part.is_empty() && !part.starts_with('.')))
+    .then(|| relative.to_owned())
+}
+
+/// Whether host execution may give `path`, a folder under `root`, to a
+/// workspace of `target` -- and if so, record that `target` owns it.
+///
+/// The same registry an Agent Host run's folder is claimed in, so a folder
+/// one paired workspace uses is never handed to another's commands. A folder
+/// nobody has claimed is claimed now; unlike `prepare`, it may already hold
+/// files, because host execution made these folders before it claimed them.
+pub fn claim_for_host_execution(root: &Path, target: Uuid, path: &Path) -> anyhow::Result<()> {
+    let relative = owned_relative(root, path)
+        .ok_or_else(|| anyhow::anyhow!("{} is not a conversation folder", path.display()))?;
+    let mut connection = open_registry(root)?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let target = target.to_string();
+    let owners = overlapping_owners(&transaction, &relative)?;
+    anyhow::ensure!(
+        owners.iter().all(|(_, owner)| owner == &target),
+        "{} belongs to another paired workspace",
+        path.display()
+    );
+    transaction.execute(
+        "INSERT OR IGNORE INTO directory_owners (path, target) VALUES (?1, ?2)",
+        [relative.as_str(), &target],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Whether `target` already owns `path`, or a folder that contains it.
+#[must_use]
+pub fn owned_by(root: &Path, target: Uuid, path: &Path) -> bool {
+    let Some(relative) = owned_relative(root, path) else {
+        return false;
+    };
+    let owned = || -> anyhow::Result<bool> {
+        let mut connection = open_registry(root)?;
+        let transaction = connection.transaction()?;
+        let target = target.to_string();
+        let owners = overlapping_owners(&transaction, &relative)?;
+        Ok(owners.iter().any(|(owned, owner)| {
+            owner == &target && (owned == &relative || relative.starts_with(&format!("{owned}/")))
+        }) && owners.iter().all(|(_, owner)| owner == &target))
+    };
+    owned().unwrap_or(false)
+}
+
+/// Bind paths to a paired workspace before opening an agent. Conversations
+/// within the same workspace can share their parent's cwd, just as in a VM.
+/// This registry prevents accidental collisions; it is not an OS sandbox.
+pub fn prepare(root: &Path, target: Uuid, cwd: &str) -> anyhow::Result<PathBuf> {
+    let relative = suffix(cwd)?;
+    let mut connection = open_registry(root)?;
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let target = target.to_string();

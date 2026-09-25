@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.core.exposure import local_relaxations_allowed
 from app.version import API_VERSION
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.migration_state import schema_migration_state
@@ -215,7 +216,9 @@ async def health_capabilities():
         "environment": settings.environment,
         "llm_mode": settings.e2e_llm_mode,
     }
-    if settings.is_local_mode():
+    # Not while shared: a Desktop installation on the LAN or a tunnel runs as
+    # `local`, and its visitors are exactly the strangers described above.
+    if local_relaxations_allowed():
         configuration |= {
             "abuse_protection": settings.auth_abuse_protection_enabled,
             "altcha": settings.auth_altcha_enabled,

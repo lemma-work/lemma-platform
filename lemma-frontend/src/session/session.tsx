@@ -15,6 +15,7 @@ import { MISSING_API_URL } from "./origins";
 import { source } from "@/data";
 import { sessionStatus, doorFor, type SessionStatus } from "./auth-state";
 import { LemmaLogo } from "@/ui/icons";
+import { signedOutOfThisComputer } from "@/desktop/auto-connect";
 
 /** Who is asking.
  *
@@ -104,6 +105,9 @@ export function useSession(): Session {
             throw new Error("We couldn’t confirm sign-out. Check your connection and try again.");
         }
         resetAnalyticsIdentity();
+        /* This computer's pairing of the person leaving stops taking work,
+           so the next person at this Mac is not running theirs. */
+        await signedOutOfThisComputer();
         cache.clear();
         sent.clear();
         try { retainWorkspaceOwner(localStorage, null); } catch { /* no storage */ }

@@ -148,6 +148,68 @@ pub(crate) fn generation_matches(
     response.text().is_ok_and(|body| body.contains(generation))
 }
 
+/// The capability granting this installation's local workspace -- its exact
+/// origin, port included -- the shipped workspace commands.
+///
+/// Not in `capabilities/workspace.json`, because the port is locald's to
+/// allocate and a file can only say `http://app.lemma.localhost:*`. That
+/// pattern would also cover every pod-app alias (`pod_app_alias.rs`): user
+/// code served on the workspace's host at another port, framed inside the
+/// very window this grants. Pinned here to the one origin that is the
+/// workspace, an alias origin matches no capability at all.
+///
+/// `None` for anything but a local workspace origin this build trusts.
+pub(crate) fn local_workspace_capability(workspace: &str) -> Option<String> {
+    let url = tauri::Url::parse(workspace).ok()?;
+    let host = url.host_str()?;
+    let port = url.port()?;
+    if url.scheme() != "http" || !trusted_local_workspace_host(host) {
+        return None;
+    }
+    Some(
+        json!({
+            "identifier": format!("workspace-local-capability-{port}"),
+            "description": "This installation's local workspace, on its exact origin, granted the shipped workspace commands.",
+            "local": false,
+            "webviews": ["main"],
+            "remote": {"urls": [format!("http://{host}:{port}")]},
+            "permissions": shipped_workspace_permissions(),
+        })
+        .to_string(),
+    )
+}
+
+/// Grant the local workspace at `workspace` its commands, once per origin.
+///
+/// Called before anything navigates the main window there: on a resumed
+/// launch, and whenever locald names the workspace's URL.
+pub(crate) fn grant_local_workspace_capability(app: &AppHandle, workspace: &str) {
+    let Some(capability) = local_workspace_capability(workspace) else {
+        return;
+    };
+    let Ok(url) = tauri::Url::parse(workspace) else {
+        return;
+    };
+    let origin = url.origin().ascii_serialization();
+    let shell: State<Shell> = app.state();
+    if !shell
+        .granted_workspace_origins
+        .lock_or_recover()
+        .insert(origin.clone())
+    {
+        return;
+    }
+    if let Err(error) = app.add_capability(capability) {
+        shell
+            .granted_workspace_origins
+            .lock_or_recover()
+            .remove(&origin);
+        append_install_log(&format!(
+            "could not grant the local workspace at {origin} its commands: {error}"
+        ));
+    }
+}
+
 /// The workspace origins `capabilities/workspace.json` already covers.
 /// The origins the shipped capability already covers, read from the file.
 ///

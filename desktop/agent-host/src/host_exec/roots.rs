@@ -27,17 +27,38 @@ type Roots = BTreeMap<String, String>;
 
 static WRITER: Mutex<()> = Mutex::new(());
 
-fn read(store: &Path) -> Roots {
-    std::fs::read_to_string(store)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+/// The record, or an error when it exists and cannot be read.
+///
+/// A missing record is an empty one. One that cannot be read (permissions,
+/// an I/O failure) is an error rather than an empty record, because the next
+/// `remember` would write the empty record over every conversation's folder.
+/// One that does not parse is set aside beside itself and started afresh:
+/// there is nothing in it to keep, and refusing every open for ever would be
+/// worse.
+fn read(store: &Path) -> std::io::Result<Roots> {
+    let raw = match std::fs::read_to_string(store) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Roots::new()),
+        Err(error) => return Err(error),
+    };
+    match serde_json::from_str(&raw) {
+        Ok(roots) => Ok(roots),
+        Err(error) => {
+            tracing::warn!(%error, store = %store.display(), "the record of conversation folders did not parse; setting it aside");
+            std::fs::rename(store, store.with_extension("json.unreadable"))?;
+            Ok(Roots::new())
+        }
+    }
 }
 
 /// The root this conversation's workspace last opened in, if one is recorded.
 #[must_use]
 pub fn remembered(store: &Path, conversation: uuid::Uuid) -> Option<PathBuf> {
     read(store)
+        .inspect_err(|error| {
+            tracing::warn!(%error, "could not read the record of conversation folders");
+        })
+        .ok()?
         .get(&conversation.to_string())
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
@@ -45,23 +66,19 @@ pub fn remembered(store: &Path, conversation: uuid::Uuid) -> Option<PathBuf> {
 
 /// Record the root a conversation's workspace opened in.
 ///
-/// Written to a temporary file and renamed over the record, so a crash leaves
-/// the old record or the new one, never half of either.
+/// Written to a temporary file, synced, and renamed over the record, so a
+/// crash or a power cut leaves the old record or the new one, never half of
+/// either and never an empty file.
 pub fn remember(store: &Path, conversation: uuid::Uuid, root: &Path) -> std::io::Result<()> {
     let _writer = WRITER.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut roots = read(store);
+    let mut roots = read(store)?;
     let key = conversation.to_string();
     let value = root.to_string_lossy().into_owned();
     if roots.get(&key) == Some(&value) {
         return Ok(());
     }
     roots.insert(key, value);
-    if let Some(parent) = store.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let staging = store.with_extension("json.tmp");
-    std::fs::write(&staging, serde_json::to_vec_pretty(&roots)?)?;
-    std::fs::rename(&staging, store)
+    lemma_private_file::write_atomic(store, &serde_json::to_vec_pretty(&roots)?)
 }
 
 #[cfg(test)]
@@ -95,9 +112,25 @@ mod tests {
         let store = directory.path().join("conversation-roots.json");
         std::fs::write(&store, "not json").unwrap();
         assert_eq!(remembered(&store, uuid::Uuid::now_v7()), None);
-        // And is replaced, not appended to, by the next open.
+        // And is set aside and started afresh by the next open.
         let conversation = uuid::Uuid::now_v7();
         remember(&store, conversation, Path::new("/x")).unwrap();
         assert_eq!(remembered(&store, conversation), Some(PathBuf::from("/x")));
+        assert!(store.with_extension("json.unreadable").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_that_cannot_be_read_is_not_written_over() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("conversation-roots.json");
+        let kept = uuid::Uuid::now_v7();
+        remember(&store, kept, Path::new("/kept")).unwrap();
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let refused = remember(&store, uuid::Uuid::now_v7(), Path::new("/new"));
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(refused.is_err());
+        assert_eq!(remembered(&store, kept), Some(PathBuf::from("/kept")));
     }
 }

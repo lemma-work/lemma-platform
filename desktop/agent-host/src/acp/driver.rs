@@ -180,12 +180,13 @@ impl AgentDriver for AcpDriver {
                     published_config_options,
                     session.origin,
                 );
-                let plan = plan_configuration(
+                let mut plan = plan_configuration(
                     &options,
                     run_spec.model_name.as_deref(),
                     &run_spec.config_selections,
                 )
                 .map_err(invalid)?;
+                plan.adapter_key.clone_from(&adapter.spec.key);
                 configure_session(&connection, &session, plan, callbacks.as_ref()).await?;
                 callbacks
                     .before_prompt(&session.session_id.to_string())

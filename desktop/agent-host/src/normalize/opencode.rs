@@ -13,7 +13,7 @@
 
 use serde_json::{Value, json};
 
-use super::canonical::{canonical_input, canonical_name, canonical_output, snake_case};
+use super::canonical::{canonical_input, canonical_name, canonical_output};
 use super::{Call, RunContext, ToolRef, ToolSource};
 
 pub(super) fn identify(call: &Call, context: &RunContext) -> (ToolRef, Value) {
@@ -24,12 +24,34 @@ pub(super) fn identify(call: &Call, context: &RunContext) -> (ToolRef, Value) {
     if let Some(tool) = context.joined_lemma_tool(&name, "_") {
         return (tool, call.raw_input.clone());
     }
-    match canonical_name(&name) {
+    // `OpenCode`'s own tools are single words (`bash`, `webfetch`,
+    // `todowrite`); an underscore is its join of an MCP server and tool, and
+    // `web_search` from a server called `web` is not its `websearch`.
+    let own = (!name.contains('_'))
+        .then(|| canonical_name(&name))
+        .flatten();
+    match own {
         Some(canonical) => (
             native(canonical),
             canonical_input(canonical, &call.raw_input, &call.locations, &call.content),
         ),
-        None => (native(&snake_case(&name)), call.raw_input.clone()),
+        // Not a tool this host knows the shape of. `OpenCode` names somebody
+        // else's MCP tool `<server>_<tool>`, indistinguishable from a native
+        // one, and reporting it as native let a name that happened to spell
+        // one of Lemma's (`web_search` from a server called `web`) be drawn as
+        // Lemma's card over a payload it had never seen. So it is reported the
+        // way any tool of unknown shape is: verbatim, and claimed by no card.
+        None => (unmapped(&name), call.raw_input.clone()),
+    }
+}
+
+fn unmapped(name: &str) -> ToolRef {
+    ToolRef {
+        name: name.to_owned(),
+        source: ToolSource::Mcp,
+        server: None,
+        title: None,
+        kind: None,
     }
 }
 

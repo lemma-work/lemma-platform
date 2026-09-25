@@ -208,6 +208,8 @@ pub struct LinkHandle {
     pending: Pending,
     next_id: Arc<AtomicU64>,
     closed: watch::Receiver<Option<LinkError>>,
+    /// What the `welcome` said Lemma keeps: see `idempotent_tool_calls`.
+    idempotent_tool_calls: bool,
     _tasks: Arc<LinkTasks>,
 }
 
@@ -219,6 +221,13 @@ pub struct Connected {
 }
 
 impl LinkHandle {
+    /// Whether Lemma runs a `tools/call` once per `request_id` and answers a
+    /// repeat with the stored result, so sending it again is safe.
+    #[must_use]
+    pub fn idempotent_tool_calls(&self) -> bool {
+        self.idempotent_tool_calls
+    }
+
     /// Whether the link has gone away. Every request after that fails.
     #[must_use]
     pub fn is_closed(&self) -> bool {
@@ -572,11 +581,12 @@ pub async fn open(
         }
     });
 
-    let handle = LinkHandle {
+    let mut handle = LinkHandle {
         outgoing,
         pending,
         next_id: Arc::new(AtomicU64::new(1)),
         closed,
+        idempotent_tool_calls: false,
         _tasks: Arc::new(LinkTasks {
             writer: Some(writer),
             reader: Some(reader),
@@ -587,7 +597,7 @@ pub async fn open(
     // a connection open on Lemma's side.
     let (kind, body) = first;
     let answer = handshake(&handle, kind, body).await?;
-    let welcome = if kind == host::HELLO {
+    let welcome: WelcomeBody = if kind == host::HELLO {
         serde_json::from_value(answer.body.clone())
             .map_err(|error| LinkError::Protocol(format!("welcome did not parse: {error}")))?
     } else {
@@ -596,8 +606,11 @@ pub async fn open(
             user_id: Uuid::nil(),
             protocol_version: crate::PROTOCOL_VERSION,
             heartbeat_ms: 20_000,
+            server_time: None,
+            idempotent_tool_calls: false,
         }
     };
+    handle.idempotent_tool_calls = welcome.idempotent_tool_calls;
     Ok((
         Connected {
             handle,

@@ -239,9 +239,9 @@ impl Daemon {
         manager.replace_service_environment("backend", backend);
         manager.replace_service_environment("frontend", frontend);
 
-        let activate = manager
-            .restart_all()
-            .and_then(|_| validate_canonical_origin(&prepared.origin));
+        let activate = manager.restart_all().and_then(|_| {
+            validate_canonical_origin(&prepared.origin, &prepared.probe_token, request.provider)
+        });
         if let Err(error) = activate {
             manager.replace_service_environment("backend", previous_backend);
             manager.replace_service_environment("frontend", previous_frontend);
@@ -386,9 +386,14 @@ impl Daemon {
         };
         let (backend, _) = sharing_environment(&origin, mode, who_can_join);
         let previous_backend = manager.replace_service_environment("backend", backend);
-        if let Err(error) = manager.restart_backend() {
+        // Visitors wait out the restart rather than meeting a backend halfway
+        // through one.
+        sharing.set_gateway_open(false);
+        let restarted = manager.restart_backend();
+        if let Err(error) = restarted {
             manager.replace_service_environment("backend", previous_backend);
             let rollback = manager.restart_backend();
+            sharing.set_gateway_open(true);
             sharing.finish_who_can_join(Some(previous));
             return match rollback {
                 Ok(()) => Err(io::Error::other(format!(
@@ -399,6 +404,7 @@ impl Daemon {
                 ))),
             };
         }
+        sharing.set_gateway_open(true);
         sharing.finish_who_can_join(None);
         Ok(())
     }
@@ -509,7 +515,7 @@ impl Daemon {
             .map(|(_, backend_port)| {
                 format!(
                     "http://{}:{backend_port}",
-                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                    crate::local_domain::LocalDomain::current().frontend_host()
                 )
             })
             .unwrap_or_else(|| state.api_url.clone());

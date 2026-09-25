@@ -27,15 +27,26 @@ const MARKER: &str = "__LEMMA_HOST_ENV_BEGIN__";
 /// directories. The suffix rules catch the common spellings of a secret in
 /// someone's shell profile; `AWS_*` is all of it, since the region and
 /// profile names are what point a stray `aws` call at a real account.
+/// `OP_SESSION_*` is a signed-in 1Password CLI, and `SSH_AUTH_SOCK` names the
+/// ssh-agent -- which the profile refuses to connect to anyway, so a command
+/// that finds no agent says so instead of failing with a sandbox error.
 #[must_use]
 pub fn is_scrubbed(name: &str) -> bool {
+    const PREFIXES: &[&str] = &["LEMMA_", "AGENT_HOST_", "AWS_", "OP_SESSION_"];
+    const SUFFIXES: &[&str] = &[
+        "_TOKEN",
+        "_SECRET",
+        "_KEY",
+        "_PASSWORD",
+        "_PASSWD",
+        "_PAT",
+        "_CREDENTIALS",
+    ];
+    const NAMES: &[&str] = &["SSH_AUTH_SOCK", "GPG_AGENT_INFO", "PGPASSWORD"];
     let upper = name.to_ascii_uppercase();
-    upper.starts_with("LEMMA_")
-        || upper.starts_with("AGENT_HOST_")
-        || upper.starts_with("AWS_")
-        || upper.ends_with("_TOKEN")
-        || upper.ends_with("_SECRET")
-        || upper.ends_with("_API_KEY")
+    PREFIXES.iter().any(|prefix| upper.starts_with(prefix))
+        || SUFFIXES.iter().any(|suffix| upper.ends_with(suffix))
+        || NAMES.contains(&upper.as_str())
 }
 
 /// `environment` without anything `is_scrubbed` names.
@@ -180,12 +191,28 @@ mod tests {
             "AWS_PROFILE",
             "NVM_DIR",
             "TOKENIZERS_PARALLELISM",
+            "SSH_AUTH_SOCK",
+            "STRIPE_SECRET_KEY",
+            "DB_PASSWORD",
+            "GITLAB_PAT",
+            "OP_SESSION_my",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "KEYCHAIN_PROFILE",
         ]
         .into_iter()
         .map(|name| (name.to_owned(), "x".to_owned()))
         .collect();
         let kept: Vec<_> = scrub(environment).into_keys().collect();
-        assert_eq!(kept, ["HOME", "NVM_DIR", "PATH", "TOKENIZERS_PARALLELISM"]);
+        assert_eq!(
+            kept,
+            [
+                "HOME",
+                "KEYCHAIN_PROFILE",
+                "NVM_DIR",
+                "PATH",
+                "TOKENIZERS_PARALLELISM"
+            ]
+        );
     }
 
     #[test]

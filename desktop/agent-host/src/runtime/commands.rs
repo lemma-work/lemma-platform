@@ -3,7 +3,7 @@
 use super::{
     AcceptOutcome, Arc, AtomicBool, CANCEL_KILL_AFTER, Command, CommandKind, CommandRejection,
     JournalCallbacks, PermissionDecision, RejectionCode, RunSpec, RunState, StreamSegments,
-    TargetWorker, Utc, Value, redact_error, short_revision, terminal_failure,
+    TargetWorker, Value, redact_error, short_revision, terminal_failure,
 };
 
 /// Why a command was refused, decided where the refusal happens.
@@ -108,7 +108,10 @@ pub(crate) fn command_rejection(
 
 impl TargetWorker {
     pub(crate) fn handle_command(&mut self, command: &Command) -> anyhow::Result<()> {
-        if command.expires_at < Utc::now() {
+        // Judged by Lemma's clock, which set the expiry: this one can be
+        // minutes out. And never for a cancel -- stopping late is still
+        // stopping, and refusing it leaves the run going.
+        if command.kind != CommandKind::CancelRun && command.expires_at < self.lemma_now() {
             return Err(refuse(RefusedBecause::CommandExpired, "command is expired"));
         }
         match command.kind {

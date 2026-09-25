@@ -442,8 +442,8 @@ fn every_page_that_ships_on_windows_renames_the_machine() {
 #[test]
 fn reopening_with_every_window_closed_goes_somewhere() {
     assert_eq!(
-        reopen_target("local", true, false, "http://app.127.0.0.1.sslip.io:1/"),
-        ReopenTarget::Workspace("http://app.127.0.0.1.sslip.io:1/".into()),
+        reopen_target("local", true, false, "http://app.lemma.localhost:1/"),
+        ReopenTarget::Workspace("http://app.lemma.localhost:1/".into()),
         "a running local stack goes straight back to the workspace"
     );
 
@@ -455,13 +455,13 @@ fn reopening_with_every_window_closed_goes_somewhere() {
 
     for (label, ready, error, url) in [
         ("still starting", false, false, ""),
-        ("failed", true, true, "http://app.127.0.0.1.sslip.io:1/"),
+        ("failed", true, true, "http://app.lemma.localhost:1/"),
         ("ready but with no url yet", true, false, ""),
         (
             "undecided mode",
             true,
             false,
-            "http://app.127.0.0.1.sslip.io:1/",
+            "http://app.lemma.localhost:1/",
         ),
     ] {
         let mode = if label == "undecided mode" {

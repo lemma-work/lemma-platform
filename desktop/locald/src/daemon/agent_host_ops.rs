@@ -131,10 +131,17 @@ impl Daemon {
                 "agent-host.start" => daemon.agent_host.start(),
                 "agent-host.stop" => daemon.agent_host.stop(),
                 "agent-host.restart" => daemon.agent_host.restart(),
-                "agent-host.pair" => {
+                "agent-host.pair" => daemon.agent_host.pair(
+                    &text("url"),
+                    &text("pairing_code"),
+                    &text("name"),
+                    request.get("reenable").and_then(Value::as_bool) == Some(true),
+                ),
+                "agent-host.session" => {
+                    let user = text("user_id");
                     daemon
                         .agent_host
-                        .pair(&text("url"), &text("pairing_code"), &text("name"))
+                        .session(&text("url"), (!user.is_empty()).then_some(user.as_str()))
                 }
                 "agent-host.unpair" => {
                     let target = text("target_id");

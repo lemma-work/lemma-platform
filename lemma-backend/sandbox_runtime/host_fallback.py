@@ -41,6 +41,7 @@ enforces that whatever a shipped module imports ships too.
 from __future__ import annotations
 
 import errno
+import ipaddress
 import os
 import selectors
 import socket
@@ -51,7 +52,35 @@ from urllib.parse import urlsplit
 
 #: The loopback names a request may carry. `[::1]` is how a bracketed IPv6
 #: literal arrives in a request line; `::1` is how it arrives from `CONNECT`.
+#: Not the whole story: see `is_loopback`, which also takes every
+#: `*.localhost` name and every loopback or unspecified address.
 LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+def is_loopback(host: str | None) -> bool:
+    """Whether a browser means this machine by `host`.
+
+    Chrome resolves every `*.localhost` name to loopback itself, and
+    `127.0.0.2`, `0.0.0.0` and `[::ffff:127.0.0.1]` all reach a server listening
+    on loopback. Only the four spellings in `LOOPBACK_NAMES` used to count, so
+    `http://app.localhost:3000` -- which a dev server prints -- went to the
+    sandbox's resolver and failed, and `http://0.0.0.0:3000` did too.
+    """
+    if not host:
+        return False
+    name = host.lower().rstrip(".")
+    if name.startswith("[") and name.endswith("]"):
+        name = name[1:-1]
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_loopback or address.is_unspecified
+
 
 #: How long to wait for the sandbox's own loopback before deciding nothing is
 #: there. Loopback either answers or refuses at once; this only bounds a
@@ -152,7 +181,7 @@ def open_upstream(host: str, port: int) -> tuple[socket.socket | None, str]:
     name is for the log line: "it went to the other machine" is the single
     most useful thing to know when somebody is surprised by what they got.
     """
-    if host.lower() not in LOOPBACK_NAMES:
+    if not is_loopback(host):
         connection = _connect(host, port, HOST_CONNECT_TIMEOUT)
         return connection, "direct" if connection else "none"
 
@@ -207,6 +236,146 @@ def _splice(a: socket.socket, b: socket.socket) -> None:
         selector.close()
 
 
+#: Hop-by-hop headers a proxy must not pass on, plus the proxy's own.
+_HOP_HEADERS = frozenset(
+    {
+        b"connection",
+        b"proxy-connection",
+        b"keep-alive",
+        b"proxy-authorization",
+        b"te",
+        b"trailer",
+        b"upgrade",
+    }
+)
+
+
+def _parse_headers(block: bytes) -> list[tuple[bytes, bytes]]:
+    headers = []
+    for line in block.split(b"\r\n"):
+        if not line:
+            continue
+        name, _, value = line.partition(b":")
+        headers.append((name.strip(), value.strip()))
+    return headers
+
+
+def _header(headers: list[tuple[bytes, bytes]], name: bytes) -> bytes | None:
+    for key, value in headers:
+        if key.lower() == name:
+            return value
+    return None
+
+
+def cross_site_to_host(headers: list[tuple[bytes, bytes]]) -> bool:
+    """Whether a request bound for the Mac was started by another site.
+
+    Chrome keeps public pages away from `localhost` (Private Network Access)
+    by the address a request resolves to, which it cannot know when the
+    request goes to a proxy -- so through this one, any page the agent's
+    browser opened could have sent requests to the person's dev server. A
+    request whose `Origin` is not loopback, or that Chrome marks
+    `Sec-Fetch-Site: cross-site` (a link or form from a public page), is not
+    sent to the Mac. The agent typing a URL is `none`, and a loopback page
+    calling another loopback port has a loopback `Origin`; both pass.
+    """
+    origin = _header(headers, b"origin")
+    if origin is not None:
+        text = origin.decode("latin-1")
+        if text == "null":
+            return True
+        return not is_loopback(urlsplit(text).hostname)
+    return _header(headers, b"sec-fetch-site") == b"cross-site"
+
+
+def _request_body_length(headers: list[tuple[bytes, bytes]]) -> int | None:
+    """The body's length, 0 for none, None for chunked."""
+    encoding = _header(headers, b"transfer-encoding")
+    if encoding is not None and b"chunked" in encoding.lower():
+        return None
+    length = _header(headers, b"content-length")
+    if length is None:
+        return 0
+    try:
+        return max(0, int(length))
+    except ValueError:
+        return 0
+
+
+def _forward_body(
+    client: socket.socket,
+    upstream: socket.socket,
+    buffered: bytes,
+    length: int | None,
+) -> None:
+    """Send exactly one request body upstream, and nothing after it.
+
+    What the client sends after its request is its *next* request -- for
+    another host, perhaps -- and must not reach this upstream.
+    """
+    if length is not None:
+        remaining = length - len(buffered)
+        upstream.sendall(buffered[:length])
+        while remaining > 0:
+            chunk = client.recv(min(_CHUNK, remaining))
+            if not chunk:
+                return
+            upstream.sendall(chunk)
+            remaining -= len(chunk)
+        return
+    # Chunked: forward chunk by chunk until the terminating one and its
+    # trailer.
+    data = buffered
+    while True:
+        while b"\r\n" not in data:
+            chunk = client.recv(_CHUNK)
+            if not chunk:
+                upstream.sendall(data)
+                return
+            data += chunk
+        size_line, _, data = data.partition(b"\r\n")
+        upstream.sendall(size_line + b"\r\n")
+        try:
+            size = int(size_line.split(b";")[0].strip(), 16)
+        except ValueError:
+            return
+        if size == 0:
+            # Trailer section, ending in an empty line.
+            while b"\r\n\r\n" not in b"\r\n" + data:
+                chunk = client.recv(_CHUNK)
+                if not chunk:
+                    break
+                data += chunk
+            end = (b"\r\n" + data).index(b"\r\n\r\n") + 2
+            upstream.sendall(data[:end])
+            return
+        needed = size + 2
+        while len(data) < needed:
+            chunk = client.recv(_CHUNK)
+            if not chunk:
+                upstream.sendall(data)
+                return
+            data += chunk
+        upstream.sendall(data[:needed])
+        data = data[needed:]
+
+
+def _pump(source: socket.socket, sink: socket.socket) -> None:
+    """Carry one direction until `source` is done."""
+    source.settimeout(300)
+    while True:
+        try:
+            chunk = source.recv(_CHUNK)
+        except OSError:
+            return
+        if not chunk:
+            return
+        try:
+            sink.sendall(chunk)
+        except OSError:
+            return
+
+
 class _Handler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
         client: socket.socket = self.request
@@ -230,35 +399,76 @@ class _Handler(socketserver.BaseRequestHandler):
                 client.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
                 return
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            try:
+                _splice(client, upstream)
+            finally:
+                # The client is closed by the server; this end is ours. Left
+                # to the collector, a browsing agent's worth of these holds
+                # relay slots on the Mac open long after the page is done.
+                upstream.close()
+            return
+
+        parsed = urlsplit(target)
+        if not parsed.netloc:
+            # A relative target means somebody pointed a normal client at
+            # this port. It is a proxy, and saying so is better than
+            # half-answering.
+            client.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+            return
+        header_block, _, body = rest.partition(b"\r\n\r\n")
+        headers = _parse_headers(header_block)
+        host, port = _split_authority(parsed.netloc)
+        if parsed.scheme == "https" and port == 80:
+            port = 443
+        if is_loopback(host) and cross_site_to_host(headers):
+            # Only refused when it would reach the Mac; a server in the
+            # sandbox is the sandbox's own business. Asked first so a refusal
+            # never costs a relay connection.
+            local = _connect("127.0.0.1", port, LOCAL_CONNECT_TIMEOUT)
+            if local is None:
+                client.sendall(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+                return
+            upstream, where = local, "sandbox"
         else:
-            parsed = urlsplit(target)
-            if not parsed.netloc:
-                # A relative target means somebody pointed a normal client at
-                # this port. It is a proxy, and saying so is better than
-                # half-answering.
-                client.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-                return
-            host, port = _split_authority(parsed.netloc)
-            if parsed.scheme == "https" and port == 80:
-                port = 443
             upstream, where = open_upstream(host, port)
-            if upstream is None:
-                client.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-                return
-            # Forwarded as an origin-form request, because what is on the other
-            # end is an ordinary server rather than another proxy.
+        if upstream is None:
+            client.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            return
+        del where
+        try:
+            # One request per connection, forwarded as an origin-form request
+            # because what is on the other end is an ordinary server rather
+            # than another proxy.
+            #
+            # This used to forward the first request and then splice the two
+            # sockets. A browser keeps a proxy connection alive and sends its
+            # next request -- for any host -- down the same one, so that
+            # request went, absolute URL and all, to whichever server the
+            # first had reached: a page on the Mac could be answered by the
+            # sandbox's server, or the other way round. Now the upstream is
+            # told to close after its answer, only this request's body is
+            # sent to it, and the client connection ends with the response.
             path = parsed.path or "/"
             if parsed.query:
                 path = f"{path}?{parsed.query}"
-            head = f"{method} {path} HTTP/1.1\r\n".encode("latin-1") + rest
-            upstream.sendall(head)
-        del where
-        try:
-            _splice(client, upstream)
+            kept = b"".join(
+                name + b": " + value + b"\r\n"
+                for name, value in headers
+                if name.lower() not in _HOP_HEADERS
+            )
+            upstream.sendall(
+                f"{method} {path} HTTP/1.1\r\n".encode("latin-1")
+                + kept
+                + b"Connection: close\r\n\r\n"
+            )
+            _forward_body(client, upstream, body, _request_body_length(headers))
+            _pump(upstream, client)
+        except OSError:
+            return
         finally:
-            # The client is closed by the server; this end is ours. Left to the
-            # collector, a browsing agent's worth of these holds relay slots
-            # on the Mac open long after the page is done.
             upstream.close()
 
 

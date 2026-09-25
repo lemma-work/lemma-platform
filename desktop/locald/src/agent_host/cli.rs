@@ -31,6 +31,12 @@ pub(crate) fn summarize_target(target: &Value) -> Value {
     json!({
         "target_id": target.get("target_id"),
         "host_id": target.get("host_id"),
+        // Whose pairing it is: the app treats one belonging to anybody but
+        // the person signed in as not this workspace's.
+        "user_id": target.get("user_id"),
+        "local": target.get("local"),
+        "host_execution": target.get("host_execution"),
+        "session_paused": target.get("session_paused"),
         "name": target.get("name"),
         "url": target.get("url"),
         "enabled": target.get("enabled"),
@@ -45,15 +51,10 @@ pub(crate) fn summarize_target(target: &Value) -> Value {
 /// Loopback HTTP is the one plain-HTTP case the host accepts, and only when
 /// asked. A development backend is served that way.
 pub(crate) fn is_loopback_http(url: &str) -> bool {
-    is_loopback_http_for(url, &crate::local_domain::LocalDomain::from_env())
+    is_loopback_http_for(url, &crate::local_domain::LocalDomain::current())
 }
 
-/// The check with the install's domain handed in.
-///
-/// Split so the tests can state which domain they mean. `from_env` probes DNS
-/// and caches the answer for the process, so a test that leaned on it would
-/// assert one thing on a machine with a network and the opposite on one
-/// without -- and a gate that flips with the weather gets switched off.
+/// The check with the install's domain handed in, so a test states it.
 pub(crate) fn is_loopback_http_for(url: &str, domain: &crate::local_domain::LocalDomain) -> bool {
     let Some(rest) = url.strip_prefix("http://") else {
         return false;
@@ -63,23 +64,11 @@ pub(crate) fn is_loopback_http_for(url: &str, domain: &crate::local_domain::Loca
         Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
         _ => authority,
     };
-    // Twice now. `.localhost` is reserved to loopback by RFC 6761, and matching
-    // only the three literal spellings meant this flag was never passed for a
-    // desktop install's own URL, so the host refused to pair with the very
-    // workspace that asked it to. Adding `.localhost` fixed that -- and then the
-    // base domain stopped being `.localhost`.
-    //
-    // An install now serves itself under whatever `LocalDomain` resolved,
-    // because a browser derives no registrable domain from `*.localhost` and a
-    // pod app framed by the workspace needs one. On such an install the URL is
-    // `app.127.0.0.1.sslip.io:<port>`: loopback in every way that matters --
-    // the name resolves to 127.0.0.1 and the backend binds there -- and matched
-    // by none of the spellings above. Pairing failed silently, and the
-    // onboarding step sat on "Connecting this computer" for ever.
-    //
-    // So the question this asks is the one it always meant: is this address
-    // this installation's own? Asking `LocalDomain` means the next time the
-    // domain moves, this moves with it.
+    // `.localhost` is reserved to loopback by RFC 6761, and matching only the
+    // three literal spellings meant this flag was never passed for a desktop
+    // install's own URL, so the host refused to pair with the very workspace
+    // that asked it to. Asking `LocalDomain` as well keeps this in step with
+    // whatever domain this installation serves under.
     matches!(host, "localhost" | "127.0.0.1" | "[::1]")
         || host.ends_with(".localhost")
         || domain.owns_host(host)
@@ -104,6 +93,16 @@ pub(crate) fn redact_secrets(detail: &str, arguments: &[&str]) -> String {
 
 impl AgentHostSupervisor {
     pub(crate) fn run_cli(&self, arguments: &[&str]) -> io::Result<String> {
+        self.run_cli_with_input(arguments, None)
+    }
+
+    /// `run_cli`, writing `input` to the command's stdin: for a secret, which
+    /// on the argument list any process on this computer could read.
+    pub(crate) fn run_cli_with_input(
+        &self,
+        arguments: &[&str],
+        input: Option<&str>,
+    ) -> io::Result<String> {
         let executable = self.executable.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -117,7 +116,11 @@ impl AgentHostSupervisor {
             .arg("--data-dir")
             .arg(&self.data_dir)
             .args(arguments)
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]
@@ -133,6 +136,14 @@ impl AgentHostSupervisor {
         // Nothing below may return without reaping. `Child::drop` neither kills
         // nor waits, and two of the lines that follow used `?`.
         let mut child = Reaped(Some(command.spawn()?));
+        if let Some(input) = input {
+            if let Some(mut stdin) = child.get().stdin.take() {
+                use std::io::Write;
+                // One line, then EOF.
+                stdin.write_all(input.as_bytes())?;
+                stdin.write_all(b"\n")?;
+            }
+        }
 
         let deadline = Instant::now() + cli_timeout(arguments[0]);
         loop {
@@ -155,9 +166,13 @@ impl AgentHostSupervisor {
             return Err(io::Error::other(if detail.is_empty() {
                 format!("Agent Host `{}` failed", arguments[0])
             } else {
-                // stderr can quote the argument list, and one of those
-                // arguments may be a live pairing code.
-                redact_secrets(detail, arguments)
+                // stderr can quote the argument list or what came on stdin,
+                // and either may be a live pairing code.
+                let redacted = redact_secrets(detail, arguments);
+                match input.map(str::trim).filter(|input| !input.is_empty()) {
+                    Some(secret) => redacted.replace(secret, "[redacted]"),
+                    None => redacted,
+                }
             }));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())

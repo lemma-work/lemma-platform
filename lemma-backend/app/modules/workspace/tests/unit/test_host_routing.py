@@ -15,8 +15,13 @@ import pytest
 
 from app.modules.workspace.domain.host_execution import (
     HOST_EXECUTION_PROVIDER,
+    HostTarget,
+    RunHostPin,
     host_sandbox_id,
+    host_sandbox_slug,
     is_host_sandbox_id,
+    pinned_host_for,
+    run_pinned_host,
 )
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.host_workspace_session import (
@@ -173,3 +178,104 @@ async def test_a_host_session_starts_in_the_root_and_never_rewrites_it():
     assert await session._resolve_path("a.txt") == f"{root}/a.txt"
     with pytest.raises(ValueError):
         HostWorkspaceSession(root="relative", client=object(), sandbox_id=uuid4())
+
+
+# ------------------------------------------------ a run keeps its own Mac
+
+
+class PinReadingClient:
+    """Records, for each call, which host a pinned run would route it to."""
+
+    def __init__(self) -> None:
+        self.seen: list[RunHostPin | None] = []
+
+    async def list_processes(self, workload_kind, logical_id, **_kwargs):
+        self.seen.append(pinned_host_for(logical_id))
+        return []
+
+    def not_a_call(self) -> str:
+        return "plain"
+
+
+async def test_a_host_session_routes_every_call_by_its_runs_recorded_host():
+    sandbox_id, host_id = host_sandbox_id(uuid4()), uuid4()
+    root = "/Users/o/lemma/c/2026-09-25/abc"
+    client = PinReadingClient()
+    session = HostWorkspaceSession(
+        root=root, host_id=host_id, client=client, sandbox_id=sandbox_id
+    )
+
+    await session.client.list_processes(None, sandbox_id)
+    assert client.seen == [
+        RunHostPin(sandbox_id=sandbox_id, host_id=host_id, root=root)
+    ]
+    # The pin lasts for the call only, and other sandboxes are never pinned.
+    assert pinned_host_for(sandbox_id) is None
+    await session.client.list_processes(None, uuid4())
+    assert client.seen[-1] is None
+    assert session.client.not_a_call() == "plain"
+
+
+async def test_a_session_without_a_recorded_host_is_not_pinned():
+    sandbox_id = host_sandbox_id(uuid4())
+    client = PinReadingClient()
+    session = HostWorkspaceSession(
+        root="/Users/o/proj", client=client, sandbox_id=sandbox_id
+    )
+    await session.client.list_processes(None, sandbox_id)
+    assert client.seen == [None]
+
+
+class _Uow:
+    """A unit of work whose session holds one host sandbox row."""
+
+    def __init__(self, row) -> None:
+        self.session = self
+        self._row = row
+
+    async def get(self, _model, _sandbox_id):
+        return self._row
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+async def test_host_targets_follow_the_calling_run_not_the_conversations_latest():
+    """Two runs of one conversation chose different Macs: each run's ops go to
+    its own, and only an unpinned caller follows the conversation's latest."""
+    from types import SimpleNamespace
+
+    from app.modules.workspace.services import host_workspace
+
+    conversation_id = uuid4()
+    sandbox_id = host_sandbox_id(conversation_id)
+    run_mac, latest_mac = uuid4(), uuid4()
+
+    row = SimpleNamespace(
+        to_entity=lambda: SimpleNamespace(
+            slug=host_sandbox_slug(conversation_id), owner_id=uuid4()
+        )
+    )
+
+    async def latest(*, conversation_id, user_id):
+        return latest_mac, "/Users/o/latest"
+
+    targets = host_workspace.SqlHostTargets(
+        uow_factory=lambda: _Uow(row), conversation_host=latest
+    )
+
+    with run_pinned_host(
+        RunHostPin(sandbox_id=sandbox_id, host_id=run_mac, root="/Users/o/mine")
+    ):
+        pinned = await targets.target(sandbox_id)
+    unpinned = await targets.target(sandbox_id)
+
+    assert pinned == HostTarget(
+        host_id=run_mac, conversation_id=conversation_id, root="/Users/o/mine"
+    )
+    assert unpinned == HostTarget(
+        host_id=latest_mac, conversation_id=conversation_id, root="/Users/o/latest"
+    )

@@ -158,7 +158,7 @@ fn every_sandbox_runs_with_a_bounded_log() {
 /// Where these tests say the guest keeps the loopback relay's directory.
 const RELAY_DIRECTORY: &str = "/var/lib/lemma/host-loopback";
 
-fn workspace_parameters(host_access: bool) -> EnsureParameters {
+pub(super) fn workspace_parameters(host_access: bool) -> EnsureParameters {
     EnsureParameters {
         sandbox_id: "box-1".into(),
         workload_kind: WorkloadKind::Workspace,
@@ -219,6 +219,21 @@ fn every_sandbox_drops_every_capability_and_cannot_regain_one() {
         );
         assert!(
             !arguments.iter().any(|argument| argument == "--privileged"),
+            "{kind:?}: {arguments:?}"
+        );
+        // Bounded, and first in line for the OOM killer rather than the
+        // database; named after itself, so a rebuilt container keeps the host
+        // name its browser profile was locked under.
+        assert!(
+            pairs.contains(&("--pids-limit", "1024")),
+            "{kind:?}: {arguments:?}"
+        );
+        assert!(
+            pairs.contains(&("--oom-score-adj", "500")),
+            "{kind:?}: {arguments:?}"
+        );
+        assert!(
+            pairs.contains(&("--hostname", parameters.sandbox_id.as_str())),
             "{kind:?}: {arguments:?}"
         );
         // Options, all of them, before the image: the engine reads anything
@@ -301,8 +316,9 @@ fn sandbox_isolation_is_installed_idempotently_and_fails_closed() {
                 Ok(true)
             }
             "-I" => {
-                // `-I INPUT 1 ...` is checked as `-C INPUT ...`.
-                let mut rule = vec!["-I".to_owned(), "INPUT".to_owned()];
+                // `-I <hook> 1 ...` is checked as `-C <hook> ...`.
+                assert_eq!(arguments[2], "1", "a jump goes at the top");
+                let mut rule = vec!["-I".to_owned(), arguments[1].clone()];
                 rule.extend_from_slice(&arguments[3..]);
                 installed.borrow_mut().push(rule);
                 Ok(true)
@@ -312,7 +328,8 @@ fn sandbox_isolation_is_installed_idempotently_and_fails_closed() {
     };
 
     ensure_sandbox_isolation(&iptables).unwrap();
-    assert_eq!(installed.borrow().len(), 4);
+    // The four core-port rules, and the two peer rules with their two jumps.
+    assert_eq!(installed.borrow().len(), 8);
     assert!(calls
         .borrow()
         .contains(&"-I INPUT 1 -i nerdctl0 -j LEMMA-SANDBOX-ISOLATION".to_owned()));
@@ -321,7 +338,7 @@ fn sandbox_isolation_is_installed_idempotently_and_fails_closed() {
     ensure_sandbox_isolation(&iptables).unwrap();
     assert_eq!(
         installed.borrow().len(),
-        4,
+        8,
         "a second pass added duplicates"
     );
     assert!(
@@ -487,90 +504,6 @@ fn a_running_sandbox_from_before_the_hardening_is_replaced() {
     assert!(
         joined.contains(&format!("lemma.work/hardening={SANDBOX_HARDENING_VERSION}")),
         "{joined}"
-    );
-}
-
-fn swap_service(outputs: Vec<Output>) -> (tempfile::TempDir, GuestService<FakeEngine>) {
-    let root = tempdir().unwrap();
-    let service = GuestService::new(
-        FakeEngine::new(outputs),
-        root.path().into(),
-        Some("192.168.64.2".into()),
-        "192.168.64.1".into(),
-        None,
-    )
-    .unwrap();
-    (root, service)
-}
-
-fn strings(parts: &[&str]) -> Vec<String> {
-    parts.iter().map(|part| (*part).to_owned()).collect()
-}
-
-/// A replacement whose `run` fails puts the running sandbox back as it was.
-///
-/// The old container is renamed aside rather than removed, so a failed start
-/// -- an image that will not run, a port the engine refuses -- leaves the user
-/// with the sandbox they had instead of none.
-#[test]
-fn a_failed_replacement_restores_the_running_sandbox() {
-    let (_root, service) = swap_service(vec![
-        output(false, ""), // no leftover aside
-        output(true, ""),  // rename aside
-        output(false, ""), // run fails
-        output(true, ""),  // clear whatever run left
-        output(true, ""),  // rename back
-    ]);
-    let run = strings(&["run", "--name", "lemma-box-1", "image"]);
-
-    let error = service
-        .replace_and_run("lemma-box-1", &run, true)
-        .expect_err("the run failure is reported");
-    assert_eq!(error.code, "guest_engine_failed");
-    assert_eq!(
-        service.engine.commands.lock().unwrap().as_slice(),
-        [
-            strings(&["rm", "--force", "lemma-box-1-replaced"]),
-            strings(&["rename", "lemma-box-1", "lemma-box-1-replaced"]),
-            run.clone(),
-            strings(&["rm", "--force", "lemma-box-1"]),
-            strings(&["rename", "lemma-box-1-replaced", "lemma-box-1"]),
-        ]
-    );
-}
-
-#[test]
-fn a_successful_replacement_removes_the_old_container_only_afterwards() {
-    let (_root, service) = swap_service(vec![
-        output(false, ""),
-        output(true, ""),
-        output(true, "new-id"),
-        output(true, ""),
-    ]);
-    let run = strings(&["run", "--name", "lemma-box-1", "image"]);
-
-    service.replace_and_run("lemma-box-1", &run, true).unwrap();
-    assert_eq!(
-        service.engine.commands.lock().unwrap().as_slice(),
-        [
-            strings(&["rm", "--force", "lemma-box-1-replaced"]),
-            strings(&["rename", "lemma-box-1", "lemma-box-1-replaced"]),
-            run.clone(),
-            strings(&["rm", "--force", "lemma-box-1-replaced"]),
-        ]
-    );
-}
-
-/// A stopped container has nothing to keep: removed right before `run`.
-#[test]
-fn a_stopped_container_is_removed_immediately_before_run() {
-    let (_root, service) = swap_service(vec![output(true, ""), output(true, "new-id")]);
-    let run = strings(&["run", "--name", "lemma-box-1", "image"]);
-
-    service.replace_and_run("lemma-box-1", &run, false).unwrap();
-    assert_eq!(
-        service.engine.commands.lock().unwrap().as_slice(),
-        [strings(&["rm", "--force", "lemma-box-1"]), run.clone()]
     );
 }
 

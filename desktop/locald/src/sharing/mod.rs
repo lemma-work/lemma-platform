@@ -48,14 +48,14 @@ const LOCAL_JOIN_INVITE_ONLY: &str = "Only people you invite can create an accou
 /// which was accurate while signup was always open and would be a false
 /// alarm now -- and a warning that is wrong in the alarming direction is how
 /// people learn to click through the ones that are right.
-pub(crate) fn public_warning(who_can_join: WhoCanJoin) -> &'static str {
+pub fn public_warning(who_can_join: WhoCanJoin) -> &'static str {
     match who_can_join {
         WhoCanJoin::Open => PUBLIC_WARNING_OPEN,
         WhoCanJoin::InviteOnly => PUBLIC_WARNING_INVITE_ONLY,
     }
 }
 
-pub(crate) fn local_join_warning(who_can_join: WhoCanJoin) -> &'static str {
+pub fn local_join_warning(who_can_join: WhoCanJoin) -> &'static str {
     match who_can_join {
         WhoCanJoin::Open => LOCAL_JOIN_OPEN,
         WhoCanJoin::InviteOnly => LOCAL_JOIN_INVITE_ONLY,
@@ -75,7 +75,7 @@ pub enum SharingMode {
 
 mod cloudflare;
 mod files;
-mod gateway;
+pub(crate) mod gateway;
 mod interfaces;
 mod ngrok;
 mod process;
@@ -84,9 +84,11 @@ mod types;
 
 pub(crate) use cloudflare::*;
 pub(crate) use files::*;
+pub(crate) use gateway::ACTIVATION_PROBE_HEADER;
 pub(crate) use interfaces::*;
 pub(crate) use ngrok::*;
 pub(crate) use process::*;
+pub use types::WhoCanJoin;
 pub(crate) use types::*;
 
 #[cfg(test)]
@@ -155,12 +157,15 @@ pub(crate) struct GatewayHandle {
     address: SocketAddr,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
+    hold: Arc<gateway::GatewayHold>,
 }
 
 #[derive(Debug)]
 pub struct PreparedSharing {
     pub mode: SharingMode,
     pub origin: String,
+    /// What locald's activation check presents to get past the held gateway.
+    pub probe_token: String,
 }
 
 impl Drop for SharingController {

@@ -249,6 +249,38 @@ impl Drop for InstallInFlight {
     }
 }
 
+/// How many agent runs the Agent Host says are in flight, across every
+/// workspace it is paired with. Zero when it is not running or has not said.
+pub(crate) fn active_agent_runs(status: Option<&Value>) -> u64 {
+    let Some(status) = status else { return 0 };
+    if status["running"].as_bool() != Some(true) {
+        return 0;
+    }
+    status["targets"]
+        .as_array()
+        .map(|targets| {
+            targets
+                .iter()
+                .filter_map(|target| target["active_runs"].as_u64())
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// The consent's account of the runs an install interrupts, or nothing.
+///
+/// Said only when there is something to lose: a line about zero runs is one
+/// more thing to read past on every update.
+pub(crate) fn interrupted_runs_sentence(active_runs: u64) -> String {
+    match active_runs {
+        0 => String::new(),
+        1 => " 1 agent run on this computer is in progress and will be interrupted.".into(),
+        many => {
+            format!(" {many} agent runs on this computer are in progress and will be interrupted.")
+        }
+    }
+}
+
 /// Download and install a newer Lemma, then offer to restart.
 ///
 /// `expected_version` is the version the user was actually shown and agreed
@@ -300,10 +332,29 @@ pub(crate) async fn install_app_update(
     // so a refusal they would make anyway is not preceded by a question, and
     // before the download, so saying no costs nothing. Off the async runtime,
     // for the reason given at the restart question below.
+    // Said before, not after: the workspace is unusable from the moment the
+    // stack stops until the new runtime has downloaded on the next launch,
+    // and that is a cost somebody deciding *when* to update needs to know.
+    let runtime_download = match lemma_update_metadata(&update.raw_json).runtime_download_bytes {
+        Some(bytes) => format!(" (about {} MB)", bytes.div_ceil(1024 * 1024)),
+        None => String::new(),
+    };
+    // Stopping locald stops the Agent Host with it, so a coding agent mid-run
+    // is cut off. Read from the status the shell already holds rather than
+    // asked for: this is a sentence in a question, and a stack too sick to
+    // answer is not a reason to withhold the update.
+    let active_runs = {
+        let shell: State<Shell> = app.state();
+        let status = shell.agent_host_status.lock_or_recover().clone();
+        active_agent_runs(status.as_ref())
+    };
     let consent = format!(
         "Lemma {} will be downloaded and installed. Lemma's local runtime stops \
-         while it installs.",
-        update.version
+         while it installs, and Lemma restarts as soon as it is installed.{} Your \
+         local workspace opens again once the updated runtime{runtime_download} \
+         has downloaded.",
+        update.version,
+        interrupted_runs_sentence(active_runs),
     );
     let handle = app.clone();
     let agreed = tauri::async_runtime::spawn_blocking(move || {
@@ -376,28 +427,14 @@ pub(crate) async fn install_app_update(
         return Ok(());
     }
 
-    // Off the async runtime. `confirm_destructive_action_impl` waits on a
-    // channel until the user answers, and the user may never answer -- so
-    // calling it from this async command parked a tokio worker on a dialog for
-    // as long as the window was left open.
-    let message = format!(
-        "Lemma {} is installed. Restarting now finishes the update; it downloads \
-         its runtime once afterwards.",
+    // Not a question any more. The stack was stopped above and the bundle on
+    // disk is now the new version: "Later" left the old shell running over a
+    // stopped stack it could only restart from the *new* locald binary, which
+    // then met the old guest -- a mixed-version runtime nobody tested. The
+    // consent above says the restart is part of installing.
+    append_install_log(&format!(
+        "update: Lemma {} installed; restarting to finish",
         update.version
-    );
-    let handle = app.clone();
-    let restart = tauri::async_runtime::spawn_blocking(move || {
-        confirm_destructive_action_impl(
-            handle,
-            "Restart to finish updating?".into(),
-            message,
-            "Restart Now".into(),
-        )
-    })
-    .await
-    .map_err(|join| join.to_string())??;
-    if restart {
-        app.restart();
-    }
-    Ok(())
+    ));
+    app.restart();
 }

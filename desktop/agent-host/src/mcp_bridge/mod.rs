@@ -20,7 +20,9 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::config::HostPaths;
-use crate::mcp_relay::{MAX_RELAY_LINE, RelayEndpoint, RelayRequest, RelayResponse, endpoint_path};
+use crate::mcp_relay::{
+    CANCEL, HELLO, MAX_RELAY_LINE, RelayEndpoint, RelayRequest, RelayResponse, endpoint_path,
+};
 
 mod parking;
 
@@ -35,6 +37,14 @@ const MAX_MCP_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 /// starts the bridge while the host is already running the run, so this only
 /// covers a relay that is still binding.
 const RELAY_WAIT: Duration = Duration::from_secs(30);
+
+/// The longest a listing may take. Past it the agent is told, rather than
+/// left waiting on a Lemma that is not going to answer.
+const LIST_TIMEOUT: Duration = Duration::from_secs(120);
+/// The longest one tool call may take here, parked waits apart. Lemma bounds
+/// its own tools well inside this; it is the backstop for an answer that was
+/// lost, not a limit a working tool reaches.
+const CALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// The MCP revision the bridge answers `initialize` with when the agent does
 /// not ask for one.
@@ -56,6 +66,9 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
             }
         }
     });
+    // Requests still being answered, by their JSON-RPC id, so a
+    // `notifications/cancelled` can stop one.
+    let working: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>> = Arc::default();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
@@ -65,21 +78,35 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
             anyhow::bail!("MCP input exceeded the {MAX_MCP_MESSAGE_BYTES} byte limit");
         }
         let message: Value = serde_json::from_str(&line).context("MCP input was not valid JSON")?;
-        // A notification has no id and wants no answer.
-        let Some(id) = message.get("id").filter(|id| !id.is_null()).cloned() else {
-            continue;
-        };
         let method = message
             .get("method")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
+        // A notification has no id and wants no answer. One of them matters:
+        // the agent giving up on a request -- a parked question the person
+        // will never answer now, say -- which must stop holding it open here
+        // and on the relay.
+        let Some(id) = message.get("id").filter(|id| !id.is_null()).cloned() else {
+            if method == "notifications/cancelled"
+                && let Some(cancelled) = message.pointer("/params/requestId")
+                && let Some(task) = working
+                    .lock()
+                    .expect("bridge work poisoned")
+                    .remove(&cancelled.to_string())
+            {
+                task.abort();
+            }
+            continue;
+        };
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         let relay = relay.clone();
         let answers = answers.clone();
+        let key = id.to_string();
+        let finished = Arc::clone(&working);
         // Tool calls run concurrently: an agent that calls tools in parallel
         // should not have them queue behind each other here.
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let frame = match answer(&relay, &method, params).await {
                 Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
                 Err(Failure { code, message }) => json!({
@@ -88,8 +115,16 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
                     "error": { "code": code, "message": message },
                 }),
             };
+            finished
+                .lock()
+                .expect("bridge work poisoned")
+                .remove(&id.to_string());
             let _ = answers.send(frame);
         });
+        working
+            .lock()
+            .expect("bridge work poisoned")
+            .insert(key, task.abort_handle());
     }
     drop(answers);
     let _ = writer.await;
@@ -120,12 +155,12 @@ async fn answer(relay: &RelayClient, method: &str, params: Value) -> Result<Valu
         })),
         "ping" => Ok(json!({})),
         "tools/list" => relay
-            .request("tools/list", params)
+            .request_within("tools/list", params, LIST_TIMEOUT)
             .await
             .map_err(|message| internal(&message)),
         "tools/call" => {
             let result = relay
-                .request("tools/call", params)
+                .request_within("tools/call", params, CALL_TIMEOUT)
                 .await
                 .map_err(|message| internal(&message))?;
             // Lemma may have answered "waiting for the person" -- `ask_user`
@@ -164,7 +199,19 @@ fn internal(message: &str) -> Failure {
     }
 }
 
-type Waiters = Arc<Mutex<HashMap<u64, oneshot::Sender<RelayResponse>>>>;
+/// The requests waiting on one relay connection, and whether it is gone.
+///
+/// One lock for both, so a request either registers before the connection is
+/// marked gone -- and hears so when its sender is dropped -- or sees the mark
+/// and reconnects. Registering on a connection whose reader had already
+/// exited was a wait nobody would ever end.
+#[derive(Default)]
+struct Waiting {
+    gone: bool,
+    waiters: HashMap<u64, oneshot::Sender<RelayResponse>>,
+}
+
+type Waiters = Arc<Mutex<Waiting>>;
 
 /// The bridge's connection to its host's relay, reopened if the host restarts.
 #[derive(Clone)]
@@ -196,22 +243,40 @@ impl RelayClient {
     }
 
     async fn open(&self) -> anyhow::Result<()> {
+        // The endpoint file outlives the relay that wrote it: after the host
+        // restarts it names a port nothing listens on until the new relay
+        // rewrites it. So a refused connection is waited out like a missing
+        // file, re-reading the file each time.
         let deadline = tokio::time::Instant::now() + RELAY_WAIT;
-        let endpoint: RelayEndpoint = loop {
-            match std::fs::read(&self.endpoint_file) {
-                Ok(bytes) => break serde_json::from_slice(&bytes)?,
-                Err(error) if tokio::time::Instant::now() >= deadline => {
-                    return Err(error).context("the Agent Host's MCP relay is not running");
-                }
+        let (endpoint, stream) = loop {
+            let attempt = async {
+                let bytes = std::fs::read(&self.endpoint_file)
+                    .context("the Agent Host's MCP relay is not running")?;
+                let endpoint: RelayEndpoint = serde_json::from_slice(&bytes)?;
+                let stream = TcpStream::connect(("127.0.0.1", endpoint.port))
+                    .await
+                    .context("could not reach the Agent Host's MCP relay")?;
+                anyhow::Ok((endpoint, stream))
+            };
+            match attempt.await {
+                Ok(opened) => break opened,
+                Err(error) if tokio::time::Instant::now() >= deadline => return Err(error),
                 Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
             }
         };
-        let stream = TcpStream::connect(("127.0.0.1", endpoint.port))
-            .await
-            .context("could not reach the Agent Host's MCP relay")?;
         let (reader, mut writer) = stream.into_split();
         let (lines, mut outgoing) = mpsc::unbounded_channel::<String>();
-        let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
+        let waiters: Waiters = Arc::default();
+        // The token first, on a line of its own: the relay gives a connection
+        // a few seconds and a small first line to prove it holds it.
+        let hello = serde_json::to_string(&RelayRequest {
+            id: 0,
+            token: endpoint.token.clone(),
+            run_id: self.run_id,
+            method: HELLO.to_owned(),
+            params: Value::Null,
+        })?;
+        let _ = lines.send(hello);
         tokio::spawn(async move {
             while let Some(mut line) = outgoing.recv().await {
                 line.push('\n');
@@ -233,17 +298,17 @@ impl RelayClient {
                 let waiter = reader_waiters
                     .lock()
                     .expect("relay waiters poisoned")
+                    .waiters
                     .remove(&response.id);
                 if let Some(waiter) = waiter {
                     let _ = waiter.send(response);
                 }
             }
             // The relay went away: everyone waiting hears so by their sender
-            // being dropped.
-            reader_waiters
-                .lock()
-                .expect("relay waiters poisoned")
-                .clear();
+            // being dropped, and nobody registers here again.
+            let mut waiting = reader_waiters.lock().expect("relay waiters poisoned");
+            waiting.gone = true;
+            waiting.waiters.clear();
         });
         *self.connection.lock().await = Some(RelayConnection {
             token: endpoint.token,
@@ -253,15 +318,29 @@ impl RelayClient {
         Ok(())
     }
 
+    /// `request`, abandoned -- and the relay told to stop -- after `limit`.
+    async fn request_within(
+        &self,
+        method: &str,
+        params: Value,
+        limit: Duration,
+    ) -> Result<Value, String> {
+        tokio::time::timeout(limit, self.request(method, params))
+            .await
+            .unwrap_or_else(|_| {
+                Err(format!(
+                    "Lemma did not answer within {} minutes",
+                    limit.as_secs() / 60
+                ))
+            })
+    }
+
     async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         // One reconnect: the host may have restarted since the last call.
         for attempt in 0..2 {
-            let answered = {
+            let (answered, mut stop) = {
                 let mut connection = self.connection.lock().await;
-                if connection
-                    .as_ref()
-                    .is_none_or(|open| open.lines.is_closed())
-                {
+                if connection.as_ref().is_none_or(RelayConnection::is_gone) {
                     drop(connection);
                     self.open().await.map_err(|error| error.to_string())?;
                     connection = self.connection.lock().await;
@@ -278,18 +357,34 @@ impl RelayClient {
                     params: params.clone(),
                 };
                 let (waiter, answered) = oneshot::channel();
-                open.waiters
-                    .lock()
-                    .expect("relay waiters poisoned")
-                    .insert(id, waiter);
+                {
+                    let mut waiting = open.waiters.lock().expect("relay waiters poisoned");
+                    if waiting.gone {
+                        drop(waiting);
+                        *connection = None;
+                        continue;
+                    }
+                    waiting.waiters.insert(id, waiter);
+                }
                 let line = serde_json::to_string(&request).map_err(|error| error.to_string())?;
                 if open.lines.send(line).is_err() {
                     *connection = None;
                     continue;
                 }
-                answered
+                // Dropped with this future -- the agent cancelled, or a
+                // deadline passed -- it tells the relay to stop too.
+                let stop = StopOnDrop {
+                    lines: open.lines.clone(),
+                    token: open.token.clone(),
+                    run_id: self.run_id,
+                    id,
+                    armed: true,
+                };
+                (answered, stop)
             };
-            match answered.await {
+            let outcome = answered.await;
+            stop.armed = false;
+            match outcome {
                 Ok(RelayResponse {
                     result: Some(result),
                     ..
@@ -312,5 +407,38 @@ impl RelayClient {
             }
         }
         Err("the Agent Host's MCP relay is not reachable".to_owned())
+    }
+}
+
+impl RelayConnection {
+    fn is_gone(&self) -> bool {
+        self.lines.is_closed() || self.waiters.lock().expect("relay waiters poisoned").gone
+    }
+}
+
+/// Tells the relay to stop working on a request nobody is waiting for any
+/// more, unless disarmed because the answer came.
+struct StopOnDrop {
+    lines: mpsc::UnboundedSender<String>,
+    token: String,
+    run_id: Uuid,
+    id: u64,
+    armed: bool,
+}
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Ok(line) = serde_json::to_string(&RelayRequest {
+            id: 0,
+            token: self.token.clone(),
+            run_id: self.run_id,
+            method: CANCEL.to_owned(),
+            params: json!({ "id": self.id }),
+        }) {
+            let _ = self.lines.send(line);
+        }
     }
 }

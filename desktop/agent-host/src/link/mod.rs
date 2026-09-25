@@ -41,11 +41,33 @@ pub async fn pair(
     installation_id: &str,
     allow_insecure_http: bool,
 ) -> anyhow::Result<TargetConfig> {
+    pair_reenabling(
+        base_url,
+        pairing_code,
+        display_name,
+        installation_id,
+        allow_insecure_http,
+        false,
+    )
+    .await
+}
+
+/// `pair`, saying whether the person asked to turn a computer they removed
+/// back on. See `PairBody::reenable`.
+pub async fn pair_reenabling(
+    base_url: Url,
+    pairing_code: &str,
+    display_name: &str,
+    installation_id: &str,
+    allow_insecure_http: bool,
+    reenable: bool,
+) -> anyhow::Result<TargetConfig> {
     validate_target_url(&base_url, allow_insecure_http)?;
     let body = serde_json::to_value(PairBody {
         pairing_code: pairing_code.to_owned(),
         display_name: display_name.to_owned(),
         hello: HostHello::current(installation_id),
+        reenable,
     })?;
     let (connected, answer) = connection::open(&base_url, None, (host::PAIR, body), None).await?;
     connected.handle.close(protocol::close::NORMAL, "paired");
@@ -65,6 +87,8 @@ pub async fn pair(
         allow_insecure_http,
         draining: false,
         refresh_generation: 0,
+        session_paused: false,
+        host_execution: false,
     })
 }
 

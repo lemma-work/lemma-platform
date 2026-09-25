@@ -18,9 +18,13 @@ from app.modules.agent.domain.agent_host import (
     AgentHostStatus,
     HostHello,
 )
+from app.modules.agent.infrastructure.agent_host.recovery import (
+    terminalize_revoked_host,
+)
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_PAIRING_TTL_SECONDS,
     AgentHostNotFound,
+    AgentHostInstallationRevoked,
     AgentHostPairingRejected,
     AgentHostProtocolViolation,
     utcnow,
@@ -141,9 +145,15 @@ class AgentHostRepository:
         host_secret_hash: str,
         display_name: str,
         hello: HostHello,
+        reenable: bool = False,
         now: datetime | None = None,
     ) -> AgentHostModel:
-        """Create or re-pair a host; re-pairing rotates the host secret."""
+        """Create or re-pair a host; re-pairing rotates the host secret.
+
+        An installation its user removed stays removed unless ``reenable``
+        says the person asked for it back: raises
+        ``AgentHostInstallationRevoked``, and the code is left unused.
+        """
         timestamp = now or utcnow()
         pairing = (
             await self.session.execute(
@@ -174,6 +184,8 @@ class AgentHostRepository:
                 .with_for_update()
             )
         ).scalar_one_or_none()
+        if host is not None and host.revoked_at is not None and not reenable:
+            raise AgentHostInstallationRevoked()
         if host is None:
             host = AgentHostModel(
                 user_id=pairing.user_id,
@@ -370,9 +382,9 @@ class AgentHostRepository:
     ) -> AgentHostModel:
         """Revoke a host, invalidating its secret immediately.
 
-        Cancelling the host's in-flight commands and run leases is added
-        alongside the dispatch tables; there is no dispatch state to reconcile
-        while this revision is the head.
+        In the same transaction, its unfinished runs fail and its undelivered
+        or unacknowledged commands are cancelled (``terminalize_revoked_host``):
+        a removed computer must not keep a run waiting on it.
         """
         host = await self.get(host_id, for_update=True)
         if host is None or host.user_id != user_id:
@@ -381,6 +393,7 @@ class AgentHostRepository:
         host.revoked_at = timestamp
         host.status = AgentHostStatus.REVOKED.value
         await self.session.flush()
+        await terminalize_revoked_host(self.session, host_id=host.id, now=timestamp)
         return host
 
     async def publish_harness(

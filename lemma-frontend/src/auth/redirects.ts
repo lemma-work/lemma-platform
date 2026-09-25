@@ -147,3 +147,22 @@ export function authLink(path: string, search = window.location.search): string 
     const destination = pendingDestination(search);
     return destination ? path + "?redirect_uri=" + encodeURIComponent(destination) : path;
 }
+
+const INVITATION_PATH = /^\/invitations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/accept\/?$/i;
+
+/** The invitation a sign-up is on its way to accept, read off where it lands.
+ *
+ *  An invitation link is `/invitations/<id>/accept`, and somebody signed out
+ *  who follows one is sent here with it as the destination. The id is sent
+ *  with the sign-up: where the deployment never proves an address — a shared
+ *  Desktop installation, with no mail to verify by — having it is what shows
+ *  the person was actually invited, rather than merely able to type the
+ *  invitee's address. */
+export function invitationIn(destination: string | null, origin = "http://portal.invalid"): string | null {
+    if (!destination) return null;
+    try {
+        return INVITATION_PATH.exec(new URL(destination, origin).pathname)?.[1] ?? null;
+    } catch {
+        return null;
+    }
+}

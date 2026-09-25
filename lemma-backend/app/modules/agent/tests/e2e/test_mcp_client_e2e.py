@@ -468,3 +468,63 @@ async def test_conversation_mcp_refuses_a_member_removed_from_the_pod(
         with pytest.raises(LinkMcpError) as refused:
             await client.list_tools()
         assert refused.value.code == "UNAUTHORIZED"
+
+
+@pytest.mark.asyncio
+async def test_conversation_mcp_refuses_a_run_of_another_conversation(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """A run id is only honoured in the conversation it belongs to.
+
+    The token grants a conversation, and the run a request names decides the
+    context it runs in -- its runtime, its agent. Naming a run of another
+    conversation (a finished one, or somebody else's thread in the same pod)
+    must not borrow that run's context.
+    """
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+    from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+    from app.modules.agent.infrastructure.repositories import ConversationRepository
+
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    agent = await _create_agent(authenticated_client, pod_id)
+    mine = await _create_conversation(authenticated_client, pod_id, agent["name"])
+    other = await _create_conversation(authenticated_client, pod_id, agent["name"])
+    runs: dict[str, UUID] = {}
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        for conversation_id in (mine, other):
+            run = await ConversationRepository(uow).create_agent_run(
+                conversation_id=UUID(conversation_id),
+                agent_id=UUID(agent["id"]),
+                agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+                metadata={"source": "mcp_run_ownership_e2e"},
+            )
+            runs[conversation_id] = run.id
+        await uow.commit()
+
+    machine = await pair(
+        authenticated_client, authenticated_client, display_name="e2e run owner"
+    )
+    link = await connected_host(app_of(authenticated_client), machine)
+    try:
+        own = LinkMcpClient(
+            link,
+            conversation_id=mine,
+            token=fixed_test_user["token"],
+            run_id=runs[mine],
+        )
+        assert (await own.list_tools()).tools
+
+        borrowed = LinkMcpClient(
+            link,
+            conversation_id=mine,
+            token=fixed_test_user["token"],
+            run_id=runs[other],
+        )
+        with pytest.raises(LinkMcpError) as refused:
+            await borrowed.list_tools()
+        assert refused.value.code == "UNAUTHORIZED"
+    finally:
+        await link.aclose()

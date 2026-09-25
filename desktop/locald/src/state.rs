@@ -71,6 +71,7 @@ impl StateSnapshot {
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
+        state.url = migrate_legacy_local_api_url(&state.url);
         state.api_url = migrate_legacy_local_api_url(&state.api_url);
         if state.url == "http://app.lemma.localhost:3711"
             && state.api_url == "http://app.lemma.localhost:8711"
@@ -270,7 +271,7 @@ impl StateSnapshot {
 }
 
 fn migrate_legacy_local_api_url(value: &str) -> String {
-    migrate_legacy_local_api_url_onto(value, &crate::local_domain::LocalDomain::from_env())
+    migrate_legacy_local_api_url_onto(value, &crate::local_domain::LocalDomain::current())
 }
 
 /// The migration with the target domain handed in.
@@ -283,17 +284,26 @@ fn migrate_legacy_local_api_url_onto(
     value: &str,
     domain: &crate::local_domain::LocalDomain,
 ) -> String {
-    const LEGACY_PREFIX: &str = "http://api.lemma.localhost";
-    let Some(suffix) = value.strip_prefix(LEGACY_PREFIX) else {
-        return value.to_owned();
-    };
-    if !suffix.is_empty() && !suffix.starts_with(':') && !suffix.starts_with('/') {
-        return value.to_owned();
+    // Hosts earlier builds served on: `api.lemma.localhost` (a separate API
+    // host), and the public loopback wildcard that replaced `*.localhost` for a
+    // while. A migrated URL is stored state the shell will be handed, and
+    // pointing it at a hostname this build no longer serves just makes the next
+    // launch resume nowhere.
+    const RETIRED_HOSTS: [&str; 3] = [
+        "http://api.lemma.localhost",
+        "http://app.127.0.0.1.sslip.io",
+        "http://api.127.0.0.1.sslip.io",
+    ];
+    for prefix in RETIRED_HOSTS {
+        let Some(suffix) = value.strip_prefix(prefix) else {
+            continue;
+        };
+        if !suffix.is_empty() && !suffix.starts_with(':') && !suffix.starts_with('/') {
+            return value.to_owned();
+        }
+        return format!("http://{}{suffix}", domain.frontend_host());
     }
-    // To whatever host this installation serves now, not the one that era used:
-    // a migrated URL is stored state the shell will be handed, and pointing it
-    // at a hostname nothing answers just makes the next launch resume nowhere.
-    format!("http://{}{suffix}", domain.frontend_host())
+    value.to_owned()
 }
 
 fn string_field(event: &Value, name: &str, fallback: &str) -> String {
@@ -375,16 +385,18 @@ mod tests {
         assert_eq!(
             migrate_legacy_local_api_url_onto(
                 "http://api.lemma.localhost:8711",
-                &LocalDomain::parse(Some("sslip"))
+                &LocalDomain::current()
             ),
-            "http://app.127.0.0.1.sslip.io:8711"
+            "http://app.lemma.localhost:8711"
+        );
+        // The public wildcard an earlier build served on comes home too.
+        assert_eq!(
+            migrate_legacy_local_api_url("http://app.127.0.0.1.sslip.io:8711/ready"),
+            "http://app.lemma.localhost:8711/ready"
         );
         assert_eq!(
-            migrate_legacy_local_api_url_onto(
-                "http://api.lemma.localhost:8711/ready",
-                &LocalDomain::parse(Some("lemma.localhost"))
-            ),
-            "http://app.lemma.localhost:8711/ready"
+            migrate_legacy_local_api_url("http://app.127.0.0.1.sslip.io.evil:8711"),
+            "http://app.127.0.0.1.sslip.io.evil:8711"
         );
         assert_eq!(
             migrate_legacy_local_api_url("https://api.example.com"),

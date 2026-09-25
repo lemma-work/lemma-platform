@@ -238,3 +238,36 @@ fn image_repair_and_failed_download_retries_leave_health_responsive() {
         assert!(downloads.try_recv().is_err());
     }
 }
+
+/// Mutations are serialised across processes, not only threads: on Windows
+/// every request is its own guestd. A second open of the lock file -- which
+/// `flock` treats exactly as another process's -- cannot take it while a
+/// mutation holds it, and can the moment it is done.
+#[test]
+fn a_mutation_holds_a_lock_another_process_would_wait_on() {
+    use std::os::fd::AsRawFd;
+    let root = tempdir().unwrap();
+    let service = GuestService::new(
+        FakeEngine::new(vec![]),
+        root.path().into(),
+        Some("192.168.64.2".into()),
+        "192.168.64.1".into(),
+        None,
+    )
+    .unwrap();
+    let held = service.lock_mutations_across_processes().unwrap();
+    let other = std::fs::File::open(service.mutation_lock_path()).unwrap();
+    let try_lock = |file: &std::fs::File| unsafe {
+        libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0
+    };
+    assert!(
+        !try_lock(&other),
+        "a second process got in beside a mutation"
+    );
+    drop(held);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !try_lock(&other) {
+        assert!(Instant::now() < deadline, "the lock outlived its mutation");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}

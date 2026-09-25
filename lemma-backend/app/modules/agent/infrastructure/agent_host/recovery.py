@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.domain.agent_host import (
@@ -298,6 +298,65 @@ async def reconcile_expired_leases(
         await reconcile_expired_run(session, run_id=run_id, now=timestamp)
         reconciled += 1
     return reconciled
+
+
+#: The words a run on a removed computer ends on; the run's failure shows them.
+HOST_REVOKED_DETAIL = (
+    "This computer was removed from the account, so the run on it was stopped"
+)
+
+
+async def terminalize_revoked_host(
+    session: AsyncSession,
+    *,
+    host_id: UUID,
+    now: datetime | None = None,
+) -> list[UUID]:
+    """End everything a just-revoked host was given. Returns the runs ended.
+
+    Every non-terminal lease on the host is FAILED with ``HOST_REVOKED`` --
+    the harness watching each run reads the lease and fails the run with
+    ``HOST_REVOKED_DETAIL`` -- and every command not yet acknowledged is
+    CANCELLED, so nothing waits for a machine that can no longer connect. No
+    CANCEL_RUN is queued: a revoked host cannot fetch it. The host stops its
+    own runs when its link closes as revoked.
+    """
+    timestamp = now or utcnow()
+    # Two UPDATEs rather than reading the rows: the host's own row is locked
+    # by the revoke, so nothing adds to either set while this runs.
+    ended = await session.execute(
+        update(AgentHostRunLeaseModel)
+        .where(
+            AgentHostRunLeaseModel.host_id == host_id,
+            AgentHostRunLeaseModel.state.in_(_NON_TERMINAL_HOST_RUN_STATES),
+        )
+        .values(
+            state=AgentHostRunState.FAILED.value,
+            error_code="HOST_REVOKED",
+            error_detail=HOST_REVOKED_DETAIL,
+            terminal_at=timestamp,
+            lease_expires_at=timestamp,
+            updated_at=timestamp,
+        )
+        .returning(AgentHostRunLeaseModel.run_id)
+        .execution_options(synchronize_session=False)
+    )
+    run_ids = list(ended.scalars())
+    await session.execute(
+        update(AgentHostCommandModel)
+        .where(
+            AgentHostCommandModel.host_id == host_id,
+            AgentHostCommandModel.state.in_(
+                [
+                    AgentHostCommandState.QUEUED.value,
+                    AgentHostCommandState.DELIVERED.value,
+                ]
+            ),
+        )
+        .values(state=AgentHostCommandState.CANCELLED.value)
+        .execution_options(synchronize_session=False)
+    )
+    return run_ids
 
 
 async def cleanup_retained_state(
