@@ -110,6 +110,31 @@ use row placeholders rather than standalone loading prose.
 
 ## Session recovery
 
+Email code is the default on both sign-in and sign-up. The browser-bound
+`/auth/email-code` flow creates or reuses the canonical account after the code
+is verified, then resumes the saved destination. Codes expire after ten minutes;
+the backend enforces the attempt and resend limits. Password and provider login
+remain available. The API must allow the frontend origin for email-code requests.
+
+The auth portal keeps the requested destination through sign-in, sign-up,
+provider callbacks, password reset, and email verification. It accepts this
+site, the configured API origin, and configured pod-app hosts; auth routes and
+untrusted origins cannot be return destinations. Without a destination, users
+land at `/t`. Email links opened in another browser have no saved destination;
+the original tab retains it.
+
+After authentication, the API decides whether the account needs verification.
+Unverified accounts receive a verification email before entering the workspace.
+The waiting tab detects verification completed in another tab; Continue refreshes
+the session and resumes the requested destination. Existing sessions follow the
+same access check when they visit sign-in.
+
+Run `npm run test:auth-browser` for browser regressions against isolated auth API
+fixtures. Install Chromium with `npx playwright install chromium`, or set
+`LEMMA_TEST_BROWSER_CHANNEL=chrome` to use installed Chrome. These checks exercise
+the real portal and SuperTokens browser client; live email delivery and provider
+consent still require deployment verification.
+
 An unsuccessful return from sign-in offers Sign in again and Back to home, without
 assuming cookies caused the failure. Each explicit retry counts as a portal trip
 so an unsuccessful retry cannot trigger another automatic redirect. The portal

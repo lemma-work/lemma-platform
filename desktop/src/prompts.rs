@@ -127,26 +127,6 @@ pub(crate) async fn confirm_destructive_action(
 }
 
 #[tauri::command]
-pub(crate) async fn confirm_settings_changes(
-    window: Webview,
-    app: AppHandle,
-) -> Result<confirmation::Decision, String> {
-    require_control_window(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        show_app_decision(
-            app,
-            "Save your settings changes?".into(),
-            "Save each changed section, discard your drafts, or keep editing.".into(),
-            "Save changes".into(),
-            true,
-            true,
-        )
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
 pub(crate) async fn resolve_confirmation(
     window: Webview,
     app: AppHandle,

@@ -93,6 +93,16 @@ class ProviderCreateSpec:
     # What the owner's plan pays for. None is the provider's configured default.
     # Only a workspace is sized by plan; a function sandbox keeps its own.
     size: SandboxSize | None = None
+    # Whether the sandbox may reach the machine it runs on, through the
+    # `host.lemma.internal` alias. Only the Desktop guest acts on it: its
+    # sandboxes share a computer with the person running Desktop, and that
+    # reach is what the host loopback relay is narrowed by. True keeps every
+    # sandbox's current reach -- the workspace runtime's callbacks to the
+    # backend go through that alias, so switching it off is a deliberate,
+    # per-sandbox decision and never a default. `lemma_local` sends the key
+    # only when it is False: the guest parses `sandbox.ensure` with
+    # `deny_unknown_fields`, so an older guest would refuse even a `True`.
+    host_access: bool = True
 
 
 class ProviderStorageKind(StrEnum):

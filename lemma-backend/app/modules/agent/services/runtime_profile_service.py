@@ -509,6 +509,20 @@ def _selected_model(
     # model was later deprecated, or a swapped BYO key). Degrade gracefully to
     # the profile's own default — and then the first catalog entry — rather than
     # hard-failing every run that relies on this profile.
+    #
+    # Except for a coding agent on someone's computer. That agent has a default
+    # of its own, which is what an unpinned profile already runs on, and it is
+    # the honest fallback: the first entry of its published list is an
+    # arbitrary model the person never chose, and pinning it explicitly
+    # replaced "whatever the agent would use" with a model nobody picked.
+    if profile.harness_id is not None:
+        logger.warning(
+            "agent.runtime_profile.model_substituted.degraded",
+            profile_id=profile.id,
+            requested_model_name=model_name,
+            selected_model_name=None,
+        )
+        return None
     substitute: RuntimeModelCatalogEntry | None = None
     if requested_model_name and profile.default_model_name:
         substitute = next(

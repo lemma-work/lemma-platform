@@ -125,14 +125,18 @@ pub(crate) fn handle_menu_action(app: &AppHandle, id: &str) {
                 Ok(())
             });
         }
+        // Settings live in the workspace now, under This Mac. The menu opens
+        // them there while the local workspace is up and answering, and falls
+        // back to Local settings -- which keeps health, recovery and
+        // diagnostics -- when it is not. See `settings_destination`.
         "control" => {
-            menu_attempt(&app, "Local settings", || show_control_center(&app));
+            open_settings(&app, "this-mac", "overview");
         }
         "control-ai" => {
-            let _ = show_control_center_page(&app, Some("ai"));
+            open_settings(&app, "models", "overview");
         }
         "control-sharing" => {
-            let _ = show_control_center_page(&app, Some("sharing"));
+            open_settings(&app, "this-mac-sharing", "overview");
         }
         "diagnostics" => {
             let _ = show_control_center_page(&app, Some("diagnostics"));

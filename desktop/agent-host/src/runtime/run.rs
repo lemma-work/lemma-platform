@@ -24,7 +24,7 @@ impl TargetWorker {
         let mcp_bridge_executable = self.mcp_bridge_executable.clone();
         let paths = self.paths.clone();
         let permissions = self.permissions.clone();
-        let events_ready = Arc::clone(&self.events_ready);
+        let events_ready = self.events_ready.clone();
         let reprobe_requested = Arc::clone(&self.reprobe_requested);
         let run_id = spec.agent_run_id;
         let credential = crate::runtime::credentials::RunCredential::new(&paths.root, run_id);
@@ -46,10 +46,7 @@ impl TargetWorker {
                 RunState::Accepted,
                 &JsonMap::new(),
             )?;
-            // `poll_target` snapshots the control batch when it builds the
-            // request, so a checkpoint written a moment later waits out the
-            // whole 25s long poll. Measured at 10-24s between a command being
-            // delivered and the host reporting it accepted.
+            // Report the acceptance now rather than on the next heartbeat.
             events_ready.notify_one();
             if !spec.mcp.is_object() {
                 terminal_failure(
@@ -61,8 +58,7 @@ impl TargetWorker {
                     "the start command did not carry a run-scoped MCP configuration",
                 )?;
                 // Like the sibling failure below and the normal exit at the
-                // end. Without it this run's terminal checkpoint waits out the
-                // whole long poll -- the delay the comment above measures.
+                // end: the terminal checkpoint goes out now.
                 events_ready.notify_one();
                 return Ok(());
             }
@@ -124,7 +120,7 @@ impl TargetWorker {
                 provider_seen: AtomicBool::new(false),
                 dispatched: AtomicBool::new(false),
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
-                events_ready: Arc::clone(&events_ready),
+                events_ready: events_ready.clone(),
             });
             let remaining = (spec.run_deadline - Utc::now())
                 .to_std()

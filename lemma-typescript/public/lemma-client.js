@@ -9198,10 +9198,59 @@ var LemmaClient = (() => {
   // src/supertokens.ts
   var import_supertokens_web_js = __toESM(require_supertokens_web_js(), 1);
   var import_session = __toESM(require_session2(), 1);
+
+  // src/refresh-breaker.ts
+  var RefreshSuspendedError = class extends Error {
+    constructor(retryAt) {
+      super("Session refresh is paused after repeated failures.");
+      __publicField(this, "retryAt");
+      this.name = "RefreshSuspendedError";
+      this.retryAt = retryAt;
+    }
+  };
+  function createRefreshBreaker(options = {}) {
+    var _a, _b, _c, _d, _e, _f;
+    const budget = (_a = options.budget) != null ? _a : 4;
+    const windowMs = (_b = options.windowMs) != null ? _b : 6e4;
+    const cooldownMs = (_c = options.cooldownMs) != null ? _c : 3e4;
+    const maxCooldownMs = (_d = options.maxCooldownMs) != null ? _d : 5 * 6e4;
+    const forgetAfterMs = (_e = options.forgetAfterMs) != null ? _e : 10 * 6e4;
+    const now = (_f = options.now) != null ? _f : Date.now;
+    let attempts = [];
+    let until = 0;
+    let strikes = 0;
+    let lastTrip = -Infinity;
+    return {
+      admit() {
+        var _a2;
+        const at = now();
+        if (at < until) throw new RefreshSuspendedError(until);
+        if (at - lastTrip > forgetAfterMs) strikes = 0;
+        attempts = attempts.filter((when) => at - when < windowMs);
+        if (attempts.length >= budget) {
+          until = at + Math.min(maxCooldownMs, cooldownMs * 2 ** strikes);
+          strikes += 1;
+          lastTrip = at;
+          attempts = [];
+          (_a2 = options.onTrip) == null ? void 0 : _a2.call(options, until);
+          throw new RefreshSuspendedError(until);
+        }
+        attempts.push(at);
+      },
+      suspendedUntil() {
+        return now() < until ? until : null;
+      }
+    };
+  }
+
+  // src/supertokens.ts
   var APP_NAME = "Lemma";
   var SESSION_API_SUFFIX = "/st/auth";
   var initializedSignature = null;
   var unauthorisedListeners = /* @__PURE__ */ new Set();
+  var refreshBreaker = createRefreshBreaker({
+    onTrip: () => unauthorisedListeners.forEach((listener) => listener())
+  });
   function normalizePath(pathname) {
     const trimmed = pathname.trim();
     if (!trimmed || trimmed === "/") {
@@ -9282,6 +9331,12 @@ var LemmaClient = (() => {
            * the one case it was raised for.
            */
           maxRetryAttemptsForSessionRefresh: 3,
+          /* Thrown inside SuperTokens' refresh `try`, so a refused refresh never
+             reaches the network and fails only the request that asked for it. */
+          preAPIHook: async (context) => {
+            if (context.action === "REFRESH_SESSION") refreshBreaker.admit();
+            return context;
+          },
           onHandleEvent: (event) => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
@@ -10200,6 +10255,20 @@ var LemmaClient = (() => {
       }
     }
     async stream(path, options = {}) {
+      const response = await this.streamResponse(path, options);
+      if (!response.body) {
+        throw new ApiError(response.status, "Stream response had no body.");
+      }
+      return response.body;
+    }
+    /**
+     * `stream`, but the whole successful `Response` rather than only its body.
+     *
+     * For a caller that has to read the status as well as the bytes: a ranged
+     * read is only a slice if it came back 206, and a server that ignored the
+     * `Range` answers 200 with the file from byte 0.
+     */
+    async streamResponse(path, options = {}) {
       var _a, _b, _c;
       let response;
       try {
@@ -10228,10 +10297,7 @@ var LemmaClient = (() => {
       if (!response.ok) {
         throw await this.parseError(response);
       }
-      if (!response.body) {
-        throw new ApiError(response.status, "Stream response had no body.");
-      }
-      return response.body;
+      return response;
     }
     /**
      * A binary response, optionally only part of one.
@@ -10241,6 +10307,16 @@ var LemmaClient = (() => {
      * was capped and there was no way to ask for the rest.
      */
     async requestBytes(method, path, options = {}) {
+      return (await this.requestBytesResponse(method, path, options)).blob;
+    }
+    /**
+     * `requestBytes`, with the status and `Content-Range` it came back with.
+     *
+     * A ranged read needs them: 206 (or a `Content-Range` starting where it
+     * asked) is the only evidence the server honoured the `Range` rather than
+     * answering with the whole file again.
+     */
+    async requestBytesResponse(method, path, options = {}) {
       const url = `${this.apiUrl}${path}`;
       const init = this.auth.getRequestInit({ method });
       if (options.headers) {
@@ -10253,7 +10329,11 @@ var LemmaClient = (() => {
       if (!response.ok) {
         throw await this.parseError(response);
       }
-      return response.blob();
+      return {
+        blob: await response.blob(),
+        status: response.status,
+        contentRange: response.headers.get("Content-Range")
+      };
     }
   };
 
@@ -10746,116 +10826,6 @@ var LemmaClient = (() => {
   // src/openapi_client/services/AgentHostService.ts
   var AgentHostService = class {
     /**
-     * Append Agent Host Events
-     * Append one ordered batch to the run's stream.
-     *
-     * There is no second lane to publish on: every event type travels the one
-     * ordered stream, and the ack watermark is the stream's last entry.
-     * @param requestBody
-     * @param authorization
-     * @returns AgentHostEventAck Successful Response
-     * @throws ApiError
-     */
-    static agentHostEventsAppend(requestBody, authorization) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/agent-host/events/append",
-        headers: {
-          "authorization": authorization
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Publish Agent Host Harnesses
-     * Replace this host's harness snapshots with the reported set.
-     * @param requestBody
-     * @param authorization
-     * @returns AgentHostHarnessPublishResponse Successful Response
-     * @throws ApiError
-     */
-    static agentHostHarnessesPublish(requestBody, authorization) {
-      return request(OpenAPI, {
-        method: "PUT",
-        url: "/agent-host/harnesses",
-        headers: {
-          "authorization": authorization
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Complete Agent Host Pairing
-     * Consume a pairing code and issue the host secret, shown exactly once.
-     * @param requestBody
-     * @returns AgentHostPairingCompleted Successful Response
-     * @throws ApiError
-     */
-    static agentHostPairingComplete(requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/agent-host/pairings/complete",
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Poll Agent Host Commands
-     * Long-poll for commands, carrying the host's control updates up.
-     *
-     * This owns its own units of work rather than the request-scoped one: the
-     * idle wait below can hold the connection open for 25 seconds, and a
-     * transaction must not stay open across it.
-     * @param requestBody
-     * @param authorization
-     * @returns AgentHostPollResponse Successful Response
-     * @throws ApiError
-     */
-    static agentHostPoll(requestBody, authorization) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/agent-host/poll",
-        headers: {
-          "authorization": authorization
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Self Revoke Agent Host
-     * Let a host retire its own credential, e.g. on uninstall.
-     * @param authorization
-     * @returns AgentHostResponse Successful Response
-     * @throws ApiError
-     */
-    static agentHostSelfRevoke(authorization) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/agent-host/revoke",
-        headers: {
-          "authorization": authorization
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
      * Create Agent Host Pairing
      * Mint a short-lived pairing code for a machine this user controls.
      *
@@ -10891,6 +10861,11 @@ var LemmaClient = (() => {
     /**
      * Revoke Agent Host
      * Revoke a host, invalidating its secret immediately.
+     *
+     * The secret stops authenticating the moment this commits, but a link opened
+     * with it before then is already past authentication. The notice closes it,
+     * on whichever replica holds it, instead of leaving it working until the host
+     * happens to reconnect.
      * @param hostId
      * @returns AgentHostResponse Successful Response
      * @throws ApiError
@@ -12002,11 +11977,16 @@ var LemmaClient = (() => {
       var _a;
       const items = [];
       let pageToken;
+      const seen = /* @__PURE__ */ new Set();
       for (; ; ) {
         const page = await this.releases(name, { limit: pageSize, pageToken });
         items.push(...(_a = page.items) != null ? _a : []);
         pageToken = page.next_page_token;
         if (typeof pageToken !== "string" || !pageToken) return items;
+        if (seen.has(pageToken)) {
+          throw new Error(`Release pages for app "${name}" repeated page token "${pageToken}"; stopping.`);
+        }
+        seen.add(pageToken);
       }
     }
     /**
@@ -13013,11 +12993,16 @@ var LemmaClient = (() => {
           var _a;
           const items = [];
           let pageToken;
+          const seen = /* @__PURE__ */ new Set();
           for (; ; ) {
             const page = await this.revisions.list(name, { limit: pageSize, pageToken });
             items.push(...(_a = page.items) != null ? _a : []);
             pageToken = page.next_page_token;
             if (typeof pageToken !== "string" || !pageToken) return items;
+            if (seen.has(pageToken)) {
+              throw new Error(`Revision pages for function "${name}" repeated page token "${pageToken}"; stopping.`);
+            }
+            seen.add(pageToken);
           }
         },
         /** One revision, with its source and the schemas its code implements. */
@@ -13789,7 +13774,11 @@ var LemmaClient = (() => {
           ));
         },
         execute: (scope, operationName, payload, accountId) => {
-          const body = { payload, account_id: accountId };
+          const body = {
+            payload,
+            account_id: accountId,
+            ...scope.podId ? { pod_id: scope.podId } : {}
+          };
           return this.client.request(() => ConnectorsService.connectorOperationExecute(
             scope.organizationId,
             scope.authConfigName,
@@ -16189,6 +16178,7 @@ var LemmaClient = (() => {
       const { filters, sort, offset, pageSize } = options;
       const rows = [];
       let pageToken;
+      const seen = /* @__PURE__ */ new Set();
       for (; ; ) {
         const page = await this.list(table, {
           filters,
@@ -16202,6 +16192,10 @@ var LemmaClient = (() => {
         if (!pageToken) {
           return rows;
         }
+        if (seen.has(pageToken)) {
+          throw new Error(`Record pages for table "${table}" repeated page token "${pageToken}"; stopping.`);
+        }
+        seen.add(pageToken);
       }
     }
     create(table, data) {
@@ -17352,6 +17346,22 @@ var LemmaClient = (() => {
 
   // src/namespaces/workspace.ts
   var MAX_READ_BYTES = 8 * 1024 * 1024;
+  function contentPath(path, options = {}) {
+    const query = new URLSearchParams({ path });
+    if (options.offset) query.set("offset", String(options.offset));
+    if (options.length) query.set("length", String(options.length));
+    return `/workspace/files:content?${query.toString()}`;
+  }
+  function rangeHeader(range) {
+    return { Range: `bytes=${range.start}-${range.end}` };
+  }
+  function rangeHonoured(status, contentRange, start) {
+    if (contentRange) {
+      const match = /^bytes (\d+)-\d+\/(?:\d+|\*)$/.exec(contentRange.trim());
+      return match !== null && Number(match[1]) === start;
+    }
+    return status === 206;
+  }
   var WebLoginsNamespace = class {
     constructor(http) {
       __publicField(this, "http", http);
@@ -17508,11 +17518,8 @@ var LemmaClient = (() => {
      * you.
      */
     readFile(path, options = {}) {
-      const query = new URLSearchParams({ path });
-      if (options.offset) query.set("offset", String(options.offset));
-      if (options.length) query.set("length", String(options.length));
-      return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`, {
-        headers: options.range ? { Range: `bytes=${options.range.start}-${options.range.end}` } : void 0
+      return this.http.requestBytes("GET", contentPath(path, options), {
+        headers: options.range ? rangeHeader(options.range) : void 0
       });
     }
     /**
@@ -17551,13 +17558,22 @@ var LemmaClient = (() => {
       }
       for (; ; ) {
         let part;
+        let honoured;
         try {
-          part = await this.readFile(path, {
-            range: { start, end: start + step - 1 }
+          const answer = await this.http.requestBytesResponse("GET", contentPath(path), {
+            headers: rangeHeader({ start, end: start + step - 1 })
           });
+          part = answer.blob;
+          honoured = rangeHonoured(answer.status, answer.contentRange, start);
         } catch (error) {
           if (error instanceof ApiError && error.statusCode === 416) break;
           throw error;
+        }
+        if (!honoured) {
+          if (start === 0 && part.size < MAX_READ_BYTES) return part;
+          throw new Error(
+            `The server ignored the Range header reading "${path}" at byte ${start}; stopping rather than stitching repeated copies of the file.`
+          );
         }
         if (part.size === 0) break;
         parts.push(part);
@@ -17601,7 +17617,7 @@ var LemmaClient = (() => {
   // src/datastore-changes.ts
   var RECONNECT_BASE_DELAY_MS = 500;
   var RECONNECT_MAX_DELAY_MS = 3e4;
-  var WS_POLICY_VIOLATION = 1008;
+  var WS_UNAUTHENTICATED = 4401;
   function reconnectDelayMs(attempt) {
     const ceiling = Math.min(
       RECONNECT_MAX_DELAY_MS,
@@ -17622,21 +17638,30 @@ var LemmaClient = (() => {
     let cursor = options.since;
     let attempt = 0;
     let stopped = false;
+    let authRefreshed = false;
     let reconnectTimer = null;
     const status = (next) => {
       var _a;
       return (_a = options.onStatus) == null ? void 0 : _a.call(options, next);
     };
-    const scheduleReconnect = () => {
+    const fail = (error) => {
       var _a;
       if (stopped) return;
-      if (options.maxRetries != null && attempt >= options.maxRetries) {
+      stopped = true;
+      status("closed");
+      (_a = options.onError) == null ? void 0 : _a.call(options, error);
+    };
+    const scheduleReconnect = () => {
+      var _a, _b;
+      if (stopped) return;
+      if (((_a = auth.getState) == null ? void 0 : _a.call(auth).status) === "unauthenticated") {
         stopped = true;
         status("closed");
-        (_a = options.onError) == null ? void 0 : _a.call(
-          options,
-          new Error("Datastore change stream: max reconnect attempts reached")
-        );
+        (_b = options.onError) == null ? void 0 : _b.call(options, new Error("Datastore change stream: signed out"));
+        return;
+      }
+      if (options.maxRetries != null && attempt >= options.maxRetries) {
+        fail(new Error("Datastore change stream: max reconnect attempts reached"));
         return;
       }
       const delay = reconnectDelayMs(attempt);
@@ -17666,10 +17691,6 @@ var LemmaClient = (() => {
         return;
       }
       socket = ws;
-      ws.onopen = () => {
-        attempt = 0;
-        status("open");
-      };
       ws.onmessage = (event) => {
         var _a2;
         let frame;
@@ -17681,6 +17702,9 @@ var LemmaClient = (() => {
         if (!frame || typeof frame !== "object") return;
         const record = frame;
         if (record.type === "ready") {
+          attempt = 0;
+          authRefreshed = false;
+          status("open");
           cursor = record.since || cursor;
           if (cursor) (_a2 = options.onReady) == null ? void 0 : _a2.call(options, { since: cursor });
           return;
@@ -17694,8 +17718,20 @@ var LemmaClient = (() => {
           status("closed");
           return;
         }
-        if (event.code === WS_POLICY_VIOLATION && !options.useCookie) {
-          auth.refreshAccessToken().then(scheduleReconnect, scheduleReconnect);
+        if (event.code === WS_UNAUTHENTICATED) {
+          if (authRefreshed) {
+            fail(new Error("Datastore change stream: session rejected after refresh"));
+            return;
+          }
+          authRefreshed = true;
+          auth.refreshAccessToken().then(
+            scheduleReconnect,
+            (error) => fail(
+              new Error(
+                `Datastore change stream: session refresh failed (${error instanceof Error ? error.message : String(error)})`
+              )
+            )
+          );
           return;
         }
         scheduleReconnect();
@@ -17891,6 +17927,14 @@ var LemmaClient = (() => {
      */
     stream(path, options) {
       return this._http.stream(path, options);
+    }
+    /**
+     * `stream`, returning the whole `Response` so its status and headers can be
+     * read — e.g. whether a ranged read came back 206 or the server ignored the
+     * `Range` and sent the file from the start.
+     */
+    streamResponse(path, options) {
+      return this._http.streamResponse(path, options);
     }
   };
 

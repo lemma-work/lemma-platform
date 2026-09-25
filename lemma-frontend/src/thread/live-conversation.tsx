@@ -14,6 +14,8 @@ import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
 import { sendToConversation } from "./send-message";
+import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
+import { FolderChip } from "@/desktop/folder-chip";
 
 /** The conversation, on the SDK's own session.
  *
@@ -113,6 +115,9 @@ export function LiveConversation({
         autoLoad: false,
         autoResume: false,
     });
+    /* The folder on this computer the conversation works in — desktop app,
+       local install only; `FolderChip` draws nothing anywhere else. */
+    const folder = useConversationFolder(session.conversationId ?? null);
 
     const [historyLoading, setHistoryLoading] = useState(Boolean(conversationId && conversationId !== NEW_CONVERSATION));
     const [loadAttempt, setLoadAttempt] = useState(0);
@@ -129,6 +134,12 @@ export function LiveConversation({
     const olderInFlight = useRef(false);
     const { loadMessages, refreshConversation, resumeIfRunning } = session;
     const openId = conversationId === NEW_CONVERSATION ? null : conversationId;
+    /* Read through a ref, not listed as a dependency: its identity changes
+       with `isStreaming`, so every stream starting or ending re-ran the load
+       below and re-fetched the conversation and its messages. Declared first
+       so it is current by the time the load runs in the same commit. */
+    const resumeIfRunningRef = useRef(resumeIfRunning);
+    useEffect(() => { resumeIfRunningRef.current = resumeIfRunning; }, [resumeIfRunning]);
 
     useEffect(() => {
         if (!openId || (createdHere.current === openId && !callRefresh)) return;
@@ -154,7 +165,7 @@ export function LiveConversation({
                 }
                 /* Only after the transcript is on screen: reattaching first
                    means a live run writes into a view that has no history. */
-                await resumeIfRunning(openId, { knownConversation: record ?? undefined });
+                await resumeIfRunningRef.current(openId, { knownConversation: record ?? undefined });
             } catch {
                 if (!cancelled && !historyReady) {
                     setLoadError("Could not load this conversation. Please try again.");
@@ -166,7 +177,7 @@ export function LiveConversation({
         return () => {
             cancelled = true;
         };
-    }, [openId, loadMessages, refreshConversation, resumeIfRunning, callRefresh, loadAttempt]);
+    }, [openId, loadMessages, refreshConversation, callRefresh, loadAttempt]);
 
     /* Older messages are merged into the session's own list by the controller,
        so there is nothing to stitch here: ask for the next page and the turns
@@ -311,7 +322,14 @@ export function LiveConversation({
                        agent_id that falls outside the filter it was created
                        for. Omitting the field is the only payload that means
                        "the pod's own assistant". */
-                    create: () => client.conversations.create({ pod_id: pod.id }),
+                    create: async () => {
+                        const made = await client.conversations.create({ pod_id: pod.id });
+                        /* A folder chosen while composing is parked in the
+                           desktop shell. Adopted here, before the session
+                           learns the id and before the first run reads it. */
+                        await adoptConversationFolder(made.id, folder.pendingId);
+                        return made;
+                    },
                     isActive: () => mounted.current,
                     /* Because the conversation is created off the client, the
                        session does not know it exists. Telling the pod first
@@ -367,7 +385,7 @@ export function LiveConversation({
                 if (mounted.current) setSending(false);
             }
         },
-        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles],
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId],
     );
 
     const resolve = useCallback(
@@ -418,7 +436,11 @@ export function LiveConversation({
                  for. Dropped here, the row had nothing current to show and
                  fell back to a sentence from several steps ago. */
               tool: session.streamingTool
-                  ? { toolName: session.streamingTool.toolName, args: session.streamingTool.args }
+                  ? {
+                        toolName: session.streamingTool.toolName,
+                        toolCallId: session.streamingTool.toolCallId,
+                        args: session.streamingTool.args,
+                    }
                   : null,
           }
         : null;
@@ -458,6 +480,7 @@ export function LiveConversation({
                 dockedId={waitingOn?.id}
             />
             <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
+            <FolderChip folder={folder} />
             <Composer
                 placeholder={"Talk to " + pod.name + "…"}
                 note={

@@ -147,6 +147,7 @@ dev = [
     # an unbounded bump does not tighten the gate, it drowns it. Adopting
     # those rules is its own piece of work.
     "ruff>=0.14.8,<0.17",
+    "moto[s3,server]>=5.1",
 ]
 
 [build-system]

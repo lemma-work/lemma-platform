@@ -4,6 +4,7 @@ import { TRANSCRIPT_ROW_ATTRIBUTE, useTranscriptScroll } from "./use-transcript-
 import { transcriptState } from "./transcript-state";
 import { ConversationLoading } from "./conversation-loading";
 import { Prose } from "./markdown";
+import { ClampedProse } from "./clamped-prose";
 import { CopyButton } from "./copy-button";
 import { Mark } from "@/shell/mark";
 import { ResourceCard } from "./resource-card";
@@ -71,7 +72,12 @@ function Notes({
             {open && (
                 <ol className="steps__list">
                     {notes.map((note, index) => (
-                        <li key={index} data-kind={note.kind} data-card={note.card ? "" : undefined}>
+                        <li
+                            key={index}
+                            data-kind={note.kind}
+                            data-card={note.card ? "" : undefined}
+                            data-nested={note.nested ? "" : undefined}
+                        >
                             {note.card ? (
                                 /* The step, read rather than summarised. Same
                                    row it always was — this is what opening the
@@ -217,14 +223,14 @@ export function Transcript({
                 <div className="convo">
                     {turns.map((turn, index) => {
                         const merging = index === mergeInto && streaming;
-                        const notes = merging ? [...turn.notes, ...liveNote(streaming)] : turn.notes;
+                        const notes = merging ? [...turn.notes, ...liveNote(streaming, turn.notes)] : turn.notes;
                         const spoke = turn.items.find((item) => item.kind === "text");
 
                         return (
                             <div key={turn.id} {...{ [TRANSCRIPT_ROW_ATTRIBUTE]: "" }}>
                                 {turn.day && <div className="day">{turn.day}</div>}
 
-                                {turn.notice && <div className="notice">{turn.notice}</div>}
+                                {turn.notice && <div className="notice"><ClampedProse text={turn.notice} /></div>}
 
                                 {/* Attribution above the surface, the same as a
                                     reply — a name tucked *inside* the block made

@@ -11,16 +11,19 @@ import time
 from uuid import UUID, uuid4
 
 import httpx
-import httpx2
 import pytest
 from fastapi import status
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.tests.e2e.agent_host_helpers import (
+    LinkMcpClient,
+    app_of,
+    connected_host,
+    pair,
+)
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     SYSTEM_LEMMA_SKIP_REASON,
     e2e_real_llm,
@@ -813,36 +816,26 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
 
 
 @asynccontextmanager
-async def _mcp_client_session(url: str, token: str):
-    """A real MCP client against the conversation's streamable-HTTP endpoint.
+async def _link_mcp_sessions(client, *, conversation_id, token: str, run_id):
+    """Two MCP callers on one paired host's link, as the host's bridge runs them.
 
-    Through the library's own entry point, deliberately. This used to hand-wire
-    `StreamableHTTPTransport.post_writer` onto a pair of plain
-    `anyio.create_memory_object_stream` channels -- a copy of
-    `streamable_http_client`'s body, one version behind it. The SDK's internal
-    wiring is not a contract, and `mcp` 2.x changed it: the client now carries
-    the sender's `contextvars.Context` across those channels and reads it back
-    as `write_stream_reader.last_context`, which a plain memory stream does not
-    have. Every session died in `post_writer` with an `AttributeError` the
-    caller only ever saw as `MCPError(-32000, 'Connection closed')` out of
-    `initialize()`.
-
-    Nothing is lost by asking the library instead: `streamable_http_client`
-    takes the authenticated client, which is the only reason to be down here.
+    The conversation's tools are reached the way a local agent reaches them: as
+    ``mcp`` frames on the Agent Host link, re-authorized per call against the
+    run's token. The HTTP conversation MCP mount this used to drive is gone --
+    the Agent Host was its only caller. Two clients share the one socket on
+    purpose: that is what a host running a shell and a Python tool at once does.
     """
-    async with (
-        httpx2.AsyncClient(
-            timeout=None,
-            headers={"Authorization": f"Bearer {token}"},
-        ) as http_client,
-        streamable_http_client(url, http_client=http_client) as (
-            read_stream,
-            write_stream,
-        ),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
-        yield session
+    machine = await pair(client, client, display_name="e2e workspace mcp")
+    link = await connected_host(app_of(client), machine)
+    try:
+        yield tuple(
+            LinkMcpClient(
+                link, conversation_id=conversation_id, token=token, run_id=run_id
+            )
+            for _ in range(2)
+        )
+    finally:
+        await link.aclose()
 
 
 def _latency_summary(values: list[float]) -> dict[str, float]:
@@ -908,10 +901,6 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
         )
         await uow.commit()
 
-    mcp_url = (
-        f"{backend_server['host_base_url']}"
-        f"/agent-runtime/conversations/{conversation_id}/mcp"
-    )
     workspace_service = WorkspaceSandboxService()
     try:
         token = (
@@ -929,10 +918,12 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
         await workspace_service.close()
 
     try:
-        async with (
-            _mcp_client_session(mcp_url, token) as shell_session,
-            _mcp_client_session(mcp_url, token) as python_session,
-        ):
+        async with _link_mcp_sessions(
+            authenticated_client,
+            conversation_id=conversation_id,
+            token=token,
+            run_id=run.id,
+        ) as (shell_session, python_session):
             tools = await shell_session.list_tools()
             tool_names = {tool.name for tool in tools.tools}
             assert {"lemma_exec_command", "lemma_execute_python"} <= tool_names
@@ -953,10 +944,10 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
                     },
                 ),
             )
-            assert startup_shell.structuredContent["success"] is True
-            assert "MCP_STARTUP" in startup_shell.structuredContent["stdout"]
-            assert startup_python.structuredContent["success"] is True
-            assert startup_python.structuredContent["result"] == "42"
+            assert startup_shell.structured_content["success"] is True
+            assert "MCP_STARTUP" in startup_shell.structured_content["stdout"]
+            assert startup_python.structured_content["success"] is True
+            assert startup_python.structured_content["result"] == "42"
 
             shell_latencies: list[float] = []
             python_latencies: list[float] = []
@@ -990,10 +981,10 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
                     call_shell(index),
                     call_python(index),
                 )
-                assert shell_result.structuredContent["success"] is True
-                assert f"SHELL_MCP_{index}" in shell_result.structuredContent["stdout"]
-                assert python_result.structuredContent["success"] is True
-                assert python_result.structuredContent["result"] == str(index * index)
+                assert shell_result.structured_content["success"] is True
+                assert f"SHELL_MCP_{index}" in shell_result.structured_content["stdout"]
+                assert python_result.structured_content["success"] is True
+                assert python_result.structured_content["result"] == str(index * index)
 
             shell_summary = _latency_summary(shell_latencies)
             python_summary = _latency_summary(python_latencies)

@@ -6,6 +6,7 @@ import { UtteranceBuffer } from "./utterance-buffer";
 import type { VoiceEvent } from "./routing";
 import { VoiceEvents } from "./voice-events";
 import { instructionFor } from "./voice-instructions";
+import { siteRuntime } from "@/site/runtime";
 
 export type CallStatus = "idle" | "connecting" | "live" | "ended" | "error";
 
@@ -14,7 +15,12 @@ export type CallStatus = "idle" | "connecting" | "live" | "ended" | "error";
  *  nothing below this line knows which one answered. */
 export type VoiceProvider = "gemini" | "gpt-live";
 
-const PROVIDER: VoiceProvider = process.env.NEXT_PUBLIC_VOICE_PROVIDER === "gpt-live" ? "gpt-live" : "gemini";
+/* Asked when a call starts rather than once at import: the answer comes from
+   `/site-config.js`, and a module-level read would freeze whatever was there
+   the first time any page imported this file. */
+function provider(): VoiceProvider {
+    return siteRuntime().voiceProvider === "gpt-live" ? "gpt-live" : "gemini";
+}
 
 export interface CallHandlers {
     observeTranscript: (text: string) => void;
@@ -92,7 +98,7 @@ export function useCall({ teammate, pod, handlers }: { teammate: string; pod: st
         setStatus("connecting");
         try {
             const { Client, micSampleRate } =
-                PROVIDER === "gpt-live"
+                provider() === "gpt-live"
                     ? await import("./gpt-live-client").then((m) => ({ Client: m.GptLiveClient, micSampleRate: m.MIC_SAMPLE_RATE }))
                     : await import("./gemini-live-client").then((m) => ({ Client: m.GeminiLiveClient, micSampleRate: m.MIC_SAMPLE_RATE }));
             if (attempt !== attemptRef.current) return;

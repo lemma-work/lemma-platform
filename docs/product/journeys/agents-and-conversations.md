@@ -307,7 +307,10 @@ whether copying succeeded.
 - When a host is revoked, the system shall stop dispatching work to it
   immediately.
 
-**Contracts:** `agent.host.pairing.create`, `agent.host.pairing.complete`, `agent.host.list`, `agent.host.revoke`, `agent.host.self_revoke`
+**Contracts:** `agent.host.pairing.create`, `agent.host.list`, `agent.host.revoke`
+(the machine's half -- spending the code, and revoking from its own end -- is
+the `pair` and `revoke` frames on the host's link WebSocket, which has no
+OpenAPI operation)
 
 ### PS-AGENT-041 — Work dispatched to a host runs exactly once
 **Status:** covered
@@ -322,7 +325,9 @@ whether copying succeeded.
   the sandbox root (`~/lemma`) mapped to `~/lemma` on the computer. Existing
   provider sessions shall retain their previous directory across upgrades.
 
-**Contracts:** `agent.host.poll`, `agent.host.events.append`, `agent.host.harnesses.list`
+**Contracts:** `agent.host.harnesses.list` (dispatch itself travels on the
+host's link WebSocket -- `control`, `commands` and `events` frames -- which has
+no OpenAPI operation)
 
 ---
 

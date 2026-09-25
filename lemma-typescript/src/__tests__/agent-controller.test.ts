@@ -203,6 +203,56 @@ describe("AgentController", () => {
     expect(snapshots.every(({ thinking, text }) => !(thinking && text))).toBe(true);
   });
 
+  it("keeps an Agent Host call running from the token that follows it", async () => {
+    // The host sends a call whole, so its message lands first and the `tool`
+    // token after it -- the reverse of a streamed pydantic-ai call. The
+    // indicator has to survive the message and last until the return.
+    const call = {
+      id: "call-msg",
+      role: "assistant",
+      kind: "TOOL_CALL",
+      tool_name: "exec_command",
+      tool_call_id: "call-1",
+      tool_args: { cmd: "make test" },
+      created_at: "2026-06-18T00:00:00.000Z",
+      metadata: { tool_source: "native", tool_title: "make test" },
+    };
+    const controller = makeController([
+      call,
+      {
+        type: "token",
+        kind: "tool",
+        data: JSON.stringify({ tool_name: "exec_command", tool_call_id: "call-1", args: { cmd: "make test" } }),
+      },
+      { type: "token", kind: "tool_output", data: "running 12 tests\n", tool_call_id: "call-1" },
+      {
+        id: "return-msg",
+        role: "tool",
+        kind: "TOOL_RETURN",
+        tool_name: "exec_command",
+        tool_call_id: "call-1",
+        tool_result: { exit_code: 0, stdout: "ok" },
+        created_at: "2026-06-18T00:00:01.000Z",
+      },
+      { type: "completed" },
+    ], { paceMs: 5 });
+
+    const seen: Array<{ tool: string | undefined; id: string | undefined; text: string }> = [];
+    controller.subscribe(() => {
+      const state = controller.getState();
+      seen.push({ tool: state.streamingTool?.toolName, id: state.streamingTool?.toolCallId, text: state.streamingText });
+    });
+
+    await controller.createConversation();
+    await controller.sendMessage("run the tests");
+
+    expect(seen.some(({ tool, id }) => tool === "exec_command" && id === "call-1")).toBe(true);
+    // Live terminal output is not answer text.
+    expect(seen.every(({ text }) => text === "")).toBe(true);
+    expect(controller.getState().streamingTool).toBeNull();
+    expect(controller.getState().messages.map((message) => message.id)).toEqual(["call-msg", "return-msg"]);
+  });
+
   it("surfaces a stream error as FAILED + error state", async () => {
     const controller = makeController([
       { type: "error", data: { message: "boom" } },
@@ -281,6 +331,73 @@ describe("AgentController", () => {
       });
       expect(controller.getState().messages).toHaveLength(1);
       expect(controller.getState().messages[0]).toMatchObject(finalMessage);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  function reconnectingClient(options: {
+    resumeStream: () => Promise<ReadableStream<Uint8Array>>;
+    authStatus?: () => string;
+  }): LemmaClient {
+    return {
+      podId: "pod-1",
+      withPod() {
+        return this;
+      },
+      auth: { getState: () => ({ status: options.authStatus?.() ?? "authenticated", user: null }) },
+      conversations: {
+        create: async () => ({ id: "conv-1", status: "WAITING", pod_id: "pod-1" }),
+        get: async (id: string) => ({ id, status: "RUNNING" }),
+        list: async () => ({ items: [], limit: 20, next_page_token: null }),
+        messages: { list: async () => ({ items: [], limit: 100, next_page_token: null }) },
+        sendMessageStream: async () => droppedStream(),
+        resumeStream: options.resumeStream,
+        stopRun: async () => ({ id: "conv-1", status: "WAITING" }),
+      },
+    } as unknown as LemmaClient;
+  }
+
+  it("backs off on a resumed stream that opens and closes with nothing in it", async () => {
+    vi.useFakeTimers();
+    try {
+      const resumeStream = vi.fn(async () => sseStream([]));
+      const controller = new AgentController({
+        client: reconnectingClient({ resumeStream }),
+        scope: { podId: "pod-1", agentName: "triage" },
+      });
+      await controller.createConversation();
+      void controller.sendMessage("hi");
+
+      /* Resetting the backoff on connect made this every second, forever.
+         Backing off, the first 15 s hold 1 + 2 + 4 + 8. */
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(resumeStream).toHaveBeenCalledTimes(4);
+      controller.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops reconnecting once the session is signed out", async () => {
+    vi.useFakeTimers();
+    try {
+      let status = "authenticated";
+      const resumeStream = vi.fn(async () => {
+        status = "unauthenticated";
+        throw Object.assign(new Error("Unauthorized"), { statusCode: 401 });
+      });
+      const controller = new AgentController({
+        client: reconnectingClient({ resumeStream, authStatus: () => status }),
+        scope: { podId: "pod-1", agentName: "triage" },
+      });
+      await controller.createConversation();
+      const turn = controller.sendMessage("hi");
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      await turn;
+      expect(resumeStream).toHaveBeenCalledOnce();
+      expect(controller.getState().isStreaming).toBe(false);
     } finally {
       vi.useRealTimers();
     }

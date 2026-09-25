@@ -9,6 +9,7 @@ import { readableName } from "@/library/reading";
 import { RecordView } from "@/library/record-view";
 import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
+import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
 import { ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -22,7 +23,7 @@ import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
 import { NOWHERE, readAddress, tabFromId, writeAddress } from "./address";
-import { podAccess } from "./pod-access";
+import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
 import { OrgSwitcher } from "./org-switcher";
 import { Rail } from "./rail";
@@ -52,6 +53,10 @@ import { useHuddle } from "@/call/use-huddle";
 import { CallScreen } from "@/call/call-screen";
 import { CallBar } from "@/call/call-bar";
 import { isLandingPreview, previewTabForStep } from "@/marketing/preview-mode";
+import { DesktopNotices } from "@/desktop/desktop-notices";
+import { useOpenSettingsEvent } from "@/desktop/open-settings";
+import { useAppsOpenInWindow } from "@/desktop/pod-apps";
+import { AppWindowPanel } from "@/desktop/app-window";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -60,6 +65,7 @@ const TAB_CLOSE_MS = 180;
 
 const ORG_KEY = key("org");
 const TAB_KEY = key("tabs");
+const LAST_POD_KEY = key("last-pod");
 
 function readJson<T>(key: string, fallback: T): T {
     try {
@@ -115,6 +121,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         }
     });
     const [tabs, setTabs] = useState<Record<string, string>>(() => preview ? { kit: "conversation" } : readJson<Record<string, string>>(TAB_KEY, {}));
+    /** Which teammate `/t` opens when the address names none: the one last
+     *  open in that organization, so the front door and every organization
+     *  switch land where somebody left off rather than on the first pod. */
+    const [lastPods, setLastPods] = useState<LastPods>(() => preview ? {} : readLastPods(readJson<unknown>(LAST_POD_KEY, {})));
     /** Apps stay mounted once opened — hidden, never unmounted, so coming
      *  back to a tab does not cold-boot someone's app. */
     const appFrames = useRef<Record<string, HTMLIFrameElement | null>>({});
@@ -127,7 +137,23 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
      *  stay in the strip until closed, the way an opened tab does. */
     const [extraTabs, setExtraTabs] = useState<Record<string, Tab[]>>({});
     const [searching, setSearching] = useState(false);
-    const [settings, setSettings] = useState<SettingsSection | null>(() => settingsFromQuery(incoming.get("settings")));
+    /* `?connect=` is a connector round trip coming home. With no return path
+       recorded the API sends it to the app root, and the panel that reads it
+       is the one that has to be open. */
+    const [settings, setSettings] = useState<SettingsSection | null>(() =>
+        settingsFromQuery(incoming.get("settings")) ?? (incoming.get("connect") ? "connectors" : null));
+    /* The desktop menu and tray open Settings at a section by raising
+       `lemma:open-settings` in this page. Keyed by request, so asking for a
+       different section while Settings is already open moves it there. */
+    const [settingsRequest, setSettingsRequest] = useState(0);
+    const [settingsFocus, setSettingsFocus] = useState<string | null>(null);
+    useOpenSettingsEvent(useCallback((section: SettingsSection, focus: string | null) => {
+        setSettings(section);
+        setSettingsFocus(focus);
+        setSettingsRequest((count) => count + 1);
+        setMobileOpen(false);
+    }, []));
+    const appsOpenInWindow = useAppsOpenInWindow();
     /* Hiring takes the whole pane, like organization settings — a candidate
        gets the same profile page a hired teammate gets, and that does not
        fit in a dialog. */
@@ -270,9 +296,15 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         setSelection(previous => ({ id: named, generation: previous.generation + 1 }));
     }, [podId]);
 
-    const access = podAccess(podId, pods.data, linkedPod);
+    const access = podAccess(podId, pods.data, linkedPod, activeOrgId ? lastPods[activeOrgId] ?? null : null);
     const listedPod = access.pod;
     const stranger = access.state === "denied" ? podId : null;
+    /* Keyed by the pod's own organization, not the active one: a link into
+       another organization's teammate is remembered where it belongs. */
+    useEffect(() => {
+        if (preview || !listedPod) return;
+        setLastPods(previous => rememberPod(previous, listedPod.orgId, listedPod.id));
+    }, [preview, listedPod]);
 
     /* Only the teammate you are looking at pays for its roster. */
     const detail = useQuery({
@@ -557,10 +589,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         try {
             localStorage.setItem(TAB_KEY, JSON.stringify(tabs));
             if (activeOrgId) localStorage.setItem(ORG_KEY, JSON.stringify(activeOrgId));
+            if (!preview) localStorage.setItem(LAST_POD_KEY, JSON.stringify(lastPods));
         } catch {
             /* storage refused; the app still works */
         }
-    }, [tabs, activeOrgId]);
+    }, [tabs, activeOrgId, lastPods, preview]);
 
     /* Remember every app tab that has been opened, with its URL. */
     useEffect(() => {
@@ -723,6 +756,9 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     }}
                 />
             )}
+            {/* The desktop app's background work: connecting this computer and
+                the sandbox download. Renders nothing in a browser. */}
+            {!preview && <DesktopNotices />}
             {mobileOpen && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
             <aside className="side" id="app-sidebar" aria-label="Workspace navigation">
                 <div className="side__brand"><LemmaLogo compact={collapsed && !mobileOpen} /><button className="icon-button sidebar-toggle" title={collapsed ? "Expand sidebar (⌘\\)" : "Collapse sidebar (⌘\\)"} aria-label={mobileOpen ? "Close navigation" : collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} aria-controls="app-sidebar" onClick={() => { if (mobileOpen) setMobileOpen(false); else { setSidebarHidden(false); setCollapsed(v => !v); } }}><SidebarIcon size={19} /></button></div>
@@ -770,11 +806,13 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                 {sidebarHidden && <button className="desktop-nav-toggle icon-button" aria-label="Show sidebar" title="Show sidebar" onClick={() => { setSidebarHidden(false); setCollapsed(false); }}><SidebarIcon size={21} /></button>}
                 <button className="mobile-nav-toggle icon-button" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar" onClick={() => setMobileOpen(true)}><MenuIcon size={22} /></button>
                 {settings && <SettingsModal
+                    key={settingsRequest}
                     orgs={orgs.data ?? []}
                     activeOrgId={activeOrgId}
                     onPickOrg={(id) => { setOrgId(id); goToPod(null); setConversationId(null); }}
                     initial={settings}
-                    onClose={() => setSettings(null)}
+                    initialFocus={settingsFocus}
+                    onClose={() => { setSettings(null); setSettingsFocus(null); }}
                 />}
                 {hiring && activeOrgId && (
                     <div className="settings-view">
@@ -1032,7 +1070,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                         </div>
 
                         <div className="body">
-                            {Object.entries(openedApps).map(([key, url]) => (
+                            {Object.entries(openedApps).map(([key, url]) => appsOpenInWindow ? (
+                                /* Where a frame would load the app signed out
+                                   (macOS desktop), it gets its own window. */
+                                <AppWindowPanel key={key} url={url} hidden={key !== activeKey} />
+                            ) : (
                                 <iframe
                                     ref={element => { appFrames.current[key] = element; }}
                                     key={key}
@@ -1187,6 +1229,11 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
             </main>
 
             {reaching && pod && <ReachSheet pod={pod} onClose={() => setReaching(false)} />}
+
+            {/* Here rather than on the arrival screen: this branch is the
+                first render that has somewhere to belong, whichever of the
+                ways in somebody took. */}
+            <FirstProfileStep />
 
             {addingPeople && pod && (
                 <Modal

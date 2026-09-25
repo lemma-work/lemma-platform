@@ -74,6 +74,7 @@ from app.modules.agent.services.wait_wake_service import AgentWaitService
 from app.modules.agent.tools.waiting.models import WaitForRequest
 from app.modules.agent.tools.waiting.pydantic_adapter import wait_for
 from app.modules.agent.tests.e2e.agent_host_helpers import (
+    publish_harnesses,
     conversation_with_a_leased_run,
     paired_machine,
     stale_after,
@@ -119,22 +120,30 @@ def _turn(run_id: UUID) -> list[AgentHostEvent]:
         at(4, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "Let me look. "}),
         at(
             5,
-            AgentHostEventType.TOOL_CALL_UPSERT,
-            {"title": "read_file", "rawInput": {"path": "README.md"}},
+            AgentHostEventType.TOOL_CALL,
+            {
+                "tool": {
+                    "name": "read_file",
+                    "source": "native",
+                    "title": "Read README.md",
+                    "kind": "read",
+                },
+                "input": {"file_path": "README.md"},
+            },
             object_id="call-1",
         ),
         at(
             6,
-            AgentHostEventType.TOOL_CALL_UPDATE,
-            {"status": "COMPLETED", "result": "# Lemma"},
+            AgentHostEventType.TOOL_CALL_RESULT,
+            {"status": "completed", "output": {"content": "# Lemma"}},
             object_id="call-1",
         ),
         at(7, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "It is the readme."}),
         at(8, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "It is the readme."}),
         at(
             9,
-            AgentHostEventType.USAGE_UPDATE,
-            {"usage": {"input_tokens": 120, "output_tokens": 34}},
+            AgentHostEventType.USAGE,
+            {"input_tokens": 120, "output_tokens": 34},
         ),
         at(
             10,
@@ -285,10 +294,22 @@ async def test_the_stream_carries_a_permission_request_without_ending_the_run(
                     3,
                     AgentHostEventType.PERMISSION_REQUEST,
                     {
-                        "toolCall": {"title": "Run rm -rf build", "kind": "execute"},
+                        "request_id": "native-shell",
+                        "tool_call_id": "native-shell",
+                        "tool": {
+                            "name": "exec_command",
+                            "source": "native",
+                            "title": "Run rm -rf build",
+                            "kind": "execute",
+                        },
+                        "input": {"cmd": "rm -rf build"},
                         "options": [
-                            {"optionId": "once", "name": "Allow", "kind": "allow_once"},
-                            {"optionId": "no", "name": "No", "kind": "reject_once"},
+                            {
+                                "option_id": "once",
+                                "name": "Allow",
+                                "kind": "allow_once",
+                            },
+                            {"option_id": "no", "name": "No", "kind": "reject_once"},
                         ],
                     },
                     object_id="native-shell",
@@ -1105,25 +1126,23 @@ async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
     await db_session.commit()
 
     # Meanwhile the harness was republished at a newer revision.
-    republished = await scenario.async_client.put(
-        "/agent-host/harnesses",
-        json={
-            "harnesses": [
-                {
-                    "harness_key": "codex",
-                    "display_name": "Codex",
-                    "adapter_version": "1.0.0",
-                    "health": "READY",
-                    "capabilities": {"load_session": True},
-                    "config_revision": "rev-2",
-                    "config_options": [],
-                    "stale_after": stale_after(),
-                }
-            ]
-        },
-        headers={"Authorization": f"Bearer {machine['host_secret']}"},
+    republished = await publish_harnesses(
+        scenario.async_client,
+        machine,
+        [
+            {
+                "harness_key": "codex",
+                "display_name": "Codex",
+                "adapter_version": "1.0.0",
+                "health": "READY",
+                "capabilities": {"load_session": True},
+                "config_revision": "rev-2",
+                "config_options": [],
+                "stale_after": stale_after(),
+            }
+        ],
     )
-    assert republished.status_code == 200, republished.text
+    assert republished["type"] == "harnesses_ok", republished
 
     # The host refuses the stale-revision command; the backend re-aims it.
     rejected = await repository.poll_commands(

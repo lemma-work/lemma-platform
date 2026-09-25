@@ -5,9 +5,10 @@ Plain functions over a session, following ``agent_host_recovery`` and
 
 Every rule here exists because delivery is at-least-once and the host only
 clears its outbox once we accept an update. Anything we refuse is something
-it resends forever, and the poll carrying these updates is also the only way
-commands reach that host -- so a stale update must be a no-op, never an
-error, and never a reason to fail the request around it.
+it resends forever, and the ``control`` frame carrying these updates is also
+the heartbeat that keeps that host's link alive and the moment its commands are
+read -- so a stale update must be a no-op, never an error, and never a reason
+to fail the frame around it.
 """
 
 from __future__ import annotations
@@ -79,15 +80,14 @@ async def apply_control_updates(
 ) -> int:
     """Apply the host's reported updates, isolating each one.
 
-    Returns how many of them actually changed something, so a poll carrying
-    nothing but repeated heartbeats can be told apart from one carrying
-    news.
+    Returns how many of them actually changed something, so a frame carrying
+    nothing but repeated heartbeats can be told apart from one carrying news.
 
     A failure here is one run's problem and must never become this host's:
-    the poll that carries these updates is also the only way commands reach
-    the host, so raising would stop CANCEL_RUN and RESOLVE_PERMISSION
-    reaching every other run it is executing. The host would then resend the
-    same update on its next poll and wedge itself permanently.
+    the ``control`` frame that carries these updates is also what answers the
+    host with its commands, so raising would stop CANCEL_RUN and
+    RESOLVE_PERMISSION reaching every other run it is executing. The host would
+    then resend the same update on its next frame and wedge itself permanently.
 
     ValueError is caught alongside the typed failures because a lease row
     carrying a state this build no longer parses would otherwise raise out
@@ -147,8 +147,8 @@ async def _rejection_target(
     match its command is a protocol violation and raises -- that is a host
     sending us something incoherent. A receipt for a lease that has moved on is
     simply late, and must be a silent no-op: the host resends anything we
-    refuse, and the poll carrying it is also the only way commands reach that
-    host, so an error here would wedge it.
+    refuse, and the frame carrying it is also what answers that host with its
+    commands, so an error here would wedge it.
     """
     command = await session.get(
         AgentHostCommandModel,
@@ -250,8 +250,8 @@ async def apply_rejection(
         "detail": detail,
         "rejected_at": timestamp.isoformat(),
         # Carried on the command rather than in a new column, because it is the
-        # only thing that bounds the re-aim loop: the poll hands back whatever
-        # is QUEUED and counts nothing.
+        # only thing that bounds the re-aim loop: the command queue hands back
+        # whatever is QUEUED and counts nothing.
         **remint.receipt,
     }
     if rejection.retryable or remint.requeue:
@@ -295,10 +295,10 @@ async def acknowledge_commands(
         if command is None:
             # Nothing to mark: the command was swept by retention, or it
             # was never ours. Either way the host has already stopped
-            # executing it, and refusing the poll would only make it resend
+            # executing it, and refusing the frame would only make it resend
             # the same acknowledgement forever.
             _log_unappliable_update(
-                kind="acknowledgement",
+                kind="ack",
                 host_id=host_id,
                 run_id=None,
                 exc=AgentHostNotFound(f"command {command_id} is unknown"),
@@ -327,12 +327,12 @@ async def apply_checkpoint(
     """Advance a run's state and extend its lease.
 
     This is the lease heartbeat. Event batches deliberately do not extend
-    it, so an active run is kept alive by its poll cycle rather than by a
+    it, so an active run is kept alive by its heartbeat rather than by a
     row write per batch of output.
 
     Idempotent in exactly the way :func:`apply_rejection` is, and for the
     same reason: a checkpoint the host cannot get us to accept is one it
-    resends every poll forever. A checkpoint for a lease we no longer have,
+    resends on every heartbeat forever. A checkpoint for a lease we no longer have,
     for a superseded epoch, for an already-terminal run, or reporting a
     state behind the one we hold is *information we have already acted on*,
     not a protocol breach. All four return ``None`` and change nothing.

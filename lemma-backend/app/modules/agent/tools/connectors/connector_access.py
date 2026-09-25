@@ -58,6 +58,8 @@ class ConnectorServices:
     operations: object
     ctx: Context
     uow: SqlAlchemyUnitOfWork
+    #: Reads an attachment and lands a download, as this agent in its pod.
+    files: object
 
 
 def _connector_dependencies():
@@ -70,6 +72,15 @@ def _connector_dependencies():
     from app.modules.connectors.api import dependencies
 
     return dependencies
+
+
+async def find_file_result(response: object) -> object | None:
+    """The file an operation result carries, fetched -- outside any session.
+
+    It walks and base64-decodes the whole provider response and may download
+    a URL, so it runs before the session that persists the file is opened.
+    """
+    return await _connector_dependencies().find_file_result(response)
 
 
 @asynccontextmanager
@@ -109,6 +120,9 @@ async def connector_services(
                 operations=dependencies.build_connector_operation_service(uow),
                 ctx=auth_ctx,
                 uow=uow,
+                files=dependencies.build_operation_files(
+                    uow, pod_id=deps.pod_id, ctx=auth_ctx
+                ),
             )
             await uow.commit()
         finally:

@@ -2,6 +2,8 @@ import { fields } from "@/connect/schema";
 import { surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
 import { SurfaceCredentials } from "./surface-credentials";
 import { SurfaceGuide } from "./surface-setup";
+import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
+import { credentialFormForChannel } from "@/desktop/this-mac";
 import { SurfaceManage } from "./surface-manage";
 import { LoadingIndicator } from "@/ui/loading";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +17,9 @@ import { OwnBot } from "./own-bot";
 import { ChannelIcon, channelKey, channelName } from "./channels";
 import { Modal } from "./modal";
 import { Mark } from "./mark";
+import { completionPath, hereWith, openAuthorization, useConnectOutcome } from "@/connect/round-trip";
+import { connectorProblem } from "@/connect/install";
+import { copyText } from "@/desktop/clipboard";
 
 /** Giving a teammate a way to be reached.
  *
@@ -58,8 +63,7 @@ function Handle({ surface }: { surface: Surface }) {
             title="Copy"
             onClick={() => {
                 clearTimeout(timer.current);
-                navigator.clipboard
-                    ?.writeText(surface.email ?? surface.handle)
+                copyText(surface.email ?? surface.handle)
                     .then(() => {
                         setCopied(true);
                         timer.current = setTimeout(() => setCopied(false), 1600);
@@ -134,6 +138,18 @@ function ConnectedRow({ surface, pod, onDrop, onManage }: { surface: Surface; po
     );
 }
 
+/** How long the two setup polls below keep asking once every ask fails.
+ *
+ *  Both poll every 2.5 s while somebody finishes a step somewhere else, and
+ *  both used to catch a failure, say so, and ask again — forever, for as long
+ *  as the sheet stayed open. Eight in a row is twenty seconds of an API that
+ *  is not answering, which is long enough to stop and hand the retry back to
+ *  the person. */
+const POLL_EVERY_MS = 2500;
+const GIVE_UP_AFTER_FAILURES = 8;
+/** An authorisation nobody finished in this long is not going to be. */
+const ACCOUNT_WAIT_MS = 15 * 60_000;
+
 /** The guided path: Lemma's manager bot makes you a bot of your own.
  *
  *  Three legs — start here, finish in Telegram, come back — so the waiting is
@@ -149,16 +165,38 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
     useEffect(() => {
         if (!setup || ready || failed) return;
         let stop = false;
+        let failures = 0;
         const tick = window.setInterval(() => {
+            /* `failed` reads the clock only when this renders, and a poll that
+               keeps failing sets the same error and never re-renders it. So
+               expiry is checked here, and a copy of the same setup is enough
+               to make the render notice. */
+            if (setup.expiresAt && Date.parse(setup.expiresAt) < Date.now()) {
+                stop = true;
+                window.clearInterval(tick);
+                setSetup((current) => current && { ...current });
+                return;
+            }
             source
                 .checkGuided(pod.id, setup.setupId)
                 .then((next) => {
                     if (stop) return;
+                    failures = 0;
                     setSetup(next);
                     if (next.status === "READY" || next.status === "COMPLETE") onDone();
                 })
-                .catch(() => setError("Could not check setup. We will try again."));
-        }, 2500);
+                .catch(() => {
+                    if (stop) return;
+                    failures += 1;
+                    if (failures < GIVE_UP_AFTER_FAILURES) {
+                        setError("Could not check setup. We will try again.");
+                        return;
+                    }
+                    stop = true;
+                    window.clearInterval(tick);
+                    setError("We still can’t check on this setup. Reload the page to look again.");
+                });
+        }, POLL_EVERY_MS);
         return () => {
             stop = true;
             window.clearInterval(tick);
@@ -177,7 +215,7 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
                         .startGuided(pod.id, "TELEGRAM")
                         .then(next => { setSetup(next); if (next.status === "COMPLETE" || next.status === "READY") onDone(); })
                         .catch((problem) =>
-                            setError(problem instanceof Error ? problem.message : "That could not be started."),
+                            setError(connectorProblem(problem, "That could not be started.")),
                         )
                         .finally(() => setStarting(false));
                 }}
@@ -263,15 +301,50 @@ function Account({
     const [error, setError] = useState<string | null>(null);
     const name = entry.title || channelName(entry.platform);
     const [pendingAccount, setPendingAccount] = useState<string | null>(null);
+    /* The account the provider's tab named on its way back. The only answer
+       for an account that was already fine and was simply signed into again —
+       nothing about it changes that a poll could notice. */
+    const [named, setNamed] = useState<string | null>(null);
+    useConnectOutcome((outcome) => {
+        if (outcome.connect === "connected" && outcome.account) setNamed(outcome.account);
+        else if (outcome.connect === "error") {
+            /* The provider said no. Back to the start, which is also what ends
+               the poll below: nothing it could find would change that answer. */
+            setStage("idle");
+            setLink(null);
+            setError(outcome.reason || "The account was not connected.");
+        }
+    }, () => undefined);
 
     useEffect(() => {
         if (!link || stage !== "waiting") return;
         let stop = false;
+        let failures = 0;
+        const deadline = Date.now() + ACCOUNT_WAIT_MS;
+        /* Back to the Connect button, with the reason beside it — the waiting
+           view has nowhere to show one. */
+        const giveUp = (reason: string) => {
+            stop = true;
+            window.clearInterval(tick);
+            setStage("idle");
+            setLink(null);
+            setError(reason);
+        };
+        const look = () => named
+            ? Promise.resolve(named)
+            /* Scoped to the install this authorisation ran against, so an
+               account on another install of the same connector is not it. */
+            : source.findAccount(pod.orgId, entry.connectorId, link.before, link.authConfigId);
         const tick = window.setInterval(() => {
-            source
-                .findAccount(pod.orgId, entry.connectorId, link.before)
+            if (Date.now() > deadline) {
+                giveUp("That took too long. Connect again to start over.");
+                return;
+            }
+            look()
                 .then(async (accountId) => {
-                    if (stop || !accountId) return;
+                    if (stop) return;
+                    failures = 0;
+                    if (!accountId) return;
                     stop = true;
                     window.clearInterval(tick);
                     setStage("binding");
@@ -287,14 +360,17 @@ function Account({
                 })
                 .catch((problem) => {
                     if (stop) return;
-                    setError(problem instanceof Error ? problem.message : "That account could not be used.");
+                    failures += 1;
+                    const reason = problem instanceof Error ? problem.message : "That account could not be used.";
+                    if (failures >= GIVE_UP_AFTER_FAILURES) giveUp(reason);
+                    else setError(reason);
                 });
-        }, 2500);
+        }, POLL_EVERY_MS);
         return () => {
             stop = true;
             window.clearInterval(tick);
         };
-    }, [link, stage, pod.orgId, pod.id, entry.connectorId, entry.platform, onDone]);
+    }, [link, stage, named, pod.orgId, pod.id, entry.connectorId, entry.platform, onDone]);
 
     if (pendingAccount && stage !== "binding") return <div className="guided">
         <p role="alert">{error}</p>
@@ -316,9 +392,12 @@ function Account({
     if (link && link.authorizeUrl) {
         return (
             <div className="guided">
-                <a className="btn btn--primary" href={link.authorizeUrl} target="_blank" rel="noreferrer">
+                {/* A button, not a `noreferrer` link: the finished tab reports
+                    back to its opener and closes, rather than loading the app
+                    a second time inside itself. */}
+                <button className="btn btn--primary" onClick={() => openAuthorization(link.authorizeUrl)}>
                     Authorise {name} <ExternalIcon size={14} />
-                </a>
+                </button>
                 <p>{name} asks whether Lemma may act for you. This page notices when you are done.</p>
                 <span className="guided__wait"><RefreshIcon size={13} /> Waiting for {name}…</span>
             </div>
@@ -334,7 +413,12 @@ function Account({
                     setStage("starting");
                     setError(null);
                     source
-                        .startAccount(pod.orgId, entry.connectorId)
+                        .startAccount(
+                            pod.orgId, entry.connectorId, undefined,
+                            /* Back to this sheet. It polls for the account
+                               anyway; this is where the tab lands. */
+                            completionPath(hereWith({ reach: "1" })),
+                        )
                         .then((started) => {
                             setLink(started);
                             /* No URL means this deployment cannot start the
@@ -345,7 +429,7 @@ function Account({
                         })
                         .catch((problem) => {
                             setStage("idle");
-                            setError(problem instanceof Error ? problem.message : "That could not be started.");
+                            setError(connectorProblem(problem, "That could not be started."));
                         });
                 }}
             >
@@ -524,7 +608,15 @@ function Focused({
                         {name} will ask whether Lemma may act for you. Nothing is sent anywhere until you say so —
                         this only gives {pod.name} somewhere to answer.
                     </p>
-                    {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : <p>This platform is not configured on this deployment. Follow the setup instructions or ask your administrator.</p>}
+                    {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : (
+                        <>
+                            <p>This platform is not configured on this deployment. Follow the setup instructions or ask your administrator.</p>
+                            {/* On a local install the administrator is the
+                                person reading, and the bot credentials are
+                                this computer's to set. */}
+                            <SetUpOnThisMac form={credentialFormForChannel(entry.platform)} />
+                        </>
+                    )}
                     {canOwn && (
                         <button className="linkish focused__alt" onClick={() => setOwnBot(true)}>
                             Or give {pod.name} a Slack bot of its own

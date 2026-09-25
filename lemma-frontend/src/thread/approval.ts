@@ -1,3 +1,5 @@
+import { toolKey } from "./tool-name";
+
 export interface ApprovalDetails {
     /** What is about to happen, in the agent's own words where it wrote them. */
     title: string;
@@ -33,27 +35,23 @@ function asString(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
-/** Agent tools arrive namespaced (`mcp__pod__request_approval`); the last
- *  segment is the tool. */
-function normalizeToolName(name: string | null | undefined): string {
-    const raw = asString(name).toLowerCase();
-    const parts = raw.split("__");
-    return parts[parts.length - 1] ?? raw;
-}
+type ToolMetadata = Record<string, unknown> | null | undefined;
 
-export function isApprovalTool(name: string | null | undefined): boolean {
-    const tool = normalizeToolName(name);
+/** Lemma's own pausing tools only. Someone else's MCP server may well have an
+ *  `ask_user`, and nothing this app posts can answer it. */
+export function isApprovalTool(name: string | null | undefined, metadata?: ToolMetadata): boolean {
+    const tool = toolKey(name, metadata);
     return tool === "request_approval" || tool === "user_approval";
 }
 
-export function isAskTool(name: string | null | undefined): boolean {
-    return normalizeToolName(name) === "ask_user";
+export function isAskTool(name: string | null | undefined, metadata?: ToolMetadata): boolean {
+    return toolKey(name, metadata) === "ask_user";
 }
 
 /** Whether a tool pauses the run for a person. Both kinds end the run and
  *  resume through the same endpoint. */
-export function isInteractionTool(name: string | null | undefined): boolean {
-    return isApprovalTool(name) || isAskTool(name);
+export function isInteractionTool(name: string | null | undefined, metadata?: ToolMetadata): boolean {
+    return isApprovalTool(name, metadata) || isAskTool(name, metadata);
 }
 
 /** What a resolved interaction settled on, read from the tool return. The

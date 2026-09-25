@@ -19,7 +19,7 @@ name = "lemma-agent-host"
 path = "src/main.rs"
 
 [dependencies]
-agent-client-protocol = "=2.0.0"
+agent-client-protocol = { version = "=2.0.0", features = ["unstable_end_turn_token_usage"] }
 # The agent child is spawned through the protocol crate's escape hatch and
 # supervised here; see `SupervisedAgent` in acp.rs for why.
 async-process = "2.5"
@@ -30,13 +30,17 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 clap = { version = "4.5", features = ["derive", "env"] }
 getrandom = "0.3"
 hex = "0.4"
-reqwest = { workspace = true }
 rusqlite = { version = "0.40.2", features = ["bundled", "uuid"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = "2"
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+# The link to Lemma. native-tls for the same reason reqwest used it here: the
+# system trust store, so a machine behind a TLS-inspecting corporate proxy
+# trusts what its browser trusts. 0.29 is the version axum's `ws` uses, which
+# the tests' stand-in control plane serves the link with.
+tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 url = { version = "2", features = ["serde"] }
@@ -47,6 +51,7 @@ rustix = { version = "1", features = ["process"] }
 fs4 = { version = "1.1.0", features = ["sync"] }
 lemma-desktop-process = { path = "../process" }
 lemma-job-object = { path = "../job-object" }
+lemma-private-file = { path = "../private-file" }
 
 # Measurement, not a test: it asserts nothing, and a test target is compiled
 # and linked on every `cargo test` whether or not it is ignored.
@@ -56,7 +61,7 @@ harness = false
 
 [dev-dependencies]
 assert_cmd = "2"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 predicates = "3"
 tempfile = { workspace = true }
 # Tests only. `start_paused` lets the scheduling tests assert what the loop does

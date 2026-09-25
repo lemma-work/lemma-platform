@@ -71,25 +71,7 @@ test('failed approval remains visible and can be cancelled; notices have one Clo
   assert.equal(await notice.locator(':focus').textContent(), 'Close');
 });
 
-test('settings offers three keyboard-contained choices and Escape always cancels', async (t) => {
-  const page = await prompt(t, { title: 'Save your settings changes?', confirmLabel: 'Save changes', allowDiscard: true });
-  assert.deepEqual(await page.getByRole('button').allTextContents(), ['Cancel', 'Discard', 'Save changes']);
-  assert.equal(await page.locator(':focus').textContent(), 'Cancel');
-  for (const name of ['Discard', 'Save changes', 'Cancel']) {
-    await page.keyboard.press('Tab');
-    assert.equal(await page.locator(':focus').textContent(), name);
-  }
-  await page.keyboard.press('Shift+Tab');
-  assert.equal(await page.locator(':focus').textContent(), 'Save changes');
-  await page.keyboard.press('Escape');
-  assert.deepEqual(await page.evaluate(() => window.calls), [{ command: 'resolve_confirmation', args: { id: 'owned-operation', decision: 'cancel' } }]);
-});
-
-test('discard and save resolve distinct settings decisions without duplicate submissions', async (t) => {
-  for (const [button, decision] of [['Discard', 'discard'], ['Save changes', 'confirm']]) {
-    const page = await prompt(t, { confirmLabel: 'Save changes', allowDiscard: true });
-    await page.getByRole('button', { name: button, exact: true }).click();
-    assert.deepEqual(await page.evaluate(() => window.calls), [{ command: 'resolve_confirmation', args: { id: 'owned-operation', decision } }]);
-    assert.equal(await page.getByRole('button', { name: button, exact: true }).isDisabled(), true);
-  }
-});
+// The three-way save, discard or keep-editing decision on closing Local
+// settings went with the forms that had drafts: those moved to lemma-frontend's
+// This Mac settings, and lemma-frontend/tests/this-mac.test.ts covers leaving
+// them. Nothing in the shell asks for a Discard button any more.

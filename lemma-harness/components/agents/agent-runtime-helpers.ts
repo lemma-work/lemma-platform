@@ -462,46 +462,6 @@ export type HarnessConfigControl = {
     choices: Array<{ value: string; label: string }>;
 };
 
-// Options whose value decides how much the agent may do unattended, and the
-// values Agent Host refuses for them. Mirrors `is_policy_bearing_option` /
-// `is_disallowed_policy_value` (desktop/agent-host/src/acp.rs) and the same pair in the
-// backend domain. Harnesses *do* enumerate these — Claude Code lists
-// `bypassPermissions` among its permission modes — and the host rejects them
-// anyway at session setup, so offering one here would be a dead choice.
-// Settings Lemma owns, so the dialog must not offer them per profile.
-//
-// `mode` is the agent's approval and sandboxing preset. Approvals are the
-// platform's job — a run asks, Lemma surfaces it, a human answers — and that
-// must behave identically whichever harness is executing. Letting each profile
-// pick a preset makes the same question answerable in several different ways.
-//
-// `collaboration_mode` decides how the agent carries state across turns. Lemma
-// maps one conversation to one session already, so this is decided by the
-// conversation, not by the profile.
-//
-// The harness keeps applying its own safe default for both, which is what
-// "the same as the Lemma server default harness" means in practice.
-export const PLATFORM_OWNED_OPTION_CATEGORIES = ['mode', 'collaboration_mode'];
-
-const POLICY_OPTION_MARKERS = ['mode', 'permission', 'approval', 'sandbox'];
-const DISALLOWED_POLICY_VALUES = new Set([
-    'bypasspermissions',
-    'agentfullaccess',
-    'fullaccess',
-    'acceptedits',
-    'yolo',
-    'auto',
-]);
-
-function isPolicyBearing(selectionKey: string, category: string): boolean {
-    const identity = `${selectionKey} ${category}`.toLowerCase();
-    return POLICY_OPTION_MARKERS.some((marker) => identity.includes(marker));
-}
-
-function isDisallowedPolicyValue(value: string): boolean {
-    return DISALLOWED_POLICY_VALUES.has(value.replace(/[^a-z0-9]/gi, '').toLowerCase());
-}
-
 /**
  * The harness config options this UI can safely offer a control for.
  *
@@ -510,9 +470,15 @@ function isDisallowedPolicyValue(value: string): boolean {
  * (models are chosen through `default_model_name`), and an allowed value is
  * `item.value ?? item.id`.
  *
+ * Every published value is offered, permission modes included. The host owns
+ * that policy: it removes the values that would turn off the approval gate
+ * before publishing an option, marks the option `metadata.policy`, and refuses
+ * one again at session setup. This dialog used to repeat the rule with its own
+ * substring match, which disagreed with the host's -- it hid plan mode, which
+ * the host allows.
+ *
  * Options that enumerate no values are dropped rather than rendered as a text
- * box, and escalating values are dropped from the ones that do — either would
- * let a selection save cleanly and then fail on the user's first run.
+ * box, which would let a selection save cleanly and then fail on the first run.
  */
 export function harnessConfigControls(
     configOptions?: Array<{
@@ -522,23 +488,21 @@ export function harnessConfigControls(
         description?: string | null;
         current_value?: unknown;
         options?: Array<Record<string, unknown>> | null;
+        metadata?: Record<string, unknown> | null;
     }> | null,
 ): HarnessConfigControl[] {
     const controls: HarnessConfigControl[] = [];
     for (const option of configOptions ?? []) {
         const category = typeof option.category === 'string' ? option.category : '';
-        // `model` is chosen through default_model_name; the rest are Lemma's.
+        // `model` is chosen through default_model_name.
         if (category === 'model') continue;
-        if (PLATFORM_OWNED_OPTION_CATEGORIES.includes(category)) continue;
         const selectionKey = (typeof option.id === 'string' && option.id) || category;
         if (!selectionKey) continue;
 
-        const policyBearing = isPolicyBearing(selectionKey, category);
         const choices: Array<{ value: string; label: string }> = [];
         for (const item of option.options ?? []) {
             const value = item.value ?? item.id;
             if (typeof value !== 'string' || !value) continue;
-            if (policyBearing && isDisallowedPolicyValue(value)) continue;
             const label = typeof item.name === 'string' && item.name ? item.name : value;
             choices.push({ value, label });
         }

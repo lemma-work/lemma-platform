@@ -23,7 +23,6 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ByteStreams, ConnectionTo};
 use async_trait::async_trait;
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::adapters::ResolvedAdapter;
@@ -99,6 +98,8 @@ pub struct AcpRunOutcome {
     /// the user "Agent Host run ended in FAILED" while its partial answer sat
     /// directly above.
     pub message: Option<String>,
+    /// The turn's token usage, as the adapter reported it with its answer.
+    pub usage: Option<Value>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

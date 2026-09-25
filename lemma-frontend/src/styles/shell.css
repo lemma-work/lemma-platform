@@ -1242,6 +1242,51 @@
     border-radius: var(--r-md);
     padding: 8px 12px;
     display: inline-block;
+    line-height: 1.55;
+}
+
+/* ── markdown held to a few lines ───────────────────────────────────── */
+/* The box sets the type and the markdown inside takes it, so `1lh` on the box
+   is one line of what is actually in it. Paragraph and list margins shrink to
+   what a line of UI text can carry — this is a bubble, not a page. */
+.clamp__body .md {
+    font-size: inherit;
+    line-height: inherit;
+    color: inherit;
+}
+.clamp__body .md p,
+.clamp__body .md ul,
+.clamp__body .md ol {
+    margin-bottom: 6px;
+}
+.clamp__body .md li {
+    margin-bottom: 2px;
+}
+.clamp__body .md > :last-child {
+    margin-bottom: 0;
+}
+.clamp__body .md h1,
+.clamp__body .md h2,
+.clamp__body .md h3,
+.clamp__body .md h4 {
+    font-size: inherit;
+    margin: 8px 0 4px;
+}
+.clamp__body[data-collapsed] {
+    max-height: calc(var(--clamp-lines, 2) * 1lh);
+    overflow: hidden;
+}
+.clamp__toggle {
+    display: block;
+    border: 0;
+    background: none;
+    padding: 4px 0 0;
+    font-size: var(--t-meta);
+    color: var(--accent);
+    cursor: pointer;
+}
+.clamp__toggle:hover {
+    text-decoration: underline;
 }
 
 /* ── a document, where a document is what it is ────────────────────── */
@@ -2150,6 +2195,15 @@
     border: 1px solid var(--line);
     border-radius: var(--r-xl);
     box-shadow: var(--shadow-lift);
+    outline: none;
+}
+/* The panel takes focus so a dialog opens with the keyboard inside it, and
+   every click on its blank space focuses it again. It is not a control: the
+   blanket `[tabindex]:focus-visible` ring outranked the line above and drew a
+   bright outline round the whole dialog on each click, which read as an input
+   grabbing focus. Specific enough to win whatever order the sheets load in. */
+.modal__panel[tabindex]:focus,
+.modal__panel[tabindex]:focus-visible {
     outline: none;
 }
 .modal__panel--narrow {
@@ -5276,10 +5330,32 @@ a.reach { text-decoration: none; }
 .message-actions .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
 .copy-control__button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: var(--paper); color: var(--ink-2); cursor: pointer; }
 .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
-.copy-section { margin: 12px 0; padding-top: 32px; border: 1px solid var(--line-2); border-radius: 10px; }
-.copy-section > .copy-control { position: absolute; top: 0; right: 0; }
-.copy-section pre { margin: 0; }
-.copy-section:has(table) { overflow-x: auto; }
+/* The copy button floats over the block's top-right corner instead of
+   owning a strip above it, and only shows on hover or focus (always on touch,
+   where there is no hover). */
+.copy-section { margin: 0 0 12px; min-width: 0; }
+.copy-section > .copy-control { position: absolute; top: 6px; right: 6px; z-index: 1; opacity: 0; transition: opacity .12s; }
+.copy-section:hover > .copy-control,
+.copy-section:focus-within > .copy-control { opacity: 1; }
+@media (hover: none) { .copy-section > .copy-control { opacity: 1; } }
+.copy-section > .copy-control .copy-control__button { width: 28px; height: 28px; background: var(--chrome); color: var(--ink-3); }
+.copy-section > .copy-control .copy-control__button:hover { background: var(--paper); color: var(--ink); }
+.copy-section > pre,
+.copy-section > blockquote,
+.copy-section > details { margin: 0; }
+/* Code wraps to the column rather than scrolling sideways; space is kept on
+   the right so the first line never runs under the button. */
+.copy-section > pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; padding-right: 40px; border: 0; }
+.copy-section > pre code { white-space: inherit; }
+/* Tables fit the column when they can and scroll only inside their own frame
+   when they genuinely can't. */
+.copy-section:has(> table) { overflow-x: auto; }
+.copy-section > table { width: 100%; margin: 0; border-collapse: collapse; }
+.copy-section > table th,
+.copy-section > table td { padding: 8px 12px; vertical-align: top; overflow-wrap: anywhere; min-width: 6ch; }
+.copy-section > table th { background: var(--chrome); }
+.copy-section > table th:last-child { padding-right: 40px; }
+.copy-section > table tr:last-child td { border-bottom: 0; }
 
 
 .apps-pane { padding: 28px clamp(20px, 3vw, 40px); }

@@ -29,6 +29,13 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
     // `prepare_sandbox_image` carries and the only thing that makes the grant
     // safe. They are granted at all because the folder is chosen from the
     // composer, which only exists in the workspace.
+    //
+    // The This Mac commands are the rest. They are the settings a person
+    // changes about their own computer, now in the workspace's Settings, and
+    // each one refuses in Rust unless the caller is this installation's own
+    // workspace on its loopback origin (`require_local_settings_caller`) --
+    // `workspace_settings.rs` has the rule and its tests. Public sharing,
+    // repair and installing an update each ask natively before acting.
     let workspace = granted("workspace");
     assert!(workspace.contains(&"allow-open-control-center".to_string()));
     assert!(workspace.iter().all(|permission| {
@@ -42,14 +49,34 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
                 | "allow-bind-conversation-folder"
                 | "allow-unbind-conversation-folder"
                 | "allow-adopt-conversation-folder"
+                | "allow-local-settings-snapshot"
+                | "allow-apply-local-settings"
+                | "allow-local-sharing"
+                | "allow-set-start-at-login"
+                | "allow-repair-runtime"
+                | "allow-open-logs"
+                | "allow-prepare-sandbox-image"
+                | "allow-check-for-app-update"
+                | "allow-install-app-update"
+                | "allow-telemetry-status"
+                | "allow-set-telemetry-enabled"
+                | "allow-diagnostic-logs"
         ) || permission.starts_with("allow-agent-host-")
     }));
+    // Destructive, or the operator's whole configuration at once: these stay
+    // in Local settings, a bundled page no remote origin can become.
     for forbidden in [
         "allow-apply-operator-config",
         "allow-sharing-action",
+        "allow-control-snapshot",
         "allow-prepare-runtime",
-        "allow-repair-runtime",
+        "allow-reset-local-data",
+        "allow-reset-full-reinstall",
+        "allow-restart-into-recovery",
         "allow-stop",
+        "allow-start",
+        "allow-restart",
+        "allow-open-developer-tools",
         "core:default",
     ] {
         assert!(

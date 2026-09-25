@@ -45,6 +45,11 @@ pub(crate) fn convert_config_option(
     let policy_bearing = is_policy_bearing_option(&option_id, &category);
     let mut options = raw_options;
     if policy_bearing {
+        // Said on the option, so nothing downstream has to re-derive which
+        // options govern approvals -- the backend and the UI each used to, by
+        // a substring match that read `model` as a mode. The values below are
+        // already the ones this host allows.
+        metadata.insert("policy".to_owned(), Value::Bool(true));
         let original_count = options.len();
         options.retain(|candidate| {
             option_value(candidate).is_none_or(|value| !is_disallowed_policy_value(value))

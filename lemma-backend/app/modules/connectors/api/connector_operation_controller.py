@@ -157,4 +157,5 @@ async def execute_operation(
         user_id=user.id,
         request=request,
         account_id=account_id,
+        pod_id=body.pod_id,
     )

@@ -10,7 +10,7 @@ truncates a persisted message.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from app.modules.agent.domain.agent_host import AgentHostRunState
@@ -19,9 +19,6 @@ from app.modules.agent.domain.value_objects import (
     AgentEventType,
     JsonObject,
     MessageDraft,
-)
-from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
-    json_object,
 )
 from app.modules.usage.contracts import AgentRunUsage
 
@@ -48,15 +45,29 @@ class Segment:
     ``object_id`` is the host's identifier for the current segment, carried so
     the emitted message metadata refers to something real rather than to the
     internal stream name.
+
+    ``inserts`` is rich content -- an image the artifact writer saved as a pod
+    file and rendered as markdown -- that this side added and the host never
+    will. The host's ``chunk_text`` reads an image block as no text at all, so
+    its upsert does not contain the markdown. Appending it to ``pending`` made
+    ``pending`` stop being a prefix of the upsert, the ``startswith`` check
+    failed, and the upsert's text replaced everything: the image streamed to
+    the screen and was gone from the saved message. Each insert is kept apart,
+    at the offset into the host's text where it arrived, and spliced back in
+    when the segment is sealed or taken.
     """
 
     kind: str
     sealed: str = ""
     pending: str = ""
     object_id: str | None = None
+    inserts: list[tuple[int, str]] = field(default_factory=list)
 
-    def append(self, chunk: str, object_id: str | None) -> None:
+    def append(self, chunk: str, object_id: str | None, *, rich: str = "") -> None:
+        """Take a chunk: host text, then whatever rich content rode with it."""
         self.pending += chunk
+        if rich:
+            self.inserts.append((len(self.pending), rich))
         if object_id is not None:
             self.object_id = object_id
 
@@ -66,23 +77,43 @@ class Segment:
         Normally nothing: the chunks and the upsert carry the same text and the
         user has already seen it. It is non-empty when the host sealed a segment
         no chunk delivered, and the host's record wins over a disagreement,
-        because a token stream cannot retract what it already emitted.
+        because a token stream cannot retract what it already emitted. Rich
+        content survives either way: on a disagreement its offsets are clamped
+        to the host's text, which keeps the image even if not in its exact spot.
         """
         delta = (
             segment_text[len(self.pending) :]
             if segment_text.startswith(self.pending)
             else ""
         )
-        self.sealed += segment_text
+        self.sealed += _splice(segment_text, self.inserts)
         self.pending = ""
+        self.inserts = []
         if object_id is not None:
             self.object_id = object_id
         return delta
 
     def take(self) -> tuple[str, str | None]:
-        text, object_id = self.sealed + self.pending, self.object_id
+        text = self.sealed + _splice(self.pending, self.inserts)
+        object_id = self.object_id
         self.sealed, self.pending, self.object_id = "", "", None
+        self.inserts = []
         return text, object_id
+
+
+def _splice(text: str, inserts: list[tuple[int, str]]) -> str:
+    """``text`` with each rich insert put back at its offset, in order."""
+    if not inserts:
+        return text
+    parts: list[str] = []
+    cursor = 0
+    for offset, rich in inserts:
+        offset = max(cursor, min(offset, len(text)))
+        parts.append(text[cursor:offset])
+        parts.append(rich)
+        cursor = offset
+    parts.append(text[cursor:])
+    return "".join(parts)
 
 
 def event_text(payload: JsonObject) -> str:
@@ -104,15 +135,6 @@ def integer(value: object, *, default: int = 0) -> int:
         return default
     try:
         return int(value)
-    except ValueError:
-        return default
-
-
-def number(value: object, *, default: float = 0.0) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
-        return default
-    try:
-        return float(value)
     except ValueError:
         return default
 
@@ -145,6 +167,23 @@ def narration_event(
     )
 
 
+def thought_event(
+    *,
+    agent_run_id: UUID,
+    text: str,
+    object_id: str | None,
+) -> AgentEvent:
+    """One step's reasoning. Never the answer, so never final."""
+    return AgentEvent(
+        type=AgentEventType.MESSAGE,
+        data=MessageDraft.of_thinking(
+            text,
+            metadata={"agent_host_object_id": object_id, "is_final_answer": False},
+        ),
+        agent_run_id=agent_run_id,
+    )
+
+
 def usage_event(
     *,
     agent_run_id: UUID,
@@ -153,17 +192,34 @@ def usage_event(
     metadata: JsonObject,
     sequence: int,
 ) -> AgentEvent:
-    usage = json_object(payload.get("usage")) or payload
+    """One turn's token usage, from the host's ``usage`` event.
+
+    The host emits this once per turn, from the adapter's end-of-turn usage
+    (``AgentHostUsagePayload``), so it is exactly one model request as the
+    usage ledger counts them. It is the *only* event that produces usage. The
+    old ``usage_update`` was ACP's context-window report, not token usage, and
+    reading it as usage recorded zero tokens and one request per notification.
+
+    ``input_tokens`` is kept as the adapter reported it, which excludes cached
+    input; the cache and reasoning counts go into metadata under the keys the
+    in-process harness uses, so neither is lost and neither is double-counted.
+    """
+    extra: JsonObject = {}
+    for source, target in (
+        ("cached_input_tokens", "cache_read_tokens"),
+        ("reasoning_tokens", "reasoning_tokens"),
+        ("total_tokens", "total_tokens"),
+    ):
+        if payload.get(source) is not None:
+            extra[target] = integer(payload.get(source))
     return AgentEvent(
         type=AgentEventType.USAGE,
         data=AgentRunUsage(
-            model_name=str(usage.get("model_name") or model_name),
-            input_tokens=integer(usage.get("input_tokens")),
-            output_tokens=integer(usage.get("output_tokens")),
-            request_count=integer(usage.get("request_count"), default=1),
-            tool_call_count=integer(usage.get("tool_call_count")),
-            units=number(usage.get("units")),
-            metadata=metadata,
+            model_name=model_name,
+            input_tokens=integer(payload.get("input_tokens")),
+            output_tokens=integer(payload.get("output_tokens")),
+            request_count=1,
+            metadata={**metadata, **extra},
         ),
         agent_run_id=agent_run_id,
         sequence=sequence,

@@ -17,10 +17,14 @@ import { ConnectorsSection } from "@/org/connectors";
 import { ModelsSection } from "@/org/models";
 import { OrgUsageSection } from "@/org/org-usage";
 import { Modal } from "@/shell/modal";
+import { isLocalDeployment } from "@/site/config";
 import {
     RefreshIcon, SignOutIcon, EmailIcon, ProfileIcon, AppearanceIcon,
     UsageIcon, PeopleIcon, ConnectorIcon, KeyIcon, OrgIcon, CardIcon, ReceiptIcon,
+    ComputerIcon, TerminalIcon, GlobeIcon, UpgradeIcon, SettingsIcon,
 } from "@/ui/icons";
+import { ThisMacPane, isThisMacSection, useThisMacAvailability, type ThisMacSection } from "@/desktop/this-mac-settings";
+import { capitalised, useThisComputer } from "@/desktop/this-computer";
 
 /** One door for everything that is not a teammate.
  *
@@ -35,7 +39,8 @@ import {
  */
 export type SettingsSection =
     | "account" | "appearance" | "usage" | "plan"
-    | "people" | "connectors" | "models" | "org-usage" | "team-billing";
+    | "people" | "connectors" | "models" | "org-usage" | "team-billing"
+    | ThisMacSection;
 
 interface Entry {
     key: SettingsSection;
@@ -64,20 +69,62 @@ const THEIRS: Entry[] = [
         blurb: "What this organization pays for, how many seats it has bought, and who may change that." },
 ];
 
+/** This computer: a third owner, after you and the organization. Only in the
+ *  desktop app, on a local install, for the person whose computer it is —
+ *  `useThisMacAvailability` has the rule. Named with the machine's own noun,
+ *  so a Windows install says "This PC". */
+function thisMacEntries(noun: string): Entry[] {
+    return [
+        { key: "this-mac", label: "Overview", icon: ComputerIcon, title: noun,
+            blurb: "Whether Lemma is running here, and how it starts." },
+        { key: "this-mac-agents", label: "Coding agents", icon: TerminalIcon, title: "Coding agents",
+            blurb: `What runs on ${noun.toLowerCase()} for your teammates.` },
+        { key: "this-mac-sharing", label: "Sharing", icon: GlobeIcon, title: "Sharing",
+            blurb: "Who can reach this Lemma, and who can make an account on it." },
+        { key: "this-mac-updates", label: "Updates", icon: UpgradeIcon, title: "Updates",
+            blurb: "Which Lemma this is, and whether there is a newer one." },
+        { key: "this-mac-advanced", label: "Advanced", icon: SettingsIcon, title: "Advanced",
+            blurb: "Your own OAuth apps and bots, diagnostics, and install health." },
+    ];
+}
+
+/** Sections about paying, which a local installation has nothing to say in:
+ *  it runs the open-source backend on somebody's own machine, with no plans
+ *  to pick and no seats to buy. Hidden rather than shown empty, because an
+ *  empty Plan page reads as "billing is broken", not "there is no billing". */
+const BILLING: ReadonlySet<SettingsSection> = new Set(["plan", "team-billing"]);
+
+function offered(entries: Entry[]): Entry[] {
+    return isLocalDeployment() ? entries.filter((entry) => !BILLING.has(entry.key)) : entries;
+}
+
 export function SettingsModal({
     orgs,
     activeOrgId,
     onPickOrg,
     initial = "account",
+    initialFocus = null,
     onClose,
 }: {
     orgs: Org[];
     activeOrgId: string | null;
     onPickOrg: (id: string) => void;
     initial?: SettingsSection;
+    /** A part of the section to open at — Advanced's Google form, say. */
+    initialFocus?: string | null;
     onClose: () => void;
 }) {
-    const [section, setSection] = useState<SettingsSection>(initial);
+    const yours = offered(YOURS);
+    const theirs = offered(THEIRS);
+    const noun = capitalised(useThisComputer());
+    const thisMacAvailability = useThisMacAvailability();
+    const machine = thisMacAvailability === "hidden" ? [] : thisMacEntries(noun);
+    /* A This Mac section is kept while the installation is still answering
+       whether you own it, so the menu's ⌘, lands where it asked. */
+    const [requested, setSection] = useState<SettingsSection>(
+        [...yours, ...theirs].some((entry) => entry.key === initial) || isThisMacSection(initial) ? initial : "account",
+    );
+    const section: SettingsSection = isThisMacSection(requested) && thisMacAvailability === "hidden" ? "account" : requested;
     const session = useSession();
     const [leaving, setLeaving] = useState(false);
     const [signOutError, setSignOutError] = useState<string | null>(null);
@@ -93,7 +140,7 @@ export function SettingsModal({
     });
 
     const name = sample ? "Sample user" : displayName(user.data);
-    const here = [...YOURS, ...THEIRS].find((entry) => entry.key === section) ?? YOURS[0];
+    const here = [...yours, ...theirs, ...thisMacEntries(noun)].find((entry) => entry.key === section) ?? yours[0];
 
     function nav(entry: Entry) {
         return (
@@ -121,11 +168,16 @@ export function SettingsModal({
                             onChange={(event) => setSection(event.target.value as SettingsSection)}
                         >
                             <optgroup label="You">
-                                {YOURS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+                                {yours.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
                             </optgroup>
                             {org && (
                                 <optgroup label={org.name}>
-                                    {THEIRS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+                                    {theirs.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+                                </optgroup>
+                            )}
+                            {machine.length > 0 && (
+                                <optgroup label={noun}>
+                                    {machine.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
                                 </optgroup>
                             )}
                         </select>
@@ -145,7 +197,7 @@ export function SettingsModal({
 
                 <nav className="settings-nav" aria-label="Settings">
                     <span className="settings-nav__label">You</span>
-                    {YOURS.map(nav)}
+                    {yours.map(nav)}
 
                     {org && <>
                         {/* Which organization these are the settings of — a
@@ -165,7 +217,12 @@ export function SettingsModal({
                                 ))}
                             </select>
                         </label>
-                        {THEIRS.map(nav)}
+                        {theirs.map(nav)}
+                    </>}
+
+                    {machine.length > 0 && <>
+                        <span className="settings-nav__label">{noun}</span>
+                        {machine.map(nav)}
                     </>}
                 </nav>
 
@@ -230,6 +287,7 @@ export function SettingsModal({
                         {org && section === "models" && <ModelsSection orgId={org.id} />}
                         {org && section === "org-usage" && <OrgUsageSection orgId={org.id} />}
                         {org && section === "team-billing" && <TeamBillingSection orgId={org.id} />}
+                        {isThisMacSection(section) && <ThisMacPane section={section} focus={section === initial ? initialFocus : null} />}
                     </div>
                 </div>
             </div>

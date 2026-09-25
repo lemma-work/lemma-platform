@@ -56,8 +56,8 @@ async def remember_provider_session(
 
     Returns whether the binding actually changed. The host puts the session id
     on *every* checkpoint, and a non-terminal checkpoint is the lease heartbeat
-    it resends on every poll, so writing unconditionally meant one ``jsonb_set``
-    per poll per active run to store a value that had not moved since the run
+    it resends on every heartbeat, so writing unconditionally meant one
+    ``jsonb_set`` per heartbeat per active run to store a value that had not moved since the run
     began.
     """
     session_id = checkpoint.detail.get("provider_session_id")

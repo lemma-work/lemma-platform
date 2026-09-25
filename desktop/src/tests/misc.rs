@@ -81,46 +81,15 @@ fn every_command_that_is_not_pure_ui_is_async() {
 }
 
 #[test]
-fn local_settings_says_which_integrations_are_set_up() {
-    // Every row's badge read "Optional" whether or not a credential had been
-    // saved, and the only signal that one had been was the placeholder
-    // inside the input -- grey, and invisible until the drawer was opened.
-    // Somebody who had just saved a Deepgram key had no way to see it land.
+fn integrations_and_channels_moved_out_of_local_settings() {
+    // The OAuth apps and bot credentials connectors and channels run with are
+    // configured where they are needed: This Mac → Advanced in the workspace,
+    // which the Connectors and Channels screens link to at the right form.
+    // Local settings keeping a copy would be two forms for one secret.
     let markup = include_str!("../../ui/control.html").replace("\r\n", "\n");
-    let script = CONTROL.replace("\r\n", "\n");
-    let style = include_str!("../../ui/control.css").replace("\r\n", "\n");
-
-    assert!(
-        !markup.contains(">Optional<"),
-        "a badge that says the same word on every row carries nothing"
-    );
-    assert!(
-        markup.contains("data-config-state"),
-        "each row has a slot for its real state"
-    );
-    // Twice: the definition, and a call. Asserting the function merely
-    // exists passes just as happily when nothing invokes it, which is how a
-    // helper ships dead.
-    assert!(
-        script.matches("paintConfigStates(presence)").count() >= 2,
-        "the painter is defined but never called from the fill pass"
-    );
-    // Read off the row's own fields, so a row added to the markup is
-    // described without anyone remembering a table in the script.
-    assert!(
-        script.contains("input[data-secret]"),
-        "presence of a saved secret is part of being configured"
-    );
-    assert!(
-        style.contains(r#"[data-config-state="configured"]"#),
-        "a configured row has to look different, not just read differently"
-    );
-    // A different axis, and it survives: these rows need a reachable URL
-    // whether or not anyone has filled them in.
-    assert!(
-        markup.contains("Public link"),
-        "the ingress requirement is not a state and should not be replaced by one"
-    );
+    assert!(!markup.contains("data-page=\"integrations\""));
+    assert!(!markup.contains("data-page=\"channels\""));
+    assert!(!markup.contains("data-secret="));
 }
 
 #[test]
@@ -409,16 +378,17 @@ fn iframes_may_render_their_own_inline_content() {
 }
 
 #[test]
-fn cloudflare_sharing_defaults_to_safe_automatic_provisioning() {
+fn local_settings_can_always_turn_sharing_off_and_nothing_else() {
+    // Choosing a mode moved to This Mac → Sharing. Turning it off stays here:
+    // a shared workspace moves this window to the shared origin, where the
+    // workspace cannot reach this computer's settings, so this page is the
+    // one that always can.
     let html = include_str!("../../ui/control.html").replace("\r\n", "\n");
     let script = CONTROL.replace("\r\n", "\n");
-
-    assert!(html.contains("Automatic setup · recommended"));
-    assert!(html.contains("Use an existing named tunnel"));
-    assert!(html.contains("Cloudflare automatic setup stores only its generated tunnel credential"));
-    assert!(script.contains("payload.cloudflare_setup = $(\"cloudflare-setup\").value"));
-    assert!(script.contains("public_warning_confirmed: true"));
-    assert!(!script.contains("--overwrite-dns"));
+    assert!(html.contains("id=\"sharing-disable\""));
+    assert!(script.contains("action: \"disable\""));
+    assert!(!script.contains("action: \"enable\""));
+    assert!(!html.contains("cloudflare-setup"));
 }
 
 #[test]

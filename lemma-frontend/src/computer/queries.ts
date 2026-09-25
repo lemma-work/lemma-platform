@@ -1,10 +1,11 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError } from "lemma-sdk";
 import { lemma } from "@/session/client";
 import { live } from "@/usage/queries";
 import { useEffect, useRef } from "react";
 import { startupProgress } from "./startup";
 import { MAX_READ_BYTES, MAX_TEXT_BYTES, viewerFor, type BrowserState, type Listing } from "./machine";
+import { wholeFileFrom, type Slice } from "./whole-file";
+import { openExternalWhenReady } from "@/desktop/open-external";
 
 export function useWorkspaceStatus(enabled: boolean) {
     const cache = useQueryClient();
@@ -107,20 +108,30 @@ export interface FileBody {
 
 /** One slice of a file, or all of it the server will give at once.
  *
- *  Through `stream` rather than `request`, and that is not a style choice: the
+ *  Through `streamResponse` rather than `request`, and that is not a style choice: the
  *  route answers `application/octet-stream`, which `request` hands back as
  *  `response.text()` — a UTF-8 decode that silently replaces every byte a PNG
  *  is made of. The stream gives a real body, so one path serves text, images
  *  and the download alike, and no part of this has to touch a credential to do
  *  it.
  */
-async function slice(path: string, options: { length?: number; range?: { start: number; end: number } }): Promise<Blob> {
-    const body = await lemma().stream("/workspace/files:content", {
+async function slice(path: string, options: { length?: number }): Promise<Blob> {
+    return (await sliceWithStatus(path, options)).blob;
+}
+
+/** The same read, with the status it came back with — which is how a ranged
+ *  read knows it got the slice it asked for. See `whole-file.ts`. */
+async function sliceWithStatus(path: string, options: { length?: number; range?: { start: number; end: number } }): Promise<Slice> {
+    const response = await lemma().streamResponse("/workspace/files:content", {
         method: "GET",
         params: { path, length: options.length },
         headers: options.range ? { Range: `bytes=${options.range.start}-${options.range.end}` } : undefined,
     });
-    return await new Response(body).blob();
+    return {
+        blob: await response.blob(),
+        status: response.status,
+        contentRange: response.headers.get("Content-Range"),
+    };
 }
 
 export function useFileBody(path: string | null) {
@@ -172,39 +183,8 @@ export function useFileStat(path: string | null) {
     });
 }
 
-export async function wholeFile(path: string, sizeBytes = 0): Promise<Blob> {
-    const parts: Blob[] = [];
-    let start = 0;
-    if (sizeBytes > 0 && sizeBytes <= MAX_READ_BYTES) {
-        const only = await slice(path, {});
-        /* Short of the ceiling means that was the whole file. Exactly the
-           ceiling means the hint was stale — the file grew after the listing
-           that measured it — and returning here would truncate, which is the
-           failure this function exists to prevent. */
-        if (only.size < MAX_READ_BYTES) return only;
-        parts.push(only);
-        start = only.size;
-    }
-    for (;;) {
-        let part: Blob;
-        try {
-            part = await slice(path, { range: { start, end: start + MAX_READ_BYTES - 1 } });
-        } catch (error) {
-            /* 416. The file ended exactly on a chunk boundary, or it is empty:
-               both are "there is nothing at this offset", and neither is a
-               failure. Any other status is. */
-            if (error instanceof ApiError && error.statusCode === 416) break;
-            throw error;
-        }
-        if (part.size === 0) break;
-        parts.push(part);
-        start += part.size;
-        /* Short of what was asked for means the server ran out of file, which
-           is the ordinary way this ends — one request more than the file
-           needs, rather than a 416 every time. */
-        if (part.size < MAX_READ_BYTES) break;
-    }
-    return new Blob(parts);
+export function wholeFile(path: string, sizeBytes = 0): Promise<Blob> {
+    return wholeFileFrom(range => sliceWithStatus(path, { range }), sizeBytes);
 }
 
 /** A signed, expiring URL onto the sandbox's own browser.
@@ -232,26 +212,16 @@ export function useBrowserAccess() {
  *  nothing to say about it — which makes this the one route to the display
  *  that still works when the socket is refused.
  *
- *  The tab is opened empty inside the click's own turn and pointed at the
- *  grant when it arrives. Opening it in the callback instead is what a browser
- *  calls a popup: the grant takes a round trip and a provision to come back,
- *  by which time the gesture is long over and the tab is blocked. `noopener`
- *  cannot do the severing here because it makes `window.open` hand back
- *  nothing to point, so the reference is cut by hand, which is the same
- *  protection.
+ *  The grant takes a round trip and a provision to come back, by which time
+ *  the click is long over — so the tab has to be claimed inside the click and
+ *  pointed later, which `openExternalWhenReady` does (and does differently in
+ *  the desktop app, which refuses a blank window).
  */
 export function useOpenBrowserTab() {
     const access = useBrowserAccess();
     const open = () => {
-        const opened = window.open("", "_blank");
-        access.mutate(undefined, {
-            onSuccess: (grant) => {
-                if (!opened || opened.closed) { window.open(grant.url, "_blank", "noopener,noreferrer"); return; }
-                opened.opener = null;
-                opened.location.replace(grant.url);
-            },
-            onError: () => { if (opened && !opened.closed) opened.close(); },
-        });
+        /* Failure is already on `access`, which is what `failed` reads. */
+        void openExternalWhenReady(access.mutateAsync().then((grant) => grant.url)).catch(() => undefined);
     };
     return { open, busy: access.isPending, failed: access.isError };
 }

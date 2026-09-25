@@ -1,7 +1,17 @@
 import type { NextConfig } from "next";
 import path from "node:path";
 
+/* The desktop app runs this frontend from a host pack: a Node binary, this
+ * app's standalone tree, and nothing else -- no `npm ci` on somebody's laptop.
+ * Opt-in rather than always on because the hosted image (`Dockerfile`) ships
+ * the whole `node_modules` and starts `server.mjs` against `next.config.ts`,
+ * and tracing a second copy of the dependency graph into `.next/standalone`
+ * would only make that image bigger. `scripts/complete-standalone.mjs` adds
+ * what Next's tracer cannot see: the custom server and its gateways. */
+const standalone = process.env.LEMMA_STANDALONE === "1";
+
 const config: NextConfig = {
+  ...(standalone ? { output: "standalone" as const } : {}),
   poweredByHeader: false,
   skipTrailingSlashRedirect: true,
   async redirects() {

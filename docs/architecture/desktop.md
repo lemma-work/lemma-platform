@@ -13,7 +13,7 @@ it, see the [Desktop maintainer guide](../../desktop/README.md).
 ```text
 Tauri Desktop
   ├─ main workspace webview
-  ├─ trusted `control` child webview (Local settings, created on demand)
+  ├─ trusted `control` child webview (Local settings: health, recovery, diagnostics)
   │ authenticated local IPC
   ▼
 lemma-locald ─────────────── process ledger / network state / logs / config vault
@@ -21,7 +21,7 @@ lemma-locald ─────────────── process ledger / netw
   ├─ optional canonical-origin sharing gateway
   ├─ optional exact-owned ngrok or cloudflared child
   ├─ all-in-one Python backend (API + worker + scheduler + sandboxes + documents)
-  ├─ Next.js frontend
+  ├─ lemma-frontend (Next.js behind its own server.mjs)
   └─ lemma-runtime bridge
        └─ private Linux runtime
             ├─ PostgreSQL: lemma + sandbox databases
@@ -237,6 +237,73 @@ Capability health is separate from core readiness. AI and embeddings may be
 preparing/degraded without making account creation or core workspace access
 unhealthy.
 
+### 5.1 Frontend hosting and runtime configuration
+
+The frontend is `lemma-frontend`, the same app hosted Lemma serves, built once
+per release and shipped in the host pack as Next's standalone output:
+
+```text
+frontend/
+  node/                      packed Node runtime
+  frontend-launcher.mjs      desktop/runtime/frontend-launcher.mjs
+  lemma-frontend/
+    server.mjs               the custom server locald starts (voice gateways)
+    server.js                Next's generated server; not started
+    server/ node_modules/ .next/ public/ content/
+```
+
+`scripts/build_local_host_pack.py` runs `LEMMA_STANDALONE=1 npm run build`
+(standalone output is opt-in in `next.config.ts`) and then
+`lemma-frontend/scripts/complete-standalone.mjs`, which traces `server.mjs`,
+its gateways and their dependencies with Next's own tracer and copies them,
+`public/` and `.next/static` into the tree. `server.mjs` recognises a
+standalone tree by Next's `server.js` beside it and then loads the config Next
+serialised into `.next/required-server-files.json` through
+`__NEXT_PRIVATE_STANDALONE_CONFIG`, exactly as the generated server does. The
+layout both sides probe is pinned by `desktop/contracts/host-pack-layout.json`.
+
+locald starts `node frontend-launcher.mjs <server.mjs>`. Source mode
+(`dev-local.sh --source`) starts `node frontend-launcher.mjs --dev
+lemma-frontend`, which runs `server.mjs --dev` from the checkout. The launcher:
+
+- refuses to start without `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SITE_URL`,
+  and defaults `NEXT_PUBLIC_AUTH_URL` to the site's `/auth`;
+- writes `public/runtime-config.js`, whose body contains the runtime
+  instance id — the frontend health check;
+- maps locald's `HOSTNAME` to `LEMMA_FRONTEND_HOST`, so the server listens on
+  loopback only. Sharing puts the gateway in front of it; the server itself
+  never answers on the LAN.
+
+Everything that differs per deployment is read when the server **starts**, not
+when it is built. `GET /site-config.js` (never cached) answers
+`window.__LEMMA_SITE__ = {...}` from the server's own environment, falling
+back to each value's build-time `NEXT_PUBLIC_*` only when it is unset; the
+root layout loads it before the app hydrates, and server rendering reads the
+same values (`lemma-frontend/src/site/runtime.ts`):
+
+| Field | Variable |
+|---|---|
+| `apiUrl` | `NEXT_PUBLIC_API_URL` |
+| `authUrl` | `NEXT_PUBLIC_AUTH_URL` |
+| `siteUrl` | `NEXT_PUBLIC_SITE_URL` |
+| `sessionTokenDomain` | `NEXT_PUBLIC_SESSION_TOKEN_DOMAIN` |
+| `appsDomainSuffix` | `NEXT_PUBLIC_APPS_DOMAIN_SUFFIX` |
+| `deployment` | `NEXT_PUBLIC_LEMMA_DEPLOYMENT` (`local` for Desktop) |
+| `analyticsKey`, `analyticsHost` | `NEXT_PUBLIC_ANALYTICS_KEY`, `NEXT_PUBLIC_ANALYTICS_HOST` |
+| `desktopDownloadUrl` | `NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL` (`null` when unset) |
+| `voiceProvider` | `NEXT_PUBLIC_VOICE_PROVIDER` |
+| `authEmailVerificationRequired` | `NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED` |
+| `runtimeInstanceId` | `NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID` |
+
+So LAN or Public activation (7.2) needs no rebuild: locald restarts the
+frontend with the rewritten `NEXT_PUBLIC_*` values and the next page load
+reads them. `deployment: local` sends `/` and `/download` to `/t`, turns off
+analytics and the consent banner, hides the Plan and Billing settings, and
+hides download links. The auth portal honours `show=signup`, `redirect_uri`
+and the shell's injected `window.__LEMMA_AUTH_CONFIG__`, whose
+`AUTH_EMAIL_VERIFICATION_REQUIRED` wins over the site config. Fonts are
+self-hosted by `next/font` at build time, so the workspace renders offline.
+
 ## 6. Ports and routing
 
 `locald/network.json` contains:
@@ -313,7 +380,94 @@ provider, PID, canonical executable, and OS start identity. `locald` never
 searches by process name and never stops an unrelated ngrok/cloudflared
 process. Only one gateway/tunnel transition may run at a time.
 
-## 7.1 Integrated Local settings
+## 7.1 Settings: This Mac and Local settings
+
+A person changes this computer's settings in the workspace's own Settings,
+under a **This Mac** group (This PC on Windows), next to *You* and the
+organization. The group is drawn only in the desktop app's own window, on a
+local install (`NEXT_PUBLIC_LEMMA_DEPLOYMENT=local`), and only while the page
+is on this installation's loopback origin -- whoever is signed in. There is no
+account check: the shell's `require_local_settings_caller` decides by where
+the call comes from, and the frontend mirrors that (`thisMacAvailability`).
+On a shared origin the app's window shows one line saying where the settings
+are instead of controls the shell would refuse.
+
+| Section | Owns | Data source |
+| --- | --- | --- |
+| Overview | One health line, Start at login, Verify & repair, Open logs | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs` |
+| Coding agents | This computer's Agent Host card, the workspace sandbox image | `agent_host_*`, `local_settings_snapshot`, `prepare_sandbox_image` |
+| Sharing | This Mac / Local network / Public (ngrok or Cloudflare), who can join, a link to invite people | `local_sharing` |
+| Updates | Current version, check, install, what the channel means | `check_for_app_update`, `install_app_update` |
+| Advanced | Developer credentials (Google, GitHub, Microsoft, Composio, Deepgram; Slack, Telegram, Teams, WhatsApp, Resend), diagnostics and log tails, anonymous install health | `apply_local_settings`, `diagnostic_logs`, `telemetry_status`, `set_telemetry_enabled` |
+
+AI models are the organization's, on Organization → Models. On a local
+install that page also suggests Ollama and LM Studio when they answer on
+their default loopback ports (`discover_provider_models`, sent with an empty
+key so the stored provider key never reaches a probed endpoint), and offers
+the operator AI provider this install was set up with as **Add to
+workspace**. Adding it creates an organization provider and leaves the
+operator profile in place: that profile is the backend's `system:lemma`,
+which it falls back to for a pod with no default runtime, conversation
+titles, summaries and image reading. A keyed provider's key is asked for
+again, because the page can only learn that one is stored.
+
+Connectors and channels that need an OAuth app or bot credentials this
+install does not have yet show **Set up on this Mac** where they fail, which
+opens Advanced at that form (`lemma:open-settings` with `{section, focus}`).
+
+The menu's Desktop settings… (⌘,) and the tray item raise
+`lemma:open-settings` in the workspace when it is local, ready and on its own
+origin (`settings_destination` in `desktop/src/workspace_settings.rs`), and
+otherwise open **Local settings**, the bundled native page. Local settings
+keeps what has to work when the workspace does not: health and the running
+services (Reconcile, Restart), what is exposed with a *Return to This
+computer* button, updating the app, This computer's Agent Host (the only
+settings a cloud workspace has on the machine), Recovery (restart into
+recovery, stop, reset data, force cleanup) and Diagnostics. Stopping sharing
+stays native because sharing moves the app's window to the shared origin,
+where the workspace is deliberately given nothing. Page names that moved
+(`ai`, `sharing`, `integrations`, `channels`, `runtime`, `updates`) still
+resolve, to Overview.
+
+### Tauri IPC commands and who may call them
+
+Each command is granted to a webview by a capability in
+`desktop/capabilities/`, and then checked again in Rust. The rules:
+
+- **control**: `require_control_window` — the `control` webview on the
+  packaged `control.html`.
+- **local workspace**: `require_local_settings_caller` — the `main` webview,
+  in local mode, on the origin this app navigated to, and that origin a
+  shipped loopback workspace host (or the debug-only `LEMMA_DESKTOP_LOCAL_URL`).
+  Refuses the hosted site and any shared LAN or tunnel origin.
+- **settings**: `require_settings_caller` — control, or local workspace.
+- **agent host**: `require_agent_host_caller` — control, the splash, or the
+  workspace on the origin this app navigated to (hosted or local).
+
+| Command | Granted to | Rust check | Notes |
+| --- | --- | --- | --- |
+| `local_settings_snapshot` | workspace | local workspace | An allowlisted view of `control.snapshot`: no install id, schema, operation ids or process details |
+| `apply_local_settings` | workspace | local workspace | `config.apply` for `integrations` or `surfaces` only |
+| `local_sharing` | workspace | local workspace | Public asks natively first; the page cannot set the consent flag |
+| `set_start_at_login` | workspace | local workspace | Rebuilds the menus so the tray's check stays true |
+| `prepare_sandbox_image` | workspace | local workspace | |
+| `open_logs`, `diagnostic_logs` | main, control, workspace | native page, or local workspace | Log tails are redacted |
+| `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
+| `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown |
+| `telemetry_status`, `set_telemetry_enabled` | control, workspace | settings | |
+| `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Onboarding and the Models suggestions |
+| `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |
+| `open_control_center` | main, workspace | page name validated | |
+| `control_snapshot`, `sharing_action`, `agent_host_action`, `runtime_info`, `start`, `stop`, `restart`, `open_developer_tools`, `close_local_settings`, `confirm_destructive_action` | control (some also main) | control or native page | Local settings only |
+| `reset_local_data`, `reset_full_reinstall`, `restart_into_recovery` | control, main | native page | Destructive: never granted to a remote origin |
+
+`desktop/src/tests/misc.rs` holds every registered command to a grant and
+every bundled page to exactly the commands it calls;
+`desktop/src/tests/navigation.rs` holds the workspace grant to a closed list;
+`lemma-frontend/tests/desktop-ipc.test.ts` holds the page's own list to the
+grant and the registration.
+
+### Local settings, the native page
 
 The main Tauri window owns the remote workspace webview and creates one
 full-client-size `control` child webview on demand. Creation always begins on a
@@ -329,26 +483,12 @@ builds additionally accept the exact Tauri asset server URL
 `http://127.0.0.1:1430/control.html`; other hosts, ports, and paths remain
 denied. Privileged commands verify both webview label and current URL.
 Escape, Close, and Back to Lemma destroy the child and focus the original
-workspace.
-
-Unsaved settings and public-sharing decisions use the same trusted confirmation
-webview as recovery and Quit. It opens with Cancel focused and traps keyboard
-focus until answered. Decisions are typed and bound to the requesting operation;
-Discard is accepted only for a settings prompt. A close request cannot interrupt
-an admitted save. Save applies dirty sections sequentially and retains the page
-after an error or newer edits, with an inline explanation. Cancel preserves the
-draft and restores focus to Back to Lemma.
+workspace. Destructive actions use the trusted confirmation webview shared
+with recovery and Quit, which opens with Cancel focused and traps keyboard
+focus until answered.
 
 The HTML, CSS, JavaScript modules, fonts, and icons are bundled without CDN
-dependencies. Navigation is Overview; AI provider; Sharing,
-Integrations/Channels; Runtime, Updates/Diagnostics.
-
-Desktop settings is available in both cloud and local modes through the app
-menu and tray. This computer shows Agent Host status, restart, and logs, plus
-a link back to agent setup in the workspace. Local installation sections are
-enabled in local mode. Connecting and choosing agents still live in the
-workspace page, which both modes can reach. See
-[Agent Host in the desktop app](agent-host.md).
+dependencies. Navigation is This computer; Overview, Recovery, Diagnostics.
 
 Settings content paints immediately without a page-entry fade. A child webview
 can suspend animation frames while its parent changes; starting the page at
@@ -500,13 +640,12 @@ The desktop shell serializes its own configuration writes, replaces the file
 atomically, and refuses to overwrite malformed saved configuration. Window and
 navigation updates cannot erase a concurrently saved runtime binding. Recovery
 remains available when this file is damaged.
-The native settings page keeps saved configuration, drafts, and live health
-separate. Snapshot refreshes preserve dirty sections. Each save sends one
-section with its expected revision; the daemon serializes writes and rejects a
-stale revision with `config-conflict`. The legacy whole-config command also
-checks its revision. Credentials use explicit `keep`, `replace`, and `remove`
-actions. Reusing a saved AI key requires the same protocol and provider URL;
-changing the destination requires a replacement or explicit removal.
+This Mac → Advanced sends one section per save with its expected revision;
+the daemon serializes writes and rejects a stale revision with
+`config-conflict`. Credentials use explicit `keep`, `replace`, and `remove`
+actions and are never read back: the page only learns whether one is stored.
+Reusing a saved AI key requires the same protocol and provider URL; changing
+the destination requires a replacement or explicit removal.
 
 Apply validates the provider, persists configuration, and restarts only the
 backend when it is running. Reconfiguration holds crash-reconciliation ownership
@@ -556,10 +695,10 @@ profile is active and the host reports it available. First-pod default selection
 skips unavailable agents, and the setup banner links saved-agent failures to
 Models rather than asking for an unrelated installation provider.
 
-The backend exposes safe capability health. The frontend local banner calls
-the validated native `open_control_center` command with `ai`; accepted
-destinations include `ai`, `connectors`/`integrations`, `surfaces`, services,
-updates, and diagnostics.
+The backend exposes safe capability health. `open_control_center` still
+accepts `ai`, `connectors`/`integrations`, `surfaces`, services and updates
+from older callers, and opens Local settings at Overview for each; the
+current workspace opens its own Settings instead.
 
 ## 11. Packaging workflows
 

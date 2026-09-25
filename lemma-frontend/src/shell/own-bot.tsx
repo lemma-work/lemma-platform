@@ -3,6 +3,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { AccountConnect, Connectable, Pod } from "@/data";
 import { CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { completionPath, hereWith, openAuthorization } from "@/connect/round-trip";
+import { copyText } from "@/desktop/clipboard";
 
 /** Giving a teammate a bot of its own.
  *
@@ -27,8 +29,7 @@ function Copyable({ text, label }: { text: string; label: string }) {
         <button
             className="btn"
             onClick={() => {
-                navigator.clipboard
-                    ?.writeText(text)
+                copyText(text)
                     .then(() => {
                         setCopied(true);
                         window.setTimeout(() => setCopied(false), 1600);
@@ -76,7 +77,9 @@ export function OwnBot({
             setInstallId(authConfigId);
             setSecret("");
             setSigningSecret("");
-            return source.startAccount(pod.orgId, entry.connectorId, authConfigId);
+            return source.startAccount(
+                pod.orgId, entry.connectorId, authConfigId, completionPath(hereWith({ reach: "1" })),
+            );
         },
         onSuccess: (started) => {
             setAuthorization(started);
@@ -190,14 +193,14 @@ export function OwnBot({
                     <p>The last step, and the one that hands {pod.name} the bot.</p>
                     {step === 3 && authorizeUrl && (
                         <div className="ownbot__acts">
-                            <a
+                            <button
                                 className="btn btn--primary"
-                                href={authorizeUrl}
-                                target="_blank"
-                                rel="noreferrer"
+                                /* With an opener, so the finished tab reports
+                                   back and closes instead of reloading the app. */
+                                onClick={() => openAuthorization(authorizeUrl)}
                             >
                                 Authorise <ExternalIcon size={13} />
-                            </a>
+                            </button>
                             <button className="btn" disabled={finish.isPending} onClick={() => { setError(null); finish.mutate(); }}>
                                 <RefreshIcon size={13} /> {finish.isPending ? "Connecting…" : "Finish connection"}
                             </button>

@@ -1,6 +1,8 @@
 // Bake the in-app education concept registry into the installer splash.
-// Single source of truth: lemma-harness/lib/education/concepts.ts feeds the
-// in-app hints, the docs, and (via this script) desktop/ui/concepts.gen.json.
+// Single source of truth: lemma-frontend/src/site/education/concepts.ts feeds
+// the docs, and (via this script) desktop/ui/concepts.gen.json -- from the
+// frontend Desktop serves, so the splash and the workspace behind it describe
+// the same product.
 //
 // Usage: node desktop/scripts/extract-concepts.mjs
 
@@ -12,7 +14,7 @@ import os from "node:os";
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const sourcePath = path.join(
   repoRoot,
-  "lemma-harness/lib/education/concepts.ts",
+  "lemma-frontend/src/site/education/concepts.ts",
 );
 const outPath = path.join(repoRoot, "desktop/ui/concepts.gen.json");
 

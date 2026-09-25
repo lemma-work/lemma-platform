@@ -1,9 +1,16 @@
-"""E2E: the Lemma MCP surfaces work over a real streamable-HTTP MCP client.
+"""E2E: the Lemma MCP surfaces, over the transports their callers really use.
 
-These tests drive the pod and conversation MCP endpoints with an actual MCP
-client (the full ``initialize`` -> ``notifications/initialized`` -> ``tools/list``
--> ``tools/call`` handshake) over the wire against a real backend server, and
-assert the ``lemma_`` tools run end to end.
+The pod MCP endpoint is driven with an actual MCP client (the full
+``initialize`` -> ``notifications/initialized`` -> ``tools/list`` ->
+``tools/call`` handshake) over the wire against a real backend server.
+
+A conversation's tools are reached only by a local agent, through the Agent
+Host: its MCP bridge relays each call as an ``mcp`` frame on the host's link
+WebSocket, and waits on a parked interaction with ``interaction_wait``. Those
+tests drive the link. The conversation's HTTP MCP mount they used to drive is
+gone, because the Agent Host was its only caller; what they prove about
+authorization -- the run's token, the agent's own grants, pod membership --
+moved with the tools onto the link and is asserted there.
 
 They guard the regression where the FastMCP apps were built with
 ``stateless_http=False``: the server then held the ``Mcp-Session-Id`` session in
@@ -19,11 +26,21 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
+from contextlib import asynccontextmanager
+
 import httpx
 import pytest
 from fastapi import status
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
+
+from app.modules.agent.tests.e2e.agent_host_helpers import (
+    LinkMcpClient,
+    LinkMcpError,
+    app_of,
+    connected_host,
+    pair,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -33,9 +50,15 @@ def _pod_mcp_url(backend_server, pod_id: str) -> str:
     return f"{base}/agent-runtime/pods/{pod_id}/mcp"
 
 
-def _conversation_mcp_url(backend_server, conversation_id: str) -> str:
-    base = backend_server["host_base_url"].rstrip("/")
-    return f"{base}/agent-runtime/conversations/{conversation_id}/mcp"
+@asynccontextmanager
+async def _conversation_tools(client, conversation_id: str, token: str):
+    """A paired host's MCP bridge, relaying for one conversation's run token."""
+    machine = await pair(client, client, display_name="e2e mcp bridge")
+    link = await connected_host(app_of(client), machine)
+    try:
+        yield LinkMcpClient(link, conversation_id=conversation_id, token=token)
+    finally:
+        await link.aclose()
 
 
 def _mcp_client(url: str, token: str) -> Client:
@@ -138,11 +161,9 @@ async def test_conversation_mcp_client_lists_and_calls_tools(
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
-    backend_server,
 ):
-    """A real MCP client completes the handshake against the conversation MCP
-    surface, sees the agent's ``lemma_`` tools, and a tool call routes through to
-    a structured result (not a transport error)."""
+    """A tool call relayed on the link sees the agent's ``lemma_`` tools, and a
+    call routes through to a structured result (not a transport error)."""
     pod_id = await _create_pod(authenticated_client, fixed_test_org)
     table = f"notes_{uuid4().hex[:8]}"
     await _create_table(authenticated_client, pod_id, table)
@@ -167,9 +188,10 @@ async def test_conversation_mcp_client_lists_and_calls_tools(
     )
     conversation_id = create_conversation.json()["id"]
 
-    url = _conversation_mcp_url(backend_server, conversation_id)
-    async with _mcp_client(url, fixed_test_user["token"]) as client:
-        tools = await client.list_tools()
+    async with _conversation_tools(
+        authenticated_client, conversation_id, fixed_test_user["token"]
+    ) as client:
+        tools = (await client.list_tools()).tools
         tool_names = {tool.name for tool in tools}
         assert "lemma_pod_get_records" in tool_names, tool_names
         # Every exposed tool carries the lemma_ prefix this surface promises.
@@ -181,7 +203,6 @@ async def test_conversation_mcp_client_lists_and_calls_tools(
         result = await client.call_tool(
             "lemma_pod_get_records",
             {"table_name": table},
-            raise_on_error=False,
         )
         assert result.structured_content is not None, result.content
         assert isinstance(result.structured_content, dict), result.structured_content
@@ -246,24 +267,25 @@ async def test_mcp_endpoint_is_stateless(
 
 
 @pytest.mark.asyncio
-async def test_the_bridge_can_poll_a_parked_interaction_until_it_is_decided(
+async def test_the_bridge_waits_on_a_parked_interaction_until_it_is_decided(
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
-    backend_server,
     db_session,
 ):
     """What the host's MCP bridge does while it holds a tool response open.
 
     `ask_user` and `request_approval` hand a remote harness a parked tool call id
-    instead of prose. This is the other end of that: the bridge polls the id and
-    gets 204 until a person decides, then the answer -- which it returns as the
-    tool's own result, so the model waits inside its turn exactly as it does for
-    a native ACP permission.
+    instead of prose. This is the other end of that: the bridge sends
+    ``interaction_wait`` with the id and is answered once a person decides --
+    and the answer is returned as the tool's own result, so the model waits
+    inside its turn exactly as it does for a native ACP permission.
 
     Nothing is stored to make this work. Deciding an interaction already writes a
     synthesized tool RETURN under the same durable id, so "decided" is simply
-    "that return exists".
+    "that return exists". The bridge used to poll a route every two seconds for
+    it; the wait is now answered by Lemma, woken by the conversation's own
+    realtime frame, with a slow re-check under it.
     """
     pod_id = await _create_pod(authenticated_client, fixed_test_org)
     created = await authenticated_client.post(
@@ -271,44 +293,61 @@ async def test_the_bridge_can_poll_a_parked_interaction_until_it_is_decided(
     )
     assert created.status_code == status.HTTP_201_CREATED, created.text
     conversation_id = created.json()["id"]
-
-    base = backend_server["host_base_url"].rstrip("/")
     tool_call_id = f"parked-{uuid4().hex[:8]}"
-    url = f"{base}/agent-runtime/conversations/{conversation_id}/interactions/{tool_call_id}"
-    headers = {"Authorization": f"Bearer {fixed_test_user['token']}"}
 
-    async with httpx.AsyncClient() as client:
-        pending = await client.get(url, headers=headers)
-        # 204, not 404: "not decided yet" is the normal answer the bridge polls
-        # on, and 404 is what an unknown route says.
-        assert pending.status_code == status.HTTP_204_NO_CONTENT, pending.text
-
-        # A token that is not this conversation's must not be able to read it.
-        anonymous = await client.get(url, headers={"Authorization": "Bearer nope"})
-        assert anonymous.status_code == status.HTTP_401_UNAUTHORIZED, anonymous.text
-
-    # The person decides. This is the same write the approvals endpoint makes.
-    from app.modules.agent.domain.value_objects import MessageKind, MessageRole
-    from app.modules.agent.infrastructure.models import MessageModel
-
-    db_session.add(
-        MessageModel(
-            conversation_id=UUID(conversation_id),
-            role=MessageRole.TOOL.value,
-            kind=MessageKind.TOOL_RETURN.value,
-            tool_call_id=tool_call_id,
-            tool_name="ask_user",
-            tool_result={"success": True, "answers": {"Pick one": "Blue"}},
-            sequence=1,
-        )
+    machine = await pair(
+        authenticated_client, authenticated_client, display_name="e2e parked"
     )
-    await db_session.commit()
+    link = await connected_host(app_of(authenticated_client), machine)
+    try:
+        # A token that is not this conversation's must not be able to wait on it.
+        refused = await link.request(
+            "interaction_wait",
+            {
+                "conversation_id": conversation_id,
+                "token": "nope",
+                "tool_call_id": tool_call_id,
+            },
+        )
+        assert refused["type"] == "error", refused
+        assert refused["body"]["code"] == "UNAUTHORIZED", refused
 
-    async with httpx.AsyncClient() as client:
-        decided = await client.get(url, headers=headers)
+        waiting = link.send(
+            "interaction_wait",
+            {
+                "conversation_id": conversation_id,
+                "token": fixed_test_user["token"],
+                "tool_call_id": tool_call_id,
+            },
+        )
+        # Pending is not an answer: nothing comes back until someone decides.
+        with pytest.raises(TimeoutError):
+            await link.answer_to(waiting, timeout=1.0)
 
-    assert decided.status_code == status.HTTP_200_OK, decided.text
-    assert decided.json()["answers"] == {"Pick one": "Blue"}
+        # The person decides. This is the same write the approvals endpoint
+        # makes; it publishes nothing, so the re-check is what finds it here.
+        from app.modules.agent.domain.value_objects import MessageKind, MessageRole
+        from app.modules.agent.infrastructure.models import MessageModel
+
+        db_session.add(
+            MessageModel(
+                conversation_id=UUID(conversation_id),
+                role=MessageRole.TOOL.value,
+                kind=MessageKind.TOOL_RETURN.value,
+                tool_call_id=tool_call_id,
+                tool_name="ask_user",
+                tool_result={"success": True, "answers": {"Pick one": "Blue"}},
+                sequence=1,
+            )
+        )
+        await db_session.commit()
+
+        decided = await link.answer_to(waiting, timeout=30)
+    finally:
+        await link.aclose()
+
+    assert decided["type"] == "interaction_ok", decided
+    assert decided["body"]["answer"]["answers"] == {"Pick one": "Blue"}
 
 
 async def _create_agent(authenticated_client, pod_id: str) -> dict:
@@ -342,7 +381,6 @@ async def test_conversation_mcp_authorizes_as_the_agent_not_as_its_caller(
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
-    backend_server,
 ):
     """A named agent's pod tool call is bounded by the agent's own grants.
 
@@ -361,12 +399,12 @@ async def test_conversation_mcp_authorizes_as_the_agent_not_as_its_caller(
         authenticated_client, pod_id, agent["name"]
     )
 
-    url = _conversation_mcp_url(backend_server, conversation_id)
-    async with _mcp_client(url, fixed_test_user["token"]) as client:
+    async with _conversation_tools(
+        authenticated_client, conversation_id, fixed_test_user["token"]
+    ) as client:
         result = await client.call_tool(
             "lemma_pod_write_record",
             {"action": "create", "table_name": table, "data": {"title": "blocked"}},
-            raise_on_error=False,
         )
     denied = result.structured_content
     assert isinstance(denied, dict), result.content
@@ -380,12 +418,13 @@ async def test_conversation_mcp_refuses_a_member_removed_from_the_pod(
     authenticated_client,
     async_client,
     fixed_test_org,
-    backend_server,
 ):
     """Owning a conversation is not access to the pod it lives in.
 
-    Every HTTP conversation route asserts pod membership; this mount asserted
-    only that the token's user id matched ``conversation.user_id``. Ownership
+    Every HTTP conversation route asserts pod membership; the conversation MCP
+    asserted only that the token's user id matched ``conversation.user_id``.
+    The check is per call, so a link already open stops working the moment the
+    membership goes. Ownership
     survives being removed from a pod, so a removed member kept a working path to
     run that pod's agent tools (PS-POD-040, DEV-ACCESS-001).
     """
@@ -416,15 +455,16 @@ async def test_conversation_mcp_refuses_a_member_removed_from_the_pod(
         async_client, pod_id, agent["name"], headers=auth_headers(member)
     )
 
-    url = _conversation_mcp_url(backend_server, conversation_id)
-    async with _mcp_client(url, member["token"]) as client:
-        assert await client.list_tools()
+    async with _conversation_tools(
+        async_client, conversation_id, member["token"]
+    ) as client:
+        assert (await client.list_tools()).tools
 
-    removed = await authenticated_client.delete(
-        f"/pods/{pod_id}/members/{pod_member['pod_member_id']}"
-    )
-    assert removed.status_code == status.HTTP_204_NO_CONTENT, removed.text
+        removed = await authenticated_client.delete(
+            f"/pods/{pod_id}/members/{pod_member['pod_member_id']}"
+        )
+        assert removed.status_code == status.HTTP_204_NO_CONTENT, removed.text
 
-    with pytest.raises(Exception):  # noqa: B017 - any auth failure aborts the client
-        async with _mcp_client(url, member["token"]) as client:
+        with pytest.raises(LinkMcpError) as refused:
             await client.list_tools()
+        assert refused.value.code == "UNAUTHORIZED"

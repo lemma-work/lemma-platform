@@ -127,7 +127,7 @@ make desktop-fmt-fix       # rewrite instead of check
 swift build --package-path desktop/local-runtime/macos-vz
 uv run --project lemma-backend pytest \
   lemma-backend/app/tests/unit/test_health_endpoints.py
-npx tsc --noEmit --project lemma-harness/tsconfig.json
+npm --prefix lemma-frontend run typecheck
 ```
 
 **What `make desktop-check` cannot cover.** Bundling and codesigning need
@@ -395,9 +395,24 @@ To run Desktop local mode against the code you are editing:
 desktop/scripts/dev-local.sh --source
 ```
 
-locald supervises the backend out of `lemma-backend/` through `uv run` and the
-frontend through `next dev`, so the workspace is your working tree rather than
-the last release. The managed runtime, ports, health checks and restart policy
+locald supervises the backend out of `lemma-backend/` through `uv run` and
+`lemma-frontend` through its own `server.mjs --dev` (Next in development mode,
+voice gateways included), so the workspace is your working tree rather than
+the last release. It runs straight from the checkout with no npm in between,
+so run `npm ci` in `lemma-typescript` and `lemma-frontend` first; `make
+desktop-dev` checks and builds the SDK if needed. Origins arrive in the
+frontend's environment and reach the browser through `/site-config.js` —
+see [frontend hosting](../docs/architecture/desktop.md#51-frontend-hosting-and-runtime-configuration).
+
+To try the packaged frontend without building a whole pack:
+
+```bash
+cd lemma-frontend
+LEMMA_STANDALONE=1 npm run build && node scripts/complete-standalone.mjs
+cd .next/standalone/lemma-frontend
+PORT=3100 NEXT_PUBLIC_API_URL=http://127.0.0.1:8710 NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3100 \
+  NEXT_PUBLIC_LEMMA_DEPLOYMENT=local node server.mjs
+``` The managed runtime, ports, health checks and restart policy
 are the packaged ones — a dev run that exercised a different supervisor would
 prove nothing about the real one.
 
@@ -476,7 +491,7 @@ stable versions. Local development builds do not self-update. Runtime and app
 assets are retained so an installed nightly is not stranded by automatic pruning.
 
 To qualify the update path, install nightly A, create representative local data,
-and publish nightly B with app/backend/frontend changes. Use Desktop settings →
+and publish nightly B with app/backend/frontend changes. Use Settings → This Mac →
 Updates to install B, reopen, and verify the version, credentials, data, services,
 and conversation continuity. Repeat with interrupted downloads and installation
 failure. Run this on macOS and Windows; feed publication alone is not upgrade
@@ -566,18 +581,19 @@ Acceptance flow:
    either must not claim that AI is ready. At the minimum window size and with
    enlarged text, confirm every step's Continue/Create action is fully visible
    without scrolling. Tab through the form: content may scroll, actions stay
-   put. The shared layout regression runs with
-   `node --test desktop/ui-tests/drivers/setup-layout.mjs` and is included in
-   `make desktop-agent-host-browser-e2e`.
-7. Open **Local settings** from the workspace footer, close it with Escape,
-   reopen it from the tray, and confirm the underlying workspace state was not
-   remounted or lost. It must look like the rest of the product: warm paper,
-   violet primary action, no gold.
-8. On the AI provider page, press **Ollama** and **LM Studio** to prefill a
-   loopback endpoint, then **Connect and list models** and pick a default from
-   the list — typing a model name must not be required. Apply it and verify
-   thinking and structured tool calls. Also verify an API provider can replace
-   them, and that a model the provider does not serve is refused.
+   put.
+7. Press ⌘, and use the tray's **Desktop settings…**: both open Settings at
+   **This Mac** in the workspace, without remounting it. Stop the stack and
+   press ⌘, again: Local settings opens instead, with Overview, Recovery and
+   Diagnostics. Sign in to the app as a second account and confirm This Mac
+   is still shown -- it follows the app's own window on the loopback origin,
+   not the account. Open the same workspace in a browser, and from a LAN
+   device while sharing, and confirm This Mac is not shown at all.
+8. With Ollama and LM Studio running, open **Settings → Models** and confirm
+   each is offered as **Add as provider** with its models; add one and verify
+   thinking and structured tool calls. If this install had an AI provider set
+   before, confirm it is offered as **Add to workspace** and that titles still
+   work after adding it.
 9. From the onboarding agents step, and again from **Models**, confirm the
    computer pairs on its own. A failed start or pairing must display the
    failure and offer **Retry connection**, without remaining on a loading row.
@@ -587,13 +603,13 @@ Acceptance flow:
    and reopening restores the paired host. A machine with no coding agents
    installed must say so and still let the step continue. Repeat in hosted
    mode: the Agent Host connects without downloading the complete local stack.
-10. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
+10. From **Settings → This Mac → Sharing**, enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
     second browser, create/sign into an account, and verify streamed chat, a
     tool call, and a file transfer. Confirm that browser is offered the account
     portal rather than the landing page. Disable it and confirm the LAN port
     closes.
 11. Verify ngrok preflight without exposing credentials. Activate a public link
-    only after the open-signup confirmation, repeat streamed chat/file/webhook
+    only after the native confirmation (the page cannot skip it), repeat streamed chat/file/webhook
     checks, then disable it. After `cloudflared tunnel login`, verify automatic
     setup creates one installation-owned named tunnel and DNS route, reuses it
     after disable, and still offers an existing tunnel as an advanced option.
@@ -601,7 +617,7 @@ Acceptance flow:
 12. Run a sandbox operation that uses `lemma` CLI against the dynamic API.
 13. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
     the UI honestly says published pod apps remain local-only.
-14. Check the menu bar: **Settings…** on ⌘, opens Local settings, and no menu
+14. Check the menu bar: **Desktop settings…** on ⌘, opens This Mac settings (or Local settings when the workspace is not up), and no menu
     item names a service. The tray's first line must report the stack's real
     state, and everything operational must sit under **Troubleshoot**.
 15. Close the window; verify schedules, the Agent Host, and active sharing
@@ -673,7 +689,7 @@ a shipped artifact.
 25. **Concurrency.** Press Start and Reset within the same second. One must be
     refused as busy, and the loser must touch nothing.
 26. **Update.** Install v(N-1) from its DMG into Applications, complete first
-    run, create a workspace. Publish v(N) and confirm Local settings offers it
+    run, create a workspace. Publish v(N) and confirm This Mac → Updates offers it
     with the real runtime download size. Update, restart, and confirm the
     workspace returns with its data, that `pgrep -a lemma-locald` shows nothing
     from the previous bundle, and that the relaunched app does not bounce off

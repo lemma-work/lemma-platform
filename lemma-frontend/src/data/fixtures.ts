@@ -1334,7 +1334,13 @@ function settleAccount(): void {
    CONNECTED rather than ACTIVE). */
 const CONNECTORS: unknown[] = [
     { id: "slack", title: "Slack", description: "Messaging, channels and notifications.", icon: "/connector-logos/slack.svg", is_active: true },
-    { id: "telegram", title: "Telegram", description: "Bots and direct messages.", icon: "/connector-logos/telegram.svg", is_active: true },
+    /* With its kind, as the wire has it: a bot token over `http`, with no
+       address to supply — so the sample walks the credential form. */
+    { id: "telegram", title: "Telegram", description: "Bots and direct messages.", icon: "/connector-logos/telegram.svg", is_active: true,
+        kinds: [{ kind: "http", auth_scheme: "API_KEY", system_default_available: true,
+            config_schema: { type: "object", properties: {} },
+            credential_schema: { type: "object", required: ["bot_token"], properties: {
+                bot_token: { type: "string", title: "Bot token", description: "From @BotFather." } } } }] },
     { id: "whatsapp", title: "WhatsApp Business", description: "The number your customers already use.", icon: "/connector-logos/whatsapp.svg", is_active: true },
     { id: "teams", title: "Microsoft Teams", description: "Chat and channels in Microsoft 365.", icon: "/connector-logos/teams.svg", is_active: true },
     { id: "github", title: "GitHub", description: "Repositories, issues and pull requests.", icon: "", is_active: true },
@@ -1450,8 +1456,16 @@ const AGENTS_ON: Record<string, unknown[]> = {
             id: "h-claude", harness_key: "claude-code", display_name: "Claude Code", health: "READY",
             upstream_version: "2.1.233",
             config_options: [
-                { category: "model", options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }] },
-                { category: "permission", id: "permission_mode", options: [{ value: "plan", name: "Plan" }] },
+                {
+                    id: "model", category: "model", current_value: "sonnet",
+                    options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }],
+                },
+                /* The host has already taken the modes Lemma refuses out of
+                   this list, and marked it `policy`. */
+                {
+                    id: "mode", category: "mode", name: "Mode", current_value: "default", metadata: { policy: true },
+                    options: [{ value: "default", name: "Ask before edits" }, { value: "plan", name: "Plan" }],
+                },
             ],
         },
         {
@@ -1477,7 +1491,13 @@ const AGENTS_ON: Record<string, unknown[]> = {
         {
             id: "h-opencode", harness_key: "opencode", display_name: "OpenCode", health: "READY",
             upstream_version: "1.4.0",
-            config_options: [{ category: "model", options: [{ value: "qwen3-coder", name: "Qwen3 Coder" }] }],
+            config_options: [
+                { id: "model", category: "model", current_value: "qwen3-coder", options: [{ value: "qwen3-coder", name: "Qwen3 Coder" }] },
+                {
+                    id: "effort", category: "thought_level", name: "Effort", current_value: "high",
+                    options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }, { value: "max", name: "Max" }],
+                },
+            ],
         },
     ],
 };
@@ -2177,9 +2197,22 @@ export const fixtureSource: PodSource = {
             scope: agent.shared ? "ORGANIZATION" : "PERSONAL",
             harness_id: harnessId, availability_status: "READY",
             default_model_name: agent.model || null,
+            config: { config_selections: agent.selections },
             metadata: { harness_key: found?.harness ?? "" },
             model_catalog: (found?.models ?? []).map((model) => ({ name: model.name, display_name: model.label })),
         }];
+    },
+    async updateLocalAgent(_orgId: string, runtimeId: string, changes) {
+        await wait(400);
+        RUNTIMES = RUNTIMES.map((raw) => {
+            const entry = raw as { id?: string; default_model_name?: string | null; config?: Record<string, unknown> };
+            if (entry.id !== runtimeId) return raw;
+            return {
+                ...entry,
+                ...(changes.default_model_name !== undefined ? { default_model_name: changes.default_model_name } : {}),
+                ...(changes.config_selections ? { config: { ...entry.config, config_selections: changes.config_selections } } : {}),
+            };
+        });
     },
     async archiveRuntime(_orgId: string, runtimeId: string) {
         await wait(300);

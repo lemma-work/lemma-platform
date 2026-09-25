@@ -103,6 +103,57 @@ are shown with a retry action rather than an indefinite loading message.
 
 ---
 
+### PS-ONB-006 — Authentication resumes the person's requested destination
+**Status:** manual
+
+> **Verified by:** opening a workspace or app link while signed out, switching
+> to sign-up, completing email verification, and continuing to the original
+> destination. Repeat with password reset and provider sign-in. Browser
+> regressions use `npm run test:auth-browser` in `lemma-frontend`; real provider
+> consent and email delivery require a configured deployment.
+
+- Sign-in and sign-up shall preserve the requested path, query, and fragment.
+- Switching auth screens or completing a provider round trip shall retain the
+  destination. Completing a flow shall clear its saved destination.
+- When verification is required, the portal shall send a verification email
+  and let the person resend or retry without creating another account.
+- Sign-in and sign-up shall offer email code by default, with password and
+  provider options available. A verified code shall resume the requested
+  destination without an additional email-verification step.
+- A waiting tab shall recognize verification completed in another tab and let
+  the person continue to its saved destination. A separate browser without a
+  saved destination shall use the workspace default after sign-in.
+- An authenticated visitor shall continue without entering credentials again.
+- Auth routes and untrusted origins shall not be accepted as destinations.
+  A refused destination shall not revive a previously saved destination.
+
+### PS-ONB-007 — A new person confirms their name and can prove their phone before they start
+**Status:** manual
+
+> **Verified by:** signing up with an email code on a deployment where WhatsApp
+> mobile verification is enabled, confirming the step opens over the app with
+> the name fields and a scannable code, sending the message from a phone, and
+> reloading to confirm the step does not return. The API scenario suite cannot
+> inspect the rendered dialog.
+
+- When a person lands in the app for the first time and their account has no
+  first name, or has no mobile number where the deployment can verify one over
+  WhatsApp, the system shall ask for what is missing in one step before they
+  start.
+- The step shall offer the name the account already holds, so a name supplied by
+  a sign-in provider is confirmed rather than retyped.
+- The phone shall be proved by sending one message from it, by scanning a code
+  or opening WhatsApp, and never by typing a number the system then trusts.
+- The step shall not imply that a teammate can be reached on WhatsApp yet. At
+  that point none has been connected there, so proving the phone only means a
+  teammate connected later recognises the person.
+- The phone shall be optional, and the whole step shall be skippable.
+- The system shall not ask an account that already has both, an account older
+  than its first week, or a person who has already continued or skipped in that
+  browser.
+
+---
+
 ## Capability: Create an organization
 
 ### PS-ONB-010 — The person who creates an organization owns it

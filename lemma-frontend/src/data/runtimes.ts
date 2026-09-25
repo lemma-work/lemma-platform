@@ -34,13 +34,22 @@ export interface Runtime {
     /** The live harness this profile was made from, when it has one. */
     harnessId: string;
     models: RuntimeModel[];
+    /** Empty for a coding agent means *unpinned*: the agent runs whatever it
+     *  is set to on that computer, and dispatch sends no model at all. */
     defaultModel: string;
+    /** A coding agent's saved option choices — effort, permission mode —
+     *  keyed as the harness published them. Empty for a provider key. */
+    selections: Record<string, string>;
     scope: "system" | "org" | "personal";
     /** Retired: out of the picker, still readable, restorable. */
     archived: boolean;
     /** Why it cannot take work right now, in a person's words. Empty when it
      *  can. A provider key is always reachable, so it never fills this in. */
     trouble: string;
+    /** A provider key's route, when the API says. Empty for a coding agent.
+     *  Read so the desktop app can tell a model server on this computer is
+     *  already in the list before suggesting it again. */
+    baseUrl?: string;
 }
 
 /** One coding agent as a computer reports it, before anyone has added it. */
@@ -51,12 +60,37 @@ export interface LocalAgent {
     name: string;
     version: string;
     models: RuntimeModel[];
+    /** The model it runs when nobody pins one: the harness's own
+     *  `current_value`. Empty when it did not say. */
+    defaultModel: string;
+    /** Everything else it lets a person choose, model aside. */
+    options: AgentOption[];
     /** READY means this computer would take a run right now. */
     ready: boolean;
     /** The state, said the way a person would say it. */
     state: string;
     /** What to do about it, when there is something to do. */
     fix: string;
+}
+
+/** One setting a coding agent publishes besides its model.
+ *
+ *  Read generically, because the harnesses name them differently — Codex's
+ *  effort is `reasoning_effort` with low, medium and high, OpenCode's is
+ *  `effort` with low, high and max — and only the ACP `category` is shared. A
+ *  permission mode is one of these too. Every value is offered as published:
+ *  the host has already removed the ones Lemma refuses (it marks those
+ *  options `metadata.policy`), and repeating that rule here is how the
+ *  frontend and the host came to disagree about plan mode. */
+export interface AgentOption {
+    /** What a selection is stored under: the option's id, else its category. */
+    key: string;
+    kind: "effort" | "mode" | "other";
+    label: string;
+    description: string;
+    /** What that computer is set to now, when it names one of the choices. */
+    current: string;
+    choices: { value: string; label: string }[];
 }
 
 /** A paired computer, and the agents it found on itself. */
@@ -217,6 +251,7 @@ export function readRuntime(raw: unknown): Runtime | null {
         default_model_name?: string | null;
         model_catalog?: unknown[];
         metadata?: Record<string, unknown> | null;
+        config?: Record<string, unknown> | null;
     };
     const id = asString(entry.id);
     if (!id) return null;
@@ -241,9 +276,11 @@ export function readRuntime(raw: unknown): Runtime | null {
             ? models
             : [{ name: defaultModel, label: shortModel(defaultModel) }],
         defaultModel,
+        selections: readSelections(entry.config?.["config_selections"]),
         scope: SCOPES[asString(entry.scope)] ?? "org",
         archived: entry.status === "DISABLED",
         trouble: runtimeTrouble(harnessId, asString(entry.availability_status)),
+        baseUrl: asString(entry.config?.["base_url"]),
     };
 }
 
@@ -264,6 +301,75 @@ export function agentModels(configOptions: unknown): RuntimeModel[] {
         }
     }
     return models;
+}
+
+/** Saved selections, strings only: a selection is one of the values a harness
+ *  published, and those are strings. */
+function readSelections(raw: unknown): Record<string, string> {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const selections: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof value === "string" && value) selections[key] = value;
+    }
+    return selections;
+}
+
+/** The model an agent runs unpinned, off its `model` option. */
+export function agentDefaultModel(configOptions: unknown): string {
+    const options = Array.isArray(configOptions) ? configOptions : [];
+    for (const raw of options) {
+        const option = (raw ?? {}) as { category?: string; current_value?: unknown };
+        if (option.category === "model") return asString(option.current_value);
+    }
+    return "";
+}
+
+const OPTION_KIND: Record<string, AgentOption["kind"]> = {
+    thought_level: "effort",
+    mode: "mode",
+    collaboration_mode: "mode",
+};
+const KIND_ORDER: AgentOption["kind"][] = ["effort", "mode", "other"];
+
+/** Every option an agent publishes besides its model, as choices a person can
+ *  make. Keyed the way `validate_agent_host_selections` reads a selection —
+ *  id first, then category — and an option that enumerates no values is left
+ *  out rather than drawn as a text box nothing would accept. */
+export function agentOptions(configOptions: unknown): AgentOption[] {
+    const options = Array.isArray(configOptions) ? configOptions : [];
+    const read: AgentOption[] = [];
+    for (const raw of options) {
+        const option = (raw ?? {}) as {
+            id?: unknown;
+            name?: unknown;
+            category?: unknown;
+            description?: unknown;
+            current_value?: unknown;
+            options?: unknown;
+            metadata?: { policy?: unknown } | null;
+        };
+        const category = asString(option.category);
+        if (category === "model") continue;
+        const key = asString(option.id) || category;
+        if (!key) continue;
+        const choices: AgentOption["choices"] = [];
+        for (const rawItem of Array.isArray(option.options) ? option.options : []) {
+            const item = (rawItem ?? {}) as { value?: unknown; id?: unknown; name?: unknown };
+            const value = asString(item.value) || asString(item.id);
+            if (value) choices.push({ value, label: asString(item.name) || value });
+        }
+        if (!choices.length) continue;
+        const current = asString(option.current_value);
+        read.push({
+            key,
+            kind: OPTION_KIND[category] ?? (option.metadata?.policy === true ? "mode" : "other"),
+            label: asString(option.name) || sentence(key),
+            description: asString(option.description),
+            current: choices.some((choice) => choice.value === current) ? current : "",
+            choices,
+        });
+    }
+    return read.sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
 }
 
 export function readLocalAgent(raw: unknown): LocalAgent | null {
@@ -288,6 +394,8 @@ export function readLocalAgent(raw: unknown): LocalAgent | null {
         name: agentLabel(harness) || asString(entry.display_name) || harness || id,
         version: asString(entry.upstream_version),
         models: agentModels(entry.config_options),
+        defaultModel: agentDefaultModel(entry.config_options),
+        options: agentOptions(entry.config_options),
         ready: health.ready,
         state: health.state,
         fix: health.fix,
@@ -334,17 +442,33 @@ export function stillLooking(computer: Computer, now = Date.now()): boolean {
 
 /* ── the choice ────────────────────────────────────────────────────── */
 
-/** The model a choice will actually run on.
+/** The model a choice will actually run on, or empty for "the agent's own".
  *
  *  A stored choice routinely names a runtime and leaves the model open, and
- *  the backend fills that gap at dispatch: the runtime's own default, else the
- *  first model it offers. Resolving it the same way here is the difference
- *  between a page that says "sonnet" and a page that says "Default" about a
- *  perfectly well-defined model. */
+ *  the backend fills that gap at dispatch. For a provider key that is the
+ *  runtime's own default, else the first model it offers, and resolving it
+ *  the same way here is the difference between a page that says "sonnet" and
+ *  one that says "Default" about a perfectly well-defined model.
+ *
+ *  A coding agent is the exception. Unpinned, dispatch sends no model and the
+ *  agent runs whatever it is set to on that computer; a pin to a model it no
+ *  longer offers falls back the same way. Naming the first model of its list
+ *  would name a model that is not running. */
 export function chosenModel(runtime: Runtime | undefined, choice: Choice | null): string {
+    if (runtime?.kind === "agent") {
+        const offered = (name: string) => Boolean(name) && runtime.models.some((model) => model.name === name);
+        if (choice?.model && offered(choice.model)) return choice.model;
+        return offered(runtime.defaultModel) ? runtime.defaultModel : "";
+    }
     if (choice?.model) return choice.model;
     if (!runtime) return "";
     return runtime.defaultModel || runtime.models[0]?.name || "";
+}
+
+/** What an unpinned coding agent is called, with the model it runs when the
+ *  computer has said. */
+export function agentDefaultLabel(current = ""): string {
+    return current ? "Agent default (" + shortModel(current) + ")" : "Agent default";
 }
 
 /** How a choice reads on one line: the runtime, and the model when it adds
@@ -354,8 +478,43 @@ export function describeChoice(runtimes: Runtime[], choice: Choice | null): stri
     const runtime = runtimes.find((entry) => entry.id === choice.runtimeId);
     if (!runtime) return "";
     const model = chosenModel(runtime, choice);
-    const label = model ? (runtime.models.find((entry) => entry.name === model)?.label ?? shortModel(model)) : "";
+    const label = model
+        ? (runtime.models.find((entry) => entry.name === model)?.label ?? shortModel(model))
+        : runtime.kind === "agent"
+          ? agentDefaultLabel()
+          : "";
     return label && label !== runtime.name ? runtime.name + " · " + label : runtime.name;
+}
+
+/** A coding agent's settings as a form holds them: a model name or empty for
+ *  "the agent's own", and a value per option or none for "as that computer
+ *  has it". */
+export interface AgentSettings {
+    model: string;
+    selections: Record<string, string>;
+}
+
+/** The PATCH body for a coding agent's settings: only what changed.
+ *
+ *  Not tidiness. The backend asks the paired computer to validate an edit
+ *  only when it touches `default_model_name` or `config_selections`
+ *  (`touches_configuration` in `runtime_profile_editor.py`), so sending them
+ *  unchanged would make an unrelated save fail whenever that machine is
+ *  asleep. Selections replace wholesale, so a change sends the whole map. */
+export function agentSettingsChanges(
+    before: AgentSettings,
+    after: AgentSettings,
+): { default_model_name?: string | null; config_selections?: Record<string, string> } {
+    const changes: { default_model_name?: string | null; config_selections?: Record<string, string> } = {};
+    if (after.model !== before.model) changes.default_model_name = after.model || null;
+    const live = (selections: Record<string, string>) =>
+        Object.fromEntries(Object.entries(selections).filter(([, value]) => Boolean(value)));
+    const was = live(before.selections);
+    const now = live(after.selections);
+    const same =
+        Object.keys(was).length === Object.keys(now).length && Object.keys(now).every((key) => was[key] === now[key]);
+    if (!same) changes.config_selections = now;
+    return changes;
 }
 
 export function readChoice(raw: unknown): Choice | null {

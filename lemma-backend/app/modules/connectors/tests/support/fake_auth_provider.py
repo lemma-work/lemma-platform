@@ -56,6 +56,7 @@ class FakeAuthProvider(AuthProviderInterface):
         self._on_exchange = on_exchange
         # What the last call was given, for tests that assert on it.
         self.last_code_verifier: str | None = None
+        self.last_connection_fields: dict[str, object] | None = None
         self.revoked: list[UUID] = []
 
     async def connect_with_credentials(
@@ -73,8 +74,10 @@ class FakeAuthProvider(AuthProviderInterface):
         state: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        connection_fields: dict[str, object] | None = None,
     ) -> Tuple[str, str]:
         self.last_code_verifier = code_verifier
+        self.last_connection_fields = connection_fields
         if self._on_authorize is not None:
             self._on_authorize(install, code_verifier)
         return self._authorization_url, self._provider_state

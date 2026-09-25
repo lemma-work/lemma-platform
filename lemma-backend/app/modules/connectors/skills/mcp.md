@@ -66,3 +66,7 @@ Then `operations search` / `details` / `run`, as with any connector.
   the install schema is closed and has no field for one.
 - **Private, loopback and link-local addresses are refused.**
 - Changing `server_url` sends the install's accounts to `REAUTH_REQUIRED`.
+- **File arguments.** MCP has no file type of its own. A tool field declared as
+  a base64 string (`contentEncoding: base64`) takes a pod file reference,
+  `{"pod_path": "/me/report.pdf"}`, and receives the file's bytes base64
+  encoded. Any other field is passed through untouched.

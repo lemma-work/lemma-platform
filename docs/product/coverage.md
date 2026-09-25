@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 169 |
 | `gap` | 2 |
-| `manual` | 13 |
+| `manual` | 15 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **184** |
+| **total** | **186** |
 
 Scenario tests declaring a promise: 403.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 248 | 265 |
+| OpenAPI operations | 243 | 260 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -147,6 +147,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-003` A signed-in person is identified consistently everywhere | `covered` | `test_a_credential_identifies_its_owner`, `test_a_forged_credential_is_refused` |
 | `PS-ONB-004` A person sets a display name and preferences that follow them | `covered` | `test_a_profile_is_one_thing` |
 | `PS-ONB-005` A person chooses comfortable chat text on their device | `manual` | — |
+| `PS-ONB-006` Authentication resumes the person's requested destination | `manual` | — |
+| `PS-ONB-007` A new person confirms their name and can prove their phone before they start | `manual` | — |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |
@@ -182,7 +184,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `manual` | `test_feedback_can_be_reported` |
 | `PS-OPS-032` A deployment can be configured for its own region and rules | `manual` | — |
-| `PS-OPS-040` Desktop settings keep drafts until a deliberate decision | `manual` | — |
+| `PS-OPS-040` This computer's settings keep drafts until saved or discarded | `manual` | — |
 | `PS-OPS-041` Desktop reopens the last workspace page after Quit | `manual` | — |
 
 ## [Packaging and reuse](journeys/packaging-and-reuse.md)

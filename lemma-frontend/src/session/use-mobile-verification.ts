@@ -6,6 +6,8 @@ import type { UserResponse } from "lemma-sdk";
 import { source } from "@/data";
 import { apiUrl, askApi, lemma, sameSiteWithApi } from "./client";
 import { VERIFICATION_POLL_MS, verificationMessage } from "./mobile-number";
+import { copyText } from "@/desktop/clipboard";
+import { openExternal } from "@/desktop/open-external";
 
 /** Proving a mobile number is yours, without a presentation.
  *
@@ -232,12 +234,7 @@ export function useWhatsAppMobileVerification({
             setCopied(state);
             copyTimer.current = setTimeout(() => setCopied("idle"), 2400);
         };
-        const writing = navigator.clipboard?.writeText(message);
-        if (!writing) {
-            settleCopy("failed");
-            return;
-        }
-        writing.then(() => settleCopy("done")).catch(() => settleCopy("failed"));
+        copyText(message).then(() => settleCopy("done")).catch(() => settleCopy("failed"));
     }, [message]);
 
     /** Omit the number to bind whichever phone answers.
@@ -330,11 +327,10 @@ export function useTelegramMobileVerification({
         const url = new URL(apiUrl() + "/auth/telegram/start");
         url.searchParams.set("purpose", "verify_mobile");
         url.searchParams.set("return_to", window.location.href);
-        const tab = window.open(url.toString(), "_blank", "noopener,noreferrer");
-        if (!tab) {
-            setError("Your browser blocked that tab. Allow pop-ups for this site and try again.");
-            return;
-        }
+        /* No "was it blocked?" check: with `noopener` a browser answers null
+           either way, and the desktop app opens it in the system browser and
+           answers null too. The deadline below is what notices it never came. */
+        openExternal(url.toString());
         deadline.current = Date.now() + TELEGRAM_WAIT_MS;
         setWaiting(true);
     }, []);

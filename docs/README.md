@@ -30,7 +30,9 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Platform architecture](../ARCHITECTURE.md) | The map: components, state, how work moves, the invariants |
 | [Sandbox fabric](architecture/sandbox/README.md) | The provider-neutral sandbox model, and the doc set below it |
 | [Desktop architecture](architecture/desktop.md) | Process ownership, lifecycle protocol, ports, and local state |
-| [Agent Host](architecture/agent-host.md) | Running local coding agents against a pod, and how Desktop supervises them |
+| [Desktop security](architecture/desktop-security.md) | Who counts as the person at this Mac, sharing and signup modes, sandbox hardening, and the Tauri origin rule |
+| [Agent Host](architecture/agent-host.md) | Running local coding agents against a pod, how Desktop supervises them, and the link they talk to Lemma over |
+| [Agent Host run events](architecture/agent-host-events.md) | What a local agent run reports: the normalized events, the canonical tool names, and the recorded transcripts they are held to |
 | [Agent memory](architecture/agent-memory.md) | Where an agent's durable facts live, what is loaded into every prompt, and what bounds it |
 | [Usage accounting](design/usage-accounting.md) | Spending authority, batched receipts, ongoing limits, failure recovery and rollout |
 | [Database connection scope](design/db-connection-scope.md) | How long a pooled connection is held, the gates that keep it short, and what authorization costs |

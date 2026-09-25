@@ -65,6 +65,11 @@ def sync_detailed(
 
      Revoke a host, invalidating its secret immediately.
 
+    The secret stops authenticating the moment this commits, but a link opened
+    with it before then is already past authentication. The notice closes it,
+    on whichever replica holds it, instead of leaving it working until the host
+    happens to reconnect.
+
     Args:
         host_id (UUID):
 
@@ -96,6 +101,11 @@ def sync(
 
      Revoke a host, invalidating its secret immediately.
 
+    The secret stops authenticating the moment this commits, but a link opened
+    with it before then is already past authentication. The notice closes it,
+    on whichever replica holds it, instead of leaving it working until the host
+    happens to reconnect.
+
     Args:
         host_id (UUID):
 
@@ -121,6 +131,11 @@ async def asyncio_detailed(
     """Revoke Agent Host
 
      Revoke a host, invalidating its secret immediately.
+
+    The secret stops authenticating the moment this commits, but a link opened
+    with it before then is already past authentication. The notice closes it,
+    on whichever replica holds it, instead of leaving it working until the host
+    happens to reconnect.
 
     Args:
         host_id (UUID):
@@ -150,6 +165,11 @@ async def asyncio(
     """Revoke Agent Host
 
      Revoke a host, invalidating its secret immediately.
+
+    The secret stops authenticating the moment this commits, but a link opened
+    with it before then is already past authentication. The notice closes it,
+    on whichever replica holds it, instead of leaving it working until the host
+    happens to reconnect.
 
     Args:
         host_id (UUID):

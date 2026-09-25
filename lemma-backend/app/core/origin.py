@@ -58,7 +58,10 @@ class OriginKind(str, Enum):
     """The pod MCP route (``/agent-runtime/pods``)."""
 
     MCP_CONVERSATION = "MCP_CONVERSATION"
-    """The conversation MCP route (``/agent-runtime/conversations``)."""
+    """A local agent calling Lemma's tools for its conversation, as ``mcp``
+    frames on the Agent Host link. It used to be an HTTP mount at
+    ``/agent-runtime/conversations``; the value is kept so the dimension reads
+    the same across that move."""
 
     AGENT_HOST = "AGENT_HOST"
     """A user-owned coding agent over ACP. The agent family (claude-code,
@@ -162,7 +165,6 @@ _CLIENT_ORIGINS: dict[str, OriginKind] = {
 #: only honest signal, and it is a better one than a header a caller controls.
 _PATH_ORIGINS: tuple[tuple[str, OriginKind], ...] = (
     ("/agent-runtime/pods", OriginKind.MCP_POD),
-    ("/agent-runtime/conversations", OriginKind.MCP_CONVERSATION),
 )
 
 

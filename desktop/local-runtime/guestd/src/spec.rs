@@ -81,6 +81,23 @@ pub(crate) struct EnsureParameters {
     pub(crate) resources: ResourceSpec,
     #[serde(default)]
     pub(crate) callback: CallbackSpec,
+    /// Whether `host.lemma.internal` resolves inside the container.
+    ///
+    /// Defaulted to true so every caller that does not send it -- which is
+    /// every caller today -- keeps the reach it has: the workspace runtime's
+    /// callbacks to the backend and the function gateway both go through that
+    /// name. It exists so a later change can withhold it from sandboxes that
+    /// have no business reaching the Mac.
+    ///
+    /// A name, not a wall. Without the alias a container can still dial the
+    /// host gateway by address; closing that needs a per-container firewall
+    /// rule, and this flag is what such a rule would key on.
+    #[serde(default = "default_host_access")]
+    pub(crate) host_access: bool,
+}
+
+pub(crate) fn default_host_access() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize)]

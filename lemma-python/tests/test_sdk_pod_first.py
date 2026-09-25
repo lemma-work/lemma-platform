@@ -287,7 +287,7 @@ def test_pod_connectors_execute_uses_bound_org_id():
     result = pod.connectors.execute(
         "gmail",
         "GMAIL_SEND_EMAIL",
-        {"to": "a@example.com", "subject": "Hi"},
+        {"to": "anukul@lemma.work", "subject": "Hi"},
     )
 
     assert isinstance(result, OperationExecutionResponse)
@@ -297,8 +297,11 @@ def test_pod_connectors_execute_uses_bound_org_id():
         "gmail",
         "GMAIL_SEND_EMAIL",
     )
+    # The pod travels with the call, so a file argument naming `/me/...` has a
+    # pod to resolve in -- an org-level route carries none of its own.
     assert transport.calls[0]["body"] == {
-        "payload": {"to": "a@example.com", "subject": "Hi"}
+        "payload": {"to": "anukul@lemma.work", "subject": "Hi"},
+        "pod_id": "22222222-2222-4222-8222-222222222222",
     }
 
 
