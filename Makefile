@@ -30,7 +30,7 @@ SHELL := /bin/bash
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
-        scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
+        scenarios scenarios-all scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
         scenarios-standing-down \
         scenarios-deployment scenarios-provision scenarios-reset \
         scenarios-desktop scenarios-desktop-provision \
@@ -411,6 +411,7 @@ help:
 	@echo "    make test-cli-unit      lemma-cli unit tests only (no docker)"
 	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
 	@echo "    make scenarios          product scenarios over real HTTP (needs docker)"
+	@echo "    make scenarios-all      all local scenarios, including sandboxes and clients, with a report"
 	@echo "    make scenarios-guards   scenario suite guards only (fast, no docker)"
 	@echo "    SCENARIOS_STANDING_STACK=1 make scenarios   keep the database between runs"
 	@echo "    make scenarios-standing-down   and remove it again"
@@ -1601,6 +1602,27 @@ test-python:
 scenarios:
 	@echo "→ Product scenarios (real HTTP, needs docker)…"
 	@cd $(SCENARIOS_DIR) && uv run pytest -q
+
+# The complete local, credential-free suite. CI splits these steps to keep
+# feedback attributable; locally one stack and one JUnit report make reruns and
+# Slack reporting straightforward. Live provider scenarios remain opt-in.
+scenarios-all:
+	@set +e; \
+	rm -f $(SCENARIOS_DIR)/artifacts/all-results.xml; \
+	make scenarios-images; result=$$?; \
+	if [ $$result -eq 0 ]; then uv sync --project lemma-backend && uv sync --project lemma-cli && uv sync --project lemma-python; result=$$?; fi; \
+	if [ $$result -eq 0 ]; then cd lemma-typescript && npm ci && npm run build; result=$$?; cd ..; fi; \
+	if [ $$result -eq 0 ]; then cd lemma-frontend && npm ci; result=$$?; cd ..; fi; \
+	if [ $$result -eq 0 ]; then \
+	  mkdir -p $(SCENARIOS_DIR)/artifacts; \
+	  (cd $(SCENARIOS_DIR) && SCENARIOS_WORKERS=$${SCENARIOS_WORKERS:-1} uv run pytest journeys/*/ -q -m 'not live' --junitxml=artifacts/all-results.xml); \
+	  result=$$?; \
+	fi; \
+	if [ -f $(SCENARIOS_DIR)/artifacts/all-results.xml ]; then \
+	  python3 scripts/report_scenarios_to_slack.py $(SCENARIOS_DIR)/artifacts/all-results.xml --lane local --markdown-out $(SCENARIOS_DIR)/artifacts/report.md; \
+	  python3 scripts/report_scenarios_to_slack.py $(SCENARIOS_DIR)/artifacts/all-results.xml --lane local; \
+	fi; \
+	exit $$result
 
 # Build the sandbox images the `sandbox` lane needs. Local tags rather than the
 # content-addressed names the backend's own e2e uses: those rebuild whenever

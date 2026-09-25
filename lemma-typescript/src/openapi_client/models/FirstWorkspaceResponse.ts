@@ -14,6 +14,7 @@ export namespace FirstWorkspaceResponse {
     export enum entry {
         EXISTING = 'existing',
         SURFACE_JOIN = 'surface_join',
+        INVITATION = 'invitation',
         DOMAIN_JOIN = 'domain_join',
         NEW_ORG = 'new_org',
     }

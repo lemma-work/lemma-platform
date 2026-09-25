@@ -257,7 +257,7 @@ def require_docker() -> None:
 #: meant asking a person to click through OAuth again, every time.
 STANDING_SETTING = "SCENARIOS_STANDING_STACK"
 
-#: Named, so they can be found again. `_docker_run` deliberately names nothing.
+#: Named, so they can be found again.
 STANDING_NETWORK = "lemma-scenarios"
 STANDING_POSTGRES = "lemma-scenarios-postgres"
 STANDING_REDIS = "lemma-scenarios-redis"
@@ -367,27 +367,6 @@ def _database_exists(postgres: str, name: str) -> None:
     )
 
 
-def _docker_run(image: str, internal_port: int, env: dict[str, str] | None = None) -> str:
-    command = [
-        "docker",
-        "run",
-        "-d",
-        "--label",
-        CONTAINER_LABEL,
-        "-p",
-        f"127.0.0.1::{internal_port}",
-    ]
-    for key, value in (env or {}).items():
-        command += ["-e", f"{key}={value}"]
-    command.append(image)
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise StackError(
-            f"could not start {image}: {(result.stderr or result.stdout).strip()[:500]}"
-        )
-    return result.stdout.strip()
-
-
 def _mapped_port(container_id: str, internal_port: int) -> int:
     result = subprocess.run(
         ["docker", "port", container_id, f"{internal_port}/tcp"],
@@ -398,15 +377,30 @@ def _mapped_port(container_id: str, internal_port: int) -> int:
     return int(result.stdout.strip().splitlines()[0].rsplit(":", 1)[1])
 
 
-def _remove(container_id: str) -> None:
-    # -v also removes the container's anonymous data volume (postgres/redis/
-    # supertokens all declare VOLUME in their image) — without it every
-    # teardown, even a clean one, leaked one volume forever. Found via three
-    # random-named containers (docker's default naming for a container run
-    # without --name) sitting exited on a dev machine for 21+ hours.
-    subprocess.run(
-        ["docker", "rm", "-f", "-v", container_id], check=False, capture_output=True
+def _compose(project: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-p",
+            project,
+            "-f",
+            str(ROOT / "tests/scenarios/docker-compose.yml"),
+            *arguments,
+        ],
+        capture_output=True,
+        text=True,
     )
+
+
+def _compose_port(project: str, service: str, internal_port: int) -> int:
+    result = _compose(project, "port", service, str(internal_port))
+    if result.returncode != 0:
+        raise StackError(
+            f"could not read the {service} port from Docker Compose: "
+            f"{(result.stderr or result.stdout).strip()[:500]}"
+        )
+    return int(result.stdout.strip().rsplit(":", 1)[1])
 
 
 def _wait_tcp(host: str, port: int, timeout: float = 60) -> None:
@@ -968,7 +962,7 @@ def start_stack():
     require_docker()
     refuse_to_take_a_deployments_bot()
 
-    containers: list[str] = []
+    compose_project = ""
     processes: list[subprocess.Popen] = []
     log_path = Path(tempfile.gettempdir()) / f"lemma-scenarios-{os.getpid()}.log"
     log = open(log_path, "w+", encoding="utf-8")
@@ -1004,10 +998,19 @@ def start_stack():
                 # and loses everything, silently.
                 volume="/var/lib/postgresql",
             )
+            postgres_port = _mapped_port(postgres, 5432)
         else:
-            postgres = _docker_run(POSTGRES_IMAGE, 5432, credentials)
-            containers.append(postgres)
-        postgres_port = _mapped_port(postgres, 5432)
+            compose_project = f"lemma-scenarios-{os.getpid()}"
+            started = _compose(compose_project, "up", "-d", "--wait")
+            if started.returncode != 0:
+                logs = _compose(compose_project, "logs", "--no-color", "--tail", "80")
+                raise StackError(
+                    "could not start the scenario Compose stack. "
+                    f"{(started.stderr or started.stdout).strip()[-1000:]}\n"
+                    f"Container logs:\n{logs.stdout[-4000:]}"
+                )
+            postgres = _compose(compose_project, "ps", "-q", "db").stdout.strip()
+            postgres_port = _compose_port(compose_project, "db", 5432)
         _wait_postgres("127.0.0.1", postgres_port)
         subprocess.run(
             [
@@ -1031,10 +1034,9 @@ def start_stack():
             # Redis holds caches and streams, not the tenant. It stands only so
             # the three move together; nothing here would be lost by dropping it.
             redis = _standing_container(STANDING_REDIS, REDIS_IMAGE, 6379)
+            redis_port = _mapped_port(redis, 6379)
         else:
-            redis = _docker_run(REDIS_IMAGE, 6379)
-            containers.append(redis)
-        redis_port = _mapped_port(redis, 6379)
+            redis_port = _compose_port(compose_project, "redis", 6379)
         _wait_tcp("127.0.0.1", redis_port)
 
         if standing:
@@ -1054,10 +1056,9 @@ def start_stack():
                     )
                 },
             )
+            supertokens_port = _mapped_port(supertokens, 3567)
         else:
-            supertokens = _docker_run(SUPERTOKENS_IMAGE, 3567)
-            containers.append(supertokens)
-        supertokens_port = _mapped_port(supertokens, 3567)
+            supertokens_port = _compose_port(compose_project, "supertokens", 3567)
         _wait_http(f"http://127.0.0.1:{supertokens_port}/hello")
 
         pinned = os.getenv(PORT_SETTING, "")
@@ -1165,8 +1166,8 @@ def start_stack():
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        for container_id in containers:
-            _remove(container_id)
+        if compose_project:
+            _compose(compose_project, "down", "--volumes", "--remove-orphans")
         # Last: mitmproxy only flushes its recording when it exits, so a run
         # that tore this down first would lose the final calls it made — and a
         # recording missing its own tail replays as a mystery.
