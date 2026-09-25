@@ -56,7 +56,9 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(backend_env["EMAIL_TRANSPORT"], "filesystem")
             self.assertEqual(backend_env["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false")
             self.assertEqual(backend_env["API_URL"], "http://localhost:8710")
-            self.assertEqual(backend_env["FRONTEND_URL"], "http://localhost:3710")
+            self.assertEqual(backend_env["FRONTEND_URL"], "http://localhost:3000")
+            self.assertEqual(backend_env["AUTH_FRONTEND_URL"], "http://localhost:3000")
+            self.assertEqual(backend_env["CLI_AUTH_FRONTEND_URL"], "http://localhost:3000")
 
     def test_ensure_backend_env_appends_only_missing_values(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -170,8 +172,8 @@ class DevWorkflowTests(unittest.TestCase):
                 variables={"BACKEND_API_URL": "https://public-api.example.test"},
             )
             self.assertIn("API_URL=https://public-api.example.test", backend.stdout)
-            self.assertIn("FRONTEND_URL=http://localhost:3710", backend.stdout)
-            self.assertIn("AUTH_FRONTEND_URL=http://localhost:3710", backend.stdout)
+            self.assertIn("FRONTEND_URL=http://localhost:3000", backend.stdout)
+            self.assertIn("AUTH_FRONTEND_URL=http://localhost:3000", backend.stdout)
 
             frontend = self.run_make(
                 tmp,
@@ -184,8 +186,29 @@ class DevWorkflowTests(unittest.TestCase):
                 frontend.stdout,
             )
             self.assertIn("NEXT_PUBLIC_SITE_URL=http://localhost:3710", frontend.stdout)
-            self.assertIn("NEXT_PUBLIC_AUTH_URL=http://localhost:3710", frontend.stdout)
+            self.assertIn("NEXT_PUBLIC_AUTH_URL=http://localhost:3000", frontend.stdout)
 
+
+    def test_custom_workspace_port_aligns_backend_auth_and_new_frontend(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            backend = tmp / "backend"
+            backend.mkdir()
+            workspace = tmp / "lemma-frontend"
+            variables = {
+                "BACKEND_DIR": str(backend),
+                "WORKSPACE_DIR": str(workspace),
+                "DEV_WORKSPACE_PORT": "13009",
+            }
+            self.run_make(tmp, "_init-backend-env", variables=variables)
+            backend_env = self.env_values(backend / ".env")
+            for key in ("FRONTEND_URL", "AUTH_FRONTEND_URL", "CLI_AUTH_FRONTEND_URL"):
+                self.assertEqual(backend_env[key], "http://localhost:13009")
+            running_backend = self.run_make(tmp, "-n", "_run-backend", variables=variables)
+            self.assertIn("AUTH_FRONTEND_URL=http://localhost:13009", running_backend.stdout)
+            frontend = self.run_make(tmp, "-n", "dev-frontend", variables=variables)
+            self.assertIn(str(workspace / ".env.local"), frontend.stdout)
+            self.assertIn(f"cd {workspace} && npm run dev -- --port 13009", frontend.stdout)
 
     def test_workspace_setup_preserves_custom_configuration(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
