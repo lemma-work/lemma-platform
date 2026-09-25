@@ -33,10 +33,7 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
     let executable = Command::new("/bin/ps")
         .args(["-p", &pid, "-o", "comm="])
         .output()?;
-    let started = Command::new("/bin/ps")
-        .args(["-p", &pid, "-o", "lstart="])
-        .output()?;
-    if !executable.status.success() || !started.status.success() {
+    if !executable.status.success() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "process not found"));
     }
     let executable = String::from_utf8(executable.stdout)
@@ -45,17 +42,46 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
         .canonicalize()?
         .to_string_lossy()
         .into_owned();
-    let start_identity = String::from_utf8(started.stdout)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
-        .trim()
-        .to_owned();
-    if start_identity.is_empty() {
-        return Err(io::Error::other("process start identity was empty"));
-    }
+    let start_identity = kernel_start_identity(
+        pid.parse::<i32>()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+    )?;
     Ok(ProcessIdentity {
         executable,
         start_identity,
     })
+}
+
+/// When the kernel says `pid` started, to the microsecond.
+///
+/// `ps -o lstart=` printed it in local time at one-second granularity, so a
+/// time-zone or daylight-saving change between recording a process and
+/// checking it made a process this installation started look like a stranger
+/// (and never reclaimed), and a PID recycled within the same second looked
+/// like the original. `proc_pidinfo` answers in UTC seconds and microseconds.
+#[cfg(target_os = "macos")]
+pub(crate) fn kernel_start_identity(pid: i32) -> io::Result<String> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is exactly one proc_bsdinfo, and its size is passed.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if written != size {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "process not found"));
+    }
+    // SAFETY: proc_pidinfo filled the whole structure.
+    let info = unsafe { info.assume_init() };
+    Ok(format!(
+        "{}.{:06}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    ))
 }
 
 #[cfg(target_os = "macos")]
