@@ -9198,10 +9198,59 @@ var LemmaClient = (() => {
   // src/supertokens.ts
   var import_supertokens_web_js = __toESM(require_supertokens_web_js(), 1);
   var import_session = __toESM(require_session2(), 1);
+
+  // src/refresh-breaker.ts
+  var RefreshSuspendedError = class extends Error {
+    constructor(retryAt) {
+      super("Session refresh is paused after repeated failures.");
+      __publicField(this, "retryAt");
+      this.name = "RefreshSuspendedError";
+      this.retryAt = retryAt;
+    }
+  };
+  function createRefreshBreaker(options = {}) {
+    var _a, _b, _c, _d, _e, _f;
+    const budget = (_a = options.budget) != null ? _a : 4;
+    const windowMs = (_b = options.windowMs) != null ? _b : 6e4;
+    const cooldownMs = (_c = options.cooldownMs) != null ? _c : 3e4;
+    const maxCooldownMs = (_d = options.maxCooldownMs) != null ? _d : 5 * 6e4;
+    const forgetAfterMs = (_e = options.forgetAfterMs) != null ? _e : 10 * 6e4;
+    const now = (_f = options.now) != null ? _f : Date.now;
+    let attempts = [];
+    let until = 0;
+    let strikes = 0;
+    let lastTrip = -Infinity;
+    return {
+      admit() {
+        var _a2;
+        const at = now();
+        if (at < until) throw new RefreshSuspendedError(until);
+        if (at - lastTrip > forgetAfterMs) strikes = 0;
+        attempts = attempts.filter((when) => at - when < windowMs);
+        if (attempts.length >= budget) {
+          until = at + Math.min(maxCooldownMs, cooldownMs * 2 ** strikes);
+          strikes += 1;
+          lastTrip = at;
+          attempts = [];
+          (_a2 = options.onTrip) == null ? void 0 : _a2.call(options, until);
+          throw new RefreshSuspendedError(until);
+        }
+        attempts.push(at);
+      },
+      suspendedUntil() {
+        return now() < until ? until : null;
+      }
+    };
+  }
+
+  // src/supertokens.ts
   var APP_NAME = "Lemma";
   var SESSION_API_SUFFIX = "/st/auth";
   var initializedSignature = null;
   var unauthorisedListeners = /* @__PURE__ */ new Set();
+  var refreshBreaker = createRefreshBreaker({
+    onTrip: () => unauthorisedListeners.forEach((listener) => listener())
+  });
   function normalizePath(pathname) {
     const trimmed = pathname.trim();
     if (!trimmed || trimmed === "/") {
@@ -9282,6 +9331,12 @@ var LemmaClient = (() => {
            * the one case it was raised for.
            */
           maxRetryAttemptsForSessionRefresh: 3,
+          /* Thrown inside SuperTokens' refresh `try`, so a refused refresh never
+             reaches the network and fails only the request that asked for it. */
+          preAPIHook: async (context) => {
+            if (context.action === "REFRESH_SESSION") refreshBreaker.admit();
+            return context;
+          },
           onHandleEvent: (event) => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
@@ -17531,7 +17586,14 @@ var LemmaClient = (() => {
       (_a = options.onError) == null ? void 0 : _a.call(options, error);
     };
     const scheduleReconnect = () => {
+      var _a, _b;
       if (stopped) return;
+      if (((_a = auth.getState) == null ? void 0 : _a.call(auth).status) === "unauthenticated") {
+        stopped = true;
+        status("closed");
+        (_b = options.onError) == null ? void 0 : _b.call(options, new Error("Datastore change stream: signed out"));
+        return;
+      }
       if (options.maxRetries != null && attempt >= options.maxRetries) {
         fail(new Error("Datastore change stream: max reconnect attempts reached"));
         return;

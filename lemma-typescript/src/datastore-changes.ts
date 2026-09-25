@@ -56,6 +56,13 @@ export type ChangeStreamStatus =
 export interface ChangeStreamTokenProvider {
   getAccessToken(): Promise<string>;
   refreshAccessToken(): Promise<string>;
+  /**
+   * The session's state, when the provider knows it. A signed-out session ends
+   * the stream: the server refuses the handshake before accepting it, which a
+   * browser reports as 1006 rather than 1008, so the close code alone cannot
+   * say "not you" and the socket would otherwise retry that refusal forever.
+   */
+  getState?(): { status: string };
 }
 
 export interface WatchChangesOptions {
@@ -144,6 +151,12 @@ export function watchDatastoreChanges(
 
   const scheduleReconnect = (): void => {
     if (stopped) return;
+    if (auth.getState?.().status === "unauthenticated") {
+      stopped = true;
+      status("closed");
+      options.onError?.(new Error("Datastore change stream: signed out"));
+      return;
+    }
     if (options.maxRetries != null && attempt >= options.maxRetries) {
       fail(new Error("Datastore change stream: max reconnect attempts reached"));
       return;
@@ -189,7 +202,9 @@ export function watchDatastoreChanges(
       const record = frame as Record<string, unknown>;
       if (record.type === "ready") {
         // Not `onopen`: the server accepts before it authenticates, so only
-        // `ready` says the session was taken and the stream is live.
+        // `ready` says the session was taken and the stream is live. Backoff
+        // resets here too, so a server that accepts and then drops the socket
+        // is not reconnected to within half a second, forever.
         attempt = 0;
         authRefreshed = false;
         status("open");

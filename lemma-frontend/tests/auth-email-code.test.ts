@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EmailCodeError, mintEmailNonce, startEmailCode, resendEmailCode, verifyEmailCode } from "../src/auth/email-code.ts";
+import { EmailCodeError, continueEmail, mintEmailNonce, startEmailCode, resendEmailCode, verifyEmailCode } from "../src/auth/email-code.ts";
 
 process.env.NEXT_PUBLIC_API_URL = "https://api.example.test";
 
@@ -61,4 +61,54 @@ test("malformed successful responses never advance the flow", async () => {
     await assert.rejects(startEmailCode("person@example.test", "binding", malformed), /send a code/);
     await assert.rejects(verifyEmailCode("challenge", "binding", "123456", malformed), /confirm your code/);
     await assert.rejects(startEmailCode("person@example.test", "binding", async () => new Response("bad gateway", { status: 502 })), /Unable to continue/);
+});
+
+for (const answer of [{ method: "password" }, { method: "thirdparty", provider: "google" }, { method: "thirdparty", provider: "active-directory" }, { method: "code", challenge_id: "new", expires_at: "2030-01-01T00:00:00Z" }]) {
+    test(`continue selects ${JSON.stringify(answer)} and abandons the previous challenge`, async () => {
+        const result = await continueEmail(" person@example.test ", "binding", "old", async (url, options) => {
+            assert.match(String(url), /email-code\/continue$/);
+            assert.deepEqual(JSON.parse(String(options?.body)), { email: "person@example.test", nonce: "binding", abandon_challenge_id: "old" });
+            return Response.json(answer);
+        });
+        assert.deepEqual(result, answer);
+    });
+}
+
+test("coded proof rejection retries once and preserves the error code", async () => {
+    let attempts = 0;
+    await assert.rejects(continueEmail("person@example.test", "binding", null, async url => {
+        if (String(url).includes("altcha/challenge")) return Response.json({ enabled: false });
+        attempts++;
+        return Response.json({ code: "EMAIL_LOGIN_PROOF_REJECTED", message: "Proof required" }, { status: 403 });
+    }), (error: unknown) => {
+        assert.ok(error instanceof EmailCodeError);
+        assert.equal(error.code, "EMAIL_LOGIN_PROOF_REJECTED");
+        return true;
+    });
+    assert.equal(attempts, 2);
+});
+
+test("unknown methods fail instead of silently starting email signup", async () => {
+    await assert.rejects(continueEmail("person@example.test", "binding", null, async () => Response.json({ method: "thirdparty", provider: "unknown" })), /determine how/);
+});
+
+test("proof escalation solves the challenge and retries the same lookup", async () => {
+    const salt = "test-salt", signature = "test-signature";
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(salt + "0"));
+    const challenge = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    let lookups = 0;
+    const answer = await continueEmail("person@example.test", "binding", null, async (url, options) => {
+        if (String(url).includes("altcha/challenge")) {
+            assert.match(String(url), /purpose=signin-risk/);
+            return Response.json({ enabled: true, algorithm: "SHA-256", salt, signature, challenge, maxnumber: 0 });
+        }
+        lookups++;
+        if (lookups === 1) return Response.json({ code: "EMAIL_LOGIN_PROOF_REJECTED", message: "Proof required" }, { status: 400 });
+        const proof = new Headers(options?.headers).get("x-altcha-payload");
+        assert.ok(proof);
+        assert.equal(JSON.parse(atob(proof.replace(/-/g, "+").replace(/_/g, "/"))).number, 0);
+        return Response.json({ method: "password" });
+    });
+    assert.deepEqual(answer, { method: "password" });
+    assert.equal(lookups, 2);
 });

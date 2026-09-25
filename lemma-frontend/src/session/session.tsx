@@ -4,7 +4,8 @@ import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } f
 import type { AuthState, LemmaClient } from "lemma-sdk";
 import { useQueryClient } from "@tanstack/react-query";
 import { lemma, hasApiUrl, hasToken } from "./client";
-import { key, retainWorkspaceOwner, sessionStorageChanged } from "./storage";
+import { retainWorkspaceOwner, sessionStorageChanged } from "./storage";
+import { portalTrip as sent } from "./portal-trip";
 import { observeAuth } from "./observe-auth";
 import { PageLoading } from "@/ui/loading";
 import { resetAnalyticsIdentity } from '@/site/analytics/client';
@@ -93,7 +94,6 @@ export function useSession(): Session {
     const auth = useAuthState(client, !sample);
 
     const signIn = useCallback(() => {
-
         sent.mark();
         const here = window.location.pathname + window.location.search + window.location.hash;
         window.location.assign(PORTAL_PATH + "?redirect_uri=" + encodeURIComponent(here));
@@ -130,23 +130,6 @@ function Screen({ children }: { children: ReactNode }) {
     );
 }
 
-/** The door.
- *
- *  Deliberately not a form. This app does not own the password — the platform's
- *  auth portal does — and a box that looks like it takes one, then bounces the
- *  person somewhere else to type it again, is worse than a button that says
- *  where it is going.
- */
-/* One trip per tab, recorded before it is taken. `sessionStorage` rather than
-   `localStorage`: the question is "has this tab just been to the portal", which
-   dies with the tab and must not be inherited by the next one. */
-const SENT = key("sent-to-portal");
-const sent = {
-    mark() { try { sessionStorage.setItem(SENT, "1"); } catch { /* no storage */ } },
-    was() { try { return sessionStorage.getItem(SENT) === "1"; } catch { return false; } },
-    clear() { try { sessionStorage.removeItem(SENT); } catch { /* no storage */ } },
-};
-
 /** Taken to the door, rather than shown a picture of one. */
 function ToThePortal({ signIn }: { signIn: () => void }) {
     useEffect(() => {
@@ -178,7 +161,7 @@ function StalledScreen({ signIn }: { signIn: () => void }) {
                 <button className="btn btn--primary" onClick={signIn}>
                     Sign in again
                 </button>
-                <a className="btn" href="/" onClick={() => sent.clear()}>Back to home</a>
+                <a className="btn" href="/">Back to home</a>
             </div>
         </Screen>
     );
@@ -255,12 +238,6 @@ export function SessionGate({ children }: { children: ReactNode }) {
         return () => window.removeEventListener("storage", changed);
     }, [cache]);
 
-    /* In an effect, not in the branch below: clearing it is a side effect, and
-       a render is not allowed to have one. The next sign-out starts a fresh
-       trip either way. */
-    const through = session.status === "in" || session.status === "sample";
-    useEffect(() => { if (through) sent.clear(); }, [through]);
-
     if (session.status === "unconfigured") {
         return <SetupScreen />;
     }
@@ -272,7 +249,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
     }
 
     if (session.status === "out") {
-        const door = doorFor(hasToken(), sent.was());
+        const door = doorFor(hasToken(), sent.recent());
         if (door === "token") return <TokenScreen />;
         if (door === "stalled") return <StalledScreen signIn={session.signIn} />;
         return <ToThePortal signIn={session.signIn} />;

@@ -50,6 +50,8 @@ export {
   nextBackoffDelay,
 } from "./run-utils.js";
 export type { AnyRunStatus } from "./run-utils.js";
+export { createRefreshBreaker, RefreshSuspendedError } from "./refresh-breaker.js";
+export type { RefreshBreaker, RefreshBreakerOptions } from "./refresh-breaker.js";
 export { parseAssistantStreamEvent, upsertConversationMessage } from "./assistant-events.js";
 export type { ParsedAssistantStreamEvent } from "./assistant-events.js";
 export { isThirdPartyMcpTool, normalizeAgentToolName } from "./core/agent/tool-names.js";

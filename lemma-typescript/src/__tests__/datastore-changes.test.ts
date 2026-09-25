@@ -255,6 +255,64 @@ describe("watchDatastoreChanges", () => {
     handle.close();
   });
 
+  it("keeps backing off when the server accepts and drops the socket before it is ready", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(Math, "random").mockReturnValue(1); // delay = the full ceiling
+      const handle = watchDatastoreChanges("https://api.x.test", makeAuth(), "POD", {
+        onChange: vi.fn(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const dropBeforeReady = () => {
+        const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+        socket.onopen?.();
+        socket.onclose?.({ code: 1006 });
+      };
+
+      dropBeforeReady();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(FakeWebSocket.instances.length).toBe(2);
+
+      /* Resetting on open made this 500 ms again, every time. */
+      dropBeforeReady();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(FakeWebSocket.instances.length).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeWebSocket.instances.length).toBe(3);
+
+      /* A connection that got as far as `ready` was a real one. */
+      const socket = FakeWebSocket.instances[2];
+      socket.onopen?.();
+      socket.onmessage?.({ data: JSON.stringify({ type: "ready", since: "5-0" }) });
+      socket.onclose?.({ code: 1006 });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(FakeWebSocket.instances.length).toBe(4);
+
+      handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops for good once the session is signed out", async () => {
+    const onError = vi.fn();
+    const auth = { ...makeAuth(), getState: () => ({ status: "unauthenticated" }) };
+    const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
+      onChange: vi.fn(),
+      onError,
+    });
+    await flush();
+
+    FakeWebSocket.instances[0].onclose?.({ code: 1006 });
+    await flush();
+    await flush();
+
+    expect(FakeWebSocket.instances.length).toBe(1);
+    expect(handle.closed).toBe(true);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("signed out") }));
+  });
+
   it("stops reconnecting after close()", async () => {
     const auth = makeAuth();
     const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {

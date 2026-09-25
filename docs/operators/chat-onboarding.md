@@ -13,6 +13,62 @@ transactional outbox. Pending requests are stored outside pod conversations and
 purged after handoff, cancellation or expiry. Keep the worker running for replay
 and expiry cleanup. Do not log webhook form contents or email codes.
 
+## Web authentication and local verification
+
+The user-facing auth screens live in `lemma-frontend`. Both sign-in and signup
+first mint a browser binding at `/auth/email-code/browser`, then submit the email
+to `/auth/email-code/continue`. Its `method` selects a password form, Google or
+Microsoft, or an email-code challenge. Passwordless accounts created through chat
+use the code branch and retain their canonical identity. `/start` is the explicit
+code endpoint; it does not select an existing account's login method.
+
+Set backend `AUTH_FRONTEND_URL` and `FRONTEND_URL` to the actual new frontend
+origin, including its port in local development. The browser Origin must match
+one of those origins. Cookie binding, JSON requests and origin checks remain
+required; CORS configuration alone does not authorize an email-code request.
+`EMAIL_LOGIN_ORIGIN_NOT_ALLOWED` indicates a deployment configuration mismatch,
+not that the address belongs to a Google account.
+
+Root Makefile defaults now point backend auth and frontend URLs at the workspace
+on port 3000. Start the backend with the normal local stack and run
+`make dev-frontend` for `lemma-frontend`; override `DEV_WORKSPACE_PORT` consistently
+in both commands when choosing another port. The operator harness remains on
+`DEV_FRONTEND_PORT` and is not the user auth frontend. Existing custom environment
+files or deployment overrides must also use the new frontend's origin.
+
+Email-code failures expose a stable top-level `code` alongside `message`.
+Clients should use `EMAIL_LOGIN_EXPIRED` to restart the browser binding,
+`EMAIL_CODE_EXPIRED` to request a replacement, and `EMAIL_CODE_RATE_LIMITED` with
+`Retry-After` to delay another request. Invalid codes use `EMAIL_CODE_INVALID`;
+configuration, invalid input, delivery, challenge lifecycle and proof failures
+have their own codes. Do not infer recovery actions from HTTP 403 alone.
+
+For browser regression checks, run `npm run test:auth-browser` in
+`lemma-frontend`. That suite uses controlled API responses. For actual signup,
+sign-in, verification mail, password reset, code exhaustion and resend, boot an
+**isolated** local backend with Postgres, Redis and SuperTokens and set
+`EMAIL_TRANSPORT=filesystem`, `EMAIL_OUTPUT_DIR` to a private inbox directory,
+`AUTH_EMAIL_VERIFICATION_REQUIRED=true` and matching frontend origins. Disable
+email domain checks for the suite's reserved example addresses. Point the real
+frontend at that API with verification enabled, then run:
+
+```bash
+cd lemma-frontend
+LEMMA_AUTH_QA_ORIGIN=http://localhost:13009 \
+LEMMA_AUTH_QA_API=http://localhost:18719 \
+LEMMA_AUTH_QA_MAILBOX=/private/tmp/lemma-auth-qa/emails \
+LEMMA_TEST_BROWSER_CHANNEL=chrome npm run test:auth-live
+```
+
+The live suite refuses non-loopback hosts, consumes only filesystem test mail,
+creates uniquely named test accounts, and closes its browsers. It does not start
+or stop the stack; its launcher must trap exit and tear down all owned processes
+and services. It skips when the three `LEMMA_AUTH_QA_*` variables are absent.
+Keep the inbox private: it contains usable test codes and reset links. Live
+provider consent and WhatsApp transport require their own credentials and test
+installations; seeded provider/passwordless identities verify routing and account
+reuse, not those external transports.
+
 ## Shared WhatsApp and Telegram
 
 Configure the existing shared WhatsApp number/token and Telegram bot token.

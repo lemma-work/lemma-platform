@@ -7,7 +7,7 @@ import { accountAccess, completionDestination } from "./completion";
 import { authLink, pendingDestination, rememberDestination } from "./redirects";
 import { PORTAL_PATH } from "./config";
 import { authFailure, sayProblem } from "./errors";
-import { startVerification, type VerificationPhase } from "./verification";
+import { checkInbox, startVerification, type VerificationPhase } from "./verification";
 
 const SENT_KEY = "lemma-app:auth:verification-sent";
 const COOLDOWN = 60_000;
@@ -99,10 +99,11 @@ export function Verify() {
             if (checking) return;
             checking = true;
             try {
-                if ((await EmailVerification.isEmailVerified()).isVerified) {
-                    await Session.attemptRefreshingSession();
-                    if (await accountAccess() === "ready" && live) setPhase("done");
-                }
+                const next = await checkInbox({
+                    verified: async () => (await EmailVerification.isEmailVerified()).isVerified,
+                    refresh: () => Session.attemptRefreshingSession(),
+                });
+                if (live && next === "done") setPhase("done");
             } catch { /* The manual check reports failures and can be retried. */ }
             finally { checking = false; }
         };
