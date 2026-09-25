@@ -27,6 +27,8 @@ from app.modules.agent.domain.agent_host import (
 from app.modules.agent.domain.agent_host_link import (
     ControlBody,
     LinkErrorCode,
+    ErrorBody,
+    HostFrameType,
     LinkFrame,
     RefusedUpdate,
     ServerErrorBody,
@@ -39,7 +41,11 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostStaleLease,
     AgentHostTerminalRun,
 )
-from app.modules.agent.services.agent_host_link_mcp import LinkUnauthorized
+from app.modules.agent.services.agent_host_link_mcp import (
+    DispatchedCallFailed,
+    InteractionRunEnded,
+    LinkUnauthorized,
+)
 from app.modules.agent.services.agent_host_link_store import ControlUpdates
 
 
@@ -343,8 +349,10 @@ async def answer_request(
     try:
         await asyncio.wait({task})
     except asyncio.CancelledError:
-        # The link is closing: the request goes with it, unanswered, and the
-        # host sends it again on the next link.
+        # The link is closing: the request goes with it, unanswered. A
+        # ``tools/call`` with a ``request_id`` is not cancelled by this -- its
+        # execution is shielded and recorded, and the host's retry on the next
+        # link is answered from the record (``agent_host_link_tool_calls``).
         task.cancel()
         raise
     if task.cancelled() or task.exception() is None:
@@ -360,8 +368,27 @@ async def answer_request(
         frame,
         LinkErrorCode.INTERNAL,
         "Lemma could not handle this request",
-        retryable=True,
+        # A tool call that reached its handler may already have acted.
+        retryable=not _is_tool_call(frame),
     )
+
+
+def log_host_reported_error(frame: LinkFrame, *, host_id: UUID | None) -> None:
+    """An ``error`` frame the host sent that answers no ``op``: logged only."""
+    try:
+        body = ErrorBody.model_validate(frame.body)
+    except ValidationError:
+        body = ErrorBody(code="UNREADABLE")
+    logger.warning(
+        "agent.agent_host_link.host_reported_error",
+        host_id=str(host_id) if host_id else None,
+        error_code=body.code,
+        error_message=body.message[:512],
+    )
+
+
+def _is_tool_call(frame: LinkFrame) -> bool:
+    return frame.type == HostFrameType.MCP and frame.body.get("method") == "tools/call"
 
 
 async def _answering(
@@ -390,6 +417,16 @@ async def _answering(
             frame,
             LinkErrorCode.UNAUTHORIZED,
             "the token does not grant this conversation",
+        )
+    except DispatchedCallFailed as failed:
+        # Logged where it failed. Never retryable: the tool may have acted.
+        await writer.send_error(frame, failed.code, failed.message, retryable=False)
+    except InteractionRunEnded:
+        await writer.send_error(
+            frame,
+            LinkErrorCode.TERMINAL_RUN,
+            "the run this interaction belongs to has ended",
+            retryable=False,
         )
     except TRANSIENT_ERRORS as exc:
         logger.warning(

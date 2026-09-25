@@ -18,7 +18,7 @@ update was refused, and a vocabulary of close codes.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 from uuid import UUID
@@ -279,6 +279,9 @@ class HarnessesBody(BaseModel):
 _TOOL_CALL_ID_PATTERN = r"^[A-Za-z0-9_.:-]{1,200}$"
 
 
+_REQUEST_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+
+
 class McpBody(BaseModel):
     """One Lemma MCP request from the agent, relayed by the host's bridge.
 
@@ -293,6 +296,10 @@ class McpBody(BaseModel):
     token: str = Field(min_length=1, max_length=8192)
     method: Literal["tools/list", "tools/call"]
     params: JsonObject = Field(default_factory=dict)
+    #: The host mints one per ``tools/call`` and sends the same one on every
+    #: retry of that call, on any link. With ``run_id`` it makes the call
+    #: execute at most once (``agent_host_link_tool_calls``).
+    request_id: str | None = Field(default=None, pattern=_REQUEST_ID_PATTERN)
 
 
 class InteractionWaitBody(BaseModel):
@@ -321,11 +328,20 @@ class OpOkBody(BaseModel):
 # -------------------------------------------------------------- server frames
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class WelcomeBody(BaseModel):
     host_id: UUID
     user_id: UUID
     protocol_version: int = AGENT_HOST_PROTOCOL_VERSION
     heartbeat_ms: int = AGENT_HOST_LINK_HEARTBEAT_MS
+    #: This server's clock when the link opened, UTC. Command expiry is
+    #: stamped by this clock, so a host whose own clock is off corrects by
+    #: the difference instead of refusing every command (CANCEL_RUN included)
+    #: as expired or not yet valid.
+    server_time: datetime = Field(default_factory=_utc_now)
 
 
 class RefusedUpdate(BaseModel):
