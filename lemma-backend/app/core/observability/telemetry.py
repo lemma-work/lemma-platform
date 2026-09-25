@@ -58,6 +58,11 @@ from app.core.observability.otel_logging import (
     quiet_otlp_export_logs,
     setup_otel_logs,
 )
+from app.core.observability.span_limits import (
+    GENERAL_SPAN_LIMITS,
+    MAX_SPAN_CONTENT_CHARS as _MAX_SPAN_CONTENT_CHARS,
+    general_span_processor,
+)
 from app.core.observability.span_sanitizer import (
     METRIC_ATTRIBUTE_KEYS,
     SanitizingSpanExporter,
@@ -263,13 +268,6 @@ def agent_run_telemetry_context(
         yield attributes
     finally:
         _agent_run_context.reset(token)
-
-
-# Phoenix renders these in full, so the cap is about what a span is allowed to
-# weigh on the wire rather than about what is readable. A run's transcript can
-# be megabytes; the OTLP batch it would ride in is not the place to find that
-# out.
-_MAX_SPAN_CONTENT_CHARS = 8_192
 
 
 def record_span_input(span: Any, value: Any) -> None:
@@ -570,12 +568,13 @@ def _setup_tracing(service_name: str) -> TracerProvider | None:
     provider = TracerProvider(
         resource=_build_resource(service_name),
         sampler=_build_sampler(settings),
+        span_limits=GENERAL_SPAN_LIMITS,  # truncate at record time
     )
 
     provider.add_span_processor(AgentRunSpanEnricher())
 
     provider.add_span_processor(
-        BatchSpanProcessor(
+        general_span_processor(
             SanitizingSpanExporter(
                 _build_span_exporter(
                     traces_endpoint,

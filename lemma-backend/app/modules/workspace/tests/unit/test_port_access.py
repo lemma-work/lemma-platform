@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.modules.workspace.services.port_access import (
@@ -167,3 +168,82 @@ def test_the_proxy_carries_whatever_the_fabrics_own_door_needs() -> None:
     assert sent["e2b-traffic-access-token"] == "the-real-one"
     assert sent["x-harmless"] == "kept"
     assert "cookie" not in sent
+
+
+class _TrackedStream(httpx.AsyncByteStream):
+    """An upstream body that records how far it was read and whether closed."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.yielded = 0
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            self.yielded += 1
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _client_answering(stream: _TrackedStream, **headers: str) -> httpx.AsyncClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers=headers, stream=stream)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+async def test_the_upstream_body_is_streamed_not_buffered() -> None:
+    from starlette.responses import StreamingResponse
+
+    from app.modules.workspace.api.controllers.port_proxy_controller import _forward
+
+    stream = _TrackedStream([b"a", b"b", b"c"])
+    async with _client_answering(stream, **{"content-encoding": "gzip"}) as client:
+        response = await _forward(client, httpx.Request("GET", "http://sandbox/"))
+
+        assert isinstance(response, StreamingResponse)
+        # Nothing read before the ASGI server starts pulling.
+        assert stream.yielded == 0
+        # Raw bytes under the upstream's own encoding.
+        assert response.headers["content-encoding"] == "gzip"
+        body = [chunk async for chunk in response.body_iterator]
+        assert body == [b"a", b"b", b"c"]
+        assert stream.closed
+
+
+async def test_the_upstream_is_closed_when_the_caller_leaves_before_the_body() -> None:
+    """A disconnect before streaming never iterates the body; the background
+    task Starlette always runs is what closes the upstream then."""
+    from app.modules.workspace.api.controllers.port_proxy_controller import _forward
+
+    stream = _TrackedStream([b"never read"])
+    async with _client_answering(stream) as client:
+        response = await _forward(client, httpx.Request("GET", "http://sandbox/"))
+        assert response.background is not None
+        await response.background()
+        assert stream.closed
+        assert stream.yielded == 0
+
+
+async def test_an_unreachable_upstream_is_a_502() -> None:
+    from app.modules.workspace.api.controllers.port_proxy_controller import _forward
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        response = await _forward(client, httpx.Request("GET", "http://sandbox/"))
+    assert response.status_code == 502
+
+
+async def test_the_proxy_reuses_one_client_and_closes_it_on_shutdown() -> None:
+    from app.modules.workspace.api.controllers import port_proxy_controller as proxy
+
+    first = proxy.get_port_proxy_client()
+    assert proxy.get_port_proxy_client() is first
+    await proxy.close_port_proxy_client()
+    assert first.is_closed
+    assert proxy.get_port_proxy_client() is not first
+    await proxy.close_port_proxy_client()

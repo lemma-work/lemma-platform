@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from uuid import UUID
 
 from opentelemetry import trace
 
+from app.core.bounded import BoundedDict
 from app.core.request_context import create_inherited_task
 
 tracer = trace.get_tracer(__name__)
@@ -77,8 +77,10 @@ class FunctionSessionTokenCache:
         self._max_entries = max_entries
         self._clock = clock
         self._wall_clock = wall_clock
-        self._entries: OrderedDict[FunctionSessionTokenKey, _CachedToken] = (
-            OrderedDict()
+        # Touched explicitly on a valid hit only (re-set moves a key to the
+        # end), so ``touch_on_get`` stays off.
+        self._entries: BoundedDict[FunctionSessionTokenKey, _CachedToken] = BoundedDict(
+            max_entries, name="function.session_tokens"
         )
         self._inflight: dict[
             FunctionSessionTokenKey, asyncio.Task[FunctionSessionToken]
@@ -118,7 +120,7 @@ class FunctionSessionTokenCache:
                 and cached.cache_expires_at > now
                 and cached.token.expires_at > required_until
             ):
-                self._entries.move_to_end(key)
+                self._entries[key] = cached
                 span.set_attribute("lemma.cache", "hit")
                 return cached.token
             if cached is not None:
@@ -174,7 +176,4 @@ class FunctionSessionTokenCache:
                 token=token,
                 cache_expires_at=self._clock() + self._ttl_seconds,
             )
-            self._entries.move_to_end(key)
-            while len(self._entries) > self._max_entries:
-                self._entries.popitem(last=False)
         return token

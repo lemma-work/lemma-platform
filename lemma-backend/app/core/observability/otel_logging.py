@@ -32,6 +32,7 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogExporter
 from opentelemetry.sdk.resources import Resource
 
+from app.core.bounded import BoundedDict
 from app.core.redaction import redact_text
 
 _SAFE_OTEL_LOG_FIELDS = frozenset(
@@ -167,7 +168,12 @@ class _RateLimitedLogFilter(logging.Filter):
     def __init__(self, interval_seconds: float = 60.0) -> None:
         super().__init__()
         self._interval = interval_seconds
-        self._last_emit: dict[str, float] = {}
+        # Keyed by logger + message prefix, which embeds endpoints and error
+        # text, so the key space is open-ended; forgetting a key only lets one
+        # extra line through.
+        self._last_emit: BoundedDict[str, float] = BoundedDict(
+            1024, name="observability.log_rate_limit"
+        )
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:

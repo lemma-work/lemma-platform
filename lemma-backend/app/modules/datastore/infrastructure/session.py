@@ -10,6 +10,7 @@ from sqlalchemy.pool import NullPool
 from app.modules.datastore.config import datastore_settings
 from app.core.config import settings
 from app.core.observability.connection_scope import attach_connection_scope_monitor
+from app.core.observability.memory_sampler import watch_compiled_cache
 
 _engine = None
 _session_maker = None
@@ -137,11 +138,18 @@ def get_datastore_engine():
             # otherwise indistinguishable, and their readings sum into a single
             # meaningless series.
             pool_logging_name="datastore",
+            # No compiled-statement cache. Every statement on this engine is a
+            # dynamic ``text()`` keyed by its SQL string -- a bulk write's text
+            # changes with its row count, a query is user-authored -- so entries
+            # never repeat, and one 1000-row bulk insert holds ~15 MB. The
+            # default 500-entry LRU grew the API by gigabytes and never shrank.
+            query_cache_size=0,
             **engine_kwargs,
         )
         # The datastore pool has no telemetry of its own; one line gives the
         # monitor both engines.
         attach_connection_scope_monitor(_engine)
+        watch_compiled_cache("datastore", _engine)
     return _engine
 
 

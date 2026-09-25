@@ -31,6 +31,10 @@ from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreRecordNotFoundError,
 )
+from app.modules.datastore.infrastructure.record_bulk_sql import (
+    chunk_rows,
+    unnest_delete_statement,
+)
 from app.modules.datastore.infrastructure.record_errors import (
     raise_record_write_error,
 )
@@ -97,6 +101,33 @@ def prepare_bulk_deletes(
     return prepared
 
 
+def batch_bulk_deletes(
+    ctx: TableContext,
+    prepared: list[tuple[RecordId, str, SqlParams]],
+    user_id: UUID,
+    *,
+    enforce_user_scope: bool,
+) -> list[tuple[list[tuple[RecordId, str, SqlParams]], str, SqlParams]]:
+    """Fold the per-row deletes into fixed-shape ``pk = ANY(:ids)`` statements.
+
+    Each tuple is ``(rows, sql, params)``: the SQL text is the same for every
+    batch size, and the rows are kept so the ids that matched nothing can still
+    be named. Falls back to one statement per row only if the primary key's
+    array type cannot be named (which no supported key type hits today).
+    """
+    scoped = ctx.enable_rls and enforce_user_scope
+    sql = unnest_delete_statement(ctx, scoped_to_user=scoped)
+    if sql is None:
+        return [([row], row[1], row[2]) for row in prepared]
+    batches = []
+    for chunk in chunk_rows(prepared, sized=False):
+        params: SqlParams = {"ids": [row_params["id"] for _, _, row_params in chunk]}
+        if scoped:
+            params["current_user_id"] = str(user_id)
+        batches.append((chunk, sql, params))
+    return batches
+
+
 def _missing_ids_message(missing: list[RecordId], requested: int) -> str:
     named = ", ".join(f"'{record_id}'" for record_id in missing[:_NAMED_MISSING_IDS])
     if len(missing) > _NAMED_MISSING_IDS:
@@ -145,18 +176,25 @@ async def bulk_delete_records(
             events: list[DomainEvent] = []
             missing: list[RecordId] = []
             try:
-                for record_id, sql, params in prepared:
+                for rows, sql, params in batch_bulk_deletes(
+                    ctx, prepared, user_id, enforce_user_scope=enforce_user_scope
+                ):
                     result = await session.execute(text(sql), params)
-                    row = result.fetchone()
-                    if row is None:
-                        # Collected rather than raised on the spot: the whole
-                        # batch is rolled back either way, and one refusal
-                        # naming every bad id is worth more than N attempts.
-                        missing.append(record_id)
-                        continue
+                    deleted = [dict(row._mapping) for row in result.fetchall()]
+                    matched = {str(row.get(ctx.primary_key_column)) for row in deleted}
+                    # Collected rather than raised on the spot: the whole
+                    # batch is rolled back either way, and one refusal
+                    # naming every bad id is worth more than N attempts.
+                    missing.extend(
+                        record_id
+                        for record_id, _, row_params in rows
+                        if str(row_params["id"]) not in matched
+                    )
                     if event_factory is None:
                         continue
-                    events.append(event_factory(row_to_entity(dict(row._mapping), ctx)))
+                    events.extend(
+                        event_factory(row_to_entity(row, ctx)) for row in deleted
+                    )
             except IntegrityError as exc:
                 await session.rollback()
                 raise DatastoreConflictError(

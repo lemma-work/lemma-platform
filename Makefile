@@ -2024,6 +2024,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-controller-types
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+	@echo "→ Memory hazards…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-memory-hazards
 	@echo "→ Public prose…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-public-prose
 	@echo "→ Migration order…"

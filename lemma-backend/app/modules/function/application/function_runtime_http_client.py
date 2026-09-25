@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Callable
 
 import httpx
@@ -31,14 +32,19 @@ class FunctionRuntimeHttpClientPool:
 
     def __init__(self, factory: HttpClientFactory = _build_client) -> None:
         self._factory = factory
-        self._clients: dict[int, httpx.AsyncClient] = {}
+        # Keyed by the loop itself, weakly: an ``id()`` key outlived its loop,
+        # pinned the client forever, and could be reused by a new loop that
+        # was then handed a client bound to the dead one.
+        self._clients: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, httpx.AsyncClient
+        ] = weakref.WeakKeyDictionary()
 
     def get(self) -> httpx.AsyncClient:
-        loop_id = id(asyncio.get_running_loop())
-        client = self._clients.get(loop_id)
+        loop = asyncio.get_running_loop()
+        client = self._clients.get(loop)
         if client is None:
             client = self._factory()
-            self._clients[loop_id] = client
+            self._clients[loop] = client
         return client
 
     async def close(self) -> None:

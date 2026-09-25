@@ -69,3 +69,42 @@ class TestBoundedDict:
         assert popped == 1
         assert "a" not in held
         assert missing == -1
+
+
+class TestLruAndEviction:
+    def test_touch_on_get_keeps_a_hot_entry(self) -> None:
+        cache = BoundedDict[str, int](2, touch_on_get=True)
+        cache["a"] = 1
+        cache["b"] = 2
+        assert cache.get("a") == 1
+        cache["c"] = 3
+        assert "a" in cache and "b" not in cache
+
+    def test_on_evict_receives_what_the_cap_pushed_out(self) -> None:
+        evicted: list[tuple[str, int]] = []
+        cache = BoundedDict[str, int](
+            1, on_evict=lambda key, value: evicted.append((key, value))
+        )
+        cache["a"] = 1
+        cache["b"] = 2
+        cache.pop("b")
+        assert evicted == [("a", 1)]
+        assert cache.evictions == 1
+
+    def test_named_collections_register_and_unnamed_do_not(self) -> None:
+        from app.core.bounded import registered_collections
+
+        named = BoundedSet[int](4, name="test.bounded.registry")
+        named.add(1)
+        BoundedSet[int](4).add(1)
+        stats = [
+            s for s in registered_collections() if s["name"] == "test.bounded.registry"
+        ]
+        assert stats == [
+            {
+                "name": "test.bounded.registry",
+                "entries": 1,
+                "maxsize": 4,
+                "evictions": 0,
+            }
+        ]

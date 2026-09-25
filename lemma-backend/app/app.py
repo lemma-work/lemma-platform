@@ -277,6 +277,11 @@ async def lifespan(app: FastAPI):
             )
 
             await close_shared_http_client()
+            from app.modules.workspace.api.controllers.port_proxy_controller import (
+                close_port_proxy_client,
+            )
+
+            await close_port_proxy_client()
             # The client every SuperTokens verification goes through.
             await close_shared_querier_client()
             # The separate libcurl session `web_fetch` reads pages through.

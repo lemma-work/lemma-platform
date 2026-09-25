@@ -17,6 +17,11 @@ from typing import Any
 from uuid import UUID
 
 from app.modules.datastore.domain.datastore_entities import SYSTEM_COLUMNS
+from app.modules.datastore.infrastructure.record_bulk_sql import (
+    chunk_rows,
+    column_arrays,
+    unnest_insert_statement,
+)
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.record_validator import convert_record
@@ -247,6 +252,15 @@ def build_bulk_statements(
     held a connection -- with the write's row locks -- while it assembled
     strings. Measured at eleven holds on a real-LLM e2e run, worst 784ms.
     """
+    fixed_sql = unnest_insert_statement(ctx, ordered_keys, conflict_sql)
+    if fixed_sql is not None:
+        # One text per (table, column set, upsert), whatever the row count.
+        return [
+            (fixed_sql, column_arrays(ordered_keys, chunk))
+            for chunk in chunk_rows(prepared_records)
+        ]
+    # Fallback: a key whose array element type cannot be named with certainty
+    # (see record_bulk_sql) keeps the per-row VALUES form and its behaviour.
     return [
         bulk_returning_statement(ctx, ordered_keys, chunk, conflict_sql)
         for chunk in chunk_for_parameter_limit(prepared_records, len(ordered_keys))
