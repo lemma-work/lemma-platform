@@ -113,6 +113,14 @@ class ConnectRequestInitiateSchema(BaseModel):
             "a rooted path is accepted; anything else is ignored."
         ),
     )
+    connection_fields: dict[str, object] | None = Field(
+        default=None,
+        description=(
+            "Per-connection values the sign-in itself does not carry, such as "
+            "Shopify's store `subdomain`. Validated against the connector "
+            "kind's `config_schema`; omit for connectors that declare none."
+        ),
+    )
 
 
 class ConnectRequestResponseSchema(BaseSchema):

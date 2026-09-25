@@ -31,6 +31,7 @@ from app.modules.agent.domain.value_objects import to_json_value
 from app.modules.agent.tools.connectors.connector_access import (
     connector_execution_only,
     connector_services,
+    find_file_result,
 )
 from app.modules.agent.tools.connectors.models import (
     DescribeConnectorOperationRequest,
@@ -197,9 +198,11 @@ async def run_connector_operation(
     """Run an operation on an installed connector.
 
     `arguments` must match the operation's input schema -- fetch it with
-    `describe_connector_operation` first. A file result larger than the inline
-    limit is written to the pod datastore and returned as a reference; pass
-    `output_path` to choose where it lands.
+    `describe_connector_operation` first. To send a file (an email attachment,
+    a Drive upload), pass it as `{"pod_path": "/me/report.pdf"}` in the file
+    argument; a file in your sandbox has to be uploaded to the pod first. A
+    file result larger than the inline limit is written to the pod datastore
+    and returned as a reference; pass `output_path` to choose where it lands.
     """
     deps = ctx.deps
     if deps.org_id is None:
@@ -229,9 +232,9 @@ async def run_connector_operation(
             if invalid is not None:
                 return invalid
 
+            # `output_path` is Lemma's argument and is kept out of the payload:
+            # it used to be sent to the provider along with everything else.
             payload = dict(request.arguments or {})
-            if request.output_path:
-                payload["output_path"] = request.output_path
 
             resolved = await services.operations.resolve_execution_for_auth_config(
                 user_id=deps.user_id,
@@ -247,6 +250,10 @@ async def run_connector_operation(
                 # says nothing here and stays the person.
                 act_as="app",
             )
+            # The files the arguments name, read as this agent -- its delegated
+            # grants, not the account owner's -- so a connector call cannot send
+            # anything the agent could not have read itself.
+            resolved = await services.files.prepare(resolved)
 
         # Phase 2: the provider call, holding no connection. The REST path has
         # split these two since it was written; this one had not, so the
@@ -254,6 +261,18 @@ async def run_connector_operation(
         # connection for the length of an external call.
         async with connector_execution_only() as operations:
             response = await operations.execute_resolved(resolved)
+        # Phase 3: a file result lands in the pod when it is large or asked
+        # for. The REST route has always done this; this path skipped it, so a
+        # download came back as an inline blob however big it was.
+        found = await find_file_result(response)
+        if found is not None:
+            async with connector_services(deps) as services:
+                response = await services.files.capture(
+                    response,
+                    found,
+                    connector_id=resolved.connector_id,
+                    output_path=request.output_path,
+                )
     except DomainError as exc:
         # Connector failures are information for the model (wrong argument,
         # account needs reconnecting), not a reason to end the run.

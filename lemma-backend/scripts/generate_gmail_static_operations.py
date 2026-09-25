@@ -41,6 +41,9 @@ from app.modules.connectors.infrastructure.openapi.spec_import import (  # noqa:
     build_operation_descriptors,
     build_raw_passthrough,
 )
+from app.modules.connectors.services.files.file_ref import (  # noqa: E402
+    file_reference_schema,
+)
 from scripts._openapi_static_operations import (  # noqa: E402
     LEMMA_APPS_CONFIG_PATH,
     load_spec,
@@ -173,6 +176,119 @@ def _build_overrides(spec: dict) -> dict[str, dict]:
     return overrides
 
 
+_ADDRESS_LIST = {
+    "anyOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}},
+    ],
+}
+
+
+def _message_fields() -> dict[str, dict]:
+    """What a caller writes instead of a base64url RFC 822 blob."""
+    return {
+        "to": {**_ADDRESS_LIST, "description": "Recipient address, or a list."},
+        "cc": {**_ADDRESS_LIST, "description": "Cc address, or a list."},
+        "bcc": {**_ADDRESS_LIST, "description": "Bcc address, or a list."},
+        "reply_to": {"type": "string", "description": "Reply-To address."},
+        "subject": {"type": "string"},
+        "text": {"type": "string", "description": "Plain-text body."},
+        "html": {
+            "type": "string",
+            "description": "HTML body. With `text` as well, both are sent and "
+            "the recipient's client picks one.",
+        },
+        "attachments": {
+            "type": "array",
+            "items": file_reference_schema("A file to attach."),
+            "description": "Files to attach, each a pod file reference.",
+        },
+        "thread_id": {
+            "type": "string",
+            "description": "Gmail thread id, to send this as a reply in that thread.",
+        },
+        "in_reply_to": {
+            "type": "string",
+            "description": "Message-ID header of the message being replied to, "
+            "so the recipient's client threads it too.",
+        },
+        "userId": {
+            "type": "string",
+            "description": "The mailbox; `me` for the connected account.",
+        },
+    }
+
+
+def _composed_operations() -> list[dict]:
+    """Send and draft, taking fields and attachments instead of raw MIME.
+
+    `messages_send` and `drafts_create` stay, for a caller that already has a
+    message; these are what anyone else should use. The descriptor's
+    `encoding: rfc822` has the executor build the message, and `attachments`
+    are pod file references read under the caller's own access.
+    """
+    base = {
+        "kind": "http",
+        "mode": "openapi",
+        "method": "POST",
+        "server_url": SERVER_URL,
+        "path_params": ["userId"],
+        "query_params": [],
+        "header_params": [],
+        "response": {"binary": False},
+        "path_param_defaults": {"userId": "me"},
+        "default_headers": dict(DEFAULT_HEADERS),
+    }
+    rfc822 = {
+        "content_type": "application/json",
+        "encoding": "rfc822",
+        "raw_field": "raw",
+    }
+
+    def schema(title: str) -> dict:
+        return {
+            "type": "object",
+            "title": title,
+            "properties": _message_fields(),
+            "required": ["to"],
+            "additionalProperties": False,
+        }
+
+    return [
+        {
+            "name": "send_message",
+            "description": (
+                "Send an email, with attachments from the pod. Takes to, "
+                "subject, text or html, and attachments as pod file references "
+                "-- no MIME to build."
+            ),
+            "execution": {
+                **base,
+                "path": "/gmail/v1/users/{userId}/messages/send",
+                "request_body": {**rfc822, "thread_field": "threadId"},
+            },
+            "input_schema": schema("send_message"),
+        },
+        {
+            "name": "create_draft",
+            "description": (
+                "Save an email as a draft, with attachments from the pod. Same "
+                "fields as send_message."
+            ),
+            "execution": {
+                **base,
+                "path": "/gmail/v1/users/{userId}/drafts",
+                "request_body": {
+                    **rfc822,
+                    "envelope": "message",
+                    "thread_field": "threadId",
+                },
+            },
+            "input_schema": schema("create_draft"),
+        },
+    ]
+
+
 def build_static_operations() -> list[dict]:
     spec = load_spec(CONNECTOR_ID)
     operations = build_operation_descriptors(
@@ -188,7 +304,10 @@ def build_static_operations() -> list[dict]:
         name=RAW_PASSTHROUGH_NAME,
         default_headers=DEFAULT_HEADERS,
     )
-    return [operation_to_static_entry(op) for op in [*operations, raw]]
+    return [
+        *(operation_to_static_entry(op) for op in [*operations, raw]),
+        *_composed_operations(),
+    ]
 
 
 def main() -> None:

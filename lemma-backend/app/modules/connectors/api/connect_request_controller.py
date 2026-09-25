@@ -66,6 +66,7 @@ async def initiate_connect_request(
         connector_id=data.connector_id,
         auth_config_id=data.auth_config_id,
         return_to=data.return_to,
+        connection_fields=data.connection_fields,
     )
 
     return ConnectRequestResponseSchema.model_validate(connect_request)

@@ -5,6 +5,7 @@ import Session from "supertokens-web-js/recipe/session";
 import EmailPassword from "supertokens-web-js/recipe/emailpassword";
 import ThirdParty from "supertokens-web-js/recipe/thirdparty";
 import EmailVerification from "supertokens-web-js/recipe/emailverification";
+import { createRefreshBreaker } from "lemma-sdk";
 import { apiUrl, hasApiUrl } from "@/session/client";
 import { ST_BASE } from "./config";
 import { proofHeader, type Purpose } from "./altcha";
@@ -42,6 +43,12 @@ function apiBase(): { apiDomain: string; apiBasePath: string } {
 
 let started = false;
 
+/* The same page-wide ceiling the SDK puts on the workspace's init, for the
+   portal's. The verification screen polls, and a refresh that keeps failing
+   there would otherwise be retried on every poll. Nothing here listens for a
+   trip: the refused refresh fails the one call, and the screen says so. */
+const refreshBreaker = createRefreshBreaker();
+
 export function startAuth(): void {
     if (started || typeof window === "undefined") return;
     started = true;
@@ -51,7 +58,14 @@ export function startAuth(): void {
     SuperTokens.init({
         appInfo: { appName: "Lemma", apiDomain, apiBasePath },
         recipeList: [
-            Session.init({ tokenTransferMethod: "cookie", maxRetryAttemptsForSessionRefresh: 3 }),
+            Session.init({
+                tokenTransferMethod: "cookie",
+                maxRetryAttemptsForSessionRefresh: 3,
+                preAPIHook: async (context) => {
+                    if (context.action === "REFRESH_SESSION") refreshBreaker.admit();
+                    return context;
+                },
+            }),
             EmailPassword.init({
                 preAPIHook: async (context) => {
                     const purpose = GUARDED[context.action];

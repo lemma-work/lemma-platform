@@ -50,6 +50,8 @@ export {
   nextBackoffDelay,
 } from "./run-utils.js";
 export type { AnyRunStatus } from "./run-utils.js";
+export { createRefreshBreaker, RefreshSuspendedError } from "./refresh-breaker.js";
+export type { RefreshBreaker, RefreshBreakerOptions } from "./refresh-breaker.js";
 export { parseAssistantStreamEvent, upsertConversationMessage } from "./assistant-events.js";
 export type { ParsedAssistantStreamEvent } from "./assistant-events.js";
 export { isThirdPartyMcpTool, normalizeAgentToolName } from "./core/agent/tool-names.js";
@@ -228,6 +230,7 @@ export type {
 } from "./datastore-query.js";
 
 export { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
+export { podFile, podFileById, type PodFileRef } from "./file-refs.js";
 
 // Namespace types (for advanced usage)
 export type { AgentHostNamespace } from "./namespaces/agent-host.js";

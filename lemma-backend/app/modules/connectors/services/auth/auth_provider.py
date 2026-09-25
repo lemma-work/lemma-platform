@@ -47,11 +47,16 @@ class AuthProviderInterface(ABC):
         state: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        connection_fields: dict[str, object] | None = None,
     ) -> Tuple[str, str]:
         """Return ``(authorization_url, state)`` to send the person to.
 
         ``code_verifier`` is supplied by the caller when the install's client
         has no secret, because it must survive until the callback.
+
+        ``connection_fields`` are the per-connection values a sign-in does not
+        carry, already validated against the kind's schema -- Shopify's store
+        ``subdomain``. ``None`` for nearly every connector.
         """
 
     @abstractmethod

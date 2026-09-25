@@ -416,7 +416,7 @@ search_connector_operations {"query": "send an email"}
 
 run_connector_operation {"auth_config": "workspace-gmail",
                          "operation": "gmail_send_email",
-                         "arguments": {"recipient_email": "a@b.com", "subject": "Hi", "body": "…"}}
+                         "arguments": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "…"}}
 ```
 
 Wrong arguments come back as `invalid_arguments` **with the operation's
@@ -424,6 +424,27 @@ input_schema attached** — correct and retry, don't go fetch the schema
 separately. Pass `auth_config` on search only to narrow to one install;
 `describe_connector_operation` only when you want the full schema up front;
 `output_path` on run to land a file result in the pod.
+
+### Sending files: attachments and uploads
+
+Wherever an operation's schema takes a file — a Gmail attachment, a Drive or
+Slack upload, a multipart field — pass a **pod file**, never file bytes:
+
+```text
+run_connector_operation {"auth_config": "workspace-gmail", "operation": "GMAIL_SEND_EMAIL",
+  "arguments": {"recipient_email": "anukul@lemma.work", "subject": "Q3", "body": "Attached.",
+                "attachment": {"pod_path": "/me/reports/q3.pdf"}}}
+```
+
+`{"file_id": "..."}` works too, and a list of references where the field
+takes several. The file is read with *your* access, so it must be one you can
+read. A file that only exists in your sandbox has to go into the pod first
+(`lemma files upload ./q3.pdf /me/reports/`). This is the same on every
+connector kind; `describe_connector_operation` shows which fields take files.
+
+On a native Gmail install, `send_message` and `create_draft` take `to`,
+`subject`, `text`/`html` and `attachments` directly. Use them rather than
+building MIME for `messages_send`.
 
 ### From the CLI
 
@@ -435,8 +456,13 @@ payload; let `--dry-run` hand you the schema.
 lemma connectors run gmail "list recent emails" --dry-run    # resolves + prints the input schema
 lemma connectors run gmail gmail_list_messages -d '{"max_results": 5}'
 lemma connectors run gmail gmail_send_email \
-  -d '{"recipient_email": "a@b.com", "subject": "Hi", "body": "..."}'
+  -d '{"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "..."}'
+lemma connectors run gmail GMAIL_SEND_EMAIL \
+  -d '{"recipient_email": "anukul@lemma.work", "subject": "Q3"}' --attach attachment=/me/q3.pdf
 ```
+
+`--attach FIELD=PATH` puts a pod file in a file argument (repeat it for a
+list). `@./local.pdf` uploads a local file to `/me/connector-uploads/` first.
 
 The first argument is the **connector id** you already know from the task
 (`gmail`, `slack`); it resolves to that connector's install. The second is an

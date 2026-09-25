@@ -44,6 +44,7 @@ import {
     getAccountStatusMeta,
     INSTALL_STATE,
     getAppLabel,
+    getConnectionFieldsSchema,
     getInstallLabel,
     getPrimaryKindSpec,
     getKindSpec,
@@ -51,6 +52,7 @@ import {
     getTenantConfiguredKindSpec,
     installUsesOAuth,
     isTenantConfigured,
+    schemaHasFields,
     usesDirectCredentials,
     type ConnectorKindSpec,
 } from './connector-utils';
@@ -496,11 +498,29 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     };
 
     // OAuth needs a round-trip to fetch the authorization URL before we can act.
-    const startOAuth = async (connectorId: string, authConfigId: string) => {
+    const startOAuth = async (
+        connectorId: string,
+        authConfigId: string,
+        connectionFields?: Record<string, unknown>,
+    ) => {
+        if (!connectionFields) {
+            // Some sign-ins need a question answered first -- Shopify's store
+            // name. Ask it, and come back here with the answer.
+            const connector = (connectors || []).find((app) => app.id === connectorId) ?? null;
+            const install = (authConfigs || []).find((config) => config.id === authConfigId);
+            const capability = install
+                ? getKindSpec(connector, install.kind)
+                : getPrimaryKindSpec(connector);
+            if (connector && schemaHasFields(getConnectionFieldsSchema(capability))) {
+                setCredentialTarget({ connector, capability, authConfigId, mode: 'authorize' });
+                return;
+            }
+        }
         const response = await createConnectRequest.mutateAsync({
             connectorId,
             authConfigId,
             returnTo: completionPath(),
+            connectionFields,
         });
         if (response.authorization_url) {
             setPendingOAuth({ connectorId });
@@ -815,6 +835,11 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                 authConfigId = authConfig.id;
             }
 
+            if (target.mode === 'authorize') {
+                setCredentialTarget(null);
+                await startOAuth(target.connector.id, authConfigId, data);
+                return;
+            }
             if (target.mode === 'reconnect' && target.accountId) {
                 // Rotated in place. This used to delete the account and create
                 // a replacement, which loses everything if the create fails —

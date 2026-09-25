@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from ..openapi_client.api.connectors import (
     connector_account_create,
     connector_account_update,
@@ -307,13 +309,26 @@ class ConnectorOperations:
         payload: ConnectorPayload,
         *,
         account_id: str | None = None,
+        pod_id: str | None = None,
     ) -> OperationExecutionResponse:
+        """Run ``operation``.
+
+        A file argument takes a reference -- ``lemma_sdk.pod_file("/me/a.pdf")``
+        -- which resolves in ``pod_id``: this client's pod unless one is given.
+        """
+        pod = pod_id if pod_id is not None else self._parent.pod_id
         return self._parent._call(
             connector_operation_execute,
             self._parent._org_uuid(),
             auth_config,
             operation,
-            body=compact({"payload": payload, "account_id": account_id}),
+            body=compact(
+                {
+                    "payload": payload,
+                    "account_id": account_id,
+                    "pod_id": str(pod) if pod is not None else None,
+                }
+            ),
             body_model=OperationExecutionRequest,
         )
 
@@ -364,12 +379,14 @@ class BoundConnectors(BoundResource):
         payload: ConnectorPayload,
         *,
         account_id: str | None = None,
+        pod_id: str | None = None,
     ) -> OperationExecutionResponse:
         return self.operations.execute(
             auth_config,
             operation,
             payload,
             account_id=account_id,
+            pod_id=pod_id,
         )
 
     def connect_request(
@@ -377,11 +394,24 @@ class BoundConnectors(BoundResource):
         app: str,
         *,
         auth_config_id: str | None = None,
+        connection_fields: dict[str, Any] | None = None,
     ) -> ConnectRequestResponseSchema:
+        """Start a browser sign-in for ``app``.
+
+        ``connection_fields`` carries what the sign-in cannot, such as
+        Shopify's store ``subdomain``; the connector kind's ``config_schema``
+        says which fields exist.
+        """
         return self._call(
             connector_connect_request_create,
             self._org_uuid(),
-            body=compact({"connector_id": app, "auth_config_id": auth_config_id}),
+            body=compact(
+                {
+                    "connector_id": app,
+                    "auth_config_id": auth_config_id,
+                    "connection_fields": connection_fields,
+                }
+            ),
             body_model=ConnectRequestInitiateSchema,
         )
 

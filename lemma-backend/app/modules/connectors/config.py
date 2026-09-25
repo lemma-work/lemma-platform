@@ -146,6 +146,14 @@ class ConnectorSettings(BaseSettings):
         default=64 * 1024 * 1024,
         description="Hard ceiling on a binary result; larger is refused, not buffered.",
     )
+    connector_file_input_max_bytes: int = Field(
+        default=25 * 1024 * 1024,
+        description=(
+            "Ceiling on the files one operation call may send, together. Each "
+            "is read into memory before dispatch, and 25 MB is Gmail's own "
+            "message limit -- the most common reason to send a file at all."
+        ),
+    )
     connector_sql_engine_cache_size: int = Field(
         default=32,
         description=(
