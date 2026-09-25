@@ -19,6 +19,13 @@ test("account access distinguishes verification from sign-out and unrelated deni
     assert.equal(needsVerification(null), false);
 });
 
+test("a non-JSON access denial gives a readable account error", async () => {
+    await assert.rejects(
+        accountAccess(async () => new Response("<html>Forbidden</html>", { status: 403 })),
+        /This account cannot access Lemma/,
+    );
+});
+
 function actions(overrides: Partial<VerificationActions> = {}): VerificationActions {
     return {
         access: async () => "verify",

@@ -20,7 +20,7 @@ export async function accountAccess(fetcher: typeof fetch = fetch): Promise<Acce
     const response = await fetcher(onApi("/users/me"), { credentials: "include", cache: "no-store" });
     if (response.ok) return "ready";
     if (response.status === 401) return "signed-out";
-    if (response.status === 403 && needsVerification(await response.json())) return "verify";
+    if (response.status === 403 && needsVerification(await response.json().catch(() => null))) return "verify";
     throw new Error(response.status === 403
         ? "This account cannot access Lemma. Contact your administrator."
         : "We couldn’t check your account. Try again.");

@@ -687,7 +687,11 @@ jobs:
           key: playwright-auth-${{ runner.os }}-${{ hashFiles('lemma-frontend/package-lock.json') }}
       - name: Install browser for auth journeys
         working-directory: lemma-frontend
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright install chromium
+          if ! npx playwright install-deps chromium; then
+            echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
+          fi
       - name: Test auth journeys
         working-directory: lemma-frontend
         run: npm run test:auth-browser
