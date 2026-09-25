@@ -201,6 +201,7 @@ class WorkspaceToolRuntime:
         pod_id: UUID | None,
         sandbox_id: UUID,
         root: str,
+        host_id: UUID | None = None,
         session_id: str | None = None,
         close_on_exit: bool = True,
         workload_type: str | None = None,
@@ -253,6 +254,7 @@ class WorkspaceToolRuntime:
             )
         return HostWorkspaceSession(
             root=root,
+            host_id=host_id,
             client=build_local_client(),
             sandbox_id=sandbox_id,
             session_id=session_id,

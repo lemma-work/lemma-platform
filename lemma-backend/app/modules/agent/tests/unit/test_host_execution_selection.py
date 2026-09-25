@@ -155,6 +155,8 @@ async def test_the_paired_users_own_message_runs_on_their_mac():
     chosen = await _choose(facts)
 
     assert chosen is not None and chosen.root == ROOT
+    # The Mac chosen travels with the workspace: the run's ops are pinned to it.
+    assert chosen.host_id == HOST
     assert facts.opened[0]["host_id"] == HOST
     assert facts.opened[0]["owner_id"] == PAIRED
     assert (facts.opened[0]["day"], facts.opened[0]["slug"]) == (

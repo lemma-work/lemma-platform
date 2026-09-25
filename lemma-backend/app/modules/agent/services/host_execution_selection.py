@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from sandbox_runtime.errors import SandboxError
@@ -204,9 +204,14 @@ def workspace_from_choice(value: dict[str, object]) -> HostWorkspace | None:
     if value.get("target") != "host":
         return None
     sandbox_id, root = value.get("sandbox_id"), value.get("root")
-    if not isinstance(sandbox_id, str) or not isinstance(root, str):
+    host_id = value.get("host_id")
+    if (
+        not isinstance(sandbox_id, str)
+        or not isinstance(root, str)
+        or not isinstance(host_id, str)
+    ):
         raise ValueError("this run's recorded host workspace is unreadable")
-    return HostWorkspace(sandbox_id=UUID(sandbox_id), root=root)
+    return HostWorkspace(sandbox_id=UUID(sandbox_id), root=root, host_id=UUID(host_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +367,9 @@ async def _select(
             exc_info=True,
         )
         return None, None
+    # Stamped with the Mac chosen, so the run's operations go to it (and not
+    # to whichever Mac a later run in the conversation chose).
+    workspace = replace(workspace, host_id=host_id)
     logger.info(
         "agent.host_execution.chosen",
         conversation_id=str(conversation.id),
