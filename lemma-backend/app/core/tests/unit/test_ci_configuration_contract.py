@@ -102,7 +102,7 @@ def test_dependabot_is_monthly_grouped_and_uv_native() -> None:
 def test_backend_changes_do_not_trigger_committed_spec_codegen() -> None:
     workflow = _read(".github/workflows/ci.yml")
     codegen_filter = workflow.split("            codegen:\n", 1)[1].split(
-        "\n\n  backend-unit:", 1
+        "\n\n  backend-lint:", 1
     )[0]
 
     assert "lemma-python/lemma_sdk/openapi_spec.json" in codegen_filter
@@ -197,7 +197,12 @@ def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
             ]
             assert cache, f"{name} downloads a browser it never restores"
             key = cache[-1]["with"]["key"]
-            assert "desktop/ui-tests/package-lock.json" in key, (
+            lockfile = (
+                "lemma-frontend/package-lock.json"
+                if name == "workspace"
+                else "desktop/ui-tests/package-lock.json"
+            )
+            assert lockfile in key, (
                 f"{name} keys its browser cache on something other than the "
                 "lockfile a version bump changes"
             )

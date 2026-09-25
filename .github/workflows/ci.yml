@@ -196,112 +196,6 @@ jobs:
               - 'scripts/_pytest_census_plugin.py'
               - 'scripts/check_host_pack.py'
               - 'scripts/plan_e2e_shards.py'
-  backend-unit:
-    name: lemma-backend unit
-    timeout-minutes: 30
-    needs: changes
-    if: needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
-    # Inherits the workflow's `contents: read` / `pull-requests: read`. This
-    # job asked for `pull-requests: write` and `issues: write` back when it
-    # posted the coverage table as a PR comment; that moved to the job summary
-    # and then to backend-coverage.yml, and the grant stayed behind. Nothing
-    # here writes anything to GitHub but an artifact.
-    defaults:
-      run:
-        working-directory: lemma-backend
-    services:
-      redis:
-        # The same tag `test_utils.py` pins and the e2e workflow caches.
-        # This said `redis:7`, a second, different image (192MB against
-        # 42MB) pulled fresh for this job alone.
-        image: redis:7.4-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      # This lane runs `$(UNIT_MARKERS)`, which includes the integration tests,
-      # and those skip themselves when no database answers. Without this service 57
-      # of them did -- the whole workspace integration suite: the sandbox state
-      # machine, the repository, and every one of the sweeper's decisions about
-      # what it may destroy. They passed locally and were absent here, which is
-      # how a sweep that deleted live user workspaces reached production with 24
-      # tests written about it.
-      #
-      # The two that need a Docker daemon or a cargo-built bridge are marked
-      # `local_host` and deselected instead: a database this lane can be given,
-      # and those it cannot, so here they could only ever skip.
-      postgres:
-        image: pgvector/pgvector:0.8.3-pg18
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: lemma
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d lemma"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - name: Sync deps
-        run: uv sync --extra local
-      - name: Unit tests with coverage
-        run: make coverage-backend-unit
-        env:
-          REDIS_URL: redis://localhost:6379
-          TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
-      # Collection-time checks cannot see a test that starts and then skips
-      # itself from a fixture. 72 of this lane's tests do exactly that when
-      # Postgres is unreachable, and this job's own comment records what the
-      # same suite silently skipping 57 tests once cost.
-      - name: No suite skipped itself at runtime
-        if: always()
-        run: >-
-          python3 ../scripts/check_test_run.py --lane unit
-          coverage-backend/junit-unit.xml
-
-      - name: Add backend coverage to job summary
-        if: always()
-        run: |
-          if [ -f coverage-backend/comment.md ]; then
-            cat coverage-backend/comment.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Record the commit this coverage was measured on
-        if: always()
-        run: |
-          mkdir -p coverage-backend
-          echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
-      - name: Upload backend unit coverage
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: backend-unit-coverage
-          include-hidden-files: true
-          path: |
-            lemma-backend/.coverage.backend
-            lemma-backend/coverage-backend/measured-sha.txt
-            lemma-backend/coverage-backend/comment.md
-            lemma-backend/coverage-backend/summary.json
-            lemma-backend/coverage-backend/coverage.json
-            lemma-backend/coverage-backend/coverage.xml
-            # `make coverage-backend-unit` has always written this and nothing
-            # has ever collected it, so the unit lane's slow tail is invisible
-            # -- 195 seconds with no way to see whether that is a broad spread
-            # or three slow tests, which is the difference between needing
-            # per-worker database isolation for xdist and needing to split
-            # three tests. The e2e shards upload theirs and get a slowest-tests
-            # summary out of it; this is the same line.
-            lemma-backend/coverage-backend/junit-*.xml
-          if-no-files-found: ignore
   backend-lint:
     name: lemma-backend quality gates
     timeout-minutes: 30
@@ -677,6 +571,24 @@ jobs:
         working-directory: lemma-frontend
       - run: npm test
         working-directory: lemma-frontend
+      - name: Cache the auth test browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-auth-${{ runner.os }}-${{ hashFiles('lemma-frontend/package-lock.json') }}
+      - name: Install browser for auth journeys
+        working-directory: lemma-frontend
+        run: |
+          npx playwright install chromium
+          if ! npx playwright install-deps chromium; then
+            echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
+          fi
+      - name: Test auth journeys
+        working-directory: lemma-frontend
+        run: npm run test:auth-browser
       - run: npm run build
         working-directory: lemma-frontend
         env:
@@ -1536,7 +1448,9 @@ jobs:
     if: always()
     needs:
       - changes
-      - backend-unit
+      # `lemma-backend unit` moved to e2e.yml, beside the e2e shards, so its
+      # coverage can be combined with theirs inside one run. It is gated by
+      # "Backend E2E passed" now.
       - backend-lint
       - backend-migration
       - python-sdk

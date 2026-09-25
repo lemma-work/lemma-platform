@@ -5,7 +5,8 @@ import { PageLoading } from "@/ui/loading";
 import { useEffect, useState } from "react";
 import { startAuth } from "./supertokens";
 import { screenFor } from "./which";
-import { Callback, Reset, SignInUp, Verify } from "./screens";
+import { Callback, Reset, SignInUp } from "./screens";
+import { Verify } from "./verification-screen";
 import { PORTAL_PATH } from "./config";
 import { hasApiUrl } from "@/session/client";
 
@@ -45,7 +46,7 @@ export function Portal({ path }: { path?: string[] }) {
 
     if (!ready) return <PageLoading label="Opening sign in" />;
 
-    switch (screenFor(path)) {
+    switch (screenFor(path, window.location.search)) {
         case "sign-in": return <SignInUp mode="in" />;
         case "sign-up": return <SignInUp mode="up" />;
         case "reset": return <Reset />;

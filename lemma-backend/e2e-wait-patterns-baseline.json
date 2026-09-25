@@ -1,7 +1,6 @@
 {
   "_comment": "Pre-existing hand-rolled e2e poll loops that do not go through waiters.eventually()/wait_for_status(). Each entry here is a deliberate, permanent exception (documented at its call site) -- not a backlog. This file may shrink freely; growing it means a new poll loop was hand-rolled instead of using the shared helper. See scripts/check_e2e_wait_patterns.py.",
   "violations": {
-    "app/core/tests/e2e/conftest.py::_provision_bucket::hand-rolled-poll-loop::time.sleep": 1,
     "app/core/tests/e2e/test_connection_scope_e2e.py::test_two_monitors_in_a_row_both_detect::hand-rolled-poll-loop::asyncio.sleep": 1,
     "app/core/tests/e2e/test_loop_scope_e2e.py::test_ordinary_async_work_is_silent::hand-rolled-poll-loop::asyncio.sleep": 1,
     "app/modules/agent/tests/e2e/test_shell_latency_bench_e2e.py::_run::hand-rolled-poll-loop::asyncio.sleep": 1,
