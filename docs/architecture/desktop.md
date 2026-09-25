@@ -585,15 +585,24 @@ The shell owns automatic startup on launch and mode changes. Loading or
 reloading the splash only observes state, so it cannot race a second start
 against the shell. Start and Retry remain explicit user actions.
 
-On macOS, host services connect to the private VM through its local IP address.
-The app and daemon carry `NSLocalNetworkUsageDescription`, and local setup
-explains this permission before installation. A blocked or unreachable guest
-connection offers Local Network settings guidance and a retry without deleting
-data; that socket error alone does not establish that permission was denied.
-Terminal connectivity does not prove app connectivity because macOS attributes
-helper access to its responsible app. Candidate qualification must exercise the
-installed app with its release signing identity and both allowed and denied
-access. See Apple's [local network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+On macOS, host services reach the private VM over virtio vsock, not over its
+network address. PostgreSQL, Redis and SuperTokens each have a vsock port that
+the guest's `lemma-service@<port>.socket` hands to `systemd-socket-proxyd` on
+the guest's loopback; guestd's control channel is vsock 42411; the backend
+reaches a sandbox's published ports through guestd's tunnel on vsock 42412
+(`sandbox_tunnel.rs`, `desktop_tunnel.py` in the backend); and the paired
+user's loopback relay comes back the other way on vsock 42413. None of these
+is a connection to a device on the local network, so none is subject to macOS
+Local Network privacy, which a background process cannot be prompted for.
+
+The guest still takes a DHCP lease from vmnet, and a sandbox's reported URL
+names that address -- the tunnel dials it from inside the guest. A guest with
+no lease keeps serving its core services and reports
+`guest_network_unavailable` for sandbox operations. The app and daemon still
+carry `NSLocalNetworkUsageDescription`, but no host path depends on the
+permission being granted; a guest that is unreachable is diagnosed through its
+vsock health channel rather than by suspecting the permission. See
+[Desktop security](desktop-security.md) for what a sandbox can reach.
 
 ## 7.2 Sharing and canonical origin
 
