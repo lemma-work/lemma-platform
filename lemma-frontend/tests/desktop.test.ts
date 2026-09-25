@@ -11,6 +11,8 @@ import {
     connectThisComputer,
     resetAutoConnectForTests,
     retryAutoConnect,
+    tellSession,
+    wasRemoved,
     type ConnectDeps,
 } from "../src/desktop/auto-connect.ts";
 import { capitalised, describeThisComputer, selectWorkspaceTarget, thisComputer } from "../src/desktop/this-computer.ts";
@@ -298,7 +300,9 @@ function deps(log: string[], fail?: string): ConnectDeps {
         },
         host: {
             start: async () => { log.push("start"); },
-            pair: async (url, code) => { log.push(`pair:${url}:${code}`); },
+            pair: async (url, code, _name, reenable) => {
+                log.push(`pair:${url}:${code}` + (reenable ? ":reenable" : ""));
+            },
             refresh: async () => { log.push("refresh"); },
         },
     };
@@ -347,6 +351,55 @@ test("a failure is recorded, not retried, until someone asks", async () => {
     assert.equal(connectFailure(), null);
     assert.equal(await connectThisComputer(unpaired, WORKSPACE, deps(log)), "connected");
     assert.equal(log.filter((entry) => entry.startsWith("mint")).length, 2);
+});
+
+test("a pairing that is off, or somebody else's, is not this workspace's", () => {
+    const mine = target({ host_id: "mine", user_id: "me" });
+    const theirs = target({ host_id: "theirs", user_id: "them" });
+    assert.equal(selectWorkspaceTarget([theirs, mine], WORKSPACE, "me")?.host_id, "mine");
+    assert.equal(selectWorkspaceTarget([theirs], WORKSPACE, "me"), null, "another person's pairing");
+    assert.equal(selectWorkspaceTarget([target({ enabled: false })], WORKSPACE), null, "a pairing the host turned off");
+    /* An older shell says whose it is nowhere: taken as the signed-in person's. */
+    assert.equal(selectWorkspaceTarget([target({ host_id: "old" })], WORKSPACE, "me")?.host_id, "old");
+    assert.equal(
+        describeThisComputer(status({ targets: [theirs] }), null, WORKSPACE, null, "this Mac", "me").label,
+        "Connecting",
+    );
+});
+
+test("a second person signed in on this Mac gets a pairing of their own", async () => {
+    const log: string[] = [];
+    const theirs = status({ targets: [target({ user_id: "them" })] });
+    assert.equal(await connectThisComputer(theirs, WORKSPACE, { ...deps(log), userId: "me" }), "connected");
+    assert.deepEqual(log, ["mint:My Mac", `pair:${WORKSPACE}:code-1`, "refresh"]);
+});
+
+test("only a person's retry asks to turn a removed computer back on", async () => {
+    const log: string[] = [];
+    const unpaired = status({ targets: [] });
+    const removed = "This computer was removed from this account. Connect it again from Lemma to turn it back on.";
+    const refusing: ConnectDeps = {
+        ...deps(log),
+        host: { ...deps(log).host, pair: async () => { throw new Error(removed); } },
+    };
+    assert.equal(await connectThisComputer(unpaired, WORKSPACE, refusing), "failed");
+    assert.equal(wasRemoved(connectFailure()), true);
+    retryAutoConnect();
+    assert.equal(await connectThisComputer(unpaired, WORKSPACE, deps(log)), "connected");
+    assert.ok(log.includes(`pair:${WORKSPACE}:code-1:reenable`), log.join(" "));
+    /* Spent by that attempt: the next automatic one does not re-enable. */
+    resetAutoConnectForTests();
+    await connectThisComputer(unpaired, WORKSPACE, deps(log));
+    assert.equal(log.filter((entry) => entry.endsWith(":reenable")).length, 1);
+});
+
+test("who is signed in is told once per page, and an old shell's refusal is harmless", async () => {
+    const told: (string | null)[] = [];
+    const host = { session: async (_url: string, user: string | null) => { told.push(user); throw new Error("unknown command"); } };
+    await tellSession(WORKSPACE, "me", host);
+    await tellSession(WORKSPACE, "me", host);
+    await tellSession(WORKSPACE, null, host);
+    assert.deepEqual(told, ["me", null]);
 });
 
 /* ── conversation folders ──────────────────────────────────────────── */

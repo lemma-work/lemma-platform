@@ -54,6 +54,7 @@ export const WORKSPACE_COMMANDS = [
     "agent_host_status",
     "agent_host_start",
     "agent_host_pair",
+    "agent_host_session",
     "agent_host_refresh",
     "agent_host_open_log",
     "sandbox_image_status",
