@@ -1,0 +1,241 @@
+[
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "commands": [
+        "recorded"
+      ]
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d1c115087d0903e88360e9f355f",
+    "payload": {
+      "text": "I"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d1c115087d0903e88360e9f355f",
+    "payload": {
+      "text": "’ll"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d1c115087d0903e88360e9f355f",
+    "payload": {
+      "text": " follow"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d1c115087d0903e88360e9f355f",
+    "payload": {
+      "text": " the"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d1c115087d0903e88360e9f355f",
+    "payload": {
+      "text": " steps"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d1c115087d0903e88360e9f355f",
+    "payload": {
+      "text": " in"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d1c115087d0903e88360e9f355f",
+    "payload": {
+      "text": " order"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d1c115087d0903e88360e9f355f",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-004f0e9a-a01a-45fc-af6c-0f3324838709",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "content": "one\n"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "write_file",
+        "source": "native",
+        "server": null,
+        "title": "Editing files",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-004f0e9a-a01a-45fc-af6c-0f3324838709",
+    "payload": {
+      "error": null,
+      "output": {
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "add",
+            "old_text": null,
+            "new_text": "one\n"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20548,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-f8747e19-fdfc-4840-ac39-50d046baff7f",
+    "payload": {
+      "input": {
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "update",
+            "old_text": "one\n",
+            "new_text": "two\n"
+          }
+        ],
+        "file_path": "/workspace/fixture/notes.txt"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "edit_file",
+        "source": "native",
+        "server": null,
+        "title": "Editing files",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-f8747e19-fdfc-4840-ac39-50d046baff7f",
+    "payload": {
+      "error": null,
+      "output": {
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "update",
+            "old_text": "one\n",
+            "new_text": "two\n"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20615,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-9ffe4542-54f6-4901-ab26-faa6623b0167",
+    "payload": {
+      "input": {
+        "query": "Agent Client Protocol"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "web_search",
+        "source": "native",
+        "server": null,
+        "title": "Web search: Agent Client Protocol",
+        "kind": "search"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-9ffe4542-54f6-4901-ab26-faa6623b0167",
+    "payload": {
+      "error": null,
+      "output": null,
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20691,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_02afb39cbd7eb548016ab56d26a7cc87d08ed365ed0970c5cc",
+    "payload": {
+      "text": "done"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 24690,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "title": "You are being recorded to test a tool-call integration. Do each step below in order and keep every message short. 1. Create a file named notes.txt containing the single line: one Use your file-editing or patch tool, not the shell. 2. Change that line to: two Again use your file-editing or patch tool, not the shell. 3. Search the web for the phrase \"Agent Client Protocol\" with your web search tool, and fetch https://agentclientprotocol.com if you have a fetch tool. 4. Reply with the single word: done"
+    }
+  },
+  {
+    "type": "usage",
+    "object_id": null,
+    "payload": {
+      "cached_input_tokens": 20224,
+      "input_tokens": 4461,
+      "output_tokens": 5,
+      "reasoning_tokens": 0,
+      "total_tokens": 24690
+    }
+  }
+]

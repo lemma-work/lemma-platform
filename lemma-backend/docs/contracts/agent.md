@@ -25,15 +25,10 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.create` | POST | `/pods/{pod_id}/agents` | Create Agent |
 | `agent.delete` | DELETE | `/pods/{pod_id}/agents/{agent_name}` | Delete Agent |
 | `agent.get` | GET | `/pods/{pod_id}/agents/{agent_name}` | Get Agent |
-| `agent.host.events.append` | POST | `/agent-host/events/append` | Append Agent Host Events |
 | `agent.host.harnesses.list` | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | List Agent Host Harnesses |
-| `agent.host.harnesses.publish` | PUT | `/agent-host/harnesses` | Publish Agent Host Harnesses |
 | `agent.host.list` | GET | `/me/runtime/agent-hosts` | List Agent Hosts |
-| `agent.host.pairing.complete` | POST | `/agent-host/pairings/complete` | Complete Agent Host Pairing |
 | `agent.host.pairing.create` | POST | `/me/runtime/agent-host-pairings` | Create Agent Host Pairing |
-| `agent.host.poll` | POST | `/agent-host/poll` | Poll Agent Host Commands |
 | `agent.host.revoke` | DELETE | `/me/runtime/agent-hosts/{host_id}` | Revoke Agent Host |
-| `agent.host.self_revoke` | POST | `/agent-host/revoke` | Self Revoke Agent Host |
 | `agent.list` | GET | `/pods/{pod_id}/agents` | List Agents |
 | `agent.permissions.get` | GET | `/pods/{pod_id}/agents/{agent_name}/permissions` | Get Agent Resource Permissions |
 | `agent.permissions.replace` | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | Replace Agent Resource Permissions |

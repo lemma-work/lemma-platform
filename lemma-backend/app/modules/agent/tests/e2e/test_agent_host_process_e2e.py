@@ -484,8 +484,10 @@ async def test_json_acp_tools_obey_the_public_conversation_decision(
                 ), "every tool and approval must have one matching result"
                 for tool_id in expected_ids:
                     native_call = next(m for m in calls if m.tool_call_id == tool_id)
+                    # Canonical: the host names a read's path `file_path`,
+                    # whatever the adapter called it.
                     assert native_call.tool_args == {
-                        "path": f"{tool_id.removeprefix('read-')}.md"
+                        "file_path": f"{tool_id.removeprefix('read-')}.md"
                         if action == "parallel"
                         else "README.md"
                     }
@@ -493,9 +495,9 @@ async def test_json_acp_tools_obey_the_public_conversation_decision(
                         m.tool_result for m in returns if m.tool_call_id == tool_id
                     )
                     if action == "approve":
-                        assert native_result == {"text": "# Mock project"}
+                        assert native_result == {"content": "# Mock project"}
                     elif action == "parallel" and tool_id == "read-a":
-                        assert native_result == {"text": "# File A"}
+                        assert native_result == {"content": "# File A"}
                     else:
                         assert isinstance(native_result, dict)
                         assert native_result["success"] is False
@@ -549,6 +551,12 @@ async def test_browser_chat_replays_json_acp_and_retains_results_after_reload(
 ) -> None:
     del worker
     await scenario.create_org_with_pod(name_prefix="Browser ACP")
+    # A new account with no name is asked for one before anything else, and
+    # that step would stand between the journey and the chat it drives.
+    named = await scenario.owner_client.post(
+        "/users/me/profile", json={"first_name": "Journey", "last_name": "Owner"}
+    )
+    assert named.status_code == 201, named.text
     if action == "stream":
         # Exercise a valid URL-safe token that CLI parsers can mistake for a flag.
         monkeypatch.setattr(

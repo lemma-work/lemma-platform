@@ -57,3 +57,23 @@ export function normalizeAgentToolName(toolName: string): string {
     ? normalized.slice("lemma_".length)
     : normalized;
 }
+
+/**
+ * Whether a call is someone else's MCP tool, which no Lemma card may claim.
+ *
+ * Two ways to know. An Agent Host run says so outright: every call carries
+ * `tool_source`, and a third-party tool keeps its own bare name (`web_search`
+ * from somebody's search server), so the name alone would read it as Lemma's.
+ * Older conversations, and harnesses that report the namespace in the name,
+ * carry `mcp__<server>__<tool>` instead; that is someone else's exactly when
+ * normalizing leaves the namespace on, because only Lemma's server is stripped.
+ */
+export function isThirdPartyMcpTool(
+  toolName: string,
+  metadata?: Record<string, unknown> | null,
+): boolean {
+  const source = metadata?.tool_source;
+  if (typeof source === "string" && source.trim()) return source.trim().toLowerCase() === "mcp";
+  const normalized = normalizeAgentToolName(toolName).toLowerCase();
+  return MCP_MARKERS.some((marker) => normalized.startsWith(marker));
+}

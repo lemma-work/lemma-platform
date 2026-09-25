@@ -1,0 +1,556 @@
+[
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "commands": [
+        "recorded"
+      ]
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": "Plan"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": ":"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " run"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " shell"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " write"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " and"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " notes"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " and"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " search"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " call"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " both"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " Lem"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": "ma"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": " tools"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56c95c34887d083dd7f80ead97331",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-5ad66449-fd48-4f39-ac45-70919eec074c",
+    "payload": {
+      "input": {
+        "cmd": "echo hello-lemma",
+        "workdir": "/workspace/fixture"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "echo hello-lemma",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-5ad66449-fd48-4f39-ac45-70919eec074c",
+    "payload": {
+      "error": null,
+      "output": {
+        "exit_code": 0,
+        "stdout": "hello-lemma\n"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20661,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-e7f70f05-5df2-409c-8663-8a84008fcb69",
+    "payload": {
+      "input": {
+        "cmd": "printf 'one' > notes.txt",
+        "workdir": "/workspace/fixture"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "printf 'one' > notes.txt",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-e7f70f05-5df2-409c-8663-8a84008fcb69",
+    "payload": {
+      "error": null,
+      "output": {
+        "exit_code": 0
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20726,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-ef0e9acc-09a5-4f31-abcd-7e4ca8c73efd",
+    "payload": {
+      "input": {
+        "cmd": "printf 'two' > notes.txt",
+        "workdir": "/workspace/fixture"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "printf 'two' > notes.txt",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-ef0e9acc-09a5-4f31-abcd-7e4ca8c73efd",
+    "payload": {
+      "error": null,
+      "output": {
+        "exit_code": 0
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20787,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-69c65338-e8c9-45ad-968b-7d39ef8c9611",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "read_file",
+        "source": "native",
+        "server": null,
+        "title": "Read file '/workspace/fixture/notes.txt'",
+        "kind": "read"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-69c65338-e8c9-45ad-968b-7d39ef8c9611",
+    "payload": {
+      "error": null,
+      "output": {
+        "content": "two"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20844,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-67ec663f-a775-46ca-a30b-db38e30284a1",
+    "payload": {
+      "input": {},
+      "parent_call_id": null,
+      "tool": {
+        "name": "list_files",
+        "source": "native",
+        "server": null,
+        "title": "List files",
+        "kind": "read"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-67ec663f-a775-46ca-a30b-db38e30284a1",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "notes.txt\n"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20906,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-b52173ce-71b4-45b0-a8f2-b465f45a0b42",
+    "payload": {
+      "input": {
+        "pattern": "two"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "grep",
+        "source": "native",
+        "server": null,
+        "title": "Search for 'two'",
+        "kind": "search"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-b52173ce-71b4-45b0-a8f2-b465f45a0b42",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "notes.txt:1:two\n"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 20973,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 21048,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-fa4ec0b2-e5e5-4ebf-aed4-9fb323e45f96",
+    "payload": {
+      "input": {
+        "cmd": "echo from-mcp"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp.lemma_tools.lemma_exec_command",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "exec-fa4ec0b2-e5e5-4ebf-aed4-9fb323e45f96",
+    "payload": {
+      "input": {
+        "cmd": "echo from-mcp"
+      },
+      "tool": {
+        "name": "exec_command",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp.lemma_tools.lemma_exec_command",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-fa4ec0b2-e5e5-4ebf-aed4-9fb323e45f96",
+    "payload": {
+      "error": null,
+      "output": {
+        "exit_code": 0,
+        "stdout": "from-mcp\n",
+        "stderr": ""
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 21252,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "exec-d853a0bc-e7fa-48b7-bbb0-83bac91b6a2a",
+    "payload": {
+      "input": {
+        "type": "MARKDOWN",
+        "content": "# recorded"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "display_resource",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp.lemma_tools.lemma_display_resource",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "exec-d853a0bc-e7fa-48b7-bbb0-83bac91b6a2a",
+    "payload": {
+      "input": {
+        "type": "MARKDOWN",
+        "content": "# recorded"
+      },
+      "tool": {
+        "name": "display_resource",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp.lemma_tools.lemma_display_resource",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "exec-d853a0bc-e7fa-48b7-bbb0-83bac91b6a2a",
+    "payload": {
+      "error": null,
+      "output": {
+        "success": true,
+        "resource_id": "resource-1"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 21371,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0db6d6bc38ecd994016ab56cb111c487d0b4641f7f62c2b046",
+    "payload": {
+      "text": "done"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 21446,
+        "size": 258400,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "title": "You are being recorded to test a tool-call integration. Do each step below in order, using the tool named, and do not skip any. Keep every message short. 1. Make a short todo list (plan) of these steps first, using your own todo or plan tool if you have one. 2. Run the shell command `echo hello-lemma` with your own shell tool. 3. Create a file named notes.txt containing the single word: one 4. Edit notes.txt, replacing the word one with the word two. 5. Read notes.txt with your file-reading tool. 6. Find files matching *.txt with your own file search or glob tool. 7. Search file contents for the word two with your own grep or search tool. 8. Call the MCP tool lemma_exec_command from the lemma_tools server with cmd set to: echo from-mcp 9. Call the MCP tool lemma_display_resource from the lemma_tools server with type MARKDOWN and content: # recorded 10. Reply with the single word: done"
+    }
+  },
+  {
+    "type": "usage",
+    "object_id": null,
+    "payload": {
+      "cached_input_tokens": 20224,
+      "input_tokens": 1217,
+      "output_tokens": 5,
+      "reasoning_tokens": 0,
+      "total_tokens": 21446
+    }
+  }
+]

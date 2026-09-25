@@ -26,7 +26,9 @@ from app.modules.agent.infrastructure.agent_host.event_stream import (
 )
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostNotFound,
-    AgentHostProtocolViolation,
+    AgentHostSequenceGap,
+    AgentHostStaleLease,
+    AgentHostTerminalRun,
 )
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 
@@ -66,14 +68,14 @@ async def append_events(
     if lease is None or lease.host_id != host_id:
         raise AgentHostNotFound("run lease does not belong to this host")
     if lease.lease_epoch != first.lease_epoch:
-        raise AgentHostProtocolViolation("stale run lease epoch")
+        raise AgentHostStaleLease("stale run lease epoch")
 
     if AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES:
         # A pure replay of what the stream already holds is still tolerated:
         # the host resends until acked, and refusing forever would wedge it.
         watermark = await events.last_sequence(run_id=first.run_id)
         if batch.events[-1].sequence > watermark:
-            raise AgentHostProtocolViolation("terminal run cannot accept events")
+            raise AgentHostTerminalRun("terminal run cannot accept events")
         return AgentHostEventAck(
             run_id=first.run_id,
             lease_epoch=first.lease_epoch,
@@ -94,7 +96,7 @@ async def append_events(
     )
     if outcome.gap is not None:
         expected, got = outcome.gap
-        raise AgentHostProtocolViolation(
+        raise AgentHostSequenceGap(
             f"event sequence gap: expected {expected}, got {got}"
         )
     if outcome.resynced_from is not None:

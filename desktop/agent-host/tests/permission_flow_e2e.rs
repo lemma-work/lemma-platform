@@ -56,8 +56,7 @@ async fn run_scripted(
         "Delete the build directory.",
         json!({
             "server_name": "lemma_tools",
-            "url": "http://127.0.0.1:1/agent-runtime/conversations/unused/mcp",
-            "authorization": "Bearer unused-permission-e2e-token",
+            "token": "unused-permission-e2e-token",
         }),
         answer,
     )
@@ -244,8 +243,7 @@ async fn blank_tool_call_ids_keep_parallel_requests_independent() {
         "Delete the build directory.",
         json!({
             "server_name": "lemma_tools",
-            "url": "http://127.0.0.1:1/agent-runtime/conversations/unused/mcp",
-            "authorization": "Bearer unused-permission-e2e-token",
+            "token": "unused-permission-e2e-token",
         }),
         PermissionAnswer::AllowThenDeny,
     )

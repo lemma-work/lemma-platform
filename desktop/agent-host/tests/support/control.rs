@@ -1,4 +1,4 @@
-//! A stand-in for the workspace's control plane.
+//! A stand-in for the workspace's control plane: Lemma's end of the link.
 
 use super::*;
 
@@ -88,22 +88,24 @@ pub(crate) struct ControlState {
     /// The `START_RUN` we are offering, until the host acknowledges it.
     ///
     /// A real control plane redelivers a command until it comes back in a
-    /// poll's `acknowledged_command_ids`; this used to be a one-shot bool, marked the moment
-    /// the command was written into a response body. A response that never
-    /// arrived -- a dropped connection, a poll cancelled under load -- took the
-    /// run with it, permanently: nothing re-offered it, so the test waited its
-    /// whole 90s for events from a run that was never started. That is the
-    /// `published=Some(..), start_sent=true, events=[]` failure.
+    /// `control` frame's `acknowledged_command_ids`; this used to be a one-shot
+    /// bool, marked the moment the command was written into a response. A
+    /// response that never arrived -- a dropped connection, a request cancelled
+    /// under load -- took the run with it, permanently: nothing re-offered it,
+    /// so the test waited its whole 90s for events from a run that was never
+    /// started. That is the `published=Some(..), start_sent=true, events=[]`
+    /// failure.
     pub(crate) start_command: Arc<Mutex<Option<Command>>>,
-    /// Drop the first response that carries a command, as a lost one would be.
-    pub(crate) drop_first_command: Arc<AtomicBool>,
-    /// Streamed text that, once seen, makes the next poll cancel the run.
+    /// Close the link instead of sending the first frame that carries a
+    /// command, as a connection lost with the command in flight would.
+    pub(crate) drop_link_on_first_command: Arc<AtomicBool>,
+    /// Streamed text that, once seen, makes the next offer cancel the run.
     ///
     /// Keyed on the agent's own output so the cancel lands mid-turn, while the
     /// adapter is genuinely working, rather than racing the run's start.
     pub(crate) cancel_after: Arc<Mutex<Option<String>>>,
     pub(crate) cancel_sent: Arc<AtomicBool>,
-    /// Streamed text that, once seen, makes the next poll hand the run a
+    /// Streamed text that, once seen, makes the next offer hand the run a
     /// replacement Lemma MCP configuration.
     pub(crate) refresh_after: Arc<Mutex<Option<(String, Value)>>>,
     pub(crate) refresh_sent: Arc<AtomicBool>,
@@ -117,18 +119,21 @@ pub(crate) struct ControlState {
     /// outcome, and usually finished the whole run, before Lemma decided.
     pub(crate) decisions: Arc<Mutex<Vec<DecisionSnapshot>>>,
     pub(crate) events: Arc<Mutex<Vec<Event>>>,
-    pub(crate) lose_append_ack: Arc<AtomicBool>,
+    /// Commit the next `events` batch, then close the link instead of
+    /// answering it: the acknowledgement lost after the receiver committed.
+    pub(crate) drop_link_after_first_append: Arc<AtomicBool>,
     pub(crate) append_attempts: Arc<Mutex<Vec<Vec<u64>>>>,
     pub(crate) run_budget: Arc<Mutex<chrono::Duration>>,
     pub(crate) workspace_cwd: Arc<Mutex<Option<String>>>,
     pub(crate) snapshots: Arc<Mutex<Vec<Value>>>,
     /// Commands the host refused, and why.
     ///
-    /// The poll body carries these and this double used to take no body at
-    /// all, so the one field that explains a run which never starts was
-    /// discarded on arrival. A `START_RUN` rejected as `HARNESS_NOT_FOUND` is
-    /// permanent -- `retryable: false`, and this double sends `START_RUN`
-    /// exactly once -- and presented as a 90-second wait for a terminal event
+    /// The `control` frame carries these (the poll body did before it), and
+    /// this double used to take no body at all, so the one field that
+    /// explains a run which never starts was discarded on arrival. A
+    /// `START_RUN` rejected as `HARNESS_NOT_FOUND` is permanent --
+    /// `retryable: false`, and a command refused that way is not offered
+    /// again -- and presented as a 90-second wait for a terminal event
     /// that was never coming, with nothing anywhere saying why.
     pub(crate) rejections: Arc<Mutex<Vec<Value>>>,
     /// The id assigned to each harness key, once and for the life of this
@@ -142,16 +147,16 @@ pub(crate) struct ControlState {
     ///
     /// The host re-publishes whenever a harness changes state. `published` was
     /// then updated to an id the host had not yet been told about -- the
-    /// publish response carrying it was still in flight -- and a poll landing
-    /// in that window sent `START_RUN` naming it. `handle_start` looks the id
+    /// publish response carrying it was still in flight -- and a poll (now a
+    /// push) landing in that window sent `START_RUN` naming it. `handle_start` looks the id
     /// up in the map built from the *last* response, does not find it, and
     /// fails with "command references an unknown harness".
     ///
     /// Which is permanent. `command_rejection` classifies it as
-    /// `HARNESS_NOT_FOUND` with `retryable: false`, and `start_sent` means this
-    /// double sends `START_RUN` exactly once -- so nothing was ever going to
-    /// arrive after it, and the test waited out its full 90 seconds for a
-    /// terminal event with `events=[]`.
+    /// `HARNESS_NOT_FOUND` with `retryable: false`, and a command refused that
+    /// way is never offered again -- nothing was ever going to arrive after
+    /// it, and the test waited out its full 90
+    /// seconds for a terminal event with `events=[]`.
     ///
     /// Measured at a 5ms window, hit whenever an adapter install happened to
     /// finish inside it.
@@ -163,6 +168,19 @@ pub(crate) struct ControlState {
     /// panic reaches a human the log is already gone.
     pub(crate) host_log: Arc<Mutex<Option<PathBuf>>>,
     pub(crate) scripted_traffic: Arc<Mutex<Option<PathBuf>>>,
+    /// Who answers the `mcp` and `interaction_wait` frames, once a test has
+    /// said. The link carries the agent's Lemma tool calls now, so the MCP
+    /// stand-in is reached through the control plane rather than beside it.
+    pub(crate) mcp_endpoint: Arc<Mutex<Option<LemmaMcpEndpoint>>>,
+    /// Every `pair` body, as sent.
+    pub(crate) pairings: Arc<Mutex<Vec<Value>>>,
+    /// Every `hello` body this control plane welcomed.
+    pub(crate) hellos: Arc<Mutex<Vec<Value>>>,
+    /// Close the next authenticated `hello` with this code instead of
+    /// welcoming it.
+    pub(crate) refuse_next_hello_with: Arc<Mutex<Option<u16>>>,
+    /// How many `revoke` frames arrived.
+    pub(crate) revocations: Arc<Mutex<u32>>,
 }
 
 impl ControlPlane {
@@ -185,7 +203,7 @@ impl ControlPlane {
             published: Arc::new(Mutex::new(None)),
             start_sent: Arc::new(AtomicBool::new(false)),
             start_command: Arc::new(Mutex::new(None)),
-            drop_first_command: Arc::new(AtomicBool::new(false)),
+            drop_link_on_first_command: Arc::new(AtomicBool::new(false)),
             cancel_after: Arc::new(Mutex::new(None)),
             cancel_sent: Arc::new(AtomicBool::new(false)),
             refresh_after: Arc::new(Mutex::new(None)),
@@ -193,7 +211,7 @@ impl ControlPlane {
             answered: Arc::new(Mutex::new(std::collections::HashSet::new())),
             decisions: Arc::new(Mutex::new(Vec::new())),
             events: Arc::new(Mutex::new(Vec::new())),
-            lose_append_ack: Arc::new(AtomicBool::new(false)),
+            drop_link_after_first_append: Arc::new(AtomicBool::new(false)),
             append_attempts: Arc::new(Mutex::new(Vec::new())),
             run_budget: Arc::new(Mutex::new(chrono::Duration::minutes(3))),
             workspace_cwd: Arc::new(Mutex::new(None)),
@@ -202,12 +220,14 @@ impl ControlPlane {
             harness_ids: Arc::new(Mutex::new(BTreeMap::new())),
             host_log: Arc::new(Mutex::new(None)),
             scripted_traffic: Arc::new(Mutex::new(None)),
+            mcp_endpoint: Arc::new(Mutex::new(None)),
+            pairings: Arc::new(Mutex::new(Vec::new())),
+            hellos: Arc::new(Mutex::new(Vec::new())),
+            refuse_next_hello_with: Arc::new(Mutex::new(None)),
+            revocations: Arc::new(Mutex::new(0)),
         };
         let app = Router::new()
-            .route("/agent-host/pairings/complete", post(pairing))
-            .route("/agent-host/harnesses", put(publish))
-            .route("/agent-host/poll", post(poll))
-            .route("/agent-host/events/append", post(append_events))
+            .route("/agent-host/link", get(link))
             .with_state(state.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -223,17 +243,64 @@ impl ControlPlane {
         }
     }
 
-    /// Cancel the run on the first poll after `marker` appears in its output.
+    /// Close the link in place of the first frame that carries a command, so
+    /// the host never receives it and has to be offered it again.
+    pub fn drop_the_link_instead_of_the_first_command(&self) {
+        self.state
+            .drop_link_on_first_command
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Commit the next event batch, then close the link without answering
+    /// it. The host cannot tell that from a batch that never arrived, so it
+    /// reconnects and replays from its outbox.
+    pub fn drop_the_link_after_the_first_append(&self) {
+        self.state
+            .drop_link_after_first_append
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Answer the link's `mcp` and `interaction_wait` frames from `endpoint`.
     ///
     /// # Panics
     /// If the mutex is poisoned.
-    /// Arm the stub to lose the first response that carries a command.
-    pub fn lose_the_first_command(&self) {
-        self.state.drop_first_command.store(true, Ordering::SeqCst);
+    pub fn serve_mcp(&self, endpoint: &LemmaMcpEndpoint) {
+        *self.state.mcp_endpoint.lock().unwrap() = Some(endpoint.clone());
     }
 
-    pub fn lose_the_first_append_ack(&self) {
-        self.state.lose_append_ack.store(true, Ordering::SeqCst);
+    /// Every `pair` body the host sent.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    #[must_use]
+    pub fn pairings(&self) -> Vec<Value> {
+        self.state.pairings.lock().unwrap().clone()
+    }
+
+    /// Every `hello` body this control plane welcomed.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    #[must_use]
+    pub fn hellos(&self) -> Vec<Value> {
+        self.state.hellos.lock().unwrap().clone()
+    }
+
+    /// Close the next authenticated `hello` with `code` instead of welcoming it.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    pub fn refuse_the_next_hello_with(&self, code: u16) {
+        *self.state.refuse_next_hello_with.lock().unwrap() = Some(code);
+    }
+
+    /// How many `revoke` frames arrived.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    #[must_use]
+    pub fn revocations(&self) -> u32 {
+        *self.state.revocations.lock().unwrap()
     }
 
     pub fn append_attempts(&self) -> Vec<Vec<u64>> {
@@ -248,6 +315,10 @@ impl ControlPlane {
         *self.state.workspace_cwd.lock().unwrap() = Some(cwd.to_owned());
     }
 
+    /// Cancel the run on the first offer after `marker` appears in its output.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
     pub fn cancel_when_text_contains(&self, marker: &str) {
         *self.state.cancel_after.lock().unwrap() = Some(marker.to_owned());
     }
@@ -379,9 +450,9 @@ impl ControlPlane {
             .collect::<Vec<_>>();
         format!(
             "\n  the host REFUSED {} command(s): {described:?}\n  \
-             A refusal with retryable=false is permanent, and this control \
-             plane sends START_RUN exactly once, so nothing was ever going to \
-             arrive after it.",
+             A refusal with retryable=false is permanent: this control plane \
+             stops offering the command, as Lemma does, so nothing was ever \
+             going to arrive after it.",
             rejections.len(),
         )
     }

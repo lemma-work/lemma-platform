@@ -1,4 +1,5 @@
-//! Wire contracts shared with the Lemma Agent Host API.
+//! Wire types shared with Lemma: run specs, checkpoints, commands, events and
+//! harness snapshots. The frames that carry them are in `link::protocol`.
 
 use std::collections::BTreeMap;
 
@@ -9,19 +10,6 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{HOST_RELEASE, PROTOCOL_VERSION};
-
-/// How long Lemma holds a poll open before answering it empty.
-///
-/// Part of the wire contract rather than a local choice — it is
-/// `_LONG_POLL_SECONDS` in `agent_host_controller.py` — and worth stating
-/// because two things are built on it and neither reads as depending on it.
-///
-/// The HTTP timeout has to clear it or every poll fails. And the worker loop
-/// spends essentially all of its time inside one, so anything the host must do
-/// sooner than this needs to be able to interrupt a poll; it cannot wait for one
-/// to return. Assuming otherwise is how a two-second check for newly installed
-/// agents came to answer in up to twenty-five.
-pub const POLL_HOLD: std::time::Duration = std::time::Duration::from_secs(25);
 
 pub type JsonMap = BTreeMap<String, Value>;
 
@@ -141,18 +129,6 @@ impl RunState {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PollRequest {
-    pub hello: HostHello,
-    pub capacity: HostCapacity,
-    #[serde(default)]
-    pub acknowledged_command_ids: Vec<Uuid>,
-    #[serde(default)]
-    pub checkpoints: Vec<RunCheckpoint>,
-    #[serde(default)]
-    pub rejections: Vec<CommandRejection>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandRejection {
     pub command_id: Uuid,
@@ -175,16 +151,6 @@ wire_enum! {
         AdapterUnavailable,
         InvalidCommand,
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PollResponse {
-    pub protocol_version: u16,
-    pub host_status: HostStatus,
-    #[serde(default)]
-    pub commands: Vec<Command>,
-    #[serde(default)]
-    pub poll_after_ms: u64,
 }
 
 wire_enum! {
@@ -293,23 +259,115 @@ pub struct Event {
 }
 
 wire_enum! {
+    /// What a run event is. See docs/architecture/agent-host-events.md.
+    ///
+    /// Every variant is already normalized: the per-adapter modules in
+    /// `normalize` turn whatever an ACP adapter reported into one of these,
+    /// so the backend maps each one to a conversation message without
+    /// interpreting ACP itself.
     #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "snake_case")]
     pub enum EventType {
         RunState,
-        UserMessage,
         AgentMessageChunk,
         AgentMessageUpsert,
         AgentThoughtChunk,
         AgentThoughtUpsert,
-        PlanUpsert,
-        ToolCallUpsert,
-        ToolCallUpdate,
-        UsageUpdate,
+        /// A tool call whose arguments have settled; see [`ToolCallPayload`].
+        ToolCall,
+        /// Live output from a call still running. Not persisted.
+        ToolCallProgress,
+        /// How a call ended; see [`ToolResultPayload`].
+        ToolCallResult,
+        /// Token usage for the turn; see [`UsagePayload`].
+        Usage,
+        /// Session facts: title, mode, commands, context window.
+        SessionUpdate,
         ConfigUpdate,
         PermissionRequest,
         Terminal,
     }
+}
+
+wire_enum! {
+    /// Whose tool a call is.
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ToolSource {
+        /// The agent's own tool: Claude Code's `Bash`, Codex's shell.
+        Native,
+        /// One of Lemma's MCP tools, named without any prefix or namespace.
+        Lemma,
+        /// Another MCP server's tool; [`ToolRef::server`] names it.
+        Mcp,
+    }
+}
+
+wire_enum! {
+    /// How a tool call ended.
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ToolStatus {
+        Completed,
+        Failed,
+        Cancelled,
+        Denied,
+    }
+}
+
+/// Which tool a call is, in Lemma's vocabulary.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolRef {
+    /// Canonical (`exec_command`, `read_file`, ...) when the host recognises
+    /// the tool; otherwise the adapter's own name in `snake_case`.
+    pub name: String,
+    pub source: ToolSource,
+    #[serde(default)]
+    pub server: Option<String>,
+    /// The adapter's own description of the call. Display only.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// The ACP kind (`execute`, `read`, ...). Display only.
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+/// The payload of [`EventType::ToolCall`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ToolCallPayload {
+    pub tool: ToolRef,
+    /// Canonical arguments for a canonical tool; the adapter's own otherwise.
+    #[serde(default)]
+    pub input: Value,
+    /// The call this one was made inside of, for a sub-agent's calls.
+    #[serde(default)]
+    pub parent_call_id: Option<String>,
+}
+
+/// The payload of [`EventType::ToolCallResult`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ToolResultPayload {
+    pub status: ToolStatus,
+    #[serde(default)]
+    pub output: Value,
+    /// Why, for anything but [`ToolStatus::Completed`].
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// The payload of [`EventType::Usage`]: tokens for one turn.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsagePayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -322,25 +380,6 @@ pub struct EventAck {
     pub run_id: Uuid,
     pub lease_epoch: u32,
     pub acked_through: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PairingCompleteRequest {
-    pub pairing_code: String,
-    pub display_name: String,
-    pub hello: HostHello,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PairingCompleteResponse {
-    pub host_id: Uuid,
-    pub user_id: Uuid,
-    pub host_secret: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HarnessPublishRequest {
-    pub harnesses: Vec<HarnessSnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -378,11 +417,28 @@ impl HarnessSnapshot {
     /// fence is actually protecting is the *configuration* a profile was bound
     /// against — the options offered and the capabilities advertised — and a
     /// release that changes either of those changes them here too.
+    ///
+    /// Nor is any option's `current_value`. That is the agent's own default
+    /// -- the model Claude Code is set to use, say -- and a person changing it
+    /// in the agent's settings changes nothing a profile was bound against:
+    /// what is offered stayed the same. Hashing it meant that edit refused
+    /// every run already dispatched as `CONFIG_REVISION_STALE`.
     #[must_use]
     pub fn revision(&self) -> String {
+        let offered: Vec<Value> = self
+            .config_options
+            .iter()
+            .map(|option| {
+                let mut value = serde_json::to_value(option).expect("option serialization");
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("current_value");
+                }
+                value
+            })
+            .collect();
         let value = serde_json::json!({
             "adapter_version": self.adapter_version,
-            "config_options": self.config_options,
+            "config_options": offered,
             "capabilities": self.capabilities,
         });
         hex::encode(Sha256::digest(
@@ -433,59 +489,59 @@ pub struct ConfigOption {
 mod tests {
     use super::*;
 
-    /// The committed client spec, which CI already holds to the backend.
-    fn spec_enum(name: &str) -> Vec<String> {
+    /// One enum as `wire_contract.json` spells it; the backend's test reads
+    /// the same file, which is what holds the two to each other.
+    fn contract_enum(name: &str) -> Vec<String> {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../lemma-python/lemma_sdk/openapi_spec.json"
+            "/tests/fixtures/wire_contract.json"
         );
-        let raw = std::fs::read_to_string(path).expect("the committed OpenAPI spec is readable");
-        let spec: serde_json::Value =
-            serde_json::from_str(&raw).expect("the committed OpenAPI spec parses");
-        spec["components"]["schemas"][name]["enum"]
+        let raw = std::fs::read_to_string(path).expect("the wire contract is readable");
+        let contract: serde_json::Value =
+            serde_json::from_str(&raw).expect("the wire contract parses");
+        let values = if name == "event_types" {
+            &contract["event_types"]
+        } else {
+            &contract["enums"][name]
+        };
+        values
             .as_array()
-            .unwrap_or_else(|| panic!("{name} is an enum in the client spec"))
+            .unwrap_or_else(|| panic!("{name} is an enum in the wire contract"))
             .iter()
             .map(|value| value.as_str().expect("enum members are strings").to_owned())
             .collect()
     }
 
     #[test]
-    fn the_wire_states_match_the_backend_exactly() {
-        // These enums exist twice — once here, once in the backend — and agreed
-        // only because someone kept them in step by hand. A variant added on one
-        // side and not the other is a run state the other end cannot parse, and
-        // nothing failed until it reached a user.
+    fn the_wire_enums_match_the_contract_exactly() {
+        // These enums exist twice, once here and once in the backend, and a
+        // variant added on one side and not the other is a value the other end
+        // cannot parse. Nothing fails until it reaches a user.
         //
-        // The spec is the arbiter because CI already refuses to let it drift
-        // from the backend, so pinning to it pins to the backend transitively.
-        // Compared as sets in both directions: an addition here that the backend
-        // has never heard of is exactly as broken as the reverse.
+        // The contract fixture is the arbiter because the backend asserts the
+        // same file. It used to be the OpenAPI spec, which stopped working as
+        // an arbiter when the host's endpoints moved onto the link and these
+        // enums stopped appearing in it. Compared as sets in both directions:
+        // an addition here the backend has never heard of is exactly as broken
+        // as the reverse.
         //
-        // The names come from `serde` rather than from parsing this file. The
-        // first version of this test scraped the source for `pub enum X {` and
-        // read to the next `}`, then reimplemented `rename_all` to guess the
-        // wire spelling. Both halves were guesses at things the compiler and
-        // serde already know exactly: the parser would have silently mis-read
-        // the first enum to gain a braced variant or a doc comment containing a
-        // brace, and the spelling would have diverged the first time a variant
-        // needed its own `#[serde(rename)]`.
-        for (ours, spec_name) in [
-            (RunState::wire_names(), "AgentHostRunState"),
-            (HostStatus::wire_names(), "AgentHostStatus"),
-            (HarnessHealth::wire_names(), "AgentHostHarnessHealth"),
-            (RejectionCode::wire_names(), "AgentHostRejectionCode"),
-            (CommandKind::wire_names(), "AgentHostCommandKind"),
-            (EventType::wire_names(), "AgentHostEventType"),
+        // The names come from `serde` rather than from parsing this file, so a
+        // `#[serde(rename)]` cannot make the two silently disagree.
+        for (ours, name) in [
+            (RunState::wire_names(), "run_state"),
+            (HostStatus::wire_names(), "host_status"),
+            (HarnessHealth::wire_names(), "harness_health"),
+            (RejectionCode::wire_names(), "rejection_code"),
+            (CommandKind::wire_names(), "command_kind"),
+            (ToolSource::wire_names(), "tool_source"),
+            (ToolStatus::wire_names(), "tool_status"),
+            (EventType::wire_names(), "event_types"),
         ] {
             let mut ours = ours;
-            let mut theirs = spec_enum(spec_name);
+            let mut theirs = contract_enum(name);
             ours.sort();
             theirs.sort();
-            assert_eq!(
-                ours, theirs,
-                "{spec_name} has drifted apart from this crate"
-            );
+            assert_eq!(ours, theirs, "{name} has drifted apart from the contract");
         }
     }
 
@@ -545,6 +601,26 @@ mod tests {
         });
 
         assert_ne!(before.revision(), after.revision());
+    }
+
+    /// The agent's own default is not part of what a profile bound against.
+    #[test]
+    fn changing_the_agents_default_does_not_change_the_revision() {
+        let option = |current: &str| ConfigOption {
+            id: "model".into(),
+            category: "model".into(),
+            name: "Model".into(),
+            description: None,
+            current_value: Value::String(current.into()),
+            options: Vec::new(),
+            metadata: JsonMap::new(),
+        };
+        let mut before = snapshot();
+        before.config_options.push(option("opus"));
+        let mut after = snapshot();
+        after.config_options.push(option("sonnet"));
+
+        assert_eq!(before.revision(), after.revision());
     }
 
     /// Capabilities decide whether a run may resume a session, so a harness

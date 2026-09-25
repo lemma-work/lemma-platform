@@ -1,7 +1,7 @@
 /* Marketing uses fixed paper/ink pairs, independent of app appearance.
    Motion: 160ms feedback, 240ms replacement, 400ms reveal.
    Surface roles: paper canvas, color field, evidence card, floating overlay. */
-.page { position: relative; --violet: #4a35c9; --teal: #0d5c55; --magenta: #9c1c58; --amber: #e0a01e; --cream: #f4f3ed; --paper: #fffefa; --ink: #20211f; --ink-2: #4c4d48; --ink-3: #65665e; --brand: #4a35c9; background: var(--cream); color: var(--ink); font-family: "Schibsted Grotesk", Arial, sans-serif; font-size: 16px; line-height: 1.5; min-height: 100%; overflow: clip; --radius-control: 12px; --radius-card: 20px; --radius-field: 28px; --line: #20211f22; --line-soft: #20211f14; --shadow-card: 0 8px 24px rgb(32 33 31 / .07); --shadow-float: 0 18px 42px rgb(24 16 48 / .18); --motion-fast: 160ms; --motion-content: 240ms; --motion-reveal: 400ms; --ease: cubic-bezier(.2,.8,.2,1); --wait: #815b16; --bad: #9c1c58; --ok: #1f5b3a; --gutter: 5vw }
+.page { position: relative; --violet: #4a35c9; --teal: #0d5c55; --magenta: #9c1c58; --amber: #e0a01e; --cream: #f4f3ed; --paper: #fffefa; --ink: #20211f; --ink-2: #4c4d48; --ink-3: #65665e; --brand: #4a35c9; background: var(--cream); color: var(--ink); font-family: var(--font-ui, "Schibsted Grotesk"), Arial, sans-serif; font-size: 16px; line-height: 1.5; min-height: 100%; overflow: clip; --radius-control: 12px; --radius-card: 20px; --radius-field: 28px; --line: #20211f22; --line-soft: #20211f14; --shadow-card: 0 8px 24px rgb(32 33 31 / .07); --shadow-float: 0 18px 42px rgb(24 16 48 / .18); --motion-fast: 160ms; --motion-content: 240ms; --motion-reveal: 400ms; --ease: cubic-bezier(.2,.8,.2,1); --wait: #815b16; --bad: #9c1c58; --ok: #1f5b3a; --gutter: 5vw }
 .page a { color: inherit; text-decoration: none }
 .page h1, .page h2, .page h3, .page p { margin: 0 }
 .page a:focus-visible { outline: 3px solid var(--violet); outline-offset: 5px }
@@ -18,7 +18,7 @@
 .nav nav a:last-child { border: 1px solid #20211f50; border-radius: 99px; padding: 10px 20px }
 .footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 34px 5%; font-size: 14px; border-top: 1px solid #20211f18 }
 .footer > span { color: var(--ink-3) }
-.sectionEyebrow { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .075em; color: var(--ink-3) }
+.sectionEyebrow { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .075em; color: var(--ink-3) }
 .sectionHeading { font-weight: 400; font-size: clamp(34px,4.1vw,56px); line-height: 1.08; letter-spacing: -.045em; margin-top: 16px !important; max-width: 22ch }
 .sectionNote { font-size: 16px; color: var(--ink-2); margin-top: 24px !important; max-width: 68ch; line-height: 1.65 }
 .greeter { display: block; flex: none; line-height: 0 }
@@ -28,10 +28,10 @@
 .toneMagenta { --field: #9c1c58; --fieldInk: #9c1c58; --fieldSoft: #f7e6ee; --onField: #fffefa }
 .heroLede { max-width: 520px; position: relative; z-index: 2; opacity: clamp(0,calc(1 - var(--grow) * 2.4),1); transform: translateX(calc(var(--grow) * -40px)) }
 [data-grown] .heroLede { pointer-events: none }
-.heroEyebrow { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .075em; color: #55564e; display: flex; align-items: center; gap: 9px }
+.heroEyebrow { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .075em; color: #55564e; display: flex; align-items: center; gap: 9px }
 .heroIntro { font-size: 17px; line-height: 1.65; color: var(--ink-2); margin-top: 24px !important }
 .channels { display: flex; align-items: center; gap: 10px; margin-top: 24px; flex-wrap: wrap }
-.channelsLabel { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .075em; color: var(--ink-3); margin-right: 6px }
+.channelsLabel { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .075em; color: var(--ink-3); margin-right: 6px }
 .channelsMore { font-size: 13px; color: var(--ink-3) }
 .heroActions { display: flex; gap: 12px; align-items: center; margin-top: 28px; flex-wrap: wrap }
 .primary { background: var(--violet); color: var(--paper) !important; padding: 15px 30px; border-radius: 99px; font-size: 16px; transition: transform var(--motion-fast), filter var(--motion-fast) }
@@ -47,7 +47,7 @@
 .orgChip { display: flex; align-items: center; gap: 7px; padding: 6px; border: 1px solid #20211f14; border-radius: var(--radius-control); font-size: 12px; background: var(--paper) }
 .orgChip i { width: 17px; height: 17px; border-radius: 5px; background: var(--fieldSoft); color: var(--fieldInk); font-style: normal; font-size: 12px; display: grid; place-items: center; flex: none }
 .railFind { font-size: 12px; color: var(--ink-3); padding: 7px 6px 3px }
-.railLabel { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .09em; color: var(--ink-3); padding: 4px 6px; display: flex; justify-content: space-between }
+.railLabel { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .09em; color: var(--ink-3); padding: 4px 6px; display: flex; justify-content: space-between }
 .railLabel em { font-style: normal }
 .railOne, .railOneOn { display: flex; align-items: center; gap: 7px; padding: 8px 5px; border-radius: var(--radius-control); border: 0; text-align: left; font: inherit; font-size: 12px; color: var(--ink-2); cursor: pointer; background: none; min-height: 40px }
 .newTeammate { margin-top: auto; border: 1px solid #20211f20; border-radius: var(--radius-control); padding: 8px; text-align: center; font-size: 12px; color: #55564e }
@@ -55,7 +55,7 @@
 .appHead { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line-soft) }
 .appFace { flex: none; line-height: 0 }
 .appName { display: flex; flex-direction: column; font-size: 15px; letter-spacing: -.02em; line-height: 1.2; min-width: 0 }
-.appName em { font-style: normal; font-family: "DM Mono",monospace; font-size: 12px; color: var(--ink-3); white-space: normal; margin-top: 3px }
+.appName em { font-style: normal; font-family: var(--font-mono, "DM Mono"),monospace; font-size: 12px; color: var(--ink-3); white-space: normal; margin-top: 3px }
 .appChannels { display: none }
 .appChannels b { font-weight: 400; font-size: 12px; color: var(--ink-3) }
 .people { display: none }
@@ -82,13 +82,13 @@
 .railList { display: flex; flex-direction: column; gap: 3px }
 .dialog { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: var(--shadow-float); font-size: 14px; line-height: 1.55 }
 .dialogTop { display: flex; align-items: center; gap: 12px; font-size: 17px }
-.dialogTop em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3) }
-.dialogNote { font: 12px "DM Mono",monospace; color: var(--ink-3); letter-spacing: .03em }
+.dialogTop em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3) }
+.dialogNote { font: 12px var(--font-mono, "DM Mono"),monospace; color: var(--ink-3); letter-spacing: .03em }
 .toneAmber .dialogDo b { color: #20211f }
 .msg { display: flex; gap: 9px; align-items: flex-start; min-width: 0 }
 .msgFace { width: 26px; height: 26px; border-radius: 50%; background: #e9e7dc; flex: none; display: grid; place-items: center; overflow: visible }
 .msgWho { font-size: 12px; color: var(--ink); margin-bottom: 4px !important }
-.msgWho em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .03em; color: var(--ink-3); margin-left: 6px }
+.msgWho em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .03em; color: var(--ink-3); margin-left: 6px }
 .msgText { line-height: 1.45; color: #3f403a; font-size: 12px }
 .msgSaid { line-height: 1.45; color: #2f302b; font-size: 12px; background: var(--fieldSoft); border-radius: var(--radius-control); padding: 8px 11px }
 .worked { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: #55564e; background: var(--cream); border-radius: 99px; padding: 4px 10px; margin-bottom: 6px }
@@ -98,13 +98,13 @@
 .desk { border: 1px solid #20211f18; border-radius: var(--radius-control); padding: 11px 12px 10px; display: flex; flex-direction: column; gap: 9px; flex: 1; min-height: 0 }
 .deskTop { display: flex; align-items: baseline; justify-content: space-between; gap: 12px }
 .deskName { font-size: 13px }
-.deskMeta { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3) }
+.deskMeta { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3) }
 .deskFoot { margin-top: auto; padding-top: 9px; border-top: 1px solid #20211f10; display: flex; align-items: baseline; gap: 7px; font-size: 12px; color: #55564e }
-.deskFoot b { font-weight: 400; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; color: var(--fieldInk) }
-.deskFoot em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .06em; color: var(--ink-3); margin-left: auto; flex: none }
+.deskFoot b { font-weight: 400; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .08em; color: var(--fieldInk) }
+.deskFoot em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .06em; color: var(--ink-3); margin-left: auto; flex: none }
 .week { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px }
 .day { display: flex; flex-direction: column; gap: 4px; min-width: 0 }
-.dayName { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3); display: flex; justify-content: space-between; padding-bottom: 4px; border-bottom: 1px solid #20211f12 }
+.dayName { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3); display: flex; justify-content: space-between; padding-bottom: 4px; border-bottom: 1px solid #20211f12 }
 .dayName em { font-style: normal; color: #55564e }
 .slotDone, .slotDoing, .slotWait, .slotFlag { font-size: 12px; line-height: 1.3; border-radius: 5px; padding: 6px 5px }
 .slotDone { background: #dfeee2; color: #1f5b3a }
@@ -114,20 +114,20 @@
 .toneAmber .slotFlag { color: #20211f }
 .board { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px }
 .column { display: flex; flex-direction: column; gap: 5px; background: var(--cream); border-radius: var(--radius-control); padding: 7px; min-width: 0 }
-.columnTop { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3); display: flex; justify-content: space-between; text-transform: uppercase }
+.columnTop { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3); display: flex; justify-content: space-between; text-transform: uppercase }
 .columnTop em { font-style: normal; color: var(--fieldInk) }
 .dealCard { background: var(--paper); border: 1px solid #20211f14; border-radius: 5px; padding: 6px 7px; font-size: 12px; color: #3f403a; display: flex; justify-content: space-between; gap: 6px }
-.dealCard em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; color: var(--ink-3) }
+.dealCard em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; color: var(--ink-3) }
 .table { overflow-x: auto; min-width: 0 }
 .tableHead, .tableRow, .tableRowQuiet { display: grid; grid-template-columns: 1.1fr 1.2fr .7fr .5fr 1.3fr; min-width: 550px; gap: 10px; font-size: 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line-soft) }
 .tableHead { border-bottom: 1px solid #20211f14; padding-top: 0 }
-.tableHead b { font-weight: 400; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3) }
+.tableHead b { font-weight: 400; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3) }
 .tableRow, .tableRowQuiet { border-top: 1px solid #20211f0d; font-size: 12px }
 .tableRow b, .tableRowQuiet b { font-weight: 400; color: #3f403a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .tableRowQuiet b { color: var(--ink-3) }
 .priceUp { color: #1f5b3a !important }
 .priceDown { color: #8c2f26 !important }
-.source { color: var(--fieldInk) !important; font-family: "DM Mono", monospace; font-size: 12px }
+.source { color: var(--fieldInk) !important; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px }
 .tableRowQuiet .source { color: var(--ink-3) !important }
 .piles { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px }
 .pileDone, .pileDoing, .pileWait, .pileFlag { display: flex; flex-direction: column; border-radius: 6px; padding: 6px 7px; font-size: 12px; line-height: 1.25 }
@@ -139,13 +139,13 @@
 .asks { display: flex; flex-direction: column }
 .askRow { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line-soft) }
 .askRow:first-child { border-top: 0 }
-.askRow > i { width: 22px; height: 22px; border-radius: 50%; background: var(--cream); color: #6a6b62; font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; display: grid; place-items: center; flex: none }
+.askRow > i { width: 22px; height: 22px; border-radius: 50%; background: var(--cream); color: #6a6b62; font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; display: grid; place-items: center; flex: none }
 .askWhat { font-size: 14px; display: flex; flex-direction: column; min-width: 0; gap: 4px }
 .askWhat em { font-style: normal; font-size: 12px; color: var(--ink-3) }
-.askNote, .askHot { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .05em; border-radius: 99px; padding: 3px 7px; flex: none }
+.askNote, .askHot { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .05em; border-radius: 99px; padding: 3px 7px; flex: none }
 .askNote { background: var(--cream); color: #6a6b62 }
 .askHot { background: #f6e3e1; color: #8c2f26 }
-.askRow > b { font-weight: 400; font-family: "DM Mono", monospace; font-size: 12px; color: var(--ink-3); flex: none }
+.askRow > b { font-weight: 400; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; color: var(--ink-3); flex: none }
 .library { display: flex; flex-direction: column; gap: 3px; flex: 1; min-height: 0 }
 .libraryTop { display: flex; flex-direction: column; gap: 8px; align-items: flex-start }
 .filters { display: flex; gap: 3px }
@@ -159,18 +159,18 @@
 .iconFolder { background: var(--fieldSoft); box-shadow: inset 0 0 0 1px currentColor; color: var(--fieldInk) }
 .fileName { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 14px; overflow-wrap: anywhere }
 .fileName em { font-style: normal; font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.fileRow b { font-weight: 400; font-family: "DM Mono", monospace; font-size: 12px; color: var(--ink-3); flex: none }
-.libraryFoot { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3); padding-top: 9px; margin-top: auto; border-top: 1px solid #20211f10 }
+.fileRow b { font-weight: 400; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; color: var(--ink-3); flex: none }
+.libraryFoot { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3); padding-top: 9px; margin-top: auto; border-top: 1px solid #20211f10 }
 .profile { display: flex; flex-direction: column; gap: 16px; min-height: 100% }
 .profileHead { display: flex; gap: 10px; align-items: flex-start }
 .profileFace { flex: none; line-height: 0; background: var(--fieldSoft); border-radius: 50%; padding: 3px }
 .profileName { display: flex; align-items: center; gap: 7px; font-size: 15px; letter-spacing: -.02em }
-.profileName em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; background: #dfeee2; color: #1f5b3a; border-radius: 99px; padding: 3px 6px }
+.profileName em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; background: #dfeee2; color: #1f5b3a; border-radius: 99px; padding: 3px 6px }
 .profileRole { font-size: 14px; color: var(--ink-2); line-height: 1.5; margin-top: 6px !important }
-.profileMeta { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .05em; color: var(--ink-3); display: block; margin-top: 3px }
+.profileMeta { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .05em; color: var(--ink-3); display: block; margin-top: 3px }
 .profileGrid { display: grid; grid-template-columns: 1fr; gap: 12px }
 .profileGrid section { display: flex; flex-direction: column; gap: 5px; min-width: 0 }
-.profileLabel { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3); display: flex; justify-content: space-between; gap: 8px }
+.profileLabel { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3); display: flex; justify-content: space-between; gap: 8px }
 .profileLabel em { display: none }
 .chips { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px }
 .chips em { font-style: normal; font-size: 12px; padding: 3px 7px; border-radius: 99px; border: 1px solid #20211f18; color: #3f403a }
@@ -181,8 +181,8 @@
 .profileFoot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap }
 .lead { display: flex; align-items: center; gap: 8px }
 .lead i { width: 24px; height: 24px; border-radius: 50%; background: var(--fieldSoft); color: var(--fieldInk); font-style: normal; font-size: 12px; display: grid; place-items: center; flex: none }
-.lead > span { display: flex; flex-direction: column; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3); line-height: 1.3 }
-.lead em { font-style: normal; font-family: "Schibsted Grotesk", Arial, sans-serif; font-size: 13px; letter-spacing: -.01em; color: var(--ink) }
+.lead > span { display: flex; flex-direction: column; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3); line-height: 1.3 }
+.lead em { font-style: normal; font-family: var(--font-ui, "Schibsted Grotesk"), Arial, sans-serif; font-size: 13px; letter-spacing: -.01em; color: var(--ink) }
 .boundary { font-size: 12px; color: #3f403a; background: var(--cream); border-radius: 99px; padding: 5px 11px }
 .knot > span { width: 100% !important; height: 100% !important }
 .bandField { background: var(--magenta); border-radius: var(--radius-field); margin-top: 36px; padding: 32px; display: flex; justify-content: center }
@@ -194,7 +194,7 @@
 .askMark { width: 28px; height: 28px; border-radius: 50%; background: var(--cream); color: #55564e; font-style: normal; font-size: 13px; display: grid; place-items: center; flex: none }
 .askBody { display: flex; flex-direction: column; gap: 5px; min-width: 0 }
 .askWho { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--ink) }
-.askWho em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; color: var(--ink-3) }
+.askWho em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; color: var(--ink-3) }
 .askWho b { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; font-size: 12px; color: #6a6b62; background: var(--cream); border-radius: 99px; padding: 3px 8px }
 .askLeft::before, .askRight::before { content: ""; position: absolute; top: 26px; width: 12px; height: 12px; background: var(--paper); transform: rotate(45deg) }
 .askLeft::before { right: -5px }
@@ -251,35 +251,35 @@
 .podLabel:nth-child(3) { --y: 5px; --lead: 49px }
 .podLabel:nth-child(4) { --y: 97px; --lead: 51px }
 .podLabel:nth-child(5) { --y: 184px; --lead: 27px }
-.sheetLabel { display: flex; align-items: center; gap: 7px; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .09em; color: var(--ink-3) }
+.sheetLabel { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .09em; color: var(--ink-3) }
 .sheetTitle { font-size: 19px; letter-spacing: -.02em }
 .sheetText { font-size: 14px; line-height: 1.55; color: var(--ink-2) }
-.sheetFoot { margin-top: auto; padding-top: 13px; border-top: 1px solid #20211f10; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3) }
+.sheetFoot { margin-top: auto; padding-top: 13px; border-top: 1px solid #20211f10; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3) }
 .chatBody { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 14px; flex: 1 }
 .chatNav { display: flex; flex-direction: column; gap: 1px; border-right: 1px solid #20211f0d; padding-right: 10px }
 .chatNav span { padding: 5px 7px; border-radius: 6px; font-size: 12px; color: var(--ink-3) }
 .chanOn { background: var(--cream); color: var(--ink) }
 .thread3 { display: flex; flex-direction: column; gap: 12px; flex: 1; min-width: 0 }
 .said { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; line-height: 1.5 }
-.said > i { width: 22px; height: 22px; border-radius: 6px; background: var(--cream); color: var(--ink-3); font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; display: grid; place-items: center; flex: none }
+.said > i { width: 22px; height: 22px; border-radius: 6px; background: var(--cream); color: var(--ink-3); font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; display: grid; place-items: center; flex: none }
 .saidBot { line-height: 0 }
 .said > span { display: flex; flex-direction: column; gap: 2px; color: var(--ink-2); min-width: 0 }
 .said b { font-weight: 400; color: var(--ink); display: flex; align-items: center; gap: 6px }
-.said b em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; background: var(--cream); color: var(--ink-3); border-radius: 4px; padding: 2px 5px }
+.said b em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .08em; background: var(--cream); color: var(--ink-3); border-radius: 4px; padding: 2px 5px }
 .chat { display: flex; flex-direction: column; gap: 8px; flex: 1 }
 .toThem, .fromThem { font-size: 13px; line-height: 1.5; border-radius: var(--radius-control); padding: 9px 12px; max-width: 88% }
 .toThem { background: var(--cream); color: var(--ink-2); align-self: flex-start }
 .fromThem { background: #e6efe8; color: #1f5b3a; align-self: flex-end }
-.fileChip { align-self: flex-end; font-family: "DM Mono", monospace; font-size: 12px; color: var(--ink-2); background: var(--cream); border-radius: var(--radius-control); padding: 8px 11px }
+.fileChip { align-self: flex-end; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; color: var(--ink-2); background: var(--cream); border-radius: var(--radius-control); padding: 8px 11px }
 .rows { display: flex; flex-direction: column; flex: 1 }
 .rowHead, .row { display: grid; grid-template-columns: 1.1fr .7fr 1fr; gap: 12px; align-items: baseline; padding: 9px 0 }
 .rowHead { border-bottom: 1px solid #20211f14 }
-.rowHead b { font-weight: 400; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3) }
+.rowHead b { font-weight: 400; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3) }
 .row { border-top: 1px solid #20211f0d; font-size: 13px }
 .row:first-child { border-top: 0 }
 .row b { font-weight: 400; color: var(--ink-2) }
 .row b:last-child { text-align: right }
-.rowThin { font-family: "DM Mono", monospace; font-size: 12px; color: var(--ink-3) !important }
+.rowThin { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; color: var(--ink-3) !important }
 .rowWait { color: var(--wait) !important }
 .steps2 { display: flex; flex-direction: column; gap: 9px; flex: 1 }
 .step2 { font-size: 13px; line-height: 1.5; color: var(--ink-2); padding-left: 16px; position: relative }
@@ -288,23 +288,23 @@
 .schema { display: flex; flex-direction: column; flex: 1 }
 .schemaRow { display: grid; grid-template-columns: 1fr .8fr 1.2fr; gap: 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid #20211f0d; font-size: 13px }
 .schemaRow:first-child { border-top: 0 }
-.schemaRow b { font-weight: 400; font-family: "DM Mono", monospace; color: var(--ink) }
-.schemaRow em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; color: var(--violet) }
+.schemaRow b { font-weight: 400; font-family: var(--font-mono, "DM Mono"), monospace; color: var(--ink) }
+.schemaRow em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; color: var(--violet) }
 .schemaRow i { font-style: normal; font-size: 12px; color: var(--ink-3) }
 .md { background: var(--cream); border-radius: var(--radius-control); padding: 13px 15px; display: flex; flex-direction: column; gap: 6px }
-.md p { font-family: "DM Mono", monospace; font-size: 12px; line-height: 1.5; color: var(--ink-2) }
+.md p { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; line-height: 1.5; color: var(--ink-2) }
 .md p:first-child { color: var(--ink-3) }
-.code { background: var(--cream); border-radius: var(--radius-control); padding: 14px 15px; font-family: "DM Mono", monospace; font-size: 12px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-x: auto; flex: 1 }
+.code { background: var(--cream); border-radius: var(--radius-control); padding: 14px 15px; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; overflow-x: auto; flex: 1 }
 .scope { display: flex; flex-direction: column; flex: 1 }
 .scopeRow, .scopeNo { display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: baseline; padding: 9px 0; border-top: 1px solid #20211f0d; font-size: 13px }
 .scopeRow:first-child, .scopeNo:first-child { border-top: 0 }
-.scopeRow b, .scopeNo b { font-weight: 400; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3) }
+.scopeRow b, .scopeNo b { font-weight: 400; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; color: var(--ink-3) }
 .scopeRow em { font-style: normal; color: var(--ink-2) }
 .scopeNo em { font-style: normal; color: var(--bad) }
 .flow { display: flex; flex-wrap: wrap; gap: 7px }
 .nodeDone, .nodeWait, .nodeIdle { display: flex; flex-direction: column; gap: 1px; border-radius: var(--radius-control); padding: 8px 11px; font-size: 12px }
 .nodeDone b, .nodeWait b, .nodeIdle b { font-weight: 400 }
-.nodeDone em, .nodeWait em, .nodeIdle em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .07em; opacity: .7 }
+.nodeDone em, .nodeWait em, .nodeIdle em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .07em; opacity: .7 }
 .nodeDone { background: #dfeee2; color: #1f5b3a }
 .nodeWait { background: #f4ecd9; color: var(--wait) }
 .nodeIdle { background: var(--cream); color: var(--ink-3) }
@@ -316,11 +316,11 @@
 .chartHead { padding-bottom: 10px; border-bottom: 1px solid #20211f10; margin-bottom: 4px }
 .chartRow { padding: 5px 0 }
 .chartWho { display: flex; align-items: center; gap: 9px; font-size: 14px; font-family: inherit; color: var(--ink); min-width: 0 }
-.chartHead .chartWho { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3) }
+.chartHead .chartWho { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3) }
 .chartWho > i { width: 26px; height: 26px; border-radius: 50%; background: var(--cream); color: var(--ink-3); font-style: normal; font-size: 12px; display: grid; place-items: center; flex: none }
 .chartFace { background: none !important; line-height: 0 }
-.chartWho em { font-style: normal; font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3); margin-left: auto }
-.colName, .colShut { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .04em; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.chartWho em { font-style: normal; font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .08em; color: var(--ink-3); margin-left: auto }
+.colName, .colShut { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .04em; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .colName { color: var(--ink-3) }
 .colShut { color: var(--ink-3) }
 .cell, .cellGone { height: 30px; border-radius: 6px; display: grid; place-items: center; font-size: 14px; color: var(--violet) }
@@ -365,12 +365,12 @@
 .demoLabel button { border: 0; background: none; color: inherit; font: inherit; padding: 6px 0; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; white-space: nowrap }
 .knot { position: absolute; left: calc(33% - 100px); bottom: 2%; width: 180px; height: 180px; z-index: 3; pointer-events: none; opacity: calc(1 - var(--grow) * 2.4); transform: translateY(calc(var(--grow) * 40px)) }
 .tourCopy { position: absolute; left: var(--gutter); top: 50%; width: 27%; transform: translateY(-50%); z-index: 3; color: var(--onField); opacity: clamp(0,calc((var(--grow) - .6) * 2.5),1) }
-.tourEyebrow { font: 12px "DM Mono",monospace; letter-spacing: .06em; margin-bottom: 18px !important }
+.tourEyebrow { font: 12px var(--font-mono, "DM Mono"),monospace; letter-spacing: .06em; margin-bottom: 18px !important }
 .beats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px }
 .beat, .beatOn { display: flex; align-items: flex-start; gap: 14px; width: 100%; font: inherit; text-align: left; color: inherit; background: none; border: 1px solid transparent; border-radius: var(--radius-control); padding: 10px 12px; cursor: pointer; transition: background var(--motion-fast), border-color var(--motion-fast) }
 .beatOn { background: rgb(255 254 250 / .1); border-color: rgb(255 254 250 / .5) }
 .beat:hover { background: rgb(255 254 250 / .08) }
-.beatNumber { font: 12px "DM Mono",monospace; padding-top: 4px }
+.beatNumber { font: 12px var(--font-mono, "DM Mono"),monospace; padding-top: 4px }
 .beat b, .beatOn b { display: block; font-weight: 400; font-size: 18px; letter-spacing: -.025em; line-height: 1.2 }
 .beat span span, .beatOn span span { display: block; font-size: 14px; line-height: 1.55; margin-top: 6px; max-width: 43ch }
 .tourSkip { display: inline-flex; align-items: center; gap: 24px; font-size: 14px; min-height: 44px; margin: 16px 12px 0; border-bottom: 1px solid currentColor }
@@ -383,7 +383,7 @@
 .tourChannels > span { display: flex; align-items: center; gap: 8px; font-size: 14px }
 .storySummary { display: none }
 .storySummary button { display: flex; gap: 12px; font: inherit; text-align: left; padding: 0; border: 0; background: none; cursor: pointer }
-.storySummary button > span { font: 12px "DM Mono",monospace; color: var(--violet); padding-top: 3px }
+.storySummary button > span { font: 12px var(--font-mono, "DM Mono"),monospace; color: var(--violet); padding-top: 3px }
 .productFrame { border: 1px solid rgb(255 254 250 / .3); border-radius: var(--radius-card); overflow: hidden; box-shadow: var(--shadow-float); background: var(--paper); }
 .productViewport { --preview-width: 900px; --preview-scale: 1; position: relative; height: min(calc(62vh + 84px),704px); min-height: 504px; overflow: hidden; background: var(--paper) }
 .productIframe { border: 0; display: block; width: var(--preview-width); height: calc(100% / var(--preview-scale)); transform: scale(var(--preview-scale)); transform-origin: top left }
@@ -455,7 +455,7 @@
     .productViewport { height: 684px }
     .storySummary { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: 24px; list-style: none; margin: 32px var(--gutter) 0; padding: 24px 0; border-bottom: 1px solid var(--line) }
     .storySummary li { display: flex; gap: 12px }
-    .storySummary li > span { font: 12px "DM Mono",monospace; color: var(--magenta); padding-top: 3px }
+    .storySummary li > span { font: 12px var(--font-mono, "DM Mono"),monospace; color: var(--magenta); padding-top: 3px }
     .storySummary b { font-size: 16px; font-weight: 400; line-height: 1.3 }
     .storySummary p { font-size: 14px; color: var(--ink-3); line-height: 1.5; margin-top: 8px }
 }
@@ -489,7 +489,7 @@
     .mobileAccess article:last-child { border: 0 }
     .mobileAccess article > div { display: flex; align-items: center; flex-wrap: wrap; gap: 10px }
     .mobileAccess b { font-weight: 500; font-size: 16px }
-    .mobileAccess span { font: 12px "DM Mono", monospace; color: var(--ink-3) }
+    .mobileAccess span { font: 12px var(--font-mono, "DM Mono"), monospace; color: var(--ink-3) }
     .mobileAccess em { margin-left: auto; font-style: normal; font-size: 13px; color: var(--violet) }
     .mobileAccess p { font-size: 14px; color: var(--ink-2); line-height: 1.6; margin-top: 12px }
     .mobileAccess small { display: block; font-size: 12px; color: var(--ink-3); margin-top: 8px }
@@ -581,7 +581,7 @@
     .knot, .tourCopy, .emerge { display: none }
     .storySummary { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: 24px; list-style: none; margin: 32px var(--gutter) 0; padding: 24px 0; border-bottom: 1px solid var(--line) }
     .storySummary li { display: flex; gap: 12px }
-    .storySummary li > span { font: 12px "DM Mono",monospace; color: var(--magenta); padding-top: 3px }
+    .storySummary li > span { font: 12px var(--font-mono, "DM Mono"),monospace; color: var(--magenta); padding-top: 3px }
     .storySummary b { font-size: 16px; font-weight: 400; line-height: 1.3 }
     .storySummary p { font-size: 14px; color: var(--ink-3); line-height: 1.5; margin-top: 8px }
     .page *, .page *::before, .page *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important }
@@ -594,7 +594,7 @@
 .switcher { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-bottom: 1px solid var(--line) }
 .pick, .pickOn { border: 0; border-radius: 0; padding: 18px 20px 22px; min-height: 110px; background: transparent; box-shadow: none }
 .pickOn { box-shadow: inset 0 -2px var(--magenta) }
-.pickFace { font: 12px "DM Mono", monospace; color: var(--ink-3); padding-top: 5px }
+.pickFace { font: 12px var(--font-mono, "DM Mono"), monospace; color: var(--ink-3); padding-top: 5px }
 .pickOn .pickFace { color: var(--magenta) }
 .wide { padding: 0; min-height: 0; border-radius: 0 }
 .channelDemo { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border: 1px solid var(--line); border-radius: var(--radius-card); overflow: hidden; background: var(--paper) }
@@ -603,7 +603,7 @@
 .channelHeader b { font-weight: 500 }
 .channelHeader > span { border-left: 1px solid var(--line); padding-left: 12px; color: var(--ink-2); font-size: 14px }
 .channelThread { padding: 28px; display: flex; flex-direction: column; gap: 24px }
-.channelLabel { font: 12px "DM Mono", monospace; letter-spacing: .04em; color: var(--ink-3) }
+.channelLabel { font: 12px var(--font-mono, "DM Mono"), monospace; letter-spacing: .04em; color: var(--ink-3) }
 .channelThread .said { gap: 12px }
 .channelThread .said > i { width: 32px; height: 32px; flex: 0 0 32px }
 .workAttachment { display: flex; flex-direction: column; gap: 8px; margin-left: 44px; padding: 18px; border: 1px solid var(--line); border-left: 3px solid var(--magenta); border-radius: 8px; font-size: 14px; color: var(--ink-2) }
@@ -650,7 +650,7 @@
 .phoneHeader b { font-size: 15px; font-weight: 500 }
 .phoneHeader div > span { font-size: 12px; color: var(--ink-3) }
 .phoneMessages { display: flex; flex-direction: column; gap: 12px; padding: 16px 12px 20px }
-.phoneDay { align-self: center; font: 12px "DM Mono",monospace; color: var(--ink-3); margin: 0 0 4px }
+.phoneDay { align-self: center; font: 12px var(--font-mono, "DM Mono"),monospace; color: var(--ink-3); margin: 0 0 4px }
 .phoneIncoming, .phoneOutgoing { max-width: 90%; padding: 11px 12px 7px; border-radius: 12px; font-size: 13px; line-height: 1.5; box-shadow: 0 1px 2px #20211f0d }
 .phoneIncoming { align-self: flex-start; background: var(--paper); border-top-left-radius: 3px }
 .phoneOutgoing { align-self: flex-end; background: #dcedcf; border-top-right-radius: 3px }
@@ -672,10 +672,10 @@
 .scheduleAuthor span { font-size: 12px; color: var(--ink-3) }
 .scheduleReport h3 { font-size: 32px }
 .reportItem { display: flex; gap: 16px; padding: 18px 0; border-top: 1px solid var(--line-soft) }
-.reportItem > span { font: 12px "DM Mono",monospace; color: var(--magenta); padding-top: 4px }
+.reportItem > span { font: 12px var(--font-mono, "DM Mono"),monospace; color: var(--magenta); padding-top: 4px }
 .reportItem b { font-size: 16px; font-weight: 500 }
 .reportItem p { margin: 6px 0 0; font-size: 14px; line-height: 1.6; color: var(--ink-2) }
-.scheduleFooter { display: block; font: 12px "DM Mono",monospace; color: var(--ink-3); padding-top: 20px }
+.scheduleFooter { display: block; font: 12px var(--font-mono, "DM Mono"),monospace; color: var(--ink-3); padding-top: 20px }
 @media (max-width: 800px) {
     .mobileExample { grid-template-columns: minmax(0, 1fr); gap: 28px; padding: 28px 20px }
     .mobileStory { max-width: 100% }

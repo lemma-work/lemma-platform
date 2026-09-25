@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = ROOT / "Makefile"
 STACK_RENDER = ROOT / "lemma-stack/lemma_stack/config/render.py"
 CONFIG = ROOT / "lemma-backend/app/core/config.py"
-FRONTEND_CONFIG = ROOT / "lemma-harness/components/auth/portal/auth/config.ts"
+FRONTEND_CONFIG = ROOT / "lemma-frontend/src/auth/config.ts"
 
 
 def gates_on_by_default():
@@ -75,17 +75,19 @@ def browser_mirrored_gates():
 
     A gate the frontend mirrors has two renderings to keep in step, not one, and
     the second is easy to miss precisely because the backend half looks complete.
-    `supertokens-auth-react` mounts its email-verification recipe from this copy
-    and defaults it to ON when unset, so a backend told to relax the gate and a
-    frontend never told anything disagree -- and the disagreement is not a
-    warning, it is a 404 on a route the backend never registered and a sign-in
-    nobody can get past.
+    The sign-up screen decides from this copy whether to send somebody off to
+    verify their address, so a backend told to relax the gate and a frontend
+    told the opposite disagree -- and the disagreement is not a warning, it is
+    a new account waiting on an email a local installation will never send.
+
+    Read from the keys of `MIRRORED_GATES`, the one table the frontend reads
+    its gates through.
     """
     text = FRONTEND_CONFIG.read_text(encoding="utf-8")
-    return {
-        name
-        for name in re.findall(r'"(AUTH_[A-Z_]+)",\s*\n\s*process\.env\.NEXT_PUBLIC_', text)
-    }
+    table = re.search(r"const MIRRORED_GATES = \{(.*?)\n\}", text, re.DOTALL)
+    if not table:
+        raise SystemExit(f"MIRRORED_GATES not found in {FRONTEND_CONFIG}")
+    return set(re.findall(r'"(AUTH_[A-Z_]+)":', table.group(1)))
 
 
 def frontend_env_gates(gates):
@@ -129,7 +131,7 @@ def main() -> int:
             problems.append(
                 f"  {key}: {MAKEFILE.name} relaxes it for the backend but never "
                 f"writes NEXT_PUBLIC_{key} for the frontend, which reads the same "
-                f"gate and defaults it ON"
+                f"gate"
             )
 
     if problems:

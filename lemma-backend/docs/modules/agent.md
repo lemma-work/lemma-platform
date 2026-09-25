@@ -46,7 +46,7 @@ cancellation.
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
 | `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
-| `/me/runtime/agent-hosts...`, `/agent-host/*` | Agent Host pairing, harness catalog, command poll, and event append |
+| `/me/runtime/agent-hosts...`, `/agent-host/link` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
 | `/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL |
 

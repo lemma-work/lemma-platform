@@ -488,3 +488,35 @@
    do not get the same voice. */
 .steps__detail--said { color:var(--ink-2); }
 .steps__peek { font-style:normal; }
+
+/* ── a local agent's edits ──────────────────────────────────────────
+   A diff is read line by line, so each line is its own block and the sign
+   carries the colour: the same two tokens a failure and a success already use,
+   rather than a second pair of greens and reds for one card. */
+.toolcard__file + .toolcard__file {
+    margin-top: 10px;
+}
+.toolcard__diff {
+    white-space: normal;
+}
+.toolcard__diffline {
+    display: block;
+    white-space: pre-wrap;
+}
+.toolcard__diffline[data-sign="+"] {
+    color: var(--ok);
+}
+.toolcard__diffline[data-sign="-"] {
+    color: var(--bad);
+}
+.toolcard__diffline[data-sign="gap"] {
+    color: var(--ink-3);
+}
+
+/* A sub-agent's own steps, under the task that started them. An indent and a
+   rule, the same device the list itself uses, one level in. */
+.steps__list li[data-nested] {
+    margin-left: 14px;
+    padding-left: 10px;
+    border-left: 1px solid var(--line);
+}

@@ -549,11 +549,11 @@ async def reconcile_agent_host_dispatch() -> None:
     # Two transactions, not one, and that is a deadlock fix rather than a
     # style choice. Both halves touch leases and commands; run together they
     # hold lease locks from `cancel_abandoned_host_runs` while
-    # `reconcile_expired_leases` goes on to take command locks. The host poll
-    # walks the same two tables the other way round -- commands first, then a
-    # blocking lease lock -- so the two can wedge (ABBA), Postgres aborts one
-    # with 40P01, and the poll surfaces it as a 500 because it catches only
-    # `AgentHostRepositoryError`.
+    # `reconcile_expired_leases` goes on to take command locks. A host's
+    # `control` frame walks the same two tables the other way round -- commands
+    # first, then a blocking lease lock -- so the two can wedge (ABBA), and
+    # Postgres aborts one with 40P01. The link retries that once
+    # (`AgentHostLinkStore.apply_control`); this removes the cause.
     #
     # Committing between them means no lease lock is ever held across a command
     # acquisition, which removes this side of the cycle. The two sweeps are
@@ -572,8 +572,8 @@ async def reconcile_agent_host_dispatch() -> None:
             "agent.handlers.reconcile_agent_host_dispatch_cron.failed", exc_info=True
         )
         return
-    # Poke outside the transaction: the host is long-polling, and without this
-    # the cancel waits out its poll deadline. poke_host never raises.
+    # Poke outside the transaction: without it the cancel waits for the link's
+    # 5-second floor instead of going out now. poke_host never raises.
     for host_id in dict.fromkeys(host_ids):
         await poke_host(host_id)
 

@@ -1,0 +1,843 @@
+[
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "commands": [
+        "recorded"
+      ]
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": "Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " do"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " each"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " First"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " create"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " file"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " notes"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": ".txt"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " with"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " \""
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": "one"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": "\"."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " I"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " need"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " to"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " it"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " first"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": "?"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " Write"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " tool"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " for"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " new"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " file"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " doesn"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": "'t"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " require"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": " write"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b26ac7001F9chxtDFwcgdku",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_224480b5e9db49bc8627eb19",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "content": "one\n"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "write_file",
+        "source": "native",
+        "server": null,
+        "title": "write",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_224480b5e9db49bc8627eb19",
+    "payload": {
+      "error": null,
+      "output": {
+        "message": "Wrote file successfully."
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_6c75b760a01443a98aa1799c",
+    "payload": {
+      "input": {
+        "query": "Agent Client Protocol"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "tinyfish_search",
+        "source": "native",
+        "server": null,
+        "title": "tinyfish_search",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_4a265f9b9744497295f370e3",
+    "payload": {
+      "input": {
+        "urls": [
+          "https://agentclientprotocol.com"
+        ],
+        "format": "markdown",
+        "links": false,
+        "image_links": false,
+        "page_metadata": false
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "tinyfish_fetch_content",
+        "source": "native",
+        "server": null,
+        "title": "tinyfish_fetch_content",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_6c75b760a01443a98aa1799c",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "{\n  \"query\": \"Agent Client Protocol\",\n  \"results\": [\n    {\n      \"position\": 1,\n      \"site_name\": \"agentclientprotocol.com\",\n      \"snippet\": \"The Agent Client Protocol (ACP) standardizes communication between code editors/IDEs and coding agents and is suitable for both local and remote scenarios. ​.\",\n      \"title\": \"Agent Client Protocol: Introduction\",\n      \"url\": \"https://agentclientprotocol.com/get-started/introduction\"\n    },\n    {\n      \"position\": 2,\n      \"site_name\": \"github.com\",\n      \"snippet\": \"The Agent Client Protocol (ACP) standardizes communication between code editors (interactive programs for viewing and editing source code) and coding agents ( ...\",\n      \"title\": \"agentclientprotocol/agent-client-protocol: A ...\",\n      \"url\": \"https://github.com/agentclientprotocol/agent-client-protocol\"\n    },\n    {\n      \"position\": 3,\n      \"site_name\": \"www.jetbrains.com\",\n      \"snippet\": \"Built by JetBrains and Zed, ACP helps to connect local, remote, or in-house AI agents without vendor lock-in.\",\n      \"title\": \"Agent Client Protocol (ACP): Use Any Coding ...\",\n      \"url\": \"https://www.jetbrains.com/acp/\"\n    },\n    {\n      \"position\": 4,\n      \"site_name\": \"agentclientprotocol.com\",\n      \"snippet\": \"Clients, frameworks, connectors, and related tools around the Agent Client Protocol.\",\n      \"title\": \"Clients\",\n      \"url\": \"https://agentclientprotocol.com/get-started/clients\"\n    },\n    {\n      \"position\": 5,\n      \"site_name\": \"agentcommunicationprotocol.dev\",\n      \"snippet\": \"What is ACP? The Agent Communication Protocol (ACP) is an open protocol for agent interoperability that solves the growing challenge of connecting AI agents ...\",\n      \"title\": \"Agent Communication Protocol: Welcome\",\n      \"url\": \"https://agentcommunicationprotocol.dev/introduction/welcome\"\n    },\n    {\n      \"position\": 6,\n      \"site_name\": \"zed.dev\",\n      \"snippet\": \"The Agent Client Protocol (ACP) is an open standard that enables any agent to integrate seamlessly with any editing environment. Universal Compatibility. Any ...\",\n      \"title\": \"Agent Client Protocol\",\n      \"url\": \"https://zed.dev/acp\"\n    },\n    {\n      \"position\": 7,\n      \"site_name\": \"ai-sdk.dev\",\n      \"snippet\": \"ACP (Agent Client Protocol) is an open protocol that enables seamless communication between AI agents and client applications. The ACP provider bridges ACP ...\",\n      \"title\": \"Community Providers: ACP (Agent Client Protocol)\",\n      \"url\": \"https://ai-sdk.dev/providers/community-providers/acp\"\n    },\n    {\n      \"date\": \"Feb 1, 2026\",\n      \"position\": 8,\n      \"site_name\": \"www.philschmid.de\",\n      \"snippet\": \"The Agent Client Protocol (ACP) is an an open standard abstracts the events and outputs of AI agents and provides a common interface for editors ...\",\n      \"title\": \"The Agent Client Protocol Overview\",\n      \"url\": \"https://www.philschmid.de/acp-overview\"\n    },\n    {\n      \"position\": 9,\n      \"site_name\": \"agentclientprotocol.com\",\n      \"snippet\": \"The Agent Client Protocol allows Agents and Clients to communicate by exposing methods that each side can call and sending notifications to inform each other of ...\",\n      \"title\": \"Overview\",\n      \"url\": \"https://agentclientprotocol.com/protocol/v1/overview\"\n    }\n  ],\n  \"total_results\": 9,\n  \"page\": 0\n}"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_4a265f9b9744497295f370e3",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "{\n  \"results\": [\n    {\n      \"url\": \"https://agentclientprotocol.com\",\n      \"final_url\": \"https://agentclientprotocol.com/get-started/introduction\",\n      \"title\": \"Introduction - Agent Client Protocol\",\n      \"description\": \"Get started with the Agent Client Protocol.\",\n      \"language\": \"en\",\n      \"text\": \"The Agent Client Protocol (ACP) standardizes communication between code editors/IDEs and coding agents and is suitable for both local and remote scenarios.\\n\\n##  Why ACP?\\n\\nAI coding agents and editors are tightly coupled but interoperability isn’t the default. Each editor must build custom integrations for every agent they want to support, and agents must implement editor-specific APIs to reach users.\\nThis creates several problems:\\n\\n* Integration overhead: Every new agent-editor combination requires custom work\\n* Limited compatibility: Agents work with only a subset of available editors\\n* Developer lock-in: Choosing an agent often means accepting their available interfaces\\n\\nACP solves this by providing a standardized protocol for agent-editor communication, similar to how the Language Server Protocol (LSP) standardized language server integration.\\nAgents that implement ACP work with any compatible editor. Editors that support ACP gain access to the entire ecosystem of ACP-compatible agents.\\nThis decoupling allows both sides to innovate independently while giving developers the freedom to choose the best tools for their workflow.\\n\\n##  Overview\\n\\nACP assumes that the user is primarily in their editor, and wants to reach out and use agents to assist them with specific tasks.\\nACP is suitable for both local and remote scenarios:\\n\\n* **Local agents** run as sub-processes of the code editor, communicating via JSON-RPC over stdio.\\n* **Remote agents** can be hosted in the cloud or on separate infrastructure, communicating over HTTP or WebSocket\\n\\nFull support for remote agents is a work in progress. We are actively\\ncollaborating with agentic platforms to ensure the protocol addresses the\\nspecific requirements of cloud-hosted and remote deployment scenarios.\\n\\nThe protocol re-uses the JSON representations used in MCP where possible, but includes custom types for useful agentic coding UX elements, like displaying diffs.\\nThe default format for user-readable text is Markdown, which allows enough flexibility to represent rich formatting without requiring that the code editor is capable of rendering HTML.\",\n      \"author\": null,\n      \"published_date\": null,\n      \"latency_ms\": 1364.0424969999003,\n      \"format\": \"markdown\"\n    }\n  ],\n  \"errors\": []\n}"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": "Now"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": "2"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": ":"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " notes"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": ".txt"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " line"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " one"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " ->"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " two"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " Need"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " to"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " first"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": "?"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " I"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " wrote"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " it"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " but"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " tool"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " requires"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " in"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " conversation"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " I"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " used"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " write"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " which"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " may"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " count"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": "?"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " It"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " says"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " must"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " use"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " Read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " tool"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " at"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " least"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " once"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " before"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " editing"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b2866e001Y3voPqgxPGPfpJ",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_9c938d8967334197864320fe",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "read_file",
+        "source": "native",
+        "server": null,
+        "title": "read",
+        "kind": "read"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_9c938d8967334197864320fe",
+    "payload": {
+      "error": null,
+      "output": {
+        "content": "one"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_803cc7019a2c4b449e3d7e5a",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "old_string": "one",
+        "new_string": "two"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "edit_file",
+        "source": "native",
+        "server": null,
+        "title": "edit",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_803cc7019a2c4b449e3d7e5a",
+    "payload": {
+      "error": null,
+      "output": {
+        "message": "Edit applied successfully.",
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "update",
+            "old_text": "one",
+            "new_text": "two"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0d4b29329001cvkw56o4VPRcb5",
+    "payload": {
+      "text": "done"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 37391,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.009423078,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  {
+    "type": "usage",
+    "object_id": null,
+    "payload": {
+      "cached_input_tokens": 37134,
+      "input_tokens": 257,
+      "output_tokens": 3,
+      "total_tokens": 37394
+    }
+  }
+]

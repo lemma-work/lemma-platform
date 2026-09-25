@@ -1,5 +1,6 @@
-//! Real host process, ACP subprocess, journal, and HTTP delivery. The agent
-//! cannot finish until the receiver observes its first text and releases it.
+//! Real host process, ACP subprocess, journal, and delivery over the link. The
+//! agent cannot finish until the receiver observes its first text and releases
+//! it.
 
 #![cfg(unix)]
 
@@ -102,7 +103,7 @@ async fn invalid_conversation_cwd_fails_without_dispatching_a_prompt() {
 
 async fn streaming_run(
     mode: &str,
-    lose_ack: bool,
+    drop_link_after_append: bool,
 ) -> (TempDir, ShimmedAgents, ControlPlane, HostProcess) {
     let directory = TempDir::new().unwrap();
     let shims = ShimmedAgents::install(directory.path(), mode);
@@ -113,8 +114,8 @@ async fn streaming_run(
         PermissionAnswer::Deny,
     )
     .await;
-    if lose_ack {
-        control.lose_the_first_append_ack();
+    if drop_link_after_append {
+        control.drop_the_link_after_the_first_append();
     }
     if mode == "stream-deadline" {
         control.set_run_budget(chrono::Duration::seconds(5));
@@ -125,6 +126,11 @@ async fn streaming_run(
 
 #[tokio::test]
 async fn live_unicode_text_survives_a_lost_ack_without_repeating_the_prompt() {
+    // The acknowledgement is lost the way it is on the link: Lemma commits the
+    // batch and the connection goes before `events_ok` does. The host cannot
+    // tell that from a batch that never arrived, so it reconnects and replays
+    // from its outbox -- and the replay must neither replace the text Lemma
+    // already holds nor send the prompt to the agent a second time.
     let (_directory, shims, control, host) = streaming_run("stream", true).await;
     control
         .wait_for(
@@ -190,7 +196,7 @@ async fn live_unicode_text_survives_a_lost_ack_without_repeating_the_prompt() {
             .filter(|batch| batch.contains(&first_sequence))
             .count()
             >= 2,
-        "the lost acknowledgement must force a replay"
+        "the lost acknowledgement must force a replay on the next link"
     );
     assert_eq!(
         shims

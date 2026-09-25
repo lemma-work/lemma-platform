@@ -17,6 +17,7 @@ import { Modal } from "./modal";
 import { Mark } from "./mark";
 import { completionPath, hereWith, openAuthorization, useConnectOutcome } from "@/connect/round-trip";
 import { connectorProblem } from "@/connect/install";
+import { copyText } from "@/desktop/clipboard";
 
 /** Giving a teammate a way to be reached.
  *
@@ -60,8 +61,7 @@ function Handle({ surface }: { surface: Surface }) {
             title="Copy"
             onClick={() => {
                 clearTimeout(timer.current);
-                navigator.clipboard
-                    ?.writeText(surface.email ?? surface.handle)
+                copyText(surface.email ?? surface.handle)
                     .then(() => {
                         setCopied(true);
                         timer.current = setTimeout(() => setCopied(false), 1600);

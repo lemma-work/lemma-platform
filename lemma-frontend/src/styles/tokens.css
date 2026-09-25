@@ -79,10 +79,13 @@
        glances, so they take a grotesque built for small sizes. A document is
        read for minutes, so it takes a text face — Newsreader was already being
        downloaded on every page load and used for nothing at all. Code, paths
-       and anything meant to be compared character by character stay mono. */
-    --ui: "Schibsted Grotesk", system-ui, -apple-system, sans-serif;
-    --serif: "Newsreader", Iowan Old Style, Georgia, serif;
-    --mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+       and anything meant to be compared character by character stay mono.
+       Each face is `next/font`'s self-hosted copy first (the layout defines
+       `--font-*`), so the desktop app draws them with no network; the quoted
+       name after it is a fallback for a document the layout never wrapped. */
+    --ui: var(--font-ui, "Schibsted Grotesk"), system-ui, -apple-system, sans-serif;
+    --serif: var(--font-serif, "Newsreader"), Iowan Old Style, Georgia, serif;
+    --mono: var(--font-mono, "DM Mono"), ui-monospace, SFMono-Regular, Menlo, monospace;
 
     /* Type scale — five sizes, and they do not drift. */
     --t-pod: 21px;

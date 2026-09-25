@@ -33,8 +33,7 @@ async fn run_cancelled() -> (TempDir, ControlPlane, HostProcess) {
         "Work until you are told to stop.",
         json!({
             "server_name": "lemma_tools",
-            "url": "http://127.0.0.1:1/agent-runtime/conversations/unused/mcp",
-            "authorization": "Bearer unused-cancel-e2e-token",
+            "token": "unused-cancel-e2e-token",
         }),
         PermissionAnswer::Ignore,
     )
@@ -104,7 +103,7 @@ async fn the_agents_own_cancelled_stop_reason_is_what_lemma_records() {
     host.shutdown().await;
 }
 
-/// A run whose `START_RUN` response is lost still starts.
+/// A run whose `START_RUN` is lost in flight still starts.
 ///
 /// The flake this closes: the stub marked `START_RUN` sent the moment it wrote it
 /// into a response body, with nothing to re-offer it. A response the host never
@@ -113,9 +112,12 @@ async fn the_agents_own_cancelled_stop_reason_is_what_lemma_records() {
 /// `published=Some(..), start_sent=true, events=[]`. Roughly one run in twenty,
 /// on CI and locally, and it never reproduced on demand.
 ///
-/// A real control plane redelivers a command until it comes back in a poll's
-/// `acknowledged_command_ids`, which is what the stub does now. Asserted by losing a
-/// response on purpose rather than waiting for a loaded machine to lose one.
+/// A real control plane redelivers a command until it comes back in a
+/// `control` frame's `acknowledged_command_ids`, which is what the stub does
+/// now. On the link a command is lost with the connection it was pushed on, so
+/// that is how it is lost here: the stub closes the link instead of sending the
+/// first frame that carries it, and the host has to reconnect and be offered it
+/// again. On purpose, rather than waiting for a loaded machine to lose one.
 #[tokio::test]
 async fn a_run_whose_start_command_is_lost_is_offered_it_again() {
     let directory = tempfile::tempdir().unwrap();
@@ -125,13 +127,12 @@ async fn a_run_whose_start_command_is_lost_is_offered_it_again() {
         "Say LEMMA_CANCEL_WORKING and stop.",
         json!({
             "server_name": "lemma_tools",
-            "url": "http://127.0.0.1:1/agent-runtime/conversations/unused/mcp",
-            "authorization": "Bearer unused-cancel-e2e-token",
+            "token": "unused-cancel-e2e-token",
         }),
         PermissionAnswer::Ignore,
     )
     .await;
-    control.lose_the_first_command();
+    control.drop_the_link_instead_of_the_first_command();
     // The shim for this profile works until it is told to stop, so the run is
     // cancelled the same way `run_cancelled` does it -- otherwise there is no
     // terminal event to wait for and the assertion would be about the shim

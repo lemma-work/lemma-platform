@@ -1856,3 +1856,14 @@ async def test_one_unreadable_row_does_not_blank_the_whole_listing():
     )
 
     assert [profile.id for profile in listed] == [readable.id]
+
+
+def test_a_coding_agent_with_a_stale_pin_runs_on_its_own_default():
+    """A local coding agent has a default of its own, and that -- not the first
+    model it happens to publish -- is what a stale pin falls back to. `None`
+    is what dispatch sends as "no model", exactly as for an unpinned profile."""
+    profile = _test_harness_profile(
+        organization_id=uuid4(), name="Claude Code", default_model_name="opus"
+    )
+    assert _selected_model(profile, "opus").name == "opus"
+    assert _selected_model(profile, "a-model-it-no-longer-offers") is None

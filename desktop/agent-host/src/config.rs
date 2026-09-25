@@ -309,7 +309,7 @@ impl HostConfig {
             if target.base_url.scheme() != "https" {
                 anyhow::ensure!(
                     target.allow_insecure_http
-                        && crate::api::is_loopback_host(target.base_url.host_str()),
+                        && crate::link::is_loopback_host(target.base_url.host_str()),
                     "target {} must use HTTPS (HTTP is allowed only for an explicitly opted-in loopback target)",
                     target.name
                 );
@@ -435,8 +435,20 @@ mod tests {
 
         // Releasing it lets the next process in, so a restart is not blocked by
         // its predecessor.
+        //
+        // Not necessarily at once: other tests in this binary spawn processes,
+        // and a child forked while `first` was open holds a copy of its
+        // descriptor -- and so the lock -- until it execs and the copy closes.
+        // A new process has no such children, so the wait is only a test's.
         drop(first);
-        assert!(paths.lock_single_instance().is_ok());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while paths.lock_single_instance().is_err() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lock was not released"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     /// Claiming more capacity than the backend accepts is not ambitious, it is

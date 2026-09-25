@@ -1,7 +1,7 @@
 import { isPlanToolName, planStepsFromToolInvocation, type PlanStepState } from "lemma-sdk";
-import { displayAgentName } from "@/data/agent-names";
 import { isDisplayResourceTool, parseDisplayResource, type DisplayResource } from "./display-resource";
 import { parseToolCard, type SignInAsk, type ToolCard } from "./tool-cards";
+import { toolKey, toolLabel, toolTitle } from "./tool-name";
 import {
     approvalDetails,
     askQuestions,
@@ -57,6 +57,11 @@ export interface Note {
      *  waiting on is not work, it is a question, and it belongs in the
      *  transcript beside the approval card for the same reason. */
     card?: ToolCard;
+    /** The call this step is, so the live indicator can find it. */
+    toolCallId?: string;
+    /** Made by a sub-agent (`parent_call_id`), and drawn under the `task`
+     *  that started it rather than as the run's own step. */
+    nested?: boolean;
 }
 
 /** A pause: `request_approval` or `ask_user`, carded where the run stopped.
@@ -119,6 +124,9 @@ export interface RawMessage {
     tool_call_id?: string | null;
     sequence?: number;
     created_at?: string;
+    /** `tool_source`, `tool_title`, `parent_call_id` and the rest of what the
+     *  Agent Host says about a call. */
+    metadata?: Record<string, unknown> | null;
 }
 
 export function clockOf(iso?: string | null): string {
@@ -200,16 +208,22 @@ export interface Streaming {
     /** The call in flight. `args` matters as much as the name: it carries the
      *  agent's `comment`, which is the only thing that can say what this step
      *  is *for* while it is still happening. */
-    tool: { toolName: string; args?: Record<string, unknown> } | null;
+    tool: { toolName: string; toolCallId?: string; args?: Record<string, unknown> } | null;
 }
 
 /** What the run is doing right now, as one more step rather than a row of its
  *  own. Rendering it separately gave a reply two step rows — "6 steps · Exec
  *  command" with "working · request_approval" beneath it — which reads as two
  *  things happening when it is one thing, a step further along. */
-export function liveNote(streaming: Streaming): Note[] {
+export function liveNote(streaming: Streaming, landed: Note[] = []): Note[] {
     if (streaming.text) return [];
     if (streaming.tool) {
+        /* A local agent's call lands whole, and the host announces it as
+           running *after* the message, so the step is already on the list —
+           as a card still waiting on its return. A second row for it would
+           read as two calls. */
+        const callId = streaming.tool.toolCallId;
+        if (callId && landed.some((note) => note.toolCallId === callId)) return [];
         /* A pause arrives as a tool call like any other, and for the moment
            between the stream announcing it and the message landing it would
            otherwise read as a step called "request_approval" — the envelope's
@@ -227,13 +241,32 @@ export function liveNote(streaming: Streaming): Note[] {
         const said = commentOf(streaming.tool.args);
         return [{
             kind: "tool",
-            label: displayAgentName(streaming.tool.toolName),
+            label: toolLabel(streaming.tool.toolName),
             detail: said || argSummary(streaming.tool.args),
             said: Boolean(said),
         }];
     }
     if (streaming.thinking) return [{ kind: "thought", label: "Thought", detail: streaming.thinking }];
     return [];
+}
+
+/** A tool call as a step in the fold. */
+function step(message: RawMessage, metadata: Record<string, unknown> | null, earlier: Note[]): Note {
+    const said = commentOf(message.tool_args);
+    const parent = typeof metadata?.parent_call_id === "string" ? metadata.parent_call_id : "";
+    return {
+        kind: "tool",
+        label: toolLabel(message.tool_name ?? "tool", metadata),
+        /* The agent's own line first; then, for a local agent's native tool,
+           the adapter's title ("Search for 'two'"), which says more than the
+           names of the arguments do. */
+        detail: said || toolTitle(metadata) || argSummary(message.tool_args),
+        said: Boolean(said),
+        toolCallId: message.tool_call_id ?? undefined,
+        /* Nested only under a task this turn actually shows. A parent from
+           a page not yet loaded would indent a step under nothing. */
+        nested: Boolean(parent) && earlier.some((note) => note.toolCallId === parent),
+    };
 }
 
 export function buildTurns(messages: RawMessage[]): Turn[] {
@@ -293,7 +326,8 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                belongs in the conversation at the point it happened — never
                folded into the trace, where a person would have to open a
                disclosure to discover they are being asked something. */
-            if (isInteractionTool(message.tool_name)) {
+            const metadata = message.metadata ?? null;
+            if (isInteractionTool(message.tool_name, metadata)) {
                 const callId = message.tool_call_id ?? message.id ?? "";
                 if (callId) {
                     const answered = returns.get(callId);
@@ -302,9 +336,9 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                         id: message.id ?? "i" + current.items.length,
                         interaction: {
                             id: callId,
-                            kind: isAskTool(message.tool_name) ? "question" : "approval",
+                            kind: isAskTool(message.tool_name, metadata) ? "question" : "approval",
                             details: approvalDetails(message.tool_args, textOf(message)),
-                            questions: isAskTool(message.tool_name) ? askQuestions(message.tool_args) : [],
+                            questions: isAskTool(message.tool_name, metadata) ? askQuestions(message.tool_args) : [],
                             decision: answered ? resolvedDecision(answered.tool_result) : "",
                             answers: answered ? resolvedAnswers(answered.tool_result) : {},
                             open: !answered,
@@ -325,7 +359,7 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                would be five answers to the same question. The last one wins,
                in the place the first one appeared, so the list does not jump
                down the transcript every time a step closes. */
-            if (isPlanToolName(message.tool_name ?? "")) {
+            if (toolKey(message.tool_name, metadata) && isPlanToolName(message.tool_name ?? "")) {
                 const asRecord = (value: unknown) =>
                     value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
                 const steps = planStepsFromToolInvocation({
@@ -345,7 +379,7 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                 }
             }
 
-            if (isDisplayResourceTool(message.tool_name)) {
+            if (isDisplayResourceTool(message.tool_name, metadata)) {
                 const resource = parseDisplayResource(message.tool_args);
                 if (resource) {
                     /* A widget the harness rejected has nothing to show, and
@@ -386,6 +420,7 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                 result: message.tool_call_id ? returns.get(message.tool_call_id)?.tool_result : undefined,
                 answered: message.tool_call_id ? returns.has(message.tool_call_id) : false,
                 atMs: msOf(message.created_at),
+                metadata,
             });
             if (card) {
                 /* Waiting on a person is the only kind that leaves the fold.
@@ -401,22 +436,11 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                     });
                     continue;
                 }
-                current.notes.push({
-                    kind: "tool",
-                    label: displayAgentName(message.tool_name ?? "tool"),
-                    detail: commentOf(message.tool_args) || argSummary(message.tool_args),
-                    said: Boolean(commentOf(message.tool_args)),
-                    card,
-                });
+                current.notes.push({ ...step(message, metadata, current.notes), card });
                 continue;
             }
 
-            current.notes.push({
-                kind: "tool",
-                label: displayAgentName(message.tool_name ?? "tool"),
-                detail: commentOf(message.tool_args) || argSummary(message.tool_args),
-                said: Boolean(commentOf(message.tool_args)),
-            });
+            current.notes.push(step(message, metadata, current.notes));
             continue;
         }
 

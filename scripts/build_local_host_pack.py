@@ -595,19 +595,27 @@ def copy_node_runtime(frontend: Path, explicit_root: Path | None) -> None:
         )
 
 
+FRONTEND = REPO_ROOT / "lemma-frontend"
+
+
 def standalone_server(root: Path) -> Path:
+    """lemma-frontend's custom server, wherever Next put the app.
+
+    `server.mjs` rather than the `server.js` Next generates beside it: only
+    the custom server carries the voice and live-call WebSocket gateways, and
+    a pack that started Next's would serve every page and 404 every call.
+    """
     candidates = (
-        root / "server.js",
-        root / "app/server.js",
-        root / "lemma-harness/server.js",
-        root / "lemma-frontend/server.js",
+        root / "lemma-frontend/server.mjs",
+        root / "server.mjs",
     )
     for candidate in candidates:
         if candidate.is_file():
             return candidate
     raise SystemExit(
-        "Next standalone server is missing; expected one of: "
+        "the frontend server is missing from the standalone tree; expected one of: "
         + ", ".join(str(path) for path in candidates)
+        + ". Did `scripts/complete-standalone.mjs` run?"
     )
 
 
@@ -615,27 +623,29 @@ def build_frontend(output: Path, explicit_node_root: Path | None) -> None:
     npm = npm_executable()
     run(npm, "ci", cwd=REPO_ROOT / "lemma-typescript")
     run(npm, "run", "build", cwd=REPO_ROOT / "lemma-typescript")
-    run(npm, "ci", cwd=REPO_ROOT / "lemma-harness")
-    run(npm, "run", "build", cwd=REPO_ROOT / "lemma-harness")
+    run(npm, "ci", cwd=FRONTEND)
+    # A standalone build is opt-in (see `next.config.ts`): the hosted image
+    # ships the whole `node_modules` instead, and has no use for a second,
+    # traced copy of it.
+    run(
+        npm,
+        "run",
+        "build",
+        cwd=FRONTEND,
+        env={**os.environ, "LEMMA_STANDALONE": "1", "NEXT_TELEMETRY_DISABLED": "1"},
+    )
+    # Next traces the routes, not the custom server; this adds `server.mjs`,
+    # the gateways and their dependencies, `public/` and `.next/static`, so
+    # the standalone tree is the whole of what runs.
+    run("node", "scripts/complete-standalone.mjs", cwd=FRONTEND)
 
     frontend = output / "frontend"
     copy_node_runtime(frontend, explicit_node_root)
-    standalone = REPO_ROOT / "lemma-harness/.next/standalone"
+    standalone = FRONTEND / ".next/standalone"
     if not standalone.is_dir():
         raise SystemExit(f"Next standalone output is missing: {standalone}")
-    server = standalone_server(standalone)
+    standalone_server(standalone)
     shutil.copytree(standalone, frontend, dirs_exist_ok=True)
-    server_dir = frontend / server.relative_to(standalone).parent
-    shutil.copytree(
-        REPO_ROOT / "lemma-harness/public",
-        server_dir / "public",
-        dirs_exist_ok=True,
-    )
-    shutil.copytree(
-        REPO_ROOT / "lemma-harness/.next/static",
-        server_dir / ".next/static",
-        dirs_exist_ok=True,
-    )
     shutil.copy2(
         REPO_ROOT / "desktop/runtime/frontend-launcher.mjs",
         frontend / "frontend-launcher.mjs",

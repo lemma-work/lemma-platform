@@ -204,13 +204,17 @@ EXCLUDED_PATHS = (
     "/surfaces/webhooks",  # surface webhook endpoints
     "/webhooks",
     "/agent-runtime/runs/",  # run-scoped MCP routes validate their own token
-    "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
-    # A paired computer has no user session and never will: it authenticates
-    # with its own host secret, which `_authenticated_host` checks on every one
-    # of these routes, and `pairings/complete` is authenticated by the one-time
-    # pairing code it consumes. Requiring a session here 401s the only caller
-    # these routes have. The user-facing host routes are under `/me/runtime/...`
-    # and stay session-protected.
+    # Retired: the conversation MCP mount protocol-2 hosts called. It answers
+    # only 410, so there is nothing to protect -- and a 401 here would read to
+    # the old bridge as retryable, which is the opposite of the point. Goes
+    # with `agent_host_legacy_controller`.
+    "/agent-runtime/conversations/",
+    # A paired computer has no user session and never will. Its one route is
+    # the link WebSocket, whose first frame is the credential: a one-time
+    # pairing code, or `hello` under the host secret, both checked by the
+    # session. Requiring a session here refuses the only caller the route has.
+    # The user-facing host routes are under `/me/runtime/...` and stay
+    # session-protected.
     "/agent-host/",
 )
 

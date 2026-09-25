@@ -142,7 +142,7 @@ fn fixture() -> (TempDir, JournalCallbacks, Uuid) {
         provider_seen: AtomicBool::new(true),
         dispatched: AtomicBool::new(true),
         stream_segments: std::sync::Mutex::new(StreamSegments::default()),
-        events_ready: Arc::new(tokio::sync::Notify::new()),
+        events_ready: super::OutboxSignal::default(),
     };
     (directory, callbacks, run_id)
 }
@@ -251,11 +251,7 @@ fn text_chunks_flush_as_one_upsert_before_the_next_durable_event() {
     );
 
     callbacks
-        .event(
-            EventType::ToolCallUpsert,
-            Some("call-1".into()),
-            JsonMap::new(),
-        )
+        .event(EventType::ToolCall, Some("call-1".into()), JsonMap::new())
         .unwrap();
     let events = journaled_events(&callbacks);
     let kinds = events.iter().map(|(_, kind, _)| *kind).collect::<Vec<_>>();
@@ -265,7 +261,7 @@ fn text_chunks_flush_as_one_upsert_before_the_next_durable_event() {
             EventType::AgentMessageChunk,
             EventType::AgentMessageChunk,
             EventType::AgentMessageUpsert,
-            EventType::ToolCallUpsert,
+            EventType::ToolCall,
         ]
     );
     assert_eq!(
@@ -289,11 +285,7 @@ fn recovery_seals_only_text_after_each_kinds_last_upsert() {
         .event(EventType::AgentMessageChunk, None, payload("already saved"))
         .unwrap();
     callbacks
-        .event(
-            EventType::ToolCallUpsert,
-            Some("tool".into()),
-            JsonMap::new(),
-        )
+        .event(EventType::ToolCall, Some("tool".into()), JsonMap::new())
         .unwrap();
     callbacks
         .event(

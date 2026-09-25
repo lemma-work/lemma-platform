@@ -19,3 +19,8 @@ output/
 /*.png
 
 tmp/
+
+# Written by desktop/runtime/frontend-launcher.mjs when Lemma Desktop runs this
+# checkout in local mode (`make desktop-dev`); per-run, never source.
+/public/runtime-config.js
+/public/.well-known/microsoft-identity-association.json

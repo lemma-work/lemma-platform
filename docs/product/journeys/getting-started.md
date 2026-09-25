@@ -127,6 +127,31 @@ are shown with a retry action rather than an indefinite loading message.
 - Auth routes and untrusted origins shall not be accepted as destinations.
   A refused destination shall not revive a previously saved destination.
 
+### PS-ONB-007 — A new person confirms their name and can prove their phone before they start
+**Status:** manual
+
+> **Verified by:** signing up with an email code on a deployment where WhatsApp
+> mobile verification is enabled, confirming the step opens over the app with
+> the name fields and a scannable code, sending the message from a phone, and
+> reloading to confirm the step does not return. The API scenario suite cannot
+> inspect the rendered dialog.
+
+- When a person lands in the app for the first time and their account has no
+  first name, or has no mobile number where the deployment can verify one over
+  WhatsApp, the system shall ask for what is missing in one step before they
+  start.
+- The step shall offer the name the account already holds, so a name supplied by
+  a sign-in provider is confirmed rather than retyped.
+- The phone shall be proved by sending one message from it, by scanning a code
+  or opening WhatsApp, and never by typing a number the system then trusts.
+- The step shall not imply that a teammate can be reached on WhatsApp yet. At
+  that point none has been connected there, so proving the phone only means a
+  teammate connected later recognises the person.
+- The phone shall be optional, and the whole step shall be skippable.
+- The system shall not ask an account that already has both, an account older
+  than its first week, or a person who has already continued or skipped in that
+  browser.
+
 ---
 
 ## Capability: Create an organization

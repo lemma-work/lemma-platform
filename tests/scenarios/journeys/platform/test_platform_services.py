@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario, stack_lane
+from harness.agent_host_link import PROTOCOL_VERSION, HostLink
 
 pytestmark = [journey("Operating a deployment"), capability("Platform services")]
 
@@ -126,17 +127,28 @@ async def test_an_agent_host_can_be_paired_and_revoked(person):
         assert not any(str(h.get("id")) == str(host_id) for h in remaining), remaining
 
 
-@scenario("An unpaired machine cannot poll for work")
+@scenario("An unpaired machine cannot open a link for work")
 @proves("PS-AGENT-041")
-@covers("agent.host.poll", "agent.host.events.append")
 async def test_an_unpaired_host_is_refused(world):
+    """The link is the only way work reaches a machine, so it is the door to
+    check: no credential, or one that was never issued, gets no ``welcome``."""
     anonymous = await world.new_person("anonymous", sign_up=False)
+    hello = {
+        "hello": {
+            "installation_id": "stranger",
+            "host_release": "0.0.0",
+            "protocol_version": PROTOCOL_VERSION,
+        }
+    }
 
-    polled = await anonymous.api.call("POST", "/agent-host/poll", json={})
-    appended = await anonymous.api.call("POST", "/agent-host/events/append", json={})
-
-    assert polled.status_code >= 400, polled.status_code
-    assert appended.status_code >= 400, appended.status_code
+    for secret, expected in ((None, 4403), ("not-a-host-secret", 4401)):
+        async with HostLink(anonymous.api, secret=secret) as link:
+            await link.send("hello", hello)
+            code = await link.closed()
+        assert code == expected, (
+            f"a hello with {'no' if secret is None else 'an unknown'} credential "
+            f"closed with {code}, not {expected}"
+        )
 
 
 # Asking for browser access provisions a workspace when it can, so this needs
@@ -230,33 +242,39 @@ async def test_promoting_a_missing_result_is_refused(person):
 
 @scenario("An unpaired machine cannot complete a pairing or publish harnesses")
 @proves("PS-AGENT-040")
-@covers(
-    "agent.host.pairing.complete",
-    "agent.host.harnesses.publish",
-    "agent.host.self_revoke",
-)
 async def test_an_unpaired_host_cannot_claim_anything(world):
+    """A pairing code is the only thing standing between a stranger and running
+    work on someone's machine, so a made-up one must be refused -- and a link
+    that never said ``hello`` must not be able to publish, or revoke, anything."""
     anonymous = await world.new_person("anonymous", sign_up=False)
 
-    completed = await anonymous.api.call(
-        "POST",
-        "/agent-host/pairings/complete",
-        json={"pairing_code": "not-a-code", "display_name": "Someone's laptop"},
-    )
-    published = await anonymous.api.call(
-        "PUT", "/agent-host/harnesses", json={"harnesses": []}
-    )
-    revoked = await anonymous.api.call("POST", "/agent-host/revoke", json={})
+    async with HostLink(anonymous.api, secret=None) as link:
+        refused = await link.request(
+            "pair",
+            {
+                "pairing_code": "not-a-real-pairing-code",
+                "display_name": "Someone's laptop",
+                "hello": {
+                    "installation_id": "stranger",
+                    "host_release": "0.0.0",
+                    "protocol_version": PROTOCOL_VERSION,
+                },
+            },
+        )
+        assert refused["type"] == "error", refused
+        assert refused["body"]["code"] == "UNAUTHORIZED", refused
+        assert await link.closed() == 4403
 
-    # A pairing code is the only thing standing between a stranger and running
-    # work on someone's machine, so every one of these has to refuse.
-    for label, response in (
-        ("pairing.complete", completed),
-        ("harnesses.publish", published),
-        ("self_revoke", revoked),
+    for frame_type, body in (
+        ("harnesses", {"harnesses": []}),
+        ("revoke", {}),
     ):
-        assert response.status_code >= 400, (
-            f"{label} answered {response.status_code} to an unpaired caller"
+        async with HostLink(anonymous.api, secret=None) as link:
+            await link.send(frame_type, body)
+            code = await link.closed()
+        assert code == 4400, (
+            f"{frame_type} as a first frame closed with {code}; only pair or "
+            f"hello may open a link"
         )
 
 

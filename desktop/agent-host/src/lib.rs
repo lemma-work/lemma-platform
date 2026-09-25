@@ -6,12 +6,17 @@
 
 pub mod acp;
 pub mod adapters;
-pub mod api;
 pub mod config;
 pub mod conversation_directory;
 mod conversation_folders;
 pub mod journal;
+pub mod link;
 pub mod mcp_bridge;
+/// The host's end of the MCP bridge. Public for the integration tests, which
+/// drive a real bridge process against it.
+#[doc(hidden)]
+pub mod mcp_relay;
+pub mod normalize;
 pub mod permissions;
 pub mod protocol;
 pub mod runtime;
@@ -41,4 +46,7 @@ impl NoConsoleWindow for std::process::Command {
 }
 
 pub const HOST_RELEASE: &str = env!("CARGO_PKG_VERSION");
-pub const PROTOCOL_VERSION: u16 = 2;
+/// The link protocol this host speaks. 3 is the WebSocket link with
+/// normalized run events; 2 was the HTTP long-poll. Lemma closes a link whose
+/// `hello` names any other version with 4426, and Desktop's updater takes over.
+pub const PROTOCOL_VERSION: u16 = 3;

@@ -1,10 +1,11 @@
 """Which harness configuration selections a profile may save.
 
-Agent Host keeps its own deny-list and refuses a policy-bearing selection when
-it sets up the session (``selection_is_allowed`` in ``desktop/agent-host/src/acp.rs``),
-so nothing here is a privilege boundary. It is a timing fix: without it a value
-the host will refuse saves cleanly and only fails on the user's first run, far
-from the dialog that accepted it.
+The Agent Host owns the permission policy. It removes every value that would
+turn off the approval gate from the options it publishes, and refuses one again
+at session setup (``selection_is_allowed`` in
+``desktop/agent-host/src/acp/options.rs``). So the check here is membership in
+what the host published, and nothing more: a second rule set here used to
+disagree with the host's, reading ``model`` as a mode.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from __future__ import annotations
 import pytest
 
 from app.modules.agent.domain.agent_host_selections import (
-    AgentHostSelectionRefused,
     carry_agent_host_model,
     carry_agent_host_selections,
     validate_agent_host_model,
@@ -42,63 +42,28 @@ def test_an_enumerated_option_still_enforces_membership():
         )
 
 
-def test_the_deny_list_beats_the_harness_own_option_list():
-    """The case that actually happens.
+def test_membership_in_what_the_host_published_is_the_whole_check():
+    """The host publishes only the values it allows; `bypassPermissions` never
+    reaches this list from a real host, and plan mode does."""
+    options = [_option(options=[{"id": "default"}, {"id": "plan"}])]
 
-    Harnesses enumerate their permission modes - Claude Code lists
-    ``bypassPermissions`` among its own - so this value passes a membership
-    check. The host refuses it regardless (``selection_is_allowed`` tests the
-    deny-list first), so checking membership first here would let precisely the
-    common case save and then fail at session setup.
-    """
-    options = [
-        _option(
-            options=[{"id": "default"}, {"id": "plan"}, {"id": "bypassPermissions"}]
-        )
-    ]
-
-    with pytest.raises(ValueError, match="not allowed"):
+    assert validate_agent_host_selections(
+        config_options=options, selections={"permission_mode": "plan"}
+    ) == {"permission_mode": "plan"}
+    with pytest.raises(ValueError, match="Invalid value"):
         validate_agent_host_selections(
             config_options=options,
             selections={"permission_mode": "bypassPermissions"},
         )
 
-    # The safe members of the very same list still go through.
+
+def test_an_option_whose_name_merely_contains_mode_is_not_policy():
+    """The substring rule this replaced read `model_mode` -- and `model` --
+    as a permission mode."""
     assert validate_agent_host_selections(
-        config_options=options, selections={"permission_mode": "plan"}
-    ) == {"permission_mode": "plan"}
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "bypassPermissions",
-        "bypass-permissions",
-        "acceptEdits",
-        "YOLO",
-        "agentFullAccess",
-        "auto",
-    ],
-)
-def test_a_policy_option_refuses_a_free_form_escalating_value(value):
-    """An option that advertises no values used to accept anything at all."""
-    with pytest.raises(ValueError):
-        validate_agent_host_selections(
-            config_options=[_option()], selections={"permission_mode": value}
-        )
-
-
-def test_an_ordinary_free_form_value_is_still_accepted():
-    """The rule targets policy options, not every option without a value list —
-    a harness is free to expose settings Lemma has no opinion about."""
-    assert validate_agent_host_selections(
-        config_options=[{"id": "workdir", "category": "path"}],
-        selections={"workdir": "auto"},
-    ) == {"workdir": "auto"}
-
-    assert validate_agent_host_selections(
-        config_options=[_option()], selections={"permission_mode": "ask"}
-    ) == {"permission_mode": "ask"}
+        config_options=[{"id": "reasoning_mode", "category": "thought_level"}],
+        selections={"reasoning_mode": "auto"},
+    ) == {"reasoning_mode": "auto"}
 
 
 def test_the_model_category_is_rejected_outright():
@@ -119,19 +84,16 @@ def test_an_unknown_selection_is_rejected():
 
 
 @pytest.mark.parametrize("category", ["mode", "collaboration_mode"])
-def test_platform_owned_categories_are_dropped_not_rejected(category):
-    """`mode` (the approval/sandbox preset) and `collaboration_mode` are
-    Lemma's, not a per-profile choice. A stored value in one of these must not
-    fail the whole save -- it is silently dropped, and the harness applies its
-    own default, so a profile saved before this rule existed stays editable."""
-    options = [{"id": "session_mode", "category": category}]
+def test_a_mode_the_host_published_may_be_chosen(category):
+    """Plan mode is a person's choice. The host has already removed the values
+    that would skip approvals, so what it publishes may be selected."""
+    options = [
+        {"id": "session_mode", "category": category, "options": [{"id": "plan"}]}
+    ]
 
-    assert (
-        validate_agent_host_selections(
-            config_options=options, selections={"session_mode": "whatever"}
-        )
-        == {}
-    )
+    assert validate_agent_host_selections(
+        config_options=options, selections={"session_mode": "plan"}
+    ) == {"session_mode": "plan"}
 
 
 def test_a_selection_may_be_keyed_by_category_instead_of_id():
@@ -211,28 +173,6 @@ class TestCarryAgentHostSelections:
         assert carry_agent_host_selections(
             config_options=options, selections={"permission_mode": "plan"}
         ) == {"permission_mode": "plan"}
-
-    def test_platform_owned_categories_are_dropped(self):
-        options = [{"id": "session_mode", "category": "mode"}]
-
-        assert (
-            carry_agent_host_selections(
-                config_options=options, selections={"session_mode": "anything"}
-            )
-            == {}
-        )
-
-    def test_a_policy_escalating_value_still_refuses_rather_than_drops(self):
-        """Unlike an unknown/retired value, a policy-bearing escalation is not
-        news about the harness changing -- it still must not silently ride
-        along into a dispatched run, so this raises instead of dropping."""
-        options = [_option(options=[{"id": "default"}, {"id": "bypassPermissions"}])]
-
-        with pytest.raises(AgentHostSelectionRefused):
-            carry_agent_host_selections(
-                config_options=options,
-                selections={"permission_mode": "bypassPermissions"},
-            )
 
 
 class TestCarryAgentHostModel:

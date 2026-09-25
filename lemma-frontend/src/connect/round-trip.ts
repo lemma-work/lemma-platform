@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+import { isDesktop } from "@/desktop/bridge";
+import { openExternal } from "@/desktop/open-external";
 
 /** Getting somebody back from a provider's consent page, and hearing how it went.
  *
@@ -45,9 +47,19 @@ export function completionPath(from: string = hereWith()): string {
  *  leaving two copies of it open. The opened page is the provider's, at a URL
  *  the API just minted; that is the trade every OAuth tab makes.
  *
+ *  In the desktop app the webview opens no tab at all: the shell routes the
+ *  request to the system browser, `window.open` answers `null` either way, and
+ *  a browser tab there has no opener to report to. So it goes through
+ *  `openExternal` like every other outside URL, and the outcome arrives the
+ *  one way left — the refetch when the app regains focus.
+ *
  *  False when the browser refused, which it may for a window opened after an
  *  await rather than inside the click — the caller then offers a link. */
 export function openAuthorization(url: string): boolean {
+    if (isDesktop()) {
+        openExternal(url);
+        return true;
+    }
     const opened = window.open(url, "_blank");
     return opened !== null;
 }

@@ -48,7 +48,7 @@ async fn a_run_that_ends_without_being_cancelled_leaves_nothing_parked() {
         "the dropped handler is expected to leave its request behind"
     );
 
-    harness.worker.reap_finished().await;
+    harness.worker.reap_finished_now();
 
     assert_eq!(harness.worker.permissions.parked(), 0);
 }
@@ -264,7 +264,7 @@ async fn cancelling_a_run_sweeps_a_request_parked_on_the_way_out() {
     }
 
     for _ in 0..100 {
-        harness.worker.reap_finished().await;
+        harness.worker.reap_finished_now();
         if harness.worker.permissions.parked() == 0 {
             break;
         }

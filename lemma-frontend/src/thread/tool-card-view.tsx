@@ -5,8 +5,15 @@ import {
     ChevronDownIcon,
     ChevronRightIcon,
     ClockIcon,
+    AgentIcon,
     CodeIcon,
     ConnectorIcon,
+    DeleteIcon,
+    EditIcon,
+    FileIcon,
+    FolderIcon,
+    MoveIcon,
+    SearchIcon,
     ExternalIcon,
     GlobeIcon,
     ImageIcon,
@@ -22,7 +29,21 @@ import { Modal } from "@/shell/modal";
 import { SignInPane } from "@/computer/sign-in-pane";
 import { useConversationDirectory, useFileBody } from "@/computer/queries";
 import { clockOf } from "./turns";
-import { restLength, type BrowserStep, type ConnectorRun, type ImageLook, type SignInAsk, type SnoozeWait, type SourceList, type TerminalRun, type ToolCard } from "./tool-cards";
+import {
+    restLength,
+    type BrowserStep,
+    type ConnectorRun,
+    type FileChange,
+    type FileRead,
+    type FileSearch,
+    type ImageLook,
+    type SignInAsk,
+    type SnoozeWait,
+    type SourceList,
+    type SubTask,
+    type TerminalRun,
+    type ToolCard,
+} from "./tool-cards";
 
 /** The tools this app reads instead of summarising.
  *
@@ -510,7 +531,7 @@ function SourcesCard({ list }: { list: SourceList }) {
         ? "failed"
         : list.pending
           ? "running"
-          : list.action === "search"
+          : list.action === "search" && list.listed
             ? count + (count === 1 ? " result" : " results")
             : "";
 
@@ -524,11 +545,12 @@ function SourcesCard({ list }: { list: SourceList }) {
             />
             {/* A search still running has a head and nothing under it; an
                 empty box while it waits reads as a result of none. */}
-            {(count > 0 || !list.pending || list.error || list.note) && (
+            {(count > 0 || (!list.pending && (list.listed || list.text)) || list.error || list.note || list.asked) && (
                 <div className="toolcard__body">
                     {list.error && <p className="toolcard__note" data-tone="bad">{list.error}</p>}
                     {list.note && <p className="toolcard__note">{list.note}</p>}
-                    {!list.error && count === 0 && !list.pending && (
+                    {list.asked && <p className="toolcard__note">Looking for: {list.asked}</p>}
+                    {!list.error && list.listed && count === 0 && !list.pending && !list.text && (
                         <p className="toolcard__note">Nothing came back.</p>
                     )}
                     <ol className="sources">
@@ -565,6 +587,190 @@ function SourcesCard({ list }: { list: SourceList }) {
                             {rest} more
                         </button>
                     )}
+                    {/* A local agent's search or fetch answers in prose, and
+                        the prose is the result. */}
+                    {list.text && <pre className="toolcard__out">{list.text}</pre>}
+                </div>
+            )}
+        </section>
+    );
+}
+
+/* ── a local agent's files ───────────────────────────────────────────── */
+
+function outcome(card: { pending: boolean; failed: boolean }): { text: string; tone?: "bad" | "wait" } {
+    if (card.pending) return { text: "running", tone: "wait" };
+    if (card.failed) return { text: "failed", tone: "bad" };
+    return { text: "" };
+}
+
+function ReadCard({ read }: { read: FileRead }) {
+    const [open, setOpen] = useState(false);
+    const status = outcome(read);
+    return (
+        <section className="toolcard toolcard--file">
+            <Head
+                icon={<FileIcon size={14} />}
+                what={<>Read <code className="toolcard__cmd">{read.name}</code></>}
+                meta={[read.range, read.lines ? read.lines + (read.lines === 1 ? " line" : " lines") : ""].filter(Boolean).join(" · ") || undefined}
+                status={status.text}
+                tone={status.tone}
+                open={open}
+                onToggle={() => setOpen((was) => !was)}
+            />
+            {open && (
+                <div className="toolcard__body">
+                    <p className="toolcard__where">{read.path}</p>
+                    {read.error && <p className="toolcard__note" data-tone="bad">{read.error}</p>}
+                    {read.content && <pre className="toolcard__out">{read.content}</pre>}
+                    {!read.content && !read.pending && !read.failed && <p className="toolcard__note">It was empty.</p>}
+                    {read.pending && <p className="toolcard__note">Nothing has come back yet.</p>}
+                </div>
+            )}
+        </section>
+    );
+}
+
+const CHANGE_VERB: Record<FileChange["action"], string> = {
+    write: "Wrote",
+    edit: "Edited",
+    delete: "Deleted",
+    move: "Moved",
+};
+
+const CHANGE_GLYPH: Record<FileChange["action"], ReactNode> = {
+    write: <EditIcon size={14} />,
+    edit: <EditIcon size={14} />,
+    delete: <DeleteIcon size={14} />,
+    move: <MoveIcon size={14} />,
+};
+
+/** "+12 −3", the size of a change in the unit a reviewer counts in. */
+function tally(added: number, removed: number): string {
+    return [added ? "+" + added : "", removed ? "−" + removed : ""].filter(Boolean).join(" ");
+}
+
+function ChangeCard({ change }: { change: FileChange }) {
+    const [open, setOpen] = useState(false);
+    const status = outcome(change);
+    /* A delete or a move has nothing to open onto unless it failed. */
+    const more = change.files.length > 0 || Boolean(change.error || change.message || change.destination);
+    return (
+        <section className="toolcard toolcard--file">
+            <Head
+                icon={CHANGE_GLYPH[change.action]}
+                what={
+                    <>
+                        {CHANGE_VERB[change.action]} <code className="toolcard__cmd">{change.name}</code>
+                        {change.destination && <> to <code className="toolcard__cmd">{change.destination}</code></>}
+                    </>
+                }
+                meta={tally(change.added, change.removed) || undefined}
+                status={status.text}
+                tone={status.tone}
+                open={more ? open : undefined}
+                onToggle={more ? () => setOpen((was) => !was) : undefined}
+            />
+            {more && open && (
+                <div className="toolcard__body">
+                    {change.error && <p className="toolcard__note" data-tone="bad">{change.error}</p>}
+                    {change.destination && <p className="toolcard__where">{change.path} → {change.destination}</p>}
+                    {change.files.map((file) => (
+                        <div key={file.path} className="toolcard__file">
+                            <p className="toolcard__where">
+                                {file.path}
+                                {file.change === "add" ? " · new" : file.change === "delete" ? " · removed" : ""}
+                            </p>
+                            {file.lines.length > 0 && (
+                                <pre className="toolcard__out toolcard__diff">
+                                    {file.lines.map((line, index) =>
+                                        line.sign === "gap" ? (
+                                            <span key={index} className="toolcard__diffline" data-sign="gap">⋯</span>
+                                        ) : (
+                                            <span key={index} className="toolcard__diffline" data-sign={line.sign}>
+                                                {line.sign + " " + line.text}
+                                            </span>
+                                        ),
+                                    )}
+                                </pre>
+                            )}
+                        </div>
+                    ))}
+                    {change.message && !change.error && <p className="toolcard__fine">{change.message}</p>}
+                    {change.pending && <p className="toolcard__note">Nothing has come back yet.</p>}
+                </div>
+            )}
+        </section>
+    );
+}
+
+function searchLine(search: FileSearch): ReactNode {
+    if (search.action === "list") return search.path ? <>Listed <code className="toolcard__cmd">{search.path}</code></> : search.title || "Listed files";
+    if (!search.pattern) return search.title || (search.action === "grep" ? "Searched the files" : "Matched files");
+    return (
+        <>
+            {search.action === "grep" ? "Searched for " : "Matched "}
+            <code className="toolcard__cmd">{search.pattern}</code>
+        </>
+    );
+}
+
+function SearchCard({ search }: { search: FileSearch }) {
+    const [open, setOpen] = useState(false);
+    const status = outcome(search);
+    const unit = search.action === "grep" ? " line" : " file";
+    return (
+        <section className="toolcard toolcard--file">
+            <Head
+                icon={search.action === "list" ? <FolderIcon size={14} /> : <SearchIcon size={14} />}
+                what={searchLine(search)}
+                meta={search.pending || search.failed ? undefined : search.count + unit + (search.count === 1 ? "" : "s")}
+                status={status.text}
+                tone={status.tone}
+                open={open}
+                onToggle={() => setOpen((was) => !was)}
+            />
+            {open && (
+                <div className="toolcard__body">
+                    {(search.path || search.filter) && search.action !== "list" && (
+                        <p className="toolcard__where">
+                            {["in " + (search.path || "the working folder"), search.filter ? "files matching " + search.filter : ""].filter(Boolean).join(", ")}
+                        </p>
+                    )}
+                    {search.error && <p className="toolcard__note" data-tone="bad">{search.error}</p>}
+                    {search.output && <pre className="toolcard__out">{search.output}</pre>}
+                    {!search.output && !search.pending && !search.failed && <p className="toolcard__note">Nothing matched.</p>}
+                    {search.pending && <p className="toolcard__note">Nothing has come back yet.</p>}
+                </div>
+            )}
+        </section>
+    );
+}
+
+/* ── a sub-agent ─────────────────────────────────────────────────────── */
+
+/** The steps it took are the ones indented under this card in the fold;
+ *  this card says what it was sent to do and what it brought back. */
+function TaskCard({ task }: { task: SubTask }) {
+    const [open, setOpen] = useState(false);
+    const status = task.pending ? { text: "working", tone: "wait" as const } : outcome(task);
+    return (
+        <section className="toolcard toolcard--task">
+            <Head
+                icon={<AgentIcon size={14} />}
+                what={task.description}
+                meta={task.agentType || undefined}
+                status={status.text}
+                tone={status.tone}
+                open={open}
+                onToggle={() => setOpen((was) => !was)}
+            />
+            {open && (
+                <div className="toolcard__body">
+                    {task.error && <p className="toolcard__note" data-tone="bad">{task.error}</p>}
+                    {task.prompt && task.prompt !== task.description && <p className="toolcard__note">{task.prompt}</p>}
+                    {task.output && <pre className="toolcard__out" data-stream="value">{task.output}</pre>}
+                    {task.pending && <p className="toolcard__note">Still working.</p>}
                 </div>
             )}
         </section>
@@ -759,5 +965,13 @@ export function ToolCardView({
             return <SnoozeCard wait={card} />;
         case "image":
             return <ImageCard look={card} podId={podId} conversationId={conversationId} />;
+        case "file-read":
+            return <ReadCard read={card} />;
+        case "file-change":
+            return <ChangeCard change={card} />;
+        case "file-search":
+            return <SearchCard search={card} />;
+        case "task":
+            return <TaskCard task={card} />;
     }
 }

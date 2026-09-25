@@ -1,20 +1,15 @@
+import { siteRuntime, siteRuntimeScript } from "@/site/runtime";
+
+/* Per request, never prerendered: a prerendered copy is the build's
+   environment frozen into a file, which is exactly what this route exists to
+   avoid. See `site/runtime.ts`. */
 export const dynamic = "force-dynamic";
+
 export function GET() {
-  const config = {
-    analyticsKey: process.env.NEXT_PUBLIC_ANALYTICS_KEY || "",
-    analyticsHost:
-      process.env.NEXT_PUBLIC_ANALYTICS_HOST || "https://eu.posthog.com",
-    deployment: process.env.NEXT_PUBLIC_LEMMA_DEPLOYMENT || "hosted",
-  };
-  return new Response(
-    "window.__LEMMA_SITE__=" +
-      JSON.stringify(config).replace(/</g, "\u003c") +
-      ";",
-    {
-      headers: {
-        "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
-    },
-  );
+    return new Response(siteRuntimeScript(siteRuntime()), {
+        headers: {
+            "Content-Type": "application/javascript; charset=utf-8",
+            "Cache-Control": "no-store",
+        },
+    });
 }

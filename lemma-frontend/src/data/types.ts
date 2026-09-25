@@ -428,8 +428,19 @@ export interface PodSource {
      *  harness, so the computer has to be awake and the agent ready. */
     addLocalAgent(orgId: string, harnessId: string, agent: {
         name: string;
+        /** Empty leaves it unpinned: the agent runs its own default. */
         model: string;
+        /** Effort, permission mode and the rest, keyed as the agent
+         *  published them. Empty keeps whatever that computer has. */
+        selections: Record<string, string>;
         shared: boolean;
+    }): Promise<void>;
+    /** Change a coding agent's model or options after it was added. Takes
+     *  only the fields that changed — see `agentSettingsChanges` — because
+     *  either one makes the backend check with that computer. */
+    updateLocalAgent(orgId: string, runtimeId: string, changes: {
+        default_model_name?: string | null;
+        config_selections?: Record<string, string>;
     }): Promise<void>;
     /** Retire one. Not a delete — history stays readable, and it can come
      *  back. */

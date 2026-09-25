@@ -71,7 +71,12 @@ function Notes({
             {open && (
                 <ol className="steps__list">
                     {notes.map((note, index) => (
-                        <li key={index} data-kind={note.kind} data-card={note.card ? "" : undefined}>
+                        <li
+                            key={index}
+                            data-kind={note.kind}
+                            data-card={note.card ? "" : undefined}
+                            data-nested={note.nested ? "" : undefined}
+                        >
                             {note.card ? (
                                 /* The step, read rather than summarised. Same
                                    row it always was — this is what opening the
@@ -217,7 +222,7 @@ export function Transcript({
                 <div className="convo">
                     {turns.map((turn, index) => {
                         const merging = index === mergeInto && streaming;
-                        const notes = merging ? [...turn.notes, ...liveNote(streaming)] : turn.notes;
+                        const notes = merging ? [...turn.notes, ...liveNote(streaming, turn.notes)] : turn.notes;
                         const spoke = turn.items.find((item) => item.kind === "text");
 
                         return (

@@ -37,7 +37,7 @@ pub(super) fn fixture(root: &Path) {
         "backend/python/bin/python3",
         "frontend/node/bin/node",
         "frontend/frontend-launcher.mjs",
-        "frontend/app/server.js",
+        "frontend/lemma-frontend/server.mjs",
         "backend/assets/browser-sdk/lemma-client.js",
         "backend/assets/browser-sdk/lemma-ui.js",
     ] {

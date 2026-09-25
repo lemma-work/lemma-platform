@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+// The composer's stop control, named by its title.
+const STOP = 'Stop this run';
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
 const config = JSON.parse(input);
@@ -21,17 +23,24 @@ const origin = `http://127.0.0.1:${port}`;
 await mkdir(config.artifactDirectory, { recursive: true });
 const log = createWriteStream(path.join(config.artifactDirectory, 'frontend.log'));
 const network = createWriteStream(path.join(config.artifactDirectory, 'requests.jsonl'));
+// The frontend Desktop serves, started the way `frontend-launcher.mjs --dev`
+// starts it: lemma-frontend's own server in development mode. Its origins
+// are read when it starts and handed to the browser by `/site-config.js`, so
+// they are environment here rather than a rewritten script.
+const frontend = path.join(root, 'lemma-frontend');
 const server = spawn(process.execPath, [
-  path.join(root, 'lemma-harness/node_modules/next/dist/bin/next'),
-  'dev', '--hostname', '127.0.0.1', '--port', String(port),
+  path.join(frontend, 'server.mjs'), '--dev', '--port', String(port),
 ], {
-  cwd: path.join(root, 'lemma-harness'),
+  cwd: frontend,
   env: {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: '1',
+    LEMMA_FRONTEND_HOST: '127.0.0.1',
+    NEXT_PUBLIC_DATA: 'live',
     NEXT_PUBLIC_API_URL: config.apiUrl,
     NEXT_PUBLIC_SITE_URL: origin,
-    NEXT_PUBLIC_AUTH_URL: origin,
+    NEXT_PUBLIC_AUTH_URL: `${origin}/auth`,
+    NEXT_PUBLIC_LEMMA_DEPLOYMENT: 'local',
     NEXT_PUBLIC_ANALYTICS_KEY: '',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -49,7 +58,7 @@ try {
       reject(new Error(`Frontend exited before readiness: ${code}`));
     });
     server.stdout.on('data', chunk => {
-      if (String(chunk).includes('Ready in')) {
+      if (String(chunk).includes('Lemma listening on')) {
         clearTimeout(deadline);
         resolve();
       }
@@ -69,25 +78,17 @@ try {
   context.on('request', request => recordRequest(request, 'request'));
   context.on('response', response => recordRequest(response.request(), 'response', response.status()));
   context.on('requestfailed', request => recordRequest(request, 'failed', request.failure()?.errorText));
+  // The SDK's bearer slot: served from 127.0.0.1, the API's session cookie is
+  // cross-site and never sent, so this is how the workspace authenticates.
   await context.addInitScript(token => localStorage.setItem('lemma_token', token), config.token);
-  // This is deployment configuration, not a mock of any application endpoint.
-  await context.route('**/runtime-config.js', route => route.fulfill({
-    contentType: 'application/javascript',
-    body: `window.__ENV = ${JSON.stringify({
-      NEXT_PUBLIC_API_URL: config.apiUrl,
-      NEXT_PUBLIC_SITE_URL: origin,
-      NEXT_PUBLIC_AUTH_URL: origin,
-      NEXT_PUBLIC_ANALYTICS_KEY: '',
-    })};`,
-  }));
   page = await context.newPage();
   page.setDefaultTimeout(45_000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await openConversation(page, `${origin}${config.conversationUrl}`);
-  const composer = page.locator('textarea.lm-composer-input:visible');
+  const composer = page.locator('textarea.composer__input:visible');
   await composer.fill('Read the project file for this test.');
-  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
   let answer;
   if (config.action === 'parallel') {
     const approvals = page.getByRole('button', { name: 'Approve once', exact: true });
@@ -104,7 +105,7 @@ try {
   } else if (config.action === 'cancel') {
     await page.getByText('Started the requested work.', { exact: true }).waitFor();
     const stopped = page.waitForResponse(response => response.url().endsWith('/stop'));
-    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await page.getByRole('button', { name: STOP, exact: true }).click();
     assert.equal((await stopped).status(), 200);
     const reattached = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/stream'));
     await page.reload();
@@ -129,10 +130,12 @@ try {
     await page.getByText('前 café 👩🏽‍💻', { exact: true }).waitFor();
     await page.screenshot({ path: path.join(config.artifactDirectory, 'partial.png'), fullPage: true });
     if (config.action === 'crash') {
-      await page.getByText(/encountered an error on this computer/).waitFor();
+      // lemma-frontend states the failure and offers a retry; it does not
+      // print the host's own error text into the transcript.
+      await page.getByText('That run failed.', { exact: true }).waitFor();
       answer = '前 café 👩🏽‍💻';
     } else {
-      await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
+      await page.getByRole('button', { name: STOP, exact: true }).waitFor();
       if (config.action === 'disconnect') {
         await page.close();
         page = await context.newPage();
@@ -147,11 +150,11 @@ try {
     }
   }
   await page.getByText(answer, { exact: typeof answer === 'string' }).waitFor();
-  await page.getByRole('button', { name: 'Stop', exact: true }).waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: STOP, exact: true }).waitFor({ state: 'hidden' });
   await page.reload();
   if (config.action === 'cancel') answer = /Started the requested work[.]\s+Stopped as requested[.]/;
   await page.getByText(answer, { exact: typeof answer === 'string' }).waitFor();
-  await page.getByRole('button', { name: 'Stop', exact: true }).waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: STOP, exact: true }).waitFor({ state: 'hidden' });
   assert.equal(await page.getByRole('button', { name: 'Approve once', exact: true }).count(), 0);
   assert.deepEqual(errors, [], 'the chat must not raise unhandled browser errors');
   await page.screenshot({ path: path.join(config.artifactDirectory, 'completed.png'), fullPage: true });
@@ -172,7 +175,7 @@ try {
  * Open the conversation, waiting out a dev server that has not compiled the
  * route yet.
  *
- * "Ready in" — which is what the readiness wait above listens for — means the
+ * "Lemma listening on" — which is what the readiness wait above listens for — means the
  * server is listening, not that it has built anything. Next answers 404 for a
  * dynamic route it has not compiled, and this frontend is started fresh for
  * every journey, so the first request can arrive before its own route exists.
@@ -181,10 +184,12 @@ try {
  * messages, because nothing had ever loaded. It read as a failure of whichever
  * scenario drew the short straw, and it landed on a different one each time.
  *
- * Not papering over a product 404. The page at this route is a client-rendered
- * stub that draws nothing and calls `notFound()` nowhere, and no layout above
- * it does either, so a 404 from it can only be the router. A shipped build has
- * its routes compiled before it serves anything.
+ * Not papering over a product 404. The address the backend hands over is the
+ * pre-rename `/pod/<id>/conversations/<id>`, which lemma-frontend redirects to
+ * `/t/<id>/conversation/<id>` -- a client-rendered page that calls
+ * `notFound()` nowhere -- and the redirect refuses only addresses outside that
+ * grammar, which this is not. So a 404 here can only be the router. A shipped
+ * build has its routes compiled before it serves anything.
  *
  * A 404 that outlasts the deadline is still a failure, and it fails with what
  * the page actually said rather than leaving that to be recovered from

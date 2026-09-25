@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { SurfaceSetupAction, SurfaceSetupActionField } from "lemma-sdk";
 import { source } from "@/data";
+import { copyText } from "@/desktop/clipboard";
 
 export function SetupField({ field }: { field: SurfaceSetupActionField }) {
     const [revealed, setRevealed] = useState(false);
@@ -12,7 +13,7 @@ export function SetupField({ field }: { field: SurfaceSetupActionField }) {
         <div className="surface-setup__actions">
             {field.secret && <button className="btn" onClick={() => setRevealed(!revealed)}>{revealed ? "Hide" : "Reveal"} {field.label}</button>}
             <button className="btn" onClick={async () => {
-                try { await navigator.clipboard.writeText(field.value); setNotice("Copied"); }
+                try { await copyText(field.value); setNotice("Copied"); }
                 catch { setNotice("Could not copy. Select and copy the value."); }
             }}>Copy {field.label}</button>
         </div>

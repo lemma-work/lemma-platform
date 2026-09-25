@@ -668,12 +668,17 @@ export const liveSource: PodSource = {
                get by not reading the dialog. */
             scope: agent.shared ? "ORGANIZATION" : "PERSONAL",
             default_model_name: agent.model || null,
-            /* Everything else stays as that computer has it. Lemma owns
-               approvals and session handling, so the only setting worth
-               asking about here is which model. */
-            config_selections: {},
+            /* Only what the person chose; anything left unset stays as
+               that computer has it. Every value on offer came from the
+               harness's own list, which the host has already stripped of
+               the permission modes Lemma refuses. */
+            config_selections: agent.selections,
         } as unknown as Parameters<ReturnType<typeof lemma>["agentRuntime"]["createProfile"]>[1];
         await lemma().agentRuntime.createProfile(orgId, payload);
+    },
+
+    async updateLocalAgent(orgId, runtimeId, changes): Promise<void> {
+        await lemma().agentRuntime.updateProfile(orgId, runtimeId, { source: "AGENT_HOST", ...changes });
     },
 
     async archiveRuntime(orgId: string, runtimeId: string): Promise<void> {

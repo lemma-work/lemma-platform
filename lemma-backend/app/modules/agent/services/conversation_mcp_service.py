@@ -1,5 +1,9 @@
 """Request-scoped tool resolution for conversation MCP calls.
 
+The caller is the Agent Host link: a local agent's Lemma tool calls arrive as
+``mcp`` frames (``agent_host_link_mcp``), each re-authorized here against the
+run's token and its conversation.
+
 Thin adapter over `AgentToolDispatcher`: this service owns the conversation
 authorization + context loading and the MCP wire format (``lemma_``-prefixed
 names, `CallToolResult` wrapping); the dispatcher owns toolset resolution and
@@ -141,9 +145,10 @@ class ConversationMCPService:
     ) -> JsonObject | None:
         """The answer to a parked interaction, or ``None`` while it is pending.
 
-        The host's MCP bridge polls this after `ask_user` or `request_approval`
-        hands it a parked id, and hands the result back as that tool's return so
-        the model never leaves its turn.
+        The host's MCP bridge waits on this, with an ``interaction_wait`` frame,
+        after `ask_user` or `request_approval` hands it a parked id, and hands
+        the result back as that tool's return so the model never leaves its
+        turn.
 
         Nothing new is stored to make this work. Deciding an interaction already
         writes a synthesized tool RETURN under the same durable id -- that is how
@@ -176,7 +181,7 @@ class ConversationMCPService:
             conversation=conversation,
             ctx=ctx,
             agent_run_id=agent_run_id,
-            # This route is reached only by the Agent Host MCP bridge, which is
+            # This is reached only by the Agent Host MCP bridge, which is
             # the harness that has no other way to return a structured result.
             # The assembler applies the "does this run owe one?" gate.
             include_final_answer=True,

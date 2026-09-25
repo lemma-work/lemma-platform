@@ -2,7 +2,6 @@ use super::{
     DISK_SCAN_INTERVAL, FIRST_HARNESS_WAIT, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL,
     TransientBackoff,
 };
-use crate::protocol::POLL_HOLD;
 use std::time::Duration;
 
 #[test]
@@ -15,60 +14,6 @@ fn noticing_a_new_agent_is_not_gated_on_the_refresh_interval() {
     assert!(
         DISK_SCAN_INTERVAL * 30 <= HARNESS_REFRESH_INTERVAL,
         "detection must be orders of magnitude faster than the safety net",
-    );
-    // And — the part this pair of constants cannot show on its own — the
-    // scan has to be able to *reach* the worker inside its own interval.
-    // It could not: the check ran once per loop iteration, and an iteration
-    // is one held poll, so a two-second interval detected in up to
-    // `POLL_HOLD`. `the_scan_does_not_wait_out_a_held_poll` below is the
-    // one that fails if that comes back; this only fixes the budget.
-    assert!(
-        DISK_SCAN_INTERVAL < POLL_HOLD,
-        "a scan slower than the poll hold would have nothing to add to it",
-    );
-}
-
-/// The regression this pair of tests exists for.
-///
-/// `DISK_SCAN_INTERVAL` was read as "an agent is noticed within two
-/// seconds". It was not: it bounded how often the check *could* run, and
-/// the check was reached once per iteration of a loop whose every iteration
-/// waits out a poll Lemma holds for `POLL_HOLD`. So the real answer was
-/// 0-25s, and the constant said 2.
-///
-/// Both halves are asserted, because either alone still permits the bug:
-/// a select arm that does not abandon the poll would not help, and a scan
-/// that abandons the poll on every tick would mean the poll never returns.
-#[tokio::test(start_paused = true)]
-async fn the_scan_does_not_wait_out_a_held_poll() {
-    use tokio::sync::watch;
-
-    let (agents_changed, mut receiver) = watch::channel(0_u64);
-
-    // A poll that is being held, exactly as Lemma holds it.
-    let held_poll = tokio::time::sleep(POLL_HOLD);
-    tokio::pin!(held_poll);
-
-    let woke_at = {
-        let started = tokio::time::Instant::now();
-        // The supervisor's sweep notices a new agent one interval in.
-        tokio::spawn(async move {
-            tokio::time::sleep(DISK_SCAN_INTERVAL).await;
-            agents_changed.send_modify(|generation| *generation += 1);
-        });
-        tokio::select! {
-            () = &mut held_poll => tokio::time::Instant::now() - started,
-            _ = receiver.changed() => tokio::time::Instant::now() - started,
-        }
-    };
-
-    assert!(
-        woke_at < POLL_HOLD,
-        "a newly installed agent must not wait out the poll: woke after {woke_at:?}",
-    );
-    assert_eq!(
-        woke_at, DISK_SCAN_INTERVAL,
-        "and it must wake on the scan, not on anything else",
     );
 }
 
@@ -87,29 +32,6 @@ fn only_a_change_after_the_baseline_is_worth_re_probing() {
     assert!(installed.note("bbb".to_owned()));
     assert!(!installed.note("bbb".to_owned()));
     assert!(installed.note("aaa".to_owned()));
-}
-
-/// The other half: nothing wakes the loop when the disk is unchanged.
-///
-/// A tick that fired unconditionally would abandon the in-flight poll every
-/// two seconds, so a 25-second poll would never once return and no command
-/// would ever be delivered. The arm has to be a change notification, not a
-/// timer.
-#[tokio::test(start_paused = true)]
-async fn an_unchanged_disk_lets_the_poll_run_to_completion() {
-    use tokio::sync::watch;
-
-    let (_agents_changed, mut receiver) = watch::channel(0_u64);
-    let held_poll = tokio::time::sleep(POLL_HOLD);
-    tokio::pin!(held_poll);
-    let started = tokio::time::Instant::now();
-
-    tokio::select! {
-        () = &mut held_poll => {}
-        _ = receiver.changed() => panic!("an unchanged disk must not abandon the poll"),
-    }
-
-    assert_eq!(tokio::time::Instant::now() - started, POLL_HOLD);
 }
 
 #[test]
