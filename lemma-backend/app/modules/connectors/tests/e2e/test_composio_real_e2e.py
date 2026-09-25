@@ -597,6 +597,39 @@ async def test_shopify_connects_through_the_orgs_own_app_human(
         _cleanup_user_accounts(fixed_test_user["id"])
 
 
+def _one_page_pdf(text: str) -> bytes:
+    """A real, openable one-page PDF.
+
+    The recipient opens it, so a stub that merely starts with `%PDF` -- no
+    pages, no cross-reference table -- arrives intact and still reads as a
+    broken attachment, which is exactly the report this test exists to answer.
+    """
+    stream = f"BT /F1 18 Tf 72 720 Td ({text}) Tj ET".encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    return bytes(out)
+
+
 @pytest.mark.provider
 @pytest.mark.human
 @pytest.mark.timeout(900)
@@ -642,9 +675,7 @@ async def test_gmail_sends_pod_files_as_attachments_human(
     )
     assert pod.status_code == 201, pod.text
     pod_id = pod.json()["id"]
-    report = (
-        b"%PDF-1.4\n% Lemma attachment test\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
-    )
+    report = _one_page_pdf("Q3 report - Lemma attachment test")
     table = b"region,revenue\nnorth,120\nsouth,95\n"
     for name, content, mime in (
         ("q3-report.pdf", report, "application/pdf"),
