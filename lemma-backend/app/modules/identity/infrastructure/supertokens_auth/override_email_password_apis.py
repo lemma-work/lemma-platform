@@ -22,6 +22,7 @@ from supertokens_python.recipe.session.interfaces import SessionContainer
 from supertokens_python.types import User as AuthUser
 
 from app.modules.identity.domain.email import normalize_identity_email
+from app.modules.identity.domain.errors import SignupNotAllowedError
 from app.modules.identity.infrastructure.identity_lease import (
     IdentityLeaseLost,
     identity_lease,
@@ -38,6 +39,7 @@ from app.modules.identity.services.email_policy import (
     EmailPolicyError,
     validate_auth_email,
 )
+from app.modules.identity.services.signup_gate import get_signup_gate
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import func, select
@@ -50,11 +52,22 @@ from sqlalchemy import func, select
 #: survive a rename that ought to have failed.
 UserLookup = Callable[..., Awaitable[List[AuthUser]]]
 
+#: Whether this installation takes a new account for an address. Raises
+#: `SignupNotAllowedError` to refuse. Injected for the same reason as
+#: `UserLookup`: a test stands a gate in front of the override instead of
+#: patching the one the override builds.
+AdmitSignup = Callable[[str], Awaitable[object]]
+
+
+async def _admit_signup(email: str) -> object:
+    return await get_signup_gate().admit(email)
+
 
 def override_emailpassword_apis(
     original_implementation: APIInterface,
     *,
     find_users: UserLookup = list_users_by_email,
+    admit_signup: AdmitSignup = _admit_signup,
 ) -> APIInterface:
     original_sign_in_post = original_implementation.sign_in_post
     original_sign_up_post = original_implementation.sign_up_post
@@ -180,6 +193,14 @@ def override_emailpassword_apis(
                 return SignUpPostNotAllowedResponse(
                     get_thirdparty_conflict_reason(conflicting_thirdparty_id)
                 )
+
+        # Last, after the checks that refuse on the address alone: a malformed
+        # or conflicting address is answered with its own reason rather than
+        # with the signup mode's, which would not tell the person what to fix.
+        try:
+            await admit_signup(email)
+        except SignupNotAllowedError as refused:
+            return SignUpPostNotAllowedResponse(refused.message)
 
         return await original_sign_up_post(
             form_fields,

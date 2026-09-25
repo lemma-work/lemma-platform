@@ -25,7 +25,10 @@ use crate::paths::LocalPaths;
 use crate::protocol::{
     append_bounded_journal, authenticate, error_event, load_or_create_token, read_bounded_line,
 };
-use crate::sharing::{EnableSharingRequest, SharingController, SharingMode, TunnelProvider};
+use crate::sharing::{
+    EnableSharingRequest, SetWhoCanJoinRequest, SharingController, SharingMode, TunnelProvider,
+    WhoCanJoin,
+};
 use crate::state::StateSnapshot;
 use crate::update_transaction::UpdateTransaction;
 use crate::PROTOCOL_VERSION;
@@ -33,7 +36,7 @@ use crate::PROTOCOL_VERSION;
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Bump whenever Desktop must replace a durable daemon even when the public
 // app/host-pack release has not changed (for example, a test-build hotfix).
-const DAEMON_API_REVISION: u64 = 6;
+const DAEMON_API_REVISION: u64 = 7;
 
 /// Broadcasts held for a subscriber that is not keeping up.
 ///

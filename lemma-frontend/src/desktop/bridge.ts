@@ -61,6 +61,22 @@ export const WORKSPACE_COMMANDS = [
     "bind_conversation_folder",
     "unbind_conversation_folder",
     "adopt_conversation_folder",
+    /* Settings → This Mac. Each also refuses in Rust unless the caller is
+       this installation's own workspace on its loopback origin, so the hosted
+       site and a shared origin reach none of them. */
+    "local_settings_snapshot",
+    "apply_local_settings",
+    "local_sharing",
+    "set_start_at_login",
+    "repair_runtime",
+    "open_logs",
+    "prepare_sandbox_image",
+    "check_for_app_update",
+    "install_app_update",
+    "telemetry_status",
+    "set_telemetry_enabled",
+    "diagnostic_logs",
+    "discover_provider_models",
 ] as const;
 
 export type WorkspaceCommand = (typeof WORKSPACE_COMMANDS)[number];

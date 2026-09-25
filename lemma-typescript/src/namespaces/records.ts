@@ -68,6 +68,7 @@ export class RecordsNamespace {
     const { filters, sort, offset, pageSize } = options;
     const rows: Record<string, unknown>[] = [];
     let pageToken: string | undefined;
+    const seen = new Set<string>();
 
     for (;;) {
       const page = await this.list(table, {
@@ -82,6 +83,12 @@ export class RecordsNamespace {
       if (!pageToken) {
         return rows;
       }
+      // Only the server ends this loop, so a cursor it already handed out
+      // would re-read the same pages forever. See `apps.allReleases`.
+      if (seen.has(pageToken)) {
+        throw new Error(`Record pages for table "${table}" repeated page token "${pageToken}"; stopping.`);
+      }
+      seen.add(pageToken);
     }
   }
 

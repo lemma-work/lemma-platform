@@ -15,6 +15,7 @@ import { downloadUrl } from "@/session/client";
 import { Modal } from "@/shell/modal";
 import { useIsDesktop } from "@/desktop/bridge";
 import { ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
+import { ThisMacModelSuggestions } from "@/desktop/this-mac-models";
 import { AgentSettingsFields, EditAgentSettings } from "./agent-settings";
 import {
     ComputerIcon,
@@ -517,6 +518,12 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                             ))}
                         </ul>
                     )}
+
+                    {/* On a local install, the model servers already running
+                        on this computer and the provider it was set up with,
+                        each one click from being picked here. Draws nothing
+                        anywhere else. */}
+                    <ThisMacModelSuggestions orgId={orgId} runtimes={all} onAdded={refresh} />
 
                     {desktop && (
                         <ThisComputerCard release={mine?.release}>

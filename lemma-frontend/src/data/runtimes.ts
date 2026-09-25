@@ -46,6 +46,10 @@ export interface Runtime {
     /** Why it cannot take work right now, in a person's words. Empty when it
      *  can. A provider key is always reachable, so it never fills this in. */
     trouble: string;
+    /** A provider key's route, when the API says. Empty for a coding agent.
+     *  Read so the desktop app can tell a model server on this computer is
+     *  already in the list before suggesting it again. */
+    baseUrl?: string;
 }
 
 /** One coding agent as a computer reports it, before anyone has added it. */
@@ -276,6 +280,7 @@ export function readRuntime(raw: unknown): Runtime | null {
         scope: SCOPES[asString(entry.scope)] ?? "org",
         archived: entry.status === "DISABLED",
         trouble: runtimeTrouble(harnessId, asString(entry.availability_status)),
+        baseUrl: asString(entry.config?.["base_url"]),
     };
 }
 

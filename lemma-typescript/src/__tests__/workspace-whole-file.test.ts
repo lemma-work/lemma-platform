@@ -9,28 +9,40 @@ import { MAX_READ_BYTES, WorkspaceNamespace } from "../namespaces/workspace.js";
  * never returns more than `MAX_READ_BYTES` in one response however much is
  * asked for, and it answers 416 for an offset past the end.
  */
-function serving(totalBytes: number) {
+function serving(totalBytes: number, { ignoresRange = false } = {}) {
   const asked: Array<{ start: number; end: number }> = [];
+  const respond = async (
+    _method: string,
+    _path: string,
+    options: { headers?: Record<string, string> } = {},
+  ): Promise<{ blob: Blob; status: number; contentRange: string | null }> => {
+    const header = options.headers?.Range;
+    const whole = () => ({
+      // No range, or one ignored: the whole file from byte 0, still capped.
+      blob: new Blob([new Uint8Array(Math.min(totalBytes, MAX_READ_BYTES))]),
+      status: 200,
+      contentRange: null,
+    });
+    if (!header) return whole();
+    const [first, last] = header.slice("bytes=".length).split("-");
+    const start = Number(first);
+    const end = Number(last);
+    asked.push({ start, end });
+    if (ignoresRange) return whole();
+    if (start >= totalBytes) {
+      throw new ApiError(416, "Requested Range Not Satisfiable");
+    }
+    const length = Math.min(end - start + 1, totalBytes - start, MAX_READ_BYTES);
+    return {
+      blob: new Blob([new Uint8Array(length)]),
+      status: 206,
+      contentRange: `bytes ${start}-${start + length - 1}/${totalBytes}`,
+    };
+  };
   const http = {
-    async requestBytes(
-      _method: string,
-      _path: string,
-      options: { headers?: Record<string, string> } = {},
-    ): Promise<Blob> {
-      const header = options.headers?.Range;
-      if (!header) {
-        // No range: the whole file, still capped.
-        return new Blob([new Uint8Array(Math.min(totalBytes, MAX_READ_BYTES))]);
-      }
-      const [first, last] = header.slice("bytes=".length).split("-");
-      const start = Number(first);
-      const end = Number(last);
-      asked.push({ start, end });
-      if (start >= totalBytes) {
-        throw new ApiError(416, "Requested Range Not Satisfiable");
-      }
-      const length = Math.min(end - start + 1, totalBytes - start, MAX_READ_BYTES);
-      return new Blob([new Uint8Array(length)]);
+    requestBytesResponse: respond,
+    async requestBytes(...args: Parameters<typeof respond>): Promise<Blob> {
+      return (await respond(...args)).blob;
     },
   } as unknown as HttpClient;
   return { workspace: new WorkspaceNamespace(http), asked };
@@ -102,9 +114,58 @@ describe("readWholeFile", () => {
     expect(blob.size).toBe(total);
   });
 
+  it("stops, rather than looping, when the server ignores the Range on a large file", async () => {
+    // Every ranged read comes back 200 with the first 8 MiB. Taking those as
+    // slices advanced the cursor forever and held a fresh copy each time.
+    const { workspace, asked } = serving(MAX_READ_BYTES * 3, { ignoresRange: true });
+
+    await expect(workspace.readWholeFile("/home/user/big.bin")).rejects.toThrow(
+      /ignored the Range header/,
+    );
+    expect(asked.length).toBe(1);
+  });
+
+  it("takes a whole small file from a server that ignores the Range", async () => {
+    const { workspace, asked } = serving(1234, { ignoresRange: true });
+
+    const blob = await workspace.readWholeFile("/home/user/small.txt");
+
+    expect(blob.size).toBe(1234);
+    expect(asked.length).toBe(1);
+  });
+
+  it("stops when a stale size hint is followed by a server that ignores the Range", async () => {
+    // The hint's unranged read comes back at the ceiling, so the loop goes on
+    // from 8 MiB -- and must not accept the file-from-byte-0 it is sent.
+    const { workspace, asked } = serving(MAX_READ_BYTES * 2, { ignoresRange: true });
+
+    await expect(workspace.readWholeFile("/home/user/grew.bin", 4096)).rejects.toThrow(
+      /at byte 8388608/,
+    );
+    expect(asked.length).toBe(1);
+  });
+
+  it("rejects a slice whose Content-Range starts somewhere else", async () => {
+    const http = {
+      async requestBytesResponse() {
+        return {
+          blob: new Blob([new Uint8Array(MAX_READ_BYTES)]),
+          status: 206,
+          contentRange: `bytes 0-${MAX_READ_BYTES - 1}/${MAX_READ_BYTES * 4}`,
+        };
+      },
+    } as unknown as HttpClient;
+    const workspace = new WorkspaceNamespace(http);
+
+    // The first slice starts at 0 and is fine; the second claims 0 again.
+    await expect(workspace.readWholeFile("/home/user/big.bin")).rejects.toThrow(
+      /ignored the Range header/,
+    );
+  });
+
   it("does not swallow a real failure as an end of file", async () => {
     const http = {
-      async requestBytes(): Promise<Blob> {
+      async requestBytesResponse(): Promise<never> {
         throw new ApiError(403, "not yours");
       },
     } as unknown as HttpClient;

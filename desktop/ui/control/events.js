@@ -1,19 +1,8 @@
 // The daemon's snapshots and events, and keeping them coming.
 
-import {
-  $,
-  draftVersions,
-  friendlyError,
-  invoke,
-  nextId,
-  pendingSaves,
-  sectionRevisions,
-  store,
-  toast,
-} from "./core.js";
+import { $, friendlyError, invoke, nextId, store, toast } from "./core.js";
 import { loadRuntimeInfo } from "./updates.js";
-import { fillConfiguration, setSectionError } from "./config.js";
-import { render, renderAgentHost, renderSandboxImage } from "./overview.js";
+import { render, renderAgentHost } from "./overview.js";
 
 /* The page that exists to explain a problem must not be the page that gives up.
  *
@@ -93,8 +82,7 @@ function clearSnapshotUnavailable() {
 // Only the fields its branch dereferences without guarding, which is where a
 // missing one throws. Everything else is already read with `?.` or `||`.
 const REQUIRED_EVENT_FIELDS = {
-  "control.snapshot": ["state", "operator.config.revision"],
-  "config.applied": ["operator.config.revision"],
+  "control.snapshot": ["state"],
 };
 
 function hasPath(value, path) {
@@ -103,13 +91,9 @@ function hasPath(value, path) {
     .reduce((current, key) => (current == null ? undefined : current[key]), value) !== undefined;
 }
 
-// Events cross the bridge from the daemon and were read here unparsed.
-///
-/// A shape this page did not expect threw partway through a branch, after
-/// some of that branch had already run: a `config.applied` without an
-/// `operator` released the save button and dropped the pending save, then
-/// threw before `fillConfiguration`, leaving stale settings on screen with no
-/// error, no toast, and a save the page believed had succeeded.
+// Events cross the bridge from the daemon and were read here unparsed. A
+// shape this page did not expect threw partway through a branch, after some of
+// that branch had already run, leaving stale state on screen with no error.
 function unusableEventReason(event) {
   if (!event || typeof event !== "object" || typeof event.event !== "string") {
     return "the daemon sent something this page cannot read";
@@ -138,56 +122,10 @@ export function handleLocaldEvent(event) {
     store.state = event.state;
     clearSnapshotUnavailable();
     resetSnapshotRetry();
-    if (!store.sharingChoice) store.sharingChoice = store.snapshot.sharing?.mode || "this_computer";
-    fillConfiguration();
     render();
-    renderSandboxImage(event.sandbox_images);
-    for (const [id, pending] of pendingSaves) {
-      const operation = event.config_operations?.[id];
-      if (operation?.status === "succeeded") {
-        handleLocaldEvent({ event: "config.applied", id, operator: operation.operator });
-      } else if (operation?.status === "failed" || operation?.status === "interrupted") {
-        handleLocaldEvent({ event: "error", id, message: operation.message || "The daemon restarted during this save. Review the current settings before retrying; your draft is preserved." });
-      } else if (!operation && Date.now() - pending.started > 10000) {
-        handleLocaldEvent({ event: "error", id, message: "The save could not be confirmed. Review the current settings before retrying." });
-      }
-    }
-    if (pendingSaves.size) scheduleSnapshotRetry();
-  }
-  if (event.event === "sandbox-images") {
-    if (store.snapshot) store.snapshot.sandbox_images = { state: event.state, detail: event.detail };
-    renderSandboxImage({ state: event.state, detail: event.detail });
-  }
-  if (event.event === "config.applied") {
-    const pending = pendingSaves.get(event.id);
-    if (pending) {
-      if ((draftVersions.get(pending.page.dataset.page) || 0) === pending.version) pending.page.classList.remove("dirty");
-      pending.button.disabled = false;
-      pending.button.textContent = pending.original;
-      pendingSaves.delete(event.id);
-      pending.complete(true);
-      // This acknowledged section write was conditional on our saved revision.
-      // Other drafts can advance past our own change without losing their edits.
-      for (const [name, revision] of sectionRevisions) {
-        if (revision === pending.expectedRevision) sectionRevisions.set(name, event.operator.config.revision);
-      }
-    }
-    if (store.snapshot && store.snapshot.operator.config.revision <= event.operator.config.revision) store.snapshot.operator = event.operator;
-    fillConfiguration();
-    render();
-    if (pending) toast("Configuration saved and backend health checks passed.");
-    requestSnapshot();
   }
   if (event.event === "error") {
     store.sharingBusy = false;
-    const pending = pendingSaves.get(event.id);
-    if (pending) {
-      pending.button.disabled = false;
-      pending.button.textContent = pending.original;
-      pendingSaves.delete(event.id);
-      setSectionError(pending.page, event.message || "Local operation failed");
-      pending.complete(false);
-    }
     toast(event.message || "Local operation failed", true);
     requestSnapshot();
   }
@@ -198,12 +136,10 @@ export function handleLocaldEvent(event) {
   if (event.event === "sharing.changed") {
     store.sharingBusy = false;
     if (event.sharing && store.snapshot) store.snapshot.sharing = event.sharing;
-    store.sharingChoice = event.sharing?.mode || "this_computer";
     render();
     toast(event.sharing?.mode === "this_computer" ? "Sharing stopped. Lemma is private to this computer." : "Sharing is active.");
     requestSnapshot();
   }
-  if (event.event === "sharing.preflight") requestSnapshot();
   if (event.event === "agent-host.status" && event.agent_host && store.snapshot) {
     store.snapshot.agent_host = event.agent_host;
     renderAgentHost(store.snapshot.agent_host);

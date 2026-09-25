@@ -134,6 +134,12 @@ export function LiveConversation({
     const olderInFlight = useRef(false);
     const { loadMessages, refreshConversation, resumeIfRunning } = session;
     const openId = conversationId === NEW_CONVERSATION ? null : conversationId;
+    /* Read through a ref, not listed as a dependency: its identity changes
+       with `isStreaming`, so every stream starting or ending re-ran the load
+       below and re-fetched the conversation and its messages. Declared first
+       so it is current by the time the load runs in the same commit. */
+    const resumeIfRunningRef = useRef(resumeIfRunning);
+    useEffect(() => { resumeIfRunningRef.current = resumeIfRunning; }, [resumeIfRunning]);
 
     useEffect(() => {
         if (!openId || (createdHere.current === openId && !callRefresh)) return;
@@ -159,7 +165,7 @@ export function LiveConversation({
                 }
                 /* Only after the transcript is on screen: reattaching first
                    means a live run writes into a view that has no history. */
-                await resumeIfRunning(openId, { knownConversation: record ?? undefined });
+                await resumeIfRunningRef.current(openId, { knownConversation: record ?? undefined });
             } catch {
                 if (!cancelled && !historyReady) {
                     setLoadError("Could not load this conversation. Please try again.");
@@ -171,7 +177,7 @@ export function LiveConversation({
         return () => {
             cancelled = true;
         };
-    }, [openId, loadMessages, refreshConversation, resumeIfRunning, callRefresh, loadAttempt]);
+    }, [openId, loadMessages, refreshConversation, callRefresh, loadAttempt]);
 
     /* Older messages are merged into the session's own list by the controller,
        so there is nothing to stitch here: ask for the next page and the turns

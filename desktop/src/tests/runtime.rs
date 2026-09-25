@@ -248,11 +248,41 @@ fn no_capability_exposes_the_updater_to_a_remote_origin() {
             "{name} must not grant process control",
         );
     }
-    let workspace = include_str!("../../capabilities/workspace.json").replace("\r\n", "\n");
-    for command in ["allow-check-for-app-update", "allow-install-app-update"] {
+    // This Mac → Updates reaches the two app commands from the workspace
+    // capability, which also lists the hosted site. What keeps a remote origin
+    // from replacing the application is the Rust check -- this installation's
+    // own workspace on its loopback origin, or Local settings -- and the
+    // native confirmation install asks before it downloads anything.
+    let updates = include_str!("../app_update.rs").replace("\r\n", "\n");
+    for signature in [
+        "pub(crate) async fn check_for_app_update(",
+        "pub(crate) async fn install_app_update(",
+    ] {
         assert!(
-            !workspace.contains(command),
-            "a remote origin must not be able to replace the application",
+            function_body(&updates, signature).contains("require_settings_caller(&window, &app)?;"),
+            "{signature} must refuse a caller that is not this installation",
+        );
+    }
+    let install = function_body(&updates, "pub(crate) async fn install_app_update(");
+    // Consent comes first: before the download, before the stack is stopped
+    // and before anything is installed -- and on every platform, which is why
+    // it is also before the Windows early return.
+    let consent = install
+        .find("confirm_destructive_action_impl(")
+        .expect("install asks natively");
+    let agreed = install.find("if !agreed").expect("a refusal aborts");
+    for later in [
+        ".download(",
+        "stop_locald_for_runtime_maintenance",
+        ".install(bytes)",
+        "if cfg!(windows)",
+    ] {
+        let at = install
+            .find(later)
+            .unwrap_or_else(|| panic!("{later} is missing"));
+        assert!(
+            consent < agreed && agreed < at,
+            "native consent must precede {later}: consent@{consent} abort@{agreed} {later}@{at}",
         );
     }
     assert!(include_str!("../../capabilities/control.json").contains("allow-install-app-update"));
@@ -464,24 +494,19 @@ fn local_settings_exposes_honest_runtime_repair_and_rollback_boundaries() {
     let html = include_str!("../../ui/control.html").replace("\r\n", "\n");
     let script = CONTROL.replace("\r\n", "\n");
 
-    assert!(html.contains("Signed release lifecycle"));
     assert!(script.contains("repair_runtime"));
     assert!(script.contains("open_developer_tools"));
     assert!(html.contains("Developer tools"));
     assert!(html.contains("id=\"network-contract\""));
-    assert!(html.contains("id=\"connector-callback\""));
     assert!(script.contains("snapshot.state?.api_url"));
     assert!(!html.contains("http://app.lemma.localhost:8711/api/v1/connectors"));
     // The rollback notice used to be here, toggled `hidden = rollbackAvailable`
     // against a value hardcoded `false` -- so it was *permanently* on
-    // screen, explaining a feature that does not exist. A standing
-    // paragraph about something that has never happened is a bug, not a
-    // flag, and the Previous runtime card now says what is actually true.
+    // screen, explaining a feature that does not exist.
     assert!(
         !html.contains("Rollback stays unavailable"),
         "a notice that can never be dismissed is not a boundary, it is noise",
     );
-    assert!(html.contains("Reinstalling an earlier Lemma from the release page"));
     assert!(html.contains("Databases, files, and workspaces are preserved"));
 }
 

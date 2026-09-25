@@ -20,15 +20,8 @@
         <button class="nav-item" data-page="computer"><span>This computer</span></button>
         <div class="nav-group">Local installation</div>
         <button class="nav-item active" data-page="overview"><span>Overview</span><i class="health-dot" id="dot-overview"></i></button>
-        <button class="nav-item" data-page="ai"><span>AI provider</span><i class="health-dot" id="dot-ai"></i></button>
-        <button class="nav-item" data-page="sharing"><span>Sharing</span><i class="health-dot" id="dot-sharing"></i></button>
-        <button class="nav-item" data-page="integrations"><span>Integrations</span><i class="health-dot" id="dot-integrations"></i></button>
-        <button class="nav-item" data-page="channels"><span>Channels</span><i class="health-dot" id="dot-channels"></i></button>
-        <button class="nav-item" data-page="runtime"><span>Runtime</span><i class="health-dot" id="dot-runtime"></i></button>
-        <div class="nav-group">Desktop</div>
-        <button class="nav-item" data-page="updates"><span>Updates</span><i class="health-dot" id="dot-updates"></i></button>
         <!-- No state to report, so nothing sets these: they are spacers that
-             keep the two rows aligned with the ones above. Hidden from the
+             keep the rows aligned with the one above. Hidden from the
              accessibility tree rather than left as an unexplained dot. -->
         <button class="nav-item" data-page="recovery"><span>Recovery</span><i class="health-dot" aria-hidden="true"></i></button>
         <button class="nav-item" data-page="diagnostics"><span>Diagnostics</span><i class="health-dot" aria-hidden="true"></i></button>
@@ -57,7 +50,7 @@
            something is already broken. -->
       <div class="warning-box" id="snapshot-unavailable" hidden>
         <strong>Can't reach Lemma's background service.</strong>
-        <p>Live status is unavailable. Your existing drafts are preserved. Retrying every few seconds.</p>
+        <p>Live status is unavailable. Retrying every few seconds.</p>
         <p class="limitation-note" id="snapshot-unavailable-detail"></p>
         <div class="button-row">
           <button class="btn" data-action="retry-snapshot">Try again</button>
@@ -84,16 +77,16 @@
           <div><strong id="attention-title">Attention needed</strong><p id="attention-copy"></p></div>
           <button class="btn compact" id="attention-action">Review</button>
         </div>
+        <!-- Sharing, updates, integrations and channels are changed in Lemma
+             itself: Settings, This Mac. This page keeps what has to work when
+             the workspace does not -- health, a way to stop sharing, updating
+             the app, recovery and diagnostics. -->
+        <p class="limitation-note" id="settings-moved">Sharing, updates, integrations and channels live in Lemma: Settings → This Mac.</p>
         <div class="metric-grid">
           <article class="metric-card">
             <span class="metric-label">Lemma health</span>
             <strong id="metric-app">Checking</strong>
             <p id="metric-app-detail">Backend, frontend, and private dependencies.</p>
-          </article>
-          <article class="metric-card">
-            <span class="metric-label">API provider</span>
-            <strong id="metric-ai">Checking</strong>
-            <p id="metric-ai-detail">The default model available to agents.</p>
           </article>
           <article class="metric-card">
             <span class="metric-label">Exposure</span>
@@ -109,165 +102,44 @@
           <article class="panel">
             <div class="panel-heading"><div><h2>What is exposed</h2><p>The current canonical address and its reach.</p></div></div>
             <div id="overview-exposure"></div>
+            <!-- Kept here because a shared workspace moves this window to the
+                 shared address, where the workspace cannot reach its own
+                 settings -- so this is where sharing is turned off. -->
+            <div class="button-row"><button class="btn danger" id="sharing-disable" hidden>Return to This computer</button></div>
           </article>
           <article class="panel span-two">
-            <div class="panel-heading"><div><h2>Recent health</h2><p>The friendly view; process details live under Runtime.</p></div></div>
+            <div class="panel-heading"><div><h2>Recent health</h2><p>Application processes and optional capabilities.</p></div></div>
             <div id="overview-services"></div>
+            <div class="button-row"><button class="btn" data-action="start">Reconcile</button><button class="btn" data-action="restart">Restart application</button></div>
+          </article>
+          <article class="panel span-two">
+            <div class="panel-heading">
+              <div><h2>Lemma</h2><p id="app-update-summary">Checking for updates…</p></div>
+              <button class="btn compact" data-action="check-app-update">Check for updates</button>
+            </div>
+            <!-- Shown only when there is one. A permanently visible notice about
+                 something that has not happened is noise people learn to skip. -->
+            <div class="warning-box" id="app-update-available" hidden>
+              <strong id="app-update-headline">A new version of Lemma is available.</strong>
+              <p id="app-update-cost"></p>
+              <p class="danger-warning" id="app-update-reset-warning" hidden></p>
+              <div class="button-row">
+                <button class="btn primary" data-action="install-app-update">Download and install</button>
+              </div>
+            </div>
+            <p class="limitation-note" id="app-update-unsupported" hidden></p>
           </article>
         </div>
-      </section>
-
-      <section class="page config-page" data-page="ai">
-        <article class="panel">
-          <div class="panel-heading"><div><h2>System AI profile</h2><p>The default model for everyone who uses this installation, including anyone you share it with. Credentials are stored outside this page.</p></div><span class="status" id="ai-validation">Not validated</span></div>
-          <div class="preset-row" id="ai-presets">
-            <button class="preset" type="button" data-preset="ollama"><strong>Ollama</strong><span>Runs on this Mac</span></button>
-            <button class="preset" type="button" data-preset="lmstudio"><strong>LM Studio</strong><span>Runs on this Mac</span></button>
-            <button class="preset" type="button" data-preset="openai"><strong>OpenAI</strong><span>API key</span></button>
-            <button class="preset" type="button" data-preset="anthropic"><strong>Anthropic</strong><span>API key</span></button>
-            <button class="preset" type="button" data-preset="openrouter"><strong>OpenRouter</strong><span>API key</span></button>
-          </div>
-          <div class="form-grid">
-            <div class="field"><label for="ai-protocol">Provider protocol</label><select id="ai-protocol"><option value="unconfigured">Not configured</option><option value="openai_compat">OpenAI compatible</option><option value="anthropic_compat">Anthropic compatible</option></select></div>
-            <div class="field"><label for="ai-base">Base URL</label><input id="ai-base" placeholder="https://api.openai.com/v1" /></div>
-            <div class="field"><label for="ai-key">API key</label><div class="secret-wrap"><input id="ai-key" type="password" autocomplete="new-password" data-secret="ai.api_key" /><button class="secret-clear" type="button">Remove</button></div></div>
-            <div class="field span-two"><label class="check"><input type="checkbox" id="ai-private-network" /> Trust this private-network endpoint</label><span class="hint">Loopback endpoints are trusted automatically; Lemma never scans your network.</span></div>
-          </div>
-          <div class="button-row"><button class="btn" id="ai-discover">Connect and list models</button></div>
-        </article>
-        <article class="panel" id="ai-model-panel" hidden>
-          <div class="panel-heading"><div><h2>Model</h2><p>Pick the default from what this provider actually offers.</p></div><span class="status" id="ai-model-count"></span></div>
-          <div class="form-grid">
-            <div class="field"><label for="ai-model">Default model</label><select id="ai-model"></select></div>
-            <div class="field"><label for="ai-vision">Vision-capable models</label><input id="ai-vision" placeholder="gpt-4o" /><span class="hint">Comma-separated; optional.</span></div>
-          </div>
-        </article>
-        <div class="savebar"><span>Unsaved AI provider changes</span><button class="btn primary" data-save>Validate &amp; apply</button></div>
-      </section>
-
-      <section class="page" data-page="sharing">
-        <article class="panel">
-          <div class="panel-heading">
-            <div><h2>Where Lemma is reachable</h2><p>Choose one mode. Local services and model endpoints remain private in every mode.</p></div>
-            <span class="status" id="sharing-phase">checking</span>
-          </div>
-          <div class="mode-grid" role="radiogroup" aria-label="Sharing mode">
-            <button class="mode-card active" data-sharing-mode="this_computer" role="radio" aria-checked="true">
-              <span class="mode-icon">⌂</span><strong>This computer</strong><small>Only this Mac can open Lemma.</small>
-            </button>
-            <button class="mode-card" data-sharing-mode="local_network" role="radio" aria-checked="false">
-              <span class="mode-icon">⌁</span><strong>Local network</strong><small>Phones and laptops on trusted Wi-Fi.</small>
-            </button>
-            <button class="mode-card" data-sharing-mode="public" role="radio" aria-checked="false">
-              <span class="mode-icon">↗</span><strong>Public link</strong><small>Share through your ngrok or Cloudflare account.</small>
-            </button>
-          </div>
-        </article>
-
-        <article class="panel" id="sharing-current">
-          <div class="panel-heading"><div><h2>Current exposure</h2><p id="sharing-current-copy">Only this computer can reach Lemma.</p></div><span class="exposure-badge" id="sharing-current-mode">Private</span></div>
-          <div class="url-row">
-            <code id="sharing-url">—</code>
-            <button class="btn compact" data-copy-target="sharing-url">Copy</button>
-          </div>
-          <div id="sharing-warnings"></div>
-          <div class="button-row"><button class="btn danger" id="sharing-disable" hidden>Return to This computer</button></div>
-        </article>
-
-        <article class="panel sharing-config" id="lan-config" hidden>
-          <div class="panel-heading"><div><h2>Local network</h2><p>The gateway binds only to the private IPv4 interface you select.</p></div></div>
-          <div class="form-grid">
-            <div class="field"><label for="sharing-interface">Network interface</label><select id="sharing-interface"><option value="">Choose an interface</option></select></div>
-            <div class="field"><label>Security</label><div class="inline-note">HTTP on trusted Wi-Fi · no certificate installation</div></div>
-          </div>
-          <div class="warning-box">Anyone on this Wi-Fi who has the address can reach the signup screen. Use this only on a private network you trust.</div>
-          <div class="button-row"><button class="btn primary" id="sharing-enable-lan">Enable on local network</button></div>
-          <div class="qr-card" id="sharing-qr" hidden><div id="sharing-qr-image"></div><div><strong>Scan from another device</strong><p>Both devices must remain on the selected Wi-Fi network.</p></div></div>
-        </article>
-
-        <article class="panel sharing-config" id="public-config" hidden>
-          <div class="panel-heading"><div><h2>Public link</h2><p>Lemma never installs or logs into a tunnel CLI. Cloudflare automatic setup stores only its generated tunnel credential in private app storage.</p></div></div>
-          <div class="provider-tabs">
-            <button class="provider-tab active" data-provider="ngrok">ngrok</button>
-            <button class="provider-tab" data-provider="cloudflare">Cloudflare named tunnel</button>
-          </div>
-          <div id="provider-readiness"></div>
-          <div id="cloudflare-fields" class="form-grid" hidden>
-            <div class="field"><label for="cloudflare-setup">Tunnel setup</label><select id="cloudflare-setup"><option value="automatic">Automatic setup · recommended</option><option value="existing">Use an existing named tunnel</option></select></div>
-            <div class="field"><label for="cloudflare-hostname">Public hostname</label><input id="cloudflare-hostname" placeholder="lemma.example.com" /></div>
-            <div class="field span-two" id="cloudflare-existing-field" hidden><label for="cloudflare-tunnel">Existing named tunnel</label><select id="cloudflare-tunnel"><option value="">Choose a tunnel</option></select></div>
-            <div class="inline-note span-two" id="cloudflare-managed-summary">After one-time login, Lemma will create a dedicated named tunnel and DNS route, then reuse them without auto-starting.</div>
-          </div>
-          <div class="danger-warning"><strong>Open signup is enabled.</strong><p>Every activation asks you to confirm that anyone with this link can create an account and use this Lemma installation.</p></div>
-          <div class="limitation-note">Published pod apps stay local-only in this release because their routing needs wildcard subdomains. The main workspace, auth, API, files, chat, tools, webhooks, and streaming are shared.</div>
-          <div class="button-row"><button class="btn primary" id="sharing-enable-public">Create public link</button></div>
-        </article>
-      </section>
-
-      <section class="page config-page" data-page="integrations">
-        <article class="panel">
-          <div class="panel-heading"><div><h2>Connected services</h2><p>Open only the provider you want to configure.</p></div></div>
-          <details class="config-drawer">
-            <summary><span><strong>Composio</strong><small>Connector catalog and webhooks</small></span><span class="config-state" data-config-state></span></summary>
-            <div class="drawer-body">
-              <label class="check"><input type="checkbox" id="composio-enabled" /> Enable Composio connectors</label>
-              <div class="form-grid"><div class="field"><label for="composio-key">API key</label><div class="secret-wrap"><input id="composio-key" type="password" data-secret="integrations.composio_api_key" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="composio-webhook">Webhook secret</label><div class="secret-wrap"><input id="composio-webhook" type="password" data-secret="integrations.composio_webhook_secret" /><button class="secret-clear">Remove</button></div></div></div>
-            </div>
-          </details>
-          <details class="config-drawer">
-            <summary><span><strong>Google</strong><small>Gmail, Calendar, and Drive OAuth app</small></span><span class="config-state" data-config-state></span></summary>
-            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="google-id">Client ID</label><input id="google-id" /></div><div class="field"><label for="google-secret">Client secret</label><div class="secret-wrap"><input id="google-secret" type="password" data-secret="integrations.google_client_secret" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">Callback: <code id="connector-callback">Available after startup</code></p></div>
-          </details>
-          <details class="config-drawer">
-            <summary><span><strong>GitHub</strong><small>Repositories, issues, and pull requests</small></span><span class="config-state" data-config-state></span></summary>
-            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="github-id">Client ID</label><input id="github-id" /></div><div class="field"><label for="github-secret">Client secret</label><div class="secret-wrap"><input id="github-secret" type="password" data-secret="integrations.github_client_secret" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">From a GitHub OAuth app. Needed before a GitHub account can be connected.</p></div>
-          </details>
-          <details class="config-drawer">
-            <summary><span><strong>Microsoft</strong><small>Microsoft connector OAuth app</small></span><span class="config-state" data-config-state></span></summary>
-            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="microsoft-id">Client ID</label><input id="microsoft-id" /></div><div class="field"><label for="microsoft-secret">Client secret</label><div class="secret-wrap"><input id="microsoft-secret" type="password" data-secret="integrations.microsoft_client_secret" /><button class="secret-clear">Remove</button></div></div></div></div>
-          </details>
-          <details class="config-drawer">
-            <summary><span><strong>Deepgram</strong><small>Speech: <code>say</code> and <code>listen</code></small></span><span class="config-state" data-config-state></span></summary>
-            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="deepgram-key">API key</label><div class="secret-wrap"><input id="deepgram-key" type="password" data-secret="integrations.deepgram_api_key" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">Without it, <code>say</code> and <code>listen</code> fail and inbound voice notes cannot be read.</p></div>
-          </details>
-        </article>
-        <div class="savebar"><span>Unsaved integration changes</span><button class="btn primary" data-save>Save integrations</button></div>
-      </section>
-
-      <section class="page config-page" data-page="channels">
-        <article class="panel">
-          <div class="panel-heading"><div><h2>Agent channels</h2><p>Enable only the receivers you use. Socket and polling channels do not need a public link.</p></div></div>
-          <details class="config-drawer"><summary><span><strong>Slack</strong><small>Connector app and workspace bot</small></span><span class="config-state" data-config-state></span></summary><div class="drawer-body"><p class="hint">Two different credentials. The <strong>connector app</strong> lets each person connect their own Slack account; the <strong>workspace bot</strong> is the one account that posts as Lemma.</p><div class="form-grid"><div class="field"><label for="slack-connector-id">Connector client ID</label><input id="slack-connector-id" /></div><div class="field"><label for="slack-connector-secret">Connector client secret</label><div class="secret-wrap"><input id="slack-connector-secret" type="password" data-secret="integrations.slack_client_secret" /><button class="secret-clear">Remove</button></div></div></div><label class="check"><input type="checkbox" id="slack-enabled" /> Enable Socket Mode</label><div class="form-grid"><div class="field"><label for="slack-app-token">App token</label><div class="secret-wrap"><input id="slack-app-token" type="password" data-secret="surfaces.slack_app_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="slack-bot-token">Bot token</label><div class="secret-wrap"><input id="slack-bot-token" type="password" data-secret="surfaces.slack_bot_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="slack-signing-secret">Signing secret</label><div class="secret-wrap"><input id="slack-signing-secret" type="password" data-secret="surfaces.slack_signing_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-          <details class="config-drawer"><summary><span><strong>Telegram</strong><small>Long polling · no public ingress</small></span><span class="config-state" data-config-state></span></summary><div class="drawer-body"><label class="check"><input type="checkbox" id="telegram-enabled" /> Enable polling receiver</label><div class="form-grid"><div class="field"><label for="telegram-bot-token">Bot token</label><div class="secret-wrap"><input id="telegram-bot-token" type="password" data-secret="surfaces.telegram_bot_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="telegram-webhook-secret">Webhook secret</label><div class="secret-wrap"><input id="telegram-webhook-secret" type="password" data-secret="surfaces.telegram_webhook_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-          <details class="config-drawer"><summary><span><strong>Microsoft Teams</strong><small>Bot Framework callbacks</small></span><span class="summary-tags"><span class="requirement">Public link</span><span class="config-state" data-config-state></span></span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="teams-id">Bot app ID</label><input id="teams-id" /></div><div class="field"><label for="teams-tenant">Tenant ID</label><input id="teams-tenant" /></div><div class="field"><label for="teams-password">App password</label><div class="secret-wrap"><input id="teams-password" type="password" data-secret="surfaces.teams_app_password" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-          <details class="config-drawer"><summary><span><strong>WhatsApp Business</strong><small>Meta webhook</small></span><span class="summary-tags"><span class="requirement">Public link</span><span class="config-state" data-config-state></span></span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="wa-phone">Phone number ID</label><input id="wa-phone" /></div><div class="field"><label for="wa-waba">Business account ID</label><input id="wa-waba" /></div><div class="field"><label for="wa-access-token">Access token</label><div class="secret-wrap"><input id="wa-access-token" type="password" data-secret="surfaces.whatsapp_access_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="wa-verify-token">Verify token</label><div class="secret-wrap"><input id="wa-verify-token" type="password" data-secret="surfaces.whatsapp_verify_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="wa-app-secret">App secret</label><div class="secret-wrap"><input id="wa-app-secret" type="password" data-secret="surfaces.whatsapp_app_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-          <details class="config-drawer"><summary><span><strong>Email · Resend</strong><small>Inbound email webhook</small></span><span class="summary-tags"><span class="requirement">Public link</span><span class="config-state" data-config-state></span></span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="resend-domain">Inbound domain</label><input id="resend-domain" /></div><div class="field"><label for="resend-api-key">API key</label><div class="secret-wrap"><input id="resend-api-key" type="password" data-secret="surfaces.resend_api_key" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="resend-signing-secret">Signing secret</label><div class="secret-wrap"><input id="resend-signing-secret" type="password" data-secret="surfaces.resend_signing_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-        </article>
-        <div class="savebar"><span>Unsaved channel changes</span><button class="btn primary" data-save>Save channels</button></div>
-      </section>
-
-      <section class="page" data-page="runtime">
-        <article class="panel">
-          <div class="panel-heading"><div><h2>Application runtime</h2><p>One backend, one frontend, and private dependencies.</p></div></div>
-          <div id="service-list"></div>
-          <div class="button-row"><button class="btn" data-action="start">Reconcile</button><button class="btn" data-action="restart">Restart application</button></div>
-        </article>
-        <article class="panel">
-          <div class="panel-heading"><div><h2>Workspace sandbox</h2><p>Pods run code, shells and browsers inside a sandbox image on this computer. Coding agents do not need it — they run natively — so it is downloaded only when you ask.</p></div></div>
-          <p id="sandbox-image-state">Checking…</p>
-          <p class="limitation-note" id="sandbox-image-detail" hidden></p>
-          <div class="button-row"><button class="btn" data-action="prepare-sandbox-image">Download sandbox image</button></div>
-        </article>
-        <article class="panel danger-zone">
-          <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
-          <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>
-        </article>
       </section>
 
       <section class="page" data-page="recovery">
         <article class="panel">
           <div class="panel-heading"><div><h2>Restart into Recovery</h2><p>Open Lemma without starting services or downloading a runtime. Use this if setup is stuck. This action does not erase data.</p></div></div>
           <div class="button-row"><button class="btn" data-action="restart-recovery">Restart into Recovery</button></div>
+        </article>
+        <article class="panel danger-zone">
+          <div class="panel-heading"><div><h2>Stop Lemma</h2><p>These interrupt local work. They do not delete workspace data.</p></div></div>
+          <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>
         </article>
         <article class="panel danger-zone">
           <div class="panel-heading"><div><h2>Force cleanup and fresh installation</h2><p>This recovery path works independently of the running background service, including installations left by older versions.</p></div></div>
@@ -278,36 +150,9 @@
           <p id="recovery-status" role="status" aria-live="polite"></p>
         </article>
         <article class="panel danger-zone">
-          <div class="panel-heading"><div><h2>Reset local workspace data</h2><p>Erases local pods, files and accounts while keeping your AI provider settings and downloaded runtime. Requires a working local installation.</p></div></div>
+          <div class="panel-heading"><div><h2>Reset local workspace data</h2><p>Erases local pods, files and accounts while keeping this computer's settings and downloaded runtime. Requires a working local installation.</p></div></div>
           <div class="button-row"><button class="btn danger" data-action="reset-local-data">Reset local data</button></div>
         </article>
-      </section>
-
-      <section class="page" data-page="updates">
-        <div class="metric-grid">
-          <article class="metric-card"><span class="metric-label">Desktop</span><strong id="runtime-desktop-release">—</strong><p>Signed native application.</p></article>
-          <article class="metric-card"><span class="metric-label">Active runtime</span><strong id="runtime-active-release">—</strong><p id="runtime-source">Checking verified packs.</p></article>
-          <article class="metric-card"><span class="metric-label">Previous runtime</span><strong id="runtime-previous-release">None</strong><p>Kept for reference. Reinstalling an earlier Lemma from the release page is the supported way back.</p></article>
-        </div>
-        <article class="panel">
-          <div class="panel-heading">
-            <div><h2>Lemma</h2><p id="app-update-summary">Checking for updates…</p></div>
-            <button class="btn compact" data-action="check-app-update">Check for updates</button>
-          </div>
-          <!-- Shown only when there is one. A permanently visible notice about
-               something that has not happened is noise people learn to skip. -->
-          <div class="warning-box" id="app-update-available" hidden>
-            <strong id="app-update-headline">A new version of Lemma is available.</strong>
-            <p id="app-update-cost"></p>
-            <!-- Filled in by control.js with the two Postgres versions. -->
-            <p class="danger-warning" id="app-update-reset-warning" hidden></p>
-            <div class="button-row">
-              <button class="btn primary" data-action="install-app-update">Download and install</button>
-            </div>
-          </div>
-          <p class="limitation-note" id="app-update-unsupported" hidden></p>
-        </article>
-        <article class="panel"><div class="panel-heading"><div><h2>Signed release lifecycle</h2><p>Every Desktop release uses its exact verified local runtime.</p></div></div><div class="button-row"><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
       </section>
 
       <section class="page" data-page="diagnostics">

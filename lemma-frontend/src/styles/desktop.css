@@ -129,3 +129,135 @@
 .app-window__card h3 { margin: 0 0 6px; font-size: 15px; font-weight: 500; }
 .app-window__card p { margin: 0 0 16px; font-size: 13px; line-height: 1.5; color: var(--ink-3); }
 .app-window__card .btn { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+
+/* ── Settings → This Mac ─────────────────────────────────────────────
+   Rows of one setting each: its name, one line of what it does, and its
+   control on the right. The Models page's list shapes where a list is
+   what is being drawn; everything else is these rows, so a toggle, a
+   button and a choice all sit in the same place. */
+.thismac { display: flex; flex-direction: column; gap: 2px; }
+.thismac-health {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    font-size: 13.5px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+}
+.thismac-health i { width: 7px; height: 7px; border-radius: 999px; background: var(--ink-3); flex: none; }
+.thismac-health--running i { background: var(--ok); }
+.thismac-health--starting i { background: var(--wait); }
+.thismac-health--attention i { background: var(--bad); }
+
+.thismac-row {
+    display: flex;
+    align-items: center;
+    gap: 10px 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+}
+.thismac-row__text { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.thismac-row__name { font-size: 13.5px; font-weight: 500; color: var(--ink); }
+.thismac-row__said { font-size: 12px; line-height: 1.5; color: var(--ink-3); overflow-wrap: anywhere; }
+.thismac-row__control { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 10px; flex: none; }
+.thismac-row__control .btn,
+.thismac-acts .btn { display: inline-flex; align-items: center; gap: 6px; }
+.thismac-row__control select {
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    padding: 8px 10px;
+    max-width: 260px;
+}
+
+/* A switch is a checkbox that says so: `role="switch"`, and the accent
+   rather than a second design for on and off. */
+.thismac-switch { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+
+.thismac-said { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--ink-3); overflow-wrap: anywhere; }
+.thismac-said--bad { color: var(--bad); }
+.thismac-said code, .thismac-command code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    background: var(--chrome);
+    border-radius: var(--r-sm);
+    padding: 1px 6px;
+}
+.thismac-foot { margin: 12px 0 0; font-size: 12px; color: var(--ink-3); }
+.thismac-heading {
+    margin: 22px 0 2px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    font-family: var(--mono);
+    color: var(--ink-2);
+}
+.thismac-heading:first-child { margin-top: 0; }
+.thismac-group { margin-top: 18px; }
+.thismac-acts { justify-content: flex-start; margin-top: 12px; }
+.thismac .theme__modes { flex-wrap: wrap; }
+.thismac-problem {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.thismac-problem p { margin: 0; flex: 1 1 260px; line-height: 1.5; }
+.thismac-problem svg { vertical-align: -2px; color: var(--wait); }
+.thismac-command { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; color: var(--ink-2); }
+.thismac-command code { overflow-wrap: anywhere; }
+/* Scanned by a camera, so it sits on its own paper whatever the theme. */
+.thismac-qr { display: block; width: 148px; height: 148px; margin: 12px 0 0; border-radius: var(--r-sm); background: var(--paper); }
+
+/* One developer credential per drawer, closed until asked for. */
+.thismac-form { border-bottom: 1px solid var(--line); }
+.thismac-form summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    padding: 12px 0;
+    cursor: pointer;
+    list-style: none;
+}
+.thismac-form summary::-webkit-details-marker { display: none; }
+.thismac-form summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.thismac-form__body { padding: 4px 0 16px; }
+.thismac-form__body fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.thismac-form__remove { align-self: flex-start; font-size: 12px; }
+
+.thismac-logs { padding: 8px 0 4px; }
+.thismac-log {
+    margin: 10px 0 0;
+    max-height: 280px;
+    overflow: auto;
+    padding: 10px 12px;
+    background: var(--chrome);
+    border-radius: var(--r-md);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.thismac-setup { display: inline-flex; align-items: center; gap: 6px; }
+.thismac-operator__key { margin: 8px 0 0; }
+
+@media (max-width: 620px) {
+    .thismac-row { flex-wrap: wrap; }
+    .thismac-row__control { justify-content: flex-start; }
+    .thismac-row__control .btn, .thismac-form summary { min-height: 44px; }
+}

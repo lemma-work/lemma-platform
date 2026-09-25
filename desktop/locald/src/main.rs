@@ -138,7 +138,7 @@ fn client_event_finishes(command: &str, event: &str) -> bool {
         "control.snapshot" => event == "control.snapshot",
         "sharing.snapshot" => event == "sharing.snapshot",
         "sharing.preflight" => event == "sharing.preflight",
-        "sharing.enable" | "sharing.disable" => event == "sharing.changed",
+        "sharing.enable" | "sharing.disable" | "sharing.access" => event == "sharing.changed",
         "agent-host.status" => event == "agent-host.status",
         "config.apply" => event == "config.applied",
         "runtime.prepare" => event == "done",
@@ -172,6 +172,7 @@ mod tests {
         ));
         assert!(client_event_finishes("sharing.enable", "sharing.changed"));
         assert!(client_event_finishes("sharing.disable", "sharing.changed"));
+        assert!(client_event_finishes("sharing.access", "sharing.changed"));
         assert!(client_event_finishes("runtime.prepare", "done"));
         assert!(!client_event_finishes(
             "runtime.prepare",
