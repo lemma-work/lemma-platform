@@ -17,15 +17,28 @@ the file is the identity, and it is what each database records in
 the three files listed in ``LEGACY_ID_POSITION_MISMATCH`` still disagree: their
 ids shipped, so databases are stamped with them, and renaming an id strands
 every deployment sitting on it.
+
+A third check came from Desktop: nightlies install on real machines and run
+``alembic upgrade head`` there, so a migration is *shipped* as soon as a
+nightly carries it -- not only at a stable tag. Editing or deleting one after
+that leaves every machine that already ran it on a schema the code no longer
+describes, and nothing re-runs it. The newest shipped tag (``desktop-nightly-*``
+or ``v*``) that is an ancestor of HEAD is the reference; every migration in it
+must still be here, byte-for-byte up to line endings and trailing whitespace.
+When no such tag is available locally (a shallow CI checkout, a fork) that part
+is skipped and says so.
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
+REPO_VERSIONS = "lemma-backend/migrations/versions"
+SHIPPED_TAG_PATTERNS = ("refs/tags/desktop-nightly-*", "refs/tags/v*")
 
 # Files whose filename position and revision id disagree, for the historical
 # reason above. Each id is already recorded in deployed `alembic_version` rows,
@@ -49,6 +62,7 @@ def main() -> int:
         return 1
 
     by_revision: dict[str, tuple[Path, str | None]] = {}
+    texts: dict[str, str] = {}
     numbers: dict[int, list[str]] = {}
     problems: list[str] = []
 
@@ -60,6 +74,7 @@ def main() -> int:
             continue
         down_match = _DOWN_REVISION.search(text)
         revision_id = revision.group(1)
+        texts.setdefault(revision_id, text)
         if revision_id in by_revision:
             # Recorded rather than overwritten: replacing the first file would
             # hide it from every check below, so the gate could walk a shortened
@@ -138,6 +153,12 @@ def main() -> int:
                     f"(it has not shipped, so the id is still free to change)"
                 )
 
+    reference = newest_shipped_reference()
+    if reference is None:
+        print("  (no shipped tag available locally; shipped-migration check skipped)")
+    else:
+        problems.extend(shipped_edits(texts, shipped_migrations(reference), reference))
+
     if problems:
         print("Migration order check failed:")
         for problem in problems:
@@ -148,8 +169,76 @@ def main() -> int:
         f"✓ migrations: {len(by_revision)} in one chain, one head, "
         f"filename numbers match apply order "
         f"({len(LEGACY_ID_POSITION_MISMATCH)} legacy id mismatches)"
+        + (f", none edited since {reference}" if reference else "")
     )
     return 0
+
+
+def _normalise(text: str) -> str:
+    return "\n".join(
+        line.rstrip() for line in text.replace("\r\n", "\n").strip().split("\n")
+    )
+
+
+def shipped_edits(
+    current: dict[str, str], shipped: dict[str, str], reference: str
+) -> list[str]:
+    """Every shipped migration that is gone or changed, by revision id."""
+    problems = []
+    for revision, text in sorted(shipped.items()):
+        if revision not in current:
+            problems.append(
+                f"revision {revision!r} shipped in {reference} and is no longer here; "
+                "machines that ran it cannot be migrated forward -- restore it"
+            )
+        elif _normalise(current[revision]) != _normalise(text):
+            problems.append(
+                f"revision {revision!r} was edited after it shipped in {reference}; "
+                "machines that already ran it will never run the edit -- "
+                "revert it and add a new migration instead"
+            )
+    return problems
+
+
+def _git(*arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=VERSIONS,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def newest_shipped_reference() -> str | None:
+    """The newest shipped tag this checkout descends from, if it has one."""
+    listing = _git(
+        "for-each-ref",
+        "--sort=-creatordate",
+        "--count=40",
+        "--format=%(refname:short)",
+        *SHIPPED_TAG_PATTERNS,
+    )
+    if listing.returncode != 0:
+        return None
+    for tag in listing.stdout.split():
+        if _git("merge-base", "--is-ancestor", tag, "HEAD").returncode == 0:
+            return tag
+    return None
+
+
+def shipped_migrations(reference: str) -> dict[str, str]:
+    """Revision id -> file text, for every migration in ``reference``."""
+    listing = _git("ls-tree", "--name-only", f"{reference}:{REPO_VERSIONS}")
+    shipped: dict[str, str] = {}
+    for name in listing.stdout.split():
+        if not name.endswith(".py") or name == "__init__.py":
+            continue
+        shown = _git("show", f"{reference}:{REPO_VERSIONS}/{name}")
+        revision = _REVISION.search(shown.stdout)
+        if shown.returncode == 0 and revision is not None:
+            shipped[revision.group(1)] = shown.stdout
+    return shipped
 
 
 def _ordinal(n: int) -> str:

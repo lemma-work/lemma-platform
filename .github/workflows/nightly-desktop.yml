@@ -4,8 +4,9 @@ name: Nightly Desktop
 # passed.
 #
 # The nightly channel exists so the in-app update path is exercised before a
-# stable release depends on it: installed nightlies update to the next nightly,
-# which is the only routine rehearsal that path gets. That only works if a
+# stable release depends on it: installed nightlies are offered the next
+# nightly (the user checks and consents; nothing installs on its own), which is
+# the only routine rehearsal that path gets. That only works if a
 # nightly actually appears. Until this workflow, nothing scheduled one -- the
 # `share-*` jobs in "Release Local Stack Images" are reachable only by hand, and
 # `workflow_dispatch` failures are not announced, so a nightly that stopped
@@ -32,35 +33,22 @@ permissions:
 jobs:
   cut:
     name: Cut a nightly from green main
-    timeout-minutes: 20
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # `CI passed` is the aggregator every pull request merges behind, so
+      # asking about it asks about the whole required set in one question.
+      # Waits for a run still in progress: the cron fires shortly after the
+      # day's last merges, and refusing then skipped the night entirely.
       - name: Refuse to ship a commit CI has not passed
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          sha="$(git rev-parse HEAD)"
-          echo "main is at $sha"
-
-          # `CI passed` is the aggregator every pull request merges behind, so
-          # asking about it asks about the whole required set in one question.
-          # A nightly built from a red commit is worse than no nightly: it is
-          # published to a channel installed nightlies update to *automatically*,
-          # so the breakage arrives on machines rather than in a pull request.
-          conclusion="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name == "CI passed")] | first | .conclusion // "missing"')"
-          echo "CI passed: ${conclusion}"
-
-          if [ "${conclusion}" != "success" ]; then
-            echo "::error::main is at ${sha}, whose 'CI passed' is ${conclusion}." \
-                 "Not cutting a nightly from it."
-            exit 1
-          fi
+        uses: ./.github/actions/require-ci-passed
+        with:
+          token: ${{ github.token }}
+          sha: ${{ github.sha }}
+          wait-minutes: "75"
 
       - name: Read the version this repository is on
         id: version
@@ -82,6 +70,11 @@ jobs:
           # publish=false keeps this off the stable release; share=true is what
           # builds the installable macOS and Windows nightlies and publishes
           # their signed update feed.
+          # A workflow dispatch takes a branch, not a commit, so the run
+          # builds whatever main is by the time it starts -- possibly newer
+          # than the commit checked above. That run therefore checks CI on
+          # its own commit, first, before it publishes anything; this check
+          # only decides whether tonight is worth dispatching at all.
           gh workflow run release-local-images.yml \
             --ref "${GITHUB_REF_NAME}" \
             -f version="${{ steps.version.outputs.version }}" \

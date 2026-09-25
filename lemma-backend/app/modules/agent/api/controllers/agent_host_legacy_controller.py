@@ -1,10 +1,11 @@
 """Refusals for the HTTP routes Agent Host protocol 2 used to call.
 
 Protocol 3 moved everything a paired machine says onto the link WebSocket, and
-the HTTP routes went with it. But Desktop has no auto-updater, so a machine
-paired to a hosted workspace keeps running the host it shipped with, and that
-host never opens the socket: it cannot be sent close code 4426. Left to 404s it
-would sit "offline" forever with nothing telling anyone why.
+the HTTP routes went with it. But Desktop installs an update only when its
+person agrees to one, so a machine paired to a hosted workspace can keep running
+the host it shipped with for as long as nobody does, and that host never opens
+the socket: it cannot be sent close code 4426. Left to 404s it would sit
+"offline" forever with nothing telling anyone why.
 
 So each old path answers with the one refusal the old host already understands,
 and serves nothing else. What the old host does with each (read against

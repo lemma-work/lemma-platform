@@ -154,6 +154,21 @@ pub(crate) struct Shell {
     /// a running one puts a "quit?" prompt in front of a user who asked to
     /// change servers.
     pub(crate) swapping_window: AtomicBool,
+    /// Set once this shell has sent the daemon `shutdown-daemon` for a quit.
+    /// "Quit Anyway" then waits on that stop and escalates it, rather than
+    /// sending a second request the daemon refuses as already in progress.
+    pub(crate) daemon_stop_requested: AtomicBool,
+    /// Local workspace origins granted the workspace capability this run.
+    ///
+    /// Granted one exact origin at a time, at runtime, because the port is
+    /// only known once locald has allocated it -- and a `:*` pattern in the
+    /// shipped file would also cover every pod-app alias port on the same
+    /// host. Remembered so each is added once.
+    pub(crate) granted_workspace_origins: Mutex<BTreeSet<String>>,
+    /// Pod-app alias ports this run has handed the workspace, and the
+    /// canonical app origin each fronts. Only these may load in a frame on the
+    /// workspace host; see `pod_app_alias.rs`.
+    pub(crate) app_aliases: Mutex<HashMap<u16, String>>,
 }
 
 pub(crate) struct LocaldConnection {
@@ -188,6 +203,9 @@ impl Shell {
             sharing_mode: Mutex::new(None),
             quit_confirmed: AtomicBool::new(false),
             swapping_window: AtomicBool::new(false),
+            daemon_stop_requested: AtomicBool::new(false),
+            granted_workspace_origins: Mutex::new(BTreeSet::new()),
+            app_aliases: Mutex::new(HashMap::new()),
         }
     }
 }

@@ -22,6 +22,9 @@ and files, and the VM one for the browser.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -106,7 +109,48 @@ def workspace_open_params(
 
 @dataclass(frozen=True, slots=True)
 class HostWorkspace:
-    """A host sandbox that is open, as a run's tools need it."""
+    """A host sandbox that is open, as a run's tools need it.
+
+    ``host_id`` is the Mac the run recorded when it chose the host; the run's
+    operations go there and nowhere else (``run_pinned_host``). None only for
+    a workspace just opened, before selection stamps it.
+    """
 
     sandbox_id: UUID
     root: str
+    host_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunHostPin:
+    """The host and root one run recorded for its host sandbox."""
+
+    sandbox_id: UUID
+    host_id: UUID
+    root: str
+
+
+_RUN_HOST_PIN: ContextVar[RunHostPin | None] = ContextVar(
+    "lemma_run_host_pin", default=None
+)
+
+
+@contextmanager
+def run_pinned_host(pin: RunHostPin | None) -> Iterator[None]:
+    """Route this sandbox's operations, inside the block, by the run's record.
+
+    The sandbox id names only the conversation, and a conversation's runs can
+    each have chosen a different Mac. Without a pin an operation goes where
+    the conversation's latest host run went, which may be another run's Mac.
+    """
+    token = _RUN_HOST_PIN.set(pin)
+    try:
+        yield
+    finally:
+        _RUN_HOST_PIN.reset(token)
+
+
+def pinned_host_for(sandbox_id: UUID) -> RunHostPin | None:
+    """The calling run's recorded host for ``sandbox_id``, if it pinned one."""
+    pin = _RUN_HOST_PIN.get()
+    return pin if pin is not None and pin.sandbox_id == sandbox_id else None

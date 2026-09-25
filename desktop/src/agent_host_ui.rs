@@ -14,15 +14,118 @@ pub(crate) fn agent_host_action_impl(app: AppHandle, action: String) -> Result<(
     )
 }
 
+/// Whether a page at `page` may drive this computer's Agent Host.
+///
+/// Pure, so the rule can be asserted without a running app. In hosted mode,
+/// the hosted workspace this app navigated to. In local mode, this
+/// installation's own workspace on its loopback origin -- the same rule as
+/// This Mac settings (`local_settings_origin_allowed`), and for the same
+/// reason: while sharing is on, the origin this app navigated to *is* the
+/// shared LAN or tunnel address, which a visitor's device loads too, so
+/// matching `workspace` alone would admit it.
+pub(crate) fn agent_host_origin_allowed(
+    mode: &str,
+    page: &tauri::Url,
+    workspace: &str,
+    dev_local: Option<&str>,
+) -> bool {
+    match mode {
+        "hosted" => {
+            tauri::Url::parse(workspace).is_ok_and(|hosted| page.origin() == hosted.origin())
+        }
+        "local" => local_settings_origin_allowed(mode, page, workspace, dev_local),
+        _ => false,
+    }
+}
+
+/// The Lemma this computer's Agent Host pairs with, and whose signed-in
+/// person it is told about: decided by the shell, never taken from the page.
+///
+/// A page naming any server it liked could pair this Mac -- and so hand its
+/// coding agents, and with host execution its shell -- to that server. In
+/// local mode it is this installation's own API on loopback, which the shell
+/// learned from locald; in hosted mode, the hosted site or one of its
+/// subdomains, over HTTPS -- the shell does not learn the hosted API's
+/// address, so the page's is taken only when it is that site's own.
+pub(crate) fn agent_host_workspace_url(
+    mode: &str,
+    app_url: &str,
+    api_url: &str,
+    requested: &str,
+    hosted: &str,
+    dev_local: Option<&str>,
+) -> Result<String, String> {
+    match mode {
+        "local" => {
+            let app = tauri::Url::parse(app_url).ok();
+            let shipped = app
+                .as_ref()
+                .and_then(|app| app.host_str().map(trusted_local_workspace_host))
+                .unwrap_or(false)
+                && trusted_workspace_urls(app_url, api_url);
+            let development = dev_local
+                .and_then(|raw| tauri::Url::parse(raw.trim()).ok())
+                .zip(app)
+                .is_some_and(|(dev, app)| dev.origin() == app.origin())
+                && !api_url.trim().is_empty();
+            if shipped || development {
+                Ok(api_url.to_owned())
+            } else {
+                Err(format!(
+                    "{THIS_COMPUTER} pairs with its own Lemma, which is not on its own address \
+                     right now (sharing moves it); try again from {THIS_COMPUTER}"
+                ))
+            }
+        }
+        "hosted" => {
+            let (Ok(site), Ok(requested)) = (
+                tauri::Url::parse(hosted),
+                tauri::Url::parse(requested.trim()),
+            ) else {
+                return Err("that is not a Lemma address".into());
+            };
+            let site_host = site.host_str().unwrap_or_default();
+            let same_site = requested.host_str().is_some_and(|host| {
+                !site_host.is_empty()
+                    && (host == site_host || host.ends_with(&format!(".{site_host}")))
+            });
+            if requested.scheme() == "https"
+                && same_site
+                && requested.username().is_empty()
+                && requested.password().is_none()
+            {
+                Ok(requested.to_string())
+            } else {
+                Err("this computer pairs only with the Lemma this app is signed in to".into())
+            }
+        }
+        _ => Err("Lemma has not decided where this app connects yet".into()),
+    }
+}
+
+fn agent_host_workspace_url_for(app: &AppHandle, requested: &str) -> Result<String, String> {
+    let (mode, app_url, api_url) = navigation_context(app);
+    let dev_local =
+        dev_override("LEMMA_DESKTOP_LOCAL_URL").and_then(|value| value.into_string().ok());
+    agent_host_workspace_url(
+        &mode,
+        &app_url,
+        &api_url,
+        requested,
+        &hosted_url(),
+        dev_local.as_deref(),
+    )
+}
+
 /// Who may drive this computer's Agent Host.
 ///
 /// Local settings qualifies as a trusted bundled page. So does the signed-in
 /// workspace, which is the whole point - the Agent Host page lives there so a
-/// cloud user gets it too - but only while it is on the origin this app
-/// actually navigated to. Sharing republishes that same workspace on a LAN or
-/// tunnel host, and a visitor loading it must not reach this Mac. The ACL in
-/// capabilities/workspace.json is the primary gate; this is the second one, in
-/// case a URL pattern is ever written too loosely.
+/// cloud user gets it too - but only on the origin this app navigated to, and
+/// in local mode only on its loopback origin: sharing republishes that same
+/// workspace on a LAN or tunnel host, and a visitor loading it must not reach
+/// this Mac. The ACL in capabilities/workspace.json is the primary gate; this
+/// is the second one, in case a URL pattern is ever written too loosely.
 pub(crate) fn require_agent_host_caller(window: &Webview, app: &AppHandle) -> Result<(), String> {
     if is_control_window_label(window.label()) {
         return require_control_window(window);
@@ -37,9 +140,9 @@ pub(crate) fn require_agent_host_caller(window: &Webview, app: &AppHandle) -> Re
         return Ok(());
     }
     let expected = app_base_url(app)?;
-    let expected =
-        tauri::Url::parse(&expected).map_err(|_| "no workspace origin yet".to_string())?;
-    if url.origin() != expected.origin() {
+    let dev_local =
+        dev_override("LEMMA_DESKTOP_LOCAL_URL").and_then(|value| value.into_string().ok());
+    if !agent_host_origin_allowed(&current_mode(app), &url, &expected, dev_local.as_deref()) {
         return Err("only the signed-in Lemma workspace can control the Agent Host".into());
     }
     Ok(())
@@ -92,19 +195,50 @@ pub(crate) fn agent_host_pair_impl(
     url: String,
     pairing_code: String,
     name: String,
+    reenable: bool,
 ) -> Result<(), String> {
-    if url.trim().is_empty() || pairing_code.trim().is_empty() {
-        return Err("pairing needs a workspace URL and a pairing code".into());
+    if pairing_code.trim().is_empty() {
+        return Err("pairing needs a pairing code".into());
     }
+    let url = agent_host_workspace_url_for(&app, &url)?;
     ensure_agent_host_daemon(&app)?;
     agent_host_request(
         &app,
         json!({
             "cmd": "agent-host.pair",
             "id": operation_id("agent-host-pair"),
-            "url": url.trim(),
+            "url": url,
             "pairing_code": pairing_code.trim(),
             "name": name.trim(),
+            "reenable": reenable,
+        }),
+    )
+}
+
+/// Tell this computer's Agent Host who is signed in to the workspace on
+/// screen. Pairings of anybody else to that Lemma take no new work -- and run
+/// no commands on this Mac -- until their person signs in again; nobody
+/// signed in pauses them all.
+pub(crate) fn agent_host_session_impl(
+    app: AppHandle,
+    url: String,
+    user_id: Option<String>,
+) -> Result<(), String> {
+    let user_id = user_id
+        .map(|user| user.trim().to_owned())
+        .filter(|user| !user.is_empty());
+    if let Some(user) = &user_id {
+        uuid::Uuid::parse_str(user).map_err(|_| "that is not a Lemma user id".to_string())?;
+    }
+    let url = agent_host_workspace_url_for(&app, &url)?;
+    ensure_agent_host_daemon(&app)?;
+    agent_host_request(
+        &app,
+        json!({
+            "cmd": "agent-host.session",
+            "id": operation_id("agent-host-session"),
+            "url": url,
+            "user_id": user_id,
         }),
     )
 }
@@ -367,15 +501,37 @@ pub(crate) async fn agent_host_start(window: Webview, app: AppHandle) -> Result<
 /// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
 /// the main thread, so any command that waits on the daemon, the network or a
 /// child process freezes every window for its whole duration.
+///
+/// `url` is the workspace the page is on, and is only ever checked, never
+/// trusted: see `agent_host_workspace_url`. `reenable` is the person asking,
+/// with a click, to turn back on a computer they removed from their account.
 pub(crate) async fn agent_host_pair(
     window: Webview,
     app: AppHandle,
     url: String,
     pairing_code: String,
     name: String,
+    reenable: Option<bool>,
 ) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
-    tauri::async_runtime::spawn_blocking(move || agent_host_pair_impl(app, url, pairing_code, name))
+    tauri::async_runtime::spawn_blocking(move || {
+        agent_host_pair_impl(app, url, pairing_code, name, reenable.unwrap_or(false))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+/// Runs off the UI thread; see `agent_host_pair`. Who is signed in to the
+/// workspace on screen, or `None` once they signed out.
+pub(crate) async fn agent_host_session(
+    window: Webview,
+    app: AppHandle,
+    url: String,
+    user_id: Option<String>,
+) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || agent_host_session_impl(app, url, user_id))
         .await
         .map_err(|error| error.to_string())?
 }

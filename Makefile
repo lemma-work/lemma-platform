@@ -1167,6 +1167,12 @@ desktop-entitlements:
 	@python3 desktop/scripts/check_entitlements.py
 
 .PHONY: desktop-test-browser
+.PHONY: desktop-app-alias-proof
+# WKWebView proof that a pod app framed through its locald alias is signed in,
+# and that the same app framed on its own address is not. macOS only.
+desktop-app-alias-proof:
+	@desktop/e2e/app_alias_proof/run.sh
+
 desktop-test-browser:
 	@npm ci --prefix desktop/ui-tests --ignore-scripts --no-audit --no-fund
 	@if [ -z "$${LEMMA_TEST_BROWSER_CHANNEL:-}" ]; then cd desktop/ui-tests && npx --no-install playwright install chromium; fi

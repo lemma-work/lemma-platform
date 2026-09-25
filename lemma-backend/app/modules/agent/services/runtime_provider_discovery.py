@@ -9,11 +9,12 @@ from __future__ import annotations
 import ipaddress
 import socket
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 import httpx
 
 from app.core.config import settings
+from app.core.exposure import local_relaxations_allowed
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
 from app.modules.agent.services.context_budget import (
@@ -156,6 +157,44 @@ async def _discover_anthropic_compatible_models(
 _PUBLIC_URL_ERROR = "base_url must be a public http(s) URL"
 
 
+def lemma_service_ports() -> frozenset[int]:
+    """The loopback ports this installation's own services listen on.
+
+    A model provider at one of these is not a model provider: it is the API
+    (whose own routes then receive the provider's bearer key), the web app,
+    Postgres, Redis or SuperTokens, reached from inside the backend. Read from
+    the URLs the backend is configured with, so a Desktop install's random
+    ports are covered without being named anywhere.
+    """
+    configured = (
+        settings.api_url,
+        settings.frontend_url,
+        settings.auth_frontend_url,
+        settings.supertokens_core_url,
+        settings.database_url,
+        settings.redis_url,
+    )
+    return frozenset(port for raw in configured if (port := _port_of(raw)))
+
+
+def _port_of(raw: str | None) -> int | None:
+    try:
+        return urlparse(str(raw)).port if raw else None
+    except ValueError:
+        return None
+
+
+def _loopback_allowed_for(parsed: ParseResult) -> bool:
+    """Local and unshared, and not a port this installation serves on."""
+    if not local_relaxations_allowed():
+        return False
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValueError(_PUBLIC_URL_ERROR) from exc
+    return port not in lemma_service_ports()
+
+
 async def _validate_public_base_url(url: str) -> None:
     """Reject SSRF targets before issuing a server-side request to ``url``.
 
@@ -163,15 +202,17 @@ async def _validate_public_base_url(url: str) -> None:
     schemes and any host that resolves to a loopback/private/link-local/reserved
     address (e.g. ``http://169.254.169.254/`` cloud metadata, ``http://10.x``).
     Loopback is permitted in local/testing mode so development against a model
-    server on localhost still works. (Note: this validates at resolve time; it
-    does not pin the connection, so it is not fully DNS-rebinding-proof — it
-    closes the practical metadata/internal-service vector.)
+    server on localhost still works -- but not while the installation is shared,
+    when "a member" is anybody who joined over the network, and never on a port
+    Lemma itself serves on. (Note: this validates at resolve time; it does not
+    pin the connection, so it is not fully DNS-rebinding-proof — it closes the
+    practical metadata/internal-service vector.)
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError(_PUBLIC_URL_ERROR)
     host = parsed.hostname
-    allow_loopback = settings.is_local_mode()
+    allow_loopback = _loopback_allowed_for(parsed)
     candidates: list[str] = []
     try:
         ipaddress.ip_address(host)

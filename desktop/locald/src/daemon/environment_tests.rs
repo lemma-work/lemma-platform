@@ -114,3 +114,45 @@ fn sharing_tells_the_backend_who_may_create_an_account() {
         assert_eq!(open["SIGNUP_MODE"], "open", "{mode:?}");
     }
 }
+
+/// `ENVIRONMENT` stays `local` while shared, so the backend is told outright.
+#[test]
+fn every_shared_mode_tells_the_backend_it_is_shared() {
+    for (origin, mode) in [
+        ("http://192.168.1.20:51234", SharingMode::LocalNetwork),
+        ("https://lemma.example.com", SharingMode::Public),
+    ] {
+        for who in [WhoCanJoin::InviteOnly, WhoCanJoin::Open] {
+            let (backend, _) = sharing_environment(origin, mode, who);
+            assert_eq!(
+                backend.get("INSTALLATION_SHARED").map(String::as_str),
+                Some("true")
+            );
+        }
+    }
+}
+
+/// Activation commits only once a sign-in could actually start.
+#[test]
+fn activation_requires_the_api_and_a_live_altcha_challenge() {
+    use super::environment::{activation_probe_passed, ACTIVATION_PROBES};
+    let [page, api] = ACTIVATION_PROBES;
+    assert!(api.starts_with("/_lemma/api/auth/altcha/challenge"));
+    assert!(activation_probe_passed(page, 200, "window.__LEMMA__ = {}"));
+    assert!(!activation_probe_passed(page, 503, ""));
+    assert!(activation_probe_passed(
+        api,
+        200,
+        r#"{"enabled":true,"challenge":"x"}"#
+    ));
+    // The failure C1 produced: a challenge endpoint that refuses for want of a key.
+    assert!(!activation_probe_passed(
+        api,
+        503,
+        r#"{"detail":"unavailable"}"#
+    ));
+    // A backend that never picked the overlay up.
+    assert!(!activation_probe_passed(api, 200, r#"{"enabled":false}"#));
+    // An ngrok interstitial is HTML, not a challenge.
+    assert!(!activation_probe_passed(api, 200, "<!DOCTYPE html><html>"));
+}

@@ -63,14 +63,28 @@ function originOf(url: string | null): string | null {
  *  anything"), described a Mac's local pairing while a hosted workspace was on
  *  screen. The automatic connection asks the same question and must get the
  *  same answer. A target with no URL matches nothing: it cannot be shown to be
- *  this workspace's. */
+ *  this workspace's.
+ *
+ *  Nor does a pairing the host turned off (`enabled: false`), which serves
+ *  nobody, or one that belongs to somebody other than `userId`: two people
+ *  signing in to the app on one Mac are two people, and the second one's runs
+ *  must not go to the first one's pairing. An older shell reports no
+ *  `user_id`; its pairing is taken as the signed-in person's. */
 export function selectWorkspaceTarget(
     targets: readonly AgentHostTarget[],
     workspaceUrl: string | null,
+    userId: string | null = null,
 ): AgentHostTarget | null {
     const workspace = originOf(workspaceUrl);
     if (!workspace) return null;
-    return targets.find((target) => originOf(target.url) === workspace) ?? null;
+    return (
+        targets.find(
+            (target) =>
+                originOf(target.url) === workspace &&
+                target.enabled !== false &&
+                (!userId || !target.user_id || target.user_id === userId),
+        ) ?? null
+    );
 }
 
 /* ── one reported state ────────────────────────────────────────────── */
@@ -105,6 +119,7 @@ export function describeThisComputer(
     workspaceUrl: string | null,
     connectError: string | null,
     noun: ComputerNoun = "this computer",
+    userId: string | null = null,
 ): DescribedStatus {
     if (!status) {
         /* In a hosted workspace the first poll is the one that has to start
@@ -121,7 +136,7 @@ export function describeThisComputer(
             retry: false,
         };
     }
-    const target = selectWorkspaceTarget(status.targets, workspaceUrl);
+    const target = selectWorkspaceTarget(status.targets, workspaceUrl, userId);
     if (!target) {
         /* Nothing retries on its own — one attempt per page, so a machine that
            cannot pair does not mint pairing codes in a loop — so "Connecting"

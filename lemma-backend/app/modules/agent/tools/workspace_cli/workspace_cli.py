@@ -141,6 +141,7 @@ async def get_workspace_session(
             pod_id=ctx.pod_id,
             sandbox_id=host_workspace.sandbox_id,
             root=host_workspace.root,
+            host_id=host_workspace.host_id,
             organization_id=ctx.organization_id,
             workload_type=ctx.workload_type,
             workload_id=ctx.workload_id,

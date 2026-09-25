@@ -9,6 +9,7 @@ import { createRefreshBreaker } from "lemma-sdk";
 import { apiUrl, hasApiUrl } from "@/session/client";
 import { ST_BASE } from "./config";
 import { proofHeader, type Purpose } from "./altcha";
+import { invitationIn, pendingDestination } from "./redirects";
 
 /** Which actions the server guards, and what it calls each purpose.
  *
@@ -69,8 +70,11 @@ export function startAuth(): void {
             EmailPassword.init({
                 preAPIHook: async (context) => {
                     const purpose = GUARDED[context.action];
-                    if (!purpose) return context;
-                    return { ...context, requestInit: await withProof(context.requestInit, purpose) };
+                    const requestInit = context.action === "EMAIL_PASSWORD_SIGN_UP"
+                        ? withInvitation(context.requestInit)
+                        : context.requestInit;
+                    if (!purpose) return { ...context, requestInit };
+                    return { ...context, requestInit: await withProof(requestInit, purpose) };
                 },
             }),
             ThirdParty.init(),
@@ -83,6 +87,15 @@ export function startAuth(): void {
             }),
         ],
     });
+}
+
+/** The invitation this sign-up is headed to accept, if any, as the API reads it. */
+function withInvitation(requestInit: RequestInit): RequestInit {
+    const invitation = invitationIn(pendingDestination(window.location.search), window.location.origin);
+    if (!invitation) return requestInit;
+    const headers = new Headers(requestInit.headers);
+    headers.set("x-lemma-invitation", invitation);
+    return { ...requestInit, headers };
 }
 
 async function withProof(requestInit: RequestInit, purpose: Purpose): Promise<RequestInit> {

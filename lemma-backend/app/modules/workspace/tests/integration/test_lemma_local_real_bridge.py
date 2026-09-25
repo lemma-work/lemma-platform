@@ -332,10 +332,9 @@ async def test_lifecycle_round_trips_through_the_real_bridge(real_bridge) -> Non
     )
     assert found is not None and found.provider_id == instance.provider_id
 
-    assert (
-        await provider.reach_port(instance, port=4848, deadline_at=_deadline())
-        == "http://127.0.0.1:10"
-    )
+    endpoint = await provider.reach_port(instance, port=4848, deadline_at=_deadline())
+    assert endpoint.url == "http://127.0.0.1:10"
+    assert endpoint.headers == {}, "only a function runtime port carries a token"
 
     await provider.release(
         instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()

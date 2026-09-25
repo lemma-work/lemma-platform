@@ -25,13 +25,35 @@ pub(crate) enum Command {
         #[arg(long)]
         url: Url,
         // URL-safe random codes can begin with a hyphen.
-        #[arg(long, allow_hyphen_values = true)]
-        pairing_code: String,
+        #[arg(
+            long,
+            allow_hyphen_values = true,
+            required_unless_present = "pairing_code_stdin"
+        )]
+        pairing_code: Option<String>,
+        /// Read the pairing code from the first line of stdin instead, so it
+        /// is not in the process list for anyone on this computer to read.
+        #[arg(long, conflicts_with = "pairing_code")]
+        pairing_code_stdin: bool,
         #[arg(long, default_value = "My computer")]
         name: String,
         /// Permit plain HTTP only when the URL is loopback.
         #[arg(long)]
         allow_insecure_http: bool,
+        /// Pair even though this computer was removed from the account --
+        /// only when the person asked for exactly that.
+        #[arg(long)]
+        reenable: bool,
+    },
+    /// Who is signed in to Lemma in the app, for the pairings to `url`: those
+    /// of anyone else take no new work until their person signs in again.
+    #[command(hide = true)]
+    Session {
+        #[arg(long)]
+        url: Url,
+        /// The signed-in person's user id; absent when nobody is signed in.
+        #[arg(long)]
+        user: Option<uuid::Uuid>,
     },
     /// Show service, target connectivity, and durable queue state.
     #[command(alias = "list")]

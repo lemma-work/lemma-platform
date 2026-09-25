@@ -51,26 +51,15 @@ pub(crate) fn sharing_action_impl(
     if current_mode(&app) != "local" {
         return Err("sharing is available only for a local workspace".into());
     }
-    if !matches!(
-        action.as_str(),
-        "snapshot" | "preflight" | "enable" | "disable" | "access"
-    ) {
-        return Err(format!("unknown sharing action: {action}"));
-    }
     ensure_locald(&app)?;
-    let mut request = json!({
-        "cmd": format!("sharing.{action}"),
-        "id": id,
-    });
-    if let Some(payload) = payload {
-        if action == "preflight" {
-            if let Some(provider) = payload.get("provider") {
-                request["provider"] = provider.clone();
-            }
-        } else {
-            request["payload"] = payload;
-        }
-    }
+    // The same builder and the same native questions as the workspace's This
+    // Mac page. Local settings used to forward its payload as given --
+    // `public_warning_confirmed` included -- so the one page that skipped the
+    // native confirmation was the bundled one, and anything able to drive it
+    // could publish the installation without being asked.
+    let Some(request) = consented_sharing_request(&app, &action, payload, Some(id))? else {
+        return Err("Sharing was not changed.".into());
+    };
     send_to_locald(&app, request)
 }
 

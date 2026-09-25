@@ -3,6 +3,12 @@
 use super::*;
 use std::io::Write;
 
+/// How long a read that should succeed may take before the test fails instead
+/// of hanging. Generous on purpose: it guards against a hang, not a slow
+/// machine, and a loaded shared CI runner can stall a loopback socket for
+/// seconds.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 #[test]
 fn stopping_forwarder_closes_idle_connections_in_both_directions() {
     assert_forwarder_shutdown(false);
@@ -23,7 +29,7 @@ fn assert_forwarder_shutdown(backpressured: bool) {
     )
     .unwrap();
     let mut client = TcpStream::connect(forwarder.local_address).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_GUARD;
     let mut upstream = loop {
         match target.accept() {
             Ok((stream, _)) => break stream,
@@ -36,9 +42,7 @@ fn assert_forwarder_shutdown(backpressured: bool) {
     };
     upstream.set_nonblocking(false).unwrap();
     for stream in [&client, &upstream] {
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        stream.set_read_timeout(Some(HANG_GUARD)).unwrap();
     }
 
     if backpressured {

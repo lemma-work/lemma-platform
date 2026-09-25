@@ -6,6 +6,11 @@ use super::*;
 #[cfg(target_os = "macos")]
 pub(crate) const VM_PROCESS_MARKER_SCHEMA_VERSION: u64 = 1;
 
+/// How long a verified, SIGTERM'd VM helper is given before SIGKILL.
+#[cfg(target_os = "macos")]
+pub(crate) const VM_HELPER_STOP_GRACE: Duration =
+    Duration::from_secs(crate::request::GUEST_STOP_WORST_CASE_SECONDS + 15);
+
 #[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -28,10 +33,7 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
     let executable = Command::new("/bin/ps")
         .args(["-p", &pid, "-o", "comm="])
         .output()?;
-    let started = Command::new("/bin/ps")
-        .args(["-p", &pid, "-o", "lstart="])
-        .output()?;
-    if !executable.status.success() || !started.status.success() {
+    if !executable.status.success() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "process not found"));
     }
     let executable = String::from_utf8(executable.stdout)
@@ -40,17 +42,46 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
         .canonicalize()?
         .to_string_lossy()
         .into_owned();
-    let start_identity = String::from_utf8(started.stdout)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
-        .trim()
-        .to_owned();
-    if start_identity.is_empty() {
-        return Err(io::Error::other("process start identity was empty"));
-    }
+    let start_identity = kernel_start_identity(
+        pid.parse::<i32>()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+    )?;
     Ok(ProcessIdentity {
         executable,
         start_identity,
     })
+}
+
+/// When the kernel says `pid` started, to the microsecond.
+///
+/// `ps -o lstart=` printed it in local time at one-second granularity, so a
+/// time-zone or daylight-saving change between recording a process and
+/// checking it made a process this installation started look like a stranger
+/// (and never reclaimed), and a PID recycled within the same second looked
+/// like the original. `proc_pidinfo` answers in UTC seconds and microseconds.
+#[cfg(target_os = "macos")]
+pub(crate) fn kernel_start_identity(pid: i32) -> io::Result<String> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is exactly one proc_bsdinfo, and its size is passed.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if written != size {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "process not found"));
+    }
+    // SAFETY: proc_pidinfo filled the whole structure.
+    let info = unsafe { info.assume_init() };
+    Ok(format!(
+        "{}.{:06}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -65,7 +96,9 @@ pub(crate) fn terminate_verified_process(pid: u32) -> io::Result<()> {
         }
         return Err(error);
     }
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // SIGTERM is a graceful guest power-off, which may take the guest's whole
+    // declared stop budget. Ten seconds killed a stopping database.
+    let deadline = Instant::now() + VM_HELPER_STOP_GRACE;
     while Instant::now() < deadline {
         // SAFETY: signal zero only checks whether this exact PID still exists.
         if unsafe { libc::kill(pid, 0) } != 0 {
@@ -116,7 +149,12 @@ impl ManagedRuntime {
         // Rewritten every boot, so the marker always describes *this* start
         // rather than some earlier one. A stale "fresh" marker is the one thing
         // that would let the guest format a disk holding user data.
-        let disk_is_fresh = create_private_sparse_file(&state.join("data.raw"), DATA_DISK_BYTES)?;
+        host_disk::require_host_free_space(host_disk::host_free_bytes(&state)?)?;
+        let disk_is_fresh = host_disk::prepare_data_disk(
+            &state.join("data.raw"),
+            &self.data_disk_never_mounted,
+            DATA_DISK_BYTES,
+        )?;
         if disk_is_fresh {
             write_private_atomic(&self.data_disk_fresh_marker, b"1\n")?;
         } else {
@@ -138,6 +176,7 @@ impl ManagedRuntime {
         // exactly the one somebody wants to read, and it is one boot of history
         // either way.
         rotate_log(&state.join("console.log"), 0)?;
+        use std::os::unix::process::CommandExt;
         let mut child = Command::new(&self.config.vz_executable)
             .arg("serve")
             .arg("--runtime")
@@ -157,6 +196,11 @@ impl ManagedRuntime {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(private_appending_log(&log_path)?))
+            // Out of locald's group: a signal meant for the daemon's group
+            // (a terminal Ctrl-C, launchd reaping a job) must not reach the
+            // VM helper, whose SIGTERM powers the guest off. Its lifetime is
+            // managed by the process marker instead.
+            .process_group(0)
             .spawn()?;
         if let Err(error) = self.record_macos_vm(&child) {
             let _ = child.kill();

@@ -163,7 +163,20 @@ pub(crate) struct ConfigurationPlan {
     pub(crate) policy_resets: Vec<ConfigWrite>,
     pub(crate) model: ModelChoice,
     pub(crate) selections: Vec<ConfigWrite>,
+    /// Selections this agent does not offer, each as the `config_update`
+    /// that says so. Reported and skipped: the turn is still worth having on
+    /// the agent's own setting, as with a model it no longer offers.
+    pub(crate) skipped: Vec<JsonMap>,
+    /// What was asked for, so the selections can be planned again against
+    /// the options the agent reports once the model is set -- which a model
+    /// switch changes (a reasoning level one model has and another lacks).
+    pub(crate) requested: JsonMap,
+    pub(crate) adapter_key: String,
 }
+
+/// How long one configuration write may take. An agent that never answers
+/// one would otherwise hold the run before its prompt was ever sent.
+pub(crate) const SET_OPTION_DEADLINE: Duration = Duration::from_secs(30);
 
 pub(crate) fn plan_configuration(
     options: &[ConfigOption],
@@ -202,36 +215,86 @@ pub(crate) fn plan_configuration(
                 },
             ),
     };
-    let selections = selections
-        .iter()
-        .map(|(key, selection)| plan_selection(options, key, selection))
-        .collect::<Result<Vec<_>, String>>()?;
+    let (writes, skipped) = plan_selections(options, selections)?;
     Ok(ConfigurationPlan {
         policy_resets,
         model,
-        selections,
+        selections: writes,
+        skipped,
+        requested: selections.clone(),
+        adapter_key: String::new(),
     })
+}
+
+/// Each requested selection as a write, or -- when this agent does not offer
+/// that option or that value -- as the `config_update` that says so.
+///
+/// Only a selection Lemma itself got wrong fails the run: a model sent as a
+/// selection, or a value of a type no option can take. An option or value the
+/// agent does not offer is the agent's version talking, not Lemma's mistake,
+/// and failing the turn over it cost the answer for the sake of a setting.
+/// Policy resets have already put every policy-bearing option somewhere safe,
+/// so a skipped selection leaves the session there.
+pub(crate) fn plan_selections(
+    options: &[ConfigOption],
+    selections: &JsonMap,
+) -> Result<(Vec<ConfigWrite>, Vec<JsonMap>), String> {
+    let mut writes = Vec::new();
+    let mut skipped = Vec::new();
+    for (key, selection) in selections {
+        match plan_selection(options, key, selection)? {
+            Ok(write) => writes.push(write),
+            Err(payload) => skipped.push(payload),
+        }
+    }
+    Ok((writes, skipped))
 }
 
 fn plan_selection(
     options: &[ConfigOption],
     key: &str,
     selection: &Value,
-) -> Result<ConfigWrite, String> {
-    let option = options
+) -> Result<Result<ConfigWrite, JsonMap>, String> {
+    let value = session_config_value(key, selection)?;
+    let Some(option) = options
         .iter()
         .find(|option| option.id == key || option.category == key)
-        .ok_or_else(|| format!("unknown or policy-blocked configuration: {key}"))?;
+    else {
+        return Ok(Err(selection_skipped_payload(
+            key,
+            selection,
+            "this agent does not offer that setting",
+        )));
+    };
     if option.category == "model" {
         return Err("model must be supplied through model_name".to_owned());
     }
     if !selection_is_allowed(option, selection) {
-        return Err(format!("configuration value is not allowed for {key}"));
+        return Ok(Err(selection_skipped_payload(
+            key,
+            selection,
+            "this agent does not offer that value, or it is not one Lemma allows",
+        )));
     }
-    Ok(ConfigWrite {
+    Ok(Ok(ConfigWrite {
         option_id: option.id.clone(),
-        value: session_config_value(key, selection)?,
-    })
+        value,
+    }))
+}
+
+/// The `config_update` for a selection that was not applied.
+fn selection_skipped_payload(key: &str, selection: &Value, why: &str) -> JsonMap {
+    let mut payload = JsonMap::new();
+    payload.insert("status".to_owned(), Value::from("selection_unavailable"));
+    payload.insert("option".to_owned(), Value::from(key));
+    payload.insert("requested_value".to_owned(), selection.clone());
+    payload.insert(
+        "detail".to_owned(),
+        Value::from(format!(
+            "The profile asks for {key} = {selection}, but {why}. This turn used the agent's own setting."
+        )),
+    );
+    payload
 }
 
 /// Send the plan, and tell Lemma what it could not honour.
@@ -252,33 +315,61 @@ pub(crate) async fn configure_session(
             .event(EventType::ConfigUpdate, None, session_lost_payload(lost))
             .map_err(internal)?;
     }
+    let (mut selections, mut skipped) = (plan.selections, plan.skipped);
     match plan.model {
         ModelChoice::Unrequested => {}
-        ModelChoice::Set(write) => set_option(connection, &session.session_id, write).await?,
+        ModelChoice::Set(write) => {
+            let after = set_option(connection, &session.session_id, write).await?;
+            // The options a model offers are that model's: plan again against
+            // what the agent reports now, not what it offered before.
+            let now: Vec<ConfigOption> = after
+                .iter()
+                .filter_map(|option| convert_config_option(&plan.adapter_key, option))
+                .collect();
+            if !now.is_empty() {
+                (selections, skipped) = plan_selections(&now, &plan.requested).map_err(invalid)?;
+            }
+        }
         ModelChoice::Unavailable(payload) => callbacks
             .event(EventType::ConfigUpdate, None, payload)
             .map_err(internal)?,
     }
-    for write in plan.selections {
+    for payload in skipped {
+        callbacks
+            .event(EventType::ConfigUpdate, None, payload)
+            .map_err(internal)?;
+    }
+    for write in selections {
         set_option(connection, &session.session_id, write).await?;
     }
     Ok(())
 }
 
+/// One configuration write, bounded by `SET_OPTION_DEADLINE`. Answers with
+/// the options the agent reports afterwards.
 async fn set_option(
     connection: &ConnectionTo<Agent>,
     session_id: &SessionId,
     write: ConfigWrite,
-) -> Result<(), AcpError> {
-    connection
-        .send_request(SetSessionConfigOptionRequest::new(
-            session_id.clone(),
-            write.option_id,
-            write.value,
+) -> Result<Vec<SessionConfigOption>, AcpError> {
+    let option_id = write.option_id.clone();
+    let response = tokio::time::timeout(
+        SET_OPTION_DEADLINE,
+        connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                session_id.clone(),
+                write.option_id,
+                write.value,
+            ))
+            .block_task(),
+    )
+    .await
+    .map_err(|_| {
+        internal(format!(
+            "the agent did not answer setting {option_id} within {SET_OPTION_DEADLINE:?}"
         ))
-        .block_task()
-        .await?;
-    Ok(())
+    })??;
+    Ok(response.config_options)
 }
 
 /// Send the prompt and wait for the turn to end, asking the agent to stop if

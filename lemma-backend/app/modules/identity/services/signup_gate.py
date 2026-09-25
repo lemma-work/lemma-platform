@@ -32,6 +32,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal, Protocol
+from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.identity.config import IdentitySettings, identity_settings
@@ -46,7 +47,9 @@ SignupMode = Literal["open", "invite_only", "closed"]
 class SignupStore(Protocol):
     async def has_any_user(self) -> bool: ...
 
-    async def has_pending_invitation(self, email: str, *, now: datetime) -> bool: ...
+    async def has_pending_invitation(
+        self, email: str, *, now: datetime, invitation_id: UUID | None = None
+    ) -> bool: ...
 
 
 class Admission(StrEnum):
@@ -67,11 +70,25 @@ class SignupGate:
         self._settings = settings
         self._store: SignupStore = store or SqlSignupStore()
 
-    async def admit(self, email: str) -> Admission:
+    async def admit(
+        self,
+        email: str,
+        *,
+        invitation_id: str | None = None,
+        email_proven: bool = True,
+    ) -> Admission:
         """Admit a new account for `email`, or raise `SignupNotAllowedError`.
 
         `email` must already be normalised: it is compared with invitation
         addresses as given.
+
+        `email_proven` is whether the address will have been shown to belong
+        to the person before the account can be used: a provider vouched for
+        it, a code was sent to it, or email verification is required. When it
+        is not -- a Desktop installation shared with verification off -- an
+        invitation "for this address" proves nothing, because anybody can type
+        the address. Then the invitation itself must be presented: its id,
+        from the link that was sent, which only the invitee was given.
 
         The mode is not consulted at all while it would admit anyone (`open`),
         so a hosted deployment pays no query per signup. Otherwise the
@@ -85,9 +102,14 @@ class SignupGate:
             logger.info("identity.signup.admitted", admission=Admission.FIRST_ACCOUNT)
             return Admission.FIRST_ACCOUNT
         now = datetime.now(timezone.utc)
-        if mode == "invite_only" and await self._store.has_pending_invitation(
-            email, now=now
-        ):
+        presented = _invitation_uuid(invitation_id)
+        invited = mode == "invite_only" and (
+            (email_proven or presented is not None)
+            and await self._store.has_pending_invitation(
+                email, now=now, invitation_id=None if email_proven else presented
+            )
+        )
+        if invited:
             logger.info("identity.signup.admitted", admission=Admission.INVITED)
             return Admission.INVITED
         code = (
@@ -97,6 +119,13 @@ class SignupGate:
         )
         logger.info("identity.signup.refused", code=code, signup_mode=mode)
         raise SignupNotAllowedError(code)
+
+
+def _invitation_uuid(raw: str | None) -> UUID | None:
+    try:
+        return UUID(raw.strip()) if raw else None
+    except ValueError:
+        return None
 
 
 def get_signup_gate() -> SignupGate:

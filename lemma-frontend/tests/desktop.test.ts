@@ -1,6 +1,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { crossSiteFramesCarryCookies, desktopBridgeAvailable, desktopInfo, invoke, isDesktop } from "../src/desktop/bridge.ts";
+import { appFrameMode, desktopBridgeAvailable, desktopInfo, invoke, isDesktop } from "../src/desktop/bridge.ts";
+import { resolveAppFrame } from "../src/desktop/pod-apps.ts";
 import { copyText } from "../src/desktop/clipboard.ts";
 import { openExternal, openExternalWhenReady } from "../src/desktop/open-external.ts";
 import type { AgentHostStatus, AgentHostTarget } from "../src/desktop/agent-host.ts";
@@ -11,6 +12,8 @@ import {
     connectThisComputer,
     resetAutoConnectForTests,
     retryAutoConnect,
+    tellSession,
+    wasRemoved,
     type ConnectDeps,
 } from "../src/desktop/auto-connect.ts";
 import { capitalised, describeThisComputer, selectWorkspaceTarget, thisComputer } from "../src/desktop/this-computer.ts";
@@ -105,23 +108,79 @@ test("the local bridge needs both a local deployment and the shell", () => {
     assert.equal(desktopBridgeAvailable(), false);
 });
 
+test("the app's own window on a shared address has no shell to call", async () => {
+    /* Sharing moves the window to the LAN or tunnel origin, which the shell's
+       capability does not grant; calling from there only ever failed. */
+    for (const hostname of ["192.168.1.20", "example.ngrok.app", "lemma.example.com"]) {
+        const state = page({ shell: () => null, deployment: "local", hostname, info: { mode: "local" } });
+        assert.equal(isDesktop(), false, hostname);
+        assert.equal(desktopBridgeAvailable(), false, hostname);
+        await assert.rejects(invoke("agent_host_status"), /desktop app/);
+        assert.equal(state.calls.length, 0);
+    }
+    for (const hostname of ["app.lemma.localhost", "localhost"]) {
+        page({ shell: () => null, deployment: "local", hostname });
+        assert.equal(desktopBridgeAvailable(), true, hostname);
+    }
+});
+
 test("invoke passes the command and its arguments through", async () => {
     const state = page({ shell: () => ({ ok: true }) });
     assert.deepEqual(await invoke("agent_host_pair", { url: "u", pairingCode: "c", name: "n" }), { ok: true });
     assert.deepEqual(state.calls, [{ command: "agent_host_pair", args: { url: "u", pairingCode: "c", name: "n" } }]);
 });
 
-test("frames lose their session only on macOS desktop, on the local hostnames", () => {
+test("only the macOS app on a local install frames apps through an alias", () => {
     page();
-    assert.equal(crossSiteFramesCarryCookies(), true, "a browser keeps its iframes");
-    page({ shell: () => null, info: { mode: "local", platform: "windows" } });
-    assert.equal(crossSiteFramesCarryCookies(), true, "WebView2 treats *.localhost as same-site");
-    page({ shell: () => null, info: { mode: "local", platform: "macos" } });
-    assert.equal(crossSiteFramesCarryCookies(), false);
-    page({ shell: () => null, info: { mode: "local" } });
-    assert.equal(crossSiteFramesCarryCookies(), false, "a shell too old to say is assumed restrictive");
+    assert.equal(appFrameMode(), "direct", "a browser frames the app's own URL");
+    page({ shell: () => null, deployment: "local", info: { mode: "local", platform: "windows" } });
+    assert.equal(appFrameMode(), "direct", "WebView2 treats *.lemma.localhost as one site");
+    page({ shell: () => null, deployment: "local", info: { mode: "local", platform: "macos" } });
+    assert.equal(appFrameMode(), "alias");
+    page({ shell: () => null, deployment: "local", info: { mode: "local" } });
+    assert.equal(appFrameMode(), "window", "a shell too old to say cannot alias either");
+    page({ deployment: "local", info: { mode: "local", platform: "macos" } });
+    assert.equal(appFrameMode(), "window", "no shell to ask: a window, not a signed-out frame");
     page({ shell: () => null, info: { mode: "hosted", platform: "macos" }, hostname: "lemma.work" });
-    assert.equal(crossSiteFramesCarryCookies(), true, "a real registrable domain fixes itself");
+    assert.equal(appFrameMode(), "direct", "a hosted workspace and its apps are one site");
+});
+
+test("the frame is the alias the shell hands back, or a window when it will not", async () => {
+    const app = "http://orders.apps.lemma.localhost:52414/reports";
+    const asked: string[] = [];
+    const shell = (answer: unknown) => async (url: string) => { asked.push(url); return answer; };
+
+    assert.deepEqual(await resolveAppFrame(app, "direct", shell(null)), { kind: "frame", src: app });
+    assert.deepEqual(await resolveAppFrame(app, "window", shell(null)), { kind: "window" });
+    assert.deepEqual(asked, [], "only the alias mode asks the shell");
+
+    const alias = "http://app.lemma.localhost:61001/reports";
+    assert.deepEqual(
+        await resolveAppFrame(app, "alias", shell({ url: alias, aliased: true })),
+        { kind: "frame", src: alias },
+    );
+    assert.deepEqual(asked, [app], "the shell is asked about the app's own URL");
+
+    /* An older shell refuses the command; a broken answer is not a URL. */
+    const refusing = async () => { throw new Error("Command app_frame_url not allowed by ACL"); };
+    assert.deepEqual(await resolveAppFrame(app, "alias", refusing), { kind: "window" });
+    assert.deepEqual(await resolveAppFrame(app, "alias", shell({ url: "javascript:alert(1)" })), { kind: "window" });
+    assert.deepEqual(await resolveAppFrame(app, "alias", shell(null)), { kind: "window" });
+});
+
+test("asking for a frame goes through the shell's app_frame_url", async () => {
+    const state = page({
+        shell: () => ({ url: "http://app.lemma.localhost:61001/", aliased: true }),
+        deployment: "local",
+        info: { mode: "local", platform: "macos" },
+    });
+    const frame = await resolveAppFrame(
+        "http://orders.apps.lemma.localhost:52414/",
+        appFrameMode(),
+        (url) => invoke("app_frame_url", { url }),
+    );
+    assert.deepEqual(frame, { kind: "frame", src: "http://app.lemma.localhost:61001/" });
+    assert.deepEqual(state.calls, [{ command: "app_frame_url", args: { url: "http://orders.apps.lemma.localhost:52414/" } }]);
 });
 
 /* ── clipboard ─────────────────────────────────────────────────────── */
@@ -298,7 +357,9 @@ function deps(log: string[], fail?: string): ConnectDeps {
         },
         host: {
             start: async () => { log.push("start"); },
-            pair: async (url, code) => { log.push(`pair:${url}:${code}`); },
+            pair: async (url, code, _name, reenable) => {
+                log.push(`pair:${url}:${code}` + (reenable ? ":reenable" : ""));
+            },
             refresh: async () => { log.push("refresh"); },
         },
     };
@@ -347,6 +408,57 @@ test("a failure is recorded, not retried, until someone asks", async () => {
     assert.equal(connectFailure(), null);
     assert.equal(await connectThisComputer(unpaired, WORKSPACE, deps(log)), "connected");
     assert.equal(log.filter((entry) => entry.startsWith("mint")).length, 2);
+});
+
+test("a pairing that is off, or somebody else's, is not this workspace's", () => {
+    const mine = target({ host_id: "mine", user_id: "me" });
+    const theirs = target({ host_id: "theirs", user_id: "them" });
+    assert.equal(selectWorkspaceTarget([theirs, mine], WORKSPACE, "me")?.host_id, "mine");
+    assert.equal(selectWorkspaceTarget([theirs], WORKSPACE, "me"), null, "another person's pairing");
+    assert.equal(selectWorkspaceTarget([target({ enabled: false })], WORKSPACE), null, "a pairing the host turned off");
+    /* An older shell says whose it is nowhere: taken as the signed-in person's. */
+    assert.equal(selectWorkspaceTarget([target({ host_id: "old" })], WORKSPACE, "me")?.host_id, "old");
+    assert.equal(
+        describeThisComputer(status({ targets: [theirs] }), null, WORKSPACE, null, "this Mac", "me").label,
+        "Connecting",
+    );
+});
+
+test("a second person signed in on this Mac gets a pairing of their own", async () => {
+    /* Named for the platform the shell reports, not the one running the test. */
+    page({ shell: () => null, info: { mode: "hosted", platform: "macos" } });
+    const log: string[] = [];
+    const theirs = status({ targets: [target({ user_id: "them" })] });
+    assert.equal(await connectThisComputer(theirs, WORKSPACE, { ...deps(log), userId: "me" }), "connected");
+    assert.deepEqual(log, ["mint:My Mac", `pair:${WORKSPACE}:code-1`, "refresh"]);
+});
+
+test("only a person's retry asks to turn a removed computer back on", async () => {
+    const log: string[] = [];
+    const unpaired = status({ targets: [] });
+    const removed = "This computer was removed from this account. Connect it again from Lemma to turn it back on.";
+    const refusing: ConnectDeps = {
+        ...deps(log),
+        host: { ...deps(log).host, pair: async () => { throw new Error(removed); } },
+    };
+    assert.equal(await connectThisComputer(unpaired, WORKSPACE, refusing), "failed");
+    assert.equal(wasRemoved(connectFailure()), true);
+    retryAutoConnect();
+    assert.equal(await connectThisComputer(unpaired, WORKSPACE, deps(log)), "connected");
+    assert.ok(log.includes(`pair:${WORKSPACE}:code-1:reenable`), log.join(" "));
+    /* Spent by that attempt: the next automatic one does not re-enable. */
+    resetAutoConnectForTests();
+    await connectThisComputer(unpaired, WORKSPACE, deps(log));
+    assert.equal(log.filter((entry) => entry.endsWith(":reenable")).length, 1);
+});
+
+test("who is signed in is told once per page, and an old shell's refusal is harmless", async () => {
+    const told: (string | null)[] = [];
+    const host = { session: async (_url: string, user: string | null) => { told.push(user); throw new Error("unknown command"); } };
+    await tellSession(WORKSPACE, "me", host);
+    await tellSession(WORKSPACE, "me", host);
+    await tellSession(WORKSPACE, null, host);
+    assert.deepEqual(told, ["me", null]);
 });
 
 /* ── conversation folders ──────────────────────────────────────────── */

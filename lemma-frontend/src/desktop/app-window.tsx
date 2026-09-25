@@ -4,12 +4,13 @@ import "@/styles/desktop.css";
 import { AppsIcon, ExternalIcon } from "@/ui/icons";
 import { openPodApp } from "./pod-apps";
 
-/** Stands where an app's frame would, when a frame would load it signed out.
+/** Stands where an app's frame would, when no frame could be signed in.
  *
- *  Apps run on their own address, and on macOS the desktop webview will not
- *  give an embedded one the session (`crossSiteFramesCarryCookies` has the
- *  measurements). Its own window is top-level and signs in normally, so this
- *  offers that — from a click, since opening a window is the click's to do. */
+ *  On macOS an app framed on its own address gets no session, and the
+ *  workspace frames an alias instead (`appFrameMode` has why). Where that
+ *  alias cannot be had -- an older app shell -- the app's own window is
+ *  top-level and signs in normally, so this offers that, from a click, since
+ *  opening a window is the click's to do. */
 export function AppWindowPanel({ url, hidden }: { url: string; hidden?: boolean }) {
     return (
         <div className="app-window" hidden={hidden}>

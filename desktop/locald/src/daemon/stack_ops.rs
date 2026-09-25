@@ -80,12 +80,22 @@ impl Daemon {
                 let _ = terminate_process_tree(&mut supervisor.child);
             }
             if let Some(message) = failure {
-                daemon.shutdown_running.store(false, Ordering::Release);
+                // Exit anyway. By here admission is closed for good, the
+                // supervisor is gone and pending runtime requests are
+                // cancelled, so a daemon that stayed up refused every later
+                // start with "Lemma is stopping" until something killed it.
+                // Whatever did not stop is reclaimed by identity on the next
+                // start: the VM through its process marker, host services
+                // through their ledger.
+                let _ = daemon.write_daemon_log(&format!(
+                    "shutdown finished with an error; exiting anyway: {message}"
+                ));
                 daemon.send_direct(
                     &client,
                     error_event("shutdown-failed", message, id.as_ref()),
                 );
-                return;
+                thread::sleep(std::time::Duration::from_millis(100));
+                std::process::exit(1);
             }
             daemon.broadcast(json!({
                 "v": PROTOCOL_VERSION, "event": "state", "status": "stopped",

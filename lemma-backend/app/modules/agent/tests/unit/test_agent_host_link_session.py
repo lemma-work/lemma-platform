@@ -157,12 +157,18 @@ async def test_welcome_names_the_host_and_the_heartbeat():
     link = Link()
     welcome = await link.open()
 
+    server_time = datetime.fromisoformat(welcome["body"].pop("server_time"))
     assert welcome["body"] == {
         "host_id": str(link.store.host_id),
         "user_id": str(link.store.user_id),
         "protocol_version": 3,
         "heartbeat_ms": 20_000,
+        # The host resends a named tools/call after a drop only when told so.
+        "idempotent_tool_calls": True,
     }
+    # The host corrects its command-expiry checks by this; it is UTC and now.
+    assert server_time.utcoffset() == timedelta(0)
+    assert abs(datetime.now(timezone.utc) - server_time) < timedelta(seconds=5)
     assert len(link.registry) == 1
     await link.close()
     assert len(link.registry) == 0

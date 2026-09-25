@@ -10,6 +10,7 @@ here stores which host a sandbox is on or which folder it opened.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -23,6 +24,7 @@ from app.modules.workspace.domain.host_execution import (
     conversation_of_host_sandbox_slug,
     host_sandbox_id,
     host_sandbox_slug,
+    pinned_host_for,
 )
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.infrastructure.sandbox_repository import (
@@ -83,11 +85,23 @@ class SqlHostTargets:
     conversation's runs chose. See ``agent.contracts.host_execution``.
     """
 
-    def __init__(self, uow_factory=None) -> None:
+    def __init__(
+        self,
+        uow_factory=None,
+        *,
+        conversation_host: Callable[..., Awaitable[tuple[UUID | None, str | None]]]
+        | None = None,
+    ) -> None:
         self._uow_factory = uow_factory or SessionUnitOfWorkFactory(async_session_maker)
+        #: ``host_for_host_sandbox``; injectable so a test states the answer.
+        self._conversation_host = conversation_host
 
     async def target(self, sandbox_id: UUID) -> HostTarget | None:
-        from app.modules.agent.contracts.host_execution import host_for_host_sandbox
+        host_for_host_sandbox = self._conversation_host
+        if host_for_host_sandbox is None:
+            from app.modules.agent.contracts.host_execution import (
+                host_for_host_sandbox,
+            )
 
         async with self._uow_factory() as uow:
             sandbox = await SandboxRepository(uow).get(sandbox_id)
@@ -96,6 +110,13 @@ class SqlHostTargets:
         )
         if sandbox is None or conversation_id is None:
             return None
+        pin = pinned_host_for(sandbox_id)
+        if pin is not None:
+            # The calling run's own record: a run never follows the
+            # conversation to a Mac another run chose.
+            return HostTarget(
+                host_id=pin.host_id, conversation_id=conversation_id, root=pin.root
+            )
         host_id, root = await host_for_host_sandbox(
             conversation_id=conversation_id, user_id=sandbox.owner_id
         )

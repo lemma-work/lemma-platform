@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
+from fakeredis import aioredis as fake_aioredis
 from mcp.types import CallToolResult, TextContent, Tool
 
 from app.modules.agent.domain.agent_host import (
@@ -44,6 +45,7 @@ from app.modules.agent.services.agent_host_link_registry import (
     AgentHostLinkRegistry,
 )
 from app.modules.agent.services.agent_host_link_session import AgentHostLinkSession
+from app.modules.agent.services.agent_host_link_tool_calls import ToolCallLedger
 from app.modules.agent.services.agent_host_link_store import (
     ControlUpdates,
     LinkedHost,
@@ -314,9 +316,22 @@ class FakeConversationMcp:
         self.release_call = asyncio.Event()
         self.release_call.set()
         self.decided_checks = 0
+        #: Runs of some other conversation: naming one is refused.
+        self.foreign_runs: set[UUID] = set()
+        #: Runs that have ended: their parked waits are answered TERMINAL_RUN.
+        self.ended_runs: set[UUID] = set()
+        #: Raised by the next ``call_tool`` after it is counted, once.
+        self.call_error: BaseException | None = None
 
-    async def authorize(self, *, conversation_id: UUID, token: str) -> bool:
+    async def authorize(
+        self, *, conversation_id: UUID, token: str, agent_run_id: UUID | None = None
+    ) -> bool:
+        if agent_run_id is not None and agent_run_id in self.foreign_runs:
+            return False
         return conversation_id == self.conversation_id and token == TOKEN
+
+    async def run_has_ended(self, *, agent_run_id: UUID) -> bool:
+        return agent_run_id in self.ended_runs
 
     async def list_tools(
         self, *, conversation_id: UUID, agent_run_id: UUID | None = None
@@ -339,6 +354,9 @@ class FakeConversationMcp:
     ) -> CallToolResult:
         self.calls.append((name, arguments or {}))
         await self.release_call.wait()
+        if self.call_error is not None:
+            error, self.call_error = self.call_error, None
+            raise error
         return CallToolResult(
             content=[TextContent(type="text", text="ok")],
             structured_content={"success": True},
@@ -367,18 +385,29 @@ class Link:
         resend_after_seconds: float = 30.0,
         recheck_seconds: float = 60.0,
         max_in_flight: int | None = None,
+        max_waits: int | None = None,
+        ledger: ToolCallLedger | None = None,
+        mcp_service: FakeConversationMcp | None = None,
     ) -> None:
         self.store = store or FakeStore()
         self.channels = channels or FakeChannels()
         self.registry = registry if registry is not None else AgentHostLinkRegistry()
         self.socket = socket or FakeSocket()
         self.conversation_id = conversation_id or uuid7()
-        self.mcp_service = FakeConversationMcp(self.conversation_id)
+        self.mcp_service = mcp_service or FakeConversationMcp(self.conversation_id)
+        # Real Redis semantics, in memory: two links given the same ledger
+        # share one record the way two replicas share Redis.
+        self.ledger = ledger or ToolCallLedger(
+            fake_aioredis.FakeRedis(decode_responses=True)
+        )
         self.session = AgentHostLinkSession(
             self.socket,
             store=self.store,
             mcp=AgentHostLinkMcp(
-                self.mcp_service, self.channels, recheck_seconds=recheck_seconds
+                self.mcp_service,
+                self.channels,
+                recheck_seconds=recheck_seconds,
+                ledger=self.ledger,
             ),
             channels=self.channels,
             registry=self.registry,
@@ -386,6 +415,7 @@ class Link:
             push_floor_seconds=push_floor_seconds,
             resend_after_seconds=resend_after_seconds,
             max_in_flight=max_in_flight,
+            max_waits=max_waits,
         )
         self.task: asyncio.Task | None = None
         # `SET NX`, in memory: shared through the channels object so two links

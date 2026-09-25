@@ -2,16 +2,14 @@
 
 use super::*;
 
-/// A configured domain moves every host together, and drops the workaround.
+/// The workspace, the apps and the cookie all sit under `lemma.localhost`.
 ///
-/// The point of moving off `*.localhost` is that a browser can then derive
-/// a registrable domain covering both the workspace and the app hosts, so a
-/// framed pod app is same-site and can hold a session. That only holds if
-/// the whole arrangement moves at once: a cookie still scoped to the old
-/// domain, or an app host under a different one, and the frame is back to
-/// being third-party with nothing to show for the change.
+/// And the `/_lemma` door is on: WebKit derives no site wider than the host
+/// from `*.localhost`, so an app calling the API host directly is cross-site
+/// and carries no session. The macOS alias depends on the door too -- a framed
+/// alias calls its own origin, and only a relative `apiUrl` makes that true.
 #[test]
-fn a_configured_domain_moves_the_workspace_the_apps_and_the_cookie_together() {
+fn the_workspace_the_apps_and_the_cookie_share_lemma_localhost() {
     let root = tempdir().unwrap();
     let pack = root.path().join("pack");
     fixture(&pack);
@@ -28,66 +26,7 @@ fn a_configured_domain_moves_the_workspace_the_apps_and_the_cookie_together() {
         load_or_allocate(&paths).unwrap(),
         None,
         &mut Vec::new(),
-        &LocalDomain::parse(Some("sslip")),
-    )
-    .unwrap();
-    let manifest: Value = serde_json::to_value(&manifest).unwrap();
-    let env = &manifest["services"][0]["env"];
-
-    let cookie = env["SESSION_COOKIE_DOMAIN"].as_str().unwrap();
-    let app_base = env["APP_BASE_DOMAIN"].as_str().unwrap();
-    let app_host = app_base.split(':').next().unwrap();
-    let api_host = env["API_URL"]
-        .as_str()
-        .unwrap()
-        .trim_start_matches("http://")
-        .split(':')
-        .next()
-        .unwrap()
-        .to_owned();
-
-    assert_eq!(cookie, ".127.0.0.1.sslip.io");
-    assert_eq!(app_host, "apps.127.0.0.1.sslip.io");
-    assert_eq!(api_host, "app.127.0.0.1.sslip.io");
-    // Both hosts inside the cookie's scope, or the app is signed out.
-    let scope = cookie.trim_start_matches('.');
-    assert!(app_host.ends_with(scope), "{app_host} is outside {cookie}");
-    assert!(api_host.ends_with(scope), "{api_host} is outside {cookie}");
-
-    // ...and the `*.localhost` workaround goes away with it. On a real
-    // registrable domain the app host and the API host are already
-    // same-site, so aliasing the whole API under `/_lemma` on the origin
-    // that renders user-authored HTML -- and widening the refresh cookie to
-    // make that work -- buys nothing.
-    assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "false");
-}
-
-/// The arrangement a laptop with no network gets, asserted on its own.
-///
-/// `from_env` falls back here when the public wildcard does not resolve, so
-/// this is not an exotic path -- it is every offline launch. The sibling
-/// test above pins the same-site arrangement; without this one the fallback
-/// would only ever be rendered by tests that happen to run offline, which
-/// is the same as not testing it.
-#[test]
-fn the_offline_fallback_renders_the_workaround_that_makes_it_work() {
-    let root = tempdir().unwrap();
-    let pack = root.path().join("pack");
-    fixture(&pack);
-    let paths = LocalPaths::new(root.path().join("locald"));
-    paths.ensure().unwrap();
-    let manifest = build(
-        &paths,
-        &pack,
-        &ManagedManifestMaterial {
-            postgres_password: "a".repeat(64),
-            redis_password: "b".repeat(64),
-            bridge_executable: PathBuf::from("/signed/lemma-runtime"),
-        },
-        load_or_allocate(&paths).unwrap(),
-        None,
-        &mut Vec::new(),
-        &LocalDomain::parse(Some(crate::local_domain::LOCALHOST_BASE)),
+        &LocalDomain::current(),
     )
     .unwrap();
     let manifest: Value = serde_json::to_value(&manifest).unwrap();
@@ -103,11 +42,14 @@ fn the_offline_fallback_renders_the_workaround_that_makes_it_work() {
             .unwrap(),
         "apps.lemma.localhost"
     );
-    // Here the door is the only thing that works: a browser derives no
-    // registrable domain from `*.localhost`, so an app calling the API host
-    // directly is cross-site and carries no session. Turning this off
-    // without also moving the base domain is the bug that shipped twice.
+    assert!(env["API_URL"]
+        .as_str()
+        .unwrap()
+        .starts_with("http://app.lemma.localhost:"));
     assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "true");
+    // No public-DNS name survives anywhere in what the backend is told.
+    let rendered = serde_json::to_string(env).unwrap();
+    assert!(!rendered.contains("sslip"), "{rendered}");
 }
 
 /// Changing the cookie domain has to say what it replaced.
@@ -222,28 +164,8 @@ fn the_session_cookie_reaches_the_hosts_apps_are_served_from() {
         "the API at {api_host} is outside the cookie scope {cookie_domain}"
     );
 
-    // The app-origin door exactly where it is needed, and nowhere else.
-    //
-    // On `*.localhost` a browser derives no registrable domain, so an app's
-    // call to the API is cross-site and carries no cookie whatever the
-    // Domain says -- measured. Both halves are required there: widening the
-    // cookie alone ships the bug plus a wider cookie.
-    //
-    // On a real registrable domain the two hosts are same-site already, and
-    // the door would only alias the whole API under `/_lemma` on the origin
-    // that renders user-authored HTML, widening the refresh cookie to do it.
-    let domain = LocalDomain::from_env();
-    assert_eq!(
-        env["APP_API_VIA_APP_ORIGIN"],
-        if domain.frames_carry_cookies() {
-            "false"
-        } else {
-            "true"
-        },
-        "the app-origin door has to follow whether {} is same-site with its \
-         app hosts",
-        domain.base()
-    );
+    // Always on: see `the_workspace_the_apps_and_the_cookie_share_lemma_localhost`.
+    assert_eq!(env["APP_API_VIA_APP_ORIGIN"], "true");
 }
 
 /// Every URL a sandbox is given resolves inside a sandbox.
@@ -296,7 +218,7 @@ fn no_sandbox_is_given_an_address_only_the_mac_can_resolve() {
          api_url and every call dies in DNS: {sandbox_facing:?}",
     );
 
-    let base = LocalDomain::from_env().base().to_owned();
+    let base = LocalDomain::current().base().to_owned();
     for name in sandbox_facing {
         let value = env[name].as_str().unwrap_or_default();
         assert!(
@@ -360,7 +282,7 @@ fn the_backend_url_contract_matches_what_the_host_pack_emits() {
     let recorded = contract["backend_env"]
         .as_object()
         .expect("the contract records the backend's URL environment");
-    let base = LocalDomain::from_env().base().to_owned();
+    let base = LocalDomain::current().base().to_owned();
     let emitted: serde_json::Map<String, Value> = env
         .iter()
         .filter(|(name, _)| recorded.contains_key(name.as_str()) || is_backend_url_variable(name))

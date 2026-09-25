@@ -25,6 +25,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import status
+from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
@@ -42,7 +43,14 @@ from app.modules.agent.infrastructure.agent_host.session_memory import (
     resume_session_id,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
+from app.modules.agent.infrastructure.agent_host.recovery import HOST_REVOKED_DETAIL
+from app.modules.agent.infrastructure.agent_host.repository_common import (
+    INSTALLATION_REVOKED_MESSAGE,
+)
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentHostCommandModel,
+    AgentHostRunLeaseModel,
+)
 from app.modules.agent.services import agent_host_link_session, agent_host_link_store
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     HostLink,
@@ -55,6 +63,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     publish_harnesses,
     stale_after,
 )
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
@@ -117,6 +126,88 @@ async def test_re_pairing_the_same_machine_updates_it_instead_of_duplicating(
         assert await stale.closed() == 4401
     finally:
         await stale.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_removed_computer_stays_removed_until_the_person_turns_it_back_on(
+    authenticated_client, async_client
+):
+    """Revoking has to stick: the host's auto-connect pairs again within
+    seconds, and without the tombstone that silently undid every removal."""
+    machine = hello()
+    first = await pair(
+        authenticated_client, async_client, display_name="e2e removed", machine=machine
+    )
+    revoked = await authenticated_client.delete(
+        f"/me/runtime/agent-hosts/{first['host_id']}"
+    )
+    assert revoked.status_code == status.HTTP_200_OK, revoked.text
+
+    minted = await authenticated_client.post(
+        "/me/runtime/agent-host-pairings",
+        json={"display_name": "e2e removed", "organization_id": None},
+    )
+    body = {
+        "pairing_code": minted.json()["pairing_code"],
+        "display_name": "e2e removed",
+        "hello": machine,
+    }
+    automatic = await HostLink(app_of(async_client), secret=None).open()
+    try:
+        refused = await automatic.request("pair", body)
+        assert refused["type"] == "error", refused
+        assert refused["body"]["code"] == "UNAUTHORIZED"
+        assert refused["body"]["message"] == INSTALLATION_REVOKED_MESSAGE
+        assert "was removed from this account" in refused["body"]["message"]
+        assert await automatic.closed() == 4403
+        assert automatic.close_reason == "installation_revoked"
+    finally:
+        await automatic.aclose()
+
+    # The refused attempt left the code unused, so the person's own
+    # "connect again" can still spend it.
+    chosen = await HostLink(app_of(async_client), secret=None).open()
+    try:
+        paired = await chosen.request("pair", {**body, "reenable": True})
+        assert paired["type"] == "paired", paired
+    finally:
+        await chosen.aclose()
+    assert paired["body"]["host_id"] == first["host_id"]
+
+
+@pytest.mark.asyncio
+async def test_revoking_a_host_ends_its_runs_and_cancels_its_commands(
+    db_session, scenario
+):
+    """A removed computer can never report back, so nothing may wait on it."""
+    await scenario.create_org_with_pod(name_prefix="Revoked")
+    machine = await paired_machine(scenario)
+    _, run_id = await conversation_with_a_leased_run(
+        db_session,
+        scenario,
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+    )
+    cancel = await AgentHostDispatchRepository(
+        SqlAlchemyUnitOfWork(db_session)
+    ).enqueue_cancel(run_id=run_id)
+    assert cancel is not None
+    await db_session.commit()
+
+    revoked = await scenario.owner_client.delete(
+        f"/me/runtime/agent-hosts/{machine['host_id']}"
+    )
+    assert revoked.status_code == status.HTTP_200_OK, revoked.text
+
+    lease = await db_session.get(AgentHostRunLeaseModel, run_id)
+    await db_session.refresh(lease)
+    assert lease.state == AgentHostRunState.FAILED.value
+    assert lease.error_code == "HOST_REVOKED"
+    assert lease.error_detail == HOST_REVOKED_DETAIL
+    assert lease.terminal_at is not None
+    command = await db_session.get(AgentHostCommandModel, cancel.id)
+    await db_session.refresh(command)
+    assert command.state == AgentHostCommandState.CANCELLED.value
 
 
 @pytest.mark.asyncio
@@ -632,22 +723,104 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
     )
     try:
         answer = await link.request("control", {"capacity": _capacity(0)})
-        # A command goes out once, by whichever path reaches it first: the
-        # pusher wakes on the link's own announcement after ``hello`` and may
-        # push it before ``control`` is answered. Its frame is then already
-        # queued ahead of that answer.
-        pushed = [
-            frame for frame in link.pushed_so_far() if frame["type"] == "commands"
-        ]
+        # A command goes out once, by whichever path reaches it first, and
+        # both run at once: the pusher wakes on the link's own announcement
+        # after ``hello``. Both read the queue under SKIP LOCKED, so while the
+        # pusher's transaction holds the cancel, ``control`` skips it and is
+        # answered empty -- and the push lands after that answer. So watch
+        # every delivery until the cancel arrives, rather than looking once.
+        delivered = list(answer["body"]["commands"])
+
+        async def delivered_so_far() -> list[dict]:
+            delivered.extend(
+                command
+                for frame in link.pushed_so_far()
+                if frame["type"] == "commands"
+                for command in frame["body"]["commands"]
+            )
+            return delivered
+
+        # Within the 5-second push floor even if every poke were lost; a
+        # cancel buried behind the starts would never arrive at all.
+        await eventually(
+            label="the cancel reaching a saturated host",
+            probe=delivered_so_far,
+            done=lambda commands: any(
+                command["kind"] == AgentHostCommandKind.CANCEL_RUN.value
+                for command in commands
+            ),
+            timeout_seconds=15,
+        )
+
+        # Seeing the cancel says nothing about a pass still in flight, which
+        # could hand out a start after this point and after ``aclose`` -- where
+        # no frame would be looked at. So settle the queue before judging it.
+        # Acknowledge what arrived, as a host does, so nothing is resent...
+        cancel_ids = sorted(
+            {
+                command["command_id"]
+                for command in delivered
+                if command["kind"] == AgentHostCommandKind.CANCEL_RUN.value
+            }
+        )
+        settled = await link.request(
+            "control",
+            {"capacity": _capacity(0), "acknowledged_command_ids": cancel_ids},
+        )
+        delivered.extend(settled["body"]["commands"])
+        # ...then take every one of this host's rows under FOR UPDATE. Each
+        # handout reads the queue under FOR UPDATE SKIP LOCKED and marks what it
+        # hands out in the same transaction, so this read cannot finish until
+        # any pass that locked a row has committed what it gave away -- the
+        # rows, not the frames, are the record of what left.
+        rows = (
+            (
+                await db_session.execute(
+                    select(AgentHostCommandModel)
+                    .where(AgentHostCommandModel.host_id == machine["host_id"])
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        states = {(row.kind, row.state) for row in rows}
+        await db_session.rollback()
+        # A pass that committed before that read has its frame in flight at
+        # most; one more round trip on the socket lets it land.
+        final = await link.request("control", {"capacity": _capacity(0)})
+        delivered.extend(final["body"]["commands"])
+        await delivered_so_far()
     finally:
         await link.aclose()
 
-    delivered = [answer["body"]["commands"]] + [
-        frame["body"]["commands"] for frame in pushed
-    ]
-    assert AgentHostCommandKind.CANCEL_RUN.value in {
-        command["kind"] for commands in delivered for command in commands
+    # The host has no slot, so the cancel is all it may be handed -- whichever
+    # path carried it -- and none of the starts in front of it ever left.
+    assert len(cancel_ids) == 1, delivered
+    assert {command["kind"] for command in delivered} == {
+        AgentHostCommandKind.CANCEL_RUN.value
+    }, delivered
+    assert {command["command_id"] for command in delivered} == set(cancel_ids)
+    # Every start is still waiting: none was handed out, by either path. The
+    # cancel left, which is all this proves about it -- whether the host's
+    # acknowledgement has been recorded yet is the acknowledgement path's
+    # business, not this test's.
+    starts = {
+        state for kind, state in states if kind == AgentHostCommandKind.START_RUN.value
     }
+    cancels = {
+        state for kind, state in states if kind == AgentHostCommandKind.CANCEL_RUN.value
+    }
+    assert starts == {AgentHostCommandState.QUEUED.value}, states
+    assert (
+        cancels
+        <= {
+            AgentHostCommandState.DELIVERED.value,
+            AgentHostCommandState.ACKNOWLEDGED.value,
+        }
+        and cancels
+    ), states
 
 
 @pytest.mark.asyncio

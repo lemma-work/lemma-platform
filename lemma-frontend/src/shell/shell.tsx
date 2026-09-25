@@ -55,8 +55,7 @@ import { CallBar } from "@/call/call-bar";
 import { isLandingPreview, previewTabForStep } from "@/marketing/preview-mode";
 import { DesktopNotices } from "@/desktop/desktop-notices";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
-import { useAppsOpenInWindow } from "@/desktop/pod-apps";
-import { AppWindowPanel } from "@/desktop/app-window";
+import { AppFrameView } from "@/desktop/app-frame";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -153,7 +152,6 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         setSettingsRequest((count) => count + 1);
         setMobileOpen(false);
     }, []));
-    const appsOpenInWindow = useAppsOpenInWindow();
     /* Hiring takes the whole pane, like organization settings — a candidate
        gets the same profile page a hired teammate gets, and that does not
        fit in a dialog. */
@@ -1066,29 +1064,28 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                 onNew={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
                                 onHistory={openHistory}
                                 onComputer={openComputer}
-                                onReload={() => { const frame = appFrames.current[activeKey]; if (frame && activeTab?.kind === "app") frame.src = activeTab.url; }} />
+                                onReload={() => {
+                                    /* The src it was given, which on macOS is
+                                       the app's alias rather than its URL. */
+                                    const frame = appFrames.current[activeKey];
+                                    if (frame && activeTab?.kind === "app") frame.src = frame.getAttribute("src") ?? activeTab.url;
+                                }} />
                         </div>
 
                         <div className="body">
-                            {Object.entries(openedApps).map(([key, url]) => appsOpenInWindow ? (
-                                /* Where a frame would load the app signed out
-                                   (macOS desktop), it gets its own window. */
-                                <AppWindowPanel key={key} url={url} hidden={key !== activeKey} />
-                            ) : (
-                                <iframe
-                                    ref={element => { appFrames.current[key] = element; }}
+                            {Object.entries(openedApps).map(([key, url]) => (
+                                <AppFrameView
                                     key={key}
-                                    className="frame"
-                                    title="App"
-                                    src={url}
+                                    url={url}
                                     hidden={key !== activeKey}
+                                    frameRef={element => { appFrames.current[key] = element; }}
                                     /* Registered on load, not on mount: an app
                                        that navigates gets a new contentWindow,
                                        and the window that asks the app for
                                        something has to be one we vouched for. */
-                                    onLoad={event => {
+                                    onFrameLoad={view => {
                                         appFrameGuests.current[key]?.();
-                                        appFrameGuests.current[key] = registerFrame(event.currentTarget.contentWindow);
+                                        appFrameGuests.current[key] = registerFrame(view);
                                     }}
                                 />
                             ))}

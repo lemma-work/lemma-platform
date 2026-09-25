@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::loopback_relay::{HostExecution, LemmaPorts, RelayPolicy};
+use crate::loopback_relay::{AgentHostProcess, HostExecution, LemmaPorts, RelayPolicy};
 
 /// What the controller keeps for the relay.
 #[derive(Default)]
@@ -20,6 +20,9 @@ pub(crate) struct HostLoopbackState {
     /// which owns the Agent Host. Unset means off: the relay admits nothing
     /// until it is told otherwise.
     host_execution: Arc<Mutex<Option<HostExecution>>>,
+    /// The Agent Host process the daemon supervises, supplied by the daemon.
+    /// Only a server descending from it is relayed; unset means none is.
+    agent_host: Arc<Mutex<Option<AgentHostProcess>>>,
     #[cfg(target_os = "macos")]
     relay: Mutex<Option<crate::loopback_relay::LoopbackRelay>>,
 }
@@ -61,6 +64,27 @@ impl ManagedRuntimeController {
             .expect("host execution gate lock poisoned") = Some(gate);
     }
 
+    /// Tell the relay which process's descendants it may connect to.
+    pub(crate) fn set_agent_host_process(&self, process: AgentHostProcess) {
+        *self
+            .host_loopback
+            .agent_host
+            .lock()
+            .expect("agent host process lock poisoned") = Some(process);
+    }
+
+    /// The Agent Host process, as of now.
+    pub(crate) fn agent_host_process(&self) -> AgentHostProcess {
+        let process = Arc::clone(&self.host_loopback.agent_host);
+        Arc::new(move || {
+            let process = process
+                .lock()
+                .expect("agent host process lock poisoned")
+                .clone();
+            process.and_then(|running| running())
+        })
+    }
+
     /// Whether the relay may admit anything, as of now.
     pub(crate) fn host_execution(&self) -> HostExecution {
         let gate = Arc::clone(&self.host_loopback.host_execution);
@@ -78,6 +102,8 @@ impl ManagedRuntimeController {
         RelayPolicy {
             host_execution: self.host_execution(),
             lemma_ports: self.lemma_ports(),
+            listener_owner: crate::loopback_relay::agent_listener_owner(self.agent_host_process()),
+            idle: None,
         }
     }
 

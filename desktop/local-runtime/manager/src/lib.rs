@@ -19,6 +19,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod clock;
 mod diagnostics;
 mod guest_image;
+#[cfg(target_os = "macos")]
+mod host_disk;
 #[cfg(any(target_os = "macos", test))]
 mod kernel_health;
 mod lifecycle;
@@ -167,6 +169,11 @@ pub struct ManagedRuntime {
     /// filesystem is a new disk to format or user data it must not touch.
     #[cfg(target_os = "macos")]
     data_disk_fresh_marker: PathBuf,
+    /// Present from before the data disk is created until a boot first reaches
+    /// health; see `host_disk::prepare_data_disk`. Beside `data.raw` rather
+    /// than under `run/`, because it describes the disk, not one boot.
+    #[cfg(target_os = "macos")]
+    data_disk_never_mounted: PathBuf,
     #[cfg(target_os = "macos")]
     vm: Mutex<Option<Child>>,
 }
@@ -184,6 +191,10 @@ impl ManagedRuntime {
             vm_process_marker: run_root.join("vz-process.json"),
             #[cfg(target_os = "macos")]
             data_disk_fresh_marker: run_root.join("data-disk-fresh"),
+            #[cfg(target_os = "macos")]
+            data_disk_never_mounted: config
+                .local_root
+                .join("runtime/macos/data-disk-never-mounted"),
             control_socket: config.local_root.join("run/guest.sock"),
             config,
             #[cfg(target_os = "macos")]

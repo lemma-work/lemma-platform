@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -498,11 +499,73 @@ async def cancel(request: Request) -> JSONResponse:
     return JSONResponse({"accepted": accepted}, status_code=202 if accepted else 404)
 
 
+#: Where the provider puts this sandbox's runtime credential, and the header
+#: the backend presents it in -- the same header the workspace runtime takes.
+RUNTIME_TOKEN_ENV = "LEMMA_FUNCTION_RUNTIME_TOKEN"
+RUNTIME_TOKEN_HEADER = "x-lemma-runtime-token"
+#: The one route anybody may call: a readiness probe says nothing and does
+#: nothing.
+_UNAUTHENTICATED_PATHS = frozenset({"/healthz"})
+
+
+def _load_runtime_token(explicit: str | None) -> str | None:
+    """This sandbox's credential, taken out of the environment.
+
+    Popped rather than read, so the worker processes that run function code --
+    spawned from this one -- do not inherit it.
+    """
+
+    configured = os.environ.pop(RUNTIME_TOKEN_ENV, "").strip()
+    return explicit or configured or None
+
+
+class _RequireRuntimeToken:
+    """Refuse every call that does not carry this sandbox's credential.
+
+    The runtime executes whatever artifact it is told to, fetched from
+    whichever gateway it is told to use. The function token in
+    `Authorization` is the *function's* credential against the gateway, and
+    any string passes as one here, so without this anything that could reach
+    the port -- another sandbox on the same bridge -- could have it run code of
+    its choosing, or cancel somebody else's run. The credential is derived
+    per sandbox by the backend and delivered only to this sandbox and to the
+    caller the backend hands the lease to.
+
+    Optional because a provider that does not deliver one -- an image rolled
+    out before a provider sends it -- must keep serving; every provider whose
+    sandboxes share a network with others delivers it.
+    """
+
+    def __init__(self, app, token: str) -> None:
+        self._app = app
+        self._token = token.encode()
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope.get("path") in _UNAUTHENTICATED_PATHS:
+            await self._app(scope, receive, send)
+            return
+        provided = b""
+        for name, value in scope.get("headers", ()):
+            if name.lower() == RUNTIME_TOKEN_HEADER.encode():
+                provided = value.strip()
+                break
+        if not provided or not hmac.compare_digest(provided, self._token):
+            response = JSONResponse(
+                {"error": "runtime credential is missing or wrong"},
+                status_code=401,
+            )
+            await response(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
 def create_app(
     *,
     max_workers: int | None = None,
     max_cached_revisions: int | None = None,
+    runtime_token: str | None = None,
 ) -> Starlette:
+    token = _load_runtime_token(runtime_token)
     configured_max = max_workers or int(
         os.environ.get("LEMMA_FUNCTION_MAX_WORKERS", "32")
     )
@@ -521,9 +584,17 @@ def create_app(
         finally:
             await app.state.runtime.close()
 
-    return Starlette(
+    app = Starlette(
         routes=[
             Route("/healthz", health, methods=["GET"]),
+            # Before the run route, which would otherwise take it: `{run_id}`
+            # matches `<uuid>:cancel`, fails to parse, and every cancellation
+            # the backend sent was answered 422 without reaching `cancel`.
+            Route(
+                "/functions/{function_id}/runs/{run_id}:cancel",
+                cancel,
+                methods=["POST"],
+            ),
             Route(
                 "/functions/{function_id}/runs/{run_id}",
                 invoke,
@@ -534,11 +605,9 @@ def create_app(
                 inspect_schemas,
                 methods=["POST"],
             ),
-            Route(
-                "/functions/{function_id}/runs/{run_id}:cancel",
-                cancel,
-                methods=["POST"],
-            ),
         ],
         lifespan=lifespan,
     )
+    if token is not None:
+        app.add_middleware(_RequireRuntimeToken, token=token)
+    return app

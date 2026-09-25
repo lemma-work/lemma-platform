@@ -29,7 +29,7 @@ impl NetworkPorts {
     pub fn frontend_url(self) -> String {
         format!(
             "http://{}:{}",
-            crate::local_domain::LocalDomain::from_env().frontend_host(),
+            crate::local_domain::LocalDomain::current().frontend_host(),
             self.frontend_port
         )
     }
@@ -37,7 +37,7 @@ impl NetworkPorts {
     pub fn backend_url(self) -> String {
         format!(
             "http://{}:{}",
-            crate::local_domain::LocalDomain::from_env().frontend_host(),
+            crate::local_domain::LocalDomain::current().frontend_host(),
             self.backend_port
         )
     }

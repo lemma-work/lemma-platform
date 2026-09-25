@@ -29,6 +29,28 @@ class AgentHostPairingRejected(AgentHostRepositoryError):
     code = "AGENT_HOST_PAIRING_REJECTED"
 
 
+#: What the host shows when the account removed this computer. The Desktop
+#: frontend matches on "was removed from this account"; keep the phrase.
+INSTALLATION_REVOKED_MESSAGE = (
+    "This computer was removed from this account. Connect it again from "
+    "Lemma to turn it back on."
+)
+
+
+class AgentHostInstallationRevoked(AgentHostPairingRejected):
+    """A pairing for an installation its user removed, without ``reenable``.
+
+    Removing a computer has to stick: the host's auto-connect would otherwise
+    pair it again seconds later. Only a pairing the person asked for from the
+    app (``reenable``) brings it back.
+    """
+
+    code = "installation_revoked"
+
+    def __init__(self) -> None:
+        super().__init__(INSTALLATION_REVOKED_MESSAGE)
+
+
 class AgentHostProtocolViolation(AgentHostRepositoryError):
     code = "AGENT_HOST_PROTOCOL_VIOLATION"
 

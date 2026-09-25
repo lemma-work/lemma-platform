@@ -35,6 +35,36 @@ pub(crate) const SANDBOX_STOP_GRACE_SECONDS: u32 = 1;
 /// Postgres's.
 pub(crate) const CORE_STOP_GRACE_SECONDS: u32 = 15;
 
+/// The core containers' OOM preference: far below any sandbox's.
+pub(crate) const CORE_OOM_SCORE_ADJ: i32 = -900;
+
+/// Free space on the data disk below which no sandbox is started.
+///
+/// Everything in the guest shares that disk, and it is a fixed size; the
+/// first thing to notice it filling was PostgreSQL refusing to write. A new
+/// sandbox is where growth starts -- an image unpacked, a workspace written --
+/// so it is refused while there is still room for the database to keep
+/// working, and the person is told what to free.
+pub(crate) const SANDBOX_DISK_FLOOR_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Refuse a new sandbox when the data disk is below the floor. A disk that
+/// cannot be measured is not a reason to refuse.
+pub(crate) fn admit_disk(free_bytes: Option<u64>) -> Result<(), GuestError> {
+    match free_bytes {
+        Some(free) if free < SANDBOX_DISK_FLOOR_BYTES => Err(GuestError {
+            code: "resource_capacity".into(),
+            message: format!(
+                "The private runtime's disk is nearly full ({} MiB free), so no new \
+                 sandbox was started. Delete workspaces or files you no longer need.",
+                free / (1024 * 1024),
+            ),
+            retryable: true,
+            status_code: 429,
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// The data services, in no particular order -- the stop is one engine call.
 pub(crate) const CORE_CONTAINERS: [&str; 3] = ["supertokens", "redis", "postgres"];
 
@@ -195,6 +225,8 @@ impl<E: Engine + 'static> GuestService<E> {
                 status_code: 429,
             });
         }
+
+        admit_disk(data_disk_space(&self.state_root).map(|(free, _)| free))?;
 
         let available = guest_available_memory_bytes()?;
         let needed = SANDBOX_MEMORY_REQUEST_BYTES.saturating_add(GUEST_MEMORY_HEADROOM_BYTES);

@@ -3,10 +3,29 @@
 
 use super::*;
 
+/// How long one wait on the artifact host may last: the response headers, or
+/// any single read of the body.
+///
+/// The blocking client applies `timeout` per wait, not to the whole transfer --
+/// so the two hours this used to be meant a stalled connection hung the first
+/// run for two hours before anything noticed. A minute of silence is a stall;
+/// a slow download is still any length.
+pub(crate) const DOWNLOAD_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Waits between attempts after a dropped or stalled download. Each attempt
+/// resumes from the `.part` file, so a retry costs only what was lost.
+pub(crate) const DOWNLOAD_RETRY_BACKOFF: [std::time::Duration; 5] = [
+    std::time::Duration::from_secs(2),
+    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(10),
+    std::time::Duration::from_secs(20),
+    std::time::Duration::from_secs(30),
+];
+
 pub(crate) fn download_client() -> io::Result<Client> {
     Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(2 * 60 * 60))
+        .timeout(DOWNLOAD_STALL_TIMEOUT)
         .redirect(Policy::custom(|attempt| {
             if attempt.previous().len() >= 5 {
                 attempt.error("too many artifact redirects")
@@ -20,8 +39,68 @@ pub(crate) fn download_client() -> io::Result<Client> {
         .map_err(|error| io::Error::other(format!("artifact HTTP client failed: {error}")))
 }
 
+/// Whether a failed attempt is worth resuming: the connection dropped,
+/// stalled or was refused, or the host had a server-side error. A digest or
+/// range mismatch, a client error, or a local file error is not.
+pub(crate) fn download_is_retryable(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::Interrupted
+            | io::ErrorKind::Other
+    )
+}
+
+/// Run `attempt` until it succeeds, fails for good, or the backoff runs out.
+pub(crate) fn with_download_retries<T>(
+    backoff: &[std::time::Duration],
+    mut sleep: impl FnMut(std::time::Duration),
+    mut attempt: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let mut waits = backoff.iter();
+    loop {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(error) if download_is_retryable(&error) => match waits.next() {
+                Some(wait) => sleep(*wait),
+                None => return Err(error),
+            },
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn download_artifact(
+    client: &Client,
+    artifact: &ArtifactRef,
+    destination: &Path,
+    label: &str,
+    progress_span: ProgressSpan,
+    resource_root: &Path,
+    allow_local_artifacts: bool,
+    progress: &mut dyn FnMut(InstallProgress<'_>),
+) -> io::Result<PathBuf> {
+    with_download_retries(&DOWNLOAD_RETRY_BACKOFF, std::thread::sleep, || {
+        download_artifact_once(
+            client,
+            artifact,
+            destination,
+            label,
+            progress_span,
+            resource_root,
+            allow_local_artifacts,
+            &mut *progress,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn download_artifact_once(
     client: &Client,
     artifact: &ArtifactRef,
     destination: &Path,
@@ -100,10 +179,21 @@ pub(crate) fn download_artifact(
         .send()
         .map_err(|error| io::Error::other(download_error(&error)))?;
     if !response.status().is_success() {
-        return Err(io::Error::other(format!(
-            "artifact download failed with HTTP {}",
-            response.status().as_u16()
-        )));
+        let status = response.status();
+        // A server error or throttling may pass; anything else the client
+        // asked for will be refused again.
+        let kind = if status.is_server_error()
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || status == reqwest::StatusCode::REQUEST_TIMEOUT
+        {
+            io::ErrorKind::Other
+        } else {
+            io::ErrorKind::InvalidInput
+        };
+        return Err(io::Error::new(
+            kind,
+            format!("artifact download failed with HTTP {}", status.as_u16()),
+        ));
     }
     let resumed = offset > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
     if resumed {

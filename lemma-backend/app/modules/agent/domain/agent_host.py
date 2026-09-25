@@ -160,6 +160,11 @@ class AgentHostPairingComplete(BaseModel):
     pairing_code: str = Field(min_length=16, max_length=512)
     display_name: str = Field(min_length=1, max_length=255)
     hello: HostHello
+    #: Set only when a person asked, in the app, to turn a removed computer
+    #: back on. Without it a removed installation is refused
+    #: (``installation_revoked``), so the host's own auto-connect cannot undo
+    #: a removal.
+    reenable: bool = False
 
 
 class AgentHostPairingCompleted(BaseModel):

@@ -39,6 +39,11 @@ pub(crate) struct StubState {
     /// What an `mcp` request is answered with, by method.
     pub(crate) mcp_answers: Mutex<HashMap<String, Value>>,
     pub(crate) mcp_requests: Mutex<Vec<Value>>,
+    /// Whether `welcome` says tool calls are kept by `request_id`.
+    pub(crate) idempotent_tool_calls: std::sync::atomic::AtomicBool,
+    /// How many `tools/call` requests to take and then hang up on, as a link
+    /// that drops after Lemma started the call.
+    pub(crate) drop_after_tool_calls: AtomicUsize,
     /// What an `interaction_wait` is answered with, once set.
     pub(crate) interaction_answer: Mutex<Option<Value>>,
     /// Pushes to deliver to whichever host is connected.
@@ -229,6 +234,16 @@ async fn serve(state: Arc<StubState>, mut socket: WebSocket) {
                 if frame.kind == host::HELLO {
                     *state.pushes.lock().unwrap() = Some(push_tx.clone());
                 }
+                if frame.kind == host::MCP
+                    && frame.body["method"] == "tools/call"
+                    && state
+                        .drop_after_tool_calls
+                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+                        .is_ok()
+                {
+                    state.mcp_requests.lock().unwrap().push(frame.body.clone());
+                    return;
+                }
                 let Some(answer) = answer(&state, &frame) else { continue };
                 let text = serde_json::to_string(&answer).unwrap();
                 if socket.send(Message::Text(text.into())).await.is_err() {
@@ -258,6 +273,7 @@ fn answer(state: &StubState, frame: &Frame) -> Option<Frame> {
                 "user_id": Uuid::new_v4(),
                 "protocol_version": crate::PROTOCOL_VERSION,
                 "heartbeat_ms": 20_000,
+                "idempotent_tool_calls": state.idempotent_tool_calls.load(Ordering::SeqCst),
             }),
         ),
         host::PAIR => reply(

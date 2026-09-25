@@ -281,6 +281,7 @@ async def pair(
     *,
     display_name: str,
     machine: dict | None = None,
+    reenable: bool = False,
 ) -> dict:
     """Mint a code as the user, then consume it on the link as the machine would."""
     machine = machine or hello()
@@ -298,6 +299,7 @@ async def pair(
                 "pairing_code": minted.json()["pairing_code"],
                 "display_name": display_name,
                 "hello": machine,
+                "reenable": reenable,
             },
         )
         assert paired["type"] == "paired", paired

@@ -124,3 +124,37 @@ fn a_window_that_will_not_show_is_not_then_focused() {
     assert_eq!(result, Err("no window".into()));
     assert!(!focused.get());
 }
+
+/// The shell's SIGTERM grace for `lemma-vz` covers the guest's own stop.
+///
+/// SIGTERM asks the guest to power off, and the guest declares how long that
+/// may take. The two constants live in crates that cannot link each other, so
+/// the declaration is read out of the runtime manager's source.
+#[test]
+fn a_signalled_vm_gets_the_guest_stop_budget_before_it_is_killed() {
+    let manager = include_str!("../../local-runtime/manager/src/request.rs").replace("\r\n", "\n");
+    let declared = manager
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("pub(crate) const GUEST_STOP_WORST_CASE_SECONDS: u64 = ")
+                .and_then(|rest| rest.trim_end_matches(';').parse::<u64>().ok())
+        })
+        .expect("the runtime manager declares the guest stop budget");
+    assert!(
+        VM_STOP_GRACE_BUDGET >= Duration::from_secs(declared + 10),
+        "lemma-vz is killed {}s after SIGTERM, inside the guest's {declared}s stop",
+        VM_STOP_GRACE_BUDGET.as_secs()
+    );
+}
+
+/// "Quit Anyway" escalates the stop it already asked for.
+#[test]
+fn quit_anyway_does_not_send_a_second_shutdown_request() {
+    let source = include_str!("../quitting.rs").replace("\r\n", "\n");
+    let leave = function_body(&source, "pub(crate) fn leave_nothing_running(");
+    assert!(leave.contains("daemon_stop_requested"), "{leave}");
+    assert!(leave.contains("finish_locald_stop(pid"), "{leave}");
+    let stop = function_body(&source, "pub(crate) fn stop_then_quit(");
+    assert!(stop.contains("daemon_stop_requested.store(true"), "{stop}");
+}
