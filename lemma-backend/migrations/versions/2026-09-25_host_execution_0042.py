@@ -15,16 +15,16 @@ remembers the root the host answered with. `host_id` has no foreign key: the
 host table belongs to another module, and a revoked host is answered by an op
 failing, not by a binding vanishing mid-run.
 
-Revision ID: 0041_host_execution
-Revises: 0040_installation_owner
+Revision ID: 0042_host_execution
+Revises: 0041_installation_owner
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0041_host_execution"
-down_revision = "0040_installation_owner"
+revision = "0042_host_execution"
+down_revision = "0041_installation_owner"
 branch_labels = None
 depends_on = None
 

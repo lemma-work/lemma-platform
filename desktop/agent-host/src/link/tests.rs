@@ -550,3 +550,97 @@ mod host_execution {
         );
     }
 }
+
+/// Wait for the stand-in to be serving `count` sockets, or fail.
+async fn until_open_sockets(stub: &StubLink, count: usize, what: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while stub.state.open_sockets() != count {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "{what}: the stand-in still serves {} socket(s)",
+            stub.state.open_sockets()
+        )
+    });
+}
+
+/// A connection nobody holds any more is closed, not left running.
+///
+/// The worker abandons a link whenever a request on it times out, and simply
+/// drops what it held. The reader and writer were detached tasks, and the
+/// reader kept the writer's channel alive, so neither ever ended: the socket
+/// stayed open on Lemma's side, still counted as this host's connection.
+#[tokio::test]
+async fn dropping_a_connection_closes_its_socket() {
+    let stub = StubLink::start().await;
+    let connected = connected(&stub).await;
+    until_open_sockets(&stub, 1, "after the handshake").await;
+    drop(connected);
+    until_open_sockets(&stub, 0, "after the host dropped the link").await;
+}
+
+/// Clones of the handle keep the link open; the last one to go closes it.
+#[tokio::test]
+async fn the_last_handle_to_go_closes_the_socket() {
+    let stub = StubLink::start().await;
+    let connected = connected(&stub).await;
+    let kept = connected.handle.clone();
+    drop(connected);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(stub.state.open_sockets(), 1, "a live handle keeps its link");
+    assert!(
+        kept.control(&super::protocol::ControlBody::default())
+            .await
+            .is_ok()
+    );
+    drop(kept);
+    until_open_sockets(&stub, 0, "after the last handle went").await;
+}
+
+/// A handshake Lemma refuses with an `error` frame leaves the socket open on
+/// its side; the host has to hang up rather than abandon it.
+#[tokio::test]
+async fn a_failed_handshake_closes_its_socket() {
+    let stub = StubLink::start().await;
+    *stub.state.reject_hello.lock().unwrap() = true;
+    let error = connect(
+        &stub.url,
+        "secret",
+        HostHello::current("installation"),
+        capacity(),
+    )
+    .await
+    .err()
+    .expect("the hello was refused");
+    assert!(matches!(error, LinkError::Rejected { .. }), "{error:?}");
+    until_open_sockets(&stub, 0, "after the refused handshake").await;
+}
+
+/// Closing from this side fails what is waiting at once, without waiting for
+/// Lemma to echo the close -- a peer that has stopped answering never will.
+#[tokio::test]
+async fn closing_fails_waiters_without_an_echo() {
+    let stub = StubLink::start().await;
+    let link = connected(&stub).await.handle;
+    let body = super::protocol::InteractionWaitBody {
+        run_id: Uuid::new_v4(),
+        conversation_id: Uuid::new_v4(),
+        token: "token".into(),
+        tool_call_id: "call".into(),
+    };
+    let waiting = {
+        let link = link.clone();
+        tokio::spawn(async move { link.interaction_wait(&body).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    link.close(close::NORMAL, "abandoned");
+    let result = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("a waiter must learn the link is gone")
+        .unwrap();
+    assert!(result.is_err());
+    assert!(link.is_closed());
+}

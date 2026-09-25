@@ -9,9 +9,13 @@ open, and three kinds of notice travel on it:
     also re-reads every 5 seconds, so a lost poke costs a few seconds and never
     correctness. That is why publishing is best effort and never raises.
 ``superseded``
-    A newer link for this host said ``hello``. Every other link for it closes
-    with 4409, so commands go out on one socket at a time even when a network
-    drop left a half-open one behind on another replica.
+    A newer link for this host said ``hello``. It carries the link generation
+    that ``hello`` claimed in the database, and every link holding a smaller
+    one closes with 4409, so commands go out on one socket at a time even when
+    a network drop left a half-open one behind on another replica. The
+    generation, not the connection id, is what decides: two handshakes racing
+    each hear the other's notice, and "any other connection id is newer" closed
+    both of them.
 ``revoked``
     The user revoked the host. Its secret is already dead in the database; this
     closes the socket that authenticated with it before the revocation, which
@@ -63,6 +67,9 @@ def op_reply_channel(op_id: str) -> str:
 class HostNotice:
     kind: str
     connection_id: str | None = None
+    #: The link generation a ``superseded`` notice announces. None for a notice
+    #: that carries none, which supersedes nothing.
+    generation: int | None = None
     #: The whole decoded message, for an ``op``; None for every other kind.
     payload: dict[str, object] | None = None
 
@@ -83,15 +90,24 @@ def parse_host_notice(raw: str | bytes) -> HostNotice:
     connection_id = decoded.get("connection_id")
     if kind == OP:
         return HostNotice(OP, payload=decoded)
+    generation = decoded.get("generation")
     return HostNotice(
         kind if kind in {POKE, SUPERSEDED, REVOKED} else POKE,
         connection_id if isinstance(connection_id, str) else None,
+        # bool is an int; a JSON true is not a generation.
+        generation
+        if isinstance(generation, int) and not isinstance(generation, bool)
+        else None,
     )
 
 
-def superseded_notice(connection_id: UUID) -> dict[str, str]:
+def superseded_notice(connection_id: UUID, generation: int) -> dict[str, object]:
     """What a new link publishes so every older link for its host closes."""
-    return {"type": SUPERSEDED, "connection_id": str(connection_id)}
+    return {
+        "type": SUPERSEDED,
+        "connection_id": str(connection_id),
+        "generation": generation,
+    }
 
 
 async def _publish(host_id: UUID, notice: dict[str, str]) -> None:

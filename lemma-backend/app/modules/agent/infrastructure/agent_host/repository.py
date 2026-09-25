@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -282,6 +282,53 @@ class AgentHostRepository:
         host.last_seen_at = timestamp
         await self.session.flush()
         return host
+
+    async def claim_link_generation(self, host_id: UUID) -> int:
+        """Take the next link generation for a host: the one its new link owns.
+
+        One ``UPDATE ... RETURNING``, so two handshakes racing on different
+        replicas serialize on the row lock and come away with distinct,
+        ordered values. Whichever is greater owns the host.
+        """
+        claimed = await self.session.execute(
+            update(AgentHostModel)
+            .where(AgentHostModel.id == host_id)
+            .values(link_generation=AgentHostModel.link_generation + 1)
+            .returning(AgentHostModel.link_generation)
+            .execution_options(synchronize_session=False)
+        )
+        return int(claimed.scalar_one())
+
+    async def link_generation(self, host_id: UUID) -> int | None:
+        """The generation of the link that owns the host now; None if it is gone."""
+        return (
+            await self.session.execute(
+                select(AgentHostModel.link_generation).where(
+                    AgentHostModel.id == host_id
+                )
+            )
+        ).scalar_one_or_none()
+
+    async def mark_upgrade_required(self, secret_hash: str) -> UUID | None:
+        """Record that the host holding this secret speaks a retired protocol.
+
+        Returns the host's id only when this call changed it, so the caller
+        can say so once per host rather than once per retry. Unknown and
+        revoked secrets change nothing and return None.
+        """
+        return (
+            await self.session.execute(
+                update(AgentHostModel)
+                .where(
+                    AgentHostModel.host_secret_hash == secret_hash,
+                    AgentHostModel.revoked_at.is_(None),
+                    AgentHostModel.status != AgentHostStatus.UPGRADE_REQUIRED.value,
+                )
+                .values(status=AgentHostStatus.UPGRADE_REQUIRED.value)
+                .returning(AgentHostModel.id)
+                .execution_options(synchronize_session=False)
+            )
+        ).scalar_one_or_none()
 
     async def revoke(
         self,

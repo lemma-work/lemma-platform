@@ -1,4 +1,4 @@
-"""0040 applies, rolls back and re-applies through Alembic, not create_all()."""
+"""0041 applies, rolls back and re-applies through Alembic, not create_all()."""
 
 import os
 import subprocess
@@ -14,8 +14,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
-PREVIOUS = "0039_whatsapp_number_pool"
-REVISION = "0040_installation_owner"
+PREVIOUS = "0040_agent_host_link_generation"
+REVISION = "0041_installation_owner"
 
 
 def test_installation_owner_upgrades_downgrades_and_holds_one_row() -> None:

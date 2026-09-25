@@ -27,15 +27,15 @@ also the only place that can do it race-free against a concurrent signup.
 `user_id` is `ON DELETE SET NULL`, not `CASCADE`: a deleted owner leaves the
 slot taken rather than handing it to the next person to sign up.
 
-Revision ID: 0040_installation_owner
-Revises: 0039_whatsapp_number_pool
+Revision ID: 0041_installation_owner
+Revises: 0040_agent_host_link_generation
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0040_installation_owner"
-down_revision = "0039_whatsapp_number_pool"
+revision = "0041_installation_owner"
+down_revision = "0040_agent_host_link_generation"
 branch_labels = None
 depends_on = None
 

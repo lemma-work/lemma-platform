@@ -13,7 +13,9 @@ server's half of it. Three things run per connection:
 * the **pusher** listens on the host's notice channel -- one subscription for
   the life of the socket -- and reads the command queue on every poke and every
   5 seconds, pushing what it finds. It also hears ``superseded`` and ``revoked``
-  and closes the socket for them.
+  and closes the socket for them. Supersession is decided by the link
+  generation each ``hello`` claims in the database, never by which notice
+  arrived: see ``agent_host_link_ownership``.
 * the **writer** is a lock, not a task: every frame goes out whole, from
   whichever task produced it, and never interleaved with another.
 
@@ -30,7 +32,6 @@ from typing import Protocol
 from uuid import UUID, uuid7
 
 from pydantic import ValidationError
-from redis.exceptions import RedisError
 
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
 from app.core.log.log import get_logger
@@ -68,11 +69,9 @@ from app.modules.agent.domain.agent_host_link import (
 from app.modules.agent.infrastructure.agent_host.channels import (
     OP,
     REVOKED,
-    SUPERSEDED,
     HostNotice,
     host_poke_channel,
     parse_host_notice,
-    superseded_notice,
 )
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostNotFound,
@@ -84,6 +83,7 @@ from app.modules.agent.services.agent_host_link_mcp import (
     AgentHostLinkMcp,
     notice_stream,
 )
+from app.modules.agent.services.agent_host_link_ownership import LinkOwnership
 from app.modules.agent.services.agent_host_link_store import (
     AgentHostLinkStore,
     LinkedHost,
@@ -166,6 +166,9 @@ class AgentHostLinkSession:
         self._close_code: int | None = None
         self._close_reason = ""
         self._host: LinkedHost | None = None
+        self._ownership = LinkOwnership(
+            store=store, channels=channels, connection_id=self.connection_id
+        )
         self._hello: HostHello | None = None
         self._capacity = AgentHostCapacity()
         self._sent = SentCommands(
@@ -411,6 +414,7 @@ class AgentHostLinkSession:
         if host.status is AgentHostStatus.UPGRADE_REQUIRED:
             raise LinkClose(LinkCloseCode.UPGRADE_REQUIRED, "upgrade required")
         self._host, self._hello, self._capacity = host, body.hello, body.capacity
+        self._ownership.generation = host.link_generation
         await self._writer.send_frame(
             ServerFrameType.WELCOME,
             WelcomeBody(
@@ -525,7 +529,10 @@ class AgentHostLinkSession:
         async with notice_stream(
             self._channels, host_poke_channel(host_id), host_id=str(host_id)
         ) as notices:
-            await self._announce(host_id)
+            newer = await self._ownership.claim(host_id)
+            if newer is not None:
+                self._superseded(newer)
+                return
             while True:
                 try:
                     raw = await notices.next_notice(self._push_floor_seconds)
@@ -550,30 +557,22 @@ class AgentHostLinkSession:
         if notice.kind == REVOKED:
             self.stop(LinkCloseCode.REVOKED_OR_MISSING, REVOKED_OR_MISSING_REASON)
             return True
-        if notice.kind == SUPERSEDED and notice.connection_id != str(
-            self.connection_id
-        ):
-            logger.info(
-                "agent.agent_host_link.superseded",
-                host_id=str(self.host_id),
-                connection_id=str(self.connection_id),
-                superseded_by=notice.connection_id,
-            )
-            self.stop(LinkCloseCode.SUPERSEDED, "superseded")
+        newer = self._ownership.superseded_by(notice)
+        if newer is not None:
+            self._superseded(newer, by=notice.connection_id)
             return True
         return False
 
-    async def _announce(self, host_id: UUID) -> None:
-        try:
-            await self._channels.publish(
-                host_poke_channel(host_id), superseded_notice(self.connection_id)
-            )
-        except RedisError, RuntimeError, OSError:
-            logger.warning(
-                "agent.agent_host_link.announce_skipped.degraded",
-                host_id=str(host_id),
-                exc_info=True,
-            )
+    def _superseded(self, generation: int, *, by: str | None = None) -> None:
+        logger.info(
+            "agent.agent_host_link.superseded",
+            host_id=str(self.host_id),
+            connection_id=str(self.connection_id),
+            link_generation=self._ownership.generation,
+            superseded_by_generation=generation,
+            superseded_by=by,
+        )
+        self.stop(LinkCloseCode.SUPERSEDED, "superseded")
 
     async def _push_commands(self, host_id: UUID) -> None:
         try:
