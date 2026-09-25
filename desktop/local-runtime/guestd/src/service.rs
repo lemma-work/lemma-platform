@@ -155,6 +155,12 @@ impl<E: Engine + 'static> GuestService<E> {
         })
     }
 
+    /// The directory holding the loopback relay's socket, which `sandbox.ensure`
+    /// mounts into the one sandbox granted `host_loopback`.
+    pub(crate) fn host_loopback_directory(&self) -> PathBuf {
+        host_loopback_directory(&self.state_root)
+    }
+
     /// Say that this process ends with the request it is answering.
     ///
     /// Called by the `request` subcommand, not inferred from the platform:

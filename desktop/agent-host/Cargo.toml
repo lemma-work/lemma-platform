@@ -53,6 +53,12 @@ lemma-desktop-process = { path = "../process" }
 lemma-job-object = { path = "../job-object" }
 lemma-private-file = { path = "../private-file" }
 
+# Host execution's PTYs. Unix only: the exec-server is, and portable-pty is
+# the one crate here that sets a child's controlling terminal (setsid +
+# TIOCSCTTY), which this crate cannot do itself without `unsafe`.
+[target.'cfg(unix)'.dependencies]
+portable-pty = "0.9"
+
 # Measurement, not a test: it asserts nothing, and a test target is compiled
 # and linked on every `cargo test` whether or not it is ignored.
 [[bench]]

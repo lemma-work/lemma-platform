@@ -333,6 +333,13 @@ The native host-pack renderer derives:
 - `FUNCTION_RUNTIME_GATEWAY_URL`;
 - `host.lemma.internal`.
 
+The workspace sandbox of the user this Mac's Agent Host is paired to also has
+the loopback relay, which carries its
+browser to a port on this Mac's own `127.0.0.1` over vsock and locald's
+`run/host-loopback.sock`; see
+[Desktop security](desktop-security.md#the-loopback-relay) for who has it and
+which ports it refuses.
+
 Guest-to-host callback relays own their connections in one asynchronous runtime
 per listener. Admission is bounded; stopping a relay cancels and joins its
 connection tasks, including idle and backpressured streams, before releasing
@@ -395,7 +402,7 @@ are instead of controls the shell would refuse.
 | Section | Owns | Data source |
 | --- | --- | --- |
 | Overview | One health line, Start at login, Verify & repair, Open logs | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs` |
-| Coding agents | This computer's Agent Host card, the workspace sandbox image | `agent_host_*`, `local_settings_snapshot`, `prepare_sandbox_image` |
+| Coding agents | This computer's Agent Host card, Run commands on this Mac, the workspace sandbox image | `agent_host_*`, `set_host_execution`, `local_settings_snapshot`, `prepare_sandbox_image` |
 | Sharing | This Mac / Local network / Public (ngrok or Cloudflare), who can join, a link to invite people | `local_sharing` |
 | Updates | Current version, check, install, what the channel means | `check_for_app_update`, `install_app_update` |
 | Advanced | Developer credentials (Google, GitHub, Microsoft, Composio, Deepgram; Slack, Telegram, Teams, WhatsApp, Resend), diagnostics and log tails, anonymous install health | `apply_local_settings`, `diagnostic_logs`, `telemetry_status`, `set_telemetry_enabled` |
@@ -450,6 +457,7 @@ Each command is granted to a webview by a capability in
 | `apply_local_settings` | workspace | local workspace | `config.apply` for `integrations` or `surfaces` only |
 | `local_sharing` | workspace | local workspace | Public asks natively first; the page cannot set the consent flag |
 | `set_start_at_login` | workspace | local workspace | Rebuilds the menus so the tray's check stays true |
+| `set_host_execution` | workspace | local workspace | locald `agent-host.host-execution`; sends only `enabled`, refuses to enable without Seatbelt, answers with the fresh Agent Host status. See [Host execution](desktop-host-execution.md) |
 | `prepare_sandbox_image` | workspace | local workspace | |
 | `open_logs`, `diagnostic_logs` | main, control, workspace | native page, or local workspace | Log tails are redacted |
 | `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
@@ -747,3 +755,12 @@ Unit/integration coverage must include:
 Packaged E2Es and the manual PR-DMG checklist remain merge gates because source
 browser tests cannot reproduce WKWebView, Finder installation, code signing,
 Virtualization.framework entitlements, or WSL2 setup.
+
+CI launches the app once per Desktop change: the `Desktop launch smoke` job
+builds the debug bundle and runs `desktop/e2e/launch_smoke.py`, which starts
+it in hosted mode, checks its WebView loads the workspace and that it brings up
+locald and the Agent Host itself, and carries one conversation through a
+scripted agent. GitHub's macOS runners cannot nest a VM, so local mode and the
+guest are not part of it, and nothing clicks inside WKWebView. The
+[Desktop test matrix](../../CONTRIBUTING.md#desktop-test-matrix) says which lane
+each kind of change extends.

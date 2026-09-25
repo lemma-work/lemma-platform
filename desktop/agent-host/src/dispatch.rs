@@ -16,7 +16,7 @@ use lemma_agent_host::service::ServiceManager;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, HostExecutionAction};
 use crate::console::ConsoleCallbacks;
 use crate::output::{init_logging, print_value, select_one_target, show_logs, update_targets};
 
@@ -323,8 +323,77 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::HostExecution { action } => host_execution(&paths, action).await,
+        Command::ExecServer { root_base } => {
+            #[cfg(unix)]
+            {
+                lemma_agent_host::host_exec::server::run(root_base).await
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = root_base;
+                anyhow::bail!("host execution is not supported on this platform")
+            }
+        }
         Command::McpBridge { target_id, run_id } => {
             lemma_agent_host::mcp_bridge::run_bridge(&paths, target_id, run_id).await
         }
     }
+}
+
+/// `host-execution enable|disable|status|refresh-environment`.
+///
+/// The setting lives in `config.json`, which the running host re-reads every
+/// few seconds (`apply_local_controls`), so a change here reaches Lemma on the
+/// next `control` frame without a restart.
+async fn host_execution(paths: &HostPaths, action: HostExecutionAction) -> anyhow::Result<()> {
+    use lemma_agent_host::host_exec::env::EnvironmentSnapshot;
+    use lemma_agent_host::host_exec::wire::HostExecutionStatus;
+    let set = |enabled: bool| {
+        HostConfig::mutate(paths, |config| {
+            let changed = config.host_execution != enabled;
+            config.host_execution = enabled;
+            Ok(changed)
+        })
+    };
+    match action {
+        HostExecutionAction::Enable => {
+            let status = HostExecutionStatus::current(true);
+            anyhow::ensure!(
+                status.available,
+                "this computer cannot confine commands (host execution needs macOS and /usr/bin/sandbox-exec)"
+            );
+            set(true)?;
+            // Taken now, where a slow shell profile costs the person who asked
+            // rather than the first command an agent runs.
+            EnvironmentSnapshot::load_or_take(&paths.root).await;
+            println!("Host execution is on.");
+        }
+        HostExecutionAction::Disable => {
+            set(false)?;
+            println!("Host execution is off.");
+        }
+        HostExecutionAction::Status { json } => {
+            let config = HostConfig::load_or_create(paths)?;
+            let status = HostExecutionStatus::current(config.host_execution);
+            let snapshot = EnvironmentSnapshot::cached(&paths.root);
+            print_value(
+                &serde_json::json!({
+                    "host_execution": status,
+                    "environment_taken_at": snapshot.as_ref().map(|snapshot| snapshot.taken_at),
+                    "environment_shell": snapshot.map(|snapshot| snapshot.shell),
+                }),
+                json,
+            );
+        }
+        HostExecutionAction::RefreshEnvironment => {
+            let snapshot = EnvironmentSnapshot::refresh(&paths.root).await;
+            println!(
+                "Took the environment of {} ({} variables). Workspaces opened from now on use it.",
+                snapshot.shell,
+                snapshot.variables.len()
+            );
+        }
+    }
+    Ok(())
 }

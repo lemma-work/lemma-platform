@@ -78,23 +78,31 @@ where
 ///
 /// Anything the reader already buffered past the request line is forwarded
 /// first: a client may send its HTTP request immediately after the port.
-fn splice<S>(mut from_host: BufReader<S>, mut to_host: S, upstream: TcpStream) -> io::Result<()>
+///
+/// Shared with the loopback relay (`host_loopback`), where the client is a
+/// sandbox and the upstream is the host; the shape of the exchange is the same.
+pub(crate) fn splice<S, U>(
+    mut from_client: BufReader<S>,
+    mut to_client: S,
+    upstream: U,
+) -> io::Result<()>
 where
     S: Read + Write + Send + TryCloneStream + 'static,
+    U: Read + Write + Send + TryCloneStream + 'static,
 {
-    let mut to_sandbox = upstream.try_clone()?;
-    let mut from_sandbox = upstream;
+    let mut to_upstream = upstream.try_clone_stream()?;
+    let mut from_upstream = upstream;
     let outbound = thread::Builder::new()
-        .name("guestd-tunnel-out".into())
+        .name("guestd-splice-out".into())
         .spawn(move || {
-            let _ = io::copy(&mut from_host, &mut to_sandbox);
-            let _ = to_sandbox.shutdown(Shutdown::Write);
+            let _ = io::copy(&mut from_client, &mut to_upstream);
+            let _ = to_upstream.shutdown_write();
         })?;
-    let _ = io::copy(&mut from_sandbox, &mut to_host);
-    // The host's reader must see the sandbox close, or a response that ends by
-    // closing the connection hangs until the host gives up.
-    let _ = to_host.shutdown_write();
-    let _ = from_sandbox.shutdown(Shutdown::Both);
+    let _ = io::copy(&mut from_upstream, &mut to_client);
+    // The client's reader must see the upstream close, or a response that ends
+    // by closing the connection hangs until the client gives up.
+    let _ = to_client.shutdown_write();
+    let _ = from_upstream.shutdown_both();
     let _ = outbound.join();
     Ok(())
 }
@@ -110,12 +118,14 @@ pub(crate) fn connect_published(host: &str, port: u16) -> io::Result<TcpStream> 
 
 /// A stream that can be split into a reader and a writer, and half-closed.
 ///
-/// `TcpStream` and the vsock connection's `File` both can, but through
-/// different methods; this names what `serve_tunnel` needs.
+/// `TcpStream`, `UnixStream` and the vsock connection's `File` all can, but
+/// through different methods; this names what `splice` needs.
 pub(crate) trait TryCloneStream: Sized {
     fn try_clone_stream(&self) -> io::Result<Self>;
     /// Send EOF without closing the read side, which a duplicate may hold.
     fn shutdown_write(&self) -> io::Result<()>;
+    /// End both directions, for every duplicate at once.
+    fn shutdown_both(&self) -> io::Result<()>;
 }
 
 impl TryCloneStream for TcpStream {
@@ -125,6 +135,21 @@ impl TryCloneStream for TcpStream {
     fn shutdown_write(&self) -> io::Result<()> {
         self.shutdown(Shutdown::Write)
     }
+    fn shutdown_both(&self) -> io::Result<()> {
+        self.shutdown(Shutdown::Both)
+    }
+}
+
+impl TryCloneStream for std::os::unix::net::UnixStream {
+    fn try_clone_stream(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+    fn shutdown_write(&self) -> io::Result<()> {
+        self.shutdown(Shutdown::Write)
+    }
+    fn shutdown_both(&self) -> io::Result<()> {
+        self.shutdown(Shutdown::Both)
+    }
 }
 
 impl TryCloneStream for std::fs::File {
@@ -132,12 +157,19 @@ impl TryCloneStream for std::fs::File {
         self.try_clone()
     }
     fn shutdown_write(&self) -> io::Result<()> {
-        use std::os::fd::AsRawFd;
-        // SAFETY: a valid descriptor this `File` owns; shutdown takes no memory.
-        if unsafe { libc::shutdown(self.as_raw_fd(), libc::SHUT_WR) } == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
+        shutdown_descriptor(self, libc::SHUT_WR)
+    }
+    fn shutdown_both(&self) -> io::Result<()> {
+        shutdown_descriptor(self, libc::SHUT_RDWR)
+    }
+}
+
+fn shutdown_descriptor(file: &std::fs::File, how: libc::c_int) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: a valid descriptor this `File` owns; shutdown takes no memory.
+    if unsafe { libc::shutdown(file.as_raw_fd(), how) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }

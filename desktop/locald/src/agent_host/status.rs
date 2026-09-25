@@ -41,6 +41,10 @@ impl AgentHostSupervisor {
         let paired = targets.as_ref().is_some_and(|items| !items.is_empty());
         status["paired"] = json!(paired);
         status["targets"] = json!(targets.unwrap_or_default());
+        status["host_execution"] = json!({
+            "enabled": super::pairing::host_execution_enabled(&self.data_dir.join("config.json")),
+            "available": super::pairing::host_execution_available(),
+        });
         status
     }
 
@@ -72,4 +76,40 @@ impl AgentHostSupervisor {
             .lock()
             .expect("Agent Host details lock poisoned") = None;
     }
+}
+
+impl AgentHostSupervisor {
+    /// The loopback ports the Agent Host's MCP relays listen on.
+    ///
+    /// Each relay binds an OS-chosen port and writes it, with its token, to
+    /// `mcp-relay/<target>.json` under the host's data directory (see
+    /// `mcp_relay::endpoint_path` in the Agent Host). Read from there rather
+    /// than asked for, because the loopback relay needs the answer on every
+    /// connection and the files are the host's own record of it.
+    pub(crate) fn mcp_relay_ports(&self) -> Vec<u16> {
+        mcp_relay_ports(&self.data_dir.join("mcp-relay"))
+    }
+
+    /// The paired user's "Run commands on this Mac" switch, read from the host's
+    /// config now -- the loopback relay asks on every connection.
+    pub(crate) fn host_execution_enabled(&self) -> bool {
+        super::pairing::host_execution_enabled(&self.data_dir.join("config.json"))
+    }
+}
+
+/// Every `port` in the endpoint files in `directory`. A file that cannot be
+/// read or parsed names no port, and a missing directory names none at all.
+pub(crate) fn mcp_relay_ports(directory: &Path) -> Vec<u16> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|kind| kind == "json"))
+        .filter_map(|path| std::fs::read(path).ok())
+        .filter_map(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .filter_map(|endpoint| endpoint.get("port")?.as_u64())
+        .filter_map(|port| u16::try_from(port).ok())
+        .collect()
 }

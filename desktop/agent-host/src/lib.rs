@@ -9,6 +9,8 @@ pub mod adapters;
 pub mod config;
 pub mod conversation_directory;
 mod conversation_folders;
+/// Running an owner's agent commands on this computer, under Seatbelt.
+pub mod host_exec;
 pub mod journal;
 pub mod link;
 pub mod mcp_bridge;

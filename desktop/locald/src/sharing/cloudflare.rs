@@ -199,6 +199,11 @@ impl SharingController {
         let log_path = self.root.join("logs/cloudflared.log");
         let log = bounded_log(&log_path)?;
         let error_log = log.try_clone()?;
+        // A port chosen here rather than `127.0.0.1:0`, so locald knows where
+        // cloudflared's metrics server is and the loopback relay can refuse
+        // it. Released just before the spawn, as ngrok's inspection port is.
+        let metrics = PortReservation::ephemeral()?;
+        let metrics_port = metrics.port();
         let mut command = Command::new(&executable);
         command
             .no_console_window()
@@ -207,7 +212,7 @@ impl SharingController {
             .arg(&config)
             .arg("--no-autoupdate")
             .arg("--metrics")
-            .arg("127.0.0.1:0")
+            .arg(format!("127.0.0.1:{metrics_port}"))
             .arg("--loglevel")
             .arg("info")
             .arg("run")
@@ -216,6 +221,7 @@ impl SharingController {
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(error_log));
         prepare_owned_command(&mut command);
+        metrics.release();
         let mut child = command.spawn().map_err(|error| {
             io::Error::other(format!(
                 "could not start cloudflared at {}: {error}",
@@ -243,6 +249,7 @@ impl SharingController {
             format!("https://{}", selection.hostname),
             OwnedTunnel {
                 provider: TunnelProvider::Cloudflare,
+                local_ports: vec![metrics_port],
                 executable,
                 started_at: Instant::now(),
                 child,

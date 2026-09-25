@@ -20,6 +20,14 @@ open, and three kinds of notice travel on it:
     The user revoked the host. Its secret is already dead in the database; this
     closes the socket that authenticated with it before the revocation, which
     would otherwise stay open until the host next reconnected.
+``op``
+    An operation inside a host workspace (host execution, see
+    docs/architecture/desktop-host-execution.md). It names a one-off reply
+    channel; the link holding the socket forwards it to the host as an ``op``
+    frame and publishes the answer there. Unlike a poke it is not best effort
+    for the caller -- it waits on the reply channel -- but it is still safe to
+    lose: a caller that hears nothing within ``OP_PICKUP_TIMEOUT_SECONDS``
+    reports the host offline, and nothing ran.
 
 Redis pub/sub, so any API replica can reach the one holding the socket without a
 routing table. Run events do not travel here: they go to the run's Redis Stream,
@@ -43,10 +51,16 @@ logger = get_logger(__name__)
 POKE = "poke"
 SUPERSEDED = "superseded"
 REVOKED = "revoked"
+OP = "op"
 
 
 def host_poke_channel(host_id: UUID) -> str:
     return f"agent-host:host:{host_id}:poke"
+
+
+def op_reply_channel(op_id: str) -> str:
+    """Where the answer to one ``op`` is published. Used once, then abandoned."""
+    return f"agent-host:op:{op_id}:reply"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +70,8 @@ class HostNotice:
     #: The link generation a ``superseded`` notice announces. None for a notice
     #: that carries none, which supersedes nothing.
     generation: int | None = None
+    #: The whole decoded message, for an ``op``; None for every other kind.
+    payload: dict[str, object] | None = None
 
 
 def parse_host_notice(raw: str | bytes) -> HostNotice:
@@ -72,6 +88,8 @@ def parse_host_notice(raw: str | bytes) -> HostNotice:
         return HostNotice(POKE)
     kind = decoded.get("type")
     connection_id = decoded.get("connection_id")
+    if kind == OP:
+        return HostNotice(OP, payload=decoded)
     generation = decoded.get("generation")
     return HostNotice(
         kind if kind in {POKE, SUPERSEDED, REVOKED} else POKE,

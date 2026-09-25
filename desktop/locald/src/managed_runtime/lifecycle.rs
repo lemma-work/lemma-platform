@@ -43,6 +43,9 @@ impl ManagedRuntimeController {
         let parameters = json!({
             "images": self.spec.images,
             "credentials": self.spec.credentials,
+            // Where the sandbox callback forwarders listen on the host
+            // gateway: the only ports on this Mac a sandbox may reach.
+            "callback_ports": [self.spec.ports.backend, self.spec.ports.frontend],
         });
         // Postgres and Redis first, and waited for: migrations run against the
         // database before the backend starts, and the backend reaches for both

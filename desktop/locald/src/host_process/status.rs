@@ -49,6 +49,31 @@ impl HostProcessManager {
         frontend.zip(backend)
     }
 
+    /// Every loopback port this stack is known to serve: the managed
+    /// runtime's ports, and the port of each service's loopback health URL.
+    ///
+    /// The loopback relay refuses these, so a new service that declares a
+    /// health check is refused without anybody remembering to add it.
+    pub(crate) fn declared_loopback_ports(&self) -> Vec<u16> {
+        let mut ports: Vec<u16> = self
+            .by_id
+            .values()
+            .filter_map(|service| service.health.as_ref())
+            .filter_map(|health| loopback_http_port(&health.url))
+            .collect();
+        if let Some(runtime) = self.manifest.managed_runtime.as_ref() {
+            let runtime = &runtime.ports;
+            ports.extend([
+                runtime.backend,
+                runtime.frontend,
+                runtime.postgres,
+                runtime.redis,
+                runtime.supertokens,
+            ]);
+        }
+        ports
+    }
+
     pub fn desired_running(&self) -> bool {
         self.desired_running.load(Ordering::Acquire)
     }
