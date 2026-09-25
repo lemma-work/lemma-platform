@@ -94,9 +94,9 @@ test("the app's own window sees it on the loopback origin, whoever is signed in"
 test("only the loopback workspace hosts count as this installation's origin", () => {
     page({ hostname: "app.lemma.localhost" });
     assert.equal(onLocalWorkspaceOrigin(), true);
-    page({ hostname: "app.127.0.0.1.sslip.io" });
-    assert.equal(onLocalWorkspaceOrigin(), true);
-    for (const shared of ["192.168.1.20", "example.ngrok.app", "lemma.work", "evil.lemma.localhost"]) {
+    /* The public loopback wildcard an earlier build served on is not this
+       installation any more. */
+    for (const shared of ["192.168.1.20", "example.ngrok.app", "lemma.work", "evil.lemma.localhost", "app.127.0.0.1.sslip.io"]) {
         page({ hostname: shared, shell: () => null });
         assert.equal(onLocalWorkspaceOrigin(), false, shared);
         assert.equal(thisMacReachable(), false, shared);

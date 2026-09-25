@@ -1,10 +1,12 @@
 /** Copying text from a page that may not be a secure context.
  *
- *  `navigator.clipboard` exists only in a secure context, and the local desktop
- *  workspace is served from `http://app.lemma.localhost`, which WKWebView does
- *  not treat as trustworthy. There the property is `undefined`, and
- *  `navigator.clipboard.writeText(...)` throws a `TypeError` before any promise
- *  exists — not the "permission denied" every call site was written to expect.
+ *  `navigator.clipboard` exists only in a secure context. The local desktop
+ *  workspace on `http://app.lemma.localhost` is one -- every engine treats
+ *  `*.localhost` as potentially trustworthy -- but the same workspace shared on
+ *  the LAN is plain `http://192.168.x.y`, which is not. There the property is
+ *  `undefined`, and `navigator.clipboard.writeText(...)` throws a `TypeError`
+ *  before any promise exists — not the "permission denied" every call site was
+ *  written to expect.
  *  A copy button that caught it did nothing at all: no text, no error, no
  *  feedback.
  *

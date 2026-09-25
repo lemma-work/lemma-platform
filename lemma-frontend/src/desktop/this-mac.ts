@@ -14,11 +14,11 @@ import { desktopBridgeAvailable, invoke } from "./bridge";
 
 /** The loopback hosts a local install serves its workspace on.
  *
- *  Kept in step with `TRUSTED_LOCAL_BASES` in `desktop/src/main.rs` and the
- *  remote URLs in `desktop/capabilities/workspace.json`. A page anywhere else
- *  -- the LAN address or tunnel host sharing moves this window to -- is one
- *  the shell will not answer, whatever it asks. */
-const LOCAL_WORKSPACE_HOSTS = ["app.lemma.localhost", "app.127.0.0.1.sslip.io"];
+ *  Kept in step with `TRUSTED_LOCAL_BASES` in `desktop/src/main.rs`, whose
+ *  hosts the shell grants its commands on their exact origin at runtime. A
+ *  page anywhere else -- the LAN address or tunnel host sharing moves this
+ *  window to -- is one the shell will not answer, whatever it asks. */
+const LOCAL_WORKSPACE_HOSTS = ["app.lemma.localhost"];
 
 export function onLocalWorkspaceOrigin(): boolean {
     if (typeof window === "undefined") return false;

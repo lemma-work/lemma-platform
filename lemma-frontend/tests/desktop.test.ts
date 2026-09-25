@@ -1,6 +1,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { crossSiteFramesCarryCookies, desktopBridgeAvailable, desktopInfo, invoke, isDesktop } from "../src/desktop/bridge.ts";
+import { appFrameMode, desktopBridgeAvailable, desktopInfo, invoke, isDesktop } from "../src/desktop/bridge.ts";
+import { resolveAppFrame } from "../src/desktop/pod-apps.ts";
 import { copyText } from "../src/desktop/clipboard.ts";
 import { openExternal, openExternalWhenReady } from "../src/desktop/open-external.ts";
 import type { AgentHostStatus, AgentHostTarget } from "../src/desktop/agent-host.ts";
@@ -117,7 +118,7 @@ test("the app's own window on a shared address has no shell to call", async () =
         await assert.rejects(invoke("agent_host_status"), /desktop app/);
         assert.equal(state.calls.length, 0);
     }
-    for (const hostname of ["app.lemma.localhost", "app.127.0.0.1.sslip.io", "localhost"]) {
+    for (const hostname of ["app.lemma.localhost", "localhost"]) {
         page({ shell: () => null, deployment: "local", hostname });
         assert.equal(desktopBridgeAvailable(), true, hostname);
     }
@@ -129,17 +130,57 @@ test("invoke passes the command and its arguments through", async () => {
     assert.deepEqual(state.calls, [{ command: "agent_host_pair", args: { url: "u", pairingCode: "c", name: "n" } }]);
 });
 
-test("frames lose their session only on macOS desktop, on the local hostnames", () => {
+test("only the macOS app on a local install frames apps through an alias", () => {
     page();
-    assert.equal(crossSiteFramesCarryCookies(), true, "a browser keeps its iframes");
-    page({ shell: () => null, info: { mode: "local", platform: "windows" } });
-    assert.equal(crossSiteFramesCarryCookies(), true, "WebView2 treats *.localhost as same-site");
-    page({ shell: () => null, info: { mode: "local", platform: "macos" } });
-    assert.equal(crossSiteFramesCarryCookies(), false);
-    page({ shell: () => null, info: { mode: "local" } });
-    assert.equal(crossSiteFramesCarryCookies(), false, "a shell too old to say is assumed restrictive");
+    assert.equal(appFrameMode(), "direct", "a browser frames the app's own URL");
+    page({ shell: () => null, deployment: "local", info: { mode: "local", platform: "windows" } });
+    assert.equal(appFrameMode(), "direct", "WebView2 treats *.lemma.localhost as one site");
+    page({ shell: () => null, deployment: "local", info: { mode: "local", platform: "macos" } });
+    assert.equal(appFrameMode(), "alias");
+    page({ shell: () => null, deployment: "local", info: { mode: "local" } });
+    assert.equal(appFrameMode(), "window", "a shell too old to say cannot alias either");
+    page({ deployment: "local", info: { mode: "local", platform: "macos" } });
+    assert.equal(appFrameMode(), "window", "no shell to ask: a window, not a signed-out frame");
     page({ shell: () => null, info: { mode: "hosted", platform: "macos" }, hostname: "lemma.work" });
-    assert.equal(crossSiteFramesCarryCookies(), true, "a real registrable domain fixes itself");
+    assert.equal(appFrameMode(), "direct", "a hosted workspace and its apps are one site");
+});
+
+test("the frame is the alias the shell hands back, or a window when it will not", async () => {
+    const app = "http://orders.apps.lemma.localhost:52414/reports";
+    const asked: string[] = [];
+    const shell = (answer: unknown) => async (url: string) => { asked.push(url); return answer; };
+
+    assert.deepEqual(await resolveAppFrame(app, "direct", shell(null)), { kind: "frame", src: app });
+    assert.deepEqual(await resolveAppFrame(app, "window", shell(null)), { kind: "window" });
+    assert.deepEqual(asked, [], "only the alias mode asks the shell");
+
+    const alias = "http://app.lemma.localhost:61001/reports";
+    assert.deepEqual(
+        await resolveAppFrame(app, "alias", shell({ url: alias, aliased: true })),
+        { kind: "frame", src: alias },
+    );
+    assert.deepEqual(asked, [app], "the shell is asked about the app's own URL");
+
+    /* An older shell refuses the command; a broken answer is not a URL. */
+    const refusing = async () => { throw new Error("Command app_frame_url not allowed by ACL"); };
+    assert.deepEqual(await resolveAppFrame(app, "alias", refusing), { kind: "window" });
+    assert.deepEqual(await resolveAppFrame(app, "alias", shell({ url: "javascript:alert(1)" })), { kind: "window" });
+    assert.deepEqual(await resolveAppFrame(app, "alias", shell(null)), { kind: "window" });
+});
+
+test("asking for a frame goes through the shell's app_frame_url", async () => {
+    const state = page({
+        shell: () => ({ url: "http://app.lemma.localhost:61001/", aliased: true }),
+        deployment: "local",
+        info: { mode: "local", platform: "macos" },
+    });
+    const frame = await resolveAppFrame(
+        "http://orders.apps.lemma.localhost:52414/",
+        appFrameMode(),
+        (url) => invoke("app_frame_url", { url }),
+    );
+    assert.deepEqual(frame, { kind: "frame", src: "http://app.lemma.localhost:61001/" });
+    assert.deepEqual(state.calls, [{ command: "app_frame_url", args: { url: "http://orders.apps.lemma.localhost:52414/" } }]);
 });
 
 /* ── clipboard ─────────────────────────────────────────────────────── */
