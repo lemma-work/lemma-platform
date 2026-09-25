@@ -14,7 +14,7 @@ installation. It is the person whose computer this is, and it is the only
 account that will be granted anything outside the VM.
 
 - Recorded once, in the one-row `installation_owner` table (identity module,
-  migration `0040`). The primary key is a boolean pinned to `true` by a check
+  migration `0041`). The primary key is a boolean pinned to `true` by a check
   constraint, so a second owner is a statement the database refuses rather
   than a race someone has to lose.
 - The slot is **reserved before the account exists**. Two simultaneous first

@@ -150,26 +150,82 @@ async def test_a_pairing_code_is_single_use(authenticated_client, async_client):
 
 
 @pytest.mark.asyncio
-async def test_the_http_device_routes_are_gone(async_client):
-    """No fallback: a host that still speaks HTTP gets nothing to talk to.
+async def test_the_http_device_routes_only_refuse(async_client):
+    """No fallback: a host that still speaks HTTP is told to update, nothing more.
 
-    The colon spellings went with them. Leaving any of these answering would
-    keep a second transport alive that nothing tests.
+    Through the whole app and without a session, because a protocol-2 host has
+    none: a 401 from the global gate would read to it as retryable, and to the
+    MCP bridge as "try again", which is the opposite of the point.
     """
+    conversation = uuid4()
     for method, path in [
-        ("POST", "/agent-host/poll"),
         ("POST", "/agent-host/events/append"),
         ("POST", "/agent-host/events:append"),
         ("POST", "/agent-host/pairings/complete"),
         ("POST", "/agent-host/pairings:complete"),
         ("PUT", "/agent-host/harnesses"),
         ("POST", "/agent-host/revoke"),
+        ("POST", f"/agent-runtime/conversations/{conversation}/mcp"),
+        ("DELETE", f"/agent-runtime/conversations/{conversation}/mcp"),
+        ("GET", f"/agent-runtime/conversations/{conversation}/interactions/call-1"),
     ]:
-        response = await async_client.request(method, path, json={})
-        assert response.status_code in {
-            status.HTTP_404_NOT_FOUND,
-            status.HTTP_405_METHOD_NOT_ALLOWED,
-        }, (path, response.status_code)
+        response = await async_client.request(
+            method,
+            path,
+            json={} if method != "GET" else None,
+            headers={"Authorization": "Bearer some-old-host-secret"},
+        )
+        assert response.status_code == status.HTTP_410_GONE, (path, response.text)
+        assert response.json()["detail"]["code"] == "AGENT_HOST_UPGRADE_REQUIRED"
+
+    # None of them is on the published API surface.
+    schema = (await async_client.get("/openapi.json")).json()
+    assert not [
+        path
+        for path in schema["paths"]
+        if path.startswith(("/agent-host/", "/agent-runtime/conversations"))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_protocol_2_poll_marks_the_host_as_needing_an_update(
+    authenticated_client, async_client
+):
+    """The one old route whose answer the old host acts on, and what the
+    person then sees; the new host reconnecting over the link clears it."""
+    paired = await pair(authenticated_client, async_client, display_name="e2e old")
+
+    for _ in range(2):  # the second changes nothing, and logs nothing
+        polled = await async_client.post(
+            "/agent-host/poll",
+            json={"hello": {**paired["hello"], "protocol_version": 2}},
+            headers={"Authorization": f"Bearer {paired['host_secret']}"},
+        )
+        assert polled.status_code == status.HTTP_200_OK, polled.text
+        assert polled.json() == {
+            "protocol_version": 3,
+            "host_status": "UPGRADE_REQUIRED",
+            "commands": [],
+            "poll_after_ms": 30_000,
+        }
+
+    hosts = (await authenticated_client.get("/me/runtime/agent-hosts")).json()
+    [host] = [item for item in hosts["items"] if item["id"] == paired["host_id"]]
+    assert host["status"] == "UPGRADE_REQUIRED"
+
+    # An unknown secret learns nothing it could not already guess.
+    stranger = await async_client.post(
+        "/agent-host/poll", json={}, headers={"Authorization": "Bearer nobody"}
+    )
+    assert stranger.json() == polled.json()
+
+    link = await connected_host(app_of(async_client), paired)
+    try:
+        hosts = (await authenticated_client.get("/me/runtime/agent-hosts")).json()
+        [host] = [item for item in hosts["items"] if item["id"] == paired["host_id"]]
+        assert host["status"] == "ONLINE"
+    finally:
+        await link.aclose()
 
 
 @pytest.mark.asyncio
@@ -576,11 +632,21 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
     )
     try:
         answer = await link.request("control", {"capacity": _capacity(0)})
+        # A command goes out once, by whichever path reaches it first: the
+        # pusher wakes on the link's own announcement after ``hello`` and may
+        # push it before ``control`` is answered. Its frame is then already
+        # queued ahead of that answer.
+        pushed = [
+            frame for frame in link.pushed_so_far() if frame["type"] == "commands"
+        ]
     finally:
         await link.aclose()
 
+    delivered = [answer["body"]["commands"]] + [
+        frame["body"]["commands"] for frame in pushed
+    ]
     assert AgentHostCommandKind.CANCEL_RUN.value in {
-        command["kind"] for command in answer["body"]["commands"]
+        command["kind"] for commands in delivered for command in commands
     }
 
 

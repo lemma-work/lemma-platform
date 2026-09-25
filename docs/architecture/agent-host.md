@@ -433,7 +433,11 @@ guarantee:
   (`command_receipts`) and acknowledges on its next `control`.
 - **Events** keep their per-run `sequence`. The host keeps them in its SQLite
   outbox until `events_ok` acknowledges them, and replays from there after a
-  reconnect. Lemma's stream de-duplicates by sequence.
+  reconnect. Lemma's stream de-duplicates by sequence. Delivery drains: one
+  pass reads at most 1,024 events, and a pass that was cut off, or that
+  rewound a refused run for replay, is followed by another without waiting for
+  a new event. Connecting kicks delivery once, so a run that finished while
+  the host was offline is delivered in full, terminal event included.
 - **Control updates** are idempotent and stale ones are ignored.
   `control_ok.refused` names any update Lemma could not parse, and it is the
   only way one is refused. Lemma applies each update separately, so one bad
@@ -449,10 +453,28 @@ guarantee:
   `interaction_wait`, which Lemma answers when the person decides. The bridge no
   longer polls every 2 seconds.
 
+**A connection closes with its last owner.** The socket's reader and writer
+tasks belong to the handles that talk on it: when the last handle is dropped
+-- a refused handshake, a session abandoned after a timed-out request -- the
+writer sends a close frame and both tasks end, bounded by a two-second grace.
+The worker also closes a lost session's link explicitly, so a request still
+waiting on it fails at once and retries on the next link.
+
 **Newest connection wins.** A host that reconnects after a network drop can
-leave a half-open socket behind on some replica. `hello` publishes a
-`superseded` notice on the host's channel, and every other connection for that
-host closes with 4409. Commands therefore go out on one socket at a time.
+leave a half-open socket behind on some replica. Every accepted `hello` claims
+the host's next `link_generation` in the database, in the transaction that
+authenticates it, so handshakes racing on two replicas come away ordered. Once
+subscribed to the host's channel, the connection reads the current generation
+and closes with 4409 if it is already greater than its own; otherwise it
+publishes a `superseded` notice carrying its generation, and every connection
+holding a smaller one closes with 4409. Commands therefore go out on one socket
+at a time.
+
+The generation decides, not which notice arrived. When "newer" meant "any other
+connection id", two handshakes that both subscribed before either announced
+each heard the other and both closed. The read after subscribing covers the
+opposite order: a newer `hello` whose notice went out before this connection
+was listening has already claimed its generation, so the read sees it.
 
 **Draining.** An API replica that is shutting down sends `reconnect` with a
 random `after_ms` of up to 5 seconds and closes with 1012, so a deploy does not
@@ -474,3 +496,32 @@ the worker loop had to do sooner than 25 seconds needed its own arm in the
 `select!`, because the loop spent nearly all of its time waiting on a held
 request. The link's reader, writer and worker are separate tasks joined by
 channels, so work happens when it is due.
+
+### Retired HTTP routes
+
+Desktop 0.8.0 and earlier run a protocol-2 host, which speaks HTTP and never
+opens the link, so it cannot be sent 4426. Its old routes answer with the one
+refusal it already understands and serve nothing else
+(`agent_host_legacy_controller.py`):
+
+- `POST /agent-host/poll` returns 200 with a poll response naming protocol 3.
+  The old host fails the poll on the version, shows the computer offline with
+  "target requested Agent Host protocol 3 is unsupported", and retries every
+  30 seconds. It keeps its pairing, so updating Desktop is all it takes to
+  reconnect. The first such poll marks the host `UPGRADE_REQUIRED`, which the
+  workspace shows as "Needs updating", and logs
+  `agent.agent_host_legacy.upgrade_required` once.
+- Pairing, event upload, harness publication, self-revocation, and the
+  `/agent-runtime/conversations/...` MCP mount return
+  `410 {"detail": {"code": "AGENT_HOST_UPGRADE_REQUIRED", ...}}`. The old host
+  treats that as a request rejection and stops instead of retrying. A person
+  pairing an old app sees the message.
+
+A `401 AGENT_HOST_REVOKED_OR_MISSING` would stop the old host faster, but it
+drops its pairing after three refusals, and the person would have to pair again
+after updating.
+
+**Removal.** Delete the controller, its `/agent-runtime/conversations/` entry in
+`EXCLUDED_PATHS`, and this section no earlier than 2027-03-25 (six months after
+protocol 3 shipped on 2026-09-25), and only after
+`agent.agent_host_legacy.upgrade_required` has not been logged for 30 days.

@@ -56,19 +56,38 @@ pub(crate) struct EventFlusher {
     pub(crate) rejections: HashMap<Uuid, u32>,
 }
 
+/// Most events one delivery pass reads from the journal.
+pub(crate) const FLUSH_LIMIT: usize = 1024;
+
+/// What one delivery pass did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Flushed {
+    /// Lemma acknowledged something.
+    pub(crate) delivered: bool,
+    /// The journal may still owe Lemma events this pass did not send: the
+    /// read was cut off at [`FLUSH_LIMIT`], or a refusal rewound a run for
+    /// replay or left its events to be dropped. Whoever flushes has to pass
+    /// again -- nothing else is going to ask.
+    pub(crate) more: bool,
+}
+
 impl EventFlusher {
     /// Hand journaled events to Lemma, keeping each run's failures to itself.
     ///
-    /// Returns whether anything was acknowledged. Only a link failure is an
-    /// error: a batch Lemma rejects on its own merits belongs to exactly one
-    /// run, and is contained there.
-    pub(crate) async fn flush(&mut self, link: &LinkHandle) -> anyhow::Result<bool> {
+    /// One pass: at most [`FLUSH_LIMIT`] events. [`Flushed::more`] says
+    /// whether another is due. Only a link failure is an error: a batch Lemma
+    /// rejects on its own merits belongs to exactly one run, and is contained
+    /// there.
+    pub(crate) async fn flush(&mut self, link: &LinkHandle) -> anyhow::Result<Flushed> {
         let target_id = self.target_id;
-        let mut delivered = false;
+        let mut flushed = Flushed::default();
         // Runs whose remaining batches this pass must leave alone, because the
         // journal no longer matches the batches read at the top of the loop.
         let mut stale = HashSet::new();
-        for batch in self.journal.pending_events(target_id, 1024)? {
+        let batches = self.journal.pending_events(target_id, FLUSH_LIMIT)?;
+        let read: usize = batches.iter().map(|batch| batch.events.len()).sum();
+        flushed.more = read >= FLUSH_LIMIT;
+        for batch in batches {
             let Some(first) = batch.events.first() else {
                 continue;
             };
@@ -81,6 +100,9 @@ impl EventFlusher {
                     .journal
                     .discard_events(target_id, run_id, lease_epoch)?;
                 stale.insert(run_id);
+                // The run's later batches were skipped, and other runs' may
+                // sit behind them.
+                flushed.more = true;
                 tracing::warn!(
                     %run_id,
                     dropped,
@@ -92,16 +114,34 @@ impl EventFlusher {
                 Ok(ack) => {
                     self.rejections.remove(&run_id);
                     self.journal.acknowledge_events(target_id, &ack)?;
-                    delivered = true;
+                    flushed.delivered = true;
                 }
                 Err(error) if error.is_request_rejected() => {
                     stale.insert(run_id);
                     self.reject_run_events(run_id, lease_epoch, &error)?;
+                    // Either rewound for a replay or due to be dropped; both
+                    // happen on the next pass.
+                    flushed.more = true;
                 }
                 Err(error) => return Err(error.into()),
             }
         }
-        Ok(delivered)
+        Ok(flushed)
+    }
+
+    /// Pass until the journal owes Lemma nothing this flusher can send.
+    ///
+    /// Bounded: each pass either acknowledges, rewinds or drops something,
+    /// and a run is rewound at most once before it is dropped.
+    pub(crate) async fn drain(&mut self, link: &LinkHandle) -> anyhow::Result<bool> {
+        let mut delivered = false;
+        loop {
+            let flushed = self.flush(link).await?;
+            delivered |= flushed.delivered;
+            if !flushed.more {
+                return Ok(delivered);
+            }
+        }
     }
 
     /// Contain a run whose event batch Lemma refused.
@@ -147,6 +187,12 @@ impl EventFlusher {
 /// of streamed chunks goes out as one frame rather than one each, then sends
 /// on whichever link is open. It takes the lock the shutdown flush also takes,
 /// so the two are never in flight together.
+///
+/// A notification starts a drain, not a pass: while a pass reports more to
+/// send, the next one follows without waiting to be woken. A run that finished
+/// while the link was down raised its last notification long ago, so a backlog
+/// larger than one pass -- or a replay a refusal just scheduled -- would
+/// otherwise sit in the journal until some unrelated event came along.
 pub(crate) async fn deliver_events(
     flusher: Arc<tokio::sync::Mutex<EventFlusher>>,
     signal: OutboxSignal,
@@ -156,17 +202,25 @@ pub(crate) async fn deliver_events(
     let ready = signal.events();
     let mut retry = RETRY_MIN;
     let mut consecutive_failures: u32 = 0;
+    // Whether the journal is known to still owe Lemma something, so the next
+    // pass is due without a notification.
+    let mut owed = false;
     loop {
-        tokio::select! {
-            () = ready.notified() => {}
-            _ = shutdown.changed() => return,
+        if !owed {
+            tokio::select! {
+                () = ready.notified() => {}
+                _ = shutdown.changed() => return,
+            }
+            if *shutdown.borrow() {
+                return;
+            }
+            // Coalesce. An agent streams a chunk every few milliseconds; each
+            // used to be its own request.
+            tokio::time::sleep(EVENT_LINGER).await;
         }
         if *shutdown.borrow() {
             return;
         }
-        // Coalesce. An agent streams a chunk every few milliseconds; each
-        // used to be its own request.
-        tokio::time::sleep(EVENT_LINGER).await;
         let handle = tokio::select! {
             handle = link.wait() => handle,
             _ = shutdown.changed() => return,
@@ -175,7 +229,7 @@ pub(crate) async fn deliver_events(
             return;
         };
         match flusher.lock().await.flush(&handle).await {
-            Ok(delivered) => {
+            Ok(pass) => {
                 if consecutive_failures >= EVENT_RETRY_QUIET {
                     tracing::warn!(
                         failures = consecutive_failures,
@@ -184,11 +238,12 @@ pub(crate) async fn deliver_events(
                 }
                 retry = RETRY_MIN;
                 consecutive_failures = 0;
-                if delivered {
+                if pass.delivered {
                     // A terminal checkpoint waits for its run's events to be
                     // acknowledged; they just were.
                     signal.notify_control();
                 }
+                owed = pass.more;
             }
             Err(error) => {
                 consecutive_failures += 1;
@@ -210,9 +265,8 @@ pub(crate) async fn deliver_events(
                     _ = shutdown.changed() => return,
                 }
                 retry = (retry * 2).min(EVENT_RETRY_MAX);
-                // Nothing consumed the notification that brought us here, so
-                // re-raise it: the events are still pending.
-                ready.notify_one();
+                // The events are still pending.
+                owed = true;
             }
         }
     }

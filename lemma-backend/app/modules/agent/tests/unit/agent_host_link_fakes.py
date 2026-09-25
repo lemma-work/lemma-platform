@@ -153,6 +153,9 @@ class FakeStore:
         self.control_error: Exception | None = None
         self.reads = 0
         self.host_execution: HostExecutionCapability | None = None
+        #: The host's link generation, as the row holds it: every accepted
+        #: hello takes the next one.
+        self.generation = 0
 
     async def consume_pairing_code(self, body) -> AgentHostPairingCompleted:
         if body.pairing_code != PAIRING_CODE:
@@ -177,7 +180,19 @@ class FakeStore:
             if hello.protocol_version == AGENT_HOST_PROTOCOL_VERSION
             else AgentHostStatus.UPGRADE_REQUIRED
         )
-        return LinkedHost(host_id=self.host_id, user_id=self.user_id, status=status)
+        claimed = 0
+        if status is AgentHostStatus.ONLINE:
+            self.generation += 1
+            claimed = self.generation
+        return LinkedHost(
+            host_id=self.host_id,
+            user_id=self.user_id,
+            status=status,
+            link_generation=claimed,
+        )
+
+    async def link_generation(self, host_id: UUID) -> int | None:
+        return self.generation
 
     async def apply_control(
         self, *, host_id: UUID, hello: HostHello, updates: ControlUpdates
@@ -239,11 +254,25 @@ class FakeStore:
 class FakeChannels:
     """In-memory pub/sub with the channel service's shape."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, hold_announcements: bool = False) -> None:
         self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
         self.published: list[tuple[str, object]] = []
+        #: With ``hold_announcements``, each ``superseded`` publish waits here,
+        #: keyed by the generation it announces, until the test releases it --
+        #: which is how a test orders two handshakes' announcements.
+        self._hold_announcements = hold_announcements
+        self.held: dict[int, asyncio.Event] = {}
+        #: Set to hold every subscription open until the test releases it.
+        self.subscribe_gate: asyncio.Event | None = None
 
     async def publish(self, channel: str, message: object) -> None:
+        if (
+            self._hold_announcements
+            and isinstance(message, dict)
+            and message.get("type") == "superseded"
+        ):
+            release = self.held.setdefault(message["generation"], asyncio.Event())
+            await release.wait()
         self.published.append((channel, message))
         payload = (
             message if isinstance(message, str) else json.dumps(message, default=str)
@@ -255,6 +284,8 @@ class FakeChannels:
     async def subscribe(
         self, channels: Sequence[str]
     ) -> AsyncIterator[AsyncIterator[str]]:
+        if self.subscribe_gate is not None:
+            await self.subscribe_gate.wait()
         queue: asyncio.Queue = asyncio.Queue()
         for channel in channels:
             self._subscribers[channel].append(queue)

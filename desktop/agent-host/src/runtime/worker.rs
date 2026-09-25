@@ -445,6 +445,21 @@ impl TargetWorker {
     /// had to happen sooner needed its own arm, and a check at the top of the
     /// loop ran once per 25 seconds however short its own interval said.
     async fn session(&mut self, connected: Connected) -> anyhow::Result<SessionEnd> {
+        let link = connected.handle.clone();
+        let end = self.serve_session(connected).await;
+        if !matches!(end, Ok(SessionEnd::Shutdown)) {
+            // A session ends without the link having closed -- a request on
+            // it timed out, say. Close it rather than abandon it: tasks
+            // still holding a handle (an MCP call waits without a deadline of
+            // its own) learn now that it is gone and retry on the next link,
+            // and Lemma stops counting it as this host's connection.
+            link.close(close::NORMAL, "reconnecting");
+        }
+        end
+    }
+
+    /// The body of [`Self::session`], which owns closing the link after it.
+    async fn serve_session(&mut self, connected: Connected) -> anyhow::Result<SessionEnd> {
         let Connected {
             handle,
             mut pushes,
