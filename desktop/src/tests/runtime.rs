@@ -264,7 +264,25 @@ fn no_capability_exposes_the_updater_to_a_remote_origin() {
         );
     }
     let install = function_body(&updates, "pub(crate) async fn install_app_update(");
-    assert!(install.contains("confirm_destructive_action_impl"));
+    // Consent comes first: before the download, before the stack is stopped
+    // and before anything is installed -- and on every platform, which is why
+    // it is also before the Windows early return.
+    let consent = install
+        .find("confirm_destructive_action_impl(")
+        .expect("install asks natively");
+    let agreed = install.find("if !agreed").expect("a refusal aborts");
+    for later in [
+        ".download(",
+        "stop_locald_for_runtime_maintenance",
+        ".install(bytes)",
+        "if cfg!(windows)",
+    ] {
+        let at = install.find(later).unwrap_or_else(|| panic!("{later} is missing"));
+        assert!(
+            consent < agreed && agreed < at,
+            "native consent must precede {later}: consent@{consent} abort@{agreed} {later}@{at}",
+        );
+    }
     assert!(include_str!("../../capabilities/control.json").contains("allow-install-app-update"));
 }
 

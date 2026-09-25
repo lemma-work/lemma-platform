@@ -114,6 +114,14 @@ pub(crate) fn snapshot_from_inspect_with(
             serde_json::from_str::<BTreeMap<String, String>>(encoded)
                 .map_err(|_| GuestError::engine("sandbox metadata label is invalid"))
         })?;
+    // Read back so a re-ensure can tell whether the running container still
+    // has the grants being asked for (`existing_container_verdict`). A
+    // container made before the label existed had the alias -- that was the
+    // only behaviour then -- so absent reads as `true`.
+    let host_access = labels
+        .and_then(|value| value.get("lemma.work/host-access"))
+        .and_then(Value::as_str)
+        .is_none_or(|value| value != "false");
     let ports = inspect
         .get("NetworkSettings")
         .and_then(Value::as_object)
@@ -163,6 +171,7 @@ pub(crate) fn snapshot_from_inspect_with(
         "provider_id": provider_id,
         "image": image,
         "metadata": metadata,
+        "grants": {"host_access": host_access},
         "status": {
             "id": sandbox_id,
             "ready": ready,

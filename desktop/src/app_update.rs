@@ -292,6 +292,34 @@ pub(crate) async fn install_app_update(
         lemma_update_metadata(&update.raw_json).postgres_major,
     )?;
 
+    // The person agrees here, natively, before anything is downloaded or
+    // stopped. The command is reachable from the workspace page, and a page
+    // asking is not the person agreeing: without this, a page that passed the
+    // caller check could replace the application and restart the stack with
+    // nobody at the keyboard having said yes. Asked after the checks above,
+    // so a refusal they would make anyway is not preceded by a question, and
+    // before the download, so saying no costs nothing. Off the async runtime,
+    // for the reason given at the restart question below.
+    let consent = format!(
+        "Lemma {} will be downloaded and installed. Lemma's local runtime stops \
+         while it installs.",
+        update.version
+    );
+    let handle = app.clone();
+    let agreed = tauri::async_runtime::spawn_blocking(move || {
+        confirm_destructive_action_impl(
+            handle,
+            "Install the update?".into(),
+            consent,
+            "Install".into(),
+        )
+    })
+    .await
+    .map_err(|join| join.to_string())??;
+    if !agreed {
+        return Err("The update was not installed.".into());
+    }
+
     // Downloaded first, and deliberately not with `download_and_install`.
     //
     // `download` is where the signature is verified, and it is the step most
