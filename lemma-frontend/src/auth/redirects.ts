@@ -1,5 +1,5 @@
 import { resolveSafeRedirectUri } from "lemma-sdk";
-import { appsDomainSuffix, DEFAULT_LANDING, PORTAL_PATH, siteOrigin } from "./config";
+import { appsDomainSuffix, DEFAULT_LANDING, PORTAL_PATH, siteOrigin, onApi } from "./config";
 
 /** Held across the round trip to Google or Microsoft, which leaves and
  *  re-enters this app with a URL we did not write. `sessionStorage` rather
@@ -39,6 +39,7 @@ export interface Where {
     origin: string;
     /** Hostname suffix for deployed pod apps, or "" for none. */
     appsSuffix: string;
+    apiOrigin?: string;
 }
 
 /** The decision, with nowhere read from the browser.
@@ -58,7 +59,8 @@ export function safeDestinationIn(raw: string | null, where: Where): string | nu
         fallback: REFUSED,
         /* The portal itself, so a redirect back into sign-in cannot make a
            loop that looks like a broken password. */
-        blockedPaths: [PORTAL_PATH],
+        blockedPaths: [PORTAL_PATH, "/login", "/signup", "/verify-email", "/reset-password"],
+        allowedOrigins: where.apiOrigin ? [where.apiOrigin] : undefined,
         /* A deployed pod app is first-party even though it is not this origin,
            and is where somebody signing in from an app expects to return. */
         allowedOriginSuffixes: suffix ? [suffix] : undefined,
@@ -74,7 +76,7 @@ export function safeDestinationIn(raw: string | null, where: Where): string | nu
 
 /** What this app will honour, asked of this app. */
 export function safeDestination(raw: string | null): string | null {
-    return safeDestinationIn(raw, { origin: siteOrigin(), appsSuffix: appsDomainSuffix() });
+    return safeDestinationIn(raw, { origin: siteOrigin(), appsSuffix: appsDomainSuffix(), apiOrigin: onApi("/") });
 }
 
 /** The destination a URL asks for, if this app will honour it. */
@@ -90,9 +92,9 @@ export function asksForDestination(search: string): boolean {
 }
 
 export function rememberDestination(destination: string | null): void {
-    if (!destination) return;
     try {
-        window.sessionStorage.setItem(KEY, destination);
+        if (destination) window.sessionStorage.setItem(KEY, destination);
+        else window.sessionStorage.removeItem(KEY);
     } catch {
         /* A browser refusing session storage still signs people in; they land
            on the default instead of where they were going. */
@@ -102,9 +104,14 @@ export function rememberDestination(destination: string | null): void {
 /** Take it back out, once. Read-and-clear rather than read, because a
  *  destination that outlived its sign-in would be obeyed by the next one. */
 export function takeDestination(): string | null {
+    const destination = storedDestination();
+    forgetDestination();
+    return destination;
+}
+
+export function storedDestination(): string | null {
     try {
         const held = window.sessionStorage.getItem(KEY);
-        window.sessionStorage.removeItem(KEY);
         return safeDestination(held);
     } catch {
         return null;
@@ -122,5 +129,18 @@ export function forgetDestination(): void {
 /** Where to go now: what they asked for, what they asked for before the round
  *  trip, or the workspace. */
 export function landing(search: string): string {
-    return destinationFrom(search) ?? takeDestination() ?? DEFAULT_LANDING;
+    const held = takeDestination();
+    return asksForDestination(search)
+        ? destinationFrom(search) ?? DEFAULT_LANDING
+        : held ?? DEFAULT_LANDING;
+}
+
+export function pendingDestination(search: string): string | null {
+    return asksForDestination(search) ? destinationFrom(search) : storedDestination();
+}
+
+/** Carry only the destination, never a password-reset token or OAuth code. */
+export function authLink(path: string, search = window.location.search): string {
+    const destination = pendingDestination(search);
+    return destination ? path + "?redirect_uri=" + encodeURIComponent(destination) : path;
 }

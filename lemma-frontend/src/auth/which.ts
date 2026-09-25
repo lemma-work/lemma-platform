@@ -13,9 +13,12 @@
 
 export type Screen = "sign-in" | "sign-up" | "reset" | "verify" | "callback" | "unknown";
 
-export function screenFor(path: string[] | undefined): Screen {
+export function screenFor(path: string[] | undefined, search = ""): Screen {
     const segments = (path ?? []).filter(Boolean);
-    if (segments.length === 0) return "sign-in";
+    if (segments.length === 0) {
+        const params = new URLSearchParams(search);
+        return params.get("show") === "signup" || params.get("mode") === "signup" ? "sign-up" : "sign-in";
+    }
 
     switch (segments[0]) {
         case "signin":
