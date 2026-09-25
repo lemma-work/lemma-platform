@@ -300,9 +300,18 @@ pub(crate) async fn install_app_update(
     // so a refusal they would make anyway is not preceded by a question, and
     // before the download, so saying no costs nothing. Off the async runtime,
     // for the reason given at the restart question below.
+    // Said before, not after: the workspace is unusable from the moment the
+    // stack stops until the new runtime has downloaded on the next launch,
+    // and that is a cost somebody deciding *when* to update needs to know.
+    let runtime_download = match lemma_update_metadata(&update.raw_json).runtime_download_bytes {
+        Some(bytes) => format!(" (about {} MB)", bytes.div_ceil(1024 * 1024)),
+        None => String::new(),
+    };
     let consent = format!(
         "Lemma {} will be downloaded and installed. Lemma's local runtime stops \
-         while it installs, and Lemma restarts as soon as it is installed.",
+         while it installs, and Lemma restarts as soon as it is installed. Your \
+         local workspace opens again once the updated runtime{runtime_download} \
+         has downloaded.",
         update.version
     );
     let handle = app.clone();

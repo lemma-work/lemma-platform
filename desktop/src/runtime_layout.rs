@@ -383,3 +383,29 @@ pub(crate) fn runtime_info(window: Webview) -> Result<RuntimeInfo, String> {
     require_control_window(&window)?;
     Ok(runtime_info_snapshot())
 }
+
+/// Why Lemma cannot run from where it was launched, or `None`.
+///
+/// Everything this installation owns is keyed by path: locald is recognised by
+/// its executable path, the VM helper by its path, Start at Login by the
+/// bundle path. Gatekeeper's App Translocation runs a quarantined app from a
+/// random read-only path under `/private/var/folders/.../AppTranslocation/`
+/// that changes every launch, and a DMG's `/Volumes/...` goes away when it is
+/// ejected -- so from either, each launch looks like a different installation,
+/// orphans the last one's daemon and VM, and cannot update itself.
+pub(crate) fn launch_location_problem(executable: &std::path::Path) -> Option<&'static str> {
+    let path = executable.to_string_lossy();
+    if path.contains("/AppTranslocation/") {
+        Some(
+            "macOS is running Lemma from a temporary location. Move Lemma to your \
+             Applications folder, then open it from there.",
+        )
+    } else if path.starts_with("/Volumes/") {
+        Some(
+            "Lemma is running from the disk image. Drag Lemma to your Applications \
+             folder, eject the disk image, then open Lemma from Applications.",
+        )
+    } else {
+        None
+    }
+}

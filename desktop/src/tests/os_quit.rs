@@ -89,3 +89,26 @@ fn every_quit_outcome_answers_a_held_os_terminate() {
     let app = include_str!("../app.rs").replace("\r\n", "\n");
     assert!(app.contains("install_os_quit_handler(&handle)"));
 }
+
+/// A translocated or disk-image launch is refused before it creates a second
+/// installation's worth of path-keyed state.
+#[test]
+fn lemma_refuses_to_run_from_a_translocated_or_mounted_location() {
+    use std::path::Path;
+    assert!(launch_location_problem(Path::new(
+        "/private/var/folders/x/T/AppTranslocation/AB12/d/Lemma.app/Contents/MacOS/Lemma"
+    ))
+    .is_some_and(|message| message.contains("Applications")));
+    assert!(
+        launch_location_problem(Path::new("/Volumes/Lemma/Lemma.app/Contents/MacOS/Lemma"))
+            .is_some_and(|message| message.contains("eject"))
+    );
+    assert!(
+        launch_location_problem(Path::new("/Applications/Lemma.app/Contents/MacOS/Lemma"))
+            .is_none()
+    );
+    assert!(launch_location_problem(Path::new(
+        "/Users/me/Applications/Lemma.app/Contents/MacOS/Lemma"
+    ))
+    .is_none());
+}

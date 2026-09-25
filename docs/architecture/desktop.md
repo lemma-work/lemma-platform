@@ -55,13 +55,20 @@ one source is allowed. `file://` is accepted only when both
 `LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1` select that exact source-level test
 manifest.
 
+A packaged build refuses to run from a translocated path
+(`.../AppTranslocation/...`) or a mounted disk image (`/Volumes/...`) and asks to
+be moved to Applications: locald, the VM helper and Start at Login are all
+identified by path, and those paths change every launch.
+
 Installation:
 
 1. Validate manifest schema, release, target, source, digest, and sizes.
 2. Reserve space for the compressed downloads, expanded sizes, and 4 GiB of
    working headroom before extraction.
 3. Reuse a verified archive or resume its `.part` file with a strict
-   `Content-Range`.
+   `Content-Range`. A connection that drops, or is silent for 60 seconds
+   (the header wait and every body read), is resumed automatically up to five
+   times with backoff; a digest, range or client error is not retried.
 4. Hash the existing prefix and new bytes as they transfer.
 5. Reject redirects outside HTTPS, wrong status/size/digest, archive overlap,
    path escape, duplicate entries, symlinks, and unsafe expansion.

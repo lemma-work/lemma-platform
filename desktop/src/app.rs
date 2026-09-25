@@ -116,6 +116,23 @@ fn setup(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
 
+    // Before anything is started, recorded or reclaimed under this path.
+    // Release builds only: a development build runs from target/.
+    if !cfg!(debug_assertions) {
+        if let Some(problem) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| launch_location_problem(&exe))
+        {
+            use tauri_plugin_dialog::DialogExt;
+            append_install_log(&format!("launch refused: {problem}"));
+            app.dialog()
+                .message(problem)
+                .title("Move Lemma to Applications")
+                .show(|_| std::process::exit(0));
+            return Ok(());
+        }
+    }
+
     // Before anything else reads a version: an update that did not finish is
     // the reason this launch is on the version it is on.
     reconcile_update_attempt(&handle);
