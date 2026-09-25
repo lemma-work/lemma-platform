@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { signedIn } from "@/session/who";
+import { portalTrip } from "@/session/portal-trip";
 
 /** Signed in? Then this is not the page you wanted.
  *
@@ -29,6 +30,11 @@ export function ToTheApp() {
     const router = useRouter();
 
     useEffect(() => {
+        /* A tab the workspace just sent to sign in, and which came home
+           instead, is here because the workspace could not keep it. Sending it
+           straight back would put it on the same "couldn't finish signing you
+           in" screen it just left. */
+        if (portalTrip.recent()) return;
         let live = true;
         /* One settled answer, from the same module the workspace's own gate
            uses. The first pass asked the SDK and believed it, which is the one

@@ -1,11 +1,21 @@
 import SuperTokens from "supertokens-web-js";
 import Session from "supertokens-web-js/recipe/session/index.js";
+import { createRefreshBreaker } from "./refresh-breaker.js";
 
 const APP_NAME = "Lemma";
 const SESSION_API_SUFFIX = "/st/auth";
 
 let initializedSignature: string | null = null;
 const unauthorisedListeners = new Set<() => void>();
+
+/* One per page, because the interceptor it guards is one per page. Tripping it
+   is the session being unusable, which is what the unauthorised listeners are
+   for: they mark the session signed out, the app stops rendering the screens
+   whose polls were meeting 401s, and so stops the requests that were asking
+   for refreshes. */
+const refreshBreaker = createRefreshBreaker({
+  onTrip: () => unauthorisedListeners.forEach((listener) => listener()),
+});
 
 function normalizePath(pathname: string): string {
   const trimmed = pathname.trim();
@@ -99,6 +109,12 @@ export function ensureCookieSessionSupport(
          * the one case it was raised for.
          */
         maxRetryAttemptsForSessionRefresh: 3,
+        /* Thrown inside SuperTokens' refresh `try`, so a refused refresh never
+           reaches the network and fails only the request that asked for it. */
+        preAPIHook: async (context) => {
+          if (context.action === "REFRESH_SESSION") refreshBreaker.admit();
+          return context;
+        },
         onHandleEvent: (event) => {
           if (event.action === "UNAUTHORISED") {
             unauthorisedListeners.forEach((listener) => listener());

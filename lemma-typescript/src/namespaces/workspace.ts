@@ -9,6 +9,30 @@ import type { HttpClient } from "../http.js";
  */
 export const MAX_READ_BYTES = 8 * 1024 * 1024;
 
+function contentPath(path: string, options: { offset?: number; length?: number } = {}): string {
+  const query = new URLSearchParams({ path });
+  if (options.offset) query.set("offset", String(options.offset));
+  if (options.length) query.set("length", String(options.length));
+  return `/workspace/files:content?${query.toString()}`;
+}
+
+function rangeHeader(range: { start: number; end: number }): Record<string, string> {
+  return { Range: `bytes=${range.start}-${range.end}` };
+}
+
+/**
+ * Whether a response to `Range: bytes=<start>-…` is the slice asked for: a
+ * 206, or a `Content-Range` that starts at `start`. A `Content-Range` that
+ * starts anywhere else is a different slice, whatever the status.
+ */
+function rangeHonoured(status: number, contentRange: string | null, start: number): boolean {
+  if (contentRange) {
+    const match = /^bytes (\d+)-\d+\/(?:\d+|\*)$/.exec(contentRange.trim());
+    return match !== null && Number(match[1]) === start;
+  }
+  return status === 206;
+}
+
 /** One entry in a workspace directory listing. */
 export interface WorkspaceFileEntry {
   path: string;
@@ -302,13 +326,8 @@ export class WorkspaceNamespace {
     path: string,
     options: { offset?: number; length?: number; range?: { start: number; end: number } } = {},
   ): Promise<Blob> {
-    const query = new URLSearchParams({ path });
-    if (options.offset) query.set("offset", String(options.offset));
-    if (options.length) query.set("length", String(options.length));
-    return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`, {
-      headers: options.range
-        ? { Range: `bytes=${options.range.start}-${options.range.end}` }
-        : undefined,
+    return this.http.requestBytes("GET", contentPath(path, options), {
+      headers: options.range ? rangeHeader(options.range) : undefined,
     });
   }
 
@@ -357,16 +376,31 @@ export class WorkspaceNamespace {
     }
     for (;;) {
       let part: Blob;
+      let honoured: boolean;
       try {
-        part = await this.readFile(path, {
-          range: { start, end: start + step - 1 },
+        const answer = await this.http.requestBytesResponse("GET", contentPath(path), {
+          headers: rangeHeader({ start, end: start + step - 1 }),
         });
+        part = answer.blob;
+        honoured = rangeHonoured(answer.status, answer.contentRange, start);
       } catch (error) {
         // 416. The file ended exactly on a chunk boundary, or it is empty:
         // both are "there is nothing at this offset", and neither is a
         // failure. Any other status is.
         if (error instanceof ApiError && error.statusCode === 416) break;
         throw error;
+      }
+      if (!honoured) {
+        // The server ignored the Range and sent the file from byte 0. Read
+        // again at the next offset and it does the same, so the loop never
+        // ends and holds another copy each time. From the start, short of the
+        // ceiling, that is simply the whole file; anywhere else it cannot be
+        // stitched into one.
+        if (start === 0 && part.size < MAX_READ_BYTES) return part;
+        throw new Error(
+          `The server ignored the Range header reading "${path}" at byte ${start}; ` +
+            "stopping rather than stitching repeated copies of the file.",
+        );
       }
       if (part.size === 0) break;
       parts.push(part);

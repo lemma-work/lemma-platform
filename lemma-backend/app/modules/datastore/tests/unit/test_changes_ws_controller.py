@@ -1,20 +1,25 @@
 """Unit tests for the datastore changes WebSocket controller.
 
 Focuses on error-handling paths that are hard to reproduce with the full
-E2E stack: specifically the client-disconnect race that surfaces as a
-RuntimeError when uvicorn's state machine rejects websocket.accept().
+E2E stack: the client-disconnect race that surfaces as a RuntimeError when
+uvicorn's state machine rejects websocket.accept(), and the rule that every
+rejection is a close *after* accept — a pre-accept close reaches a browser as
+1006, which hides the 4401 that tells the client to refresh its token.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
 
 import pytest
+from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
 
 from app.modules.datastore.api.controllers.changes_controller import (
+    CLOSE_UNAUTHENTICATED,
     datastore_changes_ws,
 )
+from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -153,3 +158,68 @@ async def test_accept_succeeds_normally_starts_streaming():
 
     ws.accept.assert_awaited_once()
     ws.send_json.assert_awaited_once_with({"type": "ready", "since": "0-0"})
+
+
+def _handshake_calls(ws) -> list:
+    """The accept/close calls on *ws*, in the order the handler made them."""
+    return [c for c in ws.mock_calls if c[0] in ("accept", "close")]
+
+
+async def test_missing_token_accepts_then_closes_4401():
+    """No token at all: accept, then close 4401 — never a pre-accept close."""
+    ws = _make_ws()
+    ws.query_params.get.return_value = None
+
+    await datastore_changes_ws(ws, pod_id=uuid4(), table=None, since=None)
+
+    assert _handshake_calls(ws) == [
+        call.accept(),
+        call.close(
+            code=CLOSE_UNAUTHENTICATED,
+            reason="Unauthorized datastore changes websocket.",
+        ),
+    ]
+    ws.send_json.assert_not_awaited()
+
+
+async def test_expired_token_accepts_then_closes_4401():
+    """An expired access token is the case the client can fix by refreshing."""
+    ws = _make_ws()
+
+    with patch(
+        f"{_MODULE}._resolve_session",
+        AsyncMock(side_effect=TryRefreshTokenError("expired")),
+    ):
+        await datastore_changes_ws(ws, pod_id=uuid4(), table=None, since=None)
+
+    assert _handshake_calls(ws) == [
+        call.accept(),
+        call.close(
+            code=CLOSE_UNAUTHENTICATED,
+            reason="Access token expired. Refresh your session and reconnect.",
+        ),
+    ]
+
+
+async def test_forbidden_pod_accepts_then_closes_4403():
+    """Authorization failures are also post-accept, so 4403 reaches the client."""
+    ws = _make_ws()
+
+    uow = MagicMock()
+    uow.session = MagicMock()
+    mock_ctx, mock_auth_svc, mock_build_ts = _auth_patches(uow)
+    mock_ctx.require = AsyncMock(side_effect=DatastoreAccessDeniedError())
+
+    with (
+        patch(f"{_MODULE}._resolve_session", AsyncMock(return_value=_mock_session())),
+        patch(f"{_MODULE}.SessionUnitOfWorkFactory", _mock_uow_factory(uow)),
+        patch(f"{_MODULE}.AuthorizationDataService", mock_auth_svc),
+        patch(f"{_MODULE}.build_table_service", mock_build_ts),
+    ):
+        await datastore_changes_ws(ws, pod_id=uuid4(), table=None, since=None)
+
+    assert _handshake_calls(ws) == [
+        call.accept(),
+        call.close(code=4403, reason="Access denied"),
+    ]
+    ws.send_json.assert_not_awaited()

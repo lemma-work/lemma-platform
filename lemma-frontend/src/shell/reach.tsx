@@ -138,6 +138,18 @@ function ConnectedRow({ surface, pod, onDrop, onManage }: { surface: Surface; po
     );
 }
 
+/** How long the two setup polls below keep asking once every ask fails.
+ *
+ *  Both poll every 2.5 s while somebody finishes a step somewhere else, and
+ *  both used to catch a failure, say so, and ask again — forever, for as long
+ *  as the sheet stayed open. Eight in a row is twenty seconds of an API that
+ *  is not answering, which is long enough to stop and hand the retry back to
+ *  the person. */
+const POLL_EVERY_MS = 2500;
+const GIVE_UP_AFTER_FAILURES = 8;
+/** An authorisation nobody finished in this long is not going to be. */
+const ACCOUNT_WAIT_MS = 15 * 60_000;
+
 /** The guided path: Lemma's manager bot makes you a bot of your own.
  *
  *  Three legs — start here, finish in Telegram, come back — so the waiting is
@@ -153,16 +165,38 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
     useEffect(() => {
         if (!setup || ready || failed) return;
         let stop = false;
+        let failures = 0;
         const tick = window.setInterval(() => {
+            /* `failed` reads the clock only when this renders, and a poll that
+               keeps failing sets the same error and never re-renders it. So
+               expiry is checked here, and a copy of the same setup is enough
+               to make the render notice. */
+            if (setup.expiresAt && Date.parse(setup.expiresAt) < Date.now()) {
+                stop = true;
+                window.clearInterval(tick);
+                setSetup((current) => current && { ...current });
+                return;
+            }
             source
                 .checkGuided(pod.id, setup.setupId)
                 .then((next) => {
                     if (stop) return;
+                    failures = 0;
                     setSetup(next);
                     if (next.status === "READY" || next.status === "COMPLETE") onDone();
                 })
-                .catch(() => setError("Could not check setup. We will try again."));
-        }, 2500);
+                .catch(() => {
+                    if (stop) return;
+                    failures += 1;
+                    if (failures < GIVE_UP_AFTER_FAILURES) {
+                        setError("Could not check setup. We will try again.");
+                        return;
+                    }
+                    stop = true;
+                    window.clearInterval(tick);
+                    setError("We still can’t check on this setup. Reload the page to look again.");
+                });
+        }, POLL_EVERY_MS);
         return () => {
             stop = true;
             window.clearInterval(tick);
@@ -273,21 +307,44 @@ function Account({
     const [named, setNamed] = useState<string | null>(null);
     useConnectOutcome((outcome) => {
         if (outcome.connect === "connected" && outcome.account) setNamed(outcome.account);
-        else if (outcome.connect === "error") setError(outcome.reason || "The account was not connected.");
+        else if (outcome.connect === "error") {
+            /* The provider said no. Back to the start, which is also what ends
+               the poll below: nothing it could find would change that answer. */
+            setStage("idle");
+            setLink(null);
+            setError(outcome.reason || "The account was not connected.");
+        }
     }, () => undefined);
 
     useEffect(() => {
         if (!link || stage !== "waiting") return;
         let stop = false;
+        let failures = 0;
+        const deadline = Date.now() + ACCOUNT_WAIT_MS;
+        /* Back to the Connect button, with the reason beside it — the waiting
+           view has nowhere to show one. */
+        const giveUp = (reason: string) => {
+            stop = true;
+            window.clearInterval(tick);
+            setStage("idle");
+            setLink(null);
+            setError(reason);
+        };
         const look = () => named
             ? Promise.resolve(named)
             /* Scoped to the install this authorisation ran against, so an
                account on another install of the same connector is not it. */
             : source.findAccount(pod.orgId, entry.connectorId, link.before, link.authConfigId);
         const tick = window.setInterval(() => {
+            if (Date.now() > deadline) {
+                giveUp("That took too long. Connect again to start over.");
+                return;
+            }
             look()
                 .then(async (accountId) => {
-                    if (stop || !accountId) return;
+                    if (stop) return;
+                    failures = 0;
+                    if (!accountId) return;
                     stop = true;
                     window.clearInterval(tick);
                     setStage("binding");
@@ -303,9 +360,12 @@ function Account({
                 })
                 .catch((problem) => {
                     if (stop) return;
-                    setError(problem instanceof Error ? problem.message : "That account could not be used.");
+                    failures += 1;
+                    const reason = problem instanceof Error ? problem.message : "That account could not be used.";
+                    if (failures >= GIVE_UP_AFTER_FAILURES) giveUp(reason);
+                    else setError(reason);
                 });
-        }, 2500);
+        }, POLL_EVERY_MS);
         return () => {
             stop = true;
             window.clearInterval(tick);
