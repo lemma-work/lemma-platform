@@ -55,6 +55,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     publish_harnesses,
     stale_after,
 )
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
@@ -632,22 +633,42 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
     )
     try:
         answer = await link.request("control", {"capacity": _capacity(0)})
-        # A command goes out once, by whichever path reaches it first: the
-        # pusher wakes on the link's own announcement after ``hello`` and may
-        # push it before ``control`` is answered. Its frame is then already
-        # queued ahead of that answer.
-        pushed = [
-            frame for frame in link.pushed_so_far() if frame["type"] == "commands"
-        ]
+        # A command goes out once, by whichever path reaches it first, and
+        # both run at once: the pusher wakes on the link's own announcement
+        # after ``hello``. Both read the queue under SKIP LOCKED, so while the
+        # pusher's transaction holds the cancel, ``control`` skips it and is
+        # answered empty -- and the push lands after that answer. So watch
+        # every delivery until the cancel arrives, rather than looking once.
+        delivered = list(answer["body"]["commands"])
+
+        async def delivered_so_far() -> list[dict]:
+            delivered.extend(
+                command
+                for frame in link.pushed_so_far()
+                if frame["type"] == "commands"
+                for command in frame["body"]["commands"]
+            )
+            return delivered
+
+        # Within the 5-second push floor even if every poke were lost; a
+        # cancel buried behind the starts would never arrive at all.
+        await eventually(
+            label="the cancel reaching a saturated host",
+            probe=delivered_so_far,
+            done=lambda commands: any(
+                command["kind"] == AgentHostCommandKind.CANCEL_RUN.value
+                for command in commands
+            ),
+            timeout_seconds=15,
+        )
     finally:
         await link.aclose()
 
-    delivered = [answer["body"]["commands"]] + [
-        frame["body"]["commands"] for frame in pushed
+    # The host has no slot, so the cancel is all it may be handed -- once,
+    # whichever path carried it -- and none of the starts in front of it.
+    assert [command["kind"] for command in delivered] == [
+        AgentHostCommandKind.CANCEL_RUN.value
     ]
-    assert AgentHostCommandKind.CANCEL_RUN.value in {
-        command["kind"] for commands in delivered for command in commands
-    }
 
 
 @pytest.mark.asyncio
