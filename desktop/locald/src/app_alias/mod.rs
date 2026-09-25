@@ -399,7 +399,7 @@ impl AppAliasService {
     fn bind(&self, wanted: Option<u16>) -> io::Result<TcpListener> {
         if let Some(port) = wanted.filter(|port| !self.reserved(*port)) {
             if let Ok(reservation) = PortReservation::at_loopback_port(port) {
-                return reservation.listen();
+                return reclaimable(reservation.listen()?);
             }
             // Refused is not proof somebody else has it. Our own previous run
             // closed connections on this port, and those linger in TIME_WAIT
@@ -420,7 +420,7 @@ impl AppAliasService {
             if self.reserved(reservation.port()) {
                 continue;
             }
-            return reservation.listen();
+            return reclaimable(reservation.listen()?);
         }
         Err(io::Error::other("no free loopback port for an app alias"))
     }
@@ -486,6 +486,23 @@ impl Drop for AppAliasService {
             let _ = running.shutdown.send(());
         }
     }
+}
+
+/// Mark a listener's connections as reclaimable by the next run.
+///
+/// SO_REUSEADDR on the *reclaiming* socket is not enough on Linux: a TIME_WAIT
+/// connection keeps the flag its listener had when it was accepted, and one
+/// without it blocks the rebind whatever the new socket sets (macOS only looks
+/// at the new socket, which is why this held there and moved every alias on
+/// Linux). Set after the exclusive bind, so the reservation's guarantee that
+/// nobody else holds the port is unchanged; a listening socket still refuses a
+/// second binder on either platform. Not on Windows, for the reason
+/// [`bind_reclaiming`] is not.
+fn reclaimable(listener: TcpListener) -> io::Result<TcpListener> {
+    if cfg!(not(windows)) {
+        socket2::SockRef::from(&listener).set_reuse_address(true)?;
+    }
+    Ok(listener)
 }
 
 /// A loopback listener on `port`, allowed to take it over TIME_WAIT leftovers.

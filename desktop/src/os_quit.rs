@@ -18,6 +18,8 @@
 use super::*;
 
 /// What `applicationShouldTerminate:` answers, and what it sets in motion.
+/// Pure, so the rule is tested everywhere; only macOS asks it.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OsTerminate {
     /// The shutdown worker has already finished; let AppKit terminate.
@@ -30,6 +32,7 @@ pub(crate) enum OsTerminate {
     AskThenStop,
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn os_terminate_disposition(
     may_exit: bool,
     quit_confirmed: bool,
@@ -50,6 +53,7 @@ pub(crate) fn os_terminate_disposition(
 ///
 /// `'logo'`/`'rlgo'` log out, `'rrst'`/`'rest'` restart, `'rsdn'`/`'shut'`
 /// shut down. A Dock quit carries no reason at all.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn quit_reason_ends_session(reason: u32) -> bool {
     const ENDING: [&[u8; 4]; 6] = [b"logo", b"rlgo", b"rrst", b"rest", b"rsdn", b"shut"];
     ENDING

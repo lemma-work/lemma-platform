@@ -3,6 +3,7 @@
 
 use super::*;
 
+#[cfg(unix)]
 fn migrations_running(root: &TempDir, script: &str) -> Arc<HostProcessManager> {
     let mut value = manifest(vec![service("backend", &[]), service("frontend", &[])]);
     value.setup[0].command = vec!["/bin/sh".into(), "-c".into(), script.into()];

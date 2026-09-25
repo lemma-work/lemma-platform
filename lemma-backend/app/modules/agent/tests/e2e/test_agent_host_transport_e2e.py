@@ -25,6 +25,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import status
+from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
@@ -750,14 +751,67 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
             ),
             timeout_seconds=15,
         )
+
+        # Seeing the cancel says nothing about a pass still in flight, which
+        # could hand out a start after this point and after ``aclose`` -- where
+        # no frame would be looked at. So settle the queue before judging it.
+        # Acknowledge what arrived, as a host does, so nothing is resent...
+        cancel_ids = sorted(
+            {
+                command["command_id"]
+                for command in delivered
+                if command["kind"] == AgentHostCommandKind.CANCEL_RUN.value
+            }
+        )
+        settled = await link.request(
+            "control",
+            {"capacity": _capacity(0), "acknowledged_command_ids": cancel_ids},
+        )
+        delivered.extend(settled["body"]["commands"])
+        # ...then take every one of this host's rows under FOR UPDATE. Each
+        # handout reads the queue under FOR UPDATE SKIP LOCKED and marks what it
+        # hands out in the same transaction, so this read cannot finish until
+        # any pass that locked a row has committed what it gave away -- the
+        # rows, not the frames, are the record of what left.
+        rows = (
+            (
+                await db_session.execute(
+                    select(AgentHostCommandModel)
+                    .where(AgentHostCommandModel.host_id == machine["host_id"])
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        states = {(row.kind, row.state) for row in rows}
+        await db_session.rollback()
+        # A pass that committed before that read has its frame in flight at
+        # most; one more round trip on the socket lets it land.
+        final = await link.request("control", {"capacity": _capacity(0)})
+        delivered.extend(final["body"]["commands"])
+        await delivered_so_far()
     finally:
         await link.aclose()
 
-    # The host has no slot, so the cancel is all it may be handed -- once,
-    # whichever path carried it -- and none of the starts in front of it.
-    assert [command["kind"] for command in delivered] == [
+    # The host has no slot, so the cancel is all it may be handed -- whichever
+    # path carried it -- and none of the starts in front of it ever left.
+    assert len(cancel_ids) == 1, delivered
+    assert {command["kind"] for command in delivered} == {
         AgentHostCommandKind.CANCEL_RUN.value
-    ]
+    }, delivered
+    assert {command["command_id"] for command in delivered} == set(cancel_ids)
+    assert states == {
+        (
+            AgentHostCommandKind.START_RUN.value,
+            AgentHostCommandState.QUEUED.value,
+        ),
+        (
+            AgentHostCommandKind.CANCEL_RUN.value,
+            AgentHostCommandState.ACKNOWLEDGED.value,
+        ),
+    }, states
 
 
 @pytest.mark.asyncio

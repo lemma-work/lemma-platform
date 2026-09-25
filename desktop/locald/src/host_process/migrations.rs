@@ -146,6 +146,8 @@ impl MigrationRun {
 /// A local-data reset erases the database, so what it recorded goes with it --
 /// including the pre-migration copy, which is a copy of the data being erased.
 pub(crate) fn forget_migration_records(root: &Path) -> io::Result<()> {
+    // Only macOS keeps a pre-migration copy.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut records = vec![root.join(SCHEMA_RELEASE_FILE)];
     #[cfg(target_os = "macos")]
     records.push(root.join(PRE_MIGRATION_DISK));

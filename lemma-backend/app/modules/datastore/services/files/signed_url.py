@@ -156,7 +156,7 @@ redis.call('HSET', KEYS[1],
   'budget_bytes', ARGV[9],
   'spent_bytes', 0
 )
-redis.call('PEXPIRE', KEYS[1], ARGV[10])
+redis.call('PEXPIREAT', KEYS[1], ARGV[10])
 return 1
 """
 
@@ -327,15 +327,22 @@ class SignedUrlStore:
         Called on mint and again whenever a fetch finds nothing cached, which is
         what makes a lost Redis a slow first request rather than a dead link.
         """
-        # In milliseconds, rounded up. A TTL in whole seconds either floored a
-        # link with under a second left to 0 -- dropped rather than cached, so
-        # a one-second link was 404 on the mint itself -- or, rounded up,
-        # served it for most of a second past its `expires_at`. The key is the
-        # enforcement on the fast path, so it has to lapse when the row does.
-        remaining = (link.expires_at - datetime.now(timezone.utc)).total_seconds()
-        if remaining <= 0:
+        # The key is the enforcement on the fast path -- a hit never consults
+        # the row -- so it has to lapse when the row does. An absolute expiry
+        # in milliseconds, floored, so it can never land after `expires_at`:
+        # a relative TTL computed here was rounded up and then started only
+        # when Redis received it, so a hit could outlive the persisted expiry
+        # by the rounding plus the round trip. (Whole seconds were worse: a
+        # link with under a second left was dropped rather than cached, and a
+        # one-second link was 404 on the mint itself.)
+        expires_at = link.expires_at
+        if expires_at.tzinfo is None:
+            # Postgres can hand back a naive datetime; it is UTC, and
+            # `timestamp()` would otherwise read it as local time.
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
             return
-        ttl_ms = max(1, math.ceil(remaining * 1000))
+        expires_at_ms = math.floor(expires_at.timestamp() * 1000)
         redis = await self._get_redis()
         # One script, because checking the tombstone and then writing in a
         # separate pipeline is the same check-then-act this tombstone exists to
@@ -359,7 +366,7 @@ class SignedUrlStore:
             # a link that is exhausted before its first fetch. Expiry still
             # bounds such a link.
             link.size_bytes * link.max_hits,
-            ttl_ms,
+            expires_at_ms,
         )
 
     async def peek_claims(self, code: str) -> SignedUrlClaims:

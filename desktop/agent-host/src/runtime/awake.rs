@@ -63,7 +63,7 @@ impl KeepAwake {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn holding(&self) -> bool {
         self.holder.is_some()
     }

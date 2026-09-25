@@ -41,7 +41,8 @@ impl Daemon {
     }
 
     /// `start_daemon_shutdown` with its reply drained, for a stop nobody asked
-    /// for over the socket.
+    /// for over the socket. Only the Unix signal handler has such a stop.
+    #[cfg(unix)]
     pub(crate) fn stop_without_client(self: &Arc<Self>, id: &str) {
         let (client, replies) = mpsc::sync_channel::<String>(SUBSCRIBER_BACKLOG);
         thread::spawn(move || for _ in replies {});

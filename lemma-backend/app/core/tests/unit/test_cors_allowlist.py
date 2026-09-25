@@ -19,6 +19,7 @@ choice, not an unnoticed default.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -109,7 +110,10 @@ def test_loopback_defaults_are_dropped_while_a_local_install_is_shared(
 
     assert "http://localhost:3000" not in origins
     assert "tauri://localhost" not in origins
-    assert "https://app.lemma.work" in origins
+    # Compared as parsed origins, exactly: the configured workspace survives.
+    assert ("https", "app.lemma.work", None) in {
+        (parts.scheme, parts.hostname, parts.port) for parts in map(urlsplit, origins)
+    }
 
 
 def test_loopback_defaults_stay_for_a_local_install_nobody_else_reaches(

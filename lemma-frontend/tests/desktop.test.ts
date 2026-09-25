@@ -425,6 +425,8 @@ test("a pairing that is off, or somebody else's, is not this workspace's", () =>
 });
 
 test("a second person signed in on this Mac gets a pairing of their own", async () => {
+    /* Named for the platform the shell reports, not the one running the test. */
+    page({ shell: () => null, info: { mode: "hosted", platform: "macos" } });
     const log: string[] = [];
     const theirs = status({ targets: [target({ user_id: "them" })] });
     assert.equal(await connectThisComputer(theirs, WORKSPACE, { ...deps(log), userId: "me" }), "connected");
