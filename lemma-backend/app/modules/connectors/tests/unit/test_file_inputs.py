@@ -388,8 +388,7 @@ class TestGmailSendWithAttachments:
 
     @pytest.mark.asyncio
     async def test_send_message_builds_the_message_the_api_wants(self):
-        import email
-        from email import policy
+        from email import message_from_bytes, policy
 
         seen = {}
 
@@ -428,7 +427,7 @@ class TestGmailSendWithAttachments:
         assert seen["url"].endswith("/gmail/v1/users/me/messages/send")
         assert seen["body"]["threadId"] == "t0"
         raw = base64.urlsafe_b64decode(seen["body"]["raw"])
-        message = email.message_from_bytes(raw, policy=policy.default)
+        message = message_from_bytes(raw, policy=policy.default)
         assert message["To"] == "ada@example.com, bob@example.com"
         assert message["Subject"] == "Q3 report"
         assert message.get_body(("plain",)).get_content().strip() == "Attached."

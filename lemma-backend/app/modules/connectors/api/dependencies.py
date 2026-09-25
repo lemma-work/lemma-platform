@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
+from app.core.authorization.context import Context
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
@@ -60,7 +61,6 @@ from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.services.trigger_service import ConnectorTriggerService
 
 if TYPE_CHECKING:
-    from app.core.authorization.context import Context
     from app.modules.connectors.api.schemas.connector_operation_schemas import (
         OperationExecutionResponse,
     )
@@ -205,7 +205,7 @@ def build_pod_file_gateway(uow: object) -> PodFileGatewayPort:
 
 
 def build_operation_files(
-    uow: object, *, pod_id: UUID | None, ctx: "Context"
+    uow: object, *, pod_id: UUID | None, ctx: Context
 ) -> "OperationFiles":
     """File inputs and results for one caller's operation calls, in one pod."""
     from app.modules.connectors.services.files.operation_files import OperationFiles

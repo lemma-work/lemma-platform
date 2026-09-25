@@ -565,6 +565,7 @@ async def test_shopify_connects_through_the_orgs_own_app_human(
         try:
             webbrowser.open(body["authorization_url"])
         except Exception:
+            # No browser on this machine: the URL is printed above to open by hand.
             pass
 
         connection_id = attributes["provider_state"]
