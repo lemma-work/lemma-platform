@@ -32,6 +32,10 @@ use crate::protocol::{Command, EventAck, EventBatch, HarnessSnapshot, HostCapaci
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long the handshake -- connect plus `hello`/`pair` -- may take.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long an abandoned link may spend saying goodbye: sending its close
+/// frame, and finishing whatever write it was in the middle of, before its
+/// tasks are stopped regardless.
+const CLOSE_GRACE: Duration = Duration::from_secs(2);
 
 /// Why a request, or the link itself, failed.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -116,13 +120,83 @@ enum Outgoing {
 
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Frame, LinkError>>>>>;
 
-/// A connected link. Cheap to clone; every clone talks on the same socket.
+/// Mark the link closed, then tell everyone waiting why.
+///
+/// In this order a request either sees the link closed when it re-checks
+/// after registering, or is registered in time to be drained here -- never
+/// neither. The first reason wins.
+fn mark_closed(closed: &watch::Sender<Option<LinkError>>, pending: &Pending, error: &LinkError) {
+    closed.send_if_modified(|closed| {
+        if closed.is_none() {
+            *closed = Some(error.clone());
+            return true;
+        }
+        false
+    });
+    let waiters: Vec<_> = pending
+        .lock()
+        .expect("pending requests poisoned")
+        .drain()
+        .map(|(_, waiter)| waiter)
+        .collect();
+    for waiter in waiters {
+        let _ = waiter.send(Err(error.clone()));
+    }
+}
+
+/// The socket's two tasks, owned by the handles that talk on it.
+///
+/// Every [`LinkHandle`] clone holds this, so it drops with the last of them.
+/// By then the writer's channel has no senders left -- the reader holds only
+/// a weak one -- so the writer sends a close frame and ends, and its ending
+/// stops the reader. Dropping this bounds that goodbye: a writer still stuck
+/// on a peer that stopped reading is aborted after [`CLOSE_GRACE`], and the
+/// reader with it, so an abandoned link never outlives its owners.
+struct LinkTasks {
+    writer: Option<tokio::task::JoinHandle<()>>,
+    reader: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for LinkTasks {
+    fn drop(&mut self) {
+        let (Some(mut writer), Some(mut reader)) = (self.writer.take(), self.reader.take()) else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                if tokio::time::timeout(CLOSE_GRACE, &mut writer)
+                    .await
+                    .is_err()
+                {
+                    writer.abort();
+                }
+                // Normally already ending, woken by the writer's exit.
+                if tokio::time::timeout(CLOSE_GRACE, &mut reader)
+                    .await
+                    .is_err()
+                {
+                    reader.abort();
+                }
+            });
+        } else {
+            // No runtime left to say goodbye on: stop both now.
+            writer.abort();
+            reader.abort();
+        }
+    }
+}
+
+/// A connected link. Cheap to clone; every clone talks on the same socket,
+/// and the socket is closed once the last clone is dropped.
 #[derive(Clone)]
 pub struct LinkHandle {
+    // Declared before `tasks`: the sender has to be gone by the time the
+    // tasks are released, so the writer sees its channel close.
     outgoing: mpsc::UnboundedSender<Outgoing>,
     pending: Pending,
     next_id: Arc<AtomicU64>,
     closed: watch::Receiver<Option<LinkError>>,
+    _tasks: Arc<LinkTasks>,
 }
 
 /// A link that has just completed its handshake.
@@ -345,57 +419,74 @@ pub async fn open(
     let (pushes_tx, pushes) = mpsc::unbounded_channel::<Push>();
     let (closed_tx, closed) = watch::channel::<Option<LinkError>>(None);
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+    // Dropped when the writer ends, however it ends; that is what stops the
+    // reader, whose half of the socket would otherwise keep it open.
+    let (writer_alive, mut writer_gone) = oneshot::channel::<()>();
 
     // The writer. One task owns the sink, so frames are never interleaved.
+    // It ends when told to close, when a write fails, or when every handle
+    // has been dropped -- the last is an abandoned link, and it still says
+    // goodbye.
     let writer_closed = closed_tx.clone();
     let writer_pending = Arc::clone(&pending);
-    tokio::spawn(async move {
-        while let Some(message) = outgoing_rx.recv().await {
+    let writer = tokio::spawn(async move {
+        let _alive = writer_alive;
+        let error = loop {
+            let Some(message) = outgoing_rx.recv().await else {
+                let _ = tokio::time::timeout(
+                    CLOSE_GRACE,
+                    sink.send(Message::Close(Some(CloseFrame {
+                        code: CloseCode::from(close::NORMAL),
+                        reason: "abandoned".into(),
+                    }))),
+                )
+                .await;
+                break LinkError::Transport("the link was abandoned".to_owned());
+            };
             let result = match message {
                 Outgoing::Frame(text) => sink.send(Message::Text(text.into())).await,
                 Outgoing::Flush => sink.flush().await,
                 Outgoing::Close(code, reason) => {
-                    let _ = sink
-                        .send(Message::Close(Some(CloseFrame {
+                    let _ = tokio::time::timeout(
+                        CLOSE_GRACE,
+                        sink.send(Message::Close(Some(CloseFrame {
                             code: CloseCode::from(code),
-                            reason: reason.into(),
-                        })))
-                        .await;
-                    break;
+                            reason: reason.clone().into(),
+                        }))),
+                    )
+                    .await;
+                    // Closed as of now. Waiting for Lemma to echo the close
+                    // would leave requests hanging on a peer that may never
+                    // answer again -- the reason a link is abandoned.
+                    break LinkError::Transport(format!(
+                        "this host closed the link ({code}): {reason}"
+                    ));
                 }
             };
             if let Err(error) = result {
-                let error = LinkError::Transport(error.to_string());
-                writer_closed.send_if_modified(|closed| {
-                    if closed.is_none() {
-                        *closed = Some(error.clone());
-                        return true;
-                    }
-                    false
-                });
                 // A socket that cannot be written to may still read, so the
                 // reader is not guaranteed to end soon; what is waiting on an
                 // answer learns now that none is coming.
-                let waiters: Vec<_> = writer_pending
-                    .lock()
-                    .expect("pending requests poisoned")
-                    .drain()
-                    .map(|(_, waiter)| waiter)
-                    .collect();
-                for waiter in waiters {
-                    let _ = waiter.send(Err(error.clone()));
-                }
-                break;
+                break LinkError::Transport(error.to_string());
             }
-        }
+        };
+        mark_closed(&writer_closed, &writer_pending, &error);
     });
 
-    // The reader. Answers go to whoever asked; pushes go to the worker.
+    // The reader. Answers go to whoever asked; pushes go to the worker. It
+    // holds only a weak sender to the writer, for pongs: a strong one would
+    // keep the writer's channel open after every handle had gone.
     let reader_pending = Arc::clone(&pending);
-    let reader_outgoing = outgoing.clone();
-    tokio::spawn(async move {
+    let reader_outgoing = outgoing.downgrade();
+    let reader = tokio::spawn(async move {
         let error = loop {
-            let Some(message) = stream.next().await else {
+            let message = tokio::select! {
+                message = stream.next() => message,
+                _ = &mut writer_gone => {
+                    break LinkError::Transport("the link's writer has stopped".to_owned());
+                }
+            };
+            let Some(message) = message else {
                 break LinkError::Transport("Lemma ended the link without closing it".to_owned());
             };
             let message = match message {
@@ -407,7 +498,9 @@ pub async fn open(
                 Message::Ping(_) => {
                     // tungstenite queues the pong itself; it goes out on the
                     // next flush, which an idle link would not otherwise do.
-                    let _ = reader_outgoing.send(Outgoing::Flush);
+                    if let Some(outgoing) = reader_outgoing.upgrade() {
+                        let _ = outgoing.send(Outgoing::Flush);
+                    }
                     continue;
                 }
                 Message::Close(frame) => {
@@ -447,28 +540,11 @@ pub async fn open(
                 let _ = pushes_tx.send(push);
             }
         };
-        // Marked closed first, then everyone waiting is told why. In this
-        // order a request either sees the link closed when it re-checks after
-        // registering, or is registered in time to be drained here -- never
-        // neither.
-        closed_tx.send_if_modified(|closed| {
-            if closed.is_none() {
-                *closed = Some(error.clone());
-                return true;
-            }
-            false
-        });
-        let waiters: Vec<_> = reader_pending
-            .lock()
-            .expect("pending requests poisoned")
-            .drain()
-            .map(|(_, waiter)| waiter)
-            .collect();
-        for waiter in waiters {
-            let _ = waiter.send(Err(error.clone()));
+        mark_closed(&closed_tx, &reader_pending, &error);
+        // Stop the writer too, if anything still holds the link.
+        if let Some(outgoing) = reader_outgoing.upgrade() {
+            let _ = outgoing.send(Outgoing::Close(close::NORMAL, String::new()));
         }
-        // Stop the writer too.
-        let _ = reader_outgoing.send(Outgoing::Close(close::NORMAL, String::new()));
     });
 
     let handle = LinkHandle {
@@ -476,7 +552,14 @@ pub async fn open(
         pending,
         next_id: Arc::new(AtomicU64::new(1)),
         closed,
+        _tasks: Arc::new(LinkTasks {
+            writer: Some(writer),
+            reader: Some(reader),
+        }),
     };
+    // From here every early return drops `handle`, the only one there is,
+    // which closes the socket: a refused or garbled handshake does not leave
+    // a connection open on Lemma's side.
     let (kind, body) = first;
     let answer = handshake(&handle, kind, body).await?;
     let welcome = if kind == host::HELLO {

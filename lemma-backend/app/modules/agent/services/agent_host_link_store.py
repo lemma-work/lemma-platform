@@ -66,6 +66,9 @@ class LinkedHost:
     host_id: UUID
     user_id: UUID
     status: AgentHostStatus
+    #: The link generation this ``hello`` claimed; 0 when it claimed none
+    #: because the host must upgrade and the link is about to close.
+    link_generation: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,12 +141,28 @@ class AgentHostLinkStore:
                 hello=hello,
                 capacity=capacity.model_dump(mode="json"),
             )
+            status = AgentHostStatus(host.status)
+            # Claimed in the same transaction that authenticated the hello, so
+            # the order of generations is the order of accepted handshakes. A
+            # host told to upgrade claims none: its link closes at once, and
+            # claiming would close a live link it never replaces.
+            generation = (
+                0
+                if status is AgentHostStatus.UPGRADE_REQUIRED
+                else await repository.claim_link_generation(host.id)
+            )
             await uow.commit()
         return LinkedHost(
             host_id=host.id,
             user_id=host.user_id,
-            status=AgentHostStatus(host.status),
+            status=status,
+            link_generation=generation,
         )
+
+    async def link_generation(self, host_id: UUID) -> int | None:
+        """The generation of the link that owns ``host_id`` now."""
+        async with self._uow_factory() as uow:
+            return await AgentHostRepository(uow).link_generation(host_id)
 
     async def apply_control(
         self,

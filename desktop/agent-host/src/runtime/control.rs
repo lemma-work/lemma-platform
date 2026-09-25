@@ -117,9 +117,15 @@ impl TargetWorker {
         settled
     }
 
-    /// Hand journaled events to Lemma. See [`super::EventFlusher::flush`].
+    /// One delivery pass. See [`super::EventFlusher::flush`].
+    #[cfg(test)]
     pub(crate) async fn flush_events(&mut self, link: &LinkHandle) -> anyhow::Result<()> {
         self.flusher.lock().await.flush(link).await.map(|_| ())
+    }
+
+    /// Deliver everything the journal owes. See [`super::EventFlusher::drain`].
+    pub(crate) async fn drain_events(&mut self, link: &LinkHandle) -> anyhow::Result<()> {
+        self.flusher.lock().await.drain(link).await.map(|_| ())
     }
 
     /// Collect run tasks that have finished, without waiting on any.
@@ -183,7 +189,7 @@ impl TargetWorker {
             self.reap_finished_now();
             self.enforce_cancellations()?;
             if let Some((handle, pushes)) = link.as_mut() {
-                if let Err(error) = self.flush_events(handle).await {
+                if let Err(error) = self.drain_events(handle).await {
                     tracing::warn!(%error, "could not flush Agent Host events during shutdown");
                 }
                 if let Err(error) = self.send_control(handle).await {
@@ -211,7 +217,8 @@ impl TargetWorker {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         if let Some((handle, _)) = link {
-            self.flush_events(handle).await?;
+            // The last chance: everything, not one pass's worth.
+            self.drain_events(handle).await?;
             if let Err(error) = self.send_control(handle).await {
                 tracing::warn!(%error, "could not report final run states during shutdown");
             }

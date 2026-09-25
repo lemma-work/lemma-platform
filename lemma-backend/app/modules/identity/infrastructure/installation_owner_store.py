@@ -3,7 +3,7 @@
 Every write here is either an `INSERT ... ON CONFLICT DO NOTHING` against the
 singleton key or an update under `SELECT ... FOR UPDATE` of that one row, so
 two requests deciding "am I the first?" at the same instant get one yes and one
-no from the database rather than two yeses from two reads. See the 0040
+no from the database rather than two yeses from two reads. See the 0041
 migration for why the slot is reserved before the account exists.
 """
 

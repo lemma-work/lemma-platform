@@ -58,6 +58,111 @@ async fn a_runs_events_reach_lemma_as_they_are_journaled() {
     delivery.abort();
 }
 
+/// A backlog bigger than one read is delivered whole, terminal event
+/// included, without anything journaling another event to prompt it.
+///
+/// Each pass reads at most 1,024 events. Delivery used to flush once per
+/// notification, so a run that finished while the link was down -- its last
+/// notification long spent -- had its first passes delivered on reconnect and
+/// the rest, terminal event and all, left in the journal until something else
+/// happened to wake delivery.
+#[tokio::test]
+async fn a_backlog_from_offline_is_drained_on_reconnect() {
+    let harness = Harness::new().await;
+    // The link is down while the run streams and finishes.
+    harness.worker.slot_owner.set(None);
+    let run_id = harness.seed_run(2_500);
+    super::terminal_failure(
+        &harness.journal,
+        harness.target_id,
+        run_id,
+        1,
+        RunState::Failed,
+        "finished while offline",
+    )
+    .unwrap();
+    let terminal = *harness.pending(run_id).last().unwrap();
+    assert!(terminal > 2_500);
+
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let delivery = tokio::spawn(deliver_events(
+        Arc::clone(&harness.worker.flusher),
+        harness.worker.events_ready.clone(),
+        harness.worker.link.clone(),
+        shutdown,
+    ));
+    // The run's own notifications, raised while there was no link.
+    harness.worker.events_ready.notify_one();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Reconnecting, exactly as `session` does: publish the link, kick once.
+    harness.worker.slot_owner.set(Some(harness.link.clone()));
+    harness.worker.events_ready.notify_one();
+
+    within(
+        Duration::from_secs(10),
+        "the whole backlog, terminal event included, to reach Lemma",
+        || harness.accepted().get(&run_id) == Some(&terminal) && harness.pending(run_id).is_empty(),
+    )
+    .await;
+    delivery.abort();
+}
+
+/// A replay is scheduled like any other delivery: it goes out without
+/// waiting for the run to journal something new.
+#[tokio::test]
+async fn a_replay_after_a_refusal_goes_out_on_its_own() {
+    let harness = Harness::new().await;
+    let run_id = harness.seed_run(3);
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let delivery = tokio::spawn(deliver_events(
+        Arc::clone(&harness.worker.flusher),
+        harness.worker.events_ready.clone(),
+        harness.worker.link.clone(),
+        shutdown,
+    ));
+    harness.worker.events_ready.notify_one();
+    within(Duration::from_secs(5), "the first events to land", || {
+        harness.pending(run_id).is_empty()
+    })
+    .await;
+
+    // Lemma loses the stream, refuses the next batch once, and takes the
+    // replay.
+    harness.stub.refused_once_runs.lock().unwrap().push(run_id);
+    harness
+        .journal
+        .append_event(
+            harness.target_id,
+            run_id,
+            1,
+            EventType::AgentMessageChunk,
+            None,
+            JsonMap::new(),
+        )
+        .unwrap();
+    harness.worker.events_ready.notify_one();
+
+    within(
+        Duration::from_secs(5),
+        "the replayed history to be delivered",
+        || harness.pending(run_id).is_empty() && harness.accepted().get(&run_id) == Some(&4),
+    )
+    .await;
+    assert!(
+        harness
+            .stub
+            .accepted
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(run, _)| *run == run_id)
+            .count()
+            >= 2,
+        "the run's history must have been sent again after the refusal"
+    );
+    delivery.abort();
+}
+
 /// Shutting the loop down must not strand what the journal still holds.
 ///
 /// The delivery task is aborted when the link loop ends, so the last flush
