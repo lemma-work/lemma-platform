@@ -227,8 +227,17 @@ pub fn admissible(
     if home.starts_with(&canonical) {
         return None;
     }
-    let under_base = std::fs::canonicalize(root_base)
-        .is_ok_and(|base| canonical.starts_with(&base) && canonical != base);
+    // Nothing hidden: `~/lemma/.lemma` holds the directory registry, and no
+    // conversation's folder is spelt with a dot.
+    let under_base = std::fs::canonicalize(root_base).is_ok_and(|base| {
+        canonical.strip_prefix(&base).is_ok_and(|relative| {
+            relative.components().next().is_some()
+                && relative.components().all(|component| {
+                    matches!(component, Component::Normal(name)
+                        if !name.to_string_lossy().starts_with('.'))
+                })
+        })
+    });
     let chosen = bound
         .iter()
         .any(|bound| std::fs::canonicalize(bound).is_ok_and(|bound| bound == canonical));
@@ -369,7 +378,13 @@ mod tests {
         let base = home.join("lemma");
         let project = home.join("project");
         let other = home.join("other");
-        for folder in [&base, &project, &other, &base.join("c/x")] {
+        for folder in [
+            &base,
+            &project,
+            &other,
+            &base.join("c/x"),
+            &base.join(".lemma"),
+        ] {
             std::fs::create_dir_all(folder).unwrap();
         }
         let bound = [project.clone()];
@@ -377,6 +392,8 @@ mod tests {
         assert!(admissible(&base.join("c/x"), &base, &home, &bound).is_some());
         assert!(admissible(&other, &base, &home, &bound).is_none());
         assert!(admissible(&base, &base, &home, &bound).is_none());
+        // The directory registry is not a conversation's folder.
+        assert!(admissible(&base.join(".lemma"), &base, &home, &bound).is_none());
         // Even when bound: the home folder would open every dotfile.
         assert!(admissible(&home, &base, &home, std::slice::from_ref(&home)).is_none());
         assert!(admissible(Path::new("/"), &base, &home, &[PathBuf::from("/")]).is_none());

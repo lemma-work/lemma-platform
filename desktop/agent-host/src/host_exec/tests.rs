@@ -556,6 +556,126 @@ async fn closing_a_workspace_kills_what_runs_in_it() {
     assert_eq!(error.kind, kind::WORKSPACE_NOT_OPEN);
 }
 
+#[tokio::test]
+async fn two_tries_of_one_start_arriving_together_start_one_process() {
+    let fixture = fixture().await;
+    let params = json!({ "operation_id": "op-twice", "argv": ["/bin/sleep", "5"] });
+    let (first, second) = tokio::join!(
+        call(&fixture.server, method::PROCESS_START, params.clone()),
+        call(&fixture.server, method::PROCESS_START, params),
+    );
+    assert_eq!(first.unwrap()["process_id"], second.unwrap()["process_id"]);
+    let listed = call(&fixture.server, method::PROCESS_LIST, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(listed["processes"].as_array().unwrap().len(), 1);
+    call(&fixture.server, method::WORKSPACE_CLOSE, json!({}))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_group_that_outlived_its_leader_is_kept_until_it_can_be_stopped() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = super::paths::PathPolicy::new(directory.path(), directory.path(), &[]).unwrap();
+    let table = super::process::ProcessTable::default();
+    let pid_file = directory.path().join("child.pid");
+    let started = table
+        .start(
+            &policy,
+            json!({ "shell_command": format!("sleep 60 & echo $! > {}", pid_file.display()) }),
+        )
+        .await
+        .unwrap();
+    assert!(started["group"].as_i64().is_some(), "{started}");
+    let id = started["process_id"].as_str().unwrap().to_owned();
+    // The leader exits at once; its background child is still in the group.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let read = table
+            .read(json!({ "process_id": id, "after_sequence": 0, "wait_ms": 500 }))
+            .await
+            .unwrap();
+        if read["state"] != "running" && pid_file.exists() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the leader never exited");
+    }
+    let child: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    table.reap_as_of(Instant::now() + Duration::from_secs(3600));
+    assert_eq!(
+        table.list()["processes"].as_array().unwrap().len(),
+        1,
+        "a running group was forgotten"
+    );
+    table.kill_all();
+    let child = rustix::process::Pid::from_raw(child).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while rustix::process::test_kill_process(child).is_ok() {
+        assert!(Instant::now() < deadline, "the background child survived");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    table.reap_as_of(Instant::now() + Duration::from_secs(3600));
+    assert!(table.list()["processes"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn one_read_carries_at_most_a_frame_of_output_and_the_rest_follows() {
+    let fixture = fixture().await;
+    let total = 3 * super::wire::OP_MAX_DATA_BYTES;
+    let id = start(
+        &fixture.server,
+        json!({
+            "shell_command": format!("head -c {total} /dev/zero"),
+            "output_limit_bytes": 4 * super::wire::OP_MAX_DATA_BYTES,
+        }),
+    )
+    .await;
+    // Let it finish, so the first read could have had everything.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = call(&fixture.server, method::PROCESS_LIST, json!({}))
+            .await
+            .unwrap();
+        if listed["processes"][0]["state"] != "running" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the process never exited");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let first = call(
+        &fixture.server,
+        method::PROCESS_READ,
+        json!({ "process_id": id, "after_sequence": 0, "wait_ms": 0 }),
+    )
+    .await
+    .unwrap();
+    let bytes: usize = first["chunks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|chunk| {
+            STANDARD
+                .decode(chunk["data"].as_str().unwrap())
+                .unwrap()
+                .len()
+        })
+        .sum();
+    assert!(
+        bytes <= super::wire::OP_MAX_DATA_BYTES,
+        "{bytes} bytes in one read"
+    );
+    assert_eq!(first["state"], "running", "more output is waiting");
+    let (last, output) = read_to_exit(&fixture.server, &id).await;
+    assert_eq!(last["state"], "exited");
+    // Read again from the start, one frame at a time, it is all there.
+    assert_eq!(output.len(), total);
+}
+
 /// Every method and failure kind here is one the backend's provider knows,
 /// and the other way round: both sides are held to the same fixture.
 #[test]

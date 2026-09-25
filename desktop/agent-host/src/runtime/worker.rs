@@ -209,6 +209,7 @@ impl TargetWorker {
         let exec_relay = crate::host_exec::relay::RelayPaths::current(
             paths.folders.clone(),
             paths.conversation_roots.clone(),
+            target.target_id,
         )
         .inspect_err(|error| {
             tracing::warn!(%error, "host execution is unavailable on this computer");
