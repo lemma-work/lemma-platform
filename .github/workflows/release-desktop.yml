@@ -39,14 +39,25 @@ jobs:
     runs-on: macos-14
 
     steps:
+      # The release tag, never the ref the run was started from. A dispatch
+      # (the repair path, and how release-local-images.yml starts this) runs
+      # on the default branch unless told otherwise, and checking that out
+      # built main's HEAD and shipped it under the tag's version.
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || (startsWith(inputs.version, 'v') && inputs.version || format('v{0}', inputs.version)) }}
+
+      - name: Resolve the commit being released
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Require fresh backend protected E2E
         uses: ./.github/actions/require-backend-protected-e2e
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ github.sha }}
+          sha: ${{ steps.source.outputs.sha }}
 
       - name: Import Developer ID certificate
         id: apple-signing
@@ -353,7 +364,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_UPDATER_KEY_PASSWORD }}
           LEMMA_RELEASE_CHANNEL: stable
-          LEMMA_BUILD_SHA: ${{ github.sha }}
+          LEMMA_BUILD_SHA: ${{ steps.source.outputs.sha }}
 
 
       # Tauri notarizes and staples the .app, then builds the DMG from it and
@@ -758,14 +769,25 @@ jobs:
         && secrets.WINDOWS_TIMESTAMP_URL != '' }}
 
     steps:
+      # The release tag, never the ref the run was started from. A dispatch
+      # (the repair path, and how release-local-images.yml starts this) runs
+      # on the default branch unless told otherwise, and checking that out
+      # built main's HEAD and shipped it under the tag's version.
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || (startsWith(inputs.version, 'v') && inputs.version || format('v{0}', inputs.version)) }}
+
+      - name: Resolve the commit being released
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Require fresh backend protected E2E
         uses: ./.github/actions/require-backend-protected-e2e
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ github.sha }}
+          sha: ${{ steps.source.outputs.sha }}
 
       - name: Resolve version
         id: version
