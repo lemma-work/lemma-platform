@@ -1,0 +1,2659 @@
+[
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "commands": [
+        "recorded"
+      ]
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " do"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " these"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " steps"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " in"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " order"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " Keep"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " messages"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " short"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ".\n\n"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "Step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "1"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ":"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " todo"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " list"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " Then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " steps"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "2"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "-"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "9"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " batch"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " independent"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " calls"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " Actually"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "1"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " first"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " proceed"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ".\n\n"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " create"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " todos"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " and"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " run"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " shell"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " create"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " file"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " etc"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " Some"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " are"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " dependent"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " ("
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " depends"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " on"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " create"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ")."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " do"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "1"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " via"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " tod"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "ow"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "rite"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " and"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "2"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " shell"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " in"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " parallel"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ".\n\n"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "Actually"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " be"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " orderly"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " but"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " efficient"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " I"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "'ll"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " do"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " tod"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "ow"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "rite"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " shell"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " write"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " glob"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " grep"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " M"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "CP"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " calls"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " done"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " I"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " can"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " batch"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " some"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": ".\n\n"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": " start"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b0f0290013s2H3PRkIqGVYV",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_68dc30bbb2424a18a09e380f",
+    "payload": {
+      "input": {
+        "todos": [
+          {
+            "content": "Make todo plan",
+            "status": "in_progress",
+            "priority": "high"
+          },
+          {
+            "content": "Run echo hello-lemma",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Create notes.txt with 'one'",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Edit one -> two",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Read notes.txt",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Glob *.txt",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Grep for two",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "MCP lemma_exec_command",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "MCP lemma_display_resource",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Reply done",
+            "status": "pending",
+            "priority": "high"
+          }
+        ]
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "update_plan",
+        "source": "native",
+        "server": null,
+        "title": "todowrite",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_68dc30bbb2424a18a09e380f",
+    "payload": {
+      "error": null,
+      "output": {
+        "todos": [
+          {
+            "content": "Make todo plan",
+            "status": "in_progress",
+            "priority": "high"
+          },
+          {
+            "content": "Run echo hello-lemma",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Create notes.txt with 'one'",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Edit one -> two",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Read notes.txt",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Glob *.txt",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Grep for two",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "MCP lemma_exec_command",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "MCP lemma_display_resource",
+            "status": "pending",
+            "priority": "high"
+          },
+          {
+            "content": "Reply done",
+            "status": "pending",
+            "priority": "high"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_047db6d7bfaf4a628dafbfcb",
+    "payload": {
+      "input": {
+        "cmd": "echo hello-lemma",
+        "workdir": "/workspace/fixture"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "echo hello-lemma",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_047db6d7bfaf4a628dafbfcb",
+    "payload": {
+      "error": null,
+      "output": {
+        "exit_code": 0,
+        "stdout": "hello-lemma\n"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "Now"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " create"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " notes"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ".txt"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Path"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ":"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " working"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " dir"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " /"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "private"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "var"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "..."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "fi"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "xture"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " use"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " absolute"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " path"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Actually"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " the"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " file"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " should"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " be"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " named"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " notes"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ".txt"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " write"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " to"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " /"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "private"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "var"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/f"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "old"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "ers"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/x"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "c"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/b"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "q"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "ym"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "rm"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "fx"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "2"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "pq"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "1"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "sg"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "xz"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "8"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "kh"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "0"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "ft"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "jc"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "000"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "0"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "gn"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/T"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/ac"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "p"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "-record"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "-of"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "16"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "dv"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "2"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "w"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/f"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "i"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "xture"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "/"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "notes"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ".txt"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " But"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "3"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " create"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "4"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " needs"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " first"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Write"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " But"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " requires"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " first"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " after"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " write"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " but"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " order"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " says"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " I"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " can"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " before"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " as"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " requirement"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " of"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " tool"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Actually"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " to"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " I"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " must"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " first"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " just"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " write"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " ("
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "for"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " prere"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "q"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "),"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " edit"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ","
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " then"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " read"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " again"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " for"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " step"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " "
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "5"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": ".\n\n"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "Let"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " me"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": " create"
+    }
+  },
+  {
+    "type": "agent_thought_chunk",
+    "object_id": "msg_0d4b10705001kYlYwMVAAlQ1ex",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_674b9ddf160b438f8bf08c2b",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "content": "one\n"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "write_file",
+        "source": "native",
+        "server": null,
+        "title": "write",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_674b9ddf160b438f8bf08c2b",
+    "payload": {
+      "error": null,
+      "output": {
+        "message": "Wrote file successfully."
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_316a10b8ec8d46d69bd6cecd",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "read_file",
+        "source": "native",
+        "server": null,
+        "title": "read",
+        "kind": "read"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_316a10b8ec8d46d69bd6cecd",
+    "payload": {
+      "error": null,
+      "output": {
+        "content": "one"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_c62184912b784a58b61af644",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "old_string": "one",
+        "new_string": "two"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "edit_file",
+        "source": "native",
+        "server": null,
+        "title": "edit",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_c62184912b784a58b61af644",
+    "payload": {
+      "error": null,
+      "output": {
+        "message": "Edit applied successfully.",
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "update",
+            "old_text": "one",
+            "new_text": "two"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_aa5c69bfd3f5441f9ef58df6",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "read_file",
+        "source": "native",
+        "server": null,
+        "title": "read",
+        "kind": "read"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_aa5c69bfd3f5441f9ef58df6",
+    "payload": {
+      "error": null,
+      "output": {
+        "content": "two"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_f92f998d029240a69b45d474",
+    "payload": {
+      "input": {
+        "pattern": "*.txt",
+        "path": "/workspace/fixture"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "glob",
+        "source": "native",
+        "server": null,
+        "title": "glob",
+        "kind": "search"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_f92f998d029240a69b45d474",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "/workspace/fixture/notes.txt"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_7d1ec33728fe4ba6838f7ab2",
+    "payload": {
+      "input": {
+        "pattern": "two",
+        "path": "/workspace/fixture"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "grep",
+        "source": "native",
+        "server": null,
+        "title": "grep",
+        "kind": "search"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_7d1ec33728fe4ba6838f7ab2",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "Found 1 matches\n/workspace/fixture/notes.txt:\n  Line 1: two\n"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_9a489f9b4aff488aad8e6593",
+    "payload": {
+      "input": {
+        "cmd": "echo from-mcp"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "lemma",
+        "server": null,
+        "title": "lemma_tools_lemma_exec_command",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_9a489f9b4aff488aad8e6593",
+    "payload": {
+      "error": null,
+      "output": {
+        "exit_code": 0,
+        "stdout": "from-mcp\n",
+        "stderr": ""
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_194ac729eba24823a3cdb51d",
+    "payload": {
+      "input": {
+        "type": "MARKDOWN",
+        "content": "# recorded"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "display_resource",
+        "source": "lemma",
+        "server": null,
+        "title": "lemma_tools_lemma_display_resource",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_194ac729eba24823a3cdb51d",
+    "payload": {
+      "error": null,
+      "output": {
+        "success": true,
+        "resource_id": "resource-1"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "call_44f275a92ff045b9a5245b19",
+    "payload": {
+      "input": {
+        "todos": [
+          {
+            "content": "Make todo plan",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Run echo hello-lemma",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Create notes.txt with 'one'",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Edit one -> two",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Read notes.txt",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Glob *.txt",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Grep for two",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "MCP lemma_exec_command",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "MCP lemma_display_resource",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Reply done",
+            "status": "completed",
+            "priority": "high"
+          }
+        ]
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "update_plan",
+        "source": "native",
+        "server": null,
+        "title": "todowrite",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "call_44f275a92ff045b9a5245b19",
+    "payload": {
+      "error": null,
+      "output": {
+        "todos": [
+          {
+            "content": "Make todo plan",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Run echo hello-lemma",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Create notes.txt with 'one'",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Edit one -> two",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Read notes.txt",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Glob *.txt",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Grep for two",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "MCP lemma_exec_command",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "MCP lemma_display_resource",
+            "status": "completed",
+            "priority": "high"
+          },
+          {
+            "content": "Reply done",
+            "status": "completed",
+            "priority": "high"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_0d4b160340017V9YwNuBm8NUkP",
+    "payload": {
+      "text": "done"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 37942,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.018843392,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  {
+    "type": "usage",
+    "object_id": null,
+    "payload": {
+      "cached_input_tokens": 37262,
+      "input_tokens": 680,
+      "output_tokens": 3,
+      "total_tokens": 37945
+    }
+  }
+]

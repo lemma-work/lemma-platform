@@ -17,12 +17,28 @@ boundary for the workspace page - is in
 
 ```mermaid
 flowchart LR
-    L["Lemma control plane"] <-->|"outbound HTTPS<br/>leases + durable events"| H["Lemma Agent Host"]
+    L["Lemma"] <-->|"one outbound WebSocket<br/>commands, events, MCP"| H["Lemma Agent Host"]
     H <-->|"ACP v1 over stdio"| A["Certified local agent"]
-    A <-->|"run-scoped stdio MCP bridge"| M["Lemma MCP route"]
+    A <-->|"stdio MCP"| B["mcp-bridge"]
+    B <-->|"loopback relay"| H
     D["Lemma Desktop"] --> LD["lemma-locald"]
     LD -->|"supervise + diagnose"| H
 ```
+
+Everything between the host and Lemma travels on one WebSocket per paired
+workspace -- commands down; events, checkpoints and harnesses up; and the
+agent's calls to Lemma's own MCP tools, which the adapter-private `mcp-bridge`
+hands to the host over a loopback relay. See
+[The link](../../docs/architecture/agent-host.md#the-link) for the frames, close
+codes and delivery rules.
+
+What the host reports is already normalized: one module per adapter under
+`src/normalize` turns each agent's ACP shapes into typed events -- a tool call
+named `exec_command` whether the agent called it `Bash` or `shell`, announced
+once its input is final. See
+[Agent Host run events](../../docs/architecture/agent-host-events.md), and
+"Golden transcripts" there for how the normalizers are held to real adapter
+output.
 
 The control-plane transport is at-least-once. Before any provider side effect,
 Agent Host writes the command, lease epoch, dispatch intent, checkpoints, and
@@ -109,14 +125,16 @@ somewhere else.
   no usable credentials; locally the secret lives only in the owner-only
   `config.json` (mode 0600 on Unix).
 - Pairing uses a short-lived, single-use code; the issued secret is returned
-  exactly once at enrollment and all device traffic is scoped to the five
-  Agent Host device endpoints.
+  exactly once at enrollment, and all device traffic is scoped to the one
+  Agent Host link, which authenticates the secret once per connection.
 - Target URLs require HTTPS. Plain HTTP is accepted only for an explicitly
   opted-in loopback development target.
 - Provider OAuth/API credentials remain inside the provider's own local
   credential store.
-- Lemma MCP credentials are encrypted at rest, scoped to one run and lease
-  epoch, and exposed only to an adapter-private MCP bridge.
+- Lemma MCP credentials are encrypted at rest and scoped to one run and lease
+  epoch. The adapter-private MCP bridge never holds one: it reaches the host's
+  loopback relay with a random per-host token kept in an owner-only file, and
+  the relay reads the run's current credential from the journal for each call.
 - Agent Host does not advertise ACP client-side filesystem or terminal
   capabilities, permission requests fail closed, and known unrestricted or
   pre-approved provider modes are filtered and rejected again at dispatch.
@@ -255,7 +273,8 @@ Default data locations:
 | Windows | `%LOCALAPPDATA%\Lemma\agent-host` |
 
 `config.json` contains target metadata and the per-target host secret (the
-file is owner-only). `journal.sqlite3` contains durable commands, run states,
+file is owner-only). `mcp-relay/<target>.json` holds the loopback port and token
+the MCP bridge uses to reach the host, also owner-only. `journal.sqlite3` contains durable commands, run states,
 and the event outbox; run-scoped MCP configurations are journaled with their
 runs until the backend acknowledges delivery. Set
 `LEMMA_AGENT_HOST_DATA_DIR` only for development or isolated test runs.
@@ -265,13 +284,16 @@ runs until the backend acknowledges delivery. Set
 The crate has:
 
 - unit tests for manifest pinning, version gates, configuration, lease
-  heartbeats, journal replay, stream upsert synthesis, and service
-  definitions;
+  heartbeats, journal replay, stream upsert synthesis, the link and its
+  close codes, the per-adapter normalizers, and service definitions;
+- golden-transcript tests replaying real recorded adapter sessions through the
+  normalizers (`tests/normalize_golden.rs`; see "Golden transcripts" in
+  `docs/architecture/agent-host-events.md`);
 - a fake-process ACP end-to-end test using the official Rust ACP SDK;
-- a loopback HTTP end-to-end test covering pairing, polling, harness
-  publication, event replay, and self-revocation;
+- a loopback link end-to-end test covering pairing, pushed commands, harness
+  publication, event replay, reconnects, and self-revocation;
 - backend PostgreSQL migration and full protocol tests; and
-- a real backend/worker/Rust-host HTTP test, with a scripted ACP provider,
+- a real backend/worker/Rust-host test over the link, with a scripted ACP provider,
   proving live conversation streaming, second turns, persistence after a
   client disconnect or provider crash, and concurrent tool approvals;
 - Desktop/locald supervision tests that verify restart and full process-tree
@@ -314,7 +336,7 @@ LEMMA_REAL_AGENT_HOST_DATA_DIR=/path/to/agent-host-data \
 Set `LEMMA_REAL_AGENT_E2E_AGENTS=codex,opencode` to select a subset. These tests
 are release qualification, not public CI: they require dedicated provider test
 accounts and spend real quota. The paired fixture exercises the real Rust host;
-the backend's HTTP integration tests separately exercise its control-plane implementation.
+the backend's link integration tests separately exercise its control-plane implementation.
 
 Run `make desktop-agent-host-e2e` from the repository root to join those halves:
 it builds the Rust host and pairs it with the real backend and worker. PostgreSQL,
@@ -358,7 +380,7 @@ action:
   creates the traffic log's sibling `.release` file.
 - `exit`: simulate a provider process failure with the given exit code.
 
-The parallel fixture sends both requests before either is answered. The HTTP
+The parallel fixture sends both requests before either is answered. The link
 test answers the second first and makes different decisions, then checks exact
 ACP responses, complete arguments, and one saved result per tool. Waiting for
 approval uses a connection-owned task so later notifications and requests can

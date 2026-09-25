@@ -33,6 +33,28 @@ class AgentHostProtocolViolation(AgentHostRepositoryError):
     code = "AGENT_HOST_PROTOCOL_VIOLATION"
 
 
+class AgentHostStaleLease(AgentHostProtocolViolation):
+    """A batch for a lease epoch that has since been superseded.
+
+    The three protocol violations below are subclasses rather than new codes so
+    everything that already catches ``AgentHostProtocolViolation`` keeps doing
+    so. They exist because the link answers each with its own error code: the
+    host drops its outbox for a run it no longer owns, resends from the
+    watermark after a gap, and stops sending to a run that already ended.
+    Distinguishing them used to mean reading the message text of one 409.
+    """
+
+    code = "AGENT_HOST_STALE_LEASE"
+
+
+class AgentHostSequenceGap(AgentHostProtocolViolation):
+    code = "AGENT_HOST_SEQUENCE_GAP"
+
+
+class AgentHostTerminalRun(AgentHostProtocolViolation):
+    code = "AGENT_HOST_TERMINAL_RUN"
+
+
 class AgentHostRunConflict(AgentHostRepositoryError):
     code = "AGENT_HOST_RUN_CONFLICT"
 

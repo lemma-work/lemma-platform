@@ -8,7 +8,7 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
     // ACP agent being handed a working Lemma MCP server, and a tool it calls
     // there reaches Lemma with the run's own credential. Every hop is real
     // except the agent's judgement and Lemma itself.
-    let endpoint = LemmaMcpEndpoint::start(McpTransport::StatelessJson).await;
+    let endpoint = LemmaMcpEndpoint::new();
     let directory = TempDir::new().unwrap();
     let shims = ShimmedAgents::install(directory.path(), "mcp");
     let control = ControlPlane::start(
@@ -18,6 +18,7 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
         PermissionAnswer::Ignore,
     )
     .await;
+    control.serve_mcp(&endpoint);
     let host = HostProcess::start(directory.path(), &control, &shims).await;
 
     control
@@ -83,15 +84,9 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
         "the bridge argv must identify the run without leaking its credential: {args:?}"
     );
 
-    assert_eq!(
-        endpoint.methods(),
-        vec![
-            "initialize",
-            "notifications/initialized",
-            "tools/list",
-            "tools/call"
-        ]
-    );
+    // The handshake is the bridge's own; only the tool traffic crosses the
+    // link.
+    assert_eq!(endpoint.methods(), vec!["tools/list", "tools/call"]);
     let call = endpoint
         .requests()
         .into_iter()
@@ -100,19 +95,20 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
     assert_eq!(call.params["name"], "lemma_echo");
     assert_eq!(call.params["arguments"]["text"], "LEMMA_MCP_ROUND_TRIP");
     assert_eq!(
-        call.agent_run_id.as_deref(),
-        Some(control.run_id.to_string().as_str()),
+        call.run_id,
+        control.run_id.to_string(),
         "Lemma must be able to attribute the tool call to this run"
     );
     assert_eq!(
-        call.authorization.as_deref(),
-        Some(
-            endpoint.run_configuration()["authorization"]
-                .as_str()
-                .unwrap()
-        ),
+        call.token,
+        endpoint.run_configuration()["token"].as_str().unwrap(),
         "the tool call must carry the credential from this run's START_RUN \
          payload and nothing else"
+    );
+    assert_eq!(
+        call.conversation_id,
+        endpoint.conversation_id.to_string(),
+        "and name the conversation that payload named"
     );
 
     // The tool call was also reported to Lemma as a durable event, which is
@@ -121,7 +117,7 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
         control
             .events()
             .iter()
-            .any(|event| event.event_type == EventType::ToolCallUpsert),
+            .any(|event| event.event_type == EventType::ToolCall),
         "a Lemma tool call must reach the conversation as a tool-call event"
     );
     host.shutdown().await;
@@ -132,8 +128,9 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
 /// `ask_user` and `request_approval` on an Agent Host run cannot end the
 /// agent's turn from inside a tool call, so they answer "waiting for the
 /// person" and the bridge does the waiting. This drives that: the stand-in
-/// answers parked, holds the decision back for two polls, and the agent must
-/// see one ordinary tool result carrying the person's actual answer.
+/// answers parked, holds the decision back until the bridge is already
+/// waiting on it, and the agent must see one ordinary tool result carrying the
+/// person's actual answer.
 ///
 /// Deliberately at this level rather than over the helper functions alone.
 /// Those were unit-tested first, and deleting the call that wires them into the
@@ -141,15 +138,11 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
 /// placeholder and had no idea a person was ever asked.
 #[tokio::test]
 async fn the_bridge_waits_for_a_person_and_answers_with_their_decision() {
-    let endpoint = LemmaMcpEndpoint::start(McpTransport::StatelessJson).await;
+    let endpoint = LemmaMcpEndpoint::new();
+    endpoint.hold_decisions();
     let directory = TempDir::new().unwrap();
-    let paths = HostPaths::under(directory.path());
-    paths.ensure().unwrap();
-    let target_id = Uuid::new_v4();
-    let run_id = Uuid::new_v4();
-    journal_run(&paths, target_id, run_id, endpoint.run_configuration());
-
-    let mut bridge = BridgeProcess::spawn(directory.path(), target_id, run_id);
+    let (mut bridge, _relay, _target_id, _run_id) =
+        bridge_for(&directory, &endpoint, endpoint.run_configuration()).await;
     bridge
         .request(
             "initialize",
@@ -161,12 +154,27 @@ async fn the_bridge_waits_for_a_person_and_answers_with_their_decision() {
         )
         .await;
     bridge.notify("notifications/initialized").await;
-    let called = bridge
-        .request(
+    // The person decides only once the bridge is already waiting, so an
+    // answer cannot have been sitting there to be picked up by luck.
+    let person = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while endpoint.interaction_waits() == 0 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the bridge never waited for the person"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        endpoint.decide();
+    };
+    let (called, ()) = tokio::join!(
+        bridge.request(
             "tools/call",
             json!({"name": support::PARK_TOOL, "arguments": {}}),
-        )
-        .await;
+        ),
+        person,
+    );
     let output = bridge.finish().await;
 
     assert!(
@@ -195,11 +203,13 @@ async fn the_bridge_waits_for_a_person_and_answers_with_their_decision() {
         text.contains("Blue"),
         "text content still says parked: {text}"
     );
-    // And it genuinely waited rather than asking once and getting lucky.
-    assert!(
-        endpoint.interaction_polls() > 2,
-        "the bridge did not keep asking: {} poll(s)",
-        endpoint.interaction_polls()
+    // And it waited once, held open until the person decided, rather than
+    // polling: the bridge used to ask every two seconds for as long as the
+    // person took.
+    assert_eq!(
+        endpoint.interaction_waits(),
+        1,
+        "the bridge should wait on one held request, not poll"
     );
     // The parked call is answered under the durable id Lemma handed back, which
     // is the id the person's approval card resolves through.

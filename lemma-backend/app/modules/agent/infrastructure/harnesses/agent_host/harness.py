@@ -103,6 +103,12 @@ DEFAULT_STREAM_BLOCK_MS = 1_000
 # it only matters for acceptance, expiry, and recovery.
 DEFAULT_LEASE_CHECK_SECONDS = 5.0
 DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
+_RICH_CONTENT_TYPES = frozenset(
+    {
+        AgentHostEventType.AGENT_MESSAGE_CHUNK.value,
+        AgentHostEventType.AGENT_THOUGHT_CHUNK.value,
+    }
+)
 
 
 class RemoteHarness:
@@ -382,7 +388,10 @@ class RemoteHarness:
         )
         events: list[AgentEvent] = []
         payload_override: JsonObject | None = None
-        if self.artifact_writer is not None:
+        # Only a text chunk carries rich content blocks
+        # (docs/architecture/agent-host-events.md#text); every other event is
+        # already normalized, so there is nothing in it to save as a pod file.
+        if self.artifact_writer is not None and entry.type in _RICH_CONTENT_TYPES:
             materialized = await self.artifact_writer.materialize_event(
                 payload=entry.payload,
                 pod_id=conversation.pod_id,

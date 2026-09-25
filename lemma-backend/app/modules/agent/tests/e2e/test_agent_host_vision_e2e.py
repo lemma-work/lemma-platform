@@ -50,6 +50,7 @@ from app.modules.agent.services.workspace_location import (
     resolve_workspace_location,
 )
 from app.modules.agent.tests.e2e.agent_host_helpers import (
+    publish_harnesses,
     paired_machine,
     stale_after,
 )
@@ -178,25 +179,23 @@ async def test_a_stale_catalog_does_not_outvote_a_host_that_learned_to_see(
     ), "fixture is wrong: the catalog should have been frozen without VISION"
 
     # Now the probe lands, exactly as the host reports it over ACP.
-    republished = await scenario.async_client.put(
-        "/agent-host/harnesses",
-        json={
-            "harnesses": [
-                {
-                    "harness_key": "claude-code",
-                    "display_name": "Claude Code",
-                    "adapter_version": "1.0.0",
-                    "health": "READY",
-                    "capabilities": {"load_session": True, "images": True},
-                    "config_revision": "rev-2",
-                    "config_options": [_CLAUDE_CODE_MODEL_OPTION],
-                    "stale_after": stale_after(),
-                }
-            ]
-        },
-        headers={"Authorization": f"Bearer {machine['host_secret']}"},
+    republished = await publish_harnesses(
+        scenario.async_client,
+        machine,
+        [
+            {
+                "harness_key": "claude-code",
+                "display_name": "Claude Code",
+                "adapter_version": "1.0.0",
+                "health": "READY",
+                "capabilities": {"load_session": True, "images": True},
+                "config_revision": "rev-2",
+                "config_options": [_CLAUDE_CODE_MODEL_OPTION],
+                "stale_after": stale_after(),
+            }
+        ],
     )
-    assert republished.status_code == 200, republished.text
+    assert republished["type"] == "harnesses_ok", republished
 
     mode, _run = await _vision_mode_for(db_session, scenario, profile)
 

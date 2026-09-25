@@ -73,34 +73,10 @@ def normalize_local_mcp_tool_name(tool_name: str) -> str:
     ``mcp__lemma_tools__lemma_exec_command`` and ``exec_command`` are the same
     tool, and everything that reads a tool name — cards, icons, approvals,
     analytics — has to see the same one either way.
+
+    Its one remaining reader is Lemma's MCP server (``pod_mcp_service``,
+    ``conversation_mcp_service``), which is handed whatever name the calling
+    agent chose. Agent Host *events* no longer need it: the host strips the
+    namespace itself and says the call is Lemma's in ``tool.source``.
     """
     return normalize_exported_tool_name(strip_provider_namespace(tool_name))
-
-
-def is_provider_scoped_lemma_mcp_tool_name(tool_name: object) -> bool:
-    return (
-        isinstance(tool_name, str) and strip_provider_namespace(tool_name) != tool_name
-    )
-
-
-def looks_like_lemma_mcp_payload(payload: object) -> bool:
-    if isinstance(payload, dict):
-        server_name = (
-            payload.get("serverName")
-            or payload.get("server_name")
-            or payload.get("server")
-            or payload.get("mcp_server")
-            or payload.get("mcpServer")
-        )
-        if server_name in _SERVER_NAMES:
-            return True
-        for key in ("toolName", "tool_name", "tool", "name"):
-            value = payload.get(key)
-            if is_provider_scoped_lemma_mcp_tool_name(value):
-                return True
-            if isinstance(value, dict) and looks_like_lemma_mcp_payload(value):
-                return True
-        return any(looks_like_lemma_mcp_payload(value) for value in payload.values())
-    if isinstance(payload, list):
-        return any(looks_like_lemma_mcp_payload(item) for item in payload)
-    return False

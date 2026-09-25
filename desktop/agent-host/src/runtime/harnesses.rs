@@ -6,6 +6,9 @@ use super::{
     OwnedTask, ProbedHarness, ProbedHarnesses, TargetWorker, Value, redact_error,
 };
 
+/// How long a finished probe waits for a link to publish on.
+const PUBLISH_LINK_WAIT: Duration = Duration::from_secs(60);
+
 /// Enough of a revision to correlate two log lines, without the other 56 chars.
 ///
 /// Revisions are only ever compared for equality, and a reader tracing a run
@@ -206,8 +209,16 @@ impl TargetWorker {
             self.reprobe_requested.store(true, Ordering::SeqCst);
             return;
         }
-        let client = self.client.clone();
+        let mut link = self.link.clone();
         let sender = self.probed.0.clone();
+        // Probes a scheduled refresh may reuse. None when something said the
+        // agents may have changed.
+        let reusable: HashMap<String, ProbedHarness> = if self.force_probe {
+            HashMap::new()
+        } else {
+            self.probes.clone()
+        };
+        self.force_probe = false;
         // Everything the spawned work needs, taken before the task is built:
         // it outlives this borrow of `self`.
         let manifest = self.manifest.clone();
@@ -232,8 +243,24 @@ impl TargetWorker {
                 let driver = Arc::clone(&driver);
                 let scratch = probe_root.join(&snapshot.harness_key);
                 let published_revision = published_revisions.get(&snapshot.harness_key).cloned();
+                let previous = reusable.get(&snapshot.harness_key).cloned();
                 async move {
                     if snapshot.health != HarnessHealth::Ready {
+                        return snapshot;
+                    }
+                    if let Some(previous) = previous.filter(|previous| {
+                        previous.ready
+                            && previous.adapter_version == snapshot.adapter_version
+                            && previous.upstream_version == snapshot.upstream_version
+                    }) {
+                        snapshot.config_options = previous.config_options;
+                        snapshot.capabilities = previous.capabilities;
+                        snapshot.config_revision = snapshot.revision();
+                        tracing::debug!(
+                            harness = %snapshot.harness_key,
+                            outcome = "reused",
+                            "harness probe skipped; nothing about the agent changed"
+                        );
                         return snapshot;
                     }
                     let Ok(adapter) = manifest.resolve(&snapshot.harness_key) else {
@@ -331,6 +358,9 @@ impl TargetWorker {
                         ProbedHarness {
                             capabilities: snapshot.capabilities.clone(),
                             config_options: snapshot.config_options.clone(),
+                            adapter_version: snapshot.adapter_version.clone(),
+                            upstream_version: snapshot.upstream_version.clone(),
+                            ready: snapshot.health == HarnessHealth::Ready,
                         },
                     )
                 })
@@ -370,7 +400,17 @@ impl TargetWorker {
                 })
                 .collect::<Vec<_>>();
             tracing::info!(harnesses = %attempted, retry_soon, "publishing probed harnesses");
-            match client.publish_harnesses(enriched).await {
+            // Probing does not need Lemma, so it may finish before the link is
+            // up. Wait for one, but not for ever: a publish that never lands
+            // is retried on the short interval rather than holding every
+            // later refresh behind it.
+            let Ok(Some(handle)) = tokio::time::timeout(PUBLISH_LINK_WAIT, link.wait()).await
+            else {
+                tracing::warn!("no link to publish probed harnesses on; will retry");
+                let _ = sender.send(None);
+                return;
+            };
+            match handle.publish_harnesses(enriched).await {
                 Ok(published) => {
                     let accepted = published
                         .iter()

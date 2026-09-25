@@ -1,22 +1,18 @@
-//! Carrying a tool conversation to the run-scoped endpoint.
+//! Carrying a tool conversation from the agent to Lemma, over the link.
 
 use super::*;
 
 #[tokio::test]
-async fn the_bridge_carries_a_full_tool_conversation_to_the_run_scoped_endpoint() {
-    // The bridge is the only thing standing between an ACP adapter and Lemma's
-    // tools. Before this test the whole subprocess was unexercised: a bridge
-    // that dropped the credential, mangled JSON-RPC framing, or never forwarded
-    // `tools/call` would have failed no test.
-    let endpoint = LemmaMcpEndpoint::start(McpTransport::StatelessJson).await;
+async fn the_bridge_carries_a_full_tool_conversation_to_lemma_over_the_link() {
+    // The bridge and the relay are the only things standing between an ACP
+    // adapter and Lemma's tools. Before this test the whole subprocess was
+    // unexercised: a bridge that dropped the credential, mangled JSON-RPC
+    // framing, or never forwarded `tools/call` would have failed no test.
+    let endpoint = LemmaMcpEndpoint::new();
     let directory = TempDir::new().unwrap();
-    let paths = HostPaths::under(directory.path());
-    paths.ensure().unwrap();
-    let target_id = Uuid::new_v4();
-    let run_id = Uuid::new_v4();
-    journal_run(&paths, target_id, run_id, endpoint.run_configuration());
+    let (mut bridge, _relay, _target_id, run_id) =
+        bridge_for(&directory, &endpoint, endpoint.run_configuration()).await;
 
-    let mut bridge = BridgeProcess::spawn(directory.path(), target_id, run_id);
     let (listed, called) = drive_bridge(&mut bridge).await;
     let output = bridge.finish().await;
 
@@ -32,116 +28,117 @@ async fn the_bridge_carries_a_full_tool_conversation_to_the_run_scoped_endpoint(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let requests = endpoint.requests();
+    // Only the tool traffic reaches Lemma. The handshake and the notification
+    // are the bridge's to answer; forwarding them would be a round trip per
+    // session for nothing, and the link has no frame for a notification.
     assert_eq!(
         endpoint.methods(),
-        vec![
-            "initialize",
-            "notifications/initialized",
-            "tools/list",
-            "tools/call"
-        ],
-        "every JSON-RPC message must reach Lemma, including the notification"
+        vec!["tools/list", "tools/call"],
+        "every tool request must reach Lemma, and nothing else"
     );
-    for record in &requests {
+    for record in endpoint.requests() {
         assert_eq!(
-            record.authorization.as_deref(),
-            Some("Bearer hermetic-run-scoped-mcp-token"),
+            record.token, MCP_BEARER,
             "the run-scoped credential must be attached to every request"
         );
         assert_eq!(
-            record.agent_run_id.as_deref(),
-            Some(run_id.to_string().as_str()),
-            "Lemma scopes tools to the run using this header"
+            record.run_id,
+            run_id.to_string(),
+            "Lemma scopes tools to the run it names"
         );
         assert_eq!(
-            record.protocol_version.as_deref(),
-            Some("2025-06-18"),
-            "the client's negotiated protocol version must be echoed upstream"
-        );
-        assert!(
-            record
-                .accept
-                .as_deref()
-                .is_some_and(|accept| accept.contains("text/event-stream")),
-            "streamable-HTTP servers reject a client that will not accept SSE"
+            record.conversation_id,
+            endpoint.conversation_id.to_string(),
+            "the conversation is how Lemma resolves the toolset"
         );
     }
+}
+
+#[tokio::test]
+async fn a_run_without_a_credential_cannot_reach_lemmas_tools() {
+    // `spawn_run` refuses to dispatch a run whose START_RUN payload carried no
+    // MCP object. This pins the relay's own half of that rule: a run that has
+    // no credential of its own is refused before anything is sent, so a future
+    // caller cannot reach Lemma's tools on the strength of the host's link.
+    let endpoint = LemmaMcpEndpoint::new();
+    let directory = TempDir::new().unwrap();
+    let (mut bridge, _relay, _target_id, _run_id) =
+        bridge_for(&directory, &endpoint, json!({"server_name": "lemma_tools"})).await;
+
+    let refused = bridge.request("tools/list", json!({})).await;
+    bridge.finish().await;
+
     assert_eq!(
-        requests[0].conversation_id,
-        endpoint.conversation_id.to_string(),
-        "the conversation id in the URL is how Lemma resolves the toolset"
+        refused.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32603),
+        "a run with no credential must get an error, not tools: {refused}"
+    );
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no Lemma credential")),
+        "the error should name the missing credential: {refused}"
+    );
+    assert!(
+        endpoint.requests().is_empty(),
+        "nothing may reach Lemma without the run's own credential: {:?}",
+        endpoint.methods()
     );
 }
 
 #[tokio::test]
-async fn the_bridge_understands_a_server_sent_event_response_and_closes_its_session() {
-    // Lemma mounts FastMCP with `json_response=True`, but the bridge advertises
-    // `Accept: text/event-stream` and so may be answered that way by any
-    // streamable-HTTP deployment. Getting this wrong looks like an agent whose
-    // Lemma tools simply never return.
-    let endpoint = LemmaMcpEndpoint::start(McpTransport::ServerSentEvents).await;
+async fn only_a_bridge_holding_the_relay_token_is_served() {
+    // The relay listens on loopback, where any process on this machine can
+    // connect. What stands between one of them and every running agent's
+    // Lemma tools is the random token in the relay's private endpoint file --
+    // the same bar as reading a run's credential out of the journal.
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let endpoint = LemmaMcpEndpoint::new();
     let directory = TempDir::new().unwrap();
     let paths = HostPaths::under(directory.path());
     paths.ensure().unwrap();
     let target_id = Uuid::new_v4();
     let run_id = Uuid::new_v4();
     journal_run(&paths, target_id, run_id, endpoint.run_configuration());
+    let _relay = start_relay(&paths, target_id, &endpoint).await;
 
-    let mut bridge = BridgeProcess::spawn(directory.path(), target_id, run_id);
-    let (_listed, called) = drive_bridge(&mut bridge).await;
-    let output = bridge.finish().await;
-
-    assert_eq!(
-        called["result"]["content"][0]["text"],
-        "lemma-echo:BRIDGE_ROUND_TRIP"
-    );
-    assert!(output.status.success());
-    let sessions = endpoint
-        .requests()
-        .into_iter()
-        .skip(1)
-        .filter_map(|record| record.session_id)
-        .collect::<Vec<_>>();
-    assert!(
-        !sessions.is_empty() && sessions.iter().all(|value| value == "hermetic-mcp-session"),
-        "a session id handed back by the server must be replayed on later requests"
-    );
-    assert_eq!(
-        endpoint.deletes(),
-        vec![Some("hermetic-mcp-session".to_owned())],
-        "the bridge must release the server session when the adapter disconnects"
-    );
-}
-
-#[tokio::test]
-async fn a_run_without_mcp_configuration_cannot_open_a_bridge() {
-    // `spawn_run` refuses to dispatch a run whose START_RUN payload carried no
-    // MCP object. This pins the bridge's own half of that rule so a future
-    // caller cannot reach Lemma's tools with an unauthenticated endpoint.
-    let directory = TempDir::new().unwrap();
-    let paths = HostPaths::under(directory.path());
-    paths.ensure().unwrap();
-    let target_id = Uuid::new_v4();
-    let run_id = Uuid::new_v4();
-    journal_run(
-        &paths,
-        target_id,
-        run_id,
-        json!({"url": "http://127.0.0.1:1/mcp"}),
-    );
-
-    let mut bridge = BridgeProcess::spawn(directory.path(), target_id, run_id);
-    bridge.notify("notifications/initialized").await;
-    let output = bridge.finish().await;
+    let published: Value = serde_json::from_slice(
+        &std::fs::read(lemma_agent_host::mcp_relay::endpoint_path(
+            &paths, target_id,
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let port = u16::try_from(published["port"].as_u64().unwrap()).unwrap();
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let request = json!({
+        "id": 1,
+        "token": "not-the-relay-token",
+        "run_id": run_id,
+        "method": "tools/list",
+        "params": {},
+    });
+    writer
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    let answer = tokio::time::timeout(
+        Duration::from_secs(10),
+        BufReader::new(reader).lines().next_line(),
+    )
+    .await
+    .expect("the relay should hang up on a stranger, not leave it waiting");
 
     assert!(
-        !output.status.success(),
-        "a bridge with no credential must fail loudly rather than serve tools"
+        matches!(answer, Ok(None) | Err(_)),
+        "a connection with the wrong token must be closed unanswered: {answer:?}"
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("missing authorization"),
-        "stderr should name the missing credential: {}",
-        String::from_utf8_lossy(&output.stderr)
+        endpoint.requests().is_empty(),
+        "nothing from an unauthenticated connection may reach Lemma"
     );
 }

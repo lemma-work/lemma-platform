@@ -43,7 +43,6 @@ from app.modules.agent.domain.agent_host import (
     AgentHostHarnessHealth,
 )
 from app.modules.agent.domain.agent_host_selections import (
-    AgentHostSelectionRefused,
     carry_agent_host_model,
     carry_agent_host_selections,
 )
@@ -164,13 +163,10 @@ async def remint_for_current_revision(
     assert harness is not None  # noqa: S101 - narrowed by `_refusal_for`
 
     config_options = list(harness.config_options or [])
-    try:
-        carried = carry_agent_host_selections(
-            config_options=config_options,
-            selections=dict(payload.get("config_selections") or {}),
-        )
-    except AgentHostSelectionRefused as exc:
-        return RemintOutcome(requeue=False, attempts=attempts, refusal=str(exc))
+    carried = carry_agent_host_selections(
+        config_options=config_options,
+        selections=dict(payload.get("config_selections") or {}),
+    )
 
     previous_revision = str(payload.get("profile_revision") or "")
     previous_selections = dict(payload.get("config_selections") or {})

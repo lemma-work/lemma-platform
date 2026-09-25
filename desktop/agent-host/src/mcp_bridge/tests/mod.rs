@@ -2,5 +2,4 @@
 // the bridge through here.
 pub(super) use crate::mcp_bridge::*;
 
-mod frames;
 mod parked_tests;

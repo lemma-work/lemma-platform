@@ -5,12 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
-from app.modules.agent.domain.agent_host import (
-    AgentHostHarnessSnapshot,
-    AgentHostStatus,
-)
+from app.modules.agent.domain.agent_host import AgentHostStatus
 
 
 class AgentHostHarnessResponse(BaseModel):
@@ -50,15 +47,4 @@ class AgentHostListResponse(BaseModel):
 
 
 class AgentHostHarnessListResponse(BaseModel):
-    items: list[AgentHostHarnessResponse]
-
-
-class AgentHostHarnessPublishRequest(BaseModel):
-    harnesses: list[AgentHostHarnessSnapshot] = Field(
-        min_length=1,
-        max_length=32,
-    )
-
-
-class AgentHostHarnessPublishResponse(BaseModel):
     items: list[AgentHostHarnessResponse]
