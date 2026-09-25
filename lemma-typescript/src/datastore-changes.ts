@@ -12,6 +12,11 @@
  *
  * Reconnects with full-jitter backoff and resumes from the last seen `stream_id`
  * so a brief drop replays missed changes rather than losing them.
+ *
+ * A rejected session arrives as close code 4401 (the server accepts first, so
+ * the code survives — a pre-accept close would reach a browser as 1006). The
+ * client refreshes the session once and reconnects; a second 4401 before the
+ * stream goes live is terminal and reported through `onError`.
  */
 
 export interface DatastoreChangeFrame {
@@ -51,6 +56,13 @@ export type ChangeStreamStatus =
 export interface ChangeStreamTokenProvider {
   getAccessToken(): Promise<string>;
   refreshAccessToken(): Promise<string>;
+  /**
+   * The session's state, when the provider knows it. A signed-out session ends
+   * the stream: the server refuses the handshake before accepting it, which a
+   * browser reports as 1006 rather than 1008, so the close code alone cannot
+   * say "not you" and the socket would otherwise retry that refusal forever.
+   */
+  getState?(): { status: string };
 }
 
 export interface WatchChangesOptions {
@@ -83,8 +95,8 @@ export interface ChangeStreamHandle {
 
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 30_000;
-/** SuperTokens / FastAPI close code for a rejected session. */
-const WS_POLICY_VIOLATION = 1008;
+/** Close code for a missing, invalid or expired session: refresh and retry. */
+const WS_UNAUTHENTICATED = 4401;
 
 function reconnectDelayMs(attempt: number): number {
   const ceiling = Math.min(
@@ -123,18 +135,30 @@ export function watchDatastoreChanges(
   let cursor = options.since;
   let attempt = 0;
   let stopped = false;
+  // Set once a 4401 has been answered with a refresh; cleared when the stream
+  // goes live. A second 4401 while set means the refreshed session is refused too.
+  let authRefreshed = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   const status = (next: ChangeStreamStatus): void => options.onStatus?.(next);
 
+  const fail = (error: Error): void => {
+    if (stopped) return;
+    stopped = true;
+    status("closed");
+    options.onError?.(error);
+  };
+
   const scheduleReconnect = (): void => {
     if (stopped) return;
-    if (options.maxRetries != null && attempt >= options.maxRetries) {
+    if (auth.getState?.().status === "unauthenticated") {
       stopped = true;
       status("closed");
-      options.onError?.(
-        new Error("Datastore change stream: max reconnect attempts reached"),
-      );
+      options.onError?.(new Error("Datastore change stream: signed out"));
+      return;
+    }
+    if (options.maxRetries != null && attempt >= options.maxRetries) {
+      fail(new Error("Datastore change stream: max reconnect attempts reached"));
       return;
     }
     const delay = reconnectDelayMs(attempt);
@@ -167,11 +191,6 @@ export function watchDatastoreChanges(
     }
     socket = ws;
 
-    ws.onopen = () => {
-      attempt = 0; // reset backoff once connected
-      status("open");
-    };
-
     ws.onmessage = (event: MessageEvent) => {
       let frame: unknown;
       try {
@@ -182,6 +201,13 @@ export function watchDatastoreChanges(
       if (!frame || typeof frame !== "object") return;
       const record = frame as Record<string, unknown>;
       if (record.type === "ready") {
+        // Not `onopen`: the server accepts before it authenticates, so only
+        // `ready` says the session was taken and the stream is live. Backoff
+        // resets here too, so a server that accepts and then drops the socket
+        // is not reconnected to within half a second, forever.
+        attempt = 0;
+        authRefreshed = false;
+        status("open");
         cursor = (record.since as string) || cursor;
         if (cursor) options.onReady?.({ since: cursor });
         return;
@@ -196,9 +222,23 @@ export function watchDatastoreChanges(
         status("closed");
         return;
       }
-      // Auth rejected: refresh the token once, then reconnect.
-      if (event.code === WS_POLICY_VIOLATION && !options.useCookie) {
-        auth.refreshAccessToken().then(scheduleReconnect, scheduleReconnect);
+      // Session rejected: refresh once and reconnect. In cookie mode the
+      // refresh rotates the cookie, so it is worth the one try there too.
+      if (event.code === WS_UNAUTHENTICATED) {
+        if (authRefreshed) {
+          fail(new Error("Datastore change stream: session rejected after refresh"));
+          return;
+        }
+        authRefreshed = true;
+        auth.refreshAccessToken().then(scheduleReconnect, (error: unknown) =>
+          fail(
+            new Error(
+              `Datastore change stream: session refresh failed (${
+                error instanceof Error ? error.message : String(error)
+              })`,
+            ),
+          ),
+        );
         return;
       }
       scheduleReconnect();

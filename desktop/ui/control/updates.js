@@ -1,11 +1,11 @@
-// The Updates page: this app's own update, and the runtime it runs on.
+// Updating this app from Local settings, for when the workspace -- where
+// This Mac → Updates lives -- cannot load, or is a hosted one.
 
 import {
   $,
   LOCAL_MODE,
   friendlyError,
   invoke,
-  setDot,
   store,
   toast,
 } from "./core.js";
@@ -91,18 +91,13 @@ export async function loadAppUpdate() {
   }
 }
 
+// What the runtime record is read for here: whether a repair is possible at
+// all. The version cards it used to fill moved to This Mac → Updates.
 function renderRuntime() {
   if (!store.runtimeInfo) return;
-  $("runtime-desktop-release").textContent = store.runtimeInfo.desktopRelease;
-  $("runtime-active-release").textContent = store.runtimeInfo.activeRelease || "Not installed";
-  $("runtime-previous-release").textContent = store.runtimeInfo.previousRelease || "None";
-  $("runtime-source").textContent = store.runtimeInfo.source === "bundled"
-    ? "Verified inside this signed app."
-    : "Verified immutable download.";
   document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => {
     item.disabled = !LOCAL_MODE || !store.runtimeInfo.repairAvailable;
   });
-  setDot("updates", !LOCAL_MODE ? "" : store.runtimeInfo.activeRelease === store.runtimeInfo.desktopRelease ? "ok" : "warn");
 }
 
 export async function loadRuntimeInfo() {

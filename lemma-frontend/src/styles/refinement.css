@@ -402,11 +402,18 @@ button svg, a svg { flex-shrink:0; }
     .workspace-toolbar .tabs { gap:14px; }
     .view-actions { padding-left:6px;gap:0; }.view-actions > button > span,.view-actions > a > span { display:none; }
     .view-actions button,.view-actions a,.view-actions summary { min-width:36px;min-height:44px;padding:6px; }
-    .workspace--focused .workspace-toolbar,.shell--hidden .workspace--focused .workspace-toolbar { padding-left:50px;min-height:52px; }
-    .toolbar-identity { max-width:32px;padding:0;border:0; }.toolbar-identity > span:last-child { display:none; }
-    .main:has(.workspace--focused) > .mobile-nav-toggle { top:6px; }
+    /* Any folded header, not only a full-pane view: the menu button sits over
+       the toolbar's first 50px either way, and folding by hand used to leave
+       the teammate's mark on top of it — no way into the sidebar at all. */
+    .workspace--headless .workspace-toolbar,.shell--hidden .workspace--headless .workspace-toolbar { padding-left:50px;min-height:52px; }
+    /* The name stays. A folded header — by hand, or by a remembered app or
+       profile tab on reload — leaves this as the only place on a phone that
+       says which teammate you are in, and a bare mark does not. It gives way
+       to the tabs before they do: shrinks to an ellipsis, never to nothing. */
+    .toolbar-identity { flex:0 1 auto;min-width:0;max-width:min(40vw,150px);padding:0;border:0; }
+    .main:has(.workspace--headless) > .mobile-nav-toggle { top:6px; }
 }
-.main:has(.workspace--focused) > .mobile-nav-toggle,
+.main:has(.workspace--headless) > .mobile-nav-toggle,
 .main:has(.workspace--headless) > .desktop-nav-toggle { z-index:30; }
 /* New conversation belongs to the toolbar, not a second button in the rail. */
 .workspace .history__new { display:none; }

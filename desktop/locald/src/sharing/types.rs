@@ -17,6 +17,35 @@ pub enum CloudflareSetup {
     Existing,
 }
 
+/// Who may create an account once this installation is reachable from
+/// somewhere other than this Mac.
+///
+/// A preference rather than part of a mode, because it is a decision about
+/// people and a mode is a decision about networks: somebody sharing on the LAN
+/// with their family and somebody sharing publicly with one colleague want the
+/// same answer here. Invite-only by default -- the installation's first account
+/// already exists by the time sharing can be turned on, and anyone invited from
+/// inside Lemma can join -- because the failure the other default produces is
+/// a stranger with an account and a sandbox on this computer, discovered after
+/// the fact.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhoCanJoin {
+    #[default]
+    InviteOnly,
+    Open,
+}
+
+impl WhoCanJoin {
+    /// The backend's `SIGNUP_MODE` for this choice.
+    pub fn signup_mode(self) -> &'static str {
+        match self {
+            Self::InviteOnly => "invite_only",
+            Self::Open => "open",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SharingPreferences {
@@ -29,6 +58,10 @@ pub struct SharingPreferences {
     pub cloudflare_hostname: Option<String>,
     pub cloudflare_tunnel_owned: bool,
     pub cloudflare_dns_routed: bool,
+    /// Absent from a `sharing.json` written before it existed, which reads as
+    /// the default: an upgraded installation starts invite-only rather than
+    /// keeping an openness nobody ever chose.
+    pub who_can_join: WhoCanJoin,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -42,6 +75,8 @@ pub struct EnableSharingRequest {
     pub cloudflare_tunnel_name: Option<String>,
     pub hostname: Option<String>,
     pub public_warning_confirmed: bool,
+    /// Changes the saved preference when present; absent keeps it.
+    pub who_can_join: Option<WhoCanJoin>,
 }
 
 impl Default for EnableSharingRequest {
@@ -55,6 +90,7 @@ impl Default for EnableSharingRequest {
             cloudflare_tunnel_name: None,
             hostname: None,
             public_warning_confirmed: false,
+            who_can_join: None,
         }
     }
 }
@@ -100,8 +136,15 @@ pub struct SharingSnapshot {
     pub qr_svg: Option<String>,
     pub preferences: SharingPreferences,
     pub transition_running: bool,
+    pub who_can_join: WhoCanJoin,
     pub public_confirmation: String,
     pub apps_limitation: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetWhoCanJoinRequest {
+    pub who_can_join: WhoCanJoin,
 }
 
 pub(crate) fn render_qr(value: &str) -> Option<String> {

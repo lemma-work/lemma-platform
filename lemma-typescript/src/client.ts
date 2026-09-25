@@ -222,4 +222,22 @@ export class LemmaClient {
   ): Promise<ReadableStream<Uint8Array>> {
     return this._http.stream(path, options);
   }
+
+  /**
+   * `stream`, returning the whole `Response` so its status and headers can be
+   * read — e.g. whether a ranged read came back 206 or the server ignored the
+   * `Range` and sent the file from the start.
+   */
+  streamResponse(
+    path: string,
+    options?: {
+      method?: "GET" | "POST" | "PATCH";
+      params?: Record<string, string | number | boolean | undefined | null>;
+      body?: unknown;
+      headers?: HeadersInit;
+      signal?: AbortSignal;
+    },
+  ): Promise<Response> {
+    return this._http.streamResponse(path, options);
+  }
 }

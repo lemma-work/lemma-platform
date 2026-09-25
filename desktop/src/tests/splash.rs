@@ -125,8 +125,8 @@ fn local_settings_does_not_inherit_the_splash_commands() {
         assert!(granted("main").contains(&permission.to_string()));
         assert!(!granted("control").contains(&permission.to_string()));
     }
-    assert!(granted("control").contains(&"allow-apply-operator-config".to_string()));
-    assert!(!granted("main").contains(&"allow-apply-operator-config".to_string()));
+    assert!(granted("control").contains(&"allow-control-snapshot".to_string()));
+    assert!(!granted("main").contains(&"allow-control-snapshot".to_string()));
 }
 
 #[test]

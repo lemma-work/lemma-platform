@@ -16,6 +16,8 @@ import {
 import {
     connectorProblem, connectRoute, discoveryNote, isBringYourOwn, kindFor, type CatalogEntry, type Install,
 } from "@/connect/install";
+import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
+import { oauthFormForConnector } from "@/desktop/this-mac";
 
 /** The organization's connected accounts.
  *
@@ -373,10 +375,17 @@ function ConnectorCard({
                 ) : addressed ? (
                     <button className="btn" onClick={onAdd}>{installs.length > 0 ? "Add another" : "Add one"}</button>
                 ) : (
-                    <button className="btn" disabled={start.isPending}
-                        onClick={() => { setError(null); setConnecting(installs.find((one) => one.is_default && one.status !== "DISABLED") ?? installs.find((one) => one.status !== "DISABLED") ?? null); }}>
-                        {start.isPending ? <LoadingIndicator inline label="Loading" /> : accounts.length > 0 ? "Add another" : "Connect"}
-                    </button>
+                    <>
+                        {/* Beside Connect rather than instead of it: an
+                            organization's own OAuth app still works without
+                            this computer's, so this is the other way in,
+                            offered only while that form is empty. */}
+                        {accounts.length === 0 && <SetUpOnThisMac form={oauthFormForConnector(connector.id)} compact />}
+                        <button className="btn" disabled={start.isPending}
+                            onClick={() => { setError(null); setConnecting(installs.find((one) => one.is_default && one.status !== "DISABLED") ?? installs.find((one) => one.status !== "DISABLED") ?? null); }}>
+                            {start.isPending ? <LoadingIndicator inline label="Loading" /> : accounts.length > 0 ? "Add another" : "Connect"}
+                        </button>
+                    </>
                 )}
             </div>
 

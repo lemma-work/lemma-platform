@@ -32,6 +32,7 @@ mod pull_claim;
 mod pull_progress;
 mod readiness;
 mod sandbox;
+mod sandbox_firewall;
 mod sandbox_inspect;
 mod sandbox_run;
 // Served only on Linux, over vsock; the protocol is tested everywhere.
@@ -53,6 +54,7 @@ pub use protocol::{handle_reader, GuestError, GuestRequest, GuestResponse};
 pub(crate) use pull_claim::*;
 pub(crate) use readiness::*;
 pub(crate) use sandbox::*;
+pub(crate) use sandbox_firewall::*;
 pub(crate) use sandbox_inspect::*;
 pub(crate) use sandbox_run::*;
 pub use sandbox_tunnel::TUNNEL_VSOCK_PORT;

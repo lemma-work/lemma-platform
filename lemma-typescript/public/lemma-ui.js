@@ -662,13 +662,14 @@ var LemmaUI = (() => {
         streamConversationId,
         syncAfterStream
       }) => {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
         this.patch({ isStreaming: true, error: null });
         this.clearStreamingText();
         this.clearStreamingThinking();
         let sawTerminalStatus = false;
         let unclaimedAnswer = false;
         let streamFailure = null;
+        let deliveredEvent = false;
         try {
           for await (const event of readSSE(stream)) {
             if (controller.signal.aborted) break;
@@ -678,6 +679,7 @@ var LemmaUI = (() => {
             if (parsed.interrupted) {
               continue;
             }
+            deliveredEvent = true;
             if (parsed.notice) {
               (_d = (_c = this.options).onNotice) == null ? void 0 : _d.call(_c, parsed.notice, parsed.noticeKind);
             }
@@ -750,11 +752,13 @@ var LemmaUI = (() => {
           if (!controller.signal.aborted) {
             const syncConversationId = streamConversationId != null ? streamConversationId : this.state.conversationId;
             if (!sawTerminalStatus && syncConversationId) {
+              if (deliveredEvent) this.streamReconnectCount = 0;
               while (!controller.signal.aborted) {
+                if (((_l = this.client.auth) == null ? void 0 : _l.getState().status) === "unauthenticated") break;
                 const latestConversation = await this.refreshConversation(syncConversationId);
                 await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
                 if (controller.signal.aborted) break;
-                const latestStatus = (_l = latestConversation == null ? void 0 : latestConversation.status) != null ? _l : this.state.status;
+                const latestStatus = (_m = latestConversation == null ? void 0 : latestConversation.status) != null ? _m : this.state.status;
                 if (!isConversationRunningStatus(latestStatus)) {
                   this.streamReconnectCount = 0;
                   streamFailure = null;
@@ -770,10 +774,9 @@ var LemmaUI = (() => {
                   const scope = normalizeScope(this.client, this.scopeDefaults);
                   const scopedClient = applyPodScope(this.client, scope.podId);
                   const newStream = await scopedClient.conversations.resumeStream(syncConversationId, {
-                    pod_id: (_m = scope.podId) != null ? _m : void 0,
+                    pod_id: (_n = scope.podId) != null ? _n : void 0,
                     signal: controller.signal
                   });
-                  this.streamReconnectCount = 0;
                   return await this.consume({
                     stream: newStream,
                     controller,
@@ -797,7 +800,7 @@ var LemmaUI = (() => {
             if (!controller.signal.aborted && streamFailure) {
               const normalized = normalizeError(streamFailure, "Failed to stream conversation.");
               this.patch({ error: normalized });
-              (_o = (_n = this.options).onError) == null ? void 0 : _o.call(_n, streamFailure);
+              (_p = (_o = this.options).onError) == null ? void 0 : _p.call(_o, streamFailure);
             }
           }
         } finally {

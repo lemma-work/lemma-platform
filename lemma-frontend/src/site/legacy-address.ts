@@ -9,6 +9,11 @@ export const SETTINGS: readonly SettingsSection[] = [
     "models",
     "org-usage",
     "team-billing",
+    "this-mac",
+    "this-mac-agents",
+    "this-mac-sharing",
+    "this-mac-updates",
+    "this-mac-advanced",
 ];
 export function settingsFromQuery(
     value: string | null,

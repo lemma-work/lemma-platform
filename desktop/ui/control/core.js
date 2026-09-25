@@ -7,7 +7,6 @@ export const invoke = (command, args = {}) => window.__TAURI__.core.invoke(comma
 export const listen = (event, handler) =>
   window.__TAURI__.event.listen(event, ({ payload }) => handler(payload));
 export const $ = (id) => document.getElementById(id);
-export const csv = (value) => value.split(",").map((item) => item.trim()).filter(Boolean);
 
 // This window ships in the Windows build too, and every sentence about the
 // machine said "Mac" -- including the recovery panel that names what is about
@@ -21,11 +20,7 @@ export const forThisDevice = (text) =>
 // refusing access, not about the box it runs on.
 const OS_NAME = IS_WINDOWS ? "Windows" : "macOS";
 export const LOCAL_MODE = window.__LEMMA_DESKTOP__?.mode === "local";
-export const LOCAL_PAGES = new Set(["overview", "ai", "sharing", "integrations", "channels", "runtime"]);
-
-export const sectionRevisions = new Map();
-export const draftVersions = new Map();
-export const pendingSaves = new Map();
+export const LOCAL_PAGES = new Set(["overview"]);
 
 export function toast(message, error = false) {
   const element = $("toast");
@@ -73,7 +68,7 @@ const DOT_MEANING = {
   ok: "healthy",
   warn: "needs attention",
   bad: "not working",
-  "": "not configured",
+  "": "no state to report",
 };
 
 export function setDot(id, tone) {
@@ -147,11 +142,6 @@ export const store = {
   state: null,
   runtimeInfo: null,
   appUpdate: null,
-  /** True while the forms are filled from a snapshot rather than typed into. */
-  filling: false,
-  sharingChoice: null,
-  sharingProvider: "ngrok",
-  cloudflareSetupChoice: null,
   sharingBusy: false,
 };
 

@@ -1,5 +1,6 @@
-//! What Local settings writes: the operator config, the AI provider and
-//! sharing. Each one is a locald round trip the page waits on.
+//! What Local settings and onboarding write: the AI provider, sharing and
+//! the sandbox image. Each one is a locald round trip the page waits on.
+//! The workspace's own settings go through `workspace_settings.rs`.
 
 use super::*;
 
@@ -7,18 +8,6 @@ pub(crate) fn control_snapshot_impl(app: AppHandle, id: String) -> Result<(), St
     // Opening settings is not consent to download or repair a local runtime.
     ensure_locald_without_host_pack(&app)?;
     send_to_locald(&app, json!({"cmd":"control.snapshot", "id": id}))
-}
-
-pub(crate) fn apply_operator_config_impl(
-    app: AppHandle,
-    id: String,
-    payload: Value,
-) -> Result<(), String> {
-    ensure_locald(&app)?;
-    send_to_locald(
-        &app,
-        json!({"cmd":"config.apply", "id": id, "payload": payload}),
-    )
 }
 
 pub(crate) fn discover_provider_models_impl(
@@ -64,7 +53,7 @@ pub(crate) fn sharing_action_impl(
     }
     if !matches!(
         action.as_str(),
-        "snapshot" | "preflight" | "enable" | "disable"
+        "snapshot" | "preflight" | "enable" | "disable" | "access"
     ) {
         return Err(format!("unknown sharing action: {action}"));
     }
@@ -96,23 +85,6 @@ pub(crate) async fn control_snapshot(
 ) -> Result<(), String> {
     require_control_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || control_snapshot_impl(app, id))
-        .await
-        .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
-/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
-/// the main thread, so any command that waits on the daemon, the network or a
-/// child process freezes every window for its whole duration.
-pub(crate) async fn apply_operator_config(
-    window: Webview,
-    app: AppHandle,
-    id: String,
-    payload: Value,
-) -> Result<(), String> {
-    require_agent_host_caller(&window, &app)?;
-    require_control_window(&window)?;
-    tauri::async_runtime::spawn_blocking(move || apply_operator_config_impl(app, id, payload))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -212,7 +184,9 @@ pub(crate) async fn prepare_sandbox_image(
     app: AppHandle,
     id: String,
 ) -> Result<(), String> {
-    require_control_window(&window)?;
+    // Asked for from This Mac → Coding agents, where the thing that needs it
+    // is; Local settings no longer offers it.
+    require_local_settings_caller(&window, &app)?;
     tauri::async_runtime::spawn_blocking(move || prepare_sandbox_image_impl(app, id))
         .await
         .map_err(|error| error.to_string())?

@@ -297,6 +297,7 @@ fn every_control_the_pack_switches_off_is_restored_or_recorded() {
     let (shared, _) = crate::daemon::sharing_environment(
         "https://lemma.example.com",
         crate::sharing::SharingMode::Public,
+        crate::sharing::WhoCanJoin::InviteOnly,
     );
     let recorded: Vec<&str> = OFF_BY_DESIGN.iter().map(|(key, _)| *key).collect();
 
