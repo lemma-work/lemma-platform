@@ -40,6 +40,7 @@ _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 _MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
 _USER_INTERACTION_PROMPT_PATH = _PROMPT_DIR / "user_interaction.md"
 _AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
+_AGENT_HOST_HOST_EXECUTION_PROMPT_PATH = _PROMPT_DIR / "agent_host_host_execution.md"
 
 # Per-toolset prompt fragments, in the order they should appear in the system
 # prompt. A toolset is listed here if it carries usage guidance, whether or not
@@ -174,9 +175,36 @@ def load_memory_prompt() -> str:
     return _read_required_prompt(_MEMORY_PROMPT_PATH)
 
 
-def load_agent_host_runtime_prompt() -> str:
-    """Runtime guidance for a run driven through Agent Host (remote harness)."""
-    return _read_required_prompt(_AGENT_HOST_RUNTIME_PROMPT_PATH)
+def load_agent_host_runtime_prompt(*, host_execution: bool = False) -> str:
+    """Runtime guidance for a run driven through Agent Host (remote harness).
+
+    With ``host_execution`` the ``# Runtime`` and ``# Browser`` sections are
+    replaced by the ones in ``agent_host_host_execution.md``: that run has no
+    Lemma command tools (docs/architecture/desktop-host-execution.md §7), so
+    the sections telling it to use them would send it to tools that are not
+    there. Every other section is shared, so the two cannot drift apart.
+    """
+    base = _read_required_prompt(_AGENT_HOST_RUNTIME_PROMPT_PATH)
+    if not host_execution:
+        return base
+    replacements = _prompt_sections(
+        _read_required_prompt(_AGENT_HOST_HOST_EXECUTION_PROMPT_PATH)
+    )
+    return "\n\n".join(
+        replacements.get(title, body).strip()
+        for title, body in _prompt_sections(base).items()
+    )
+
+
+def _prompt_sections(text: str) -> dict[str, str]:
+    """A Markdown prompt's top-level sections, by title, in order."""
+    sections: dict[str, str] = {}
+    title = ""
+    for line in text.splitlines(keepends=True):
+        if line.startswith("# "):
+            title = line[2:].strip()
+        sections[title] = sections.get(title, "") + line
+    return sections
 
 
 def load_toolset_fragment(toolset: AgentToolset) -> str | None:

@@ -160,7 +160,9 @@ async def enqueue_run[DepsT: AgentContext](
         messages=messages,
         ctx=ctx,
         agent_run_id=agent_run_id,
-        runtime_instructions=load_agent_host_runtime_prompt(),
+        runtime_instructions=load_agent_host_runtime_prompt(
+            host_execution=bool(getattr(ctx, "host_runs_native_commands", False))
+        ),
         carries_history=resume_session_id is None,
         resumed_tool_call_id=_resumed_tool_call_id(run),
     )

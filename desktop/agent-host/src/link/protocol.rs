@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::host_exec::wire::HostExecutionStatus;
 use crate::protocol::{
     Command, CommandRejection, EventAck, EventBatch, HarnessSnapshot, HostCapacity, HostHello,
     RunCheckpoint,
@@ -42,10 +43,12 @@ pub mod host {
     pub const MCP: &str = "mcp";
     pub const INTERACTION_WAIT: &str = "interaction_wait";
     pub const REVOKE: &str = "revoke";
+    /// The answer to Lemma's `op`.
+    pub const OP_OK: &str = "op_ok";
     pub const ERROR: &str = "error";
 
     /// Every host frame, for the contract test.
-    pub const ALL: [&str; 9] = [
+    pub const ALL: [&str; 10] = [
         PAIR,
         HELLO,
         CONTROL,
@@ -54,6 +57,7 @@ pub mod host {
         MCP,
         INTERACTION_WAIT,
         REVOKE,
+        OP_OK,
         ERROR,
     ];
 }
@@ -70,10 +74,13 @@ pub mod server {
     pub const REVOKED: &str = "revoked";
     pub const COMMANDS: &str = "commands";
     pub const RECONNECT: &str = "reconnect";
+    /// A request Lemma makes of the host: one host-execution operation. The
+    /// only server frame that carries an `id` and expects an answer.
+    pub const OP: &str = "op";
     pub const ERROR: &str = "error";
 
     /// Every server frame, for the contract test.
-    pub const ALL: [&str; 11] = [
+    pub const ALL: [&str; 12] = [
         PAIRED,
         WELCOME,
         CONTROL_OK,
@@ -84,6 +91,7 @@ pub mod server {
         REVOKED,
         COMMANDS,
         RECONNECT,
+        OP,
         ERROR,
     ];
 }
@@ -104,6 +112,11 @@ pub mod close {
 pub struct HelloBody {
     pub hello: HostHello,
     pub capacity: HostCapacity,
+    /// Whether Lemma may route an owner's commands here. Also on every
+    /// `control`, so turning it on or off takes effect on the next heartbeat
+    /// rather than the next reconnect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_execution: Option<HostExecutionStatus>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,6 +151,8 @@ pub struct ControlBody {
     pub checkpoints: Vec<RunCheckpoint>,
     #[serde(default)]
     pub rejections: Vec<CommandRejection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_execution: Option<HostExecutionStatus>,
 }
 
 /// One control update Lemma could not parse. Everything else in the frame was
@@ -236,6 +251,29 @@ pub struct ErrorBody {
     pub message: String,
     #[serde(default)]
     pub retryable: bool,
+    /// More about the failure. An `OP_FAILED` answer to an `op` carries
+    /// `{"kind": ...}`, one of `host_exec::wire::kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Value>,
+}
+
+/// One host-execution operation Lemma asks of this host.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct OpBody {
+    /// The sandbox's logical id; `workspace.open` maps it to a root folder.
+    pub workspace: String,
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+    /// How long Lemma will wait for the answer. Past it, the host answers
+    /// `timeout` itself rather than let the op run on unobserved.
+    #[serde(default)]
+    pub deadline_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct OpOkBody {
+    pub result: Value,
 }
 
 /// The event batch a host appends, carried as the `events` body as-is.

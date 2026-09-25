@@ -19,6 +19,9 @@ pub struct HostPaths {
     /// See `conversation_folders` for why the path is recorded here rather than
     /// carried on the run.
     pub folders: PathBuf,
+    /// The folder each conversation's host workspace opened in, written by
+    /// this process. See `host_exec::roots`.
+    pub conversation_roots: PathBuf,
 }
 
 /// Proof that this process is the only Agent Host for its data directory.
@@ -71,6 +74,7 @@ impl HostPaths {
             lock: root.join("agent-host.lock"),
             config_lock: root.join("config.lock"),
             folders: root.join("conversation-folders.json"),
+            conversation_roots: root.join("conversation-roots.json"),
             root,
         }
     }
@@ -157,6 +161,12 @@ pub struct HostConfig {
     pub targets: Vec<TargetConfig>,
     #[serde(default = "default_max_runs")]
     pub max_runs: u16,
+    /// Whether an owner's Lemma agents may run commands on this computer,
+    /// under Seatbelt. Off until the owner turns it on in Settings, or with
+    /// `lemma-agent-host host-execution enable`. Host-wide rather than per
+    /// pairing: it is a decision about this machine.
+    #[serde(default)]
+    pub host_execution: bool,
 }
 
 /// Drop targets this build cannot read, rather than failing the whole config.
@@ -234,6 +244,7 @@ impl HostConfig {
             installation_id: Uuid::new_v4().to_string(),
             targets: Vec::new(),
             max_runs: default_max_runs(),
+            host_execution: false,
         };
         config.save(paths)?;
         Ok(config)
@@ -458,6 +469,7 @@ mod tests {
     #[test]
     fn rejects_a_capacity_the_backend_would_refuse_on_every_poll() {
         let config = |max_runs| HostConfig {
+            host_execution: false,
             installation_id: "installation".into(),
             max_runs,
             targets: Vec::new(),
@@ -476,6 +488,7 @@ mod tests {
     #[test]
     fn rejects_remote_plain_http() {
         let config = HostConfig {
+            host_execution: false,
             installation_id: "installation".into(),
             max_runs: 1,
             targets: vec![TargetConfig {

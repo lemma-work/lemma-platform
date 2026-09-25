@@ -224,6 +224,54 @@ lemma-agent-host disconnect --target my-workspace
 If a target is permanently unreachable, `--force-local` removes only the local
 state. The remote device must then be revoked from Lemma separately.
 
+## Host execution
+
+On macOS the host can also run the installation owner's Lemma agent commands
+on this computer, inside a Seatbelt sandbox, instead of in the VM. It is off
+until the owner turns it on (Settings, or the CLI):
+
+```bash
+lemma-agent-host host-execution enable        # needs macOS and /usr/bin/sandbox-exec
+lemma-agent-host host-execution status --json
+lemma-agent-host host-execution refresh-environment   # after changing ~/.zshrc etc.
+lemma-agent-host host-execution disable       # also stops everything running
+```
+
+The setting is `host_execution` in `config.json`; a running host re-reads it
+within five seconds and reports it on its next `control` frame. Lemma sends
+`op` frames on the link; the host starts one **exec-server** per open workspace
+-- this same binary, `lemma-agent-host exec-server`, under
+`/usr/bin/sandbox-exec` with the profile in `resources/host-sandbox.sb`
+(compiled into the binary) -- and relays each op to it over stdio. The
+exec-server's environment is the owner's login shell's (`$SHELL -lic`, cached in
+`host-environment.json` in the data directory) with credentials removed. See
+`docs/architecture/desktop-host-execution.md` for the ops, the path policy and
+the profile.
+
+**Debugging an exec-server by hand.** It speaks one JSON object per line on
+stdin and answers one per line on stdout, in whatever order ops finish; logs go
+to stderr. Run it unconfined:
+
+```bash
+printf '%s\n' \
+  '{"id":"1","workspace":"w","method":"workspace.open","params":{"slug":"debug"}}' \
+  '{"id":"2","workspace":"w","method":"process.start","params":{"shell_command":"echo hi"}}' \
+  | lemma-agent-host exec-server --root-base /tmp/lemma-debug
+```
+
+or confined exactly as the host runs it, which is how to find out whether a
+tool fails because of the profile (`Operation not permitted` is Seatbelt):
+
+```bash
+sandbox-exec -p "$(cat desktop/agent-host/resources/host-sandbox.sb)" \
+  -D ROOT=/private/tmp/lemma-debug -D HOME="$HOME" \
+  -D TMP="$(cd "$TMPDIR" && pwd -P)" \
+  /bin/bash -c 'cd /private/tmp/lemma-debug && gh auth status'
+```
+
+`log stream --predicate 'sender == "Sandbox"'` shows each denial as it
+happens. Setuid programs (`ps`, `sudo`) cannot run under any sandbox profile.
+
 ## Direct adapter smoke tests
 
 The `run` subcommand exercises the real ACP adapter and provider authentication
@@ -290,6 +338,12 @@ The crate has:
   normalizers (`tests/normalize_golden.rs`; see "Golden transcripts" in
   `docs/architecture/agent-host-events.md`);
 - a fake-process ACP end-to-end test using the official Rust ACP SDK;
+- exec-server tests for every host-execution op, the output ring, chunked
+  uploads, the path policy and environment scrubbing, and link tests that
+  drive `op` frames through a relay (`src/host_exec/tests.rs`,
+  `src/link/tests.rs`);
+- on macOS, `tests/seatbelt.rs`, which runs real processes under the Seatbelt
+  profile and proves its denials and allowances;
 - a loopback link end-to-end test covering pairing, pushed commands, harness
   publication, event replay, reconnects, and self-revocation;
 - backend PostgreSQL migration and full protocol tests; and

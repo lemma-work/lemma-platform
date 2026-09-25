@@ -189,6 +189,7 @@ impl SharingController {
             url,
             OwnedTunnel {
                 provider: TunnelProvider::Ngrok,
+                local_ports: vec![inspection_port],
                 executable,
                 started_at: Instant::now(),
                 child,

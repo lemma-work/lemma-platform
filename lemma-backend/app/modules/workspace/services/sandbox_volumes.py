@@ -20,7 +20,10 @@ from app.core.log.log import get_logger
 from app.modules.workspace.domain.sandbox import Sandbox, SandboxKind
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.providers import naming
-from app.modules.workspace.providers.base import ProviderStorageKind
+from app.modules.workspace.providers.base import (
+    ProviderStorageKind,
+    storage_kind_for,
+)
 
 logger = get_logger(__name__)
 
@@ -41,7 +44,7 @@ class SandboxVolumeMixin:
             return None, sandbox.storage_generation
 
         if (
-            getattr(self._provider, "storage_kind", ProviderStorageKind.VOLUME)
+            storage_kind_for(self._provider, sandbox.id)
             is ProviderStorageKind.SANDBOX_NATIVE
         ):
             # The provider's sandbox *is* the disk, so there is no separate

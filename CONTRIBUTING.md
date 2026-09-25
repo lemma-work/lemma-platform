@@ -63,7 +63,35 @@ Each component has its own setup and its own checks. Run the ones you touched.
 | `lemma-typescript/` | [SDK README](lemma-typescript/README.md) | `npm run build && npm test` |
 | `lemma-python/` | [SDK README](lemma-python/README.md) | `uv run pytest` |
 | `lemma-skills/` | [skills README](lemma-skills/README.md) | — |
-| `desktop/` | [maintainer guide](desktop/README.md), [architecture](docs/architecture/desktop.md) | `make desktop-test && make desktop-lint` |
+| `desktop/` | [maintainer guide](desktop/README.md), [architecture](docs/architecture/desktop.md), the [Desktop test matrix](#desktop-test-matrix) | `make desktop-test && make desktop-lint`, plus the lane the matrix names |
+
+## Desktop test matrix
+
+`make desktop-test && make desktop-lint` is the floor for any `desktop/`
+change, not the whole of it. Desktop is several processes on two sides of a
+wire, and each seam has one lane that holds it. A change extends the lane for
+the seam it touches and updates the document that describes that seam, in the
+same pull request. The lanes, and what CI runs when, are in
+[docs/testing.md](docs/testing.md#the-lanes-and-what-runs-when).
+
+| You changed… | Extend | Update |
+|---|---|---|
+| How an ACP adapter's output becomes run events (`desktop/agent-host/src/normalize/`, `acp/`) | Rust unit tests in the crate, and the golden transcripts: re-record `tests/fixtures/acp/<adapter>@<version>/` with `record_transcript.py`, regenerate with `UPDATE_GOLDEN=1 cargo test -p lemma-agent-host --test normalize_golden`, and review the diff | [agent-host-events.md](docs/architecture/agent-host-events.md) |
+| A pinned adapter in `desktop/agent-host/agent-adapters.lock.json` | A recording for the new version, or a reason in `tests/fixtures/acp/unrecorded.json`. `normalize_golden` refuses a bump with neither, and an excuse for a version no longer pinned | [agent-host-events.md](docs/architecture/agent-host-events.md) |
+| A link frame, close code or body (`desktop/agent-host/src/link/`, `lemma-backend/app/modules/agent/domain/agent_host_link.py`) | `desktop/agent-host/tests/fixtures/wire_contract.json`, which both sides are held to (`--test wire_contract` in Rust, `test_agent_host_wire_contract.py` in the backend); the link tests on each side (`tests/link_control_e2e.rs`, `test_agent_host_link_*.py`) | [agent-host.md](docs/architecture/agent-host.md#the-link) |
+| Run delivery, the outbox, leases, recovery or dispatch, on either side | Unit tests on the side you changed, the hermetic real-binary e2e (`test_agent_host_process_e2e.py`), and the chaos e2e (`test_agent_host_chaos_e2e.py`) when the change touches what survives a crash or a dropped link | [agent-host.md](docs/architecture/agent-host.md#delivery), [agent-host-events.md](docs/architecture/agent-host-events.md) |
+| Host execution: op frames, the exec-server, Seatbelt, the host provider or run selection | Seatbelt tests on macOS (`tests/seatbelt.rs`, `src/host_exec/tests.rs`); backend unit (`test_host_execution_selection.py`, `test_agent_host_provider.py`, `test_host_routing.py`); `test_host_execution_link_e2e.py`, and `test_host_execution_binary_e2e.py` through the real binary | [desktop-host-execution.md](docs/architecture/desktop-host-execution.md), [desktop-security.md](docs/architecture/desktop-security.md), [provider-adapters.md](docs/architecture/sandbox/provider-adapters.md) |
+| What the workspace asks of the shell (`lemma-frontend/src/desktop/`) | The frontend's tests (`npm test` in `lemma-frontend`), including `tests/desktop-ipc.test.ts`, which holds every command the page invokes to a grant in `desktop/capabilities/workspace.json` and a handler in `desktop/src/app.rs` | [desktop.md](docs/architecture/desktop.md#tauri-ipc-commands-and-who-may-call-them) |
+| A Tauri command, a capability, or who may call it (`desktop/src/`, `desktop/capabilities/`) | The app crate's tests (every registered command is granted somewhere), `desktop/ui-tests`, and the IPC contract test above | [desktop.md](docs/architecture/desktop.md#tauri-ipc-commands-and-who-may-call-them), [desktop-security.md](docs/architecture/desktop-security.md) |
+| Anything that runs when the app starts: launch, the hosted path, locald's supervision of the Agent Host, bundling | The launch smoke, `desktop/e2e/launch_smoke.py` (CI job "Desktop launch smoke") | [desktop.md](docs/architecture/desktop.md), [agent-host.md](docs/architecture/agent-host.md) |
+| The chat's rendering of Agent Host runs | `make desktop-agent-host-browser-e2e` and its JSON ACP scenarios | [agent-host-events.md](docs/architecture/agent-host-events.md) |
+
+The Agent Host lanes use scripted ACP agents
+(`desktop/agent-host/tests/fixtures/scripted_acp_agent.py` and
+`scenarios/*.json`), never a real provider, and the real `lemma-agent-host`
+binary rather than a stand-in for it: a double proves the half you wrote, not
+what the other side actually sends. A new failure mode gets a scenario there,
+not a fake host.
 
 ## Backend
 

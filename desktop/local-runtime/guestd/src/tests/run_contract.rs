@@ -18,6 +18,7 @@ fn run_contract_uses_digest_env_file_private_gateway_and_all_app_ports() {
         },
         callback: CallbackSpec::default(),
         host_access: true,
+        host_loopback: false,
     };
     let arguments = build_run_arguments(
         &parameters,
@@ -25,6 +26,7 @@ fn run_contract_uses_digest_env_file_private_gateway_and_all_app_ports() {
         Some(Path::new("/var/lib/lemma/run/runtime-token-box-1/token")),
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
+        Path::new(RELAY_DIRECTORY),
     );
     let joined = arguments.join(" ");
 
@@ -84,6 +86,7 @@ fn function_contract_is_read_only_ephemeral_and_exposes_only_its_runtime() {
         resources: ResourceSpec::default(),
         callback: CallbackSpec::default(),
         host_access: true,
+        host_loopback: false,
     };
     let arguments = build_run_arguments(
         &parameters,
@@ -91,6 +94,7 @@ fn function_contract_is_read_only_ephemeral_and_exposes_only_its_runtime() {
         None,
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
+        Path::new(RELAY_DIRECTORY),
     );
     let joined = arguments.join(" ");
 
@@ -129,6 +133,7 @@ fn every_sandbox_runs_with_a_bounded_log() {
             resources: ResourceSpec::default(),
             callback: CallbackSpec::default(),
             host_access: true,
+            host_loopback: false,
         };
         let arguments = build_run_arguments(
             &parameters,
@@ -136,6 +141,7 @@ fn every_sandbox_runs_with_a_bounded_log() {
             workspace.then_some(Path::new("/var/lib/lemma/run/runtime-token-box-1/token")),
             Path::new("/var/lib/lemma/run/private-env"),
             "192.168.64.1",
+            Path::new(RELAY_DIRECTORY),
         );
         let joined = arguments.join(" ");
         assert!(
@@ -149,6 +155,9 @@ fn every_sandbox_runs_with_a_bounded_log() {
     }
 }
 
+/// Where these tests say the guest keeps the loopback relay's directory.
+const RELAY_DIRECTORY: &str = "/var/lib/lemma/host-loopback";
+
 fn workspace_parameters(host_access: bool) -> EnsureParameters {
     EnsureParameters {
         sandbox_id: "box-1".into(),
@@ -161,6 +170,7 @@ fn workspace_parameters(host_access: bool) -> EnsureParameters {
         resources: ResourceSpec::default(),
         callback: CallbackSpec::default(),
         host_access,
+        host_loopback: false,
     }
 }
 
@@ -172,6 +182,7 @@ fn run_arguments(parameters: &EnsureParameters) -> Vec<String> {
         workspace.then_some(Path::new("/var/lib/lemma/run/runtime-token-box-1/token")),
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
+        Path::new(RELAY_DIRECTORY),
     )
 }
 
@@ -324,6 +335,67 @@ fn sandbox_isolation_is_installed_idempotently_and_fails_closed() {
     assert!(error.retryable);
 }
 
+/// The loopback relay is mounted into a sandbox only when it was granted,
+/// and the grant is recorded on the container either way.
+#[test]
+fn the_loopback_relay_is_mounted_only_into_a_sandbox_granted_it() {
+    let mut granted = workspace_parameters(true);
+    granted.host_loopback = true;
+    let with = run_arguments(&granted);
+    let without = run_arguments(&workspace_parameters(true));
+
+    let mount = format!("type=bind,src={RELAY_DIRECTORY},dst=/run/lemma-host-loopback");
+    assert!(
+        with.windows(2)
+            .any(|pair| pair[0] == "--mount" && pair[1] == mount),
+        "{with:?}"
+    );
+    assert!(with.join(" ").contains("lemma.work/host-loopback=true"));
+    let without = without.join(" ");
+    assert!(!without.contains("lemma-host-loopback"), "{without}");
+    assert!(!without.contains(RELAY_DIRECTORY), "{without}");
+    assert!(without.contains("lemma.work/host-loopback=false"));
+    // Options before the image, as for every other one.
+    assert_eq!(with.last().unwrap(), &granted.image);
+}
+
+/// A caller that does not mention the relay grants nothing.
+#[test]
+fn an_ensure_that_does_not_mention_host_loopback_grants_nothing() {
+    let parameters: EnsureParameters = serde_json::from_value(json!({
+        "sandbox_id": "box-1",
+        "workload_kind": "workspace",
+        "image": "ghcr.io/lemma/workspace@sha256:abc",
+        "runtime_token": "runtime-secret",
+        "apps": [],
+    }))
+    .unwrap();
+    assert!(!parameters.host_loopback);
+
+    let granted: EnsureParameters = serde_json::from_value(json!({
+        "sandbox_id": "box-1",
+        "workload_kind": "workspace",
+        "image": "ghcr.io/lemma/workspace@sha256:abc",
+        "runtime_token": "runtime-secret",
+        "apps": [],
+        "host_loopback": true,
+    }))
+    .unwrap();
+    assert!(granted.host_loopback);
+}
+
+/// The relay's grant is independent of the host alias every sandbox needs for
+/// its callbacks: withholding the alias does not grant the relay, and granting
+/// the relay does not depend on the alias.
+#[test]
+fn the_host_alias_and_the_loopback_relay_are_separate_grants() {
+    let mut relay_only = workspace_parameters(false);
+    relay_only.host_loopback = true;
+    let joined = run_arguments(&relay_only).join(" ");
+    assert!(joined.contains("dst=/run/lemma-host-loopback"), "{joined}");
+    assert!(!joined.contains("host.lemma.internal"), "{joined}");
+}
+
 /// A running container is reused only when it has the grants asked for.
 ///
 /// A grant is fixed when the container is made, so reusing one made with a
@@ -337,7 +409,7 @@ fn a_running_sandbox_with_different_grants_is_replaced_not_reused() {
         json!({
             "image": asked.image,
             "metadata": asked.metadata,
-            "grants": {"host_access": host_access},
+            "grants": {"host_access": host_access, "host_loopback": false},
             "hardening": SANDBOX_HARDENING_VERSION,
             "status": {"status": "RUNNING"},
         })
@@ -364,7 +436,7 @@ fn a_different_generation_is_still_refused_and_a_stopped_one_replaced() {
         json!({
             "image": image,
             "metadata": asked.metadata,
-            "grants": {"host_access": true},
+            "grants": {"host_access": true, "host_loopback": false},
             "hardening": SANDBOX_HARDENING_VERSION,
             "status": {"status": status},
         })
@@ -393,7 +465,7 @@ fn a_running_sandbox_from_before_the_hardening_is_replaced() {
         json!({
             "image": asked.image,
             "metadata": asked.metadata,
-            "grants": {"host_access": true},
+            "grants": {"host_access": true, "host_loopback": false},
             "hardening": hardening,
             "status": {"status": "RUNNING"},
         })
@@ -499,5 +571,36 @@ fn a_stopped_container_is_removed_immediately_before_run() {
     assert_eq!(
         service.engine.commands.lock().unwrap().as_slice(),
         [strings(&["rm", "--force", "lemma-box-1"]), run.clone()]
+    );
+}
+
+/// The relay grant is compared the same way: a running sandbox made without
+/// it is replaced when it is granted, and one made with it is replaced when it
+/// is withdrawn -- never reused with the old reach.
+#[test]
+fn a_running_sandbox_whose_relay_grant_changed_is_replaced() {
+    let mut granted = workspace_parameters(true);
+    granted.host_loopback = true;
+    let running = |host_loopback: bool| {
+        json!({
+            "image": granted.image,
+            "metadata": granted.metadata,
+            "grants": {"host_access": true, "host_loopback": host_loopback},
+            "hardening": SANDBOX_HARDENING_VERSION,
+            "status": {"status": "RUNNING"},
+        })
+    };
+
+    assert_eq!(
+        existing_container_verdict(&running(true), &granted),
+        ExistingContainer::Reuse
+    );
+    assert_eq!(
+        existing_container_verdict(&running(false), &granted),
+        ExistingContainer::Replace
+    );
+    assert_eq!(
+        existing_container_verdict(&running(true), &workspace_parameters(true)),
+        ExistingContainer::Replace
     );
 }

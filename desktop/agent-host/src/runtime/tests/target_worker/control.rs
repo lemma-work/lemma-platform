@@ -202,3 +202,45 @@ async fn a_pairing_lemma_keeps_refusing_is_dropped() {
     );
     assert_eq!(harness.worker.revoked_refusals, super::REVOKED_REFUSALS);
 }
+
+/// Lemma routes an owner's commands here on what `control` says, so turning
+/// host execution on or off reaches it on the next frame -- no reconnect, no
+/// waiting for a heartbeat that is up to twenty seconds away.
+#[tokio::test]
+async fn turning_host_execution_on_is_reported_on_the_next_control() {
+    let mut harness = Harness::new().await;
+    harness.worker.apply_local_controls().unwrap();
+    harness.worker.send_control(&harness.link).await.unwrap();
+    let off = harness.stub.host_execution_reports.lock().unwrap().clone();
+    assert_eq!(off.last().unwrap()["enabled"], false);
+
+    crate::config::HostConfig::mutate(&harness.worker.paths, |config| {
+        config.host_execution = true;
+        Ok(true)
+    })
+    .unwrap();
+    harness.worker.apply_local_controls().unwrap();
+    assert!(harness.worker.host_execution);
+    #[cfg(unix)]
+    assert!(
+        harness
+            .worker
+            .exec_relay
+            .as_ref()
+            .is_some_and(|relay| relay.enabled()),
+        "the relay must accept ops once the owner turns it on"
+    );
+    harness.worker.send_control(&harness.link).await.unwrap();
+    let on = harness.stub.host_execution_reports.lock().unwrap().clone();
+    let report = on.last().unwrap();
+    assert_eq!(report["enabled"], true);
+    assert_eq!(
+        report["platform"],
+        crate::host_exec::wire::platform(),
+        "{report}"
+    );
+    assert_eq!(
+        report["available"],
+        cfg!(target_os = "macos") && std::path::Path::new("/usr/bin/sandbox-exec").exists()
+    );
+}

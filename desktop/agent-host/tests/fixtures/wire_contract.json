@@ -25,7 +25,12 @@
     "conversation message the backend must make of each. The host half is held",
     "to real adapter output by the golden transcripts in fixtures/acp; this half",
     "pins what the backend does with the result. See",
-    "docs/architecture/agent-host-events.md."
+    "docs/architecture/agent-host-events.md.",
+    "",
+    "`host_execution` is the vocabulary of `op` frames: the methods in",
+    "`host_exec::wire::method` and `AgentHostSandboxProvider`, and the failure",
+    "kinds an `OP_FAILED` answer names in `detail.kind`. See",
+    "docs/architecture/desktop-host-execution.md §4."
   ],
   "protocol_version": 3,
   "event_types": [
@@ -230,6 +235,7 @@
       "mcp",
       "interaction_wait",
       "revoke",
+      "op_ok",
       "error"
     ],
     "server_frames": [
@@ -243,6 +249,7 @@
       "revoked",
       "commands",
       "reconnect",
+      "op",
       "error"
     ],
     "close_codes": {
@@ -263,7 +270,8 @@
       "TERMINAL_RUN",
       "UNAUTHORIZED",
       "UNAVAILABLE",
-      "INTERNAL"
+      "INTERNAL",
+      "OP_FAILED"
     ]
   },
   "tool_events": [
@@ -399,5 +407,55 @@
         "error": "exited with code 1"
       }
     }
-  ]
+  ],
+  "host_execution": {
+    "error_code": "OP_FAILED",
+    "max_data_bytes": 1048576,
+    "methods": [
+      "workspace.open",
+      "workspace.close",
+      "process.start",
+      "process.read",
+      "process.input",
+      "process.resize",
+      "process.terminate",
+      "process.list",
+      "file.stat",
+      "file.list",
+      "file.mkdir",
+      "file.read",
+      "file.write",
+      "file.move",
+      "file.delete",
+      "secret.deliver"
+    ],
+    "failure_kinds": [
+      "not_found",
+      "already_exists",
+      "not_a_directory",
+      "is_a_directory",
+      "permission_denied",
+      "outside_workspace",
+      "digest_mismatch",
+      "too_large",
+      "process_not_found",
+      "workspace_not_open",
+      "exec_server_unavailable",
+      "timeout",
+      "invalid_request",
+      "io_error"
+    ],
+    "capability": {
+      "field": "host_execution",
+      "frames": [
+        "hello",
+        "control"
+      ],
+      "keys": [
+        "enabled",
+        "platform",
+        "available"
+      ]
+    }
+  }
 }

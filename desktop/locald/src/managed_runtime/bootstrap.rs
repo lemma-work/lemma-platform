@@ -121,6 +121,7 @@ impl ManagedRuntimeBootstrap {
             pending_auth: Mutex::new(None),
             pending_images: Mutex::new(None),
             cancellation: lemma_desktop_process::Cancellation::default(),
+            host_loopback: HostLoopbackState::default(),
         }))
     }
 }

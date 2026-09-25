@@ -52,6 +52,10 @@ EXEMPT = {
     # job that never starts, since its `if:` includes `github.event_name ==
     # 'push'`. A red one is "look in the morning".
     ("ci.yml", "host-pack-macos"),
+    # New, and so not yet a merge gate: it launches the built app on macOS,
+    # and earns a place in "CI passed" by being boring first. The ruleset can
+    # require it by name in the meantime.
+    ("ci.yml", "desktop-launch-smoke"),
 }
 
 # The workflow that announces a failure nobody is looking at. It watches the

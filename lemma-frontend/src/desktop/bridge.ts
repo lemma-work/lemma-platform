@@ -68,6 +68,7 @@ export const WORKSPACE_COMMANDS = [
     "apply_local_settings",
     "local_sharing",
     "set_start_at_login",
+    "set_host_execution",
     "repair_runtime",
     "open_logs",
     "prepare_sandbox_image",

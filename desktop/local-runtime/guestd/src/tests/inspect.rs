@@ -298,9 +298,13 @@ fn a_snapshot_reports_the_grants_its_container_was_made_with() {
         &refused,
     )
     .unwrap();
-    assert_eq!(before_the_label["grants"], json!({"host_access": true}));
+    assert_eq!(
+        before_the_label["grants"],
+        json!({"host_access": true, "host_loopback": false})
+    );
 
     value[0]["Config"]["Labels"]["lemma.work/host-access"] = json!("false");
+    value[0]["Config"]["Labels"]["lemma.work/host-loopback"] = json!("true");
     let narrowed = snapshot_from_inspect_with(
         "box-1",
         value[0].as_object().unwrap(),
@@ -308,5 +312,8 @@ fn a_snapshot_reports_the_grants_its_container_was_made_with() {
         &refused,
     )
     .unwrap();
-    assert_eq!(narrowed["grants"], json!({"host_access": false}));
+    assert_eq!(
+        narrowed["grants"],
+        json!({"host_access": false, "host_loopback": true})
+    );
 }

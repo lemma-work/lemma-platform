@@ -187,6 +187,17 @@ impl ManagedRuntime {
         self.service_socket(SANDBOX_TUNNEL_PORT)
     }
 
+    /// The unix socket locald's loopback relay listens on, and `lemma-vz`
+    /// connects to for every guest request to reach a port on this Mac.
+    ///
+    /// The other way round from `service_socket`: those are the VM helper's
+    /// listeners into the guest; this is locald's, out of it. See
+    /// `host_loopback` in lemma-guestd and `loopback_relay` in locald.
+    #[cfg(target_os = "macos")]
+    pub fn host_loopback_socket(&self) -> PathBuf {
+        self.config.local_root.join("run/host-loopback.sock")
+    }
+
     #[cfg(target_os = "macos")]
     pub fn service_socket(&self, port: u16) -> PathBuf {
         self.config
