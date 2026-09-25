@@ -51,8 +51,30 @@ async def warm_lazy_imports() -> None:
     provider SDK that will not import is a reason to lose *its* warm-up, not
     everyone else's.
     """
+    await warm_modules()
+    await warm_tokenizer()
+
+
+async def warm_modules() -> None:
+    """The imports alone. The lifespan awaits these before serving.
+
+    Backgrounded, they raced the first requests: ``importlib``'s per-module lock
+    makes a request that reaches ``runtime_model_factory`` mid-warm-up wait for
+    it *on the event loop thread*, and the loop-stall sampler caught exactly
+    that, inside ``from openai import AsyncOpenAI``. About a second in a thread
+    before the port opens costs less than a stall every request shares.
+    """
     for module_name in WARM_MODULES:
         await _warm(module_name, importlib.import_module, module_name)
+
+
+async def warm_tokenizer() -> None:
+    """The tokenizer, which may fetch its vocabulary over the network.
+
+    Stays in the background: a network fetch must not hold the port closed, and
+    the tokenizer's ``lru_cache`` is filled in a thread, with no import lock for
+    a request to wait on.
+    """
     await _warm("tiktoken vocabulary", _build_tokenizer)
 
 

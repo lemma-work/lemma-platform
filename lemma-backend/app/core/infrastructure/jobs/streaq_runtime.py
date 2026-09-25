@@ -45,11 +45,10 @@ from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
 from app.core.observability.backlog_gauges import backlog_gauge_loop
+from app.core.observability.startup_timing import freeze_startup_heap
 from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
 from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
-from app.core.infrastructure.jobs.job_liveness import (
-    register_job_liveness_middleware,
-)
+from app.core.infrastructure.jobs.job_liveness import register_job_liveness_middleware
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
@@ -471,7 +470,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
             # Emit only after every core and module lifespan has entered.
-            logger.info("service.started")
+            logger.info("service.started", gc_frozen_objects=freeze_startup_heap())
             started = True
             # Release any secondary lanes only now that the shared broker,
             # engine and module lifespans are fully up — they share this exact

@@ -17618,6 +17618,8 @@ var LemmaClient = (() => {
   var RECONNECT_BASE_DELAY_MS = 500;
   var RECONNECT_MAX_DELAY_MS = 3e4;
   var WS_UNAUTHENTICATED = 4401;
+  var WS_FORBIDDEN = 4403;
+  var WS_NOT_FOUND = 4404;
   function reconnectDelayMs(attempt) {
     const ceiling = Math.min(
       RECONNECT_MAX_DELAY_MS,
@@ -17732,6 +17734,14 @@ var LemmaClient = (() => {
               )
             )
           );
+          return;
+        }
+        if (event.code === WS_FORBIDDEN) {
+          fail(new Error("Datastore change stream: no access to this pod's changes"));
+          return;
+        }
+        if (event.code === WS_NOT_FOUND) {
+          fail(new Error("Datastore change stream: pod or table not found"));
           return;
         }
         scheduleReconnect();

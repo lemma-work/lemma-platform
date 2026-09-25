@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import Depends, FastAPI
@@ -148,7 +149,13 @@ async def lifespan(app: FastAPI):
         )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
         from app.core.observability.memory_sampler import memory_sampler
-        from app.warm_imports import warm_lazy_imports
+        from app.core.observability.startup_timing import (
+            freeze_startup_heap,
+            startup_step,
+        )
+        from app.warm_imports import warm_modules, warm_tokenizer
+
+        boot_started = time.monotonic()
 
         configure_thread_pool()
         start_connection_scope_monitor_from_settings(service_name="lemma-api")
@@ -175,10 +182,12 @@ async def lifespan(app: FastAPI):
                 name="api-memory-sampler",
             )
         )
-        initialize_supertokens()
+        async with startup_step("supertokens", service="lemma-api"):
+            initialize_supertokens()
         # Prove the sandbox fabric is usable before a user's first tool call
         # rather than after it. Off the loop because it stats a socket path.
-        await run_blocking(record_sandbox_probe, limiter="cpu_bound")
+        async with startup_step("sandbox_probe", service="lemma-api"):
+            await run_blocking(record_sandbox_probe, limiter="cpu_bound")
         # Build the OpenAPI document now rather than on whichever request first
         # asks for it. `custom_openapi` caches correctly, but the first call
         # costs ~3.35s of pydantic model-graph construction on the event loop —
@@ -189,29 +198,44 @@ async def lifespan(app: FastAPI):
         # Only where the document is actually served. In production it is not,
         # so this whole cost leaves the cold start rather than moving within it.
         if settings.api_docs_served():
-            await run_blocking(app.openapi, limiter="cpu_bound")
+            async with startup_step("openapi", service="lemma-api"):
+                await run_blocking(app.openapi, limiter="cpu_bound")
         # Learn which lane each task runs on before serving traffic. The
         # enqueue path resolves this lazily as a safety net, but the first
         # resolution imports every module's handlers — half a second that
         # would otherwise land on whichever request first enqueues a job.
         # The composed list, not OSS: lemma-cloud installs more modules, and a
         # cloud-only task missing here would be enqueued to the wrong lane.
-        ensure_task_lanes_registered(getattr(app.state, "lemma_modules", OSS_MODULES))
+        # In a thread: it is imports, and imports on the loop are what the stall
+        # sampler keeps catching.
+        async with startup_step("task_lanes", service="lemma-api"):
+            await run_blocking(
+                ensure_task_lanes_registered,
+                getattr(app.state, "lemma_modules", OSS_MODULES),
+                limiter="cpu_bound",
+            )
         # Same trade as the line above, for the libraries a request reaches
-        # rather than the handlers a job reaches. Backgrounded rather than
-        # awaited: none of it is needed to serve, and a tokenizer that has to
-        # fetch its vocabulary should not hold the port closed. Skipped in local
-        # mode, where a cold start is a person waiting and the first request is
+        # rather than the handlers a job reaches. The imports are awaited: left
+        # in the background they raced the first requests on importlib's module
+        # lock, which a request waits on from the event loop thread. The
+        # tokenizer stays backgrounded -- it may fetch its vocabulary, and a
+        # network call should not hold the port closed. Skipped in local mode,
+        # where a cold start is a person waiting and the first request is
         # usually theirs anyway, and under an embedded worker, which shares this
         # process and would warm the same modules twice.
-        warm_task = (
-            None
-            if embedded_worker or settings.is_local_mode()
-            else create_background_task(warm_lazy_imports(), name="api-warm-imports")
-        )
-        await channel_service.connect()
-        await get_streaq_job_queue().connect()
-        await get_message_bus().connect()
+        warm_task = None
+        if not (embedded_worker or settings.is_local_mode()):
+            async with startup_step("warm_imports", service="lemma-api"):
+                await warm_modules()
+            warm_task = create_background_task(
+                warm_tokenizer(), name="api-warm-tokenizer"
+            )
+        async with startup_step("channel_connect", service="lemma-api"):
+            await channel_service.connect()
+        async with startup_step("job_queue_connect", service="lemma-api"):
+            await get_streaq_job_queue().connect()
+        async with startup_step("message_bus_connect", service="lemma-api"):
+            await get_message_bus().connect()
         started = False
         try:
             # Module-contributed API lifespans (e.g. datastore query-role
@@ -223,9 +247,14 @@ async def lifespan(app: FastAPI):
                 # CLOUD_MODULES) is stashed on app.state by create_app.
                 modules = getattr(app.state, "lemma_modules", OSS_MODULES)
                 await assembly.enter_api_lifespans(module_stack, modules, app)
+                frozen = freeze_startup_heap()  # see its docstring: GC stalls
                 # Emit only after every core and module lifespan has entered.
                 # service.version and release.sha come from LEMMA_RELEASE_SHA.
-                logger.info("service.started")
+                logger.info(
+                    "service.started",
+                    startup_ms=round((time.monotonic() - boot_started) * 1000, 1),
+                    gc_frozen_objects=frozen,
+                )
                 started = True
                 yield
         finally:

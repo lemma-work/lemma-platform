@@ -5,6 +5,9 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.modules.connectors.infrastructure.repositories.catalog_rows import (
+    aconvert_valid_rows,
+)
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -151,7 +154,7 @@ class AuthConfigRepository(
         if len(instances) > limit:
             next_cursor = instances[limit - 1].id
             instances = instances[:limit]
-        return [await self._to_entity(instance) for instance in instances], next_cursor
+        return await aconvert_valid_rows(instances, self._to_entity), next_cursor
 
     async def delete(self, id: UUID) -> bool:
         stmt = select(AuthConfig).where(AuthConfig.id == id)

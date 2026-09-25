@@ -24,12 +24,20 @@ import pytest
 from app.core import security
 
 
-def _token(expiry: float) -> str:
+_FRESH = object()
+
+
+def _token(expiry: float, issued: float | None | object = _FRESH) -> str:
     def segment(payload: dict) -> str:
         raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
         return raw.rstrip("=")
 
-    return f"{segment({'kid': 'd-1'})}.{segment({'exp': expiry})}.signature"
+    claims: dict = {"exp": expiry}
+    if issued is _FRESH:
+        claims["iat"] = time.time() - 5
+    elif issued is not None:
+        claims["iat"] = issued
+    return f"{segment({'kid': 'd-1'})}.{segment(claims)}.signature"
 
 
 def _connection(*, cookie: str | None = None, header: str | None = None):
@@ -106,3 +114,44 @@ def test_the_throttle_lets_one_through_then_reopens() -> None:
     assert throttle.should_report(1_000.0) is True
     assert throttle.should_report(1_059.0) is False
     assert throttle.should_report(1_060.0) is True
+
+
+def test_a_months_old_cookie_is_stale_not_skew(caplog):
+    """88-day-old browser cookies were 1,410 warnings a day: minted long ago,
+    expired long ago -- nothing wrong with any clock."""
+    caplog.set_level("DEBUG")
+    day = 86_400
+    connection = _connection(
+        cookie=_token(time.time() - 88 * day + 900, issued=time.time() - 88 * day)
+    )
+
+    security._report_expired_access_token(connection)
+
+    events = _events(caplog)
+    assert [e["event"] for e in events if e["event"].endswith(".degraded")] == []
+    stale = [
+        e
+        for e in events
+        if e["event"] == "identity.session.access_token_stale.observed"
+    ]
+    assert all(e["expired_by_seconds"] > 87 * day for e in stale)
+
+
+def test_a_freshly_minted_but_long_expired_token_is_skew(caplog):
+    connection = _connection(
+        cookie=_token(time.time() - 7_200, issued=time.time() - 60)
+    )
+
+    security._report_expired_access_token(connection)
+
+    assert [e["event"] for e in _events(caplog)] == [
+        "identity.session.access_token_expiry_implausible.degraded"
+    ]
+
+
+def test_a_token_without_iat_is_treated_as_stale(caplog):
+    connection = _connection(cookie=_token(time.time() - 41_250, issued=None))
+
+    security._report_expired_access_token(connection)
+
+    assert not [e for e in _events(caplog) if e["event"].endswith(".degraded")]

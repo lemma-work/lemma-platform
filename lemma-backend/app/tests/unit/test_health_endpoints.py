@@ -86,6 +86,21 @@ def test_liveness_states_the_api_version(client):
         assert client.get(path).json()["api_version"] == API_VERSION, path
 
 
+def test_liveness_states_min_cli_version_and_release(client, monkeypatch):
+    from app.version import MIN_CLI_VERSION
+
+    monkeypatch.setattr(healthmod.settings, "release_sha", "a" * 40)
+    for path in ("/health/live", "/livez", "/health"):
+        body = client.get(path).json()
+        assert body["min_cli_version"] == MIN_CLI_VERSION, path
+        assert body["release"] == "a" * 40, path
+
+
+def test_liveness_release_is_null_when_unset(client, monkeypatch):
+    monkeypatch.setattr(healthmod.settings, "release_sha", "")
+    assert client.get("/health").json()["release"] is None
+
+
 def test_liveness_returns_503_when_loop_wedged(client, monkeypatch):
     # Force unhealthy lag above the unhealthy threshold.
     monkeypatch.setattr(loop_watchdog._lag, "seconds", 10.0)

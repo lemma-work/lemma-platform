@@ -675,8 +675,9 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
     # `logger_provider`/`event_mode` are gone as of pydantic-ai 2.x: instrumentation
     # now always writes content into span attributes rather than log records, which
     # is exactly what NoOpLoggerProvider + event_mode="attributes" used to force.
-    # `version=2` is still honoured and is kept deliberately — the span shape here
-    # is what the LLM-review tooling reads.
+    # `version=5` (2-4 warn on every boot). Through OpenInference it yields v2's
+    # attributes; only span names change (`invoke_agent`, `execute_tool`), which
+    # nothing keys on -- the sanitizer and filter read `openinference.span.kind`.
     # Imported here rather than at module scope, which is where it was.
     #
     # This module is reached from `app.app` line 18, through
@@ -693,7 +694,7 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
             meter_provider=NoOpMeterProvider(),
             include_content=True,
             include_binary_content=False,
-            version=2,
+            version=5,
             use_aggregated_usage_attribute_names=True,
         )
     )

@@ -97,6 +97,9 @@ const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 /** Close code for a missing, invalid or expired session: refresh and retry. */
 const WS_UNAUTHENTICATED = 4401;
+/** Close codes no retry can fix: the caller lacks access, or the pod/table is gone. */
+const WS_FORBIDDEN = 4403;
+const WS_NOT_FOUND = 4404;
 
 function reconnectDelayMs(attempt: number): number {
   const ceiling = Math.min(
@@ -239,6 +242,14 @@ export function watchDatastoreChanges(
             ),
           ),
         );
+        return;
+      }
+      if (event.code === WS_FORBIDDEN) {
+        fail(new Error("Datastore change stream: no access to this pod's changes"));
+        return;
+      }
+      if (event.code === WS_NOT_FOUND) {
+        fail(new Error("Datastore change stream: pod or table not found"));
         return;
       }
       scheduleReconnect();

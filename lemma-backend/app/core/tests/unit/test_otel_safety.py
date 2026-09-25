@@ -462,8 +462,18 @@ def test_llm_pipeline_enables_content_and_uses_dedicated_provider(
         "instrument_all",
         lambda instrumentation_settings: captured.append(instrumentation_settings),
     )
-    provider = telemetry._setup_llm_tracing("lemma-test")
+    import warnings
+
+    from pydantic_ai.exceptions import PydanticAIDeprecationWarning
+
+    with warnings.catch_warnings(record=True) as raised:
+        warnings.simplefilter("always")
+        provider = telemetry._setup_llm_tracing("lemma-test")
     try:
+        # Versions 2-4 of the instrumentation format warn on every boot.
+        assert not [
+            w for w in raised if issubclass(w.category, PydanticAIDeprecationWarning)
+        ]
         assert provider is not None
         assert len(captured) == 1
         instrumentation = captured[0]
@@ -476,7 +486,7 @@ def test_llm_pipeline_enables_content_and_uses_dedicated_provider(
         # the guarantee is now that no logs pipeline is wired in at all.
         assert not hasattr(instrumentation, "event_mode")
         assert getattr(instrumentation, "logger_provider", None) is None
-        assert instrumentation.version == 2
+        assert instrumentation.version == 5
     finally:
         if provider is not None:
             provider.shutdown()

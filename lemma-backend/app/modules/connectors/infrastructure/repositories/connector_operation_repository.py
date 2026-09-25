@@ -3,6 +3,9 @@ from typing import Optional, Sequence
 
 from sqlalchemy import case, desc, func, or_, select
 
+from app.modules.connectors.infrastructure.repositories.catalog_rows import (
+    convert_valid_rows,
+)
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -118,8 +121,10 @@ class ConnectorOperationRepository(
 
         result = await self.session.execute(stmt)
         if normalized_query:
-            return [row[0].to_entity() for row in result.all()]
-        return [instance.to_entity() for instance in result.scalars().all()]
+            return convert_valid_rows(
+                (row[0] for row in result.all()), ConnectorOperation.to_entity
+            )
+        return convert_valid_rows(result.scalars().all(), ConnectorOperation.to_entity)
 
     async def list_by_connector_kind(
         self,
@@ -225,7 +230,7 @@ class ConnectorOperationRepository(
         if kind is not None:
             statement = statement.where(ConnectorOperation.kind == kind)
         result = await self.session.execute(statement)
-        return [instance.to_entity() for instance in result.scalars().all()]
+        return convert_valid_rows(result.scalars().all(), ConnectorOperation.to_entity)
 
     async def get_by_connector_kind_and_name(
         self,
