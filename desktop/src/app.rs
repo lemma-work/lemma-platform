@@ -84,6 +84,7 @@ pub(crate) fn run() {
             agent_host_ui::agent_host_open_log,
             operator_settings::discover_provider_models,
             operator_settings::configure_ai_provider,
+            pod_app_alias::app_frame_url,
             operator_settings::sharing_action,
             operator_settings::close_local_settings,
             prompts::confirm_destructive_action,
@@ -157,6 +158,10 @@ fn setup(
     }
 
     let resume = resume_attempt(mode);
+    if let Some(target) = resume.as_ref() {
+        // Before the window opens straight onto it.
+        grant_local_workspace_capability(&handle, &target.url);
+    }
     // Cold means this launch found nothing already serving and has to bring
     // the stack up. It is the launch that can go wrong, and the one whose
     // duration is worth knowing.
@@ -259,6 +264,7 @@ fn seed_resumed_state(handle: &AppHandle, target: &ResumeTarget) {
 /// The only way from here to the splash is `stand_down`, which is what clears
 /// the optimistic state `seed_resumed_state` wrote.
 fn reconnect_after_resume(handle: &AppHandle, resumed_url: &str) {
+    cookie_migration::migrate_session_cookies(handle);
     if let Err(error) = ensure_locald(handle) {
         // The stack is serving but the daemon is not reachable, so the shell
         // cannot supervise it. Say so on the splash rather than leaving a
@@ -321,6 +327,9 @@ pub(crate) fn stand_down_state(ui: &mut UiState, failure: Option<String>) {
 /// answer. Inside `setup`, before the event loop pumps, that would freeze the
 /// splash for the whole install with no way to tell it from a hang.
 fn connect_on_launch(handle: &AppHandle) {
+    // Cookies first: the workspace is only navigated to once locald reports
+    // ready, which is after `start_impl` below.
+    cookie_migration::migrate_session_cookies(handle);
     let failure = match ensure_locald(handle) {
         Err(error) => Some((error, None)),
         Ok(_) => start_impl(handle.clone())

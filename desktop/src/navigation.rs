@@ -72,7 +72,7 @@ pub(crate) fn navigation_context(app: &AppHandle) -> (String, String, String) {
 
 /// The domain this installation is served under, from the API base it was given.
 ///
-/// `http://app.127.0.0.1.sslip.io:63288` -> `127.0.0.1.sslip.io`. Derived rather
+/// `http://app.lemma.localhost:63288` -> `lemma.localhost`. Derived rather
 /// than compiled in, because the shell does not link locald -- it launches it --
 /// so the hostname arrives at runtime in the `ready` event and this is the only
 /// honest source for it.
@@ -94,17 +94,10 @@ pub(crate) fn local_destination(url: &tauri::Url, api_base: &str) -> bool {
         return true;
     }
     // The domain this installation serves itself under is a local destination
-    // whatever it resolves through.
-    //
-    // This is the security-relevant half of moving off `*.localhost`. In local
-    // mode the gate below *allows* anything that is not a local destination, on
-    // the reasoning that an ordinary internet site is not a way to reach this
-    // machine. A public name that answers 127.0.0.1 breaks that reasoning: every
-    // `<anything>.127.0.0.1.sslip.io` is loopback, so without this the workspace
-    // could be navigated to an attacker-chosen name and reach any port on the
-    // user's machine -- a hole that does not exist today, because
-    // `*.lemma.localhost` matches the check above and is denied unless it is
-    // ours.
+    // whatever it resolves through. Today that is `lemma.localhost`, already
+    // caught above; kept so the gate still holds if the domain ever moves to a
+    // name that is not `.localhost` -- a public name answering 127.0.0.1 would
+    // otherwise read as "an ordinary internet site" and be allowed.
     if let Some(base) = local_base_domain(api_base) {
         if host == base || host.ends_with(&format!(".{base}")) {
             return true;
@@ -233,14 +226,10 @@ pub(crate) fn loopback_only(addresses: &[IpAddr]) -> bool {
 /// Whether the page's host is this Mac, asked now rather than trusted from launch.
 ///
 /// A `*.localhost` host is loopback by the resolver convention WebKit applies
-/// itself. Any other workspace host -- the public wildcard `127.0.0.1.sslip.io`
-/// -- is only loopback because somebody else's DNS says so, and it was asked
-/// once, at startup. A network that answers differently later (a hostile Wi-Fi,
-/// a poisoned resolver) would put its own page on the very origin this app
-/// grants its IPC to. So a privileged command asks again, at the moment it is
-/// called, and refuses unless every answer is loopback. Not proof against a
-/// rebinding race -- the page was already loaded -- but it closes the plain
-/// "the name now points elsewhere" case.
+/// itself, and that is the only kind of host a shipped build serves its
+/// workspace on. Anything else (a development override) is only loopback
+/// because a resolver says so, so a privileged command asks again, at the
+/// moment it is called, and refuses unless every answer is loopback.
 pub(crate) fn page_host_is_loopback(
     page: &tauri::Url,
     resolve: impl Fn(&str) -> Vec<IpAddr>,
@@ -265,6 +254,45 @@ pub(crate) fn resolve_host(host: &str) -> Vec<IpAddr> {
         .to_socket_addrs()
         .map(|found| found.map(|address| address.ip()).collect())
         .unwrap_or_default()
+}
+
+/// The canonical app URL a pod-app alias frame stands for, if `url` is one.
+///
+/// An alias is `http://<workspace host>:<alias port>/...`: the workspace's own
+/// host on a port locald handed this shell for one app (see
+/// `pod_app_alias.rs`). Only ports in `aliases` count, and never the
+/// workspace's or the API's own port -- those are the workspace, not an app.
+pub(crate) fn app_alias_target(
+    url: &tauri::Url,
+    app_base: &str,
+    api_base: &str,
+    aliases: &HashMap<u16, String>,
+) -> Option<String> {
+    let (Ok(app), Ok(api)) = (tauri::Url::parse(app_base), tauri::Url::parse(api_base)) else {
+        return None;
+    };
+    let port = url.port()?;
+    if url.scheme() != "http"
+        || app.scheme() != "http"
+        || url.host_str().is_none()
+        || url.host_str() != app.host_str()
+        || !app.host_str().is_some_and(trusted_local_workspace_host)
+        || Some(port) == app.port()
+        || Some(port) == api.port()
+    {
+        return None;
+    }
+    let canonical = aliases.get(&port)?;
+    let mut rest = url.path().to_owned();
+    if let Some(query) = url.query() {
+        rest.push('?');
+        rest.push_str(query);
+    }
+    if let Some(fragment) = url.fragment() {
+        rest.push('#');
+        rest.push_str(fragment);
+    }
+    Some(format!("{}{rest}", canonical.trim_end_matches('/')))
 }
 
 pub(crate) fn new_window_disposition(

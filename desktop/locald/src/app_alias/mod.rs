@@ -135,7 +135,7 @@ impl AliasRegistry {
             seen_ports.push(entry.port);
             fresh && entry.port >= 1024
         });
-        entries.sort_by(|a, b| b.last_used_ms.cmp(&a.last_used_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_used_ms));
         entries.truncate(capacity);
         Self {
             path,

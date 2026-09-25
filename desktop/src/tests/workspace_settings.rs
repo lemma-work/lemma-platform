@@ -14,13 +14,28 @@ fn the_local_workspace_reaches_this_computers_settings() {
         LOCAL,
         None,
     ));
-    // The loopback wildcard base is as much this install as the other one.
-    assert!(local_settings_origin_allowed(
-        "local",
-        &url("http://app.127.0.0.1.sslip.io:52413/"),
-        "http://app.127.0.0.1.sslip.io:52413/",
-        None,
-    ));
+}
+
+/// A pod app framed through its alias is on the workspace's host, one port
+/// over. Same site, different origin -- and no command answers it.
+#[test]
+fn a_pod_app_alias_on_the_workspace_host_reaches_no_command() {
+    let alias = url("http://app.lemma.localhost:61001/");
+    assert!(!local_settings_origin_allowed("local", &alias, LOCAL, None));
+    assert!(!agent_host_origin_allowed("local", &alias, LOCAL, None));
+    // The capability that grants the workspace its commands names the
+    // workspace's exact origin, so the alias matches no capability either.
+    let capability: Value =
+        serde_json::from_str(&local_workspace_capability(LOCAL).expect("a local capability"))
+            .expect("valid capability JSON");
+    let pattern: tauri::utils::acl::RemoteUrlPattern = capability["remote"]["urls"][0]
+        .as_str()
+        .expect("one url")
+        .parse()
+        .expect("a valid pattern");
+    assert!(pattern.test(&url("http://app.lemma.localhost:52413/pods/1?x=2")));
+    assert!(!pattern.test(&alias));
+    assert!(!pattern.test(&url("http://orders.apps.lemma.localhost:52413/")));
 }
 
 #[test]
@@ -399,11 +414,13 @@ fn a_page_on_a_host_that_stopped_resolving_to_this_mac_is_refused() {
         ]
     };
     let nothing = |_: &str| Vec::new();
-    let sslip = url("http://app.127.0.0.1.sslip.io:52413/t");
-    assert!(page_host_is_loopback(&sslip, loopback));
-    assert!(!page_host_is_loopback(&sslip, hostile));
-    assert!(!page_host_is_loopback(&sslip, mixed));
-    assert!(!page_host_is_loopback(&sslip, nothing));
+    // A development override can serve the workspace on a name that is not
+    // `.localhost`; that one is asked about at the moment of the call.
+    let named = url("http://app.lemma-dev.example:52413/t");
+    assert!(page_host_is_loopback(&named, loopback));
+    assert!(!page_host_is_loopback(&named, hostile));
+    assert!(!page_host_is_loopback(&named, mixed));
+    assert!(!page_host_is_loopback(&named, nothing));
     // `*.localhost` is loopback by convention and never asks a resolver.
     assert!(page_host_is_loopback(
         &url("http://app.lemma.localhost:52413/"),

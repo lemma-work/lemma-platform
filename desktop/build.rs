@@ -37,6 +37,7 @@ const COMMANDS: &[&str] = &[
     "agent_host_open_log",
     "discover_provider_models",
     "configure_ai_provider",
+    "app_frame_url",
     "sharing_action",
     "close_local_settings",
     "confirm_destructive_action",

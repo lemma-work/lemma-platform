@@ -228,7 +228,7 @@ fn page(raw: &str) -> tauri::Url {
 /// LAN or tunnel address, which every visitor's device loads too.
 #[test]
 fn a_shared_origin_cannot_drive_this_computers_agent_host() {
-    let local = "http://app.127.0.0.1.sslip.io:52413/";
+    let local = "http://app.lemma.localhost:52413/";
     assert!(agent_host_origin_allowed(
         "local",
         &page(local),
@@ -267,8 +267,8 @@ fn a_shared_origin_cannot_drive_this_computers_agent_host() {
 /// hosted mode only the hosted site or its subdomains, over HTTPS.
 #[test]
 fn the_shell_not_the_page_decides_what_this_computer_pairs_with() {
-    let app = "http://app.127.0.0.1.sslip.io:52413/";
-    let api = "http://app.127.0.0.1.sslip.io:52414/";
+    let app = "http://app.lemma.localhost:52413/";
+    let api = "http://app.lemma.localhost:52414/";
     assert_eq!(
         agent_host_workspace_url(
             "local",

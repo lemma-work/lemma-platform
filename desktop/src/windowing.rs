@@ -193,6 +193,11 @@ pub(crate) fn build_main_window_at(
         .on_navigation({
             let handle = handle.clone();
             move |url| {
+                // A pod app's alias, which the workspace frames on macOS. The
+                // page-load handler below keeps it out of the top frame.
+                if pod_app_alias::alias_target_for(&handle, url).is_some() {
+                    return true;
+                }
                 let (mode, app_base, api_base) = navigation_context(&handle);
                 match navigation_disposition(url, &mode, &app_base, &api_base) {
                     NavigationDisposition::Allow => true,
@@ -207,6 +212,14 @@ pub(crate) fn build_main_window_at(
         .on_new_window({
             let handle = handle.clone();
             move |url, _features| {
+                // An aliased app asking for a window of its own gets its
+                // canonical address there, where it is top-level and signed in.
+                if let Some(canonical) = pod_app_alias::alias_target_for(&handle, &url) {
+                    if let Err(error) = open_pod_app_window(&handle, &canonical) {
+                        append_install_log(&format!("could not open a pod app window: {error}"));
+                    }
+                    return NewWindowResponse::Deny;
+                }
                 let (mode, app_base, api_base) = navigation_context(&handle);
                 match new_window_disposition(&url, &mode, &app_base, &api_base) {
                     NewWindowDisposition::NavigateInApp => {
@@ -293,6 +306,16 @@ pub(crate) fn build_main_window_at(
                 // not that, is where a local workspace's window refuses to
                 // become a browser for somebody else's site.
                 let (mode, app_base, api_base) = navigation_context(&handle);
+                // An alias is for frames. As the top page it would be an app's
+                // code in the window that holds the workspace; send the window
+                // home and give the app its own window instead.
+                if let Some(canonical) = pod_app_alias::alias_target_for(&handle, payload.url()) {
+                    let _ = open_pod_app_window(&handle, &canonical);
+                    if let Ok(workspace) = tauri::Url::parse(&app_base) {
+                        let _ = window.navigate(workspace);
+                    }
+                    return;
+                }
                 if main_frame_leaves_app(payload.url(), &mode, &app_base, &api_base) {
                     open_external(payload.url().as_str());
                     if let Ok(workspace) = tauri::Url::parse(&app_base) {

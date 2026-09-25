@@ -17,6 +17,7 @@ mod confirmation;
 mod connection;
 mod control_center;
 mod conversation_folders;
+mod cookie_migration;
 mod diagnostics;
 mod ipc_read;
 mod local_recovery;
@@ -28,6 +29,7 @@ mod native_assets;
 mod navigation;
 mod operator_settings;
 mod os_quit;
+mod pod_app_alias;
 mod pod_windows;
 mod prompts;
 mod quitting;
@@ -70,6 +72,7 @@ use serde_json::{json, Value};
 use shell_paths::*;
 use stack_control::*;
 use state::*;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -109,7 +112,7 @@ const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Must match locald's handshake revision. This prevents a newly installed
 // Desktop hotfix from silently reusing an older durable daemon with the same
 // public release number.
-const REQUIRED_LOCALD_API_REVISION: u64 = 7;
+const REQUIRED_LOCALD_API_REVISION: u64 = 8;
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
@@ -295,13 +298,13 @@ const LABEL_RELEASE_POLL: Duration = Duration::from_millis(10);
 /// Compiled in on purpose. `trusted_workspace_urls` exists to stop a `ready`
 /// event pointing the workspace somewhere else, so deriving the acceptable
 /// hostname from that same event would answer the question with the thing being
-/// questioned. A short list the shell ships knowing keeps the gate meaning
-/// something while letting the domain move.
+/// questioned.
 ///
-/// Kept in step with `lemma_locald::local_domain`, which is what actually picks
-/// one -- the shell launches locald rather than linking it, so there is no
-/// shared constant to reach for.
-const TRUSTED_LOCAL_BASES: &[&str] = &["lemma.localhost", "127.0.0.1.sslip.io"];
+/// One entry: `lemma.localhost`, which every resolver answers with loopback by
+/// convention, so nothing about trusting it depends on DNS. Kept in step with
+/// `lemma_locald::local_domain` -- the shell launches locald rather than
+/// linking it, so there is no shared constant to reach for.
+const TRUSTED_LOCAL_BASES: &[&str] = &["lemma.localhost"];
 
 /// Both menus gate their local-only verbs on the connection mode, and both are
 /// built during setup — which on a machine's first launch is before the user
