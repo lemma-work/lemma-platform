@@ -551,6 +551,12 @@ async def test_browser_chat_replays_json_acp_and_retains_results_after_reload(
 ) -> None:
     del worker
     await scenario.create_org_with_pod(name_prefix="Browser ACP")
+    # A new account with no name is asked for one before anything else, and
+    # that step would stand between the journey and the chat it drives.
+    named = await scenario.owner_client.post(
+        "/users/me/profile", json={"first_name": "Journey", "last_name": "Owner"}
+    )
+    assert named.status_code == 201, named.text
     if action == "stream":
         # Exercise a valid URL-safe token that CLI parsers can mistake for a flag.
         monkeypatch.setattr(

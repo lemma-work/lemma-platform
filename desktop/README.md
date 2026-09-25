@@ -127,7 +127,7 @@ make desktop-fmt-fix       # rewrite instead of check
 swift build --package-path desktop/local-runtime/macos-vz
 uv run --project lemma-backend pytest \
   lemma-backend/app/tests/unit/test_health_endpoints.py
-npx tsc --noEmit --project lemma-harness/tsconfig.json
+npm --prefix lemma-frontend run typecheck
 ```
 
 **What `make desktop-check` cannot cover.** Bundling and codesigning need
@@ -395,9 +395,24 @@ To run Desktop local mode against the code you are editing:
 desktop/scripts/dev-local.sh --source
 ```
 
-locald supervises the backend out of `lemma-backend/` through `uv run` and the
-frontend through `next dev`, so the workspace is your working tree rather than
-the last release. The managed runtime, ports, health checks and restart policy
+locald supervises the backend out of `lemma-backend/` through `uv run` and
+`lemma-frontend` through its own `server.mjs --dev` (Next in development mode,
+voice gateways included), so the workspace is your working tree rather than
+the last release. It runs straight from the checkout with no npm in between,
+so run `npm ci` in `lemma-typescript` and `lemma-frontend` first; `make
+desktop-dev` checks and builds the SDK if needed. Origins arrive in the
+frontend's environment and reach the browser through `/site-config.js` —
+see [frontend hosting](../docs/architecture/desktop.md#51-frontend-hosting-and-runtime-configuration).
+
+To try the packaged frontend without building a whole pack:
+
+```bash
+cd lemma-frontend
+LEMMA_STANDALONE=1 npm run build && node scripts/complete-standalone.mjs
+cd .next/standalone/lemma-frontend
+PORT=3100 NEXT_PUBLIC_API_URL=http://127.0.0.1:8710 NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3100 \
+  NEXT_PUBLIC_LEMMA_DEPLOYMENT=local node server.mjs
+``` The managed runtime, ports, health checks and restart policy
 are the packaged ones — a dev run that exercised a different supervisor would
 prove nothing about the real one.
 
@@ -566,9 +581,7 @@ Acceptance flow:
    either must not claim that AI is ready. At the minimum window size and with
    enlarged text, confirm every step's Continue/Create action is fully visible
    without scrolling. Tab through the form: content may scroll, actions stay
-   put. The shared layout regression runs with
-   `node --test desktop/ui-tests/drivers/setup-layout.mjs` and is included in
-   `make desktop-agent-host-browser-e2e`.
+   put.
 7. Open **Local settings** from the workspace footer, close it with Escape,
    reopen it from the tray, and confirm the underlying workspace state was not
    remounted or lost. It must look like the rest of the product: warm paper,

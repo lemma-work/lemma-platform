@@ -55,14 +55,14 @@ the app being open, the way an open window is.
 ## Connecting is automatic
 
 This computer pairs itself, once per workspace per page load, from
-`lemma-harness/lib/desktop/auto-connect.ts`, which is mounted wherever
-`protected-route` is. The user is never asked to connect and cannot disconnect
+`lemma-frontend/src/desktop/auto-connect.ts`, which is mounted once in the
+authenticated shell (`DesktopNotices` in `src/shell/shell.tsx`). The user is never asked to connect and cannot disconnect
 the machine they are sitting at — those buttons are gone, along with the
 `localStorage` flag that used to referee between them.
 
 The attempt guard is module-level and keyed by workspace origin, not a `useRef`.
-Two components on one page call the hook — the Computers card and the setup
-banner — and a per-mount guard let both of them mint a pairing code, so one
+Two components on one page call the hook — the shell and the "This Mac" card
+on the Models page — and a per-mount guard let both of them mint a pairing code, so one
 machine arrived in the workspace twice and the first of the two was orphaned
 offline.
 
@@ -142,7 +142,7 @@ internal distinction: the UI ranks them into a single reported state.
 or whose connection is down, is a live process that will never pick up a run;
 reporting it as simply "on" is a lie the user discovers only when nothing
 happens. So both the tray and the "This computer" card rank the planes. The card
-ranks them, in `describeThisComputer`:
+ranks them, in `describeThisComputer` (`lemma-frontend/src/desktop/this-computer.ts`):
 
 not available → connecting → starting → connected → unreachable → reconnecting
 
@@ -176,7 +176,7 @@ new endpoint.
 
 | Surface | Scope | Purpose |
 |---|---|---|
-| Workspace → Models → Computers | local, hosted, and plain browser | The canonical surface. "This computer" card in the desktop app; cloud-only view elsewhere |
+| Workspace → Settings → Models | local, hosted, and plain browser | The canonical surface. "This Mac"/"This PC" card (`lemma-frontend/src/desktop/this-computer-card.tsx`) in the desktop app; cloud-only view and "Get the app" elsewhere |
 | Tray | desktop | Glanceable state and the log, without opening a window |
 | Local settings → Runtime | local mode only | Status row, restart, log — recovery when the workspace itself will not load |
 

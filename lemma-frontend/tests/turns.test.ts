@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTurns, openInteraction, spanOf, type RawMessage } from "../src/thread/turns.ts";
+import { buildTurns, liveNote, openInteraction, spanOf, type RawMessage } from "../src/thread/turns.ts";
 
 /** The rules that were actually wrong, pinned.
  *
@@ -222,4 +222,74 @@ test("a plan revised five times is one list that changed, not five lists", () =>
     // The latest wins, in the place the first one appeared.
     assert.equal(turn.items[0].kind, "plan");
     assert.equal(plans[0].kind === "plan" && plans[0].steps[0].status, "completed");
+});
+
+/* ── a local agent, through the Agent Host ─────────────────────────── */
+
+test("an Agent Host update_plan is the plan card", () => {
+    const todos = [
+        { content: "Run echo hello-lemma", status: "completed", priority: "high" },
+        { content: "Edit one -> two", status: "in_progress", priority: "high" },
+        { content: "Read notes.txt", status: "pending", priority: "medium" },
+    ];
+    const [turn] = buildTurns([
+        message({ sequence: 1, role: "user", text: "go" }),
+        message({ sequence: 2, kind: "TOOL_CALL", tool_name: "update_plan", tool_call_id: "plan-1", tool_args: { todos },
+            metadata: { tool_source: "native" } }),
+        message({ sequence: 3, kind: "TOOL_RETURN", tool_name: "update_plan", tool_call_id: "plan-1", tool_result: { todos } }),
+    ]);
+    const plan = turn.items.find((item) => item.kind === "plan");
+    assert.ok(plan && plan.kind === "plan");
+    assert.deepEqual(plan.steps.map((step) => step.status), ["completed", "in_progress", "pending"]);
+    assert.equal(plan.steps[1].step, "Edit one -> two");
+});
+
+test("somebody else's ask_user is a step, not a question this app can answer", () => {
+    const [turn] = buildTurns([
+        message({ sequence: 1, role: "user", text: "go" }),
+        message({ sequence: 2, kind: "TOOL_CALL", tool_name: "ask_user", tool_call_id: "c1", tool_args: { questions: [] },
+            metadata: { tool_source: "mcp", tool_server: "helpdesk" } }),
+    ]);
+    assert.equal(turn.items.length, 0);
+    assert.equal(turn.notes[0].label, "Ask user · helpdesk");
+});
+
+test("a sub-agent's steps sit under the task that started them", () => {
+    const [turn] = buildTurns([
+        message({ sequence: 1, role: "user", text: "go" }),
+        message({ sequence: 2, kind: "TOOL_CALL", tool_name: "task", tool_call_id: "t1",
+            tool_args: { description: "Find the test" }, metadata: { tool_source: "native" } }),
+        message({ sequence: 3, kind: "TOOL_CALL", tool_name: "grep", tool_call_id: "g1",
+            tool_args: { pattern: "flaky" }, metadata: { tool_source: "native", parent_call_id: "t1" } }),
+        // A parent this page never saw indents under nothing, so it does not.
+        message({ sequence: 4, kind: "TOOL_CALL", tool_name: "grep", tool_call_id: "g2",
+            tool_args: { pattern: "x" }, metadata: { tool_source: "native", parent_call_id: "elsewhere" } }),
+    ]);
+    assert.deepEqual(turn.notes.map((note) => note.nested), [false, true, false]);
+    assert.equal(turn.notes[0].card?.kind, "task");
+});
+
+test("a native step reads the adapter's title when it said nothing itself", () => {
+    const [turn] = buildTurns([
+        message({ sequence: 1, role: "user", text: "go" }),
+        message({ sequence: 2, kind: "TOOL_CALL", tool_name: "notebook_edit", tool_call_id: "n1", tool_args: { cell: 3 },
+            metadata: { tool_source: "native", tool_title: "Edit cell 3 of analysis.ipynb" } }),
+        // Lemma's own tools are titled with their namespaced name: not shown.
+        message({ sequence: 3, kind: "TOOL_CALL", tool_name: "pod_list_files", tool_call_id: "n2", tool_args: { path: "/me" },
+            metadata: { tool_source: "lemma", tool_title: "mcp.lemma_tools.lemma_pod_list_files" } }),
+    ]);
+    assert.equal(turn.notes[0].detail, "Edit cell 3 of analysis.ipynb");
+    assert.equal(turn.notes[1].detail, "/me");
+});
+
+test("the running indicator does not repeat a call that has already landed", () => {
+    // The host sends the call's message first and the `tool` token after it.
+    const [turn] = buildTurns([
+        message({ sequence: 1, role: "user", text: "go" }),
+        message({ sequence: 2, kind: "TOOL_CALL", tool_name: "exec_command", tool_call_id: "x1", tool_args: { cmd: "make" } }),
+    ]);
+    const streaming = { text: "", thinking: "", tool: { toolName: "exec_command", toolCallId: "x1", args: { cmd: "make" } } };
+    assert.deepEqual(liveNote(streaming, turn.notes), []);
+    // A streamed call that has not landed yet still gets its live row.
+    assert.equal(liveNote({ ...streaming, tool: { ...streaming.tool, toolCallId: "x2" } }, turn.notes).length, 1);
 });

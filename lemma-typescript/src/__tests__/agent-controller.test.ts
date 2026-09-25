@@ -203,6 +203,56 @@ describe("AgentController", () => {
     expect(snapshots.every(({ thinking, text }) => !(thinking && text))).toBe(true);
   });
 
+  it("keeps an Agent Host call running from the token that follows it", async () => {
+    // The host sends a call whole, so its message lands first and the `tool`
+    // token after it -- the reverse of a streamed pydantic-ai call. The
+    // indicator has to survive the message and last until the return.
+    const call = {
+      id: "call-msg",
+      role: "assistant",
+      kind: "TOOL_CALL",
+      tool_name: "exec_command",
+      tool_call_id: "call-1",
+      tool_args: { cmd: "make test" },
+      created_at: "2026-06-18T00:00:00.000Z",
+      metadata: { tool_source: "native", tool_title: "make test" },
+    };
+    const controller = makeController([
+      call,
+      {
+        type: "token",
+        kind: "tool",
+        data: JSON.stringify({ tool_name: "exec_command", tool_call_id: "call-1", args: { cmd: "make test" } }),
+      },
+      { type: "token", kind: "tool_output", data: "running 12 tests\n", tool_call_id: "call-1" },
+      {
+        id: "return-msg",
+        role: "tool",
+        kind: "TOOL_RETURN",
+        tool_name: "exec_command",
+        tool_call_id: "call-1",
+        tool_result: { exit_code: 0, stdout: "ok" },
+        created_at: "2026-06-18T00:00:01.000Z",
+      },
+      { type: "completed" },
+    ], { paceMs: 5 });
+
+    const seen: Array<{ tool: string | undefined; id: string | undefined; text: string }> = [];
+    controller.subscribe(() => {
+      const state = controller.getState();
+      seen.push({ tool: state.streamingTool?.toolName, id: state.streamingTool?.toolCallId, text: state.streamingText });
+    });
+
+    await controller.createConversation();
+    await controller.sendMessage("run the tests");
+
+    expect(seen.some(({ tool, id }) => tool === "exec_command" && id === "call-1")).toBe(true);
+    // Live terminal output is not answer text.
+    expect(seen.every(({ text }) => text === "")).toBe(true);
+    expect(controller.getState().streamingTool).toBeNull();
+    expect(controller.getState().messages.map((message) => message.id)).toEqual(["call-msg", "return-msg"]);
+  });
+
   it("surfaces a stream error as FAILED + error state", async () => {
     const controller = makeController([
       { type: "error", data: { message: "boom" } },

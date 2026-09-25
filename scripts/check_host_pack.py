@@ -98,7 +98,7 @@ def check_python(pack: Path) -> None:
 def check_node(pack: Path) -> None:
     node = resolve(pack, "frontend Node.js")
     launcher = resolve(pack, "frontend launcher")
-    server = resolve(pack, "Next.js standalone server")
+    server = resolve(pack, "frontend server")
 
     version = check_output(node, "--version")
     if not version.startswith("v2"):
@@ -124,7 +124,7 @@ def check_node(pack: Path) -> None:
             "with one; starting without one means it would silently serve "
             "nothing rather than say so."
         )
-    if "Next.js server path" not in refusal.stderr:
+    if "frontend server path" not in refusal.stderr:
         raise SystemExit(
             f"the frontend launcher failed for some reason other than its "
             f"missing argument, which means it did not get as far as checking:\n"

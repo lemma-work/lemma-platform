@@ -6,6 +6,7 @@ import type RFBClient from "@novnc/novnc";
 import { apiUrl, sessionToken } from "@/session/client";
 import { useBrowserResize } from "./queries";
 import { isSettled, retryDelay, socketUrl, stateFromClose, type LiveState } from "./live";
+import { copyText } from "@/desktop/clipboard";
 
 /** The sandbox's own display, live, in this pane.
  *
@@ -172,7 +173,7 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
                a broken pane, so it fails quietly. */
             rfb.addEventListener("clipboard", (event?: { detail?: { text?: string } }) => {
                 const text = event?.detail?.text;
-                if (text) void navigator.clipboard?.writeText(text).catch(() => undefined);
+                if (text) void copyText(text).catch(() => undefined);
             });
             rfb.addEventListener("disconnect", () => {
                 /* Guarded on identity: a teardown starts nothing new, but a
