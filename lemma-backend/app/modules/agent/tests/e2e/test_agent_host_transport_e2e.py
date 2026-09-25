@@ -632,11 +632,21 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
     )
     try:
         answer = await link.request("control", {"capacity": _capacity(0)})
+        # A command goes out once, by whichever path reaches it first: the
+        # pusher wakes on the link's own announcement after ``hello`` and may
+        # push it before ``control`` is answered. Its frame is then already
+        # queued ahead of that answer.
+        pushed = [
+            frame for frame in link.pushed_so_far() if frame["type"] == "commands"
+        ]
     finally:
         await link.aclose()
 
+    delivered = [answer["body"]["commands"]] + [
+        frame["body"]["commands"] for frame in pushed
+    ]
     assert AgentHostCommandKind.CANCEL_RUN.value in {
-        command["kind"] for command in answer["body"]["commands"]
+        command["kind"] for commands in delivered for command in commands
     }
 
 

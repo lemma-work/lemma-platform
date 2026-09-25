@@ -152,6 +152,13 @@ class HostLink:
     async def next_push(self, timeout: float = 30) -> dict:
         return await asyncio.wait_for(self._pushes.get(), timeout=timeout)
 
+    def pushed_so_far(self) -> list[dict]:
+        """Every push already received and not yet taken, without waiting."""
+        pushes = []
+        while not self._pushes.empty():
+            pushes.append(self._pushes.get_nowait())
+        return pushes
+
     async def closed(self, timeout: float = 30) -> int:
         """Wait for the server to close the socket, and return the code."""
         await asyncio.wait_for(self._closed.wait(), timeout=timeout)
