@@ -138,19 +138,19 @@ if [ -n "$BROWSER_PROXY" ]; then
 fi
 # Loopback in this sandbox, falling through to the machine Lemma runs on.
 #
-# On Desktop the person's own code runs on their computer -- a coding agent is
-# given a folder there, so `npm run dev` listens on *their* machine -- while
-# this browser is in a container in the guest, where `localhost` is the
-# container. The two are presented as one machine and were not one: a browser
-# asked for `http://localhost:3000` got a refusal for a server that was running
-# the whole time.
+# On Desktop the owner's agent can run commands on their Mac -- so `npm run
+# dev` listens on *their* machine -- while this browser is in a container in
+# the guest, where `localhost` is the container. The two are presented as one
+# machine and were not one: a browser asked for `http://localhost:3000` got a
+# refusal for a server that was running the whole time.
 #
 # `sandbox_runtime.host_fallback` answers per request rather than per port: a
 # loopback port this sandbox is serving stays the sandbox's, and one nothing
-# here is serving is tried again against `LEMMA_HOST_ALIAS`. That is what keeps
-# an agent able to preview a site it built here, which the browser skill tells
-# it to reach at `127.0.0.1` and the apps reference at `localhost` -- neither
-# spelling can be quietly reassigned.
+# here is serving is asked for again through the loopback relay, which reaches
+# the same port on the Mac's own 127.0.0.1. That is what keeps an agent able to
+# preview a site it built here, which the browser skill tells it to reach at
+# `127.0.0.1` and the apps reference at `localhost` -- neither spelling can be
+# quietly reassigned.
 #
 # `--proxy-bypass-list=<-loopback>` is load-bearing and was measured on this
 # image: with `--proxy-server` alone Chrome answers loopback itself and the
@@ -158,14 +158,20 @@ fi
 # other way too -- a PAC file is ignored for loopback even with the bypass
 # override, which is why this is a proxy and not a PAC.
 #
+# Started only where the relay's socket is: guestd mounts it into one sandbox,
+# the installation owner's own workspace, and nowhere else -- not an invited
+# person's, not E2B, not Docker, and not Windows, where no relay listens.
+# Everywhere else Chrome is left alone, because Chrome fails a navigation
+# outright when its proxy refuses, and a sandbox with nothing to fall through
+# to would only trade "connection refused" for a worse error page.
+#
 # Skipped entirely when the server has assigned a residential proxy. The two
 # would have to be chained, Chrome takes one `--proxy-server`, and a sandbox
 # that is being proxied for sign-in reasons is not one somebody is pointing at
-# their own dev server. Also skipped when there is no host to fall through to,
-# which is every fabric except Desktop.
+# their own dev server.
 FALLBACK_PORT="${LEMMA_HOST_FALLBACK_PORT:-4851}"
-HOST_ALIAS="${LEMMA_HOST_ALIAS:-host.lemma.internal}"
-if [ -z "$BROWSER_PROXY" ] && getent hosts "$HOST_ALIAS" >/dev/null 2>&1; then
+RELAY_SOCKET="${LEMMA_HOST_LOOPBACK_SOCKET:-/run/lemma-host-loopback/relay.sock}"
+if [ -z "$BROWSER_PROXY" ] && [ -S "$RELAY_SOCKET" ]; then
   if ! (exec 3<>"/dev/tcp/127.0.0.1/$FALLBACK_PORT") 2>/dev/null; then
     setsid nohup python3 -m sandbox_runtime.host_fallback "$FALLBACK_PORT" \
       >/tmp/lemma-host-fallback.log 2>&1 </dev/null &

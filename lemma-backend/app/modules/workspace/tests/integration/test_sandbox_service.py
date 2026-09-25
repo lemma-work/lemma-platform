@@ -126,6 +126,43 @@ async def _workspace(service: SandboxService):
 # ---------------------------------------------------------------------------
 
 
+async def test_the_loopback_relay_follows_the_policy_and_defaults_to_nobody(
+    provider: FakeProvider, sandbox_uow_factory
+) -> None:
+    """The service asks its policy per sandbox and puts the answer on the spec.
+
+    By default nobody is granted the relay, which is every deployment
+    but Desktop; with one, only the sandbox it names is.
+    """
+    SandboxService._inflight.clear()
+    plain = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    await plain.ensure((await _workspace(plain)).id)
+    assert provider.created[-1].host_loopback is False
+
+    owner = uuid4()
+    asked: list[UUID] = []
+
+    async def only_the_owner(sandbox) -> bool:
+        asked.append(sandbox.owner_id)
+        return sandbox.owner_id == owner
+
+    SandboxService._inflight.clear()
+    granted = SandboxService(
+        provider=provider,
+        uow_factory=sandbox_uow_factory,
+        host_loopback=only_the_owner,
+    )
+    owners = await granted.resolve(
+        kind=SandboxKind.WORKSPACE, owner_kind=SandboxOwnerKind.USER, owner_id=owner
+    )
+    await granted.ensure(owners.id)
+    assert provider.created[-1].host_loopback is True
+
+    await granted.ensure((await _workspace(granted)).id)
+    assert provider.created[-1].host_loopback is False
+    assert owner in asked
+
+
 async def test_ensure_provisions_once_and_then_reuses(
     service: SandboxService, provider: FakeProvider
 ) -> None:

@@ -1,7 +1,7 @@
 """Loopback in the sandbox, falling through to the machine Lemma runs on.
 
-On Desktop the person's code runs on their own computer: coding agents are
-given a folder there, so `npm run dev` listens on *their* machine. The pod
+On Desktop the owner's agent can run commands on their own Mac (host
+execution), so `npm run dev` listens on *their* machine's loopback. The
 agent's browser lives in a sandbox in the guest, where `localhost` is the
 container. The two are presented as one machine and were not one, so a browser
 asked for `http://localhost:3000` got a connection refused for a server that
@@ -13,12 +13,25 @@ This is the thing that makes the two agree, per request rather than per port:
   previewing a site it just built is unaffected -- which the browser skill
   tells it to reach at `127.0.0.1` and the apps reference at `localhost`, so
   neither spelling can be quietly reassigned;
-* a loopback address nothing in the sandbox is serving is tried again against
-  the host alias, which is where the person's own server is.
+* a loopback address nothing in the sandbox is serving is asked for again
+  through the loopback relay, which reaches the same port on the Mac's own
+  `127.0.0.1`.
 
 "Nothing is serving it" is answered by connecting, not by reading a table:
 a listener that came up a moment ago is a listener, and the alternative is a
 cache that is wrong exactly when somebody has just started their dev server.
+
+**The relay.** A Unix socket guestd mounts into one sandbox only -- the
+installation owner's own workspace -- at `LEMMA_HOST_LOOPBACK_SOCKET`. Ask it
+for a port (`3000\n`); it answers `ok\n` and then carries the bytes to the
+Mac, or `error <reason>\n` and closes. The Mac's end refuses Lemma's own ports
+and privileged ones. Every other sandbox has no socket, so there nothing falls
+through and a port the sandbox is not serving is simply refused. See
+docs/architecture/desktop-security.md, "The loopback relay".
+
+This used to dial the host alias instead, over the guest's NAT. That reached
+only servers listening on every interface -- not a dev server on `127.0.0.1`
+-- and it was open to every sandbox, including invited people's.
 
 Stdlib only and no imports from the rest of `sandbox_runtime`, because this
 ships into the E2B template as well, where `test_e2b_templates_ship_their_imports`
@@ -46,15 +59,64 @@ LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 #: going to the host anyway.
 LOCAL_CONNECT_TIMEOUT = 0.25
 
-#: How long to wait for the host. A real network hop, and the person's dev
-#: server may be starting up.
+#: How long to wait for a direct connection, or for the relay's answer. The
+#: relay's answer includes the Mac connecting to the person's dev server,
+#: which may be starting up.
 HOST_CONNECT_TIMEOUT = 5.0
+
+#: Where guestd mounts the loopback relay's socket, in the one sandbox that
+#: has it.
+DEFAULT_RELAY_SOCKET = "/run/lemma-host-loopback/relay.sock"
+
+#: The longest answer line the relay sends: `error ` and a short sentence.
+_MAX_ANSWER_BYTES = 256
 
 _CHUNK = 65536
 
 
-def _host_alias() -> str:
-    return os.environ.get("LEMMA_HOST_ALIAS", "host.lemma.internal")
+def relay_socket_path() -> str:
+    return os.environ.get("LEMMA_HOST_LOOPBACK_SOCKET", DEFAULT_RELAY_SOCKET)
+
+
+def _read_answer(connection: socket.socket) -> bytes | None:
+    """The relay's one-line answer, without consuming a byte past it.
+
+    A byte at a time because whatever follows the newline is the server's,
+    and a server may speak first.
+    """
+    answer = b""
+    while len(answer) < _MAX_ANSWER_BYTES:
+        byte = connection.recv(1)
+        if not byte:
+            return None
+        if byte == b"\n":
+            return answer
+        answer += byte
+    return None
+
+
+def open_relay(port: int) -> socket.socket | None:
+    """A stream to `port` on the Mac's loopback, or None.
+
+    None when this sandbox has no relay (every sandbox but the owner's), when
+    the relay refused the port, or when nothing on the Mac is listening.
+    """
+    path = relay_socket_path()
+    if not os.path.exists(path):
+        return None
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        connection.settimeout(HOST_CONNECT_TIMEOUT)
+        connection.connect(path)
+        connection.sendall(f"{port}\n".encode("ascii"))
+        if _read_answer(connection) != b"ok":
+            connection.close()
+            return None
+        connection.settimeout(None)
+        return connection
+    except OSError:
+        connection.close()
+        return None
 
 
 def _split_authority(authority: str) -> tuple[str, int]:
@@ -98,7 +160,7 @@ def open_upstream(host: str, port: int) -> tuple[socket.socket | None, str]:
     if local is not None:
         return local, "sandbox"
 
-    remote = _connect(_host_alias(), port, HOST_CONNECT_TIMEOUT)
+    remote = open_relay(port)
     return remote, "host" if remote else "none"
 
 
@@ -191,7 +253,13 @@ class _Handler(socketserver.BaseRequestHandler):
             head = f"{method} {path} HTTP/1.1\r\n".encode("latin-1") + rest
             upstream.sendall(head)
         del where
-        _splice(client, upstream)
+        try:
+            _splice(client, upstream)
+        finally:
+            # The client is closed by the server; this end is ours. Left to the
+            # collector, a browsing agent's worth of these holds relay slots
+            # on the Mac open long after the page is done.
+            upstream.close()
 
 
 class _Server(socketserver.ThreadingTCPServer):

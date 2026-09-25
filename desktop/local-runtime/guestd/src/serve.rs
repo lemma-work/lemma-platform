@@ -20,6 +20,29 @@ pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result
             }
         })?;
 
+    // The paired user's browser reaching the Mac's loopback. Bound before the control
+    // port listens, so the socket exists before any sandbox that mounts it can
+    // be started. A guest that cannot bind it still serves everything else:
+    // the fall-through is a convenience, the control channel is not.
+    match crate::host_loopback::bind_relay_socket(&service.host_loopback_directory()) {
+        Ok(relay) => {
+            thread::Builder::new()
+                .name("guestd-host-loopback-accept".into())
+                .spawn(move || {
+                    crate::host_loopback::serve_relay(relay, || {
+                        vsock::connect(
+                            libc::VMADDR_CID_HOST,
+                            crate::host_loopback::HOST_LOOPBACK_VSOCK_PORT,
+                        )
+                        .map(std::fs::File::from)
+                    });
+                })?;
+        }
+        Err(error) => {
+            eprintln!("lemma-guestd: host loopback relay unavailable: {error}");
+        }
+    }
+
     let listener = vsock::listen(VSOCK_PORT)?;
     let connections = Arc::new(AtomicUsize::new(0));
     loop {
@@ -134,6 +157,37 @@ mod vsock {
                 return Err(io::Error::last_os_error());
             }
             Ok(listener)
+        }
+    }
+
+    /// Open a stream to `port` on `cid` -- the host, for the loopback relay.
+    pub(super) fn connect(cid: u32, port: u32) -> io::Result<OwnedFd> {
+        // SAFETY: an initialized sockaddr_vm, checked return codes, and the
+        // descriptor owned by `OwnedFd` from the moment it exists.
+        unsafe {
+            let raw = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+            if raw < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let stream = OwnedFd::from_raw_fd(raw);
+            let mut address: libc::sockaddr_vm = zeroed();
+            address.svm_family = libc::AF_VSOCK as libc::sa_family_t;
+            address.svm_cid = cid;
+            address.svm_port = port;
+            loop {
+                if libc::connect(
+                    raw,
+                    &address as *const _ as *const libc::sockaddr,
+                    size_of::<libc::sockaddr_vm>() as libc::socklen_t,
+                ) == 0
+                {
+                    return Ok(stream);
+                }
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
         }
     }
 

@@ -115,6 +115,12 @@ pub(crate) struct AgentHostRecord {
 pub(crate) const AGENT_HOST_RECORD_SCHEMA_VERSION: u32 = 1;
 
 impl AgentHostSupervisor {
+    /// This machine's Agent Host config: its installation id, targets and the
+    /// host-execution switch.
+    pub(crate) fn config_path(&self) -> PathBuf {
+        self.data_dir.join("config.json")
+    }
+
     pub fn discover(locald_root: &Path) -> Self {
         let executable = discover_executable();
         let shared_root = locald_root

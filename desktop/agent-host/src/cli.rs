@@ -103,6 +103,20 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Turn running Lemma agents' commands on this computer on or off.
+    HostExecution {
+        #[command(subcommand)]
+        action: HostExecutionAction,
+    },
+    /// Internal: host execution's worker, speaking JSON lines on stdio. The
+    /// Agent Host starts one per open workspace under `sandbox-exec`; run by
+    /// hand only to debug it (see the README).
+    #[command(hide = true)]
+    ExecServer {
+        /// Default workspace roots go under `<root-base>/c/<date>/<slug>`.
+        #[arg(long)]
+        root_base: PathBuf,
+    },
     /// Internal run-scoped stdio MCP bridge used by ACP adapters.
     #[command(hide = true)]
     McpBridge {
@@ -111,4 +125,20 @@ pub(crate) enum Command {
         #[arg(long)]
         run_id: Uuid,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum HostExecutionAction {
+    /// Let the owner's Lemma agents run commands here, under Seatbelt.
+    Enable,
+    /// Stop them, and stop every command they are running.
+    Disable,
+    /// Show the setting and whether this computer supports it.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Take a fresh snapshot of the login shell's environment, for when the
+    /// owner has changed their shell profile.
+    RefreshEnvironment,
 }

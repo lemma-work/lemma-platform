@@ -99,7 +99,8 @@ pub(crate) fn run() {
             workspace_settings::local_settings_snapshot,
             workspace_settings::apply_local_settings,
             workspace_settings::local_sharing,
-            workspace_settings::set_start_at_login
+            workspace_settings::set_start_at_login,
+            workspace_settings::set_host_execution
         ])
         .setup(move |app| setup(app, &mode, recovery_launch))
         .on_window_event(on_window_event)

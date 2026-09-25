@@ -25,6 +25,9 @@ mod diagnostics;
 mod engine;
 mod health;
 mod host_control;
+// Served only on Linux, by the resident guest; the relay is tested everywhere.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod host_loopback;
 mod images;
 mod network;
 mod protocol;
@@ -48,6 +51,10 @@ pub(crate) use core_data::*;
 pub(crate) use diagnostics::*;
 pub(crate) use engine::*;
 pub use engine::{Engine, NerdctlEngine};
+pub use host_loopback::HOST_LOOPBACK_VSOCK_PORT;
+pub(crate) use host_loopback::{
+    host_loopback_directory, prepare_relay_directory, HOST_LOOPBACK_MOUNT,
+};
 pub(crate) use images::*;
 pub(crate) use network::*;
 pub use protocol::{handle_reader, GuestError, GuestRequest, GuestResponse};

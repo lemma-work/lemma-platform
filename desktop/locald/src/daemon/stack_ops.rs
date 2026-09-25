@@ -499,7 +499,11 @@ impl Daemon {
             .as_ref()
             .map(|runtime| runtime.backend_environment())
             .transpose()?;
-        Ok(compose_backend_environment(operator, infrastructure))
+        Ok(compose_backend_environment(
+            operator,
+            infrastructure,
+            &self.agent_host.config_path(),
+        ))
     }
 
     pub(super) fn prepare_private_infra(

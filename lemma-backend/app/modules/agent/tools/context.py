@@ -7,6 +7,7 @@ without importing anything from the old agent module.
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ from app.modules.agent.services.workspace_location import (
     ProjectRepo,
     pod_cwd_from_workspace_cwd,
 )
+from app.modules.workspace.contracts.host_execution import HostWorkspace
 from app.modules.workspace.contracts.tooling import WorkspaceFileManager
 
 
@@ -53,6 +55,16 @@ class BaseAgentContext(AgentContext):
     # Default pod-filesystem working directory for this conversation, e.g.
     # `/me/c/{date}/{slug}`. Relative pod tool paths resolve against this.
     pod_cwd: str | None = None
+    # Set when this run's commands and files execute on the installation
+    # user's Mac rather than in the VM (docs/architecture/
+    # desktop-host-execution.md). Chosen once, when the run's context is built,
+    # and carried for every tool call of the run: a run never moves between
+    # the two. The browser stays in the VM whatever this says.
+    host_workspace: HostWorkspace | None = None
+    # An Agent Host (coding agent) run whose owner has host execution on: the
+    # agent already runs on the Mac with its own shell and file tools, so
+    # Lemma's duplicates are withheld (§7).
+    host_runs_native_commands: bool = False
 
     # How image-returning tools should answer on this run. Transient (derived
     # from the resolved model each run), never persisted. UNAVAILABLE is the
@@ -79,10 +91,27 @@ class BaseAgentContext(AgentContext):
         # it was written under -- a `removeprefix` of the *current* root did
         # nothing for a cwd under the previous one, leaving an absolute string
         # where a relative one was required.
-        return WorkspaceFileManager(self.user_id, cwd=self.get_workspace_cwd())
+        # The VM workspace's cwd even on a host-execution run: this manager
+        # reaches the VM, and the host root means nothing there.
+        return WorkspaceFileManager(
+            self.user_id, cwd=self.workspace_cwd or WORKSPACE_ROOT
+        )
 
     async def get_subscription_models(self) -> SubscriptionModels:
         return await resolve_subscription_models(self.user_id)
+
+    @property
+    def host_execution_mode(self) -> Literal["native", "sandbox"] | None:
+        """How this run's commands reach the user's Mac, if they do.
+
+        ``"native"``: an Agent Host run whose own tools are on the Mac.
+        ``"sandbox"``: an in-process run whose ``exec_command`` runs there.
+        """
+        if self.host_runs_native_commands:
+            return "native"
+        if self.host_workspace is not None:
+            return "sandbox"
+        return None
 
     def get_workspace_cwd(self) -> str:
         """This conversation's directory, or the project root when there is none.
@@ -99,6 +128,8 @@ class BaseAgentContext(AgentContext):
         it used to take named a directory after all-zeroes. The project root is
         the honest answer for "no conversation".
         """
+        if self.host_workspace is not None:
+            return self.host_workspace.root
         return self.workspace_cwd or WORKSPACE_ROOT
 
     def get_pod_cwd(self) -> str:

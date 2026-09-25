@@ -38,10 +38,13 @@ pub(crate) const SANDBOX_HARDENING_VERSION: u64 = 1;
 ///
 /// Compared on every ensure, because a grant is fixed into the container when
 /// it is created: reusing a running one made with a different grant would
-/// silently keep the old reach -- the alias it was meant to lose, or lack the
-/// one it was meant to gain.
+/// silently keep the old reach -- the alias it was meant to lose, the relay it
+/// was no longer granted -- or lack the one it was meant to gain.
 pub(crate) fn requested_grants(parameters: &EnsureParameters) -> Value {
-    json!({"host_access": parameters.host_access})
+    json!({
+        "host_access": parameters.host_access,
+        "host_loopback": parameters.host_loopback,
+    })
 }
 
 pub(crate) fn existing_container_verdict(
@@ -93,6 +96,13 @@ impl<E: Engine + 'static> GuestService<E> {
                 "function sandboxes cannot receive a workspace runtime token",
             ));
         }
+        if parameters.workload_kind == WorkloadKind::Function && parameters.host_loopback {
+            // Only a person's workspace has a browser in it. A function runs an
+            // immutable artifact and has no reason to reach anyone's Mac.
+            return Err(GuestError::invalid(
+                "function sandboxes cannot receive the host loopback relay",
+            ));
+        }
 
         let container = container_name(&parameters.sandbox_id);
         // What is there now, and so what has to happen. Nothing is removed
@@ -116,6 +126,12 @@ impl<E: Engine + 'static> GuestService<E> {
         if let Some(replacing) = existing {
             if self.sandbox_isolation {
                 ensure_sandbox_isolation(&run_iptables)?;
+                ensure_host_gateway_isolation(
+                    &self.host_gateway,
+                    &self.callback_ports()?,
+                    &run_iptables,
+                    &list_iptables,
+                )?;
             }
             // A running container being replaced is a swap, not another
             // sandbox: counting it against the ceiling would refuse exactly
@@ -132,6 +148,14 @@ impl<E: Engine + 'static> GuestService<E> {
                 Some(token) => Some(self.write_runtime_token(&parameters.sandbox_id, token)?),
                 None => None,
             };
+            // Created whether or not a relay is listening in it: the engine
+            // refuses a bind mount whose source does not exist, and on WSL,
+            // where nothing ever listens, it simply stays empty.
+            let relay_directory = self.host_loopback_directory();
+            if parameters.host_loopback {
+                prepare_relay_directory(&relay_directory)
+                    .map_err(|error| GuestError::engine(error.to_string()))?;
+            }
             let env_file = self.write_env_file(&parameters.sandbox_id, &parameters.env)?;
             let arguments = build_run_arguments(
                 &parameters,
@@ -139,6 +163,7 @@ impl<E: Engine + 'static> GuestService<E> {
                 runtime_token.as_deref(),
                 &env_file,
                 &self.host_gateway,
+                &relay_directory,
             );
             let result = match replacing {
                 None => self.run_checked(&arguments).map(|_| ()),

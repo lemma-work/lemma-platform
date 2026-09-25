@@ -82,7 +82,7 @@ logger = get_logger(__name__)
 READY_MESSAGE = "You're all set. Picking up your message now."
 
 
-def ready_message() -> str:
+def ready_message(invited_pod_name: str | None = None) -> str:
     """The confirmation, plus the one thing it never said.
 
     An account made here has a single login method and it is passwordless.
@@ -97,8 +97,9 @@ def ready_message() -> str:
     URL is read when the message is sent rather than when the module is
     imported.
     """
+    joined = f"You were invited to {invited_pod_name}, and you're in it now.\n\n"
     return (
-        f"{READY_MESSAGE}\n\n"
+        f"{joined if invited_pod_name else ''}{READY_MESSAGE}\n\n"
         f"To use Lemma on the web, go to {settings.frontend_url.rstrip('/')}/login "
         "and enter this same email address. We'll send you a sign-in code -- "
         "there's no password to remember."
@@ -370,9 +371,7 @@ class ChatOnboardingCoordinator:
         )
 
         try:
-            waiting_on_an_admin = await complete_onboarding_workspace(
-                self._uows, transport, state
-            )
+            outcome = await complete_onboarding_workspace(self._uows, transport, state)
         except WorkspaceChoiceAsked as parked:
             # The one refusal that has already asked its own next question: the
             # row is parked on AWAITING_POD and the offer is in the message, so
@@ -394,8 +393,8 @@ class ChatOnboardingCoordinator:
             destination,
             "Your account is ready. Ask your team admin to add you to this "
             "Lemma organization."
-            if waiting_on_an_admin
-            else ready_message(),
+            if outcome.waiting_on_an_admin
+            else ready_message(outcome.invited_pod_name),
         )
 
     async def _handoff(
