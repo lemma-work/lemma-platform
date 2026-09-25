@@ -42,7 +42,14 @@ from app.modules.agent.infrastructure.agent_host.session_memory import (
     resume_session_id,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
+from app.modules.agent.infrastructure.agent_host.recovery import HOST_REVOKED_DETAIL
+from app.modules.agent.infrastructure.agent_host.repository_common import (
+    INSTALLATION_REVOKED_MESSAGE,
+)
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentHostCommandModel,
+    AgentHostRunLeaseModel,
+)
 from app.modules.agent.services import agent_host_link_session, agent_host_link_store
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     HostLink,
@@ -118,6 +125,88 @@ async def test_re_pairing_the_same_machine_updates_it_instead_of_duplicating(
         assert await stale.closed() == 4401
     finally:
         await stale.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_removed_computer_stays_removed_until_the_person_turns_it_back_on(
+    authenticated_client, async_client
+):
+    """Revoking has to stick: the host's auto-connect pairs again within
+    seconds, and without the tombstone that silently undid every removal."""
+    machine = hello()
+    first = await pair(
+        authenticated_client, async_client, display_name="e2e removed", machine=machine
+    )
+    revoked = await authenticated_client.delete(
+        f"/me/runtime/agent-hosts/{first['host_id']}"
+    )
+    assert revoked.status_code == status.HTTP_200_OK, revoked.text
+
+    minted = await authenticated_client.post(
+        "/me/runtime/agent-host-pairings",
+        json={"display_name": "e2e removed", "organization_id": None},
+    )
+    body = {
+        "pairing_code": minted.json()["pairing_code"],
+        "display_name": "e2e removed",
+        "hello": machine,
+    }
+    automatic = await HostLink(app_of(async_client), secret=None).open()
+    try:
+        refused = await automatic.request("pair", body)
+        assert refused["type"] == "error", refused
+        assert refused["body"]["code"] == "UNAUTHORIZED"
+        assert refused["body"]["message"] == INSTALLATION_REVOKED_MESSAGE
+        assert "was removed from this account" in refused["body"]["message"]
+        assert await automatic.closed() == 4403
+        assert automatic.close_reason == "installation_revoked"
+    finally:
+        await automatic.aclose()
+
+    # The refused attempt left the code unused, so the person's own
+    # "connect again" can still spend it.
+    chosen = await HostLink(app_of(async_client), secret=None).open()
+    try:
+        paired = await chosen.request("pair", {**body, "reenable": True})
+        assert paired["type"] == "paired", paired
+    finally:
+        await chosen.aclose()
+    assert paired["body"]["host_id"] == first["host_id"]
+
+
+@pytest.mark.asyncio
+async def test_revoking_a_host_ends_its_runs_and_cancels_its_commands(
+    db_session, scenario
+):
+    """A removed computer can never report back, so nothing may wait on it."""
+    await scenario.create_org_with_pod(name_prefix="Revoked")
+    machine = await paired_machine(scenario)
+    _, run_id = await conversation_with_a_leased_run(
+        db_session,
+        scenario,
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+    )
+    cancel = await AgentHostDispatchRepository(
+        SqlAlchemyUnitOfWork(db_session)
+    ).enqueue_cancel(run_id=run_id)
+    assert cancel is not None
+    await db_session.commit()
+
+    revoked = await scenario.owner_client.delete(
+        f"/me/runtime/agent-hosts/{machine['host_id']}"
+    )
+    assert revoked.status_code == status.HTTP_200_OK, revoked.text
+
+    lease = await db_session.get(AgentHostRunLeaseModel, run_id)
+    await db_session.refresh(lease)
+    assert lease.state == AgentHostRunState.FAILED.value
+    assert lease.error_code == "HOST_REVOKED"
+    assert lease.error_detail == HOST_REVOKED_DETAIL
+    assert lease.terminal_at is not None
+    command = await db_session.get(AgentHostCommandModel, cancel.id)
+    await db_session.refresh(command)
+    assert command.state == AgentHostCommandState.CANCELLED.value
 
 
 @pytest.mark.asyncio

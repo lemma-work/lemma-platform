@@ -300,6 +300,64 @@ async def reconcile_expired_leases(
     return reconciled
 
 
+#: The words a run on a removed computer ends on; the run's failure shows them.
+HOST_REVOKED_DETAIL = (
+    "This computer was removed from the account, so the run on it was stopped"
+)
+
+
+async def terminalize_revoked_host(
+    session: AsyncSession,
+    *,
+    host_id: UUID,
+    now: datetime | None = None,
+) -> list[UUID]:
+    """End everything a just-revoked host was given. Returns the runs ended.
+
+    Every non-terminal lease on the host is FAILED with ``HOST_REVOKED`` --
+    the harness watching each run reads the lease and fails the run with
+    ``HOST_REVOKED_DETAIL`` -- and every command not yet acknowledged is
+    CANCELLED, so nothing waits for a machine that can no longer connect. No
+    CANCEL_RUN is queued: a revoked host cannot fetch it. The host stops its
+    own runs when its link closes as revoked.
+    """
+    timestamp = now or utcnow()
+    leases = await session.execute(
+        select(AgentHostRunLeaseModel)
+        .where(
+            AgentHostRunLeaseModel.host_id == host_id,
+            AgentHostRunLeaseModel.state.in_(_NON_TERMINAL_HOST_RUN_STATES),
+        )
+        .with_for_update()
+    )
+    ended: list[UUID] = []
+    for lease in leases.scalars():
+        lease.state = AgentHostRunState.FAILED.value
+        lease.error_code = "HOST_REVOKED"
+        lease.error_detail = HOST_REVOKED_DETAIL
+        lease.terminal_at = timestamp
+        lease.lease_expires_at = timestamp
+        lease.updated_at = timestamp
+        ended.append(lease.run_id)
+    commands = await session.execute(
+        select(AgentHostCommandModel)
+        .where(
+            AgentHostCommandModel.host_id == host_id,
+            AgentHostCommandModel.state.in_(
+                [
+                    AgentHostCommandState.QUEUED.value,
+                    AgentHostCommandState.DELIVERED.value,
+                ]
+            ),
+        )
+        .with_for_update()
+    )
+    for command in commands.scalars():
+        command.state = AgentHostCommandState.CANCELLED.value
+    await session.flush()
+    return ended
+
+
 async def cleanup_retained_state(
     session: AsyncSession,
     *,
