@@ -25,7 +25,10 @@ async function* walk(dir) {
         return;
     }
     for (const entry of entries) {
-        const relative = path.join(dir, entry.name);
+        // Forward slashes on every platform: ALLOWED is keyed by them, and
+        // path.join would print backslashes on Windows, so every allowed file
+        // looked like an offence there and the Windows host pack never built.
+        const relative = path.posix.join(dir, entry.name);
         if (entry.isDirectory()) {
             if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
             yield* walk(relative);
