@@ -234,7 +234,7 @@
 
 /* The eye, inside the password field at its end, where every other sign-in
    page has taught people to look for it. The input keeps its full width and
-   gives the button room on the right so a long password never runs under it. */
+   pads its right side for the button so a long password never runs under it. */
 .field__secret {
     position: relative;
     display: flex;
