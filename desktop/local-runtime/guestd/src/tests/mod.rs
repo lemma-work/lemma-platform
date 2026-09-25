@@ -129,10 +129,11 @@ impl Engine for GatedPullEngine {
                     .contains(arguments.last().unwrap()),
                 "",
             )),
-            "run" => Ok(output(
-                !self.invalid.lock().unwrap().contains(&arguments[6]),
-                "",
-            )),
+            "run" => Ok(if self.invalid.lock().unwrap().contains(&arguments[6]) {
+                exited(MARKER_MISSING)
+            } else {
+                output(true, "")
+            }),
             "rmi" => {
                 self.present
                     .lock()
@@ -217,6 +218,15 @@ pub(super) const UNHURRIED_TEST_TIMEOUT_SECS: u64 = 30;
 /// elapses, so its assertion is written against this rather than against a
 /// second constant that could drift away from it.
 pub(super) const FORKING_ENGINE_SLEEP_SECS: u64 = 30;
+
+/// A container that ran and exited with `code`, as the engine reports it.
+pub(super) fn exited(code: i32) -> Output {
+    Output {
+        status: std::process::ExitStatus::from_raw(code << 8),
+        stdout: vec![],
+        stderr: vec![],
+    }
+}
 
 pub(super) fn output(success: bool, stdout: &str) -> Output {
     Output {

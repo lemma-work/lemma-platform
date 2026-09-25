@@ -56,6 +56,13 @@ pub struct GuestService<E: Engine> {
     /// no kernel to program -- the rule set and the installer are tested
     /// directly instead.
     pub(crate) sandbox_isolation: bool,
+    /// This boot of the guest, when known: an image that passed its unpack
+    /// check is not checked again until the guest boots again (see
+    /// `images::ImageCheck`). `None` checks every time.
+    pub(crate) boot_id: Option<String>,
+    /// Whether an image's registry answers, asked before an image is removed
+    /// to be fetched again: removed while offline, it cannot come back.
+    pub(crate) registry_reachable: fn(&str) -> bool,
 }
 
 impl<E: Engine> Clone for GuestService<E> {
@@ -73,6 +80,8 @@ impl<E: Engine> Clone for GuestService<E> {
             sandbox_count_cache: Arc::clone(&self.sandbox_count_cache),
             per_request_process: self.per_request_process,
             sandbox_isolation: self.sandbox_isolation,
+            boot_id: self.boot_id.clone(),
+            registry_reachable: self.registry_reachable,
         }
     }
 }
@@ -117,6 +126,11 @@ impl GuestService<NerdctlEngine> {
         service.dynamic_endpoint_host = dynamic_endpoint_host;
         service.kernel_taint_path = Some(PathBuf::from("/proc/sys/kernel/tainted"));
         service.sandbox_isolation = true;
+        service.boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        service.registry_reachable = image_registry_reachable;
         Ok(service)
     }
 }
@@ -152,6 +166,8 @@ impl<E: Engine + 'static> GuestService<E> {
             mutations: Arc::new(Mutex::new(())),
             per_request_process: false,
             sandbox_isolation: false,
+            boot_id: None,
+            registry_reachable: |_| true,
         })
     }
 

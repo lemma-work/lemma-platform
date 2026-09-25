@@ -28,11 +28,117 @@ fn sandbox_image_marker_probe_is_offline_and_checks_the_runtime_entrypoint() {
             "--platform",
             guest_platform(),
             "ghcr.io/lemma/workspace@sha256:abc",
-            "/usr/bin/test",
-            "-s",
+            "/bin/sh",
+            "-c",
+            "test -s \"$1\" || exit 3",
+            "lemma-image-check",
             "/usr/local/bin/start-workspace-runtime",
         ]
     );
+}
+
+fn image_service(outputs: Vec<Output>) -> (tempfile::TempDir, GuestService<FakeEngine>) {
+    let root = tempdir().unwrap();
+    let service = GuestService::new(
+        FakeEngine::new(outputs),
+        root.path().into(),
+        Some("192.168.64.2".into()),
+        "192.168.64.1".into(),
+        None,
+    )
+    .unwrap();
+    (root, service)
+}
+
+const IMAGE: &str = "ghcr.io/lemma/runtime@sha256:abc";
+
+/// An engine that could not run the check says nothing about the image, and
+/// the image -- which running sandboxes may be made from -- is left alone.
+#[test]
+fn a_check_the_engine_could_not_run_removes_nothing() {
+    let failed = Output {
+        status: std::process::ExitStatus::from_raw(1 << 8),
+        stdout: vec![],
+        stderr: b"level=fatal msg=\"failed to create shim task: OCI runtime create failed: cannot allocate memory\"".to_vec(),
+    };
+    let (_root, service) = image_service(vec![output(true, "{}"), failed]);
+    let error = service
+        .ensure_sandbox_image(IMAGE, WorkloadKind::Workspace, true)
+        .unwrap_err();
+    assert_eq!(error.code, "image_check_failed");
+    assert!(error.retryable);
+    let commands = service.engine.commands();
+    assert_eq!(commands.len(), 2, "{commands:?}");
+    assert!(!commands.iter().any(|command| command[0] == "rmi"));
+}
+
+/// Incomplete, but a running sandbox is made from it: kept. And incomplete
+/// with its registry unreachable: kept, since it could not be fetched back.
+#[test]
+fn an_incomplete_image_is_kept_while_in_use_or_offline() {
+    let (_root, service) = image_service(vec![
+        output(true, "{}"),
+        exited(3),
+        output(true, "0123456789abcdef\n"),
+    ]);
+    let error = service
+        .ensure_sandbox_image(IMAGE, WorkloadKind::Workspace, true)
+        .unwrap_err();
+    assert_eq!(error.code, "image_check_failed");
+    assert!(
+        error.message.contains("running sandboxes"),
+        "{}",
+        error.message
+    );
+    assert!(!service.engine.commands().iter().any(|c| c[0] == "rmi"));
+
+    let (_root, mut service) = image_service(vec![output(true, "{}"), exited(3), output(true, "")]);
+    service.registry_reachable = |_| false;
+    let error = service
+        .ensure_sandbox_image(IMAGE, WorkloadKind::Workspace, true)
+        .unwrap_err();
+    assert!(
+        error.message.contains("cannot be reached"),
+        "{}",
+        error.message
+    );
+    assert!(!service.engine.commands().iter().any(|c| c[0] == "rmi"));
+}
+
+/// Checked once per image per boot: a second sandbox from the same image
+/// starts no check container, and a new boot checks again.
+#[test]
+fn a_passed_check_is_remembered_until_the_guest_boots_again() {
+    let (root, mut service) = image_service(vec![
+        output(true, "{}"),
+        output(true, ""),
+        output(true, "{}"),
+        output(true, "{}"),
+        output(true, ""),
+    ]);
+    service.boot_id = Some("boot-1".into());
+    service
+        .ensure_sandbox_image(IMAGE, WorkloadKind::Workspace, true)
+        .unwrap();
+    service
+        .ensure_sandbox_image(IMAGE, WorkloadKind::Workspace, true)
+        .unwrap();
+    let runs = |service: &GuestService<FakeEngine>| {
+        service
+            .engine
+            .commands()
+            .iter()
+            .filter(|command| command[0] == "run")
+            .count()
+    };
+    assert_eq!(runs(&service), 1);
+
+    service.boot_id = Some("boot-2".into());
+    service
+        .ensure_sandbox_image(IMAGE, WorkloadKind::Workspace, true)
+        .unwrap();
+    assert_eq!(runs(&service), 2);
+    drop(root);
 }
 
 #[test]
@@ -69,7 +175,8 @@ fn incomplete_sandbox_image_reference_is_replaced_before_repull() {
     let service = GuestService::new(
         FakeEngine::new(vec![
             output(true, "{}"),
-            output(false, ""),
+            exited(3),
+            output(true, ""),
             output(true, ""),
             output(true, ""),
             output(true, ""),
@@ -90,12 +197,21 @@ fn incomplete_sandbox_image_reference_is_replaced_before_repull() {
         )
         .unwrap();
     let commands = service.engine.commands.lock().unwrap();
-    assert_eq!(commands[2], vec!["container", "prune", "--force"]);
     assert_eq!(
-        commands[3],
+        commands[2],
+        vec![
+            "ps",
+            "--quiet",
+            "--filter",
+            "ancestor=ghcr.io/lemma/runtime@sha256:abc"
+        ]
+    );
+    assert_eq!(commands[3], vec!["container", "prune", "--force"]);
+    assert_eq!(
+        commands[4],
         vec!["rmi", "--force", "ghcr.io/lemma/runtime@sha256:abc"]
     );
-    assert_eq!(commands[4][0], "pull");
+    assert_eq!(commands[5][0], "pull");
 }
 
 #[test]
@@ -104,11 +220,12 @@ fn unrecoverable_image_cache_persists_a_health_gated_reset_marker() {
     let service = GuestService::new(
         FakeEngine::new(vec![
             output(true, "{}"),
-            output(false, ""),
+            exited(3),
             output(true, ""),
             output(true, ""),
             output(true, ""),
-            output(false, ""),
+            output(true, ""),
+            exited(3),
             output(true, ""),
         ]),
         root.path().into(),
