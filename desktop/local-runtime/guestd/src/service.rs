@@ -49,6 +49,13 @@ pub struct GuestService<E: Engine> {
     /// read, and answered "still downloading" for ever however the transfer
     /// had actually gone.
     pub(crate) per_request_process: bool,
+    /// Whether a new sandbox first ensures the guest's firewall keeps it away
+    /// from PostgreSQL, Redis and SuperTokens (see `sandbox_firewall`).
+    ///
+    /// On for the real guest and off for a service built in a test, which has
+    /// no kernel to program -- the rule set and the installer are tested
+    /// directly instead.
+    pub(crate) sandbox_isolation: bool,
 }
 
 impl<E: Engine> Clone for GuestService<E> {
@@ -65,6 +72,7 @@ impl<E: Engine> Clone for GuestService<E> {
             image_warmups: Arc::clone(&self.image_warmups),
             sandbox_count_cache: Arc::clone(&self.sandbox_count_cache),
             per_request_process: self.per_request_process,
+            sandbox_isolation: self.sandbox_isolation,
         }
     }
 }
@@ -108,6 +116,7 @@ impl GuestService<NerdctlEngine> {
         // to the guest, rather than the address observed when guestd started.
         service.dynamic_endpoint_host = dynamic_endpoint_host;
         service.kernel_taint_path = Some(PathBuf::from("/proc/sys/kernel/tainted"));
+        service.sandbox_isolation = true;
         Ok(service)
     }
 }
@@ -142,6 +151,7 @@ impl<E: Engine + 'static> GuestService<E> {
             sandbox_count_cache: Arc::new(Mutex::new(None)),
             mutations: Arc::new(Mutex::new(())),
             per_request_process: false,
+            sandbox_isolation: false,
         })
     }
 

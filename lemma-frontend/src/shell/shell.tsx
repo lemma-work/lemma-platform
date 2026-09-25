@@ -146,8 +146,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
        `lemma:open-settings` in this page. Keyed by request, so asking for a
        different section while Settings is already open moves it there. */
     const [settingsRequest, setSettingsRequest] = useState(0);
-    useOpenSettingsEvent(useCallback((section: SettingsSection) => {
+    const [settingsFocus, setSettingsFocus] = useState<string | null>(null);
+    useOpenSettingsEvent(useCallback((section: SettingsSection, focus: string | null) => {
         setSettings(section);
+        setSettingsFocus(focus);
         setSettingsRequest((count) => count + 1);
         setMobileOpen(false);
     }, []));
@@ -809,7 +811,8 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     activeOrgId={activeOrgId}
                     onPickOrg={(id) => { setOrgId(id); goToPod(null); setConversationId(null); }}
                     initial={settings}
-                    onClose={() => setSettings(null)}
+                    initialFocus={settingsFocus}
+                    onClose={() => { setSettings(null); setSettingsFocus(null); }}
                 />}
                 {hiring && activeOrgId && (
                     <div className="settings-view">

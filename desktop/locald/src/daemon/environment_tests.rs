@@ -7,12 +7,15 @@
 
 use super::environment::exact_origin_regex;
 use super::sharing_environment;
-use crate::sharing::SharingMode;
+use crate::sharing::{SharingMode, WhoCanJoin};
 
 #[test]
 fn public_canonical_environment_uses_one_prefixed_secure_origin() {
-    let (backend, frontend) =
-        sharing_environment("https://lemma.example.com/", SharingMode::Public);
+    let (backend, frontend) = sharing_environment(
+        "https://lemma.example.com/",
+        SharingMode::Public,
+        WhoCanJoin::InviteOnly,
+    );
     assert_eq!(backend["API_URL"], "https://lemma.example.com/_lemma/api");
     // A tunnel serves one origin and no app host, so the deployment must
     // stop advertising one. Left set, every app's URL pointed at
@@ -44,8 +47,11 @@ fn public_canonical_environment_uses_one_prefixed_secure_origin() {
 
 #[test]
 fn lan_canonical_environment_keeps_host_only_nonsecure_cookies() {
-    let (backend, frontend) =
-        sharing_environment("http://192.168.1.20:51234", SharingMode::LocalNetwork);
+    let (backend, frontend) = sharing_environment(
+        "http://192.168.1.20:51234",
+        SharingMode::LocalNetwork,
+        WhoCanJoin::InviteOnly,
+    );
     assert_eq!(backend["SESSION_COOKIE_SECURE"], "false");
     assert_eq!(backend["SESSION_COOKIE_DOMAIN"], "");
     assert_eq!(frontend["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"], "");
@@ -69,7 +75,7 @@ fn sharing_raises_the_abuse_controls_the_local_pack_turns_off() {
         ("https://lemma.example.com", SharingMode::Public),
         ("http://192.168.1.20:51234", SharingMode::LocalNetwork),
     ] {
-        let (backend, _) = sharing_environment(origin, mode);
+        let (backend, _) = sharing_environment(origin, mode, WhoCanJoin::InviteOnly);
         assert_eq!(
             backend["AUTH_ABUSE_PROTECTION_ENABLED"], "true",
             "{origin} is reachable by someone other than this Mac"
@@ -90,5 +96,21 @@ fn sharing_raises_the_abuse_controls_the_local_pack_turns_off() {
             backend["DEBUG"], "false",
             "{origin} must not answer strangers with tracebacks"
         );
+    }
+}
+
+/// The join policy reaches the backend as `SIGNUP_MODE`, in both directions.
+///
+/// Invite-only is also the backend's own default on Desktop, so leaving the
+/// key out for that case would look equivalent -- until the default moved.
+/// Written explicitly either way, so the overlay is the one place that decides.
+#[test]
+fn sharing_tells_the_backend_who_may_create_an_account() {
+    for mode in [SharingMode::Public, SharingMode::LocalNetwork] {
+        let (invite_only, _) =
+            sharing_environment("https://lemma.example.com", mode, WhoCanJoin::InviteOnly);
+        assert_eq!(invite_only["SIGNUP_MODE"], "invite_only", "{mode:?}");
+        let (open, _) = sharing_environment("https://lemma.example.com", mode, WhoCanJoin::Open);
+        assert_eq!(open["SIGNUP_MODE"], "open", "{mode:?}");
     }
 }

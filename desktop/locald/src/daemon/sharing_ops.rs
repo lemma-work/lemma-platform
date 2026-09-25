@@ -231,7 +231,11 @@ impl Daemon {
         let prepared = sharing.prepare_enable(request)?;
         let previous_backend = manager.service_environment("backend");
         let previous_frontend = manager.service_environment("frontend");
-        let (backend, frontend) = sharing_environment(&prepared.origin, prepared.mode);
+        let (backend, frontend) = sharing_environment(
+            &prepared.origin,
+            prepared.mode,
+            sharing.who_can_join_for(request),
+        );
         manager.replace_service_environment("backend", backend);
         manager.replace_service_environment("frontend", frontend);
 
@@ -281,6 +285,121 @@ impl Daemon {
                 ))),
             };
         }
+        Ok(())
+    }
+
+    /// Change who may create an account, and apply it if sharing is live.
+    ///
+    /// Its own command rather than a field only on `sharing.enable`, because
+    /// the moment somebody wants to close signup is usually *while* the
+    /// installation is shared -- after the colleague they meant to let in has
+    /// joined -- and making them turn sharing off and on again to do it would
+    /// also change their public URL on some providers.
+    pub(super) fn start_sharing_access(
+        self: &Arc<Self>,
+        request: Value,
+        client: mpsc::SyncSender<String>,
+    ) {
+        let id = request.get("id").cloned();
+        let Some(sharing) = self.sharing.as_ref().cloned() else {
+            self.send_direct(
+                &client,
+                error_event(
+                    "sharing-unavailable",
+                    "sharing requires the managed local desktop runtime",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        };
+        let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+        let change: SetWhoCanJoinRequest = match serde_json::from_value(payload) {
+            Ok(change) => change,
+            Err(error) => {
+                self.send_direct(
+                    &client,
+                    error_event(
+                        "bad-input",
+                        format!("invalid sharing access request: {error}"),
+                        id.as_ref(),
+                    ),
+                );
+                return;
+            }
+        };
+        if self.lifecycle.begin().is_err() {
+            self.send_direct(
+                &client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": "sharing.access",
+                "id": id.as_ref(),
+            }),
+        );
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            // Released however this thread ends -- see `lifecycle::Finish`.
+            let _finish = daemon.lifecycle.finish_on_drop();
+            match daemon.set_who_can_join_transaction(&sharing, change.who_can_join) {
+                Ok(()) => {
+                    let (url, api_url) = daemon.canonical_urls();
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "sharing.changed",
+                        "id": id.as_ref(),
+                        "ok": true,
+                        "url": url,
+                        "api_url": api_url,
+                        "sharing": sharing.snapshot(false),
+                    }))
+                }
+                Err(error) => daemon.broadcast(scoped_error_event(
+                    "sharing",
+                    "sharing-access-failed",
+                    error.to_string(),
+                    id.as_ref(),
+                )),
+            }
+        });
+    }
+
+    pub(super) fn set_who_can_join_transaction(
+        &self,
+        sharing: &SharingController,
+        who_can_join: WhoCanJoin,
+    ) -> io::Result<()> {
+        let (previous, live) = sharing.begin_set_who_can_join(who_can_join)?;
+        let Some((origin, mode)) = live else {
+            sharing.finish_who_can_join(None);
+            return Ok(());
+        };
+        let Some(manager) = self.host_processes.as_ref() else {
+            sharing.finish_who_can_join(Some(previous));
+            return Err(io::Error::other("host process manager is unavailable"));
+        };
+        let (backend, _) = sharing_environment(&origin, mode, who_can_join);
+        let previous_backend = manager.replace_service_environment("backend", backend);
+        if let Err(error) = manager.restart_backend() {
+            manager.replace_service_environment("backend", previous_backend);
+            let rollback = manager.restart_backend();
+            sharing.finish_who_can_join(Some(previous));
+            return match rollback {
+                Ok(()) => Err(io::Error::other(format!(
+                    "who can join could not be changed and was rolled back: {error}"
+                ))),
+                Err(rollback_error) => Err(io::Error::other(format!(
+                    "who can join could not be changed: {error}; rollback also failed: {rollback_error}"
+                ))),
+            };
+        }
+        sharing.finish_who_can_join(None);
         Ok(())
     }
 

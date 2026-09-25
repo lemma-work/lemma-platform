@@ -45,9 +45,7 @@ export function fakeElement(overrides = {}) {
     appendChild: (child) => { children.push(child); return child; },
     append: (...added) => { children.push(...added); },
     replaceChildren: (...added) => { children.splice(0, children.length, ...added); },
-    querySelector: (selector) => (selector === '.section-error'
-      ? children.find((child) => String(child.className).includes('section-error')) ?? null
-      : null),
+    querySelector: () => null,
     querySelectorAll: () => [],
     closest: () => null,
     parentElement: null,
@@ -116,11 +114,6 @@ export function installDom() {
   return dom;
 }
 
-/** A settings page section, as `.config-page` elements are. */
-export function fakePage(name) {
-  return fakeElement({ dataset: { page: name } });
-}
-
 /**
  * A module, imported fresh.
  *
@@ -147,43 +140,7 @@ export async function resetShared() {
     state: null,
     runtimeInfo: null,
     appUpdate: null,
-    filling: false,
-    sharingChoice: null,
-    sharingProvider: 'ngrok',
-    cloudflareSetupChoice: null,
     sharingBusy: false,
   });
-  core.sectionRevisions.clear();
-  core.draftVersions.clear();
-  core.pendingSaves.clear();
   return core;
-}
-
-/** The operator configuration a daemon sends, complete enough to render. */
-export function operatorConfig(overrides = {}) {
-  return {
-    revision: 1,
-    ai: {
-      protocol: 'openai_compat',
-      base_url: 'https://saved.example/v1',
-      models: ['saved'],
-      default_model: 'saved',
-      vision_models: [],
-    },
-    integrations: {
-      composio_enabled: false,
-      google_client_id: '',
-      microsoft_client_id: '',
-    },
-    surfaces: {
-      slack_socket_mode: false,
-      telegram_polling: false,
-      teams_app_id: '',
-      teams_tenant_id: '',
-      whatsapp_phone_number_id: '',
-      whatsapp_waba_id: '',
-      resend_inbound_domain: '',
-    },
-    ...overrides,
-  };
 }

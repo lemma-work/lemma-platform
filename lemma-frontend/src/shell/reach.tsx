@@ -2,6 +2,8 @@ import { fields } from "@/connect/schema";
 import { surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
 import { SurfaceCredentials } from "./surface-credentials";
 import { SurfaceGuide } from "./surface-setup";
+import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
+import { credentialFormForChannel } from "@/desktop/this-mac";
 import { SurfaceManage } from "./surface-manage";
 import { LoadingIndicator } from "@/ui/loading";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -606,7 +608,15 @@ function Focused({
                         {name} will ask whether Lemma may act for you. Nothing is sent anywhere until you say so —
                         this only gives {pod.name} somewhere to answer.
                     </p>
-                    {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : <p>This platform is not configured on this deployment. Follow the setup instructions or ask your administrator.</p>}
+                    {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : (
+                        <>
+                            <p>This platform is not configured on this deployment. Follow the setup instructions or ask your administrator.</p>
+                            {/* On a local install the administrator is the
+                                person reading, and the bot credentials are
+                                this computer's to set. */}
+                            <SetUpOnThisMac form={credentialFormForChannel(entry.platform)} />
+                        </>
+                    )}
                     {canOwn && (
                         <button className="linkish focused__alt" onClick={() => setOwnBot(true)}>
                             Or give {pod.name} a Slack bot of its own

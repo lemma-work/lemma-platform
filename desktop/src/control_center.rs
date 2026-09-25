@@ -9,26 +9,20 @@ pub(crate) fn control_navigation_allowed(url: &tauri::Url) -> bool {
 }
 
 /// Normalise a Local settings page name, or say it is not one.
+///
+/// Local settings keeps what has to work when the workspace does not: health,
+/// this computer's Agent Host (the only settings a cloud user has here),
+/// recovery and diagnostics. The pages that moved to the workspace's This Mac
+/// settings -- the AI provider, sharing, integrations, channels, runtime and
+/// updates -- are still accepted as names, because an older frontend pack or
+/// harness can ask for them, and land on Overview rather than on an error.
 pub(crate) fn control_center_page(page: Option<&str>) -> Result<String, String> {
     let page = match page.unwrap_or("overview") {
-        "connectors" => "integrations",
-        "services" => "runtime",
-        "surfaces" => "channels",
+        "ai" | "sharing" | "integrations" | "connectors" | "channels" | "surfaces" | "runtime"
+        | "services" | "updates" => "overview",
         page => page,
     };
-    if !matches!(
-        page,
-        "overview"
-            | "computer"
-            | "ai"
-            | "sharing"
-            | "integrations"
-            | "channels"
-            | "runtime"
-            | "updates"
-            | "recovery"
-            | "diagnostics"
-    ) {
+    if !matches!(page, "overview" | "computer" | "recovery" | "diagnostics") {
         return Err(format!("unknown Local settings page: {page}"));
     }
     Ok(page.to_owned())

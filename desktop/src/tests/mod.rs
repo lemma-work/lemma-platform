@@ -22,6 +22,7 @@ mod update_install;
 mod update_single_flight;
 mod window_placement;
 mod windows;
+mod workspace_settings;
 
 fn capability(name: &str) -> Value {
     let raw = match name {
@@ -199,7 +200,6 @@ fn invoked_commands(script: &str) -> Vec<String> {
 pub(crate) const CONTROL: &str = concat!(
     include_str!("../../ui/control.js"),
     include_str!("../../ui/control/actions.js"),
-    include_str!("../../ui/control/config.js"),
     include_str!("../../ui/control/core.js"),
     include_str!("../../ui/control/events.js"),
     include_str!("../../ui/control/logs.js"),
@@ -211,7 +211,6 @@ pub(crate) const CONTROL: &str = concat!(
 /// The modules `CONTROL` includes, by file name.
 pub(crate) const CONTROL_MODULES: &[&str] = &[
     "actions.js",
-    "config.js",
     "core.js",
     "events.js",
     "logs.js",

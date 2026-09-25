@@ -5,6 +5,8 @@ import { source, type Pod, type Surface } from "@/data";
 import { filtersSupported, routesSupported, surfaceDraft, surfacePatch, type SurfaceDraft } from "@/data/surface-settings";
 import { SetupActions } from "./surface-setup";
 import { channelName } from "./channels";
+import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
+import { credentialFormForChannel } from "@/desktop/this-mac";
 
 export function SurfaceManage({ pod, surface, onBack, onSaved }: { pod: Pod; surface: Surface; onBack: () => void; onSaved: () => void }) {
     const detail = useQuery({ queryKey: ["surface-detail", pod.id, surface.name], queryFn: () => source.getSurface(pod.id, surface.name) });
@@ -20,6 +22,7 @@ export function SurfaceManage({ pod, surface, onBack, onSaved }: { pod: Pod; sur
             {consent?.required && !consent.granted && consent.consent_url && <a className="btn btn--primary" href={consent.consent_url} target="_blank" rel="noreferrer">Grant administrator consent</a>}
             {consent?.granted && <p>Administrator consent granted.</p>}
             <SetupActions actions={setup.data.actions ?? []} />
+            {!setup.data.ready && <SetUpOnThisMac form={credentialFormForChannel(surface.platform)} />}
             <button className="btn" disabled={setup.isFetching} onClick={() => { void setup.refetch(); void detail.refetch(); }}>Check setup again</button>
         </>}
         {detail.isPending && <p role="status">Loading channel settings…</p>}
