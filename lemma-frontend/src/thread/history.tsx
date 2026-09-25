@@ -74,7 +74,11 @@ export function History({
        This panel is for the conversations that have no other front door. */
     const all = unbound(history.data);
     const recent = all.slice(0, SHOWN);
-    const rest = all.length - recent.length;
+    /* Against the raw first page, not the unbound rows: the server pages before
+       bound rows are dropped, so a page of mostly bound rows can leave five or
+       fewer here while older pages still exist. Any row the server sent that
+       this panel is not showing means there is more to see. */
+    const more = (history.data?.length ?? 0) > recent.length;
 
     return (
         <aside className="history" aria-label={"Conversations with " + pod.name}>
@@ -139,7 +143,7 @@ export function History({
                 </>
             )}
 
-            {rest > 0 && (
+            {more && (
                 <button className="history__more" onClick={onSeeAll}>
                     {/* No count: this list is the first page, so any number
                         here would be a floor dressed up as a total. */}
