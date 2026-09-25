@@ -1242,6 +1242,51 @@
     border-radius: var(--r-md);
     padding: 8px 12px;
     display: inline-block;
+    line-height: 1.55;
+}
+
+/* ── markdown held to a few lines ───────────────────────────────────── */
+/* The box sets the type and the markdown inside takes it, so `1lh` on the box
+   is one line of what is actually in it. Paragraph and list margins shrink to
+   what a line of UI text can carry — this is a bubble, not a page. */
+.clamp__body .md {
+    font-size: inherit;
+    line-height: inherit;
+    color: inherit;
+}
+.clamp__body .md p,
+.clamp__body .md ul,
+.clamp__body .md ol {
+    margin-bottom: 6px;
+}
+.clamp__body .md li {
+    margin-bottom: 2px;
+}
+.clamp__body .md > :last-child {
+    margin-bottom: 0;
+}
+.clamp__body .md h1,
+.clamp__body .md h2,
+.clamp__body .md h3,
+.clamp__body .md h4 {
+    font-size: inherit;
+    margin: 8px 0 4px;
+}
+.clamp__body[data-collapsed] {
+    max-height: calc(var(--clamp-lines, 2) * 1lh);
+    overflow: hidden;
+}
+.clamp__toggle {
+    display: block;
+    border: 0;
+    background: none;
+    padding: 4px 0 0;
+    font-size: var(--t-meta);
+    color: var(--accent);
+    cursor: pointer;
+}
+.clamp__toggle:hover {
+    text-decoration: underline;
 }
 
 /* ── a document, where a document is what it is ────────────────────── */
