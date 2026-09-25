@@ -39,7 +39,7 @@ lemma connectors operations execute shopify SHOPIFY_GET_ORDERSBY_ID -d '{"order_
 
 ### Find a customer
 ```
-lemma connectors operations execute shopify SHOPIFY_GET_CUSTOMERS_SEARCH -d '{"query": "email:ada@example.com"}'
+lemma connectors operations execute shopify SHOPIFY_GET_CUSTOMERS_SEARCH -d '{"query": "email:anukul@lemma.work"}'
 ```
 
 ### Create a product

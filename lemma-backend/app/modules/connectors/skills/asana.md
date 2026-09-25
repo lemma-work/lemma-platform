@@ -15,7 +15,7 @@ lemma connectors operations execute asana ASANA_CREATE_A_PROJECT -d '{"payload":
 ### Add Members to a Project
 Give teammates access to a project so they can view and contribute to its tasks.
 ```
-lemma connectors operations execute asana ASANA_ADD_MEMBERS_TO_PROJECT -d '{"payload": {"members": "alex.johnson@example.com", "project_gid": "1205910804862507"}}'
+lemma connectors operations execute asana ASANA_ADD_MEMBERS_TO_PROJECT -d '{"payload": {"members": "anukul@lemma.work", "project_gid": "1205910804862507"}}'
 ```
 
 ### Add a Project to a Task

@@ -9,14 +9,14 @@ Send, manage, and organize email using a native Gmail connector. Users commonly 
 ### Send an email with attachments
 `send_message` takes plain fields and builds the message itself, so there is no MIME or base64 to write. `attachments` is a list of pod file references.
 ```
-lemma connectors operations execute gmail send_message -d '{"to": ["alex@example.com"], "subject": "Q3 report", "text": "Attached."}' --attach attachments=/me/reports/q3.pdf
+lemma connectors operations execute gmail send_message -d '{"to": ["anukul@lemma.work"], "subject": "Q3 report", "text": "Attached."}' --attach attachments=/me/reports/q3.pdf
 ```
 From an agent: `"attachments": [{"pod_path": "/me/reports/q3.pdf"}]`. Add `thread_id` (and `in_reply_to`, the original's Message-ID) to reply in a thread. `create_draft` takes the same fields and saves a draft instead.
 
 ### List recent drafts
 Review all current draft messages, optionally filtered by sender.
 ```
-lemma connectors operations execute gmail drafts_list -d '{"payload": {"user_id": "me", "q": "from:alice@example.com"}}'
+lemma connectors operations execute gmail drafts_list -d '{"payload": {"user_id": "me", "q": "from:anukul@lemma.work"}}'
 ```
 
 ### Create an email draft from raw MIME

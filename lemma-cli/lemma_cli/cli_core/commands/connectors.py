@@ -1455,7 +1455,7 @@ def run_connector_operation(
         lemma connectors run gmail "list recent emails" --dry-run
         lemma connectors run gmail gmail_list_messages -d '{"max_results": 5}'
         lemma connectors run gmail send_message \
-            -d '{"to": "ada@example.com", "subject": "Q3"}' --attach attachments=/me/q3.pdf
+            -d '{"to": "anukul@lemma.work", "subject": "Q3"}' --attach attachments=/me/q3.pdf
     """
     payload = read_json(json_payload, file, required=False)
     state = state_from_ctx(ctx)

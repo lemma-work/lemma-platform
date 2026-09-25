@@ -416,7 +416,7 @@ search_connector_operations {"query": "send an email"}
 
 run_connector_operation {"auth_config": "workspace-gmail",
                          "operation": "gmail_send_email",
-                         "arguments": {"recipient_email": "a@b.com", "subject": "Hi", "body": "…"}}
+                         "arguments": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "…"}}
 ```
 
 Wrong arguments come back as `invalid_arguments` **with the operation's
@@ -432,7 +432,7 @@ Slack upload, a multipart field — pass a **pod file**, never file bytes:
 
 ```text
 run_connector_operation {"auth_config": "workspace-gmail", "operation": "GMAIL_SEND_EMAIL",
-  "arguments": {"recipient_email": "a@b.com", "subject": "Q3", "body": "Attached.",
+  "arguments": {"recipient_email": "anukul@lemma.work", "subject": "Q3", "body": "Attached.",
                 "attachment": {"pod_path": "/me/reports/q3.pdf"}}}
 ```
 
@@ -456,9 +456,9 @@ payload; let `--dry-run` hand you the schema.
 lemma connectors run gmail "list recent emails" --dry-run    # resolves + prints the input schema
 lemma connectors run gmail gmail_list_messages -d '{"max_results": 5}'
 lemma connectors run gmail gmail_send_email \
-  -d '{"recipient_email": "a@b.com", "subject": "Hi", "body": "..."}'
+  -d '{"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "..."}'
 lemma connectors run gmail GMAIL_SEND_EMAIL \
-  -d '{"recipient_email": "a@b.com", "subject": "Q3"}' --attach attachment=/me/q3.pdf
+  -d '{"recipient_email": "anukul@lemma.work", "subject": "Q3"}' --attach attachment=/me/q3.pdf
 ```
 
 `--attach FIELD=PATH` puts a pod file in a file argument (repeat it for a

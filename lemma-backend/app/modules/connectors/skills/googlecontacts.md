@@ -9,7 +9,7 @@ Access and manage Google Contacts data via the Google People API. Ideal for anyo
 ### Create a new contact
 Use when you need to add a person with their name, email, and phone number to the user’s Google Contacts.
 ```
-lemma connectors operations execute googlecontacts GOOGLECONTACTS_CREATE_CONTACT -d '{"payload": {"names": [{"givenName": "Alice", "familyName": "Johnson"}], "emailAddresses": [{"value": "alice.johnson@example.com"}], "phoneNumbers": [{"value": "+1-555-123-4567"}]}}'
+lemma connectors operations execute googlecontacts GOOGLECONTACTS_CREATE_CONTACT -d '{"payload": {"names": [{"givenName": "Alice", "familyName": "Johnson"}], "emailAddresses": [{"value": "anukul@lemma.work"}], "phoneNumbers": [{"value": "+1-555-123-4567"}]}}'
 ```
 
 ### Retrieve a single contact

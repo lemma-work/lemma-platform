@@ -297,7 +297,7 @@ class TestComposioStaging:
 
         monkeypatch.setattr(composio_operation_gateway.httpx, "put", fake_put)
         payload = {
-            "recipient_email": "a@example.com",
+            "recipient_email": "anukul@lemma.work",
             "attachment": [
                 MaterializedFile(b"one", "one.pdf", "application/pdf"),
                 MaterializedFile(b"two", "two.txt", "text/plain"),
@@ -316,14 +316,14 @@ class TestComposioStaging:
             },
             {"name": "two.txt", "mimetype": "text/plain", "s3key": "staged/two.txt"},
         ]
-        assert staged["recipient_email"] == "a@example.com"
+        assert staged["recipient_email"] == "anukul@lemma.work"
         assert {p["toolkit_slug"] for p in presigns} == {"gmail"}
         # The PUT carries the content type the URL was signed with.
         assert puts[0][2]["Content-Type"] == "application/pdf"
 
     def test_a_call_without_files_makes_no_extra_request(self):
         composio = SimpleNamespace()  # any attribute access would raise
-        payload = {"recipient_email": "a@example.com"}
+        payload = {"recipient_email": "anukul@lemma.work"}
         assert composio_operation_gateway.stage_files(composio, "X", payload) is payload
 
 
@@ -405,7 +405,7 @@ class TestGmailSendWithAttachments:
         payload = await FileInputResolver(pod, pod_id=pod_id, ctx=None).resolve(
             op["input_schema"],
             {
-                "to": ["ada@example.com", "bob@example.com"],
+                "to": ["anukul@lemma.work", "anukul@lemma.work"],
                 "subject": "Q3 report",
                 "text": "Attached.",
                 "attachments": [{"pod_path": "/me/q3.pdf"}],
@@ -428,7 +428,7 @@ class TestGmailSendWithAttachments:
         assert seen["body"]["threadId"] == "t0"
         raw = base64.urlsafe_b64decode(seen["body"]["raw"])
         message = message_from_bytes(raw, policy=policy.default)
-        assert message["To"] == "ada@example.com, bob@example.com"
+        assert message["To"] == "anukul@lemma.work, anukul@lemma.work"
         assert message["Subject"] == "Q3 report"
         assert message.get_body(("plain",)).get_content().strip() == "Attached."
         (attachment,) = list(message.iter_attachments())
@@ -443,7 +443,7 @@ class TestGmailSendWithAttachments:
 
         body = rfc822_json_body(
             self._config_op("create_draft")["execution"]["request_body"],
-            {"to": "ada@example.com", "subject": "draft"},
+            {"to": "anukul@lemma.work", "subject": "draft"},
         )
 
         assert set(body) == {"message"}

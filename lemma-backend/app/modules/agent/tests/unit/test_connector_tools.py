@@ -126,7 +126,7 @@ async def test_a_connector_failure_is_data_not_a_dead_run(monkeypatch):
         RunConnectorOperationRequest(
             auth_config="workspace-gmail",
             operation="gmail_send_email",
-            arguments={"recipient_email": "a@b.com"},
+            arguments={"recipient_email": "anukul@lemma.work"},
         ),
     )
 

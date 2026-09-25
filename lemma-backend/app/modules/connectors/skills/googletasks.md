@@ -21,13 +21,13 @@ lemma connectors operations execute googletasks GOOGLETASKS_LIST_ALL_TASKS -d '{
 ### Create a task in the default list
 When you need to add a new task with a due date and notes to your primary list.
 ```
-lemma connectors operations execute googletasks GOOGLETASKS_INSERT_TASK -d '{"payload": {"title": "Send email to alice@example.com", "due": "2025-03-16T00:00:00Z", "notes": "Draft email about project update", "tasklist_id": "@default"}}'
+lemma connectors operations execute googletasks GOOGLETASKS_INSERT_TASK -d '{"payload": {"title": "Send email to anukul@lemma.work", "due": "2025-03-16T00:00:00Z", "notes": "Draft email about project update", "tasklist_id": "@default"}}'
 ```
 
 ### Update a task’s title and due date
 When you need to modify an existing task’s properties—for example, change its title, move its deadline, or mark it uncompleted.
 ```
-lemma connectors operations execute googletasks GOOGLETASKS_PATCH_TASK -d '{"payload": {"task_id": "tKx9fM3pQ7zVc1L", "tasklist_id": "@default", "title": "Send email to alice@example.com (urgent)", "due": "2025-03-17T00:00:00Z", "status": "needsAction"}}'
+lemma connectors operations execute googletasks GOOGLETASKS_PATCH_TASK -d '{"payload": {"task_id": "tKx9fM3pQ7zVc1L", "tasklist_id": "@default", "title": "Send email to anukul@lemma.work (urgent)", "due": "2025-03-17T00:00:00Z", "status": "needsAction"}}'
 ```
 
 ### Delete a task permanently

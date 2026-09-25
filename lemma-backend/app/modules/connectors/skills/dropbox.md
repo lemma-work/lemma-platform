@@ -15,13 +15,13 @@ lemma connectors operations execute dropbox DROPBOX_ALPHA_UPLOAD_FILE -d '{"payl
 ### Share a file with someone
 Use to give a specific person viewer, editor, or commenter access to a file by ID.
 ```
-lemma connectors operations execute dropbox DROPBOX_ADD_FILE_MEMBER -d '{"payload": {"file": "id:7bh4zBmgZoAAAAAAb", "members": [{"email": "collaborator@example.com"}], "quiet": false, "access_level": {".tag": "viewer"}, "custom_message": "Please review this file."}}'
+lemma connectors operations execute dropbox DROPBOX_ADD_FILE_MEMBER -d '{"payload": {"file": "id:7bh4zBmgZoAAAAAAb", "members": [{"email": "anukul@lemma.work"}], "quiet": false, "access_level": {".tag": "viewer"}, "custom_message": "Please review this file."}}'
 ```
 
 ### Add a member to a shared folder
 Apply when an owner or editor needs to invite others to a shared folder with a role.
 ```
-lemma connectors operations execute dropbox DROPBOX_ADD_FOLDER_MEMBER_ACTION -d '{"payload": {"shared_folder_id": "1234567890", "members": [{"email": "teammate@company.com"}], "quiet": true, "custom_message": "Welcome to the shared folder!"}}'
+lemma connectors operations execute dropbox DROPBOX_ADD_FOLDER_MEMBER_ACTION -d '{"payload": {"shared_folder_id": "1234567890", "members": [{"email": "anukul@lemma.work"}], "quiet": true, "custom_message": "Welcome to the shared folder!"}}'
 ```
 
 ### Tag a file or folder
@@ -33,7 +33,7 @@ lemma connectors operations execute dropbox DROPBOX_ADD_FILE_TAGS -d '{"payload"
 ### Invite a new team member
 Run when a team admin needs to add a user to the Dropbox team with a chosen role.
 ```
-lemma connectors operations execute dropbox DROPBOX_ADD_TEAM_MEMBERS -d '{"payload": {"new_members": [{"email": "newuser@company.com", "role": {".tag": "member_only"}, "send_welcome_email": true}], "force_async": false}}'
+lemma connectors operations execute dropbox DROPBOX_ADD_TEAM_MEMBERS -d '{"payload": {"new_members": [{"email": "anukul@lemma.work", "role": {".tag": "member_only"}, "send_welcome_email": true}], "force_async": false}}'
 ```
 
 ## Tips

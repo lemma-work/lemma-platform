@@ -9,7 +9,7 @@ Connect to Gmail to search, read, organize, and compose email directly from the 
 ### Search and fetch emails
 Retrieve a filtered list of recent emails, e.g., invoices from a specific sender.
 ```
-lemma connectors operations execute gmail GMAIL_FETCH_EMAILS -d '{"payload": {"query": "from:jane.doe@startup.io subject:invoice", "user_id": "me", "max_results": 20}}'
+lemma connectors operations execute gmail GMAIL_FETCH_EMAILS -d '{"payload": {"query": "from:anukul@lemma.work subject:invoice", "user_id": "me", "max_results": 20}}'
 ```
 
 ### Get full message details by ID
@@ -21,14 +21,14 @@ lemma connectors operations execute gmail GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID -d '
 ### Send an email with attachments
 `attachment` takes one pod file reference, or a list of them. Each file is read with your own access and keeps its name and type.
 ```
-lemma connectors operations execute gmail GMAIL_SEND_EMAIL -d '{"recipient_email": "jane.doe@startup.io", "subject": "Q3 report", "body": "Report and data attached."}' --attach attachment=/me/reports/q3.pdf --attach attachment=/me/reports/q3.csv
+lemma connectors operations execute gmail GMAIL_SEND_EMAIL -d '{"recipient_email": "anukul@lemma.work", "subject": "Q3 report", "body": "Report and data attached."}' --attach attachment=/me/reports/q3.pdf --attach attachment=/me/reports/q3.csv
 ```
 From an agent or function: `"attachment": [{"pod_path": "/me/reports/q3.pdf"}, {"pod_path": "/me/reports/q3.csv"}]`. `{"file_id": "..."}` works as well.
 
 ### Compose an email draft
 Create a draft when you need to prepare a reply without sending immediately.
 ```
-lemma connectors operations execute gmail GMAIL_CREATE_EMAIL_DRAFT -d '{"payload": {"to": "jane.doe@startup.io", "subject": "Re: Design mockups", "body": "Hey Jane, here are the mockups -- let me know your thoughts.", "is_html": false}}'
+lemma connectors operations execute gmail GMAIL_CREATE_EMAIL_DRAFT -d '{"payload": {"to": "anukul@lemma.work", "subject": "Re: Design mockups", "body": "Hey Jane, here are the mockups -- let me know your thoughts.", "is_html": false}}'
 ```
 
 ### Create a new label to categorize newsletters
@@ -52,7 +52,7 @@ lemma connectors operations execute gmail GMAIL_BATCH_MODIFY_MESSAGES -d '{"payl
 ### Create a filter to auto‑label incoming mail
 Automatically apply the “Newsletters” label to future emails from a specific address.
 ```
-lemma connectors operations execute gmail GMAIL_CREATE_FILTER -d '{"payload": {"criteria": {"from": "newsletter@techcrunch.com"}, "action": {"addLabelIds": ["Label_456"]}}}'
+lemma connectors operations execute gmail GMAIL_CREATE_FILTER -d '{"payload": {"criteria": {"from": "anukul@lemma.work"}, "action": {"addLabelIds": ["Label_456"]}}}'
 ```
 
 ## Tips

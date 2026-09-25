@@ -94,7 +94,7 @@ async def test_an_attachment_is_read_from_the_callers_own_pod(
     prepared = await use_cases._materialize_file_inputs(
         _plan(
             {
-                "recipient_email": "ada@example.com",
+                "recipient_email": "anukul@lemma.work",
                 "attachment": [{"pod_path": "/me/reports/q3.pdf"}],
                 "output_path": "/me/out/receipt.json",
             }
@@ -107,7 +107,7 @@ async def test_an_attachment_is_read_from_the_callers_own_pod(
     assert prepared.payload["attachment"] == [
         MaterializedFile(PDF, "q3.pdf", "application/pdf")
     ]
-    assert prepared.payload["recipient_email"] == "ada@example.com"
+    assert prepared.payload["recipient_email"] == "anukul@lemma.work"
     # Lemma's argument, not the provider's.
     assert "output_path" not in prepared.payload
     assert prepared.requested_output_path == "/me/out/receipt.json"

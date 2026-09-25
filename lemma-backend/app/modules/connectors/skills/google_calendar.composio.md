@@ -9,7 +9,7 @@ Manage calendars, events, sharing permissions, and calendar list subscriptions f
 ### Grant read-only access to a user
 Share a calendar with someone so they can see your events without editing rights.
 ```
-lemma connectors operations execute google_calendar GOOGLECALENDAR_ACL_INSERT -d '{"payload": {"calendar_id": "primary", "role": "reader", "scope": {"type": "user", "value": "alex.johnson@example.com"}, "send_notifications": false}}'
+lemma connectors operations execute google_calendar GOOGLECALENDAR_ACL_INSERT -d '{"payload": {"calendar_id": "primary", "role": "reader", "scope": {"type": "user", "value": "anukul@lemma.work"}, "send_notifications": false}}'
 ```
 
 ### List all ACL rules
@@ -21,25 +21,25 @@ lemma connectors operations execute google_calendar GOOGLECALENDAR_ACL_LIST -d '
 ### Remove a user’s access
 Revoke someone’s permission when they no longer need to see a shared calendar.
 ```
-lemma connectors operations execute google_calendar GOOGLECALENDAR_ACL_DELETE -d '{"payload": {"calendar_id": "primary", "rule_id": "user:alex.johnson@example.com"}}'
+lemma connectors operations execute google_calendar GOOGLECALENDAR_ACL_DELETE -d '{"payload": {"calendar_id": "primary", "rule_id": "user:anukul@lemma.work"}}'
 ```
 
 ### Add a calendar to your list
 Make an existing secondary calendar appear in your UI after it has been created or shared with you.
 ```
-lemma connectors operations execute google_calendar GOOGLECALENDAR_CALENDAR_LIST_INSERT -d '{"payload": {"id": "team-123@group.calendar.google.com", "hidden": false, "selected": true, "summaryOverride": "Team Projects"}}'
+lemma connectors operations execute google_calendar GOOGLECALENDAR_CALENDAR_LIST_INSERT -d '{"payload": {"id": "anukul@lemma.work", "hidden": false, "selected": true, "summaryOverride": "Team Projects"}}'
 ```
 
 ### Hide a calendar from your list
 Temporarily remove a calendar from your sidebar without deleting it or unsubscribing.
 ```
-lemma connectors operations execute google_calendar GOOGLECALENDAR_CALENDAR_LIST_PATCH -d '{"payload": {"calendar_id": "team-123@group.calendar.google.com", "hidden": true}}'
+lemma connectors operations execute google_calendar GOOGLECALENDAR_CALENDAR_LIST_PATCH -d '{"payload": {"calendar_id": "anukul@lemma.work", "hidden": true}}'
 ```
 
 ### Change a calendar’s color
 Set a distinct background and foreground color for a calendar to match your team’s visual style.
 ```
-lemma connectors operations execute google_calendar GOOGLECALENDAR_CALENDAR_LIST_PATCH -d '{"payload": {"calendar_id": "team-123@group.calendar.google.com", "backgroundColor": "#7bd148", "foregroundColor": "#ffffff"}}'
+lemma connectors operations execute google_calendar GOOGLECALENDAR_CALENDAR_LIST_PATCH -d '{"payload": {"calendar_id": "anukul@lemma.work", "backgroundColor": "#7bd148", "foregroundColor": "#ffffff"}}'
 ```
 
 ### Create events in bulk

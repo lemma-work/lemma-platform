@@ -33,7 +33,7 @@ lemma connectors operations execute googleads GOOGLEADS_CREATE_CUSTOMER_LIST -d 
 ### Add contacts to a customer list
 Import email addresses into an existing list to grow an audience segment. Expect a 6–12 hour delay before changes appear.
 ```
-lemma connectors operations execute googleads GOOGLEADS_ADD_OR_REMOVE_TO_CUSTOMER_LIST -d '{"payload": {"resource_name": "customers/9876543210/userLists/111111111", "emails": ["jane.doe@example.com", "john.smith@example.com"], "operation": "create"}}'
+lemma connectors operations execute googleads GOOGLEADS_ADD_OR_REMOVE_TO_CUSTOMER_LIST -d '{"payload": {"resource_name": "customers/9876543210/userLists/111111111", "emails": ["anukul@lemma.work", "anukul@lemma.work"], "operation": "create"}}'
 ```
 
 ### Retrieve all customer lists

@@ -115,7 +115,7 @@ def _fake_client(captured: dict):
 
     class Accounts:
         def list(self, *, app=None, limit=100):
-            return {"items": [{"id": "acct-9", "email": "me@example.com"}]}
+            return {"items": [{"id": "acct-9", "email": "anukul@lemma.work"}]}
 
     class AuthConfigs:
         def list(self, *, limit=100):
@@ -219,7 +219,7 @@ def test_run_accepts_an_account_email(monkeypatch):
             "-d",
             "{}",
             "--account",
-            "me@example.com",
+            "anukul@lemma.work",
         ],
     )
 
@@ -444,7 +444,7 @@ def test_attach_turns_pod_paths_into_file_references(monkeypatch):
             "workspace-gmail",
             "gmail_send_email",
             "-d",
-            '{"to": "ada@example.com"}',
+            '{"to": "anukul@lemma.work"}',
             "--attach",
             "attachments=/me/a.pdf",
             "--attach",
@@ -457,7 +457,7 @@ def test_attach_turns_pod_paths_into_file_references(monkeypatch):
     assert result.exit_code == 0, result.output
     sent = captured["execute"]
     assert sent["payload"] == {
-        "to": "ada@example.com",
+        "to": "anukul@lemma.work",
         "attachments": [{"pod_path": "/me/a.pdf"}, {"pod_path": "/me/b.pdf"}],
         "body": {"file": {"pod_path": "/shared/c.csv"}},
     }

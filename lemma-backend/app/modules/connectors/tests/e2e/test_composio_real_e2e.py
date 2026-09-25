@@ -651,7 +651,7 @@ async def test_gmail_sends_pod_files_as_attachments_human(
 
     Sends a real email, so it needs a recipient as well as a consent::
 
-        RUN_HUMAN_OAUTH=1 LEMMA_E2E_GMAIL_TO=someone@example.com \\
+        RUN_HUMAN_OAUTH=1 LEMMA_E2E_GMAIL_TO=anukul@lemma.work \\
         pytest -m "provider and human" -k gmail_sends -s \\
             app/modules/connectors/tests/e2e/test_composio_real_e2e.py
     """

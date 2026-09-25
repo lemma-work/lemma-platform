@@ -5,7 +5,7 @@
  * reference to one, and the server reads it with the caller's own access:
  *
  *   client.connectors.operations.execute(scope, "GMAIL_SEND_EMAIL", {
- *     recipient_email: "ada@example.com",
+ *     recipient_email: "anukul@lemma.work",
  *     attachment: podFile("/me/reports/q3.pdf"),
  *   });
  *

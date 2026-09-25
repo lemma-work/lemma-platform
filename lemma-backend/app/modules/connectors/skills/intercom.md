@@ -9,7 +9,7 @@ Intercom is a customer communication platform for live chat, email, and in‑app
 ### Create a contact
 Add a new user or lead when they sign up or enter a funnel.
 ```
-lemma connectors operations execute intercom INTERCOM_CREATE_CONTACT -d '{"payload": {"email": "jane.doe@example.com", "name": "Jane Doe", "role": "user", "phone": "+14155551234"}}'
+lemma connectors operations execute intercom INTERCOM_CREATE_CONTACT -d '{"payload": {"email": "anukul@lemma.work", "name": "Jane Doe", "role": "user", "phone": "+14155551234"}}'
 ```
 
 ### Add tag to a contact

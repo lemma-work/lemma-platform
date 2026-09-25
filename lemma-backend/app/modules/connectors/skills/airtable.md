@@ -19,7 +19,7 @@ lemma connectors operations execute airtable AIRTABLE_GET_BASE_SCHEMA -d '{"payl
 ### Add multiple records
 To quickly populate a table with new rows, passing exact field values.
 ```
-lemma connectors operations execute airtable AIRTABLE_CREATE_RECORDS -d '{"payload": {"baseId": "appTE2RkHcOlVXh3K", "tableIdOrName": "Tasks", "records": [{"fields": {"Title": "Draft proposal", "Assigned to": "lisa@example.com", "Due": "2025-05-30"}}, {"fields": {"Title": "Review contract", "Assigned to": "marcus@example.com", "Due": "2025-06-05"}}], "typecast": true}}'
+lemma connectors operations execute airtable AIRTABLE_CREATE_RECORDS -d '{"payload": {"baseId": "appTE2RkHcOlVXh3K", "tableIdOrName": "Tasks", "records": [{"fields": {"Title": "Draft proposal", "Assigned to": "anukul@lemma.work", "Due": "2025-05-30"}}, {"fields": {"Title": "Review contract", "Assigned to": "anukul@lemma.work", "Due": "2025-06-05"}}], "typecast": true}}'
 ```
 
 ### Create a record from a natural language description

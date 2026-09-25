@@ -15,7 +15,7 @@ lemma connectors operations execute teams send_channel_message -d '{"payload": {
 ### Send a direct message
 Privately notify a teammate with time-sensitive information or a personal reminder.
 ```
-lemma connectors operations execute teams send_direct_message -d '{"payload": {"user_email": "priya.patel@contoso.com", "content": "Hey Priya, the Q3 projections have been updated in the shared dashboard."}}'
+lemma connectors operations execute teams send_direct_message -d '{"payload": {"user_email": "anukul@lemma.work", "content": "Hey Priya, the Q3 projections have been updated in the shared dashboard."}}'
 ```
 
 ### List channels in a team

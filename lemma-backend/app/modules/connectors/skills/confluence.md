@@ -33,7 +33,7 @@ lemma connectors operations execute confluence search_pages -d '{"payload": {"cq
 ### Add a comment to a page
 Use when you need to post feedback, a question, or a status update on an existing page.
 ```
-lemma connectors operations execute confluence add_comment -d '{"payload": {"pageId": "987654", "content": "<p>Action items look good — will review the timeline by EOD.</p>", "authorEmail": "jane.ops@example.com"}}'
+lemma connectors operations execute confluence add_comment -d '{"payload": {"pageId": "987654", "content": "<p>Action items look good — will review the timeline by EOD.</p>", "authorEmail": "anukul@lemma.work"}}'
 ```
 
 ### List spaces in the instance

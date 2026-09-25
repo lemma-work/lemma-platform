@@ -313,7 +313,7 @@ lemma connectors operations details workspace-gmail gmail_send_email slack_chat_
 
 # 3. Execute — payload goes under "payload"; pin an account only when needed
 lemma connectors operations execute workspace-gmail gmail_send_email \
-  --data '{"payload": {"recipient_email": "a@b.com", "subject": "Hi", "body": "Test"}}'
+  --data '{"payload": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "Test"}}'
 
 lemma connectors operations execute workspace-gmail gmail_send_email \
   --account <account-id> --file payloads/send.json

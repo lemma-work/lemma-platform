@@ -5,7 +5,7 @@ A connector operation that takes a file -- a Gmail attachment, a Drive upload
 access::
 
     pod.connectors.execute("gmail", "GMAIL_SEND_EMAIL", {
-        "recipient_email": "ada@example.com",
+        "recipient_email": "anukul@lemma.work",
         "subject": "Q3",
         "body": "Attached.",
         "attachment": pod_file("/me/reports/q3.pdf"),

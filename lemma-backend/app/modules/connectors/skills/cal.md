@@ -15,7 +15,7 @@ lemma connectors operations execute cal CAL_CHECK_CALENDAR_VERSION2 -d '{"payloa
 ### Add an attendee to an existing booking
 When an extra participant needs to join a scheduled event without creating a new booking.
 ```
-lemma connectors operations execute cal CAL_ADD_ATTENDEE -d '{"payload": {"name": "Jane Doe", "email": "jane.doe@example.com", "timeZone": "America/Chicago", "bookingId": 482}}'
+lemma connectors operations execute cal CAL_ADD_ATTENDEE -d '{"payload": {"name": "Jane Doe", "email": "anukul@lemma.work", "timeZone": "America/Chicago", "bookingId": 482}}'
 ```
 
 ### Cancel a booking via UID

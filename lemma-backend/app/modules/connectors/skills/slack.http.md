@@ -39,7 +39,7 @@ lemma connectors operations execute slack files.upload -d '{"payload": {"channel
 ### Find a user by email
 Map an email address to a Slack member ID for mentions or direct messages.
 ```
-lemma connectors operations execute slack users.lookupByEmail -d '{"payload": {"email": "jane.smith@example.com"}}'
+lemma connectors operations execute slack users.lookupByEmail -d '{"payload": {"email": "anukul@lemma.work"}}'
 ```
 
 ### Update a sent message

@@ -28,7 +28,7 @@ From an agent, pass `"file_to_upload": {"pod_path": "/me/logo_package.zip"}` in 
 ### Share a file with a specific person
 Grant read, comment, or edit access to a file for an individual user by email. Set `role` and `type` accordingly.
 ```
-lemma connectors operations execute google_drive GOOGLEDRIVE_CREATE_PERMISSION -d '{"payload": {"file_id": "1xYz9AbC8dEf7GhI2jKl", "role": "writer", "type": "user", "email_address": "jordan.lee@company.com", "email_message": "You now have edit access to the style guide."}}'
+lemma connectors operations execute google_drive GOOGLEDRIVE_CREATE_PERMISSION -d '{"payload": {"file_id": "1xYz9AbC8dEf7GhI2jKl", "role": "writer", "type": "user", "email_address": "anukul@lemma.work", "email_message": "You now have edit access to the style guide."}}'
 ```
 
 ### Move a file into an additional folder
