@@ -154,6 +154,10 @@ pub(crate) struct Shell {
     /// a running one puts a "quit?" prompt in front of a user who asked to
     /// change servers.
     pub(crate) swapping_window: AtomicBool,
+    /// Set once this shell has sent the daemon `shutdown-daemon` for a quit.
+    /// "Quit Anyway" then waits on that stop and escalates it, rather than
+    /// sending a second request the daemon refuses as already in progress.
+    pub(crate) daemon_stop_requested: AtomicBool,
 }
 
 pub(crate) struct LocaldConnection {
@@ -188,6 +192,7 @@ impl Shell {
             sharing_mode: Mutex::new(None),
             quit_confirmed: AtomicBool::new(false),
             swapping_window: AtomicBool::new(false),
+            daemon_stop_requested: AtomicBool::new(false),
         }
     }
 }

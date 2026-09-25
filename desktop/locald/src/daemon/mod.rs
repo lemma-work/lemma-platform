@@ -96,6 +96,7 @@ mod loopback_ports;
 mod monitors;
 mod reset_ops;
 mod sharing_ops;
+mod signals;
 mod stack_ops;
 mod startup_state;
 mod supervisor;
@@ -181,6 +182,19 @@ impl Daemon {
                     .controller(&paths, spec)
             })
             .transpose()?;
+        // A daemon with no managed runtime -- cloud mode, or no artifacts yet --
+        // never starts a VM, so it never reclaimed one either: a helper left
+        // by a local session whose daemon died kept the guest, and the data
+        // disk, running until the next local start. The marker is verified by
+        // pid, executable and start time before anything is signalled.
+        #[cfg(target_os = "macos")]
+        if managed_runtime.is_none() {
+            if let Err(error) = crate::reset::reclaim_running_vm(&paths) {
+                healed.push(format!(
+                    "a virtual machine left by an earlier local session could not be stopped: {error}"
+                ));
+            }
+        }
         let sharing = host_processes
             .as_ref()
             .and_then(|manager| {
@@ -236,6 +250,8 @@ impl Daemon {
             ));
             let owner_switch = Arc::clone(&agent_host);
             runtime.set_host_execution(Arc::new(move || owner_switch.host_execution_enabled()));
+            let supervised = Arc::clone(&agent_host);
+            runtime.set_agent_host_process(Arc::new(move || supervised.running_pid()));
         }
         Ok(Arc::new(Self {
             paths,

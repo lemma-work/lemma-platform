@@ -1,0 +1,52 @@
+name: Require CI passed
+description: Fail unless the "CI passed" aggregator succeeded for this exact commit.
+
+# One copy of a question three jobs ask. The inline versions each read the
+# first page of check runs (`per_page=100 | first`), so a commit with more than
+# a hundred check runs -- or a re-run whose newest result was not first --
+# could read as "missing" or as a stale conclusion. This asks GitHub for that
+# one check by name, latest attempt only.
+
+inputs:
+  token:
+    description: GitHub token with checks read access.
+    required: true
+  sha:
+    description: The commit to verify.
+    required: true
+  wait-minutes:
+    description: How long to wait for a CI run that is still in progress. 0 does not wait.
+    required: false
+    default: "0"
+
+runs:
+  using: composite
+  steps:
+    - name: Verify CI passed
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        SHA: ${{ inputs.sha }}
+        WAIT_MINUTES: ${{ inputs.wait-minutes }}
+      run: |
+        set -euo pipefail
+        state() {
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs" \
+            -f check_name="CI passed" -f filter=latest -f per_page=100 \
+            --jq 'if (.check_runs | length) == 0 then "missing none"
+                  else (.check_runs | sort_by(.started_at) | last
+                        | "\(.status) \(.conclusion // "none")") end'
+        }
+        deadline=$(( $(date +%s) + WAIT_MINUTES * 60 ))
+        while :; do
+          read -r status conclusion <<<"$(state)"
+          echo "CI passed for ${SHA}: status=${status} conclusion=${conclusion}"
+          if [ "${status}" = completed ] || [ "$(date +%s)" -ge "${deadline}" ]; then
+            break
+          fi
+          sleep 60
+        done
+        if [ "${status}" != completed ] || [ "${conclusion}" != success ]; then
+          echo "::error title=CI has not passed::'CI passed' for ${SHA} is ${status}/${conclusion}."
+          exit 1
+        fi

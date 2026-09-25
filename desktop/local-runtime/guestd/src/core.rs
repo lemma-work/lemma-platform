@@ -389,6 +389,12 @@ impl<E: Engine + 'static> GuestService<E> {
             format!("work.lemma.platform={}", guest_platform()),
             "--label".into(),
             format!("work.lemma.config-generation={config_generation}"),
+            // Last in line for the OOM killer: see `SANDBOX_OOM_SCORE_ADJ`.
+            // Takes effect when a core container is next created; one that is
+            // running already still sits below every sandbox, which is the
+            // ordering that matters.
+            "--oom-score-adj".into(),
+            CORE_OOM_SCORE_ADJ.to_string(),
         ];
         arguments.extend_from_slice(options);
         if !environment.is_empty() {

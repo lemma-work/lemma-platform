@@ -573,8 +573,8 @@ A one-off, and the steps are ordered because two of them are not reversible in
 the other order.
 
 **1. Ship the desktop build first.** Agent Host carries the sandbox root as a
-compiled-in constant and there is no auto-updater, so a copy installed before
-this release rejects a conversation created after it. Shipping the backend first
+compiled-in constant and Desktop updates only when the person accepts one, so a
+copy installed before this release rejects a conversation created after it. Shipping the backend first
 breaks host-dispatched runs for anyone who has not updated.
 
 **2. Accept that every workspace disk is replaced once.** They were already being

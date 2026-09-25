@@ -45,12 +45,28 @@
 //!
 //! The ports change when locald picks new ones, so the chain is named after
 //! its contents (`LEMMA-HOST-<hash>`): a new set is built in full in a fresh
-//! chain, jumped to from the top of `FORWARD`, and only then are the old
-//! chain's jump and the old chain removed. There is never a moment with no
+//! chain, jumped to from the top of `FORWARD` and of `CNI-ADMIN`, and only
+//! then are the old chain's jumps and the old chain removed. There is never a moment with no
 //! reject in place. The old one must go, not merely be shadowed: the new
 //! chain *returns* for allowed traffic, and a packet returned to `FORWARD`
 //! would meet the old chain next and be rejected there for a port that is no
 //! longer the old one's.
+//!
+//! # Where the jumps live
+//!
+//! Top of `FORWARD` is not enough on its own. nerdctl's CNI firewall plugin
+//! inserts `CNI-FORWARD` above it when the first container starts, and that
+//! chain accepts everything a container sends. Its first rule is a jump to
+//! `CNI-ADMIN`, which the plugin creates if missing and never touches
+//! otherwise, so every forward jump of ours is in both (`FORWARD_HOOKS`).
+//!
+//! # Sandbox to sandbox, and IPv6
+//!
+//! `LEMMA-SANDBOX-PEERS` refuses new connections from the bridge to the
+//! bridge, with `br_netfilter` loaded so traffic switched between two
+//! containers is filtered at all. `ip6tables` drops everything arriving on the
+//! bridge: nothing here uses IPv6, and link-local addresses would otherwise
+//! walk around every IPv4 rule.
 
 use super::*;
 
@@ -105,29 +121,116 @@ pub(crate) fn sandbox_isolation_rules() -> Vec<Vec<String>> {
     rules
 }
 
-/// Make sure the isolation rules are in place. Idempotent and never flushes.
+/// A second chain of ours: sandboxes opening connections to each other.
+pub(crate) const SANDBOX_PEER_CHAIN: &str = "LEMMA-SANDBOX-PEERS";
+/// The CNI firewall plugin's chain for administrators.
 ///
-/// `iptables` answers `true` when the command succeeded. Check-then-add per
-/// rule rather than flush-and-rebuild, because a flush opens a window with no
-/// rule at all while a sandbox may already be running. The jump from `INPUT`
-/// is inserted at the top, ahead of anything that might accept first.
+/// The plugin that nerdctl runs for every bridge container inserts its own
+/// `CNI-FORWARD` chain at the top of `FORWARD` the first time a container
+/// starts, and appends a per-container `-s <address> -j ACCEPT` to it -- so a
+/// jump we put at the top of `FORWARD` before that first container was
+/// pushed below an accept for everything the container sends, and every
+/// `FORWARD` rule of ours stopped applying from the first sandbox on. The
+/// plugin makes `CNI-ADMIN` the *first* rule of `CNI-FORWARD` and never
+/// flushes or edits it: that is what the chain is for. So every forward
+/// rule of ours is hooked there as well as at the top of `FORWARD`, and
+/// holds whichever of the two a packet meets first.
+pub(crate) const CNI_ADMIN_CHAIN: &str = "CNI-ADMIN";
+/// Where a jump into one of our `FORWARD` chains is hooked, in check form's
+/// chain position.
+pub(crate) const FORWARD_HOOKS: [&str; 2] = ["FORWARD", CNI_ADMIN_CHAIN];
+
+fn words(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|part| (*part).to_owned()).collect()
+}
+
+/// Sandboxes may not open connections to one another.
 ///
-/// Fails closed: a sandbox is not started on a guest that could not be
-/// isolated. nerdctl programs the same `iptables` for every bridge container
-/// it runs, so a guest where this cannot work cannot run sandboxes anyway.
-pub(crate) fn ensure_sandbox_isolation(
+/// Every sandbox sits on the one bridge, whoever it belongs to, and each one
+/// publishes a runtime that takes instructions -- a function sandbox's
+/// executes code. Nothing a sandbox does needs another sandbox: the backend
+/// reaches them from the host through published ports, which arrives on the
+/// guest's uplink rather than the bridge. So a *new* connection from the
+/// bridge to the bridge is refused, whichever way it travels: bridged
+/// directly between two containers (which only reaches `iptables` with
+/// `br_netfilter`, see `ensure_bridge_netfilter`), or hairpinned through the
+/// guest to another sandbox's published port.
+pub(crate) fn sandbox_peer_rules() -> Vec<Vec<String>> {
+    let mut rules = vec![
+        words(&[
+            "-C",
+            SANDBOX_PEER_CHAIN,
+            "-p",
+            "tcp",
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "NEW",
+            "-j",
+            "REJECT",
+            "--reject-with",
+            "tcp-reset",
+        ]),
+        words(&[
+            "-C",
+            SANDBOX_PEER_CHAIN,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "NEW",
+            "-j",
+            "REJECT",
+            "--reject-with",
+            "icmp-port-unreachable",
+        ]),
+    ];
+    for hook in FORWARD_HOOKS {
+        rules.push(words(&[
+            "-C",
+            hook,
+            "-i",
+            SANDBOX_BRIDGE_INTERFACE,
+            "-o",
+            SANDBOX_BRIDGE_INTERFACE,
+            "-j",
+            SANDBOX_PEER_CHAIN,
+        ]));
+    }
+    rules
+}
+
+/// The IPv6 rules, for `ip6tables`, each in its `-C`heck form.
+///
+/// Nothing here uses IPv6: nerdctl's bridge is IPv4-only and the guest's
+/// uplink takes no router advertisements. But the kernel still gives the
+/// bridge and every container a link-local address, and PostgreSQL and
+/// SuperTokens listen on every address -- `::` included -- so without these a
+/// sandbox could dial the guest's core services, or another sandbox, at
+/// `fe80::…%eth0` and pass none of the IPv4 rules above. Dropped rather than
+/// rejected, because there is no IPv6 service here for a refusal to be
+/// helpful about.
+pub(crate) fn sandbox_ipv6_rules() -> Vec<Vec<String>> {
+    ["INPUT", "FORWARD"]
+        .iter()
+        .map(|hook| words(&["-C", hook, "-i", SANDBOX_BRIDGE_INTERFACE, "-j", "DROP"]))
+        .collect()
+}
+
+/// Add each `-C`heck-form rule that is missing: a jump from a hook chain at
+/// the top of it, anything else at the end of its own chain.
+fn install_rules(
+    rules: Vec<Vec<String>>,
     iptables: &dyn Fn(&[String]) -> Result<bool, String>,
 ) -> Result<(), GuestError> {
-    // Creating a chain that already exists fails, and that is the common case.
-    let _ = iptables(&["-N".into(), SANDBOX_ISOLATION_CHAIN.into()]);
-    for rule in sandbox_isolation_rules() {
+    for rule in rules {
         let present = iptables(&rule).map_err(isolation_error)?;
         if present {
             continue;
         }
+        let chain = rule[1].clone();
         let mut add = rule.clone();
-        if rule[1] == "INPUT" {
-            add.splice(0..2, ["-I".to_owned(), "INPUT".to_owned(), "1".to_owned()]);
+        if ["INPUT", "FORWARD", CNI_ADMIN_CHAIN].contains(&chain.as_str()) {
+            add.splice(0..2, ["-I".to_owned(), chain, "1".to_owned()]);
         } else {
             add[0] = "-A".into();
         }
@@ -139,6 +242,100 @@ pub(crate) fn ensure_sandbox_isolation(
         }
     }
     Ok(())
+}
+
+/// Make sure the isolation rules are in place. Idempotent and never flushes.
+///
+/// `iptables` answers `true` when the command succeeded. Check-then-add per
+/// rule rather than flush-and-rebuild, because a flush opens a window with no
+/// rule at all while a sandbox may already be running. Jumps are inserted at
+/// the top of the chain they hook, ahead of anything that might accept first.
+///
+/// Fails closed: a sandbox is not started on a guest that could not be
+/// isolated. nerdctl programs the same `iptables` for every bridge container
+/// it runs, so a guest where this cannot work cannot run sandboxes anyway.
+pub(crate) fn ensure_sandbox_isolation(
+    iptables: &dyn Fn(&[String]) -> Result<bool, String>,
+) -> Result<(), GuestError> {
+    // Creating a chain that already exists fails, and that is the common case.
+    // `CNI-ADMIN` is created here when no container has run yet, so the jumps
+    // are in it before the plugin first puts it on the path; the plugin finds
+    // it and leaves it alone.
+    for chain in [SANDBOX_ISOLATION_CHAIN, SANDBOX_PEER_CHAIN, CNI_ADMIN_CHAIN] {
+        let _ = iptables(&["-N".into(), chain.into()]);
+    }
+    let mut rules = sandbox_isolation_rules();
+    rules.extend(sandbox_peer_rules());
+    install_rules(rules, iptables)
+}
+
+/// The IPv6 half of `ensure_sandbox_isolation`, for `ip6tables`.
+pub(crate) fn ensure_sandbox_ipv6_isolation(
+    ip6tables: &dyn Fn(&[String]) -> Result<bool, String>,
+) -> Result<(), GuestError> {
+    install_rules(sandbox_ipv6_rules(), ip6tables)
+}
+
+/// Make traffic bridged between two containers visible to `iptables`.
+///
+/// Without `br_netfilter` a frame from one container to another on the same
+/// bridge is switched at layer 2 and never meets `FORWARD`, so the peer rule
+/// would only ever see the hairpinned route. `sysctl` is the root of
+/// `/proc/sys`, passed in so this is testable; `load_module` loads
+/// `br_netfilter` and is only called when its settings are missing. Fails
+/// closed, like the rules it exists for.
+pub(crate) fn ensure_bridge_netfilter(
+    sysctl: &Path,
+    load_module: &dyn Fn() -> bool,
+) -> Result<(), GuestError> {
+    let bridge = sysctl.join("net/bridge");
+    let settings = ["bridge-nf-call-iptables", "bridge-nf-call-ip6tables"];
+    if !bridge.join(settings[0]).exists() {
+        let _ = load_module();
+    }
+    for setting in settings {
+        let path = bridge.join(setting);
+        let current = fs::read_to_string(&path).map_err(|error| {
+            isolation_error(format!(
+                "bridged traffic cannot be filtered ({}: {error})",
+                path.display()
+            ))
+        })?;
+        if current.trim() == "1" {
+            continue;
+        }
+        fs::write(&path, "1").map_err(|error| {
+            isolation_error(format!("could not set {}: {error}", path.display()))
+        })?;
+    }
+    Ok(())
+}
+
+/// The real module load. `modprobe` is absent on WSL, whose kernel has
+/// `br_netfilter` built in, and there the settings already exist.
+pub(crate) fn load_br_netfilter() -> bool {
+    Command::new("modprobe")
+        .arg("br_netfilter")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+impl<E: Engine + 'static> GuestService<E> {
+    /// Every network rule a sandbox is started behind, installed before it
+    /// starts.
+    pub(crate) fn ensure_network_isolation(&self) -> Result<(), GuestError> {
+        ensure_bridge_netfilter(Path::new("/proc/sys"), &load_br_netfilter)?;
+        ensure_sandbox_isolation(&run_iptables)?;
+        ensure_sandbox_ipv6_isolation(&run_ip6tables)?;
+        ensure_host_gateway_isolation(
+            &self.host_gateway,
+            &self.callback_ports()?,
+            &run_iptables,
+            &list_iptables,
+        )
+    }
 }
 
 /// Prefix of the host-gateway chains; the rest is a hash of the contents.
@@ -207,11 +404,11 @@ pub(crate) fn host_gateway_chain_rules(callback_ports: &[u16]) -> Vec<Vec<String
     rules
 }
 
-/// The jump from `FORWARD` into `chain`, in its `-C`heck form.
-fn host_gateway_jump(gateway: &str, chain: &str) -> Vec<String> {
+/// The jump from `hook` into `chain`, in its `-C`heck form.
+fn host_gateway_jump(hook: &str, gateway: &str, chain: &str) -> Vec<String> {
     [
         "-C",
-        "FORWARD",
+        hook,
         "-i",
         SANDBOX_BRIDGE_INTERFACE,
         "-d",
@@ -237,7 +434,6 @@ pub(crate) fn ensure_host_gateway_isolation(
     list: &dyn Fn(&str) -> Result<String, String>,
 ) -> Result<(), GuestError> {
     let chain = host_gateway_chain(gateway, callback_ports);
-    let jump = host_gateway_jump(gateway, &chain);
     let run = |arguments: Vec<String>| -> Result<(), GuestError> {
         if iptables(&arguments).map_err(isolation_error)? {
             Ok(())
@@ -248,7 +444,15 @@ pub(crate) fn ensure_host_gateway_isolation(
             )))
         }
     };
-    if !iptables(&jump).map_err(isolation_error)? {
+    let jumps: Vec<Vec<String>> = FORWARD_HOOKS
+        .iter()
+        .map(|hook| host_gateway_jump(hook, gateway, &chain))
+        .collect();
+    let mut present = Vec::with_capacity(jumps.len());
+    for jump in &jumps {
+        present.push(iptables(jump).map_err(isolation_error)?);
+    }
+    if !present.contains(&true) {
         // Built in full before anything jumps to it. `-N` fails when a
         // previous attempt left the chain behind, and the flush makes that
         // leftover whatever it was into an empty chain again -- safe, since
@@ -260,33 +464,44 @@ pub(crate) fn ensure_host_gateway_isolation(
             add.extend(rule);
             run(add)?;
         }
-        let mut insert = jump.clone();
-        insert.splice(
-            0..2,
-            ["-I".to_owned(), "FORWARD".to_owned(), "1".to_owned()],
-        );
-        run(insert)?;
     }
-    // Any other rule set's jump goes, then its chain.
-    let forward = list("FORWARD").map_err(isolation_error)?;
-    let mut stale = Vec::new();
-    for line in forward.lines() {
-        let words: Vec<&str> = line.split_whitespace().collect();
-        let target = words
-            .windows(2)
-            .find(|pair| pair[0] == "-j")
-            .map(|pair| pair[1]);
-        let Some(target) = target else { continue };
-        if words.first() != Some(&"-A")
-            || !target.starts_with(HOST_GATEWAY_CHAIN_PREFIX)
-            || target == chain
-        {
+    for (jump, present) in jumps.iter().zip(present) {
+        if present {
             continue;
         }
-        let mut delete: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
-        delete[0] = "-D".into();
-        run(delete)?;
-        stale.push(target.to_owned());
+        if jump[1] == CNI_ADMIN_CHAIN {
+            // Absent until the first container runs, unless we made it.
+            let _ = iptables(&["-N".into(), CNI_ADMIN_CHAIN.into()]);
+        }
+        let mut insert = jump.clone();
+        let hook = insert[1].clone();
+        insert.splice(0..2, ["-I".to_owned(), hook, "1".to_owned()]);
+        run(insert)?;
+    }
+    // Any other rule set's jumps go, then its chain.
+    let mut stale = Vec::new();
+    for hook in FORWARD_HOOKS {
+        let listed = list(hook).map_err(isolation_error)?;
+        for line in listed.lines() {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let target = words
+                .windows(2)
+                .find(|pair| pair[0] == "-j")
+                .map(|pair| pair[1]);
+            let Some(target) = target else { continue };
+            if words.first() != Some(&"-A")
+                || !target.starts_with(HOST_GATEWAY_CHAIN_PREFIX)
+                || target == chain
+            {
+                continue;
+            }
+            let mut delete: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
+            delete[0] = "-D".into();
+            run(delete)?;
+            if !stale.iter().any(|old: &String| old == target) {
+                stale.push(target.to_owned());
+            }
+        }
     }
     for old in stale {
         run(vec!["-F".into(), old.clone()])?;
@@ -325,12 +540,21 @@ fn isolation_error(detail: String) -> GuestError {
 /// The real `iptables`, waiting briefly for the xtables lock nerdctl's CNI
 /// plugins also take when a container starts.
 pub(crate) fn run_iptables(arguments: &[String]) -> Result<bool, String> {
-    Command::new("iptables")
+    run_xtables("iptables", arguments)
+}
+
+/// The real `ip6tables`, likewise.
+pub(crate) fn run_ip6tables(arguments: &[String]) -> Result<bool, String> {
+    run_xtables("ip6tables", arguments)
+}
+
+fn run_xtables(binary: &str, arguments: &[String]) -> Result<bool, String> {
+    Command::new(binary)
         .args(["-w", "5"])
         .args(arguments)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map(|status| status.success())
-        .map_err(|error| format!("could not run iptables: {error}"))
+        .map_err(|error| format!("could not run {binary}: {error}"))
 }

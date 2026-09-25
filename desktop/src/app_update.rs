@@ -300,9 +300,18 @@ pub(crate) async fn install_app_update(
     // so a refusal they would make anyway is not preceded by a question, and
     // before the download, so saying no costs nothing. Off the async runtime,
     // for the reason given at the restart question below.
+    // Said before, not after: the workspace is unusable from the moment the
+    // stack stops until the new runtime has downloaded on the next launch,
+    // and that is a cost somebody deciding *when* to update needs to know.
+    let runtime_download = match lemma_update_metadata(&update.raw_json).runtime_download_bytes {
+        Some(bytes) => format!(" (about {} MB)", bytes.div_ceil(1024 * 1024)),
+        None => String::new(),
+    };
     let consent = format!(
         "Lemma {} will be downloaded and installed. Lemma's local runtime stops \
-         while it installs.",
+         while it installs, and Lemma restarts as soon as it is installed. Your \
+         local workspace opens again once the updated runtime{runtime_download} \
+         has downloaded.",
         update.version
     );
     let handle = app.clone();
@@ -376,28 +385,14 @@ pub(crate) async fn install_app_update(
         return Ok(());
     }
 
-    // Off the async runtime. `confirm_destructive_action_impl` waits on a
-    // channel until the user answers, and the user may never answer -- so
-    // calling it from this async command parked a tokio worker on a dialog for
-    // as long as the window was left open.
-    let message = format!(
-        "Lemma {} is installed. Restarting now finishes the update; it downloads \
-         its runtime once afterwards.",
+    // Not a question any more. The stack was stopped above and the bundle on
+    // disk is now the new version: "Later" left the old shell running over a
+    // stopped stack it could only restart from the *new* locald binary, which
+    // then met the old guest -- a mixed-version runtime nobody tested. The
+    // consent above says the restart is part of installing.
+    append_install_log(&format!(
+        "update: Lemma {} installed; restarting to finish",
         update.version
-    );
-    let handle = app.clone();
-    let restart = tauri::async_runtime::spawn_blocking(move || {
-        confirm_destructive_action_impl(
-            handle,
-            "Restart to finish updating?".into(),
-            message,
-            "Restart Now".into(),
-        )
-    })
-    .await
-    .map_err(|join| join.to_string())??;
-    if restart {
-        app.restart();
-    }
-    Ok(())
+    ));
+    app.restart();
 }

@@ -104,9 +104,38 @@ and it is hardened accordingly:
   starts any sandbox, and refuses to start one if the rules cannot be installed
   (`sandbox_firewall.rs`). Internet access, the backend's connections into a
   sandbox (published ports) and callbacks to the host are all unaffected.
+- **No reach into other sandboxes.** Every sandbox sits on the same bridge.
+  guestd's `LEMMA-SANDBOX-PEERS` chain rejects any *new* connection from the
+  bridge to the bridge -- directly between two containers, or hairpinned to
+  another sandbox's published port -- with `br_netfilter` loaded and
+  `bridge-nf-call-iptables` set so traffic switched between two containers is
+  filtered at all (`ensure_bridge_netfilter`). The backend's way in is a
+  published port reached from the host, which arrives on the uplink and is
+  unaffected.
+- **No IPv6.** Nothing in the guest uses it, and a link-local address would
+  otherwise walk around every rule above: `ip6tables` drops everything
+  arriving on the bridge (`INPUT` and `FORWARD`), and the VZ guest disables
+  IPv6 outright (`/etc/sysctl.d/90-lemma-runtime.conf`; not on WSL, whose
+  kernel is shared with the person's other distributions).
+- **Bounded.** `--pids-limit 1024`, `--memory`/`--cpus` from the backend, and
+  `--oom-score-adj 500` so an overcommitted guest loses a sandbox process
+  before the database (core containers are created at -900). No sandbox is
+  started with under 2 GiB free on the data disk.
 - **Nothing on the host.** A sandbox never runs anything outside the VM.
 
-A function sandbox is additionally read-only with a `noexec` `/tmp`.
+A function sandbox is additionally read-only with a `noexec` `/tmp`, and its
+runtime takes calls only with its own credential: the backend derives a
+per-sandbox token, starts the sandbox with it
+(`LEMMA_FUNCTION_RUNTIME_TOKEN`, popped before any worker runs) and with the
+backend's callback host as the only gateway it will fetch artifacts from
+(`LEMMA_FUNCTION_GATEWAY_HOSTS`), and presents it as `X-Lemma-Runtime-Token`
+on every call but `/healthz`. The runtime executes whatever artifact it is
+sent, so without it a process that could reach port 8090 could have it run
+code of its choosing.
+
+All of these rules are installed before the first sandbox starts and
+re-checked before every sandbox is created; a guest where any of them cannot be
+installed starts no sandbox.
 
 ## The host alias
 
@@ -136,7 +165,8 @@ The host gateway is the Mac's own address on the VM's network, so without a
 rule a container could dial any Mac service listening on every interface. guestd
 installs one, in `sandbox_firewall.rs`, before it starts any sandbox:
 traffic from the sandbox bridge (`nerdctl0`) to the gateway passes a chain
-(`LEMMA-HOST-<hash>`, jumped to from the top of `FORWARD`) that lets through
+(`LEMMA-HOST-<hash>`, jumped to from the top of `FORWARD` and of `CNI-ADMIN`)
+that lets through
 replies to connections the Mac opened, the two callback ports, and DNS, which
 vmnet serves on the gateway, and rejects everything else (`tcp-reset` for TCP,
 so a refused connection fails at once rather than timing out).
@@ -155,6 +185,14 @@ so a refused connection fails at once rather than timing out).
   are built into a new chain in full, jumped to, and only then is the old jump
   and chain removed — the old one must go, because the new chain *returns*
   allowed traffic to `FORWARD`, where the old chain would reject it.
+- **Ahead of nerdctl's own rules.** The CNI `firewall` plugin nerdctl runs
+  for every container inserts `CNI-FORWARD` at the top of `FORWARD` when the
+  first container starts, and that chain accepts everything a container
+  sends. A jump from the top of `FORWARD` alone was therefore bypassed from
+  the first sandbox on. Every forward jump of ours is also the first rule of
+  `CNI-ADMIN`, which the plugin makes the first rule of `CNI-FORWARD` and
+  never touches (`FORWARD_HOOKS`); guestd creates it itself when no container
+  has run yet.
 - **Fails closed.** A guest where the rules cannot be installed starts no
   sandbox.
 
@@ -213,6 +251,13 @@ Chrome ─proxy─► host_fallback ─unix─► guestd ─vsock 42413─► le
   and a newline. guestd refuses anything else, and ports below 1024, before
   opening vsock. locald connects to `127.0.0.1`, then `::1`, on that port —
   never a name and never another address.
+- **Only a server the agent started.** locald connects only if every process
+  listening on the port descends from the Agent Host process it supervises --
+  the exec-server, the coding agents it runs, and whatever they start
+  (`loopback_relay/owner.rs`: each process's listening sockets through
+  `libproc`, then the parent walk). The person's own database, a local admin
+  page, a password manager's helper -- anything the agent did not start -- is
+  refused as "not started by Lemma's agent", whether or not it is on any list.
 - **Not Lemma's own ports.** locald refuses, re-reading the list on every
   connection: the managed runtime's backend, frontend and PostgreSQL, Redis
   and SuperTokens forwards; every loopback health URL in the host pack; the
@@ -221,16 +266,35 @@ Chrome ─proxy─► host_fallback ─unix─► guestd ─vsock 42413─► le
   `mcp-relay/*.json` endpoint files. Privileged ports are refused here too.
   A refusal reaches the sandbox as `error <reason>`, and Chrome shows a failed
   load.
+- **Not after the switch goes off.** A relay already carrying bytes re-reads
+  the switch every second and ends when it is off (or the Mac is unpaired),
+  and a relay nothing has crossed for 30 minutes is ended.
+- **Not for a public page.** Chrome keeps public pages off `localhost` by the
+  address a request resolves to, which it cannot see through a proxy. So
+  `host_fallback` refuses (403) a request bound for the Mac whose `Origin` is
+  not loopback, or that Chrome marks `Sec-Fetch-Site: cross-site` -- a link or
+  form on a public page. The agent typing a URL, and a loopback page calling
+  another loopback port, go through. Each proxied HTTP request has its own
+  upstream connection, so a kept-alive browser connection cannot carry a
+  request to the wrong machine.
 - **Nothing in lemma-vz decides anything.** It carries bytes between guest
   vsock streams and locald's socket (`run/host-loopback.sock`, mode 0600).
 
-**What it does not cover.** While the switch is on, the paired user's VM
-browser — and any page it loads — can reach any non-Lemma server on the Mac's
-loopback, the same exposure their own browser on the Mac has. Every run in
-that user's workspace shares that sandbox, including a run started by an
-inbound channel message that resolved to them: such a run cannot execute on the
-host, but its browser can use the relay while the switch is on. A `curl localhost:3000` in the sandbox's shell does
-not go through the relay: the fall-through is Chrome's proxy, not the shell's.
+**What it does not cover.** While the switch is on, anything in the paired
+user's workspace sandbox can reach a server the agent started on the Mac's
+loopback: the socket is mounted for the sandbox, not for Chrome alone (every
+process there runs as the same user, so there is no browser-only uid to give
+it to). Every run in that user's workspace shares that sandbox, including a
+run started by an inbound channel message that resolved to them: such a run
+cannot execute on the host, but it can reach the agent's servers while the
+switch is on. A server that detached itself from the agent (`nohup … &` in a
+shell that then exited) is reparented to `launchd`, no longer descends from the
+Agent Host, and is refused. The ownership check only sees this user's
+processes, and is made just before connecting, not held for the connection. A
+WebSocket or HTTPS tunnel (`CONNECT`) carries no headers the proxy can read,
+so the cross-site refusal covers plain HTTP only. A `curl localhost:3000` in
+the sandbox's shell does not go through the relay: the fall-through is
+Chrome's proxy, not the shell's.
 
 **Windows.** The WSL guest runs guestd per request and never binds the relay
 socket, so the sandbox finds no socket, the fall-through is not
@@ -265,14 +329,22 @@ or anything that touches the local stack. See
 
 ## What is not covered
 
-- **Sandbox-to-sandbox traffic.** Sandboxes share one bridge. A sandbox can
-  reach another's published ports through the guest; those ports require the
-  per-sandbox runtime credential, but the network does not separate them.
-- **IPv6.** The isolation rules are IPv4; nerdctl's default bridge is IPv4-only.
+- **UDP between sandboxes that were already talking.** The peer rule
+  refuses *new* connections; conntrack state from before an upgrade survives
+  until it expires.
+- **A function sandbox's own cache.** Function code runs as the same user as
+  the runtime that unpacked its artifact, so it can alter the cached copy of
+  another function *of the same pod* for as long as that sandbox lives. Only
+  that pod's code runs there, and the credential and gateway allow-list keep
+  anything from outside from adding to it.
 - **Containers created before an upgrade** are not reused with the arguments
   they were created with. Every container carries `lemma.work/hardening`
   (`SANDBOX_HARDENING_VERSION` in guestd) and its grants as labels, and the
   next `sandbox.ensure` replaces a running one whose hardening is older or
   whose grants differ from the request. The replacement is made only after
   everything that can fail before `run` has passed, and a running container is
-  renamed aside rather than removed, so a failed start puts it back.
+  renamed aside rather than removed, so a failed start puts it back; a
+  resident guest that died mid-swap settles it when it next starts (removing
+  the old container where the new one exists, restoring it where it does
+  not). A request for a newer epoch replaces a running container the same
+  way; an older one is refused as a generation conflict.

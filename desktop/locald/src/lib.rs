@@ -2,6 +2,7 @@ pub mod agent_host;
 pub mod config_operations;
 pub mod daemon;
 pub mod host_process;
+pub mod instance_lock;
 mod lifecycle;
 pub mod local_domain;
 // The Mac's end of the paired user's loopback relay; served on macOS only, where the

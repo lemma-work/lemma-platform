@@ -128,11 +128,27 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         return f"{prefix}-{sandbox_id.hex}"
 
     def _guest_id_from_name(self, name: str) -> tuple[str, SandboxKind] | None:
+        """The guest id a name refers to, whichever of the two names it is.
+
+        The service names a sandbox by its fenced container name; the sweep
+        hands back what `list_objects` reported, which is the guest id itself
+        (the guest has no other name for it). Accepting only the first made
+        every orphan the sweep found survive it: `destroy` parsed nothing out
+        of `w-<hex>`, returned as if it had succeeded, and the sweep logged the
+        sandbox reclaimed while it went on running.
+        """
         parsed = naming.parse_container_name(name)
-        if parsed is None:
+        if parsed is not None:
+            sandbox_id, kind, _ = parsed
+            return self._guest_id(sandbox_id, kind), kind
+        sandbox_id = _sandbox_id_from_guest_id(name)
+        if sandbox_id is None:
             return None
-        sandbox_id, kind, _ = parsed
-        return self._guest_id(sandbox_id, kind), kind
+        kind = SandboxKind.WORKSPACE if name.startswith("w-") else SandboxKind.FUNCTION
+        # Only the canonical spelling, so a name that merely parses is not
+        # treated as one this provider minted.
+        guest_id = self._guest_id(sandbox_id, kind)
+        return (guest_id, kind) if guest_id == name else None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -147,7 +163,19 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             )
 
         guest_id = self._guest_id(spec.sandbox_id, spec.kind)
-        existed = await self._find(guest_id, deadline_at=spec.deadline_at) is not None
+        try:
+            existed = (
+                await self._find(guest_id, deadline_at=spec.deadline_at) is not None
+            )
+        except LocalBridgeError as exc:
+            # Not knowing is not "absent": read as absent, a failed status
+            # call reported the user's disk as recreated and moved the
+            # storage generation on while their files sat untouched.
+            if exc.retryable:
+                raise ProviderCreateAmbiguous(str(exc)) from exc
+            raise ProviderRejected(str(exc)) from exc
+        except asyncio.TimeoutError as exc:
+            raise ProviderCreateAmbiguous("managed runtime status timed out") from exc
 
         workspace = spec.kind is SandboxKind.WORKSPACE
         apps = (
@@ -186,7 +214,10 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                     # running sandbox. The guest validates every entry and
                     # rejects the whole ensure on a bad one, which is the
                     # behaviour a caller that starts setting it will want.
-                    "env": dict(spec.env),
+                    "env": {
+                        **dict(spec.env),
+                        **({} if workspace else self.function_runtime_env(guest_id)),
+                    },
                     "runtime_token": (
                         self._runtime_credentials.token(guest_id) if workspace else None
                     ),
@@ -235,7 +266,13 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         if resolved is None:
             return None
         guest_id, _ = resolved
-        snapshot = await self._find(guest_id, deadline_at=deadline_at)
+        try:
+            snapshot = await self._find(guest_id, deadline_at=deadline_at)
+        except LocalBridgeError as exc:
+            # As Docker's inspect does with an engine error: a guest that did
+            # not answer has not said the sandbox is gone, and the caller
+            # rebuilds -- or the sweep reclaims -- on "gone".
+            raise ProviderRejected(str(exc)) from exc
         if snapshot is None:
             return None
         return ProviderInstance(
@@ -276,7 +313,12 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             # than by holding the guest's single control channel open: that
             # channel serves one request at a time, and a long wait on it stalls
             # every other sandbox operation on the machine.
-            snapshot = await self._find(instance.provider_id, deadline_at=deadline_at)
+            try:
+                snapshot = await self._find(
+                    instance.provider_id, deadline_at=deadline_at
+                )
+            except LocalBridgeError as exc:
+                raise SandboxUnavailable(str(exc)) from exc
             if snapshot is None:
                 raise SandboxUnavailable(
                     f"function sandbox {instance.provider_id} disappeared before "
@@ -317,6 +359,16 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         kind: SandboxKind,
         deadline_at: datetime,
     ) -> None:
+        """Stop the sandbox, keeping its storage, after letting it quiesce.
+
+        The same order as Docker's release. Stopped cold, Chrome in a
+        workspace lost what it had not yet written to its profile -- the
+        sign-ins a person made in the agent's browser among it -- and the
+        container is rebuilt on the next ensure, so nothing else would have
+        flushed it.
+        """
+        if kind is SandboxKind.WORKSPACE:
+            await self._try_quiesce(instance, deadline_at=deadline_at)
         await self._mutate(
             "sandbox.release", instance.provider_id, deadline_at=deadline_at
         )
@@ -416,80 +468,6 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
     # Bridge plumbing
     # ------------------------------------------------------------------
 
-    def _ops(self, instance: ProviderInstance, deadline_at: datetime):
-        from contextlib import asynccontextmanager
-
-        from sandbox_runtime.errors import (
-            SandboxPathConflict,
-            SandboxPathNotFound,
-            SandboxProcessNotFound,
-            SandboxRejected,
-            SandboxUnauthorized,
-            SandboxUnavailable,
-        )
-        from app.modules.workspace.providers.runtime_errors import (
-            WorkspaceRuntimeFileConflict,
-            WorkspaceRuntimeFileNotFound,
-            WorkspaceRuntimeFileRejected,
-            WorkspaceRuntimeProcessGone,
-            WorkspaceRuntimeUnauthorized,
-        )
-
-        @asynccontextmanager
-        async def scope():
-            client: WorkspaceRuntimeClient | None = None
-            try:
-                client = await self._runtime_client(
-                    instance.provider_id, deadline_at=deadline_at
-                )
-                yield client
-            except WorkspaceRuntimeFileNotFound as exc:
-                raise SandboxPathNotFound(str(exc)) from exc
-            except WorkspaceRuntimeFileConflict as exc:
-                raise SandboxPathConflict(str(exc)) from exc
-            except WorkspaceRuntimeFileRejected as exc:
-                # 413, 422 and 507: too big, not a path this runtime will take,
-                # no room. Docker has mapped these to a refusal since they
-                # existed and this did not, so on Desktop alone they fell
-                # through to `SandboxUnavailable` below -- which
-                # `with_backpressure` retries until the deadline. A file that
-                # is too large, or a guest whose disk is full, became a retry
-                # loop on the machine's single vsock control channel instead of
-                # one sentence saying what was wrong.
-                raise SandboxRejected(str(exc)) from exc
-            except WorkspaceRuntimeProcessGone as exc:
-                # Definitive, and about the process rather than the sandbox.
-                # `ProviderGone` would make the client forget its handle to a
-                # workspace that is fine; `SandboxUnavailable` would retry a
-                # process that will never exist until the deadline.
-                raise SandboxProcessNotFound(str(exc)) from exc
-            except WorkspaceRuntimeUnauthorized as exc:
-                # Definitive: this credential will not become valid by waiting.
-                raise SandboxUnauthorized(str(exc)) from exc
-            except ProviderGone:
-                raise
-            except asyncio.TimeoutError as exc:
-                # The bridge stopped answering within the deadline. Retryable,
-                # but it has to arrive as a sandbox error with a sentence in it:
-                # uncaught, it left this scope as a bare `TimeoutError` and
-                # every caller rendered it as `500 INTERNAL_ERROR` with a null
-                # message, which is what a five-minute file listing looked like.
-                self._forget_runtime_url(instance.provider_id)
-                raise SandboxUnavailable(
-                    "managed runtime did not answer before the deadline"
-                ) from exc
-            except (WorkspaceRuntimeError, LocalBridgeError) as exc:
-                # Anything that failed at the transport may mean the sandbox
-                # moved. Cheaper to ask the guest again next time than to keep
-                # dialling an address that has stopped answering.
-                self._forget_runtime_url(instance.provider_id)
-                raise SandboxUnavailable(str(exc)) from exc
-            finally:
-                if client is not None:
-                    await client.close()
-
-        return scope()
-
     async def _runtime_client(
         self, guest_id: str, *, deadline_at: datetime
     ) -> WorkspaceRuntimeClient:
@@ -540,18 +518,17 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
     async def _find(
         self, guest_id: str, *, deadline_at: datetime
     ) -> BridgeResult | None:
-        """Absence, reported as absence.
+        """Absence, reported as absence -- and nothing else as absence.
 
         ``_status`` turns not-found into ``ProviderGone`` because a caller
         holding a handle needs that to be definitive. Here the question is
         merely "is there one?", so the same answer is a None rather than a
-        failure.
+        failure. Any other failure is raised: the guest did not answer, which
+        is not the same as saying there is none.
         """
         try:
             return await self._status(guest_id, deadline_at=deadline_at)
         except ProviderGone:
-            return None
-        except LocalBridgeError:
             return None
 
     async def _status(self, guest_id: str, *, deadline_at: datetime) -> BridgeResult:

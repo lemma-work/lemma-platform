@@ -55,13 +55,20 @@ one source is allowed. `file://` is accepted only when both
 `LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1` select that exact source-level test
 manifest.
 
+A packaged build refuses to run from a translocated path
+(`.../AppTranslocation/...`) or a mounted disk image (`/Volumes/...`) and asks to
+be moved to Applications: locald, the VM helper and Start at Login are all
+identified by path, and those paths change every launch.
+
 Installation:
 
 1. Validate manifest schema, release, target, source, digest, and sizes.
 2. Reserve space for the compressed downloads, expanded sizes, and 4 GiB of
    working headroom before extraction.
 3. Reuse a verified archive or resume its `.part` file with a strict
-   `Content-Range`.
+   `Content-Range`. A connection that drops, or is silent for 60 seconds
+   (the header wait and every body read), is resumed automatically up to five
+   times with backoff; a digest, range or client error is not retried.
 4. Hash the existing prefix and new bytes as they transfer.
 5. Reject redirects outside HTTPS, wrong status/size/digest, archive overlap,
    path escape, duplicate entries, symlinks, and unsafe expansion.
@@ -93,6 +100,16 @@ avoided on Apple Silicon; see the same disk-cache workaround in
 `locald/runtime/macos/data.raw` is the sole sparse mutable disk. Guest mount
 setup binds persistent paths for PostgreSQL, Redis, SuperTokens, containerd,
 and sandbox workspaces from that disk. Ephemeral runtime paths use tmpfs.
+
+The guest formats the disk only when it has no filesystem signature *and* the
+host says it is new. "New" is `data-disk-never-mounted` beside `data.raw`:
+written before the disk is created and removed only when a boot first reaches
+health, so a first boot interrupted before `mkfs` stays formattable instead of
+reporting that it needs repair. At boot `e2fsck -p` repairs a dirty filesystem;
+damage it declines to fix gets one `e2fsck -f -y` pass before the guest reports
+`needs-repair` and the app offers a reset. The VM does not start with less than
+2 GiB free on the Mac, because the sparse disk grows underneath the guest and a
+full Mac fails its writes -- Postgres's among them.
 
 The build creates a 2 GiB maximum ext4 image, populates it with numeric
 ownership preserved, shrinks it to minimum contents, and verifies the final
@@ -181,7 +198,9 @@ after a grace interval.
 
 Recovery is available from the welcome screen, desktop settings, and the tray,
 including cloud mode and daemon failures. Restart into Recovery pauses automatic
-service startup and runtime downloads. Force cleanup requires an app-owned
+service startup and runtime downloads. Reset Data from Recovery leaves Recovery (it
+starts local services to perform the reset) and clears the workspace session
+only once the daemon has accepted the reset. Force cleanup requires an app-owned
 confirmation with Cancel focused. It deletes this installation's local data,
 credentials, runtime downloads, Agent Host pairings and managed working folders;
 external project folders and cloud data are retained. It is separate from updates
@@ -214,6 +233,25 @@ The exit watchdog must exceed the combined sharing, handshake, graceful stop,
 and verified VM/process fallback deadlines. A shorter watchdog can terminate
 the cleanup worker itself and leave this installation's processes running.
 
+Quits macOS issues itself -- Dock → Quit, log out, restart, shut down -- take
+the same path. The shell adds `applicationShouldTerminate:` to tao's
+application delegate, answers `NSTerminateLater`, runs the ordinary quit, and
+replies once the stack is down (or the person declined). A logout, restart or
+shutdown is not asked about. `AppHandle::restart` (Restart into Recovery,
+restart after an update) is never treated as a quit. The daemon handles
+`SIGTERM`, `SIGINT` and `SIGHUP` by running the same shutdown as
+`shutdown-daemon`, so a session ending without the app still stops the VM
+rather than cutting it off. A shutdown that fails part-way exits the daemon
+anyway -- its admission is already closed -- and the next start reclaims what
+is left by identity. "Quit Anyway" escalates the stop already requested rather
+than sending a second one. A SIGTERM'd VM helper is given the guest's declared
+stop budget (75s) plus a margin before it is killed, by the shell and by the
+runtime manager's reclaim alike.
+
+Only one daemon runs per installation root: `lemma-locald serve` takes an
+exclusive lock on `<root>/locald.lock` before it reclaims anything, so a second
+daemon exits without touching the first one's services.
+
 ## 5. Host process contract
 
 The host-pack manifest requires exactly:
@@ -221,6 +259,21 @@ The host-pack manifest requires exactly:
 - setup: `migrations`;
 - service: `backend`;
 - service: `frontend`.
+
+Setups are skipped when their recorded stamp matches. On macOS a stamp is bound
+to the data disk's identity (inode and birth time of `data.raw`), so a disk
+that was replaced reruns its migrations instead of skipping them against an
+empty database. `migrations` runs under a one-hour ceiling but is ended early
+only after fifteen minutes with nothing written to its log. While it runs,
+`update.json` records the `migrating` phase; a failed run stays recorded, and
+the next start reports it and migrates forward again. Before migrating a
+database that has been migrated before, locald takes an APFS clone of the data
+disk to `runtime/macos/data.raw.before-migration` (one copy, replaced each time,
+removed by a data reset) -- restoring it is a manual support step. `schema-release`
+records the release that last completed migrations. When Alembic reports that it
+cannot locate the database's revision -- data from a newer Lemma, after a
+downgrade or a nightly-to-stable switch -- the start fails once, naming the
+release to install, instead of retrying a generic setup error.
 
 The backend environment selects the all-in-one app, local auth settings,
 background embedding initialization, private service addresses, dynamic local
@@ -467,7 +520,7 @@ Each command is granted to a webview by a capability in
 | `prepare_sandbox_image` | workspace | local workspace | |
 | `open_logs`, `diagnostic_logs` | main, control, workspace | native page, or local workspace | Log tails are redacted |
 | `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
-| `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown |
+| `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown; once installed the app restarts without asking again, because the stack is already stopped and the bundle replaced |
 | `telemetry_status`, `set_telemetry_enabled` | control, workspace | settings | |
 | `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Onboarding and the Models suggestions |
 | `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |
@@ -538,15 +591,24 @@ The shell owns automatic startup on launch and mode changes. Loading or
 reloading the splash only observes state, so it cannot race a second start
 against the shell. Start and Retry remain explicit user actions.
 
-On macOS, host services connect to the private VM through its local IP address.
-The app and daemon carry `NSLocalNetworkUsageDescription`, and local setup
-explains this permission before installation. A blocked or unreachable guest
-connection offers Local Network settings guidance and a retry without deleting
-data; that socket error alone does not establish that permission was denied.
-Terminal connectivity does not prove app connectivity because macOS attributes
-helper access to its responsible app. Candidate qualification must exercise the
-installed app with its release signing identity and both allowed and denied
-access. See Apple's [local network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+On macOS, host services reach the private VM over virtio vsock, not over its
+network address. PostgreSQL, Redis and SuperTokens each have a vsock port that
+the guest's `lemma-service@<port>.socket` hands to `systemd-socket-proxyd` on
+the guest's loopback; guestd's control channel is vsock 42411; the backend
+reaches a sandbox's published ports through guestd's tunnel on vsock 42412
+(`sandbox_tunnel.rs`, `desktop_tunnel.py` in the backend); and the paired
+user's loopback relay comes back the other way on vsock 42413. None of these
+is a connection to a device on the local network, so none is subject to macOS
+Local Network privacy, which a background process cannot be prompted for.
+
+The guest still takes a DHCP lease from vmnet, and a sandbox's reported URL
+names that address -- the tunnel dials it from inside the guest. A guest with
+no lease keeps serving its core services and reports
+`guest_network_unavailable` for sandbox operations. The app and daemon still
+carry `NSLocalNetworkUsageDescription`, but no host path depends on the
+permission being granted; a guest that is unreachable is diagnosed through its
+vsock health channel rather than by suspecting the permission. See
+[Desktop security](desktop-security.md) for what a sandbox can reach.
 
 ## 7.2 Sharing and canonical origin
 

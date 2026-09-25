@@ -81,6 +81,31 @@ jobs:
       # protected E2E is not a required check on main, so demanding a successful
       # run for the exact SHA would block nearly every one of these. The version
       # check above still runs either way.
+      # A published release is built from its tag. A dispatch runs on
+      # whatever ref it was started from -- main, unless told otherwise -- and
+      # the rest of this workflow builds `github.sha`, so a repair dispatched
+      # from main shipped main's HEAD under the tag's version.
+      - name: Require the release tag as the ref
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          expected="refs/tags/v${VERSION#v}"
+          if [ "${GITHUB_REF}" != "${expected}" ]; then
+            echo "::error title=Dispatch from the tag::This run is on ${GITHUB_REF}." \
+                 "Start it with: gh workflow run release-local-images.yml --ref v${VERSION#v} -f version=${VERSION#v} -f publish=true"
+            exit 1
+          fi
+      # First, before any job publishes anything: the nightly runtime assets
+      # go to a prerelease in `manifest`, which ran before the share jobs ever
+      # asked whether CI had passed on this commit.
+      - name: Refuse to build a nightly from a commit CI has not passed
+        if: github.event_name == 'workflow_dispatch' && inputs.share && !inputs.publish
+        uses: ./.github/actions/require-ci-passed
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ github.sha }}
       - name: Verify protected evidence
         if: github.event_name == 'push' || inputs.publish
         uses: ./.github/actions/require-backend-protected-e2e
@@ -908,7 +933,10 @@ jobs:
             echo "A desktop release run is already in flight; not starting a second."
             exit 0
           fi
-          if ! gh workflow run release-desktop.yml -f "version=${VERSION}"; then
+          # --ref the tag: without it the run starts on the default branch.
+          # release-desktop.yml checks the tag out either way; this keeps the
+          # run's own ref, and what its UI names, the release it builds.
+          if ! gh workflow run release-desktop.yml --ref "v${VERSION}" -f "version=${VERSION}"; then
             echo "::error title=Desktop release not started::" \
                  "v${VERSION} carries runtime assets but no app or update feed." \
                  "Run release-desktop.yml for ${VERSION}, or mark v${VERSION} a" \
@@ -1004,26 +1032,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      # An installed nightly updates to the next nightly automatically, so a
-      # broken one reaches machines rather than a pull request. This job builds,
+      # Installed nightlies are offered the next nightly, so a broken one
+      # reaches machines rather than a pull request. This job builds,
       # signs and notarizes but runs no tests of its own, and it is dispatchable
       # from any branch -- so without this, "did anything check this commit?"
       # had no answer. `CI passed` is the aggregator every merge goes behind, so
       # one question covers the whole required set.
       - name: Refuse to publish a nightly from a commit CI has not passed
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          conclusion="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name == "CI passed")] | first | .conclusion // "missing"')"
-          echo "CI passed for ${GITHUB_SHA}: ${conclusion}"
-          if [ "${conclusion}" != "success" ]; then
-            echo "::error title=Refusing to publish an unverified nightly::" \
-                 "'CI passed' for ${GITHUB_SHA} is ${conclusion}."
-            exit 1
-          fi
+        uses: ./.github/actions/require-ci-passed
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -1372,20 +1391,10 @@ jobs:
       # Same reason as the macOS nightly above: this job publishes an installer
       # to a channel that updates itself, and runs no tests of its own.
       - name: Refuse to publish a nightly from a commit CI has not passed
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          conclusion="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name == "CI passed")] | first | .conclusion // "missing"')"
-          echo "CI passed for ${GITHUB_SHA}: ${conclusion}"
-          if [ "${conclusion}" != "success" ]; then
-            echo "::error title=Refusing to publish an unverified nightly::" \
-                 "'CI passed' for ${GITHUB_SHA} is ${conclusion}."
-            exit 1
-          fi
+        uses: ./.github/actions/require-ci-passed
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

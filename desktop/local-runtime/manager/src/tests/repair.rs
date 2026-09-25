@@ -95,3 +95,27 @@ fn refreshes_private_host_epoch_for_direct_boot_guests() {
     assert!(epoch > 1_700_000_000);
     ensure_private_file(&runtime.host_epoch_file).unwrap();
 }
+
+/// Damage `e2fsck -p` declines to fix gets one forced repair before the host
+/// is told the disk needs resetting.
+///
+/// `-p` exits 4 for anything it will not fix unattended, and the only offer
+/// that followed was erasing all local data. The script is pinned by text
+/// because a shell script has no test harness here; the order is the point.
+#[test]
+fn preen_failures_are_repaired_before_reset_is_offered() {
+    let script = include_str!("../../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data")
+        .replace("\r\n", "\n");
+    let preen = script.find("e2fsck -p").expect("a preen pass");
+    let forced = script
+        .find("e2fsck -f -y")
+        .expect("a forced repair pass after -p leaves errors");
+    let verdict = script
+        .find("needs-repair: e2fsck exited")
+        .expect("unrepairable damage is still reported");
+    assert!(preen < forced && forced < verdict, "{script}");
+    assert!(
+        script.contains("if [ \"$status\" -eq 4 ]; then"),
+        "{script}"
+    );
+}

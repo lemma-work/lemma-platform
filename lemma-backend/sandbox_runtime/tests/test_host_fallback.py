@@ -272,3 +272,152 @@ def test_the_proxy_serves_a_fall_through_over_http(free_port, relay) -> None:
             assert answer.read() == b"the host"
     finally:
         _stop(host)
+
+
+def _proxy() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        proxy_port = probe.getsockname()[1]
+    ready = threading.Event()
+    threading.Thread(
+        target=serve, args=(proxy_port,), kwargs={"ready": ready}, daemon=True
+    ).start()
+    assert ready.wait(5), "the fall-through proxy did not start"
+    return proxy_port
+
+
+def _read_all(connection: socket.socket) -> bytes:
+    connection.settimeout(10)
+    received = b""
+    while True:
+        chunk = connection.recv(4096)
+        if not chunk:
+            return received
+        received += chunk
+
+
+def test_a_kept_alive_proxy_connection_carries_one_request_only(
+    free_port, relay
+) -> None:
+    """A browser sends its next request, for any host, down the proxy
+    connection it already has. It used to be spliced straight to whichever
+    server answered the first -- so a request meant for the Mac could be
+    answered by the sandbox. Now each connection is one request."""
+    sandbox = _running(_Server(("127.0.0.1", free_port), _say("the sandbox")))
+    with socket.socket(socket.AF_INET6) as probe:
+        probe.bind(("::1", 0))
+        mac_port = probe.getsockname()[1]
+    mac = _running(_Server6(("::1", mac_port), _say("the mac")))
+    try:
+        connection = socket.create_connection(("127.0.0.1", _proxy()))
+        connection.sendall(
+            f"GET http://localhost:{free_port}/ HTTP/1.1\r\n"
+            f"Host: localhost:{free_port}\r\nProxy-Connection: keep-alive\r\n\r\n"
+            f"GET http://localhost:{mac_port}/ HTTP/1.1\r\n"
+            f"Host: localhost:{mac_port}\r\n\r\n".encode()
+        )
+        received = _read_all(connection)
+        connection.close()
+        assert received.count(b"HTTP/1.1 200") == 1, received
+        assert received.endswith(b"the sandbox"), received
+    finally:
+        _stop(sandbox, mac)
+
+
+def test_a_request_body_is_forwarded_whole_and_alone(free_port, relay) -> None:
+    seen: list[bytes] = []
+
+    class Echo(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            seen.append(body)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    sandbox = _running(_Server(("127.0.0.1", free_port), Echo))
+    try:
+        connection = socket.create_connection(("127.0.0.1", _proxy()))
+        connection.sendall(
+            f"POST http://127.0.0.1:{free_port}/ HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{free_port}\r\nContent-Length: 5\r\n\r\n"
+            "helloGET http://example.invalid/ HTTP/1.1\r\n\r\n".encode()
+        )
+        received = _read_all(connection)
+        connection.close()
+        assert received.endswith(b"hello"), received
+        assert seen == [b"hello"]
+    finally:
+        _stop(sandbox)
+
+
+@pytest.mark.parametrize(
+    ("host", "loopback"),
+    [
+        ("localhost", True),
+        ("app.localhost", True),
+        ("LOCALHOST.", True),
+        ("127.0.0.1", True),
+        ("127.0.0.2", True),
+        ("0.0.0.0", True),
+        ("[::1]", True),
+        ("::1", True),
+        ("[::ffff:127.0.0.1]", True),
+        ("example.com", False),
+        ("localhost.example.com", False),
+        ("10.0.0.1", False),
+        ("", False),
+    ],
+)
+def test_every_spelling_of_this_machine_is_loopback(host, loopback) -> None:
+    assert host_fallback.is_loopback(host) is loopback
+
+
+def test_a_subdomain_of_localhost_falls_through_to_the_mac(free_port, relay) -> None:
+    host = _running(_Server6(("::1", free_port), _say("the host")))
+    try:
+        connection, where = open_upstream("app.localhost", free_port)
+        assert where == "host"
+        connection.close()
+    finally:
+        _stop(host)
+
+
+def test_a_public_page_cannot_reach_the_mac_through_the_proxy(free_port, relay) -> None:
+    """Chrome's protection for localhost goes by the address a request
+    resolves to, which it cannot see through a proxy. So a request for the Mac
+    that another site started -- a cross-site link, a fetch with a public
+    Origin -- is refused here; the agent's own navigation and a loopback page
+    calling its API still go through."""
+    mac = _running(_Server6(("::1", free_port), _say("the mac")))
+    proxy = _proxy()
+
+    def ask(*headers: str) -> bytes:
+        connection = socket.create_connection(("127.0.0.1", proxy))
+        connection.sendall(
+            (
+                f"GET http://localhost:{free_port}/ HTTP/1.1\r\n"
+                f"Host: localhost:{free_port}\r\n"
+                + "".join(f"{header}\r\n" for header in headers)
+                + "\r\n"
+            ).encode()
+        )
+        received = _read_all(connection)
+        connection.close()
+        return received
+
+    try:
+        assert ask("Sec-Fetch-Site: cross-site").startswith(b"HTTP/1.1 403")
+        assert ask("Origin: https://attacker.example").startswith(b"HTTP/1.1 403")
+        assert ask("Origin: null").startswith(b"HTTP/1.1 403")
+        assert ask("Sec-Fetch-Site: none").endswith(b"the mac")
+        assert ask(f"Origin: http://localhost:{free_port + 1}").endswith(b"the mac")
+        assert ask().endswith(b"the mac")
+    finally:
+        _stop(mac)
