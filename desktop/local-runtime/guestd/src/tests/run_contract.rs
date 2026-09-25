@@ -395,3 +395,87 @@ fn the_host_alias_and_the_loopback_relay_are_separate_grants() {
     assert!(joined.contains("dst=/run/lemma-host-loopback"), "{joined}");
     assert!(!joined.contains("host.lemma.internal"), "{joined}");
 }
+
+/// A running container is reused only when it has the grants asked for.
+///
+/// A grant is fixed when the container is made, so reusing one made with a
+/// different `host_access` would keep the reach it was meant to lose (or lack
+/// the one it was meant to gain). That is a replacement, not a conflict: the
+/// generation -- image and metadata -- is the same.
+#[test]
+fn a_running_sandbox_with_different_grants_is_replaced_not_reused() {
+    let asked = workspace_parameters(false);
+    let running = |host_access: bool| {
+        json!({
+            "image": asked.image,
+            "metadata": asked.metadata,
+            "grants": {"host_access": host_access, "host_loopback": false},
+            "status": {"status": "RUNNING"},
+        })
+    };
+
+    assert_eq!(
+        existing_container_verdict(&running(false), &asked),
+        ExistingContainer::Reuse
+    );
+    assert_eq!(
+        existing_container_verdict(&running(true), &asked),
+        ExistingContainer::Replace
+    );
+    assert_eq!(
+        existing_container_verdict(&running(true), &workspace_parameters(true)),
+        ExistingContainer::Reuse
+    );
+}
+
+#[test]
+fn a_different_generation_is_still_refused_and_a_stopped_one_replaced() {
+    let asked = workspace_parameters(true);
+    let snapshot = |image: &str, status: &str| {
+        json!({
+            "image": image,
+            "metadata": asked.metadata,
+            "grants": {"host_access": true, "host_loopback": false},
+            "status": {"status": status},
+        })
+    };
+
+    assert_eq!(
+        existing_container_verdict(&snapshot("ghcr.io/lemma/workspace@sha256:new", "RUNNING"), &asked),
+        ExistingContainer::Conflict
+    );
+    assert_eq!(
+        existing_container_verdict(&snapshot(&asked.image, "STOPPED"), &asked),
+        ExistingContainer::Replace
+    );
+}
+
+/// The relay grant is compared the same way: a running sandbox made without
+/// it is replaced when it is granted, and one made with it is replaced when it
+/// is withdrawn -- never reused with the old reach.
+#[test]
+fn a_running_sandbox_whose_relay_grant_changed_is_replaced() {
+    let mut granted = workspace_parameters(true);
+    granted.host_loopback = true;
+    let running = |host_loopback: bool| {
+        json!({
+            "image": granted.image,
+            "metadata": granted.metadata,
+            "grants": {"host_access": true, "host_loopback": host_loopback},
+            "status": {"status": "RUNNING"},
+        })
+    };
+
+    assert_eq!(
+        existing_container_verdict(&running(true), &granted),
+        ExistingContainer::Reuse
+    );
+    assert_eq!(
+        existing_container_verdict(&running(false), &granted),
+        ExistingContainer::Replace
+    );
+    assert_eq!(
+        existing_container_verdict(&running(true), &workspace_parameters(true)),
+        ExistingContainer::Replace
+    );
+}

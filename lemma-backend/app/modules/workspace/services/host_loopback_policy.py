@@ -29,7 +29,8 @@ on every connection instead, so the relay carries nothing while it is off and
 works as soon as it is turned on, with no container to replace.
 
 Asked each time a sandbox is provisioned, and the answer is fixed into the
-container: a running sandbox keeps what it was created with.
+container; guestd replaces a running container whose grants differ from the
+ones a later ensure asks for, rather than reusing it with the old reach.
 """
 
 from __future__ import annotations

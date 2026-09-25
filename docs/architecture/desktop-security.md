@@ -237,9 +237,13 @@ socket, so the sandbox finds no socket, the fall-through is not
 started, and `localhost` stays the sandbox's. Before the relay, a loopback miss
 was retried on the host alias; that path is gone on every platform.
 
-A grant is fixed when the container is created: pairing this Mac's host to a
-different account takes effect for a workspace the next time `sandbox.ensure`
-replaces its container, while locald's switch check applies at once.
+A grant is fixed into the container when it is created, and the backend asks
+the policy again on every `sandbox.ensure`. guestd compares the grants a
+running container was made with (its `lemma.work/host-access` and
+`lemma.work/host-loopback` labels) with the ones asked for, and replaces the
+container when they differ rather than reusing it with the old reach -- so
+pairing this Mac's host to a different account takes effect at the workspace's
+next ensure. locald's switch check applies at once.
 
 **Containers created before this** keep the arguments they were created with
 until `sandbox.ensure` next replaces them; a guest restart does.

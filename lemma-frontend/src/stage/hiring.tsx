@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Pod } from "@/data";
-import { HIRES, BLANK, openersFor, profileFor, type Hire } from "@/data/hires";
+import { HIRES, BLANK, blankHire, openersFor, profileFor, type Hire } from "@/data/hires";
 import { ASKS, typedAt } from "./asking";
 import { PlusIcon, ArrowRightIcon, BackIcon, CheckIcon, ChatIcon, LinkIcon, PeopleIcon } from "@/ui/icons";
 import { characterForSeed, variantForCharacter } from "@/shell/character";
@@ -113,7 +113,7 @@ export function HiringView({
        floor they were standing on. A dialog keeps the candidates behind it
        and makes Escape mean what it looks like it means. */
     const [describing, setDescribing] = useState(Boolean(initialJob));
-    const [picked, setPicked] = useState<Hire | null>(initialJob ? BLANK : null);
+    const [picked, setPicked] = useState<Hire | null>(() => (initialJob ? blankHire() : null));
     const [name, setName] = useState(initialJob?.name ?? "");
     const [job, setJob] = useState(initialJob?.job ?? "");
     const [done, setDone] = useState<string[]>([]);
@@ -122,7 +122,7 @@ export function HiringView({
     const queryClient = useQueryClient();
 
     function consider(hire: Hire) {
-        setPicked(hire);
+        setPicked(hire.id === "blank" ? blankHire() : hire);
         setName(hire.name);
         setError(null);
         if (hire.id === "blank") setDescribing(true);

@@ -79,7 +79,14 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
             setSaid({ text: count ? "Saved. Lemma restarted its server to use it." : "Nothing changed." });
             void queryClient.invalidateQueries({ queryKey: ["this-mac"] });
         },
-        onError: (problem) => setSaid({ text: friendlyError(problem), bad: true }),
+        onError: (problem) => {
+            setSaid({ text: friendlyError(problem), bad: true });
+            /* Some sections may have saved before this one failed, moving the
+               daemon's revision on. Refetch, so a retry is sent against the
+               revision that is there now rather than refused as stale. The
+               draft is kept: what did not save is still the person's. */
+            void queryClient.invalidateQueries({ queryKey: ["this-mac"] });
+        },
     });
 
     const configured = formConfigured(snapshot, spec.form);

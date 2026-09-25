@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BLANK, HIRES, openersFor } from "../src/data/hires.ts";
+import { BLANK, HIRES, blankHire, openersFor } from "../src/data/hires.ts";
+import { characterForSeed } from "../src/shell/cast.ts";
 
 test("every listing offers something to say on the first morning", () => {
     // The reveal's whole middle section comes from this. A listing that added
@@ -35,4 +36,14 @@ test("a listing's openers ignore whatever was typed on the shelf", () => {
     const followUps = HIRES.find((hire) => hire.id === "follow-ups");
     assert.ok(followUps);
     assert.deepEqual(openersFor(followUps, "something else entirely"), followUps.openers);
+});
+
+test("each blank hire is dealt a face of its own", () => {
+    // The shared BLANK seed hashed to one character, and hiring pins the
+    // picked character onto the pod — so every described job came out as Kite.
+    const faces = new Set(
+        Array.from({ length: 48 }, (_, index) => characterForSeed(blankHire("nonce-" + index).seed)),
+    );
+    assert.ok(faces.size > 8, "48 blank hires drew only " + faces.size + " characters");
+    assert.equal(blankHire("a").role, BLANK.role);
 });
