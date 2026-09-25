@@ -186,3 +186,78 @@ def test_a_token_from_the_environment_never_refreshes(monkeypatch, tmp_path) -> 
         asyncio.run(watch_module._run(state, "POD", None, None))
 
     assert attempts["n"] == 1
+
+
+def _closing_server(monkeypatch, *, code: int, give_up_after: int):
+    """Stub `websockets` so every handshake is accepted, then closed with *code*.
+
+    The shape the server now uses for a rejected session: an HTTP 401 never
+    reaches a browser as anything but 1006, so it accepts and closes 4401.
+    """
+    import sys
+    import types
+
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    attempts = {"n": 0}
+
+    class _Socket:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise ConnectionClosedError(Close(code, "rejected"), None)
+
+    def _connect(*_args, **_kwargs):
+        attempts["n"] += 1
+        if attempts["n"] > give_up_after:
+            raise KeyboardInterrupt
+        return _Socket()
+
+    stub = types.ModuleType("websockets")
+    stub.connect = _connect
+    monkeypatch.setitem(sys.modules, "websockets", stub)
+    return attempts
+
+
+def test_a_4401_close_refreshes_once_then_stops(monkeypatch, tmp_path) -> None:
+    """Accept-then-4401 is an auth failure: one refresh, one retry, then stop.
+
+    Treating it as a dropped connection would reconnect forever, and because
+    the socket did open, the backoff would reset to zero on every attempt.
+    """
+    import asyncio
+
+    from lemma_cli.cli_core import watch as watch_module
+
+    attempts = _closing_server(monkeypatch, code=4401, give_up_after=5)
+    state = _rotated_session_state(tmp_path)
+
+    with pytest.raises((typer.Exit, KeyboardInterrupt)):
+        asyncio.run(watch_module._run(state, "POD", None, None))
+
+    assert attempts["n"] == 2
+
+
+def test_a_4401_close_with_an_environment_token_stops_at_once(
+    monkeypatch, tmp_path
+) -> None:
+    import asyncio
+
+    from lemma_cli.cli_core import watch as watch_module
+
+    attempts = _closing_server(monkeypatch, code=4401, give_up_after=5)
+    state = _rotated_session_state(tmp_path)
+    state.token = "tok"
+
+    with pytest.raises((typer.Exit, KeyboardInterrupt)):
+        asyncio.run(watch_module._run(state, "POD", None, None))
+
+    assert attempts["n"] == 1
