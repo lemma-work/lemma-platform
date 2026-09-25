@@ -97,13 +97,9 @@ def ready_message(invited_pod_name: str | None = None) -> str:
     URL is read when the message is sent rather than when the module is
     imported.
     """
-    joined = (
-        f"You were invited to {invited_pod_name}, and you're in it now.\n\n"
-        if invited_pod_name
-        else ""
-    )
+    joined = f"You were invited to {invited_pod_name}, and you're in it now.\n\n"
     return (
-        f"{joined}{READY_MESSAGE}\n\n"
+        f"{joined if invited_pod_name else ''}{READY_MESSAGE}\n\n"
         f"To use Lemma on the web, go to {settings.frontend_url.rstrip('/')}/login "
         "and enter this same email address. We'll send you a sign-in code -- "
         "there's no password to remember."
