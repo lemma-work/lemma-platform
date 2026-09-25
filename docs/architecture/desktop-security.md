@@ -269,5 +269,10 @@ or anything that touches the local stack. See
   reach another's published ports through the guest; those ports require the
   per-sandbox runtime credential, but the network does not separate them.
 - **IPv6.** The isolation rules are IPv4; nerdctl's default bridge is IPv4-only.
-- **Containers created before an upgrade** keep the arguments they were
-  created with until the next time `sandbox.ensure` replaces them.
+- **Containers created before an upgrade** are not reused with the arguments
+  they were created with. Every container carries `lemma.work/hardening`
+  (`SANDBOX_HARDENING_VERSION` in guestd) and its grants as labels, and the
+  next `sandbox.ensure` replaces a running one whose hardening is older or
+  whose grants differ from the request. The replacement is made only after
+  everything that can fail before `run` has passed, and a running container is
+  renamed aside rather than removed, so a failed start puts it back.

@@ -237,7 +237,8 @@ pub(super) fn inspect() -> String {
         "Config": {"Labels": {
             "lemma.work/workload-kind": "workspace",
             "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
-            "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+            "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}",
+            "lemma.work/hardening": SANDBOX_HARDENING_VERSION.to_string()
         }},
         "NetworkSettings": {"Ports": {
             "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}],

@@ -63,6 +63,8 @@ pub(crate) fn build_run_arguments(
         format!("lemma.work/host-access={}", parameters.host_access),
         "--label".into(),
         format!("lemma.work/host-loopback={}", parameters.host_loopback),
+        "--label".into(),
+        format!("lemma.work/hardening={SANDBOX_HARDENING_VERSION}"),
         "--env-file".into(),
         env_file.display().to_string(),
         // No capabilities, and no way to gain any.

@@ -277,7 +277,9 @@ fn no_capability_exposes_the_updater_to_a_remote_origin() {
         ".install(bytes)",
         "if cfg!(windows)",
     ] {
-        let at = install.find(later).unwrap_or_else(|| panic!("{later} is missing"));
+        let at = install
+            .find(later)
+            .unwrap_or_else(|| panic!("{later} is missing"));
         assert!(
             consent < agreed && agreed < at,
             "native consent must precede {later}: consent@{consent} abort@{agreed} {later}@{at}",

@@ -410,6 +410,7 @@ fn a_running_sandbox_with_different_grants_is_replaced_not_reused() {
             "image": asked.image,
             "metadata": asked.metadata,
             "grants": {"host_access": host_access, "host_loopback": false},
+            "hardening": SANDBOX_HARDENING_VERSION,
             "status": {"status": "RUNNING"},
         })
     };
@@ -436,17 +437,140 @@ fn a_different_generation_is_still_refused_and_a_stopped_one_replaced() {
             "image": image,
             "metadata": asked.metadata,
             "grants": {"host_access": true, "host_loopback": false},
+            "hardening": SANDBOX_HARDENING_VERSION,
             "status": {"status": status},
         })
     };
 
     assert_eq!(
-        existing_container_verdict(&snapshot("ghcr.io/lemma/workspace@sha256:new", "RUNNING"), &asked),
+        existing_container_verdict(
+            &snapshot("ghcr.io/lemma/workspace@sha256:new", "RUNNING"),
+            &asked
+        ),
         ExistingContainer::Conflict
     );
     assert_eq!(
         existing_container_verdict(&snapshot(&asked.image, "STOPPED"), &asked),
         ExistingContainer::Replace
+    );
+}
+
+/// A running container made before the current hardening is replaced, not
+/// reused: reuse would keep the capabilities and privileges it was created
+/// with. No label at all is a container from before any hardening.
+#[test]
+fn a_running_sandbox_from_before_the_hardening_is_replaced() {
+    let asked = workspace_parameters(true);
+    let running = |hardening: Value| {
+        json!({
+            "image": asked.image,
+            "metadata": asked.metadata,
+            "grants": {"host_access": true, "host_loopback": false},
+            "hardening": hardening,
+            "status": {"status": "RUNNING"},
+        })
+    };
+
+    assert_eq!(
+        existing_container_verdict(&running(json!(SANDBOX_HARDENING_VERSION)), &asked),
+        ExistingContainer::Reuse
+    );
+    assert_eq!(
+        existing_container_verdict(&running(json!(0)), &asked),
+        ExistingContainer::Replace
+    );
+    assert_eq!(
+        existing_container_verdict(&running(Value::Null), &asked),
+        ExistingContainer::Replace
+    );
+    let joined = run_arguments(&asked).join(" ");
+    assert!(
+        joined.contains(&format!("lemma.work/hardening={SANDBOX_HARDENING_VERSION}")),
+        "{joined}"
+    );
+}
+
+fn swap_service(outputs: Vec<Output>) -> (tempfile::TempDir, GuestService<FakeEngine>) {
+    let root = tempdir().unwrap();
+    let service = GuestService::new(
+        FakeEngine::new(outputs),
+        root.path().into(),
+        Some("192.168.64.2".into()),
+        "192.168.64.1".into(),
+        None,
+    )
+    .unwrap();
+    (root, service)
+}
+
+fn strings(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|part| (*part).to_owned()).collect()
+}
+
+/// A replacement whose `run` fails puts the running sandbox back as it was.
+///
+/// The old container is renamed aside rather than removed, so a failed start
+/// -- an image that will not run, a port the engine refuses -- leaves the user
+/// with the sandbox they had instead of none.
+#[test]
+fn a_failed_replacement_restores_the_running_sandbox() {
+    let (_root, service) = swap_service(vec![
+        output(false, ""), // no leftover aside
+        output(true, ""),  // rename aside
+        output(false, ""), // run fails
+        output(true, ""),  // clear whatever run left
+        output(true, ""),  // rename back
+    ]);
+    let run = strings(&["run", "--name", "lemma-box-1", "image"]);
+
+    let error = service
+        .replace_and_run("lemma-box-1", &run, true)
+        .expect_err("the run failure is reported");
+    assert_eq!(error.code, "guest_engine_failed");
+    assert_eq!(
+        service.engine.commands.lock().unwrap().as_slice(),
+        [
+            strings(&["rm", "--force", "lemma-box-1-replaced"]),
+            strings(&["rename", "lemma-box-1", "lemma-box-1-replaced"]),
+            run.clone(),
+            strings(&["rm", "--force", "lemma-box-1"]),
+            strings(&["rename", "lemma-box-1-replaced", "lemma-box-1"]),
+        ]
+    );
+}
+
+#[test]
+fn a_successful_replacement_removes_the_old_container_only_afterwards() {
+    let (_root, service) = swap_service(vec![
+        output(false, ""),
+        output(true, ""),
+        output(true, "new-id"),
+        output(true, ""),
+    ]);
+    let run = strings(&["run", "--name", "lemma-box-1", "image"]);
+
+    service.replace_and_run("lemma-box-1", &run, true).unwrap();
+    assert_eq!(
+        service.engine.commands.lock().unwrap().as_slice(),
+        [
+            strings(&["rm", "--force", "lemma-box-1-replaced"]),
+            strings(&["rename", "lemma-box-1", "lemma-box-1-replaced"]),
+            run.clone(),
+            strings(&["rm", "--force", "lemma-box-1-replaced"]),
+        ]
+    );
+}
+
+/// A stopped container has nothing to keep: removed right before `run`.
+#[test]
+fn a_stopped_container_is_removed_immediately_before_run() {
+    let (_root, service) = swap_service(vec![output(true, ""), output(true, "new-id")]);
+    let run = strings(&["run", "--name", "lemma-box-1", "image"]);
+
+    service.replace_and_run("lemma-box-1", &run, false).unwrap();
+    assert_eq!(
+        service.engine.commands.lock().unwrap().as_slice(),
+        [strings(&["rm", "--force", "lemma-box-1"]), run.clone()]
     );
 }
 
@@ -462,6 +586,7 @@ fn a_running_sandbox_whose_relay_grant_changed_is_replaced() {
             "image": granted.image,
             "metadata": granted.metadata,
             "grants": {"host_access": true, "host_loopback": host_loopback},
+            "hardening": SANDBOX_HARDENING_VERSION,
             "status": {"status": "RUNNING"},
         })
     };
