@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { accountAccess, needsVerification } from "../src/auth/completion.ts";
-import { startVerification, type VerificationActions } from "../src/auth/verification.ts";
+import { checkInbox, startVerification, type VerificationActions } from "../src/auth/verification.ts";
 
 test("account access distinguishes verification from sign-out and unrelated denials", async () => {
     process.env.NEXT_PUBLIC_API_URL = "https://api.example.test";
@@ -76,4 +76,23 @@ test("an already-verified resend refreshes the session instead of claiming an em
 test("send and refresh failures remain retryable errors", async () => {
     await assert.rejects(startVerification(false, actions({ send: async () => { throw new Error("rate limited"); } })), /rate limited/);
     await assert.rejects(startVerification(true, actions({ refresh: async () => { throw new Error("offline"); } })), /offline/);
+});
+
+test("the inbox poll refreshes once when the address is verified, then stops", async () => {
+    let refreshes = 0;
+    const refresh = async () => { refreshes += 1; return true; };
+    assert.equal(await checkInbox({ verified: async () => false, refresh }), "inbox");
+    assert.equal(refreshes, 0);
+    assert.equal(await checkInbox({ verified: async () => true, refresh }), "done");
+    assert.equal(refreshes, 1);
+});
+
+test("a failing refresh still ends the inbox poll rather than retrying it", async () => {
+    let refreshes = 0;
+    const phase = await checkInbox({
+        verified: async () => true,
+        refresh: async () => { refreshes += 1; throw new Response(null, { status: 500 }); },
+    });
+    assert.equal(phase, "done");
+    assert.equal(refreshes, 1);
 });

@@ -657,6 +657,9 @@ export class AgentController {
     // Set where the buffer is cleared, read where the turn is reconciled.
     let unclaimedAnswer = false;
     let streamFailure: unknown = null;
+    // The reconnect backoff resets when a stream says something, not when it
+    // opens; see `useAssistantSession`, which has the same loop.
+    let deliveredEvent = false;
 
     try {
       for await (const event of readSSE(stream)) {
@@ -672,6 +675,7 @@ export class AgentController {
           // below, which is what the server is asking for.
           continue;
         }
+        deliveredEvent = true;
         if (parsed.notice) {
           this.options.onNotice?.(parsed.notice, parsed.noticeKind);
         }
@@ -753,7 +757,11 @@ export class AgentController {
       if (!controller.signal.aborted) {
         const syncConversationId = streamConversationId ?? this.state.conversationId;
         if (!sawTerminalStatus && syncConversationId) {
+          if (deliveredEvent) this.streamReconnectCount = 0;
           while (!controller.signal.aborted) {
+            // Signed out is final for this loop: every request it makes would
+            // answer 401, every ten seconds, for as long as it ran.
+            if (this.client.auth?.getState().status === "unauthenticated") break;
             const latestConversation = await this.refreshConversation(syncConversationId);
             await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
             if (controller.signal.aborted) break;
@@ -779,7 +787,6 @@ export class AgentController {
                 pod_id: scope.podId ?? undefined,
                 signal: controller.signal,
               });
-              this.streamReconnectCount = 0;
               return await this.consume({
                 stream: newStream,
                 controller,
