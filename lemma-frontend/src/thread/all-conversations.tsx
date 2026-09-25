@@ -29,7 +29,7 @@ export function AllConversations({
         initialPageParam: null as string | null,
         getNextPageParam: (last) => last.next,
     });
-    const { hasNextPage, isFetchingNextPage, fetchNextPage } = history;
+    const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = history;
 
     const entries = useMemo(() => {
         const all = history.data?.pages.flatMap((page) => page.items) ?? [];
@@ -40,13 +40,15 @@ export function AllConversations({
     const more = useRef<HTMLButtonElement>(null);
     useEffect(() => {
         const target = more.current;
-        if (!target || !hasNextPage || typeof IntersectionObserver === "undefined") return;
+        /* Not after a failure: the button stays in view, so re-observing would
+           ask for the failing page again and again. Pressing it retries. */
+        if (!target || !hasNextPage || isFetchNextPageError || typeof IntersectionObserver === "undefined") return;
         const observer = new IntersectionObserver((seen) => {
             if (seen.some((entry) => entry.isIntersecting) && !isFetchingNextPage) void fetchNextPage();
         });
         observer.observe(target);
         return () => observer.disconnect();
-    }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+    }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
     /* The filter reads the pages that have loaded, not the server. Saying
        "nothing matches" while older pages are still unread would be a claim

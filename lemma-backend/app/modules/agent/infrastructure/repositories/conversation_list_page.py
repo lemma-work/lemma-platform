@@ -28,7 +28,14 @@ async def page_by_activity(
     if cursor is not None:
         stmt = stmt.where(
             tuple_(ConversationModel.last_activity_at, ConversationModel.id)
-            < tuple_(literal(cursor.last_activity_at), literal(cursor.id))
+            < tuple_(
+                # Typed from the columns: an untyped datetime literal binds as
+                # a naive TIMESTAMP, which asyncpg refuses an aware value for.
+                literal(
+                    cursor.last_activity_at, ConversationModel.last_activity_at.type
+                ),
+                literal(cursor.id, ConversationModel.id.type),
+            )
         )
     stmt = stmt.order_by(
         ConversationModel.last_activity_at.desc(), ConversationModel.id.desc()

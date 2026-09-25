@@ -106,13 +106,18 @@ interface Pages {
 }
 
 /** Apply one patch to the short list and to every page the all-conversations
- *  pane has loaded, and hand back what undoes it.
+ *  pane has loaded.
  *
  *  Two caches because they are two queries: the sidebar's first page and the
  *  pane's pages. A rename made in the pane that only patched the first would
  *  show the old title in the very row that was just renamed.
+ *
+ *  No undo. A snapshot taken now is stale by the time a request fails — a page
+ *  may have loaded, another rename may have landed — and restoring it would
+ *  drop both. A caller whose request fails invalidates `["conversations",
+ *  podId]` instead, which reaches both queries and asks the server.
  */
-export function patchConversationLists(cache: ConversationCache, podId: string, patch: ListPatch): () => void {
+export function patchConversationLists(cache: ConversationCache, podId: string, patch: ListPatch): void {
     const shortKey = ["conversations", podId];
     const allKey = allConversationsKey(podId);
     const short = cache.getQueryData<ConversationRef[]>(shortKey);
@@ -129,9 +134,4 @@ export function patchConversationLists(cache: ConversationCache, podId: string, 
         });
         if (changed) cache.setQueryData<Pages>(allKey, { ...all, pages });
     }
-
-    return () => {
-        if (short) cache.setQueryData(shortKey, short);
-        if (all) cache.setQueryData(allKey, all);
-    };
 }

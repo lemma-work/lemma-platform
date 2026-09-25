@@ -51,7 +51,7 @@ export function History({
        this list, which is "conversations you can open here". */
     async function archive(id: string) {
         setArchiving(id);
-        const undo = patchConversationLists(cache, pod.id, (list) => applyArchived(list, id));
+        patchConversationLists(cache, pod.id, (list) => applyArchived(list, id));
         /* Leave the pane rather than leave it pointed at something that is no
            longer in the list beside it. */
         if (id === conversationId) onPick(NEW_CONVERSATION);
@@ -64,7 +64,7 @@ export function History({
                 await lemma(pod.id).conversations.update(id, { is_archived: true }, { pod_id: pod.id });
             }
         } catch {
-            undo();
+            void cache.invalidateQueries({ queryKey: ["conversations", pod.id] });
         } finally {
             setArchiving(null);
         }

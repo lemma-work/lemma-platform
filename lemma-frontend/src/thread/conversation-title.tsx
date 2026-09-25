@@ -48,7 +48,7 @@ export function ConversationTitle({
 
         /* Optimistic, and reverted below if the server disagrees. A rename that
            waits for a round trip to appear reads as a click that missed. */
-        const undo = patchConversationLists(cache, podId, (list) => applyTitle(list, conversationId!, next));
+        patchConversationLists(cache, podId, (list) => applyTitle(list, conversationId!, next));
         setSaving(true);
         setFailed(false);
         try {
@@ -59,7 +59,7 @@ export function ConversationTitle({
                 await lemma(podId).conversations.update(conversationId!, { title: next }, { pod_id: podId });
             }
         } catch {
-            undo();
+            void cache.invalidateQueries({ queryKey: ["conversations", podId] });
             setFailed(true);
         } finally {
             setSaving(false);

@@ -26,7 +26,8 @@ def parse_conversation_page_token(
     by id alone -- is refused rather than guessed at: it names a row but not a
     position in the new order.
     """
-    if page_token is None:
+    # `?page_token=` is a client serialising "no token", not a bad one.
+    if not page_token:
         return None
     try:
         decoded = base64.urlsafe_b64decode(page_token.encode("ascii")).decode()

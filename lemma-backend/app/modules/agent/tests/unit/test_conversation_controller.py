@@ -714,3 +714,8 @@ def test_conversation_page_token_rejects_what_it_did_not_mint(page_token) -> Non
         parse_conversation_page_token(page_token)
 
     assert caught.value.status_code == 400
+
+
+@pytest.mark.parametrize("page_token", [None, ""])
+def test_an_absent_or_empty_page_token_is_the_first_page(page_token) -> None:
+    assert parse_conversation_page_token(page_token) is None
