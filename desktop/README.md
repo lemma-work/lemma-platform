@@ -495,8 +495,15 @@ and publish nightly B with app/backend/frontend changes. Use Settings → This M
 Updates to install B, reopen, and verify the version, credentials, data, services,
 and conversation continuity. Repeat with interrupted downloads and installation
 failure. Run this on macOS and Windows; feed publication alone is not upgrade
-qualification. Existing Windows local-data updates remain blocked until the
-data-preserving guest migration is available.
+qualification. A Windows update that would replace the guest runtime refuses to
+run until the separate data-holder distribution confirms it has the data
+(`refuse_replacement_without_holder`); the update itself is not hidden.
+
+Nightlies are offered, never installed on their own: This Mac → Updates checks
+the feed and installs only what the person agreed to. Each nightly is cut from
+a main commit whose `CI passed` succeeded, re-checked by the build itself before
+it publishes anything. A migration a nightly has carried is shipped: installed
+nightlies ran it, so `lint-migration-order` refuses edits to it.
 
 It has to be the online DMG. Apple's notary service unpacks `host-runtime.zip`
 and rejects everything inside: a bundled CPython and `node_modules` are not
@@ -743,8 +750,13 @@ Packaged release builds ignore them.
 
 ## Release policy
 
-`release-desktop.yml` publishes only signed/notarized online macOS and Windows
-installers. `release-local-images.yml` publishes immutable host/guest runtimes
+`release-desktop.yml` builds signed online installers for macOS and Windows,
+but attaches only the notarized macOS DMG and its update payload to the
+release: the stable `latest.json` feed carries `darwin-aarch64` alone, so a
+stable Windows install has no in-app update and is updated by installing the
+next release by hand. Windows installers are workflow artifacts for testers;
+nightlies publish a Windows feed entry. The run always builds the release tag,
+never the ref it was dispatched from. `release-local-images.yml` publishes immutable host/guest runtimes
 and the release manifest. The release gate requires the platform E2Es, size
 breakdown, signatures, and runtime integrity checks.
 
