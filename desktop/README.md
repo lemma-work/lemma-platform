@@ -266,10 +266,11 @@ Two things it deliberately does not cover, both reported rather than hidden:
 
 - **Functions.** It runs no locald, so nothing dispatches a function into a
   guest sandbox. That test skips, naming `make desktop-e2e` as the lane for it.
-- **The `.localhost` arrangement.** The embedded test skips there, because a
-  framed app genuinely cannot hold a session under a base domain whose hosts a
-  browser cannot derive a registrable domain from. Force it with
-  `LEMMA_LOCAL_DOMAIN=lemma.localhost` to see the fallback behave.
+- **Framing on `lemma.localhost`.** The embedded test skips: WebKit treats
+  every `*.localhost` host as its own site, so an app framed on its own address
+  is third-party by construction. The macOS workspace frames a same-site alias
+  from locald instead, and `make desktop-app-alias-proof` proves that in
+  WKWebView (see `desktop/e2e/app_alias_proof/README.md`).
 
 **`desktop-e2e` runs against whatever install is running** and *hard-fails*
 rather than skipping when it cannot find one. That is on purpose — a lane that
@@ -495,8 +496,15 @@ and publish nightly B with app/backend/frontend changes. Use Settings → This M
 Updates to install B, reopen, and verify the version, credentials, data, services,
 and conversation continuity. Repeat with interrupted downloads and installation
 failure. Run this on macOS and Windows; feed publication alone is not upgrade
-qualification. Existing Windows local-data updates remain blocked until the
-data-preserving guest migration is available.
+qualification. A Windows update that would replace the guest runtime refuses to
+run until the separate data-holder distribution confirms it has the data
+(`refuse_replacement_without_holder`); the update itself is not hidden.
+
+Nightlies are offered, never installed on their own: This Mac → Updates checks
+the feed and installs only what the person agreed to. Each nightly is cut from
+a main commit whose `CI passed` succeeded, re-checked by the build itself before
+it publishes anything. A migration a nightly has carried is shipped: installed
+nightlies ran it, so `lint-migration-order` refuses edits to it.
 
 It has to be the online DMG. Apple's notary service unpacks `host-runtime.zip`
 and rejects everything inside: a bundled CPython and `node_modules` are not
@@ -690,7 +698,8 @@ a shipped artifact.
     refused as busy, and the loser must touch nothing.
 26. **Update.** Install v(N-1) from its DMG into Applications, complete first
     run, create a workspace. Publish v(N) and confirm This Mac → Updates offers it
-    with the real runtime download size. Update, restart, and confirm the
+    with the real runtime download size. Update (Lemma restarts itself once
+    installed; there is no "Later"), and confirm the
     workspace returns with its data, that `pgrep -a lemma-locald` shows nothing
     from the previous bundle, and that the relaunched app does not bounce off
     its own single-instance lock. Repeat with Lemma in a non-writable location
@@ -742,8 +751,13 @@ Packaged release builds ignore them.
 
 ## Release policy
 
-`release-desktop.yml` publishes only signed/notarized online macOS and Windows
-installers. `release-local-images.yml` publishes immutable host/guest runtimes
+`release-desktop.yml` builds signed online installers for macOS and Windows,
+but attaches only the notarized macOS DMG and its update payload to the
+release: the stable `latest.json` feed carries `darwin-aarch64` alone, so a
+stable Windows install has no in-app update and is updated by installing the
+next release by hand. Windows installers are workflow artifacts for testers;
+nightlies publish a Windows feed entry. The run always builds the release tag,
+never the ref it was dispatched from. `release-local-images.yml` publishes immutable host/guest runtimes
 and the release manifest. The release gate requires the platform E2Es, size
 breakdown, signatures, and runtime integrity checks.
 

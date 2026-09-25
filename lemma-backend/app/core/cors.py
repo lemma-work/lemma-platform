@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlparse
 
 from app.core.config import settings
+from app.core.exposure import local_relaxations_allowed
 
 
 def _normalise_origin(origin: str | None) -> str | None:
@@ -34,7 +35,9 @@ def _configured_origins() -> list[str]:
     not simply a narrower default: the default has to stay usable locally.
     """
     origins = list(settings.cors_origins)
-    if settings.is_local_mode() or "cors_origins" in settings.model_fields_set:
+    # A shared Desktop installation is local mode with strangers on the other
+    # end, which is exactly the case this rule exists for.
+    if local_relaxations_allowed() or "cors_origins" in settings.model_fields_set:
         return origins
     return [origin for origin in origins if not _is_loopback_default(origin)]
 

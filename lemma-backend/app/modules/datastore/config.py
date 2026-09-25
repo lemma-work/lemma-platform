@@ -339,6 +339,13 @@ class DatastoreSettings(BaseSettings):
             "``KREUZBERG_CONNECT_TIMEOUT_SECONDS``."
         ),
     )
+    kreuzberg_max_response_bytes: int = Field(
+        default=256 * 1024 * 1024,
+        description=(
+            "Cap (bytes) on a Kreuzberg response body, which is spooled to a temp "
+            "file; larger fails. 0 disables. Env: ``KREUZBERG_MAX_RESPONSE_BYTES``."
+        ),
+    )
     kreuzberg_transient_retry_attempts: int = Field(
         default=3,
         description=(

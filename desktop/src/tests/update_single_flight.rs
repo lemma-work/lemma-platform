@@ -1,7 +1,9 @@
 //! One update at a time, and only the one the user agreed to.
 
 use super::*;
-use crate::app_update::{offered_is_what_was_agreed, InstallInFlight};
+use crate::app_update::{
+    active_agent_runs, interrupted_runs_sentence, offered_is_what_was_agreed, InstallInFlight,
+};
 
 /// A second install is refused while the first is running.
 ///
@@ -83,4 +85,26 @@ fn the_restart_dialog_does_not_wait_on_a_runtime_worker() {
         body[offloaded..confirmation].find("await").is_none(),
         "the spawn_blocking before the confirmation belongs to something else",
     );
+}
+
+#[test]
+fn the_install_consent_counts_the_agent_runs_it_will_interrupt() {
+    // Installing stops locald, and the Agent Host with it. Somebody deciding
+    // *when* to update needs to know a coding agent is mid-run.
+    let status = json!({
+        "running": true,
+        "targets": [{"active_runs": 2}, {"active_runs": null}, {"active_runs": 1}],
+    });
+    assert_eq!(active_agent_runs(Some(&status)), 3);
+    assert_eq!(
+        interrupted_runs_sentence(3),
+        " 3 agent runs on this computer are in progress and will be interrupted."
+    );
+    assert!(interrupted_runs_sentence(1).contains("1 agent run on this computer is"));
+
+    // Nothing to lose, nothing said: not running, never reported, or idle.
+    let stopped = json!({"running": false, "targets": [{"active_runs": 4}]});
+    assert_eq!(active_agent_runs(Some(&stopped)), 0);
+    assert_eq!(active_agent_runs(None), 0);
+    assert_eq!(interrupted_runs_sentence(0), "");
 }

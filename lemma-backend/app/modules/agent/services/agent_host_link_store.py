@@ -121,6 +121,7 @@ class AgentHostLinkStore:
                 host_secret_hash=host_secret_hash(secret),
                 display_name=body.display_name,
                 hello=body.hello,
+                reenable=body.reenable,
             )
             await uow.commit()
         return AgentHostPairingCompleted(

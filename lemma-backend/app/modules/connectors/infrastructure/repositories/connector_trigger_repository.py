@@ -2,6 +2,9 @@ from typing import List, Optional, Sequence, Tuple
 
 from sqlalchemy import func, or_, select
 
+from app.modules.connectors.infrastructure.repositories.catalog_rows import (
+    convert_valid_rows,
+)
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -46,7 +49,7 @@ class ConnectorTriggerRepository(
             ConnectorTrigger.connector_id == connector_id
         )
         result = await self.session.execute(stmt)
-        return [instance.to_entity() for instance in result.scalars().all()]
+        return convert_valid_rows(result.scalars().all(), ConnectorTrigger.to_entity)
 
     async def list_by_connector_kind(
         self,
@@ -65,7 +68,7 @@ class ConnectorTriggerRepository(
         if limit is not None:
             stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
-        return [instance.to_entity() for instance in result.scalars().all()]
+        return convert_valid_rows(result.scalars().all(), ConnectorTrigger.to_entity)
 
     async def get_by_connector_kind_and_name(
         self,
@@ -115,7 +118,7 @@ class ConnectorTriggerRepository(
         else:
             next_cursor = None
 
-        return [t.to_entity() for t in triggers], next_cursor
+        return convert_valid_rows(triggers, ConnectorTrigger.to_entity), next_cursor
 
     async def get_by_connector_and_name(
         self, app_id: str, trigger_id: str
@@ -147,4 +150,4 @@ class ConnectorTriggerRepository(
         result = await self.session.execute(stmt)
         triggers = result.scalars().all()
 
-        return [t.to_entity() for t in triggers]
+        return convert_valid_rows(triggers, ConnectorTrigger.to_entity)

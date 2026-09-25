@@ -6,7 +6,7 @@ import json
 import mimetypes
 import os
 import tempfile
-from typing import Any
+from typing import IO, Any
 
 import aiohttp
 
@@ -18,6 +18,10 @@ from app.modules.datastore.infrastructure.extraction_result import (
 )
 from app.modules.datastore.infrastructure.kreuzberg_circuit import (
     get_kreuzberg_circuit,
+)
+from app.modules.datastore.infrastructure.kreuzberg_spool import (
+    parse_spooled,
+    spool_response,
 )
 from app.modules.datastore.infrastructure.pdf_renderer import get_pdf_text_sample
 from app.modules.datastore.infrastructure.streaming import open_binary
@@ -482,15 +486,9 @@ class KreuzbergHelper:
                     await self._raise_for_status(response)
                     # A completed HTTP round-trip means the extractor is reachable.
                     circuit.record_success()
-                    # Read bytes and parse OFF the loop. An extraction
-                    # response carries the whole document's text and, when
-                    # figures are requested, base64 images inline — tens of
-                    # megabytes of JSON. aiohttp's .json() parses that on the
-                    # event loop, and _parse_extract_response walks it again.
-                    raw = await response.read()
-                    return await run_blocking(
-                        self._parse_extract_bytes, raw, limiter="cpu_bound"
-                    )
+                    # Spool the body and parse OFF the loop (see kreuzberg_spool).
+                    body = await spool_response(response)
+                    return await parse_spooled(body, self._parse_extract_file)
             except (asyncio.TimeoutError, TimeoutError) as exc:
                 # A timeout may happen after Kreuzberg accepted the upload and
                 # started CPU-heavy work. Retrying immediately can duplicate that
@@ -582,15 +580,13 @@ class KreuzbergHelper:
         try:
             async with session.post(f"{self.base_url}/chunk", json=payload) as response:
                 await self._raise_for_status(response)
-                raw = await response.read()
+                body = await spool_response(response)
             # Parsing stays inside the try. Returning [] is what makes the
             # caller fall back to in-process chunking, and a 200 carrying
             # something that is not JSON -- a proxy error page, an engine that
             # dropped this endpoint -- has to reach that fallback rather than
             # raise out of extract().
-            return await run_blocking(
-                self._normalize_chunk_bytes, raw, limiter="cpu_bound"
-            )
+            return await parse_spooled(body, self._normalize_chunk_file)
         except Exception:
             logger.debug(
                 "datastore.kreuzberg_helper.chunking_request_text_chunker_s.diagnostic",
@@ -599,13 +595,13 @@ class KreuzbergHelper:
             )
             return []
 
-    def _parse_extract_bytes(self, raw: bytes) -> KreuzbergExtractionResult:
+    def _parse_extract_file(self, body: IO[bytes]) -> KreuzbergExtractionResult:
         """Parse and normalize an extract response, off the event loop."""
-        return self._parse_extract_response(json.loads(raw))
+        return self._parse_extract_response(json.load(body))
 
-    def _normalize_chunk_bytes(self, raw: bytes) -> list[dict[str, Any]]:
+    def _normalize_chunk_file(self, body: IO[bytes]) -> list[dict[str, Any]]:
         """Parse and normalize a chunk response, off the event loop."""
-        return self._normalize_chunk_response(json.loads(raw))
+        return self._normalize_chunk_response(json.load(body))
 
     def _normalize_chunk_response(self, data: Any) -> list[dict[str, Any]]:
         if isinstance(data, dict):

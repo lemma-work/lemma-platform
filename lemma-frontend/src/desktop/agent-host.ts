@@ -13,6 +13,13 @@ import { invoke, isDesktop } from "./bridge";
 export interface AgentHostTarget {
     target_id: string | null;
     host_id: string | null;
+    /** Whose pairing this is. A pairing of somebody other than the person
+     *  signed in is not this workspace's, here. Absent from an older shell. */
+    user_id?: string | null;
+    /** The pairing with the Lemma installed on this computer. */
+    local?: boolean | null;
+    /** Paused because somebody else, or nobody, is signed in to the app. */
+    session_paused?: boolean | null;
     name: string | null;
     url: string | null;
     enabled: boolean | null;
@@ -77,8 +84,14 @@ function readHostExecution(raw: unknown): AgentHostStatus["host_execution"] {
 export const agentHost = {
     status: () => invoke("agent_host_status"),
     start: () => invoke("agent_host_start"),
-    pair: (url: string, pairingCode: string, name: string) =>
-        invoke("agent_host_pair", { url, pairingCode, name }),
+    /** `url` is only checked by the shell, never trusted: it pairs with the
+     *  Lemma it itself navigated to. `reenable` only from a person's click,
+     *  after this computer was removed from their account. */
+    pair: (url: string, pairingCode: string, name: string, reenable = false) =>
+        invoke("agent_host_pair", { url, pairingCode, name, reenable }),
+    /** Who is signed in to the workspace on screen; `null` once they signed
+     *  out. Anybody else's pairing takes no new work meanwhile. */
+    session: (url: string, userId: string | null) => invoke("agent_host_session", { url, userId }),
     refresh: () => invoke("agent_host_refresh"),
     openLog: () => invoke("agent_host_open_log"),
 };

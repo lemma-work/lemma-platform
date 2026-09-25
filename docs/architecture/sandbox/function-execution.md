@@ -302,7 +302,9 @@ POST /functions/{function_id}/runs/{function_run_id}:cancel
 
 The call carries the lease's opaque provider headers but no delegated function
 bearer. The runtime matches both function and run IDs, cancels the task and
-kills/discards its worker process group.
+kills/discards its worker process group. (The route is matched ahead of the run
+route: with the run route first, `{run_id}` took `<uuid>:cancel` and every
+cancellation was answered 422 without reaching the runtime.)
 
 Cancellation uses the cached lease when available. Otherwise it asks the sandbox runtime to
 lease only an existing allocation without calling `ensure_sandbox`, so it never
@@ -343,10 +345,22 @@ systems must use `function_run_id` or another application-level idempotency key.
 
 ## 12. Providers and verification
 
-Docker and E2B run the same runtime source and protocol:
+Docker, E2B and Desktop (`lemma_local`) run the same runtime source and
+protocol:
 
 - Docker uses the function container command.
 - E2B uses the template start command and waits for port `8090`.
+- Desktop's function sandboxes share one bridge with every other sandbox in
+  the guest, so the runtime there is started with its own credential and
+  gateway allow-list: `LEMMA_FUNCTION_RUNTIME_TOKEN` (a per-sandbox HMAC the
+  provider derives, popped from the environment before any worker starts) and
+  `LEMMA_FUNCTION_GATEWAY_HOSTS` (the backend's callback host). With a token
+  configured, every route but `/healthz` requires `X-Lemma-Runtime-Token`,
+  which the provider's `reach_port` returns as a lease request header, so it
+  reaches every call -- invoke, schema inspection and `:cancel` -- through
+  `endpoint.headers()`. A runtime started without one (Docker and E2B today,
+  whose provider headers already gate the port) behaves as before. See
+  [Desktop security](../desktop-security.md#what-a-member-gets).
 - Function sandboxes have no persistent volume or auto-resume contract.
 - Caches are opportunistic and disappear with the allocation.
 

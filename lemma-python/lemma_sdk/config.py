@@ -313,15 +313,13 @@ def _discover_local_server_config() -> dict[str, Any] | None:
 
 # The base domains a Lemma Desktop install serves its workspace under.
 #
-# More than one because the choice is made at runtime: a browser derives no
-# registrable domain from `*.localhost`, so an install that needs pod apps to
-# work inside the workspace serves itself under a loopback wildcard instead.
-# Both are loopback-only, which is the property this gate is checking.
+# One today: `lemma.localhost`, loopback by resolver convention, which is the
+# property this gate is checking. A tuple so a new base is a one-line change.
 #
 # Kept in step with `TRUSTED_LOCAL_BASES` in the desktop shell by hand -- the
 # two do not share a build -- so a new base has to be added in both places. The
 # symptom of forgetting is that `--server local` stops finding the install.
-_DESKTOP_LOCAL_BASES = ("lemma.localhost", "127.0.0.1.sslip.io")
+_DESKTOP_LOCAL_BASES = ("lemma.localhost",)
 
 
 def _valid_desktop_endpoint(value: Any) -> bool:

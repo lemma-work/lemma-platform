@@ -388,7 +388,7 @@ class TestEngineCache:
         executor = SqlExecutor()
         await executor._engine_for(connection_config, credentials)
         await executor.dispose_all()
-        assert executor._engines == {}
+        assert len(executor._engines) == 0
 
 
 class TestThroughTheDispatcher:

@@ -132,3 +132,14 @@ test("asking for somewhere is a different question from being allowed it", () =>
     assert.equal(asksForDestination(""), false);
     assert.equal(ok(rawDestination("?redirect_uri=https://evil.example")), null);
 });
+
+test("a sign-up headed for an invitation carries that invitation", async () => {
+    const { invitationIn } = await import("../src/auth/redirects.ts");
+    const id = "6f1d8c1e-2c2a-4b0e-9d3b-0c9a0f5e7a11";
+    assert.equal(invitationIn("/invitations/" + id + "/accept"), id);
+    assert.equal(invitationIn("http://192.168.1.20:61234/invitations/" + id + "/accept"), id);
+    assert.equal(invitationIn("/invitations/" + id + "/reject"), null);
+    assert.equal(invitationIn("/invitations/not-an-id/accept"), null);
+    assert.equal(invitationIn("/t"), null);
+    assert.equal(invitationIn(null), null);
+});

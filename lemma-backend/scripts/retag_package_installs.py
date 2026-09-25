@@ -25,6 +25,9 @@ What it does, and why each table is treated differently:
   sharp edge: ``schedules.connector_trigger_id`` is a foreign key with
   ``ON DELETE SET NULL``, so deleting a trigger silently nulls every webhook
   schedule bound to it and the only symptom is a schedule that stopped firing.
+  The exception is a package trigger whose ``http`` twin (same connector and
+  event type) already exists: the unique index forbids the retag, so its
+  schedules are repointed to the twin and then the duplicate is deleted.
 * ``connector_operations`` is **deleted**. Nothing references an operation row,
   and the catalog import rebuilds the whole set from
   ``lemma_apps_config.json`` -- so the surviving names come back tagged `http`
@@ -61,44 +64,68 @@ _RETAG_TABLES = ("auth_configs", "connector_triggers")
 _DELETE_TABLES = ("connector_operations",)
 
 
-async def _count(session, table: str) -> int:
-    result = await session.execute(
-        text(f"SELECT count(*) FROM {table} WHERE kind = :kind"),  # noqa: S608
-        {"kind": _OLD_KIND},
+# A package trigger whose http twin (same connector, same event) already exists
+# cannot be retagged: the unique index on (connector_id, kind, event_type) would
+# reject the UPDATE and roll back the whole run. Those duplicates are folded into
+# the twin instead -- schedules repointed first, because the foreign key is
+# ON DELETE SET NULL and deleting a bound trigger would silently unbind them.
+_TWIN_JOIN = """
+    connector_triggers p
+    JOIN connector_triggers h
+      ON h.connector_id = p.connector_id
+     AND h.event_type = p.event_type
+     AND h.kind = :new
+    WHERE p.kind = :old
+"""
+
+
+async def _execute(session, sql: str) -> int:
+    result = await session.execute(text(sql), {"new": _NEW_KIND, "old": _OLD_KIND})
+    return int(result.rowcount or 0)
+
+
+async def retag_in_session(session) -> dict[str, int]:
+    """Every write, in order, inside the caller's transaction; row counts back.
+
+    The caller commits or rolls back. A dry run is these same statements rolled
+    back, so its counts are exactly what a real run would do -- including the
+    retag count net of the duplicates folded away before it.
+    """
+    touched: dict[str, int] = {}
+    touched["repointed"] = await _execute(
+        session,
+        "UPDATE schedules s SET connector_trigger_id = twin.h_id "
+        f"FROM (SELECT p.id AS p_id, h.id AS h_id FROM {_TWIN_JOIN}) twin "
+        "WHERE s.connector_trigger_id = twin.p_id",
     )
-    return int(result.scalar() or 0)
+    touched["deduplicated"] = await _execute(
+        session,
+        f"DELETE FROM connector_triggers WHERE id IN (SELECT p.id FROM {_TWIN_JOIN})",
+    )
+    for table in _RETAG_TABLES:
+        touched[table] = await _execute(
+            session,
+            # S608: table names are a fixed literal allow-list
+            f"UPDATE {table} SET kind = :new WHERE kind = :old",  # noqa: S608
+        )
+    for table in _DELETE_TABLES:
+        touched[table] = await _execute(
+            session,
+            f"DELETE FROM {table} WHERE kind = :old",  # noqa: S608
+        )
+    return touched
 
 
 async def retag(*, dry_run: bool) -> dict[str, int]:
-    """Returns the row count touched per table."""
-    touched: dict[str, int] = {}
+    """Returns the row count touched per step."""
     async with async_session_maker() as session:
-        try:
-            for table in _RETAG_TABLES:
-                touched[table] = await _count(session, table)
-                if not dry_run and touched[table]:
-                    await session.execute(
-                        text(  # noqa: S608 - table names are a fixed literal allow-list
-                            f"UPDATE {table} SET kind = :new WHERE kind = :old"
-                        ),
-                        {"new": _NEW_KIND, "old": _OLD_KIND},
-                    )
-            for table in _DELETE_TABLES:
-                touched[table] = await _count(session, table)
-                if not dry_run and touched[table]:
-                    await session.execute(
-                        text(  # noqa: S608 - table names are a fixed literal allow-list
-                            f"DELETE FROM {table} WHERE kind = :old"
-                        ),
-                        {"old": _OLD_KIND},
-                    )
-            if dry_run:
-                await session.rollback()
-            else:
-                await session.commit()
-        except Exception:
+        # An exception leaves the transaction uncommitted, and closing the
+        # session rolls it back: nothing is written unless every step succeeded.
+        touched = await retag_in_session(session)
+        if dry_run:
             await session.rollback()
-            raise
+        else:
+            await session.commit()
     return touched
 
 
@@ -113,6 +140,11 @@ def main() -> None:
 
     touched = asyncio.run(retag(dry_run=args.dry_run))
     verb = "would change" if args.dry_run else "changed"
+    print(
+        f"connector_triggers: {verb} {touched.get('deduplicated', 0)} package "
+        "duplicate(s) of an existing http trigger (delete)"
+    )
+    print(f"schedules: {verb} {touched.get('repointed', 0)} row(s) (repoint to twin)")
     for table in (*_RETAG_TABLES, *_DELETE_TABLES):
         action = "retag" if table in _RETAG_TABLES else "delete"
         print(f"{table}: {verb} {touched.get(table, 0)} row(s) ({action})")

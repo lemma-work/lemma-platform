@@ -4,6 +4,7 @@ retry + error-mapping + timeout paths against fakes (no live backend, no sleeps)
 from __future__ import annotations
 
 import json
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -486,3 +487,39 @@ def test_401_is_not_in_the_retry_set():
     session cost three identical rejections.
     """
     assert 401 not in _RETRYABLE_STATUS
+
+
+# --- outdated-CLI notice ----------------------------------------------------
+
+
+def test_outdated_header_warns_once_on_stderr(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+
+    monkeypatch.setattr("lemma_sdk.transport._outdated_notice", threading.Event())
+    monkeypatch.setenv("LEMMA_CLIENT", "lemma-cli")
+    headers = httpx.Headers({"X-Lemma-Client-Outdated": "0.8.1"})
+    transport = make_transport()
+    endpoint = FakeEndpoint(
+        [
+            FakeResponse(200, parsed={"ok": 1}, headers=headers),
+            FakeResponse(200, parsed={"ok": 2}, headers=headers),
+        ]
+    )
+    assert transport.call(endpoint) == {"ok": 1}
+    assert transport.call(endpoint) == {"ok": 2}
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("older than the server supports (0.8.1)") == 1
+    assert "lemma update" in captured.err
+
+
+def test_no_outdated_header_no_notice(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+
+    monkeypatch.setattr("lemma_sdk.transport._outdated_notice", threading.Event())
+    transport = make_transport()
+    endpoint = FakeEndpoint([FakeResponse(200, parsed={"ok": True})])
+    transport.call(endpoint)
+    assert capsys.readouterr().err == ""

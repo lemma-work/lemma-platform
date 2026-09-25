@@ -12,6 +12,7 @@ mod locald;
 mod locald_writer;
 mod misc;
 mod navigation;
+mod os_quit;
 mod quit;
 mod quit_prompt;
 mod runtime;

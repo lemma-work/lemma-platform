@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import replace
 
@@ -27,6 +26,7 @@ from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.services.model_stream_budget import (
@@ -46,7 +46,12 @@ logger = get_logger(__name__)
 # ceiling is a number somebody chose.
 _MAX_PROVIDER_CLIENTS = 256
 
-_provider_clients: OrderedDict[str, httpx.AsyncClient] = OrderedDict()
+_provider_clients: BoundedDict[str, httpx.AsyncClient] = BoundedDict(
+    _MAX_PROVIDER_CLIENTS,
+    name="agent.provider_clients",
+    touch_on_get=True,
+    on_evict=lambda _key, client: _close_later(client),
+)
 
 # Closing an evicted client is async, but the accessor that evicts is not, so
 # the close is handed to the loop. The set keeps a strong reference until it
@@ -60,7 +65,9 @@ _closing_clients: set[asyncio.Task[None]] = set()
 # and the cache only ever needs to know whether two credentials are the *same*,
 # never anything about them. A counter answers that exactly, and leaves nothing
 # to leak if a key ever reaches a log line or a traceback.
-_credential_labels: OrderedDict[str, str] = OrderedDict()
+_credential_labels: BoundedDict[str, str] = BoundedDict(
+    _MAX_PROVIDER_CLIENTS, name="agent.credential_labels", touch_on_get=True
+)
 
 # Monotonic, deliberately not `len(_credential_labels)`. Once the map evicts,
 # its length repeats, so a length-derived label would eventually be handed to a
@@ -94,15 +101,7 @@ def _credential_label(api_key: str | None) -> str:
     if label is None:
         label = f"credential-{next(_credential_sequence)}"
         _credential_labels[api_key] = label
-        _evict_oldest(_credential_labels, _MAX_PROVIDER_CLIENTS)
-    else:
-        _credential_labels.move_to_end(api_key)
     return label
-
-
-def _evict_oldest[K, V](cache: OrderedDict[K, V], limit: int) -> None:
-    while len(cache) > limit:
-        cache.popitem(last=False)
 
 
 def _close_later(client: httpx.AsyncClient) -> None:
@@ -186,11 +185,6 @@ def get_provider_http_client(
     if client is None or client.is_closed:
         client = _build_provider_client(headers)
         _provider_clients[key] = client
-        while len(_provider_clients) > _MAX_PROVIDER_CLIENTS:
-            _, evicted = _provider_clients.popitem(last=False)
-            _close_later(evicted)
-    else:
-        _provider_clients.move_to_end(key)
     return client
 
 

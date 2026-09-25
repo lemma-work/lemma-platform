@@ -198,7 +198,7 @@ fn perform_reset_with(
 /// also kill a developer's separate dev-root VM, and a reset of one
 /// installation must not touch another.
 #[cfg(target_os = "macos")]
-fn reclaim_running_vm(paths: &LocalPaths) -> io::Result<()> {
+pub(crate) fn reclaim_running_vm(paths: &LocalPaths) -> io::Result<()> {
     use lemma_runtime_manager::{ManagedRuntime, ManagedRuntimeConfig, DEFAULT_WSL_DISTRIBUTION};
 
     // A bare runtime, only to reach the reclaim. The executables named here are

@@ -1,4 +1,5 @@
 import { onApi } from "@/auth/config";
+import { digestSha256 } from "@/auth/sha256";
 import { desktopInfo } from "./bridge";
 
 /** Signing in to a hosted workspace from the desktop app, in the system browser.
@@ -14,16 +15,24 @@ import { desktopInfo } from "./bridge";
  *      that marker (`is_desktop_browser_auth_url` in `desktop/src/navigation.rs`),
  *      cancels the navigation and opens the URL in the system browser.
  *   2. Browser: sign in as usual. The request id is held in `sessionStorage`
- *      across the provider round trip, and on landing the portal calls
+ *      across the provider round trip. On landing the portal shows the
+ *      request's short code — the app is showing the same one — and asks the
+ *      person to confirm. Only on that click does it call
  *      `POST /auth/desktop/requests/<id>/complete` with the browser's session,
- *      then opens `lemma://auth/complete?request_id=<id>`, which brings the app
+ *      then open `lemma://auth/complete?request_id=<id>`, which brings the app
  *      back to the front.
  *   3. App: meanwhile polling `POST /auth/desktop/session` with the verifier.
  *      409 is "not yet"; success sets the app's own session cookies.
  *
  *  The verifier never leaves the app's webview, so a request id alone — which
- *  is in a URL, in a browser — cannot be exchanged for a session. The backend
- *  half is `app/modules/identity/services/desktop_auth_handoff.py`.
+ *  is in a URL, in a browser — cannot be exchanged for a session. But whoever
+ *  holds the verifier is whoever *started* the request, and that need not be
+ *  the person whose browser finishes it: a link to `/auth?desktop_request=<id>`
+ *  sent to somebody already signed in used to complete on its own and hand the
+ *  sender that person's session. Hence the code, and the click: the browser
+ *  completes only a request its own person confirms, having seen that the
+ *  Lemma app in front of them is showing the same code. The backend half is
+ *  `app/modules/identity/services/desktop_auth_handoff.py`.
  */
 
 const REQUEST_KEY = "lemma.desktop-auth.request-id";
@@ -64,6 +73,21 @@ export function heldRequestId(): string | null {
 
 export function dropRequestId(): void {
     session()?.removeItem(REQUEST_KEY);
+}
+
+/** Letters and digits nobody misreads for one another: no 0/O, 1/I/L, 5/S, 8/B. */
+const CODE_ALPHABET = "ACDEFGHJKMNPQRTUVWXY2345679";
+
+/** The short code both halves show for one request, e.g. `KX7M-Q2PA`.
+ *
+ *  Derived from the request id, so the app and the browser compute it
+ *  separately and agree without either telling the other. It is not a secret —
+ *  whoever started the request sees it — it is a comparison: the person
+ *  confirming checks it against the app they are actually looking at. */
+export async function handoffCode(requestId: string): Promise<string> {
+    const digest = await digestSha256(new TextEncoder().encode("lemma-desktop-handoff:" + requestId));
+    const letters = Array.from(digest.slice(0, 8), (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("");
+    return letters.slice(0, 4) + "-" + letters.slice(4);
 }
 
 /** Where the app is woken with the result. */
@@ -126,12 +150,9 @@ export function createVerifier(): string {
     return base64Url(bytes);
 }
 
-/** S256 of the verifier. Hosted mode is always an https origin, where
- *  `crypto.subtle` exists; a page without it cannot start a handoff. */
+/** S256 of the verifier. */
 export async function challengeFor(verifier: string): Promise<string> {
-    if (!crypto.subtle) throw new Error("This page cannot start a secure sign-in.");
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-    return base64Url(new Uint8Array(digest));
+    return base64Url(await digestSha256(new TextEncoder().encode(verifier)));
 }
 
 /** Where the system browser is sent: this portal, marked so the shell hands it

@@ -43,22 +43,9 @@ describe('whether an embedded app would still be signed in', () => {
     });
 
     it('says yes on macOS once the hostnames are a real registrable domain', () => {
-        // Read from `location`, not from a flag, so moving the local hostnames
-        // re-enables embedding on its own -- including the fallback path where
-        // the real domain cannot be resolved and the install stays on
-        // `.localhost`, which needs no coordination either.
+        // Read from `location`, not from a flag, so a workspace served on a
+        // real domain embeds with no coordination.
         pretend('macos', 'app.lemma-local.example');
-        expect(crossSiteFramesCarryCookies()).toBe(true);
-    });
-
-    it('says yes on the loopback wildcard this install actually serves', () => {
-        // The example above proves the rule; this proves the host. `sslip.io`
-        // is not itself a public suffix, so `127.0.0.1.sslip.io` is the
-        // registrable domain and the workspace and its apps are same-site
-        // under it. Named here because it is what a shipped install runs on,
-        // and a rule that holds for a made-up example but not for the real
-        // hostname would be found by a user rather than by this file.
-        pretend('macos', 'app.127.0.0.1.sslip.io');
         expect(crossSiteFramesCarryCookies()).toBe(true);
     });
 
@@ -81,7 +68,7 @@ describe('whether an embedded app would still be signed in', () => {
         // The unknown-platform case must not become a blanket refusal: the
         // hostname alone already settles it once the install has moved off
         // `.localhost`.
-        pretendShellWithoutPlatform('app.127.0.0.1.sslip.io');
+        pretendShellWithoutPlatform('app.lemma-local.example');
         expect(crossSiteFramesCarryCookies()).toBe(true);
     });
 

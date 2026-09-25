@@ -9,6 +9,7 @@ import aiohttp
 import pytest
 
 from app.modules.datastore.infrastructure import kreuzberg_helper as kreuzberg_module
+from app.modules.datastore.infrastructure import kreuzberg_spool
 from app.modules.datastore.infrastructure.kreuzberg_circuit import (
     reset_kreuzberg_circuit,
 )
@@ -83,6 +84,25 @@ class _AlwaysTimeoutPost:
                 return None
 
         return _Context()
+
+
+class _FakeContent:
+    """Stands in for ``aiohttp.StreamReader``: yields the body in chunks."""
+
+    def __init__(self, body: bytes, *, chunk: int = 7, yield_between: bool = False):
+        self._body = body
+        self._chunk = chunk
+        self._yield_between = yield_between
+
+    async def iter_chunked(self, n: int):
+        for start in range(0, len(self._body), self._chunk):
+            if self._yield_between:
+                await asyncio.sleep(0)
+            yield self._body[start : start + self._chunk]
+
+
+def _json_response(body) -> SimpleNamespace:
+    return SimpleNamespace(status=200, content=_FakeContent(json.dumps(body).encode()))
 
 
 def _fake_client_session_factory(calls: list[dict]):
@@ -444,20 +464,14 @@ async def test_extract_retries_transient_connection_error_then_succeeds() -> Non
     async def _fake_sleep(delay: float) -> None:
         sleeps.append(delay)
 
-    # `read`, not `json`: the helper reads bytes and parses them off the event
-    # loop, because an extract response carries the whole document and can
-    # carry base64 images with it.
+    # The helper streams the body into a spooled file and parses it off the
+    # event loop, because an extract response carries the whole document and
+    # can carry base64 images with it. Body I/O yields independently of the
+    # extractor's retry backoff.
     _body = [{"content": "ok", "chunks": [{"text": "ok"}]}]
-
-    async def _read_response() -> bytes:
-        # Body I/O can yield independently of the extractor's retry backoff.
-        await asyncio.sleep(0)
-        return json.dumps(_body).encode()
-
     response = SimpleNamespace(
         status=200,
-        json=AsyncMock(return_value=_body),
-        read=AsyncMock(side_effect=_read_response),
+        content=_FakeContent(json.dumps(_body).encode(), yield_between=True),
     )
     session = SimpleNamespace(post=_FlakyPost(fail_times=2, response=response))
 
@@ -559,15 +573,7 @@ async def test_extract_streams_content_path_instead_of_buffering(monkeypatch, tm
 
     monkeypatch.setattr(kreuzberg_module, "open_binary", _spy_open)
 
-    # `read`, not `json`: the helper reads bytes and parses them off the event
-    # loop, because an extract response carries the whole document and can
-    # carry base64 images with it.
-    _body = [{"content": "ok", "chunks": [{"text": "ok"}]}]
-    response = SimpleNamespace(
-        status=200,
-        json=AsyncMock(return_value=_body),
-        read=AsyncMock(return_value=json.dumps(_body).encode()),
-    )
+    response = _json_response([{"content": "ok", "chunks": [{"text": "ok"}]}])
     session = SimpleNamespace(post=_FlakyPost(fail_times=0, response=response))
 
     helper = KreuzbergHelper()
@@ -705,3 +711,61 @@ async def test_local_chunk_fallback_splits_instead_of_one_giant_chunk():
     )
     assert len(chunks) > 1
     assert all(chunk["text"].strip() for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_extract_rejects_a_response_over_the_byte_cap(monkeypatch) -> None:
+    """An oversized body fails the document instead of being buffered, and is
+    not mistaken for an extractor outage (it must spend the attempt)."""
+    monkeypatch.setattr(
+        kreuzberg_module.datastore_settings, "kreuzberg_max_response_bytes", 64
+    )
+    response = _json_response([{"content": "x" * 500}])
+    session = SimpleNamespace(post=_FlakyPost(fail_times=0, response=response))
+
+    with pytest.raises(RuntimeError, match="exceeded 64 bytes") as excinfo:
+        await KreuzbergHelper()._extract(
+            session,
+            file_content=b"bytes",
+            filename="paper.pdf",
+            mime_type="application/pdf",
+            config=None,
+        )
+    assert not isinstance(excinfo.value, DocumentExtractionUnavailableError)
+    assert session.post.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_extract_parses_a_body_that_spills_to_disk(monkeypatch) -> None:
+    """A body past the in-memory threshold rolls to a temp file and still parses."""
+    monkeypatch.setattr(kreuzberg_spool, "_SPOOL_MEMORY_BYTES", 16)
+    monkeypatch.setattr(kreuzberg_spool, "_SPOOL_READ_BYTES", 32)
+    text = "spilled " * 200
+    response = _json_response([{"content": text}])
+    session = SimpleNamespace(post=_FlakyPost(fail_times=0, response=response))
+
+    result = await KreuzbergHelper()._extract(
+        session,
+        file_content=b"bytes",
+        filename="paper.pdf",
+        mime_type="application/pdf",
+        config=None,
+    )
+    assert result.content == text
+
+
+@pytest.mark.asyncio
+async def test_chunk_content_over_cap_falls_back_to_local_chunking(
+    monkeypatch,
+) -> None:
+    """An oversized /chunk body returns [] so the caller chunks in-process."""
+    monkeypatch.setattr(
+        kreuzberg_module.datastore_settings, "kreuzberg_max_response_bytes", 8
+    )
+    response = _json_response([{"text": "a long chunk body"}])
+    session = SimpleNamespace(post=_FlakyPost(fail_times=0, response=response))
+
+    chunks = await KreuzbergHelper()._chunk_content(
+        session, text="t", chunker_type="markdown", max_chars=10, max_overlap=0
+    )
+    assert chunks == []

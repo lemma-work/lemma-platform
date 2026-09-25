@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::agent_host::AgentHostSupervisor;
+use crate::app_alias::AppAliasService;
 use crate::host_process::HostProcessManager;
 use crate::loopback_relay::LemmaPorts;
 use crate::sharing::SharingController;
@@ -17,6 +18,7 @@ use crate::sharing::SharingController;
 pub(super) fn daemon_lemma_ports(
     host_processes: Option<Arc<HostProcessManager>>,
     sharing: Option<Arc<SharingController>>,
+    app_aliases: Option<Arc<AppAliasService>>,
     agent_host: Arc<AgentHostSupervisor>,
 ) -> LemmaPorts {
     Arc::new(move || {
@@ -26,6 +28,9 @@ pub(super) fn daemon_lemma_ports(
         }
         if let Some(sharing) = sharing.as_ref() {
             ports.extend(sharing.listening_ports());
+        }
+        if let Some(aliases) = app_aliases.as_ref() {
+            ports.extend(aliases.listening_ports());
         }
         ports.extend(agent_host.mcp_relay_ports());
         ports

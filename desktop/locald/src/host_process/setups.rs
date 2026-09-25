@@ -101,6 +101,12 @@ pub(crate) fn database_socket_address(url: &str) -> Option<SocketAddr> {
     Some(SocketAddr::new(ip, port))
 }
 
+fn log_file_length(path: &Path) -> u64 {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
 impl HostProcessManager {
     /// Whether a failed setup should stop the start, or only be recorded.
     ///
@@ -148,6 +154,8 @@ impl HostProcessManager {
     /// up against tables that do not exist. The full reinstall removes the root
     /// entirely and takes the stamps with it.
     pub fn forget_setup_stamps(&self) -> io::Result<()> {
+        let root = self.log_dir.parent().unwrap_or(&self.log_dir);
+        forget_migration_records(root)?;
         match fs::remove_file(self.setup_stamp_path()) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
             _ => Ok(()),
@@ -174,10 +182,24 @@ impl HostProcessManager {
 
     pub(crate) fn run_setups(&self) -> io::Result<()> {
         let recorded = self.recorded_setup_stamps();
+        let root = self.log_dir.parent().unwrap_or(&self.log_dir).to_path_buf();
+        let disk = data_disk_identity(&root);
         'setups: for setup in &self.manifest.setup {
-            if setup_is_already_done(setup.stamp.as_deref(), recorded.get(&setup.id)) {
+            let stamp = setup
+                .stamp
+                .as_deref()
+                .map(|stamp| bound_stamp(stamp, disk.as_deref()));
+            if setup_is_already_done(stamp.as_deref(), recorded.get(&setup.id)) {
                 continue 'setups;
             }
+            let mut migration = (setup.id == MIGRATIONS_SETUP_ID).then(|| {
+                MigrationRun::begin(
+                    &root,
+                    &self.manifest.release,
+                    recorded.contains_key(MIGRATIONS_SETUP_ID),
+                )
+            });
+            let log_path = self.log_dir.join(format!("{}.log", setup.id));
             let mut environment = setup.env.clone();
             environment.extend(
                 self.backend_environment
@@ -187,6 +209,11 @@ impl HostProcessManager {
             );
             environment.extend(self.service_environment("backend"));
             let deadline = Instant::now() + Duration::from_secs(setup.timeout_seconds);
+            // A setup that is still writing to its log is still working. With
+            // an idle limit, only silence ends it early; the timeout above is
+            // the ceiling. A fixed 300 seconds used to kill a migration that
+            // was simply long -- and then retry it.
+            let idle_limit = setup.idle_timeout_seconds.map(Duration::from_secs);
             for attempt in 1..=setup.max_attempts {
                 wait_for_setup_dependency(setup, &environment, deadline)?;
                 let mut child = spawn_command(
@@ -197,6 +224,8 @@ impl HostProcessManager {
                 )?;
                 #[cfg(windows)]
                 assign_child_to_windows_job(self.windows_job, &mut child)?;
+                let mut log_length = log_file_length(&log_path);
+                let mut last_activity = Instant::now();
                 loop {
                     if let Some(status) = child.try_wait()? {
                         if status.success() {
@@ -204,10 +233,28 @@ impl HostProcessManager {
                             // let a failed or half-finished setup be skipped on
                             // the next start, which is worse than running it
                             // again.
-                            if let Some(stamp) = setup.stamp.as_deref() {
+                            if let Some(stamp) = stamp.as_deref() {
                                 self.record_setup_stamp(&setup.id, stamp);
                             }
+                            if let Some(migration) = migration.take() {
+                                migration.succeeded(&self.manifest.release);
+                            }
                             continue 'setups;
+                        }
+                        if migration.is_some() {
+                            let log = fs::read_to_string(&log_path).unwrap_or_default();
+                            if let Some(revision) = unknown_revision(&log) {
+                                // Nothing was migrated, and retrying cannot
+                                // teach this build a revision from the future.
+                                if let Some(migration) = migration.take() {
+                                    migration.abandon_unchanged();
+                                }
+                                return Err(io::Error::other(newer_database_message(
+                                    &revision,
+                                    &self.manifest.release,
+                                    read_schema_release(&root).as_deref(),
+                                )));
+                            }
                         }
                         if attempt == setup.max_attempts {
                             let detail = format!(
@@ -241,18 +288,32 @@ impl HostProcessManager {
                         thread::sleep(backoff);
                         break;
                     }
-                    if Instant::now() >= deadline {
+                    let length = log_file_length(&log_path);
+                    if length != log_length {
+                        log_length = length;
+                        last_activity = Instant::now();
+                    }
+                    let idle = idle_limit.is_some_and(|limit| last_activity.elapsed() >= limit);
+                    if Instant::now() >= deadline || idle {
                         // Terminate first, on both paths. An optional setup that
                         // hangs and is then tolerated would otherwise be left
                         // running as an orphan holding a copy of the backend
                         // environment -- Postgres and Redis passwords included.
                         let _ = terminate_process_group(&mut child);
-                        let detail = format!(
-                            "{} setup exceeded {} seconds; see {}",
-                            setup.id,
-                            setup.timeout_seconds,
-                            self.log_dir.join(format!("{}.log", setup.id)).display()
-                        );
+                        let detail = match idle_limit {
+                            Some(limit) if idle => format!(
+                                "{} setup made no progress for {} seconds; see {}",
+                                setup.id,
+                                limit.as_secs(),
+                                log_path.display()
+                            ),
+                            _ => format!(
+                                "{} setup exceeded {} seconds; see {}",
+                                setup.id,
+                                setup.timeout_seconds,
+                                log_path.display()
+                            ),
+                        };
                         match Self::optional_setup_outcome(setup, detail) {
                             None => continue 'setups,
                             Some(error) => {

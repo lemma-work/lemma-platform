@@ -23,8 +23,8 @@ Performance / caveats:
 from __future__ import annotations
 
 import threading
-from collections import OrderedDict
 
+from app.core.bounded import BoundedDict
 from app.core.config import settings
 from app.core.crypto.envelope import ALG_KMS_FERNET
 from app.core.crypto.keys import load_static_keyring
@@ -54,7 +54,9 @@ class GcpKmsKeyProvider(KeyProvider):
         self._primary_kid: str | None = None
         self._signing_keyring: Keyring | None = None
         # read-path cache: wrapped DEK bytes -> plaintext DEK bytes
-        self._unwrap_cache: "OrderedDict[bytes, bytes]" = OrderedDict()
+        self._unwrap_cache: BoundedDict[bytes, bytes] = BoundedDict(
+            unwrap_cache_size, name="crypto.kms_unwrap_cache", touch_on_get=True
+        )
         self._unwrap_cache_size = unwrap_cache_size
 
     # ------------------------------------------------------------------ client
@@ -99,7 +101,6 @@ class GcpKmsKeyProvider(KeyProvider):
     def unwrap_dek(self, kid: str, wrapped: bytes) -> bytes:
         cached = self._unwrap_cache.get(wrapped)
         if cached is not None:
-            self._unwrap_cache.move_to_end(wrapped)
             return cached
         response = self._kms().decrypt(
             request={"name": self._key_name, "ciphertext": wrapped}
@@ -110,9 +111,6 @@ class GcpKmsKeyProvider(KeyProvider):
 
     def _cache_unwrap(self, wrapped: bytes, dek: bytes) -> None:
         self._unwrap_cache[wrapped] = dek
-        self._unwrap_cache.move_to_end(wrapped)
-        while len(self._unwrap_cache) > self._unwrap_cache_size:
-            self._unwrap_cache.popitem(last=False)
 
     # ---------------------------------------------------------------- signing
     def signing_keyring(self) -> Keyring:

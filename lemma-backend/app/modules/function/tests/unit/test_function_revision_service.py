@@ -284,3 +284,15 @@ async def test_a_long_history_pages_rather_than_arriving_whole():
     assert {item.revision.id for item in first}.isdisjoint(
         {item.revision.id for item in second}
     ), "a page must not repeat what the one before it returned"
+
+
+def test_an_all_digit_hash_prefix_past_the_column_range_is_a_prefix() -> None:
+    """A 12-character hash prefix can be all digits (``267180378462`` failed a
+    CI run). As a revision number it overflows the INTEGER column and the query
+    raises before the prefix fallback can run."""
+    assert parse_revision_ref("267180378462") == (None, "267180378462")
+    assert parse_revision_ref("r12") == (12, None)
+    assert parse_revision_ref("2147483647") == (2147483647, None)
+    # Past Python's int-string conversion limit: still a prefix, never raises.
+    huge = "9" * 5000
+    assert parse_revision_ref(huge) == (None, huge)

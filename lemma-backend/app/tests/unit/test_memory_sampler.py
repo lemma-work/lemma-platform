@@ -165,3 +165,41 @@ def test_parked_task_counts_outside_a_loop_is_zero() -> None:
     from app.core.observability.memory_sampler import parked_task_counts
 
     assert parked_task_counts() == (0, 0)
+
+
+def test_compiled_cache_sizes_reports_disabled_caches_as_none() -> None:
+    """The datastore engine runs with ``query_cache_size=0``; that must read as
+    disabled rather than as an empty, still-growing cache."""
+    from sqlalchemy import create_engine
+
+    from app.core.observability.memory_sampler import (
+        compiled_cache_sizes,
+        watch_compiled_cache,
+    )
+
+    cached = create_engine("sqlite://")
+    uncached = create_engine("sqlite://", query_cache_size=0)
+    watch_compiled_cache("test.cached", cached)
+    watch_compiled_cache("test.uncached", uncached)
+
+    sizes = compiled_cache_sizes()
+
+    assert sizes["test.cached"] == 0
+    assert sizes["test.uncached"] is None
+
+
+def test_a_dump_is_written_only_when_requested(tmp_path, monkeypatch) -> None:
+    from app.core.observability import memory_sampler
+
+    request = tmp_path / "dump.request"
+    output = tmp_path / "dump.json"
+    monkeypatch.setattr(memory_sampler, "DUMP_REQUEST_PATH", str(request))
+    monkeypatch.setattr(memory_sampler, "DUMP_OUTPUT_PATH", str(output))
+
+    assert memory_sampler.dump_if_requested(service_name="lemma-test") is False
+    assert not output.exists()
+
+    request.touch()
+    assert memory_sampler.dump_if_requested(service_name="lemma-test") is True
+    assert not request.exists()
+    assert "gc_objects_top" in output.read_text()

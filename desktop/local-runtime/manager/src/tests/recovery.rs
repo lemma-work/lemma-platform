@@ -88,3 +88,37 @@ fn recovery_requires_positive_evidence_of_guest_presence_or_absence() {
         .collect();
     assert!(registered_guest(true, &utf16, "LemmaRuntime").unwrap());
 }
+
+/// A process's start identity comes from the kernel, in UTC, to the
+/// microsecond -- not from `ps lstart`, whose local-time text changed under a
+/// time-zone change and made this installation's VM helper look like a
+/// stranger that could never be reclaimed.
+#[cfg(target_os = "macos")]
+#[test]
+fn start_identity_is_the_kernels_and_ignores_the_time_zone() {
+    let mut child = std::process::Command::new("/bin/sleep")
+        .arg("5")
+        .spawn()
+        .unwrap();
+    let pid = child.id() as i32;
+    use crate::macos::kernel_start_identity;
+    let first = kernel_start_identity(pid).unwrap();
+    let (seconds, micros) = first.split_once('.').expect("seconds.micros");
+    assert!(
+        seconds.parse::<u64>().is_ok() && micros.len() == 6,
+        "{first}"
+    );
+    std::env::set_var("TZ", "Pacific/Kiritimati");
+    assert_eq!(kernel_start_identity(pid).unwrap(), first);
+    std::env::remove_var("TZ");
+    assert_ne!(
+        kernel_start_identity(std::process::id() as i32).unwrap(),
+        first
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(
+        kernel_start_identity(pid).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+}

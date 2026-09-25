@@ -163,3 +163,56 @@ async def test_password_reset_leaves_a_malformed_address_to_the_recipe():
     )
 
     assert reached.get("original") is True
+
+
+@pytest.mark.asyncio
+async def test_signup_hands_the_gate_the_invitation_the_request_presented(
+    monkeypatch,
+):
+    """The invitation link's id travels in a header, and reaches the gate.
+
+    A password sign-up does not prove its address when email verification is
+    off, so the gate needs the invitation itself -- and it can only judge what
+    the override actually passes it.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "auth_email_deliverability_checks_enabled", False)
+    monkeypatch.setattr(settings, "auth_disposable_email_domains_enabled", False)
+    admitted: list[tuple[str, str | None]] = []
+
+    async def admit(email: str, invitation_id: str | None) -> object:
+        admitted.append((email, invitation_id))
+        return object()
+
+    async def original_sign_up(*_args, **_kwargs):
+        return "signed-up"
+
+    implementation = override_emailpassword_apis(
+        SimpleNamespace(
+            sign_in_post=_unexpected_original,
+            sign_up_post=original_sign_up,
+            generate_password_reset_token_post=_unexpected_original,
+        ),
+        find_users=_finds(),
+        admit_signup=admit,
+    )
+    request = SimpleNamespace(
+        get_header=lambda name: (
+            "6f1d8c1e-2c2a-4b0e-9d3b-0c9a0f5e7a11"
+            if name == "x-lemma-invitation"
+            else None
+        )
+    )
+
+    result = await implementation.sign_up_post(
+        [FormField("email", "guest@lemma.work"), FormField("password", "pw")],
+        "public",
+        None,
+        None,
+        SimpleNamespace(request=request),
+        {},
+    )
+
+    assert result == "signed-up"
+    assert admitted == [("guest@lemma.work", "6f1d8c1e-2c2a-4b0e-9d3b-0c9a0f5e7a11")]

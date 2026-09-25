@@ -73,6 +73,7 @@ async fn concurrent_requests_each_get_their_own_answer() {
         token: "token".into(),
         method: method.into(),
         params: json!({}),
+        request_id: None,
     };
     let (list, call) = (body("tools/list"), body("tools/call"));
     let (listed, called) = tokio::join!(link.mcp(&list), link.mcp(&call));
@@ -279,10 +280,12 @@ mod host_execution {
             launcher.clone(),
             RelayPaths {
                 root_base: home.join("lemma"),
+                cache: directory.path().join("cache"),
                 home,
                 tmp,
                 folders: directory.path().join("conversation-folders.json"),
                 roots: directory.path().join("conversation-roots.json"),
+                target: uuid::Uuid::from_u128(1),
             },
         );
         relay.set_enabled(enabled);
@@ -501,6 +504,93 @@ mod host_execution {
             )
             .await;
         assert_eq!(kind, "process_not_found");
+    }
+
+    /// A command outlives an exec-server that crashed -- it leads its own
+    /// process group -- unless the relay, outside the sandbox, stops it.
+    #[tokio::test]
+    async fn what_a_crashed_exec_server_started_does_not_outlive_it() {
+        let setup = setup(true).await;
+        let opened = setup
+            .ok("workspace.open", json!({ "slug": "orphans" }))
+            .await;
+        let pid_file = std::path::Path::new(opened["root"].as_str().unwrap()).join("pid");
+        let started = setup
+            .ok(
+                "process.start",
+                json!({ "shell_command": format!("echo $$ > {}; exec sleep 30", pid_file.display()) }),
+            )
+            .await;
+        assert!(started.get("group").is_none(), "{started}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let pid = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|raw| raw.trim().parse::<i32>().ok())
+            {
+                break rustix::process::Pid::from_raw(pid).unwrap();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the command never started"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        setup.launcher.crash_all();
+        while rustix::process::test_kill_process(pid).is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline + std::time::Duration::from_secs(5),
+                "the command outlived its exec-server"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// A folder under `~/lemma` is given only to the paired workspace that
+    /// owns it: not the directory registry, not a folder no run of this
+    /// workspace claimed, and not one another workspace owns.
+    #[tokio::test]
+    async fn a_folder_under_the_base_is_given_only_to_the_workspace_that_owns_it() {
+        let setup = setup(true).await;
+        let base = std::fs::canonicalize(setup.directory.path().join("home/lemma")).unwrap();
+        let unclaimed = base.join("c/2026-09-25/someone-elses");
+        std::fs::create_dir_all(&unclaimed).unwrap();
+        for hint in [base.join(".lemma"), unclaimed.clone()] {
+            let opened = setup
+                .ok(
+                    "workspace.open",
+                    json!({ "root_hint": hint, "slug": "mine", "date": "2026-09-25" }),
+                )
+                .await;
+            assert_eq!(
+                opened["root"],
+                json!(base.join("c/2026-09-25/mine")),
+                "{hint:?} was used"
+            );
+        }
+        // The default folder is claimed for this workspace as it opens, so a
+        // second paired workspace cannot open it.
+        let taken = base.join("c/2026-09-25/taken");
+        std::fs::create_dir_all(&taken).unwrap();
+        crate::conversation_directory::claim_for_host_execution(
+            &base,
+            uuid::Uuid::from_u128(2),
+            &taken,
+        )
+        .unwrap();
+        let kind = setup
+            .failure_kind(
+                "w",
+                "workspace.open",
+                json!({ "slug": "taken", "date": "2026-09-25" }),
+            )
+            .await;
+        assert_eq!(kind, "permission_denied");
+        assert!(crate::conversation_directory::owned_by(
+            &base,
+            uuid::Uuid::from_u128(1),
+            &base.join("c/2026-09-25/mine")
+        ));
     }
 
     /// The backend naming a folder is not the owner choosing it: a root hint

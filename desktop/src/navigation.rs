@@ -72,7 +72,7 @@ pub(crate) fn navigation_context(app: &AppHandle) -> (String, String, String) {
 
 /// The domain this installation is served under, from the API base it was given.
 ///
-/// `http://app.127.0.0.1.sslip.io:63288` -> `127.0.0.1.sslip.io`. Derived rather
+/// `http://app.lemma.localhost:63288` -> `lemma.localhost`. Derived rather
 /// than compiled in, because the shell does not link locald -- it launches it --
 /// so the hostname arrives at runtime in the `ready` event and this is the only
 /// honest source for it.
@@ -94,17 +94,10 @@ pub(crate) fn local_destination(url: &tauri::Url, api_base: &str) -> bool {
         return true;
     }
     // The domain this installation serves itself under is a local destination
-    // whatever it resolves through.
-    //
-    // This is the security-relevant half of moving off `*.localhost`. In local
-    // mode the gate below *allows* anything that is not a local destination, on
-    // the reasoning that an ordinary internet site is not a way to reach this
-    // machine. A public name that answers 127.0.0.1 breaks that reasoning: every
-    // `<anything>.127.0.0.1.sslip.io` is loopback, so without this the workspace
-    // could be navigated to an attacker-chosen name and reach any port on the
-    // user's machine -- a hole that does not exist today, because
-    // `*.lemma.localhost` matches the check above and is denied unless it is
-    // ours.
+    // whatever it resolves through. Today that is `lemma.localhost`, already
+    // caught above; kept so the gate still holds if the domain ever moves to a
+    // name that is not `.localhost` -- a public name answering 127.0.0.1 would
+    // otherwise read as "an ordinary internet site" and be allowed.
     if let Some(base) = local_base_domain(api_base) {
         if host == base || host.ends_with(&format!(".{base}")) {
             return true;
@@ -193,6 +186,113 @@ pub(crate) fn navigation_disposition(
     } else {
         NavigationDisposition::Deny
     }
+}
+
+/// Whether a top-level page load takes a local workspace's window off to
+/// somebody else's site, and should go to the browser instead.
+///
+/// `navigation_disposition` allows those, and has to: it is asked about every
+/// frame, and an embedded video or document preview is an iframe on another
+/// host. But the window a local workspace lives in is the one holding its IPC
+/// grant, its session and its look, and a top-level page there reads as Lemma
+/// whatever it says. Hosted mode is left alone -- its sign-in and billing
+/// round trips are top-level visits to other hosts by design.
+pub(crate) fn main_frame_leaves_app(
+    url: &tauri::Url,
+    mode: &str,
+    app_base: &str,
+    api_base: &str,
+) -> bool {
+    mode == "local"
+        && matches!(url.scheme(), "http" | "https")
+        && !trusted_native_asset_url(url)
+        && !is_desktop_browser_auth_url(url)
+        && !same_origin(url, app_base)
+        && !same_origin(url, api_base)
+        && !owned_published_app(url, api_base)
+        && !local_destination(url, api_base)
+}
+
+/// Whether the main window may open the inspector.
+pub(crate) fn main_window_devtools(debug_build: bool, requested: Option<&str>) -> bool {
+    debug_build || requested == Some("1")
+}
+
+/// Whether a set of resolved addresses is loopback and nothing else.
+pub(crate) fn loopback_only(addresses: &[IpAddr]) -> bool {
+    !addresses.is_empty() && addresses.iter().all(IpAddr::is_loopback)
+}
+
+/// Whether the page's host is this Mac, asked now rather than trusted from launch.
+///
+/// A `*.localhost` host is loopback by the resolver convention WebKit applies
+/// itself, and that is the only kind of host a shipped build serves its
+/// workspace on. Anything else (a development override) is only loopback
+/// because a resolver says so, so a privileged command asks again, at the
+/// moment it is called, and refuses unless every answer is loopback.
+pub(crate) fn page_host_is_loopback(
+    page: &tauri::Url,
+    resolve: impl Fn(&str) -> Vec<IpAddr>,
+) -> bool {
+    let Some(host) = page.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(address) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
+        return address.is_loopback();
+    }
+    loopback_only(&resolve(&host))
+}
+
+/// The system resolver's current answer for `host`.
+pub(crate) fn resolve_host(host: &str) -> Vec<IpAddr> {
+    use std::net::ToSocketAddrs;
+    (host, 80)
+        .to_socket_addrs()
+        .map(|found| found.map(|address| address.ip()).collect())
+        .unwrap_or_default()
+}
+
+/// The canonical app URL a pod-app alias frame stands for, if `url` is one.
+///
+/// An alias is `http://<workspace host>:<alias port>/...`: the workspace's own
+/// host on a port locald handed this shell for one app (see
+/// `pod_app_alias.rs`). Only ports in `aliases` count, and never the
+/// workspace's or the API's own port -- those are the workspace, not an app.
+pub(crate) fn app_alias_target(
+    url: &tauri::Url,
+    app_base: &str,
+    api_base: &str,
+    aliases: &HashMap<u16, String>,
+) -> Option<String> {
+    let (Ok(app), Ok(api)) = (tauri::Url::parse(app_base), tauri::Url::parse(api_base)) else {
+        return None;
+    };
+    let port = url.port()?;
+    if url.scheme() != "http"
+        || app.scheme() != "http"
+        || url.host_str().is_none()
+        || url.host_str() != app.host_str()
+        || !app.host_str().is_some_and(trusted_local_workspace_host)
+        || Some(port) == app.port()
+        || Some(port) == api.port()
+    {
+        return None;
+    }
+    let canonical = aliases.get(&port)?;
+    let mut rest = url.path().to_owned();
+    if let Some(query) = url.query() {
+        rest.push('?');
+        rest.push_str(query);
+    }
+    if let Some(fragment) = url.fragment() {
+        rest.push('#');
+        rest.push_str(fragment);
+    }
+    Some(format!("{}{rest}", canonical.trim_end_matches('/')))
 }
 
 pub(crate) fn new_window_disposition(

@@ -30,3 +30,11 @@ Use a normal MAJOR.MINOR.PATCH string.
 from __future__ import annotations
 
 API_VERSION = "0.8.0"
+
+#: The oldest ``lemma`` CLI this server fully supports. The first release
+#: after v0.8.0 is the first to contain #804 ("Let connector operations take
+#: pod files as attachments"): an older CLI does not send ``pod_id`` with
+#: connector executions, so pod-file inputs are refused. Requests from an
+#: older CLI get an ``X-Lemma-Client-Outdated`` response header naming this
+#: version, and ``/health`` reports it as ``min_cli_version``.
+MIN_CLI_VERSION = "0.8.1"

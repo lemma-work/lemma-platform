@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,16 +39,18 @@ class SqlSignupStore:
             found = await session.scalar(select(User.id).limit(1))
             return found is not None
 
-    async def has_pending_invitation(self, email: str, *, now: datetime) -> bool:
+    async def has_pending_invitation(
+        self, email: str, *, now: datetime, invitation_id: UUID | None = None
+    ) -> bool:
+        conditions = [
+            func.lower(OrganizationInvitation.email) == email,
+            OrganizationInvitation.status == OrganizationInvitationStatus.PENDING,
+            OrganizationInvitation.expires_at > now,
+        ]
+        if invitation_id is not None:
+            conditions.append(OrganizationInvitation.id == invitation_id)
         async with self._session() as session:
             found = await session.scalar(
-                select(OrganizationInvitation.id)
-                .where(
-                    func.lower(OrganizationInvitation.email) == email,
-                    OrganizationInvitation.status
-                    == OrganizationInvitationStatus.PENDING,
-                    OrganizationInvitation.expires_at > now,
-                )
-                .limit(1)
+                select(OrganizationInvitation.id).where(*conditions).limit(1)
             )
             return found is not None

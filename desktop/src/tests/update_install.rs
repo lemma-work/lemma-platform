@@ -462,3 +462,28 @@ fn an_update_check_gives_up_rather_than_hanging() {
     );
     assert!(UPDATE_CHECK_TIMEOUT <= std::time::Duration::from_secs(60));
 }
+
+/// Once installed, the update restarts; there is no "Later".
+///
+/// The stack is stopped and the bundle replaced by then, so staying on the old
+/// shell only left a stopped stack whose restart would pair the new locald
+/// with the old guest.
+#[test]
+fn an_installed_update_restarts_without_offering_to_wait() {
+    let source = include_str!("../app_update.rs").replace("\r\n", "\n");
+    let body = function_body(&source, "pub(crate) async fn install_app_update(");
+    let install = body
+        .find("update.install(bytes)")
+        .expect("the update is installed");
+    let after = &body[install..];
+    assert!(after.contains("app.restart()"), "{after}");
+    assert!(
+        !after.contains("confirm_destructive_action_impl"),
+        "nothing may ask whether to restart after the bundle is replaced: {after}"
+    );
+    let consent = &body[..install];
+    assert!(
+        consent.contains("Lemma restarts as soon as it is installed"),
+        "{consent}"
+    );
+}

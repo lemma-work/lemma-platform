@@ -40,9 +40,10 @@ def test_every_base_desktop_serves_is_recognised(base):
         # Not this install. A lookalike suffix is the one that matters -- it is
         # how a name someone else controls would be accepted as local.
         "http://app.lemma.localhost.evil:52413",
-        "http://app.127.0.0.1.sslip.io.evil:52413",
-        # A different sslip address is somebody else's loopback, not ours.
-        "http://app.10.0.0.1.sslip.io:52413",
+        # The public loopback wildcard an earlier Desktop served on. Locald
+        # migrates its recorded state onto lemma.localhost, so a URL still
+        # naming it was not written by this install.
+        "http://app.127.0.0.1.sslip.io:52413",
         # Loopback by literal is not the workspace host, and the workspace host
         # is what the auth URL is built from.
         "http://127.0.0.1:52413",

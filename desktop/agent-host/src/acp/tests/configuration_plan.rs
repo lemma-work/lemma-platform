@@ -90,16 +90,20 @@ fn a_selection_is_matched_by_id_or_by_category() {
     }
 }
 
+/// An option this agent does not offer is reported and skipped, like a model
+/// it no longer offers: the turn is worth more than the setting.
 #[test]
-fn a_selection_nobody_offers_fails_the_run_by_name() {
-    let error = plan_configuration(
+fn a_selection_nobody_offers_is_reported_not_fatal() {
+    let plan = plan_configuration(
         &[option("model", "model", &[])],
         None,
         &selections(&[("sandbox", Value::from("off"))]),
     )
-    .err()
-    .expect("an unknown option is refused");
-    assert!(error.contains("sandbox"), "{error}");
+    .expect("an option the agent lacks does not fail the run");
+    assert!(plan.selections.is_empty());
+    assert_eq!(plan.skipped.len(), 1);
+    assert_eq!(plan.skipped[0]["status"], "selection_unavailable");
+    assert_eq!(plan.skipped[0]["option"], "sandbox");
 }
 
 #[test]
@@ -114,22 +118,44 @@ fn a_model_cannot_be_smuggled_in_as_a_selection() {
     assert!(error.contains("model_name"), "{error}");
 }
 
+/// A value outside the offered list is never written -- reported instead.
 #[test]
-fn a_value_outside_the_offered_list_is_refused() {
-    let error = plan_configuration(
+fn a_value_outside_the_offered_list_is_not_written() {
+    let plan = plan_configuration(
         &[option("reasoning", "thought_level", &["low", "high"])],
         None,
         &selections(&[("reasoning", Value::from("max"))]),
     )
-    .err()
-    .expect("only offered values are allowed");
-    assert!(error.contains("reasoning"), "{error}");
+    .unwrap();
+    assert!(plan.selections.is_empty());
+    assert_eq!(plan.skipped[0]["option"], "reasoning");
 }
 
-/// Planning is what makes the run fail before it writes anything: a bad
-/// selection must not arrive after the model was already set.
+/// A model switch changes which options there are, so the selections are
+/// planned again against what the agent offers once the model is set.
 #[test]
-fn one_bad_selection_fails_the_whole_plan() {
+fn selections_are_planned_again_against_the_new_models_options() {
+    let before = [
+        option("model", "model", &["fast", "deep"]),
+        option("reasoning", "thought_level", &["low"]),
+    ];
+    let requested = selections(&[("reasoning", Value::from("max"))]);
+    let plan = plan_configuration(&before, Some("deep"), &requested).unwrap();
+    assert_eq!(plan.skipped.len(), 1, "not offered before the switch");
+    let after = [option("reasoning", "thought_level", &["low", "max"])];
+    let (writes, skipped) =
+        super::super::session_setup::plan_selections(&after, &plan.requested).unwrap();
+    assert!(skipped.is_empty());
+    assert_eq!(
+        written(&writes),
+        [("reasoning".to_owned(), json!({"value": "max"}))]
+    );
+}
+
+/// Only a selection Lemma itself got wrong fails the run before it writes
+/// anything: a bad selection must not arrive after the model was already set.
+#[test]
+fn one_malformed_selection_fails_the_whole_plan() {
     let options = [
         option("model", "model", &["opus"]),
         option("reasoning", "thought_level", &["low"]),

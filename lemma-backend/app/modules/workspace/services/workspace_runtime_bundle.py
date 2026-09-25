@@ -21,13 +21,13 @@ is the status quo, not a regression this introduced.
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
 from collections.abc import Sequence
 from typing import Protocol
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from app.modules.workspace.infrastructure.runtime_bundle import (
@@ -208,8 +208,8 @@ class WorkspaceRuntimeBundleMixin:
     #: churn this would hold one key per sandbox the process had ever seen, for
     #: the life of the process. Evicting the oldest costs a probe -- one command
     #: -- which is the cheapest thing in this file.
-    _installed_bundles: OrderedDict[tuple[int, UUID, str, int, int], str] = (
-        OrderedDict()
+    _installed_bundles: BoundedDict[tuple[int, UUID, str, int, int], str] = BoundedDict(
+        _REMEMBERED_SANDBOXES, name="workspace.installed_bundles"
     )
     _inflight_bundles: dict[tuple[int, UUID, str, int, int], asyncio.Task[bool]] = {}
 
@@ -276,7 +276,7 @@ class WorkspaceRuntimeBundleMixin:
             # someone has been working in all day is evicted ahead of one that
             # was installed into once and abandoned -- exactly backwards, since
             # the busy one is the whole reason this path avoids I/O.
-            self._installed_bundles.move_to_end(key)
+            self._installed_bundles[key] = bundle.version
             return
 
         task = self._inflight_bundles.get(key) if key is not None else None
@@ -300,9 +300,6 @@ class WorkspaceRuntimeBundleMixin:
         # the life of this process, with the warm path skipping every retry.
         if installed and key is not None:
             self._installed_bundles[key] = bundle.version
-            self._installed_bundles.move_to_end(key)
-            while len(self._installed_bundles) > _REMEMBERED_SANDBOXES:
-                self._installed_bundles.popitem(last=False)
 
     async def _install_bundle(self, user_id: UUID, bundle: RuntimeBundle) -> bool:
         """Install it, reporting whether the sandbox now has this version."""

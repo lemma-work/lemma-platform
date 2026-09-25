@@ -7,8 +7,9 @@ pause -- so the choice has to live somewhere those can read it back. It lives
 under one key of the run's own metadata, written with ``jsonb_set`` so no
 other key is disturbed.
 
-The same record is what a host sandbox's operations are routed by: the host a
-conversation's most recent host run chose is the host its sandbox is on
+The same record is what a host sandbox's operations are routed by: a run's
+own operations go to the host it recorded, and an operation no run is making
+goes to the host the conversation's most recent host run chose
 (``latest_host_execution``), so there is no table saying so separately.
 """
 
@@ -80,3 +81,40 @@ async def latest_host_execution(
         )
     ).scalar_one_or_none()
     return value if isinstance(value, dict) else None
+
+
+#: How far back ``earlier_run_sources`` looks. A chain of wait wakes longer
+#: than this is treated as having no person at its start.
+EARLIER_RUNS_LIMIT = 50
+
+
+async def earlier_run_sources(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, run_id: UUID
+) -> list[str | None]:
+    """The ``source`` of each run started before ``run_id``, newest first.
+
+    What a continuation (a wait waking) continues is the work of the runs
+    before it; host execution asks who started that work.
+    """
+    this_run_created = await uow.session.scalar(
+        select(AgentRunModel.created_at).where(AgentRunModel.id == run_id)
+    )
+    if this_run_created is None:
+        return []
+    rows = (
+        await uow.session.execute(
+            select(AgentRunModel.run_metadata)
+            .where(
+                AgentRunModel.conversation_id == conversation_id,
+                AgentRunModel.id != run_id,
+                AgentRunModel.created_at <= this_run_created,
+            )
+            .order_by(AgentRunModel.created_at.desc())
+            .limit(EARLIER_RUNS_LIMIT)
+        )
+    ).scalars()
+    sources: list[str | None] = []
+    for metadata in rows:
+        source = metadata.get("source") if isinstance(metadata, dict) else None
+        sources.append(source if isinstance(source, str) else None)
+    return sources

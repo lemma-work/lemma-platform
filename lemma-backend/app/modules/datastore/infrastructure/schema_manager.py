@@ -44,7 +44,9 @@ class SchemaManager:
         # Bounded: this manager is a process-wide singleton, so an unbounded
         # memo holds one entry per (pod schema, table) ever touched. Re-ensuring
         # an index is idempotent, so an evicted entry costs a round trip.
-        self._ensured_record_indexes: BoundedSet[tuple[str, str]] = BoundedSet(4096)
+        self._ensured_record_indexes: BoundedSet[tuple[str, str]] = BoundedSet(
+            4096, name="datastore.ensured_record_indexes"
+        )
 
     async def ensure_query_role(self) -> None:
         return await self._query_role.ensure_role()

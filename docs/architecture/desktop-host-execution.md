@@ -37,21 +37,38 @@ of these hold; otherwise it gets the VM sandbox, exactly as before
 2. The run acts as the conversation's user -- the workspace is theirs.
 3. The run's **triggering human** is that user, in Lemma's own app
    (`triggered_by_run_user`): their message, the queued follow-up of messages
-   they sent, a retry, an approval resume, an answer to a question, or a
-   continuation of a run they started. A run started by a schedule or by an
+   they sent, a retry, an approval resume, or an answer to a question. A
+   `wait_for` waking qualifies only when the run it continues -- the newest
+   earlier run in the conversation that is not itself a wake -- was one of
+   those. The conversation itself must have been opened in the app: one that
+   a workflow, a schedule, a surface or a notification opened carries a
+   `source` (or `workflow_run_id`, `started_by`) in its metadata, and no run
+   in it ever executes on the host, whatever later arrives in it. A teammate's
+   reply to a message the agent sent (`message_replies`) never qualifies:
+   somebody else's words would drive commands on the user's Mac. Nor does an
    inbound channel message (Slack, email, Telegram, WhatsApp -- the platform's
-   assertion, not the user's session), and every sub-agent conversation, never
-   executes on the host.
+   assertion, not the user's session), or any sub-agent conversation.
 4. The user the run is for has a paired Agent Host that is **online**, with
    **host execution turned on** (Settings → This Mac → Coding agents). The host
    reports this on `hello` and on every `control` as `host_execution: {enabled,
    platform, available}`; Lemma routes here only when `enabled` and
    `available` are both true. `available` is macOS with
-   `/usr/bin/sandbox-exec`. The setting is `host_execution` in the Agent Host's
-   `config.json`, toggled by `lemma-agent-host host-execution enable|disable`
-   or locald's `agent-host.host-execution` (`{"enabled": bool}`); a running
-   host notices within five seconds and says so on its next `control`, without
-   a reconnect.
+   `/usr/bin/sandbox-exec`. The setting is `host_execution` on the **local
+   pairing** in the Agent Host's `config.json` -- the pairing with the Lemma
+   installed on this Mac, plain HTTP to loopback (`TargetConfig::
+   is_local_install`) -- toggled by `lemma-agent-host host-execution
+   enable|disable` or locald's `agent-host.host-execution` (`{"enabled":
+   bool}`), both of which act on that pairing only. A running host notices
+   within five seconds and says so on its next `control`, without a reconnect.
+   **Only the local pairing runs `op` frames at all**: every other pairing on
+   the Mac -- a hosted workspace, a teammate's shared install -- has no exec
+   relay, reports `enabled: false`, and answers an `op` as a host without
+   host execution. A server elsewhere asking this Mac to `process.start` is
+   exactly what the switch must never mean. An older host kept one host-wide
+   `host_execution`; it is moved onto the local pairing when the config is
+   read and never written again. The local pairing is also paused -- no host
+   commands, no new runs -- while somebody other than its person, or nobody,
+   is signed in to the app ([Agent Host](agent-host.md)).
 
 A user with more than one usable host is routed to the one the conversation's
 most recent host run used, and otherwise to the most recently seen. Somebody
@@ -105,7 +122,13 @@ backend (on the Mac)                      lemma-agent-host (on the Mac)
   stdin/stdout: `{id, workspace, method, params, deadline_ms}` in,
   `{id, result}` or `{id, error: {kind, message, retryable}}` out, answered in
   whatever order ops finish. When its stdin closes it kills every process
-  group it started and exits.
+  group it started and exits. It also reports each group it starts to the
+  relay (a `group` field the relay strips from `process.start`'s answer), and
+  when an exec-server's output ends -- it exited, crashed, or was killed after
+  its stop grace -- the relay, outside the sandbox, kills whatever of those
+  groups is left. The relay does the same for every workspace when the link
+  worker that owns it goes away. A crash of the Agent Host itself closes each
+  exec-server's stdin, which stops them in turn.
 - **Why one per workspace.** Seatbelt fixes a process's confinement when it
   starts, and a workspace's root and granted folders are only known at
   `workspace.open`. One exec-server per host would have to be confined to the
@@ -182,11 +205,17 @@ Process output is kept in a ring per process, bounded by
 that are exclusive in `after_sequence`, as in `sandbox_runtime`.
 `next_sequence` is the sequence the next chunk will get, and
 `truncated_before_sequence` the first one still held once anything was
-dropped. `process.read` waits up to `wait_ms` for new output, and returns at
-once for a process that has exited. A process reads as exited only once its
-output is complete (or 2 s after exit, for a background child holding the pipe
+dropped. One read carries at most `OP_MAX_DATA_BYTES` of output (at least one
+chunk); when it stops short, `next_sequence` is the first chunk it left out
+and the process still reads as `running`, so a reader carries on.
+`process.read` waits up to `wait_ms` for new output, and returns at once for
+a process that has exited. A process reads as exited only once its reader has
+all of its output (or 2 s after exit, for a background child holding the pipe
 open). It is tracked for 60 seconds after it has exited and been read to the
-end, or for 10 minutes after exit.
+end, or for 10 minutes after exit -- and never forgotten while anything in its
+process group is still running, so `workspace.close` still reaches a server a
+command left in the background. A `process.start` is checked, spawned and
+registered in one step, so two tries of one `operation_id` start one process.
 
 An op carries `deadline_ms` (default 120 s); past it the host answers
 `timeout` itself. At most 32 ops run at once per link.
@@ -244,8 +273,14 @@ folders but the root a run recorded (§9).
 `root_hint` or a grant only if it is a folder the user bound this
 conversation to on this machine (the desktop shell records those from a native
 folder dialog, in `conversation-folders.json`; see `conversation_folders.rs`),
-or a folder under `~/lemma` -- and never the home folder or anything
-containing it. Any other `root_hint` is ignored in favour of the default root,
+or a folder under `~/lemma` that this paired workspace already owns in the
+directory registry (`~/lemma/.lemma/directories.sqlite3`, the one Agent Host
+runs claim their folders in; `conversation_directory.rs`) -- never a hidden
+folder such as the registry's own, never the home folder or anything
+containing it. The root a workspace opens in under `~/lemma` -- the default
+folder included -- is claimed for this paired workspace as it opens, and one
+another paired workspace owns is refused (`permission_denied`) rather than
+shared. Any other `root_hint` is ignored in favour of the default root,
 which `workspace.open`'s `root` reports; any other grant is dropped.
 
 A path in a file op must resolve, after following symlinks, inside the root,
@@ -256,8 +291,9 @@ Commands are not path-checked, only sandboxed.
 ## 6. The Seatbelt profile
 
 `desktop/agent-host/resources/host-sandbox.sb`, compiled into the binary and
-passed as `sandbox-exec -p`, parameterised with `-D ROOT=… -D TMP=… -D HOME=…
--D GRANT_0=… … -D GRANT_7=…` (canonical paths; Seatbelt matches
+passed as `sandbox-exec -p`, parameterised with `-D ROOT=… -D HOME=… -D TMP=…
+-D USER_TMP=… -D CACHE=… -D GRANT_0=… … -D GRANT_7=…`, plus `GIT_0…GIT_8` and
+`RESOLVED_0…RESOLVED_15` (below), all canonical paths (Seatbelt matches
 `/private/var`, not `/var`). It is modelled on Claude Code's and Codex's:
 **deny by default**, then broad reads, narrow writes, open network. Deny by
 default rather than allow by default, because an allowed default also allows
@@ -265,33 +301,96 @@ the ways out of a sandbox that are not files at all -- `launchctl submit`,
 `open -a Terminal`, Apple Events -- so Mach services are allowed by name
 (logging, directory services, DNS, TLS trust, the Keychain, FSEvents).
 
-- **Reads:** allowed everywhere except `~/.ssh`, `~/.aws`, `~/.gnupg`,
+The rule behind every write denial: **nothing a command writes may be run
+later, unconfined, without the user asking for it.** The user's own terminal,
+editor, git and the coding agents the Agent Host starts all run outside this
+sandbox.
+
+- **Reads:** allowed everywhere except credentials and private data, which are
+  neither readable nor writable: `~/.ssh`, `~/.aws`, `~/.gnupg`,
   `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker/config.json`,
-  `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/Library/Keychains`,
-  `~/Library/Application Support/{Google/Chrome,Firefox,Arc,BraveSoftware}`,
-  `~/Library/Mail`, `~/Library/Messages`, `~/Library/Cookies`, and Lemma's own
-  data directory. The credential denials come after every allow, so a root or
-  grant that contains one still cannot reach it. One exception, measured: the
-  login keychain file (`~/Library/Keychains/login.keychain-db`) is readable.
-  `gh` and git's osxkeychain helper open it in-process to find their item and
+  `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`,
+  `~/.config/git/credentials`, `~/.pgpass`, `~/.my.cnf`, `~/.vault-token`,
+  `~/.cargo/credentials{,.toml}`, `~/.gem/credentials`, `~/.terraform.d`,
+  `~/.config/op`, `~/.password-store`, `~/.codex/auth.json`,
+  `~/.claude/.credentials.json`; shell and REPL history (`~/.zsh_history`,
+  `~/.zsh_sessions`, `~/.bash_history`, `~/.bash_sessions`, fish, Python,
+  Node, psql, MySQL, SQLite, irb); `~/Library/Keychains`; browser and chat
+  profiles under `~/Library/Application Support` (Chrome, Chromium, Edge,
+  Vivaldi, Opera, Firefox, Arc, Brave, Slack, Discord), `~/Library/Safari`,
+  `~/Library/Mail`, `~/Library/Messages`, `~/Library/Cookies`; and Lemma's own
+  data -- `~/Library/Application Support/Lemma` (the Agent Host's pairing
+  secrets and journal, the app's database and vault), `~/.lemma` (the CLI),
+  and every `work.lemma.*` entry under `~/Library/{Application Support,WebKit,
+  HTTPStorages,Caches,Preferences}` plus `~/Library/Caches/lemma-desktop`
+  (the app's web storage, its signed-in session included, for release,
+  candidate and QA bundle ids alike). The denials come after every allow, so a
+  root or grant that contains one still cannot reach it. A credential path
+  that is a **symbolic link** is denied where it really points too
+  (`RESOLVED_n`, resolved by the host when the exec-server starts), because
+  the kernel matches the resolved path.
+- **What is deliberately readable:** the login keychain file
+  (`~/Library/Keychains/login.keychain-db`) and `~/.config/gh`. `gh` and git's
+  osxkeychain helper open the keychain file in-process to find their item and
   securityd then decides whether to release the secret; with it denied, `gh
-  auth token` answers "no oauth token found". It is encrypted with the login
-  password, and the rest of `~/Library/Keychains` stays denied.
-- **Writes:** the root, granted folders, `$TMPDIR`, `/tmp`, `/private/var/folders`,
-  and the package-manager caches (`~/.npm`, `~/.cache`, `~/Library/Caches`,
-  `~/.cargo/registry`, `~/.rustup/tmp`, `~/go/pkg/mod`, `~/.gradle/caches`,
-  `~/.m2/repository`, `~/.bun/install/cache`, `~/Library/pnpm`). Also
-  `/dev/null`, `/dev/tty*` and `/dev/ptmx`.
-- **Network:** open, outbound and loopback. `npm install` and `npm run dev`
-  need both.
+  auth token` answers "no oauth token found". Without `hosts.yml`, `gh` refuses
+  to start at all. So a command can obtain what those tools can use -- `gh auth
+  token` prints the GitHub token, and `/usr/bin/security` reads any item whose
+  access list admits it. That is the cost of `gh pr create` working as the
+  user; the file is encrypted with the login password, and the rest of
+  `~/Library/Keychains` stays denied.
+- **Writes:** the root, granted folders, `TMP`, `USER_TMP` and `CACHE`, and
+  nothing else. Also `/dev/null`, `/dev/tty*` and `/dev/ptmx`.
+  - `TMP` is this exec-server's own `$TMPDIR`, `CACHE/tmp/<workspace>`.
+  - `USER_TMP` is the user's per-user temporary folder
+    (`/private/var/folders/…/T`). It cannot be moved: macOS's `mktemp` and the
+    system frameworks take it from `confstr`, not from `$TMPDIR`. The rest of
+    `/private/var/folders` and all of `/private/tmp` are read-only.
+  - `CACHE` is `~/Library/Caches/lemma-host-exec`. The package managers' own
+    caches are **not** writable: `~/.npm` (npx runs code out of `_npx`),
+    `~/Library/pnpm` (on `PATH`), `~/.cache`, `~/Library/Caches`, `~/.cargo`,
+    `~/go`, `~/.gradle`, `~/.m2` and `~/.bun` all hold code the user's own
+    terminal runs next. Instead the exec-server's environment sends every
+    package manager to `CACHE` (`seatbelt::cache_environment`):
+    `XDG_CACHE_HOME`, `npm_config_cache`, `npm_config_store_dir`,
+    `npm_config_devdir`, `YARN_CACHE_FOLDER`, `BUN_INSTALL_CACHE_DIR`,
+    `COREPACK_HOME`, `DENO_DIR`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`,
+    `POETRY_CACHE_DIR`, `CARGO_HOME`, `GOMODCACHE`, `GOCACHE`,
+    `GRADLE_USER_HOME` and `CLANG_MODULE_CACHE_PATH`. It is outside every root
+    so a bound project does not fill up with caches. Maven's
+    `~/.m2/repository` has no environment variable and is not redirected, so
+    Maven downloads fail on the host.
+- **Kept as they are, in the root and every grant:** `.git/hooks`, `.claude`,
+  `.codex`, `.gemini`, `.opencode`, `opencode.json`, `.mcp.json`, `.envrc`,
+  `.vscode` and `.idea` -- git's hooks, the coding agents' settings (their
+  hooks and MCP servers; the Agent Host starts those agents unconfined),
+  direnv, and editor tasks all run without being asked. And a repository
+  that **already existed** when the exec-server started (`GIT_n`) keeps its
+  `.git` entry and `.git/config` (where `core.fsmonitor` or `core.hooksPath`
+  names a program the user's shell prompt runs on every `cd`). Commits,
+  branches and pushes still work; `git push -u` pushes but cannot record the
+  upstream. A repository a command creates is its own: `git init` may write
+  its config, and makes no hooks, because `GIT_TEMPLATE_DIR` is an empty
+  folder under `CACHE`. Project files themselves -- `package.json` scripts, a
+  `Makefile` -- are the work, and are the user's to review before running.
+- **Network:** open, outbound and loopback, for TCP and UDP. `npm install` and
+  `npm run dev` need both. **Unix-domain sockets are refused** -- each one is a
+  service acting for the user outside the sandbox: the Docker daemon,
+  ssh-agent, a password manager's agent, tmux. The one exception is
+  `/private/var/run/mDNSResponder`, through which every `getaddrinfo` goes.
+  Listening is not limited to loopback: a dev server bound to `0.0.0.0` is
+  reachable from the local network, as it would be from the user's terminal.
 - **Processes:** fork and exec are allowed. Children inherit the profile and
   cannot drop it. Setuid programs (`ps`, `sudo`) cannot run under any
   sandbox profile.
 - **Environment:** a snapshot of the user's login shell (`$SHELL -lic env`,
   taken once, cached, refreshed from Settings). `LEMMA_*`, `AGENT_HOST_*`,
-  `*_TOKEN`, `*_SECRET`, `*_API_KEY` and `AWS_*` are removed. `PATH` is kept
-  whole, so Homebrew, nvm and asdf tools resolve as they do in the user's
-  terminal.
+  `AWS_*`, `OP_SESSION_*`, anything ending `_TOKEN`, `_SECRET`, `_KEY`,
+  `_PASSWORD`, `_PASSWD`, `_PAT` or `_CREDENTIALS`, and `SSH_AUTH_SOCK`,
+  `GPG_AGENT_INFO` and `PGPASSWORD` are removed. `PATH` is kept whole, so
+  Homebrew, nvm and asdf tools resolve as they do in the user's terminal.
+  `HOME` is the user's, `TMPDIR` is `TMP`, and the cache variables above point
+  into `CACHE`.
 
 The profile is data and is tested as data: `desktop/agent-host/tests/seatbelt.rs`
 runs on a macOS runner and proves the denials and the allowances with real
@@ -313,8 +412,8 @@ processes (§8).
 | Lane | What it proves |
 |---|---|
 | Rust unit (`make desktop-test`) | exec-server op handling, output ring and sequences, chunked write and digest, path policy including symlink escape, env scrubbing (`src/host_exec/`) |
-| Rust, macOS only (`tests/seatbelt.rs`) | under the real profile, with a test-made `HOME`: `cat ~/.ssh/x` denied, `touch ~/x` denied, write in the root and `~/.npm` allowed, grants, `git init` plus a commit in the root, `curl` to loopback; and the real exec-server binary under `sandbox-exec`, driven through the relay |
-| Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, root-hint admissibility, a conversation re-opening in the folder it remembers (and a folder the owner binds later winning), a waiting read not blocking other ops |
+| Rust, macOS only (`tests/seatbelt.rs`) | under the real profile, with a test-made `HOME`: `cat ~/.ssh/x` denied, including through a symbolic link, `touch ~/x` denied; the app's WebKit and HTTPStorages data, `~/.git-credentials`, `~/.codex/auth.json`, shell history and `~/.lemma` unreadable, `~/.config/gh` readable; writes in the root, `CACHE` (through the package managers' environment variables) and both temporary folders allowed; `~/.npm/_npx`, `~/Library/pnpm`, `~/Library/Caches`, `~/.cache`, `~/.cargo/registry` and `/private/tmp` denied; in an existing repository `.git/hooks`, `.git/config` and `.git` itself kept, `.claude`, `.mcp.json`, `.envrc` and `.vscode` kept, while commit and branch work; `git init` of a fresh root works; a Unix-domain socket connect refused while names still resolve; grants; `curl` to loopback; and the real exec-server binary under `sandbox-exec`, driven through the relay |
+| Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, a crashed exec-server's commands killed by the relay, root-hint admissibility, a folder under `~/lemma` given only to the workspace that owns it, a conversation re-opening in the folder it remembers (and a folder the owner binds later winning), a waiting read not blocking other ops |
 | Backend unit | provider maps every op and every failure kind; selection truth table (paired user, user with no host, another user's own host, steered, inbound, host offline, toggle off, cloud); tool filtering for Agent Host runs |
 | Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for the paired user's run on the host, and a run of a user with no host lands in the VM; after the binary restarts, the next command re-opens the workspace in the same folder with nothing about the folder stored by Lemma. Over the link: a `control` without `host_execution` keeps the stored report; a host sandbox follows the conversation's latest host run |
 
@@ -326,13 +425,18 @@ contract left to it.
 - **Selection** (§2) is `agent/services/host_execution_selection.py`, called
   once from `build_run_context`. "Triggering human" is read from how the run
   started: a person in Lemma's own app qualifies (`user_message`,
-  `queued_messages`, `manual_retry`, `approval_resume`, `person`), and so does
-  a continuation of such a run (`agent_wait`, `wait_resume`,
-  `message_replies`) unless a schedule started the conversation. A sub-agent
-  never does, and neither does a run in a conversation bound to a channel,
-  even when the channel resolved the sender to the paired user: that identity is
-  the platform's assertion, not the user's session. An unknown source does
-  not qualify. A Mac that cannot open the workspace at selection time gives
+  `queued_messages`, `manual_retry`, `approval_resume`, `person`). A wake
+  (`agent_wait`, `wait_resume`) qualifies only through the run it continues:
+  the conversation's earlier runs are walked back past other wakes
+  (`run_execution_record.earlier_run_sources`), and the first that is not a
+  wake has to be one of those person sources. `message_replies` -- a
+  teammate's reply -- never qualifies. A conversation whose metadata carries
+  `source`, `workflow_run_id`, `started_by`, `surface_platform` or
+  `is_sub_agent` was not opened in the app (`opened_in_app`), so no run in it
+  qualifies: that covers workflows, schedules, surfaces, notifications and
+  sub-agents, and a channel sender resolved to the paired user too, because
+  that identity is the platform's assertion, not the user's session. An
+  unknown source does not qualify. A Mac that cannot open the workspace at selection time gives
   the run the VM; nothing has run yet, so nothing moves.
 - **Where the choice is recorded.** A host sandbox's id is a UUIDv8 tagged
   `lmhost`, derived from the conversation (`workspace/domain/host_execution.py`),
@@ -341,12 +445,18 @@ contract left to it.
   never reach the VM and nothing else can reach the host. The user's VM
   workspace keeps its own id; the browser stays there. **No table records
   which host or folder**: both are derived per operation (next items).
-- **Which host an op goes to** (`agent/infrastructure/agent_host/host_execution.py`,
-  `host_for_host_sandbox`). The sandbox row's slug (`host-<conversation hex>`)
-  names the conversation and its owner the user. The op goes to the host in
-  the `execution` record of the conversation's most recent run that chose the
-  host -- whatever that host's state now, so a run never moves: offline is
-  `host_offline`, never another Mac and never the VM. A conversation no run has
+- **Which host an op goes to** (`workspace/services/host_workspace.py`,
+  `SqlHostTargets.target`). A run's ops go to the host in **that run's own**
+  `execution` record: selection stamps the chosen `host_id` on the run's
+  `HostWorkspace`, and the host session pins every client call to it
+  (`RunPinnedClient`, `run_pinned_host`), so two runs of one conversation that
+  chose different Macs never borrow each other's. Whatever that host's state
+  now, a run never moves: offline is `host_offline`, never another Mac and
+  never the VM. Only an op with no calling run (a close, a sweep) falls back
+  to the conversation: the sandbox row's slug (`host-<conversation hex>`)
+  names the conversation and its owner the user, and the op goes to the host
+  in the `execution` record of the conversation's most recent run that chose
+  the host (`host_for_host_sandbox`). A conversation no run has
   chosen the host in yet falls to the user's usable host, and with none of
   those the op is `host_offline` without being sent. Selection picks among
   the user's online hosts with host execution on and available

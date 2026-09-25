@@ -138,9 +138,13 @@ async def enter_api_lifespans(
     Teardown is automatic and LIFO as the stack unwinds, so register core
     closers *after* this call to ensure they tear down last.
     """
+    from app.core.observability.startup_timing import startup_step
+
     for module in modules:
         for make_cm in module.api_lifespans:
-            await stack.enter_async_context(make_cm(app))
+            hook = getattr(make_cm, "__name__", type(make_cm).__name__)
+            async with startup_step(f"{module.name}.{hook}", service="lemma-api"):
+                await stack.enter_async_context(make_cm(app))
 
 
 async def enter_worker_lifespans(

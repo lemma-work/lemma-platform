@@ -11,6 +11,16 @@ pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result
     use crate::protocol::handle_stream;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // Before anything is served, so no request can be mid-swap while it runs.
+    match service.recover_interrupted_replacements() {
+        Ok(0) => {}
+        Ok(count) => eprintln!("lemma-guestd: settled {count} interrupted sandbox replacement(s)"),
+        Err(error) => eprintln!(
+            "lemma-guestd: could not settle interrupted replacements: {}",
+            error.message
+        ),
+    }
+
     let tunnels = service.clone();
     thread::Builder::new()
         .name("guestd-tunnels".into())

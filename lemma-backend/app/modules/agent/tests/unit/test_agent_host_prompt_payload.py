@@ -227,9 +227,9 @@ class TestCredentials:
         delivered = host_agent_environment(
             {
                 "LEMMA_TOKEN": "a-delegated-session",
-                "LEMMA_BASE_URL": "http://app.127.0.0.1.sslip.io:53664",
-                "LEMMA_AUTH_URL": "http://app.127.0.0.1.sslip.io:53663/auth",
-                "LEMMA_HOST_ORIGIN": "http://app.127.0.0.1.sslip.io:53663",
+                "LEMMA_BASE_URL": "http://app.lemma.localhost:53664",
+                "LEMMA_AUTH_URL": "http://app.lemma.localhost:53663/auth",
+                "LEMMA_HOST_ORIGIN": "http://app.lemma.localhost:53663",
                 "LEMMA_USER_ID": "user-1",
                 "LEMMA_POD_ID": "pod-1",
                 "LEMMA_ORG_ID": "org-1",

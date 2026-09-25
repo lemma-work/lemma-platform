@@ -44,6 +44,7 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
             "allow-open-control-center"
                 | "allow-discover-provider-models"
                 | "allow-configure-ai-provider"
+                | "allow-app-frame-url"
                 | "allow-sandbox-image-status"
                 | "allow-conversation-folder"
                 | "allow-bind-conversation-folder"
@@ -104,9 +105,12 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
         patterns.iter().any(|pattern| pattern.test(&url))
     };
 
-    assert!(matches("http://app.lemma.localhost:3711/pod/abc"));
-    assert!(matches("http://app.lemma.localhost:63844/"));
     assert!(matches("https://lemma.work/pod/abc"));
+    // The local workspace is granted at runtime, on its exact origin. A
+    // `:*` pattern here would also cover the pod-app alias ports on the same
+    // host; see `a_pod_app_alias_on_the_workspace_host_reaches_no_command`.
+    assert!(!matches("http://app.lemma.localhost:3711/pod/abc"));
+    assert!(!matches("http://app.lemma.localhost:63844/"));
 
     // Sharing publishes the same workspace on a different host. Those
     // visitors must not be able to drive this Mac's Local settings.
@@ -127,30 +131,12 @@ fn an_overridden_workspace_origin_gets_the_same_commands() {
     assert!(capability_for(&["https://lemma.work"]).is_none());
     assert!(capability_for(&["not a url"]).is_none());
 
-    // ...including a local workspace, whose port is not known until it is
-    // allocated. The shipped entry is `http://app.<base>:*`, and the origin
-    // checked against it is concrete, so a plain string comparison never
-    // matched one and quietly minted an override for every local launch.
-    for base in ["lemma.localhost", "127.0.0.1.sslip.io"] {
-        assert!(
-            capability_for(&[&format!("http://app.{base}:52413")]).is_none(),
-            "the shipped capability already covers app.{base} on any port",
-        );
-    }
-    // And the wildcard is the port alone. A host that merely starts the
-    // same way is a different machine, and must still be treated as an
-    // override rather than silently accepted as shipped.
-    assert!(
-        capability_for(&["http://app.lemma.localhost.evil:52413"]).is_some(),
-        "a lookalike host must not read as a shipped origin",
-    );
+    // A local dev origin is not shipped any more -- the local workspace is
+    // granted at runtime on its exact origin -- so an override names it.
+    assert!(capability_for(&["http://app.lemma.localhost:52413"]).is_some());
     assert!(!shipped_workspace_origin_covers(
-        "http://app.lemma.localhost:*",
-        "http://app.lemma.localhost:52413/admin"
-    ));
-    assert!(!shipped_workspace_origin_covers(
-        "http://app.lemma.localhost:*",
-        "http://app.lemma.localhost"
+        "https://lemma.work",
+        "https://lemma.work.evil"
     ));
 
     let raw = capability_for(&["https://staging.lemma.work/", "http://127.0.0.1:3711"])
@@ -181,28 +167,163 @@ fn an_overridden_workspace_origin_gets_the_same_commands() {
     assert_eq!(capability["local"], json!(false));
 }
 
-/// Every local base this build serves has to be an origin the workspace
-/// capability covers.
+/// Every local base this build serves gets its workspace capability.
 ///
 /// The failure this catches is silent and total. A workspace served on a
-/// base the capability does not list matches no capability at all, so
-/// opening Local settings, connecting the Agent Host and configuring a
-/// provider each answer `not allowed by ACL` -- the whole of onboarding,
-/// with nothing on screen to say why. Nothing else ties the two files
-/// together: the base domain is chosen in locald and the origins are
-/// declared in a Tauri capability, and neither imports the other.
+/// base with no capability answers `not allowed by ACL` to opening Local
+/// settings, connecting the Agent Host and configuring a provider -- the
+/// whole of onboarding, with nothing on screen to say why.
 #[test]
-fn every_local_base_this_build_serves_is_a_shipped_workspace_origin() {
-    let shipped = shipped_workspace_origins();
+fn every_local_base_this_build_serves_is_granted_its_commands() {
     for base in TRUSTED_LOCAL_BASES {
         let origin = format!("http://app.{base}:52413");
+        let raw = local_workspace_capability(&format!("{origin}/"))
+            .unwrap_or_else(|| panic!("{origin} is granted nothing"));
+        let capability: Value = serde_json::from_str(&raw).expect("valid capability JSON");
+        assert_eq!(capability["remote"]["urls"], json!([origin]));
+        assert_eq!(
+            capability["permissions"],
+            json!(shipped_workspace_permissions())
+        );
+        assert_eq!(capability["webviews"], json!(["main"]));
+    }
+    // Nothing else is: not another host, not https, not a portless origin.
+    for refused in [
+        "http://app.lemma.localhost.evil:52413/",
+        "https://app.lemma.localhost:52413/",
+        "http://app.lemma.localhost/",
+        "http://orders.apps.lemma.localhost:52413/",
+        "http://192.168.1.20:52413/",
+    ] {
+        assert!(local_workspace_capability(refused).is_none(), "{refused}");
+    }
+}
+
+/// An alias frame is allowed exactly where locald handed one out.
+#[test]
+fn only_a_handed_out_alias_port_on_the_workspace_host_is_an_app_frame() {
+    let app = "http://app.lemma.localhost:52413/";
+    let api = "http://app.lemma.localhost:52414/";
+    let aliases: HashMap<u16, String> =
+        [(61001, "http://orders.apps.lemma.localhost:52414".to_owned())].into();
+    let target = |raw: &str| app_alias_target(&tauri::Url::parse(raw).unwrap(), app, api, &aliases);
+
+    assert_eq!(
+        target("http://app.lemma.localhost:61001/reports?q=1#top").as_deref(),
+        Some("http://orders.apps.lemma.localhost:52414/reports?q=1#top")
+    );
+    for refused in [
+        // A port nobody handed out.
+        "http://app.lemma.localhost:61002/",
+        // The workspace and the API are not apps.
+        "http://app.lemma.localhost:52413/",
+        "http://app.lemma.localhost:52414/",
+        // Another host on that port.
+        "http://evil.example:61001/",
+        "http://orders.apps.lemma.localhost:61001/",
+        "https://app.lemma.localhost:61001/",
+    ] {
+        assert_eq!(target(refused), None, "{refused}");
+    }
+}
+
+/// What the workspace frames, per platform: the alias on macOS, the
+/// canonical URL everywhere else -- and never anything that is not one of
+/// this installation's own apps.
+#[test]
+fn the_frame_plan_aliases_only_this_installations_apps_and_only_where_needed() {
+    let api = "http://app.lemma.localhost:52414/";
+    let app_url = "http://orders.apps.lemma.localhost:52414/reports";
+    assert_eq!(
+        pod_app_alias::frame_plan(app_url, api, true).unwrap(),
+        Some(app_url.to_owned())
+    );
+    assert_eq!(
+        pod_app_alias::frame_plan(app_url, api, false).unwrap(),
+        None
+    );
+    for refused in [
+        "http://orders.apps.lemma.localhost:52413/",
+        "http://app.lemma.localhost:52414/",
+        "https://orders.apps.lemma.work/",
+        "not a url",
+    ] {
         assert!(
-            shipped
-                .iter()
-                .any(|pattern| shipped_workspace_origin_covers(pattern, &origin)),
-            "capabilities/workspace.json does not cover {origin}, so a                  workspace served there reaches no shell command at all",
+            pod_app_alias::frame_plan(refused, api, true).is_err(),
+            "{refused}"
         );
     }
+    assert_eq!(pod_app_alias::FRAMES_NEED_ALIAS, cfg!(target_os = "macos"));
+
+    // And what locald answers is checked before a frame may load it.
+    let app = "http://app.lemma.localhost:52413/";
+    assert_eq!(
+        pod_app_alias::accepted_alias("http://app.lemma.localhost:61001/reports", app, api),
+        Some(61001)
+    );
+    for refused in [
+        "http://app.lemma.localhost:52413/",
+        "http://app.lemma.localhost:52414/",
+        "http://evil.example:61001/",
+        "http://user@app.lemma.localhost:61001/",
+        "https://app.lemma.localhost:61001/",
+    ] {
+        assert_eq!(
+            pod_app_alias::accepted_alias(refused, app, api),
+            None,
+            "{refused}"
+        );
+    }
+}
+
+/// Session cookies move from the retired domain onto the matching new name.
+#[test]
+fn session_cookies_move_off_the_retired_domain_once() {
+    use cookie_migration::{migrated_domain, plan};
+    assert_eq!(
+        migrated_domain(".127.0.0.1.sslip.io").as_deref(),
+        Some(".lemma.localhost")
+    );
+    assert_eq!(
+        migrated_domain("app.127.0.0.1.sslip.io").as_deref(),
+        Some("app.lemma.localhost")
+    );
+    assert_eq!(migrated_domain("app.10.0.0.7.sslip.io"), None);
+    assert_eq!(migrated_domain(".lemma.localhost"), None);
+    assert_eq!(migrated_domain("lemma.work"), None);
+
+    let cookie = |name: &str, domain: &str, path: &str| {
+        (name.to_owned(), domain.to_owned(), path.to_owned())
+    };
+    let jar = vec![
+        cookie("sAccessToken", ".127.0.0.1.sslip.io", "/"),
+        cookie("sRefreshToken", ".127.0.0.1.sslip.io", "/"),
+        cookie("sFrontToken", "app.127.0.0.1.sslip.io", "/"),
+        // Already there under the new name: kept, and the old one still goes.
+        cookie("sRefreshToken", ".lemma.localhost", "/"),
+        cookie("unrelated", "lemma.work", "/"),
+    ];
+    let moves = plan(&jar);
+    let summary: Vec<(&str, &str, bool)> = moves
+        .iter()
+        .map(|step| (step.name.as_str(), step.to_domain.as_str(), step.copy))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("sAccessToken", ".lemma.localhost", true),
+            ("sRefreshToken", ".lemma.localhost", false),
+            ("sFrontToken", "app.lemma.localhost", true),
+        ]
+    );
+    // After the move the jar holds nothing under the old domain, so running
+    // it again changes nothing.
+    let after = vec![
+        cookie("sAccessToken", ".lemma.localhost", "/"),
+        cookie("sRefreshToken", ".lemma.localhost", "/"),
+        cookie("sFrontToken", "app.lemma.localhost", "/"),
+    ];
+    assert!(plan(&after).is_empty());
 }
 
 #[test]
@@ -547,4 +668,39 @@ fn an_unparseable_hosted_url_opens_the_splash_rather_than_aborting_setup() {
             "{malformed:?} has to fall back to the splash, not abort setup"
         );
     }
+}
+
+/// A local workspace's window is not a browser for other people's sites.
+///
+/// Iframes still load anywhere `navigation_disposition` allows; this is the
+/// top-level document only, which is what a page load reports.
+#[test]
+fn a_local_window_hands_other_sites_to_the_browser() {
+    let app = "http://app.lemma.localhost:52413/";
+    let api = "http://app.lemma.localhost:52414/";
+    let leaves = |raw: &str, mode: &str| {
+        main_frame_leaves_app(&tauri::Url::parse(raw).unwrap(), mode, app, api)
+    };
+    assert!(leaves("https://example.com/login", "local"));
+    assert!(leaves("https://accounts.google.com/o/oauth2", "local"));
+    // Its own origins, its own apps, its bundled pages: stay.
+    assert!(!leaves("http://app.lemma.localhost:52413/t?pod=1", "local"));
+    assert!(!leaves("http://app.lemma.localhost:52414/files/1", "local"));
+    assert!(!leaves("http://demo.apps.lemma.localhost:52414/", "local"));
+    assert!(!leaves("tauri://localhost/index.html", "local"));
+    // Denied local destinations are `navigation_disposition`'s to refuse.
+    assert!(!leaves("http://192.168.1.1/", "local"));
+    // Hosted sign-in and billing are top-level visits elsewhere by design.
+    assert!(!leaves("https://accounts.google.com/o/oauth2", "hosted"));
+}
+
+#[test]
+fn a_release_build_opens_no_inspector_unless_asked() {
+    assert!(!main_window_devtools(false, None));
+    assert!(!main_window_devtools(false, Some("0")));
+    assert!(main_window_devtools(false, Some("1")));
+    assert!(main_window_devtools(true, None));
+    let source = include_str!("../windowing.rs").replace("\r\n", "\n");
+    assert!(!source.contains(".devtools(true)"));
+    assert!(source.contains("main_frame_leaves_app(payload.url()"));
 }

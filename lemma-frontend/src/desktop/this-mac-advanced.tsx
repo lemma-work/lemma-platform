@@ -67,12 +67,20 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
                the daemon refuses a stale revision rather than overwrite. */
             let revision = config.revision;
             for (const payload of payloads) {
-                const operator = await thisMac.applySection({ ...payload, expected_revision: revision }) as { config?: { revision?: number } };
+                const operator = await thisMac.applySection({ ...payload, expected_revision: revision }) as { cancelled?: boolean; config?: { revision?: number } };
+                /* Replacing a credential this Mac already runs with is asked
+                   natively, and a no there leaves the draft as it is. */
+                if (operator?.cancelled) return null;
                 revision = operator?.config?.revision ?? revision + 1;
             }
             return payloads.length;
         },
         onSuccess: (count) => {
+            if (count === null) {
+                setSaid({ text: "Not saved. The credentials in use are unchanged." });
+                void queryClient.invalidateQueries({ queryKey: ["this-mac"] });
+                return;
+            }
             drafts.delete(spec.form);
             setUnsaved(false);
             setSecretsState({});

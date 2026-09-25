@@ -129,7 +129,7 @@ pub(crate) fn prepare(
         ports,
         source.as_ref(),
         healed,
-        &LocalDomain::from_env(),
+        &LocalDomain::current(),
     )?;
     let destination = paths.root.join("host-pack.json");
     write_private_atomic(&destination, &serde_json::to_vec_pretty(&manifest)?)?;

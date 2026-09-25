@@ -35,7 +35,9 @@ logger = get_logger(__name__)
 # removed when the run that owns it finishes or fails. An observer that never
 # fires leaves its conversation behind permanently.
 _MAX_PENDING_CONVERSATIONS = 2048
-_pending_paths: BoundedDict[UUID, list[str]] = BoundedDict(_MAX_PENDING_CONVERSATIONS)
+_pending_paths: BoundedDict[UUID, list[str]] = BoundedDict(
+    _MAX_PENDING_CONVERSATIONS, name="agent_surfaces.pending_paths"
+)
 
 # A run that shows a hundred files is a runaway, and the reply would be refused
 # by the provider anyway. Bound it rather than letting the dict grow.

@@ -45,6 +45,7 @@ from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
 from app.core.observability.backlog_gauges import backlog_gauge_loop
+from app.core.observability.startup_timing import finish_startup, release_startup_heap
 from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
 from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
 from app.core.infrastructure.jobs.job_liveness import (
@@ -331,6 +332,7 @@ async def _worker_heartbeat_loop() -> None:
 
 @asynccontextmanager
 async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
+    boot_started = time.monotonic()
     setup_logging(
         settings.environment,
         service_name="lemma-worker",
@@ -457,9 +459,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     started = False
     global _primary_lane_context
     try:
-        # Module-contributed worker lifespans (e.g. agent_surfaces native event
-        # receiver + dedupe-store close; datastore reindex-queue close). Entered
-        # after core startup and unwound before the core closers below.
+        # Module worker lifespans: entered after core startup, unwound first.
         async with AsyncExitStack() as module_stack:
             await module_stack.enter_async_context(
                 outbox_dispatcher_lifespan(
@@ -470,12 +470,11 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 )
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
-            # Emit only after every core and module lifespan has entered.
-            logger.info("service.started")
+            ms, frozen = finish_startup(boot_started)
+            logger.info("service.started", startup_ms=ms, gc_frozen_objects=frozen)
             started = True
-            # Release any secondary lanes only now that the shared broker,
-            # engine and module lifespans are fully up — they share this exact
-            # context object and must not consume jobs before it is complete.
+            # Release secondary lanes only now: they share this exact context
+            # and must not consume jobs before it is complete.
             _primary_lane_context = context
             _primary_lane_ready.set()
             yield context
@@ -548,6 +547,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
 
         if started:
             logger.info("service.stopped")
+            release_startup_heap()
         shutdown_telemetry()
 
 

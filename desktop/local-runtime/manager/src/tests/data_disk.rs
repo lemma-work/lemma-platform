@@ -70,3 +70,53 @@ fn cache_repair_signal_is_exact_and_does_not_match_generic_failures() {
         "container engine unavailable"
     )));
 }
+
+/// Quitting during the first boot must not turn a new disk into one that
+/// "needs repair".
+///
+/// The guest formats only when the host says the disk is new. That used to be
+/// "created by this boot", so a boot interrupted before `mkfs` left an empty
+/// disk the next boot was not allowed to format.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_disk_stays_formattable_until_a_boot_has_mounted_it() {
+    let root = tempdir().unwrap();
+    let disk = root.path().join("data.raw");
+    let never_mounted = root.path().join("data-disk-never-mounted");
+
+    assert!(host_disk::prepare_data_disk(&disk, &never_mounted, 1024 * 1024).unwrap());
+    // Quit before the guest formatted it: the next boot is still a first one.
+    assert!(
+        host_disk::prepare_data_disk(&disk, &never_mounted, 1024 * 1024).unwrap(),
+        "an interrupted first boot must leave the disk formattable"
+    );
+    // A boot reached health, so the disk was mounted and may hold data.
+    remove_if_present(&never_mounted).unwrap();
+    assert!(
+        !host_disk::prepare_data_disk(&disk, &never_mounted, 1024 * 1024).unwrap(),
+        "a disk that has been mounted must never be offered for formatting"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_vm_does_not_start_on_a_nearly_full_mac() {
+    let error =
+        host_disk::require_host_free_space(host_disk::HOST_FREE_SPACE_FLOOR - 1).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+    assert!(error.to_string().contains("free up space"), "{error}");
+    host_disk::require_host_free_space(host_disk::HOST_FREE_SPACE_FLOOR).unwrap();
+    assert!(host_disk::host_free_bytes(tempdir().unwrap().path()).unwrap() > 0);
+}
+
+/// The VM helper leads its own process group, so a signal aimed at locald's
+/// group -- which would SIGTERM the guest off -- cannot reach it.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_vm_helper_is_spawned_into_its_own_process_group() {
+    let source = include_str!("../macos.rs").replace("\r\n", "\n");
+    let start = source.find("fn start_macos(").expect("start_macos exists");
+    let spawn = &source[start..];
+    let spawn = &spawn[..spawn.find(".spawn()?").expect("the helper is spawned")];
+    assert!(spawn.contains(".process_group(0)"), "{spawn}");
+}
