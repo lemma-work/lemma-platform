@@ -170,6 +170,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                 self._config.request_timeout_seconds,
                 "sandbox.ensure",
                 {
+                    **spec.guest_grants(),
                     "sandbox_id": guest_id,
                     "workload_kind": spec.kind.value,
                     "image": image,

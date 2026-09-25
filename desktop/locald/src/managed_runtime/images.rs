@@ -133,6 +133,7 @@ impl ManagedRuntimeController {
             let parameters = json!({
                 "images": controller.spec.images,
                 "credentials": controller.spec.credentials,
+                "callback_ports": [controller.spec.ports.backend, controller.spec.ports.frontend],
             });
             let result = if cfg!(target_os = "macos") {
                 poll_sandbox_image_warmup(

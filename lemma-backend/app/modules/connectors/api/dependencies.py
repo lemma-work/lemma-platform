@@ -1,8 +1,10 @@
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
+from uuid import UUID
 
 from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
+from app.core.authorization.context import Context
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
@@ -57,6 +59,15 @@ from app.modules.connectors.services.auth.composio_auth_provider import (
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
 from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.services.trigger_service import ConnectorTriggerService
+
+if TYPE_CHECKING:
+    from app.modules.connectors.api.schemas.connector_operation_schemas import (
+        OperationExecutionResponse,
+    )
+    from app.modules.connectors.services.files.operation_files import (
+        FoundFile,
+        OperationFiles,
+    )
 
 
 def _connector_repository(uow: UoWDep) -> ConnectorRepository:
@@ -176,25 +187,51 @@ ConnectorOperationServiceDep = Annotated[
 ]
 
 
+def build_pod_file_gateway(uow: object) -> PodFileGatewayPort:
+    """Pod file reads and writes for connector operations, on ``uow``.
+
+    Public because the agent's connector tools need the same one: they read an
+    attachment and land a download exactly as the REST route does.
+    """
+    # Imported here, not at module scope, for the import budget: the adapter
+    # reaches `datastore/contracts/pod_files.py`, which pulls datastore's
+    # service layer into every process that touches a connector route. This
+    # runs per operation execution, not per import.
+    from app.modules.connectors.infrastructure.adapters.pod_file_gateway import (
+        DatastorePodFileGateway,
+    )
+
+    return DatastorePodFileGateway(uow)
+
+
+def build_operation_files(
+    uow: object, *, pod_id: UUID | None, ctx: Context
+) -> "OperationFiles":
+    """File inputs and results for one caller's operation calls, in one pod."""
+    from app.modules.connectors.services.files.operation_files import OperationFiles
+
+    return OperationFiles(build_pod_file_gateway(uow), pod_id=pod_id, ctx=ctx)
+
+
+async def find_file_result(
+    response: "OperationExecutionResponse",
+) -> "FoundFile | None":
+    """The file an operation result carries, fetched. Needs no session."""
+    from app.modules.connectors.services.files.operation_files import (
+        find_file_result as find,
+    )
+
+    return await find(response)
+
+
 def build_connector_operation_use_cases(
     uow_factory: UnitOfWorkFactory,
 ) -> ConnectorOperationUseCases:
     # Factory mode: the use-case opens its own short UoWs per phase (via
     # build_connector_operation_service as the per-phase builder) so no pooled
     # connection is held across the external operation call.
-    def _pod_file_gateway(uow: object) -> PodFileGatewayPort:
-        # Imported here, not at module scope, for the import budget: the adapter
-        # reaches `datastore/contracts/pod_files.py`, which pulls datastore's
-        # service layer into every process that touches a connector route. This
-        # factory runs per operation execution, not per import.
-        from app.modules.connectors.infrastructure.adapters.pod_file_gateway import (
-            DatastorePodFileGateway,
-        )
-
-        return DatastorePodFileGateway(uow)
-
     return ConnectorOperationUseCases(
-        uow_factory, build_connector_operation_service, _pod_file_gateway
+        uow_factory, build_connector_operation_service, build_pod_file_gateway
     )
 
 

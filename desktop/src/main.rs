@@ -44,6 +44,7 @@ mod update_policy;
 mod window_placement;
 mod windowing;
 mod workspace;
+mod workspace_settings;
 
 use agent_host_ui::*;
 use app_update::*;
@@ -88,6 +89,7 @@ use tauri_plugin_updater::UpdaterExt as _;
 use window_placement::*;
 use windowing::*;
 use workspace::*;
+use workspace_settings::*;
 
 mod artifact_install;
 
@@ -105,7 +107,7 @@ const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Must match locald's handshake revision. This prevents a newly installed
 // Desktop hotfix from silently reusing an older durable daemon with the same
 // public release number.
-const REQUIRED_LOCALD_API_REVISION: u64 = 6;
+const REQUIRED_LOCALD_API_REVISION: u64 = 7;
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;

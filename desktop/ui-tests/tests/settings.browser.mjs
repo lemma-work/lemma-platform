@@ -36,42 +36,20 @@ async function settings(t, mode = 'local', daemonOffline = false) {
     const emit = (event) => listeners['lemma:locald-event']?.({ payload: event });
     const fixture = {
       calls: [],
+      // Whether this build answers `telemetry_status` as one that can send
+      // install health, which is what puts a real field on the page.
+      telemetry: false,
       snapshot: {
         event: 'control.snapshot',
         state: { ready: true, running: true, status: 'ready' },
         services: [{ id: 'backend', running: true }, { id: 'frontend', running: true }],
         managed_runtime: {}, agent_host: { available: true, running: true, targets: [] },
         sharing: { mode: 'this_computer', phase: 'ready' },
-        operator: {
-          config: {
-            revision: 1, install_id: 'test', schema_version: 1,
-            ai: { protocol: 'openai_compat', base_url: 'https://saved.example/v1', default_model: 'saved', models: ['saved'], vision_models: [] },
-            integrations: { composio_enabled: false, google_client_id: '', microsoft_client_id: '', github_client_id: '', slack_client_id: '' },
-            surfaces: { slack_socket_mode: false, telegram_polling: false, teams_app_id: '', teams_tenant_id: '', whatsapp_phone_number_id: '', whatsapp_waba_id: '', resend_inbound_domain: '' },
-          },
-          secrets: { 'ai.api_key': true },
-          readiness: { ai: 'ready', integrations: 'optional', surfaces: 'optional' },
-        },
       },
       refresh() { emit(structuredClone(this.snapshot)); },
       // The daemon's channel, with whatever a test wants to put on it.
       emit(event) { emit(event); },
       disconnect() { listeners['lemma:locald-disconnected']?.({ payload: null }); },
-      failSave(message = 'Settings changed elsewhere. Review and retry.') {
-        const { args } = this.calls.findLast((call) => call.command === 'apply_operator_config');
-        emit({ event: 'error', id: args.id, code: 'config-conflict', message });
-      },
-      completeSave(emitEvent = true) {
-        const { args } = this.calls.findLast((call) => call.command === 'apply_operator_config');
-        const { section } = args.payload;
-        this.snapshot.operator.config[section.name] = section.value;
-        this.snapshot.operator.config.revision += 1;
-        this.snapshot.config_operations = {
-          ...this.snapshot.config_operations,
-          [args.id]: { status: 'succeeded', operator: structuredClone(this.snapshot.operator) },
-        };
-        if (emitEvent) emit({ event: 'config.applied', id: args.id, operator: structuredClone(this.snapshot.operator) });
-      },
     };
     if (mode !== 'local') {
       fixture.snapshot.services = null;
@@ -88,16 +66,11 @@ async function settings(t, mode = 'local', daemonOffline = false) {
           fixture.refresh(); return;
         }
         if (command === 'reset_full_reinstall' || command === 'reset_local_data') return 'cancelled';
-        if (command === 'confirm_settings_changes') {
-          if (fixture.failDecision) throw new Error('Confirmation unavailable');
-          return new Promise(resolve => { fixture.finishDecision = value => { delete fixture.finishDecision; resolve(value); }; });
-        }
-        if (command === 'confirm_destructive_action') return fixture.publicDecision === true;
+        if (command === 'confirm_destructive_action') return false;
         if (command === 'runtime_info') return { desktopRelease: 'test', repairAvailable: false };
         if (command === 'check_for_app_update') return { updatesSupported: false, currentVersion: 'test', channel: 'dev' };
-        if (command === 'discover_provider_models') {
-          if (fixture.delayDiscovery) return new Promise((resolve) => { fixture.finishDiscovery = resolve; });
-          return ['discovered'];
+        if (command === 'telemetry_status') {
+          return { available: fixture.telemetry, enabled: true, host: 'https://telemetry.example' };
         }
       } },
       event: { listen(name, listener) { listeners[name] = listener; return Promise.resolve(() => {}); } },
@@ -105,13 +78,10 @@ async function settings(t, mode = 'local', daemonOffline = false) {
   }, {mode, daemonOffline});
   await page.goto('https://desktop.test/control.html');
   if (daemonOffline) await page.waitForFunction(() => !document.getElementById('snapshot-unavailable').hidden);
-  else await page.waitForFunction(() => document.getElementById('metric-ai').textContent === 'Ready');
+  // The first snapshot has been drawn once the pill stops saying it is still
+  // connecting -- in every mode, where the health metric reads differently.
+  else await page.waitForFunction(() => document.getElementById('state-pill').textContent !== 'Connecting…');
   return page;
-}
-
-async function settingsDecision(page, decision) {
-  await page.waitForFunction(() => typeof window.__fixture.finishDecision === 'function');
-  await page.evaluate(value => window.__fixture.finishDecision(value), decision);
 }
 
 test('settings before deployment selection do not claim the workspace is in the cloud', async t => {
@@ -130,9 +100,9 @@ test('settings content remains readable when an embedded webview suspends animat
     sheet.replaceSync('* { animation-play-state: paused !important; }');
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
   });
-  for (const name of ['Updates', 'This computer', 'Recovery']) {
-    // Prefix, not exact: a nav item's accessible name now carries its health
-    // as well, which is what stops it being colour alone.
+  for (const name of ['This computer', 'Recovery', 'Diagnostics']) {
+    // Prefix, not exact: a nav item's accessible name can carry its health as
+    // well, which is what stops it being colour alone.
     await page.getByRole('button', { name: new RegExp(`^${name}`) }).click();
     const content = await page.locator('.page.active').evaluate(element => ({
       opacity: getComputedStyle(element).opacity,
@@ -144,153 +114,35 @@ test('settings content remains readable when an embedded webview suspends animat
   }
 });
 
-test('real settings DOM preserves drafts across health refresh, navigation, and closing', async (t) => {
+// Local settings is often opened because something is already broken, so an
+// outage has to be said on the page, and the next snapshot has to clear it
+// rather than leave the banner standing over live numbers.
+test('a disconnect is said on the page and the next snapshot clears it', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-base').fill('https://draft.example/v1');
-  await page.locator('#ai-key').fill('draft-key');
-  await page.evaluate(() => window.__fixture.refresh());
-  assert.equal(await page.locator('#ai-base').inputValue(), 'https://draft.example/v1');
-  assert.equal(await page.locator('#ai-key').inputValue(), 'draft-key');
   await page.evaluate(() => window.__fixture.disconnect());
   assert.equal(await page.locator('#state-pill').textContent(), 'Disconnected');
-  assert.equal(await page.locator('#ai-key').inputValue(), 'draft-key');
+  assert.equal(await page.locator('#snapshot-unavailable').isVisible(), true);
   await page.evaluate(() => window.__fixture.refresh());
   assert.equal(await page.locator('#snapshot-unavailable').isVisible(), false);
-  await page.getByRole('button', { name: /^This computer/ }).click();
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  assert.equal(await page.locator('#ai-key').inputValue(), 'draft-key');
-  await page.getByRole('button', { name: 'Back to Lemma' }).click();
-  await settingsDecision(page, 'cancel');
-  assert.equal(await page.evaluate(() => window.__fixture.calls.some((call) => call.command === 'close_local_settings')), false);
-  await page.locator('.config-page.active').getByRole('button', { name: 'Discard changes' }).click();
-  assert.equal(await page.locator('#ai-base').inputValue(), 'https://saved.example/v1');
-  assert.equal(await page.locator('#ai-key').inputValue(), '');
+  assert.equal(await page.locator('#metric-app').textContent(), 'Healthy');
 });
 
-test('a single native decision owns close and Cancel restores the draft and focus', async (t) => {
-  const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-base').fill('https://draft.example/v1');
-  await page.getByRole('button', { name: 'Back to Lemma' }).click();
-  await page.getByRole('button', { name: 'Back to Lemma' }).click();
-  assert.equal(await page.evaluate(() => window.__fixture.calls.filter(call => call.command === 'confirm_settings_changes').length), 1);
-  await settingsDecision(page, 'cancel');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'back-to-lemma');
-  assert.equal(await page.locator('#ai-base').inputValue(), 'https://draft.example/v1');
-  assert.equal(await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'close_local_settings')), false);
-});
-
-test('a save submits one section and does not erase typing during activation', async (t) => {
-  const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-key').fill('first-key');
-  await page.locator('.config-page.active [data-save]').click();
-  const payload = await page.evaluate(() => window.__fixture.calls.find((call) => call.command === 'apply_operator_config').args.payload);
-  assert.equal(payload.section.name, 'ai');
-  assert.equal(payload.expected_revision, 1);
-  assert.deepEqual(payload.secrets['ai.api_key'], { action: 'replace', value: 'first-key' });
-  assert.equal(Object.hasOwn(payload, 'config'), false);
-  await page.locator('#ai-key').fill('second-key');
-  await page.evaluate(() => window.__fixture.completeSave());
-  assert.equal(await page.locator('#ai-key').inputValue(), 'second-key');
-  assert.equal(await page.locator('.config-page.active').evaluate((node) => node.classList.contains('dirty')), true);
-});
+// Provider drafts, saving one section at a time, model discovery, a save that
+// conflicts or whose completion is lost, and the save-or-discard decision on
+// closing all moved with their forms to lemma-frontend's This Mac settings;
+// lemma-frontend/tests/this-mac.test.ts covers them there.
 
 test('cloud mode opens this computer without provisioning a local stack', async (t) => {
   const page = await settings(t, 'hosted');
   assert.equal(await page.locator('#page-title').textContent(), 'This computer');
   assert.equal(await page.locator('#attention-banner').isVisible(), false, 'cloud mode has no local application stack to repair');
-  assert.equal(await page.getByRole('button', { name: /^AI provider/ }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: /^Overview/ }).isDisabled(), true);
   await page.getByRole('button', { name: 'Open agent setup in Lemma' }).click();
   const commands = await page.evaluate(() => window.__fixture.calls.map((call) => call.command));
   assert.equal(commands.includes('open_app'), true);
   assert.equal(commands.includes('runtime.prepare'), false);
   assert.equal(commands.includes('prepare_runtime'), false);
   assert.equal(commands.includes('start'), false);
-});
-
-test('a failed apply keeps credentials and its inline error through refresh', async (t) => {
-  const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-key').fill('replacement-canary');
-  await page.locator('.config-page.active [data-save]').click();
-  await page.evaluate(() => window.__fixture.failSave());
-  await page.evaluate(() => window.__fixture.refresh());
-  assert.match(await page.locator('.config-page.active .section-error').textContent(), /changed elsewhere/);
-  assert.equal(await page.locator('#ai-key').inputValue(), 'replacement-canary');
-  assert.equal(await page.locator('.config-page.active [data-save]').isEnabled(), true);
-  await page.locator('.config-page.active [data-save]').click();
-  const payload = await page.evaluate(() => window.__fixture.calls.findLast((call) => call.command === 'apply_operator_config').args.payload);
-  assert.equal(payload.expected_revision, 1);
-  assert.deepEqual(payload.secrets['ai.api_key'], { action: 'replace', value: 'replacement-canary' });
-});
-
-test('reconnect consumes a durable save outcome when the completion event was lost', async (t) => {
-  const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-key').fill('save-canary');
-  await page.locator('.config-page.active [data-save]').click();
-  await page.evaluate(() => {
-    window.__fixture.disconnect();
-    window.__fixture.completeSave(false);
-    window.__fixture.refresh();
-  });
-  assert.equal(await page.locator('#ai-key').inputValue(), '');
-  assert.equal(await page.locator('.config-page.active').evaluate((node) => node.classList.contains('dirty')), false);
-  await page.getByRole('button', { name: 'Back to Lemma' }).click();
-  assert.equal(await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'close_local_settings').length), 1);
-  assert.equal(await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'apply_operator_config').length), 1);
-});
-
-test('model discovery reuses the saved credential and rejects an answer for an old endpoint', async (t) => {
-  const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.evaluate(() => { window.__fixture.delayDiscovery = true; });
-  await page.locator('#ai-discover').click();
-  const payload = await page.evaluate(() => window.__fixture.calls.findLast((call) => call.command === 'discover_provider_models').args.payload);
-  assert.equal(Object.hasOwn(payload, 'api_key'), false);
-  await page.locator('#ai-base').fill('https://new-draft.example/v1');
-  await page.evaluate(() => window.__fixture.finishDiscovery(['stale-model']));
-  await page.waitForFunction(() => !document.getElementById('ai-discover').disabled);
-  assert.equal(await page.locator('#ai-model-panel').isVisible(), false);
-  assert.equal(await page.locator('#ai-model option').count(), 0);
-});
-
-test('closing with two dirty sections saves them sequentially before leaving', async (t) => {
-  const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-key').fill('provider-canary');
-  await page.getByRole('button', { name: /^Integrations/ }).click();
-  await page.locator('summary').filter({ hasText: 'Gmail, Calendar, and Drive OAuth app' }).click();
-  await page.locator('#google-id').fill('integration-canary');
-  await page.getByRole('button', { name: 'Back to Lemma' }).click();
-  await settingsDecision(page, 'confirm');
-  await page.waitForFunction(() => window.__fixture.calls.filter((call) => call.command === 'apply_operator_config').length === 1);
-  assert.equal(await page.evaluate(() => window.__fixture.calls.some((call) => call.command === 'close_local_settings')), false);
-  await page.evaluate(() => window.__fixture.completeSave());
-  await page.waitForFunction(() => window.__fixture.calls.filter((call) => call.command === 'apply_operator_config').length === 2);
-  const saves = await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'apply_operator_config').map((call) => call.args.payload));
-  assert.deepEqual(saves.map((save) => [save.section.name, save.expected_revision]), [['ai', 1], ['integrations', 2]]);
-  assert.equal(saves[1].section.value.google_client_id, 'integration-canary');
-  assert.equal(Object.hasOwn(saves[1].secrets, 'ai.api_key'), false);
-  await page.evaluate(() => window.__fixture.completeSave());
-  await page.waitForFunction(() => window.__fixture.calls.some((call) => call.command === 'close_local_settings'));
-});
-
-test('discard cannot close settings while an admitted save is unfinished', async (t) => {
-  const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-key').fill('pending-canary');
-  await page.locator('.config-page.active [data-save]').click();
-  await page.getByRole('button', { name: 'Back to Lemma' }).click();
-  assert.match(await page.locator('#settings-close-status').textContent(), /still running/);
-  assert.equal(await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'confirm_settings_changes')), false);
-  assert.equal(await page.evaluate(() => window.__fixture.calls.some((call) => call.command === 'close_local_settings')), false);
-  await page.evaluate(() => window.__fixture.failSave());
-  await page.getByRole('button', { name: 'Back to Lemma' }).click();
-  await settingsDecision(page, 'discard');
-  assert.equal(await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'close_local_settings').length), 1);
 });
 
 test('force cleanup is reachable without a daemon and cancellation never reports erased data', async (t) => {
@@ -304,143 +156,88 @@ test('force cleanup is reachable without a daemon and cancellation never reports
   assert.equal(await page.getByRole('button', { name: 'Force cleanup and reinstall', exact: true }).isEnabled(), true);
 });
 
-test('a failed native decision preserves the draft and reports an inline error', async t => {
+// Choosing a mode, public-link confirmation, who can join and the QR code
+// moved to lemma-frontend's This Mac settings; lemma-frontend/tests/this-mac.test.ts
+// covers them. What stays is the way back: a shared workspace moves this
+// window to the shared address, where the workspace cannot reach this
+// computer's settings, so turning sharing off has to work from here.
+test('stopping sharing is offered only while shared, and asks the daemon to disable it', async t => {
   const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-key').fill('unsaved-canary');
-  await page.evaluate(() => { window.__fixture.failDecision = true; });
-  await page.getByRole('button', { name: 'Back to Lemma' }).click();
-  assert.match(await page.locator('#settings-close-status').textContent(), /Confirmation unavailable/);
-  await page.evaluate(() => window.__fixture.refresh());
-  assert.equal(await page.locator('#ai-key').inputValue(), 'unsaved-canary');
-  assert.equal(await page.locator('#settings-close-status').isVisible(), true);
-  assert.equal(await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'close_local_settings')), false);
-});
+  const stop = page.getByRole('button', { name: 'Return to This computer' });
+  assert.equal(await stop.isVisible(), false, 'nothing to stop on a private installation');
 
-test('public sharing requires an affirmative app-owned confirmation on every activation', async t => {
-  const page = await settings(t);
-  await page.evaluate(() => {
-    window.__fixture.snapshot.sharing.provider_readiness = { ngrok: { installed: true, authenticated: true } };
-    window.__fixture.refresh();
-  });
-  await page.getByRole('button', { name: /^Sharing/ }).click();
-  await page.getByRole('radio', { name: /Public link/ }).check();
-  await page.getByRole('button', { name: 'Create public link', exact: true }).click();
-  assert.equal(await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'sharing_action' && call.args.action === 'enable')), false);
-  await page.evaluate(() => { window.__fixture.publicDecision = true; });
-  await page.getByRole('button', { name: 'Create public link', exact: true }).click();
-  const calls = await page.evaluate(() => window.__fixture.calls);
-  assert.equal(calls.filter(call => call.command === 'confirm_destructive_action').length, 2);
-  const enabled = calls.filter(call => call.command === 'sharing_action' && call.args.action === 'enable');
-  assert.equal(enabled.length, 1);
-  assert.equal(enabled[0].args.payload.public_warning_confirmed, true);
-});
-
-// This window can reinstall Lemma and write credentials, and its CSP allows
-// inline script. The QR arrives as markup on the daemon's event stream, so if
-// it ever reaches the DOM as HTML rather than as an image, anything that can
-// write to that stream runs code with the settings window's privileges.
-test('a QR code from the event stream is rendered as an image, never as live markup', async t => {
-  const page = await settings(t);
   await page.evaluate(() => {
     window.__fixture.snapshot.sharing = {
       mode: 'local_network',
       phase: 'ready',
       canonical_url: 'https://192.168.1.20:7423',
-      interfaces: [{ name: 'en0', address: '192.168.1.20' }],
-      selected_interface: 'en0',
-      qr_svg: '<svg xmlns="http://www.w3.org/2000/svg"><script>window.__pwned = true;<\/script></svg>',
     };
     window.__fixture.refresh();
   });
-  await page.getByRole('button', { name: /^Sharing/ }).click();
-  await page.waitForFunction(() => document.querySelector('#sharing-qr-image img'));
+  await stop.waitFor();
+  assert.match(await page.locator('#metric-exposure').textContent(), /Local network/);
 
-  assert.equal(
-    await page.evaluate(() => window.__pwned),
-    undefined,
-    'markup from the daemon must not execute in the settings window',
-  );
-  assert.equal(
-    await page.evaluate(() => document.querySelector('#sharing-qr-image script')),
-    null,
-    'the QR must not be injected as live markup',
-  );
-  assert.ok(
-    await page.evaluate(() => document.querySelector('#sharing-qr-image img').src.startsWith('data:image/svg+xml')),
-    'the QR should load through an image, which cannot run script',
-  );
-  assert.ok(
-    await page.evaluate(() => document.querySelector('#sharing-qr-image img').alt.length > 0),
-    'the QR needs a text alternative',
-  );
-});
+  await stop.click();
+  const sent = await page.evaluate(() => window.__fixture.calls
+    .filter(call => call.command === 'sharing_action')
+    .map(call => call.args.action));
+  assert.deepEqual(sent, ['disable']);
+  // Held until the daemon reports the change, so a second press cannot start
+  // a second transition while the first is running.
+  assert.equal(await stop.isDisabled(), true);
 
-test('native Save keeps the page open after a failed apply or a newer draft', async t => {
-  for (const fail of [true, false]) {
-    const page = await settings(t);
-    await page.getByRole('button', { name: /^AI provider/ }).click();
-    await page.locator('#ai-key').fill('first-canary');
-    await page.getByRole('button', { name: 'Back to Lemma' }).click();
-    await settingsDecision(page, 'confirm');
-    await page.waitForFunction(() => window.__fixture.calls.some(call => call.command === 'apply_operator_config'));
-    if (fail) await page.evaluate(() => window.__fixture.failSave());
-    else {
-      await page.locator('#ai-key').fill('newer-canary');
-      await page.evaluate(() => window.__fixture.completeSave());
-    }
-    await page.locator('#settings-close-status').waitFor();
-    assert.equal(await page.locator('#ai-key').inputValue(), fail ? 'first-canary' : 'newer-canary');
-    assert.equal(await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'close_local_settings')), false);
-  }
+  await page.evaluate(() => {
+    window.__fixture.snapshot.sharing = { mode: 'this_computer', phase: 'ready' };
+    window.__fixture.emit({ event: 'sharing.changed', sharing: window.__fixture.snapshot.sharing });
+  });
+  await stop.waitFor({ state: 'hidden' });
 });
 
 // Escape closed the whole settings window from anywhere, including from
-// inside a field being typed into. Dismissing the browser's own suggestion
-// list while filling in a key should not throw the page away.
+// inside a field. Nothing here is a draft any more, so closing asks nothing --
+// but the key pressed to leave a control still belongs to that control first.
 test('Escape leaves the field before it leaves settings', async t => {
   const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-base').focus();
+  await page.evaluate(() => { window.__fixture.telemetry = true; });
+  await page.getByRole('button', { name: /^Diagnostics/ }).click();
+  await page.locator('#telemetry-enabled').focus();
 
   await page.keyboard.press('Escape');
-  assert.deepEqual(
-    await page.evaluate(() => window.__fixture.calls
-      .filter(call => ['close_local_settings', 'confirm_settings_changes'].includes(call.command))),
-    [],
+  assert.equal(
+    await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'close_local_settings')),
+    false,
     'the first Escape belongs to the field',
   );
   assert.notEqual(
-    await page.evaluate(() => document.activeElement?.id), 'ai-base',
+    await page.evaluate(() => document.activeElement?.id), 'telemetry-enabled',
     'and it should have left the field',
   );
 
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => window.__fixture.calls
     .some(call => call.command === 'close_local_settings'));
+  assert.equal(
+    await page.evaluate(() => window.__fixture.calls.filter(call => call.command === 'close_local_settings').length),
+    1,
+    'closing is one request, with no decision asked first',
+  );
 });
 
 // Events cross the bridge from the daemon and were read here unparsed. A
-// `config.applied` without an `operator` released the save button and dropped
-// the pending save, *then* threw before refilling the page -- leaving stale
-// settings on screen, no error, and a save the page believed had succeeded.
+// shape the page did not expect threw partway through rendering, after some
+// of it had run -- leaving a mix of old and new on screen and no error.
 test('an event missing what it needs is reported, not half-applied', async t => {
   const page = await settings(t);
-  await page.getByRole('button', { name: /^AI provider/ }).click();
-  await page.locator('#ai-key').fill('a-key');
-  await page.locator('.config-page.active [data-save]').click();
+  await page.evaluate(() => window.__fixture.emit({
+    event: 'control.snapshot',
+    services: [],
+    sharing: { mode: 'public', phase: 'ready' },
+  }));
 
-  const id = await page.waitForFunction(() => window.__fixture.calls
-    .findLast(call => call.command === 'apply_operator_config')?.args.id)
-    .then(handle => handle.jsonValue());
-
-  await page.evaluate(saveId => window.__fixture.emit({ event: 'config.applied', id: saveId }), id);
-
-  await page.getByText('config.applied arrived without operator.config.revision', { exact: false })
-    .waitFor();
+  await page.getByText('control.snapshot arrived without state', { exact: false }).waitFor();
   assert.equal(
-    await page.locator('#ai-key').inputValue(), 'a-key',
-    'the draft has to survive an event the page could not use',
+    await page.locator('#metric-exposure').textContent(), 'This computer',
+    'nothing from an event the page could not use reaches the screen',
   );
 });
 
@@ -466,19 +263,19 @@ test('an event that is not an object at all is ignored without throwing', async 
 });
 
 // Which page you are on was a background colour, and each item's health was a
-// coloured dot with no text anywhere. Listening to this nav gave you eleven
-// buttons that read identically, and no way to find the one that wants you.
+// coloured dot with no text anywhere. Listening to this nav gave you buttons
+// that read identically, and no way to find the one that wants you.
 test('the settings nav says where you are and what needs you', async t => {
   const page = await settings(t);
 
   const overview = page.getByRole('button', { name: /^Overview/ });
   assert.equal(await overview.getAttribute('aria-current'), 'page');
 
-  await page.getByRole('button', { name: /^AI provider/ }).click();
+  await page.getByRole('button', { name: /^Recovery/ }).click();
   assert.equal(await overview.getAttribute('aria-current'), null,
     'only one page is the current one');
   assert.equal(
-    await page.getByRole('button', { name: /^AI provider/ }).getAttribute('aria-current'),
+    await page.getByRole('button', { name: /^Recovery/ }).getAttribute('aria-current'),
     'page',
   );
 

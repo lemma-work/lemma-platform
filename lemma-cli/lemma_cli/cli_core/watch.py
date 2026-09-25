@@ -31,6 +31,11 @@ _OP_STYLE = {"insert": "green", "update": "yellow", "delete": "red"}
 _RECONNECT_BASE_DELAY_SECONDS = 0.5
 _RECONNECT_MAX_DELAY_SECONDS = 30.0
 
+# The server accepts the handshake, then closes with this code when the session
+# is missing, invalid or expired. Older servers refused the upgrade with an HTTP
+# 401/403 instead; both mean "refresh once, then give up".
+_CLOSE_UNAUTHENTICATED = 4401
+
 
 def _reconnect_delay(attempt: int) -> float:
     ceiling = min(
@@ -86,7 +91,11 @@ async def _run(
 
     try:
         import websockets
-        from websockets.exceptions import InvalidStatus, WebSocketException
+        from websockets.exceptions import (
+            ConnectionClosed,
+            InvalidStatus,
+            WebSocketException,
+        )
     except ImportError:
         fail(
             "Missing dependency 'websockets'. Reinstall the CLI to enable watch: "
@@ -118,36 +127,49 @@ async def _run(
 
         ws_url = _changes_ws_url(base_url, pod_id, table, cursor)
         ssl_option = None if ws_url.startswith("ws://") or verify_ssl else False
+        auth_rejected = False
         try:
             async with websockets.connect(
                 ws_url,
                 additional_headers={"Authorization": f"Bearer {token}"},
                 ssl=ssl_option,
             ) as websocket:
-                attempt = 0  # reset backoff once connected
-                refreshed_since_connect = False
                 async for raw in websocket:
+                    # The server accepts before it authenticates, so an open
+                    # socket proves nothing; the first frame (`ready`) does.
+                    attempt = 0
+                    refreshed_since_connect = False
                     cursor = _handle_message(state, raw, cursor)
         except asyncio.CancelledError:
             raise
         except InvalidStatus as exc:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
             if status_code in {401, 403}:
-                if (
-                    not use_env
-                    and not refreshed_since_connect
-                    and refresh_auth_session(state)
-                ):
-                    refreshed_since_connect = True
-                    _err.print("[dim]Session refreshed; reconnecting…[/dim]")
-                    continue
-                fail("Authentication failed. Run `lemma auth login` and try again.")
-                return
-            _err.print(
-                f"[dim]Server rejected the stream (status {status_code}); retrying…[/dim]"
-            )
+                auth_rejected = True
+            else:
+                _err.print(
+                    f"[dim]Server rejected the stream (status {status_code}); "
+                    "retrying…[/dim]"
+                )
+        except ConnectionClosed as exc:
+            if exc.rcvd is not None and exc.rcvd.code == _CLOSE_UNAUTHENTICATED:
+                auth_rejected = True
+            else:
+                _err.print(f"[dim]Connection lost ({exc}); reconnecting…[/dim]")
         except (OSError, WebSocketException) as exc:
             _err.print(f"[dim]Connection lost ({exc}); reconnecting…[/dim]")
+
+        if auth_rejected:
+            if (
+                not use_env
+                and not refreshed_since_connect
+                and refresh_auth_session(state)
+            ):
+                refreshed_since_connect = True
+                _err.print("[dim]Session refreshed; reconnecting…[/dim]")
+                continue
+            fail("Authentication failed. Run `lemma auth login` and try again.")
+            return
 
         await asyncio.sleep(_reconnect_delay(attempt))
         attempt += 1

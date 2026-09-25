@@ -81,6 +81,35 @@ pub(crate) struct EnsureParameters {
     pub(crate) resources: ResourceSpec,
     #[serde(default)]
     pub(crate) callback: CallbackSpec,
+    /// Whether `host.lemma.internal` resolves inside the container.
+    ///
+    /// Defaulted to true because every sandbox needs it: the workspace
+    /// runtime's callbacks to the backend and the function gateway both go
+    /// through that name, to the two callback forwarders locald runs on the
+    /// host gateway. It is *not* a way onto the Mac's own loopback -- that is
+    /// `host_loopback`, below, which only the paired user's sandbox is given.
+    ///
+    /// A name, not a wall: what a sandbox can reach at the gateway address,
+    /// with or without the name, is `sandbox_firewall`'s host-gateway chain --
+    /// the callback ports and DNS, for every sandbox alike.
+    #[serde(default = "default_host_access")]
+    pub(crate) host_access: bool,
+    /// Whether the container gets the loopback relay: a Unix socket through
+    /// which its browser reaches a port on the Mac's `127.0.0.1`. See
+    /// `host_loopback`.
+    ///
+    /// The backend decides, and sends it for exactly one sandbox: the
+    /// workspace of the user this Mac's Agent Host is paired to, where their browser runs. Nothing
+    /// else can reach the relay, because the socket exists only in the
+    /// containers it is mounted into -- there is no address to dial.
+    /// Defaulted to false, so a caller that does not know about it grants
+    /// nothing.
+    #[serde(default)]
+    pub(crate) host_loopback: bool,
+}
+
+pub(crate) fn default_host_access() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -111,6 +140,12 @@ pub(crate) struct CoreCredentials {
 pub(crate) struct CoreParameters {
     pub(crate) images: CoreImages,
     pub(crate) credentials: CoreCredentials,
+    /// The ports locald's callback forwarders listen on at the host gateway:
+    /// the backend's and the frontend's. The only ports on the Mac a sandbox
+    /// may reach (see `sandbox_firewall`). Defaulted so an older locald's
+    /// request still parses; such a guest simply has none recorded.
+    #[serde(default)]
+    pub(crate) callback_ports: Vec<u16>,
 }
 
 #[derive(Clone, Copy)]

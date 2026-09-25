@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "workspace-capability",
-  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants opening Local settings, connecting this computer's Agent Host, and pointing this installation at an AI provider, because those are the surfaces a user meets during onboarding and cannot be sent to another window to complete. Note what is deliberately absent: nothing here can stop the Agent Host or drop a pairing. The workspace can ask this computer to be running, to pair, and to look for agents again - never the reverse, because an automatic connection and a remote off switch would spend their lives undoing each other. It can also read how the sandbox image download is going, which is a read of state the shell already holds and changes nothing. Provider configuration is deliberately the only operator setting here: it reaches config.set-ai, which merges that one section and cannot touch sharing, tunnels, runtime, or diagnostics. Both local workspace hosts are listed because the base domain this install serves under is chosen at runtime: a browser derives no registrable domain from *.localhost, so an install that needs pod apps to work inside the workspace serves itself under a loopback wildcard instead, and the workspace origin moves with it. Shared LAN and public-tunnel origins are different hosts and are deliberately not listed, so a visitor's browser matches nothing.",
+  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants opening Local settings, connecting this computer's Agent Host, pointing this installation at an AI provider, and - under Settings, This Mac - the settings a person changes about their own computer: sharing, start at login, running coding agents' commands on this Mac under its sandbox, updates, repair, the sandbox image, diagnostics, anonymous install health, and the OAuth apps and bot credentials this install's connectors and channels run with. Being granted here is only the first gate. Every This Mac command also refuses in Rust unless the caller is this installation's own workspace on its loopback origin in local mode (require_local_settings_caller), so the hosted site, which is listed below, and a shared LAN or tunnel origin, which is not, reach none of them. Public sharing, repair and installing an update each ask natively before acting, so the page asking is never the person agreeing. The destructive resets and restarting into recovery are deliberately absent: they stay in Local settings. Note also what the Agent Host grant cannot do: nothing here can stop the Agent Host or drop a pairing. Both local workspace hosts are listed because the base domain this install serves under is chosen at runtime: a browser derives no registrable domain from *.localhost, so an install that needs pod apps to work inside the workspace serves itself under a loopback wildcard instead, and the workspace origin moves with it.",
   "local": false,
   "webviews": [
     "main"
@@ -26,6 +26,19 @@
     "allow-agent-host-refresh",
     "allow-agent-host-open-log",
     "allow-discover-provider-models",
-    "allow-configure-ai-provider"
+    "allow-configure-ai-provider",
+    "allow-local-settings-snapshot",
+    "allow-apply-local-settings",
+    "allow-local-sharing",
+    "allow-set-start-at-login",
+    "allow-set-host-execution",
+    "allow-repair-runtime",
+    "allow-open-logs",
+    "allow-prepare-sandbox-image",
+    "allow-check-for-app-update",
+    "allow-install-app-update",
+    "allow-telemetry-status",
+    "allow-set-telemetry-enabled",
+    "allow-diagnostic-logs"
   ]
 }

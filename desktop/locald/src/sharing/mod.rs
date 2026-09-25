@@ -32,9 +32,35 @@ use crate::port_reservation::PortReservation;
 
 const SHARING_SCHEMA_VERSION: u64 = 2;
 const PROCESS_MARKER_SCHEMA_VERSION: u64 = 1;
-const PUBLIC_WARNING: &str =
+const PUBLIC_WARNING_OPEN: &str =
     "Anyone with this link can create an account and use this Lemma installation.";
+const PUBLIC_WARNING_INVITE_ONLY: &str =
+    "Anyone with this link can reach this Lemma's sign-in page. \
+     Only people you invite can create an account.";
 const LOCAL_WARNING: &str = "Use Local network only on a private Wi-Fi network that you trust.";
+const LOCAL_JOIN_OPEN: &str = "Anyone on this network can create an account.";
+const LOCAL_JOIN_INVITE_ONLY: &str = "Only people you invite can create an account.";
+
+/// What to confirm before a public link is created, for this join policy.
+///
+/// The sentence the person agrees to has to describe what will actually be
+/// true. It used to be one constant saying anyone could create an account,
+/// which was accurate while signup was always open and would be a false
+/// alarm now -- and a warning that is wrong in the alarming direction is how
+/// people learn to click through the ones that are right.
+pub(crate) fn public_warning(who_can_join: WhoCanJoin) -> &'static str {
+    match who_can_join {
+        WhoCanJoin::Open => PUBLIC_WARNING_OPEN,
+        WhoCanJoin::InviteOnly => PUBLIC_WARNING_INVITE_ONLY,
+    }
+}
+
+pub(crate) fn local_join_warning(who_can_join: WhoCanJoin) -> &'static str {
+    match who_can_join {
+        WhoCanJoin::Open => LOCAL_JOIN_OPEN,
+        WhoCanJoin::InviteOnly => LOCAL_JOIN_INVITE_ONLY,
+    }
+}
 const APPS_LIMITATION: &str =
     "Published pod apps remain local-only because they require wildcard subdomains.";
 
@@ -97,6 +123,10 @@ pub(crate) struct ActiveSharing {
 
 pub(crate) struct OwnedTunnel {
     provider: TunnelProvider,
+    /// Ports the tunnel process listens on, on this Mac's loopback: ngrok's
+    /// agent API, cloudflared's metrics. Named so the loopback relay can
+    /// refuse them -- ngrok's API can start a tunnel.
+    local_ports: Vec<u16>,
     executable: PathBuf,
     started_at: Instant,
     child: Child,
@@ -158,6 +188,20 @@ impl Drop for OwnedTunnel {
 }
 
 impl SharingController {
+    /// The loopback ports sharing is listening on right now: its gateway and
+    /// whatever the tunnel process serves locally. Empty while sharing is off.
+    pub(crate) fn listening_ports(&self) -> Vec<u16> {
+        let active = self.active.lock().expect("sharing active lock poisoned");
+        let Some(active) = active.as_ref() else {
+            return Vec::new();
+        };
+        let mut ports = vec![active.gateway.address.port()];
+        if let Some(tunnel) = active.tunnel.as_ref() {
+            ports.extend(&tunnel.local_ports);
+        }
+        ports
+    }
+
     pub fn load(
         root: &Path,
         local_origin: String,

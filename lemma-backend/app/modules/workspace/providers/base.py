@@ -93,6 +93,34 @@ class ProviderCreateSpec:
     # What the owner's plan pays for. None is the provider's configured default.
     # Only a workspace is sized by plan; a function sandbox keeps its own.
     size: SandboxSize | None = None
+    # Whether the `host.lemma.internal` alias resolves in the sandbox. Only
+    # the Desktop guest acts on it. Every sandbox needs it -- the workspace
+    # runtime's callbacks and the function gateway reach the backend through
+    # it, via the two callback forwarders locald runs on the host gateway --
+    # so it is True by default and switching it off is a deliberate,
+    # per-sandbox decision. It is *not* a way onto the Mac's own loopback;
+    # that is `host_loopback`. `lemma_local` sends the key only when it is
+    # False: the guest parses `sandbox.ensure` with `deny_unknown_fields`, so
+    # an older guest would refuse even a `True`.
+    host_access: bool = True
+    # Whether the sandbox gets the loopback relay: a socket through which its
+    # browser reaches a port on the Mac's own `127.0.0.1` -- a dev server
+    # started by host execution. True only for the workspace of the user this
+    # Mac's own Agent Host is paired to, while it has host execution on (see
+    # `host_loopback_policy`); never for anyone else's. Only the Desktop guest
+    # acts on it, and
+    # `lemma_local` sends it only when True, for the same older-guest reason.
+    host_loopback: bool = False
+
+    def guest_grants(self) -> dict[str, bool]:
+        """The grants a guest `sandbox.ensure` carries, each only when it
+        differs from the guest's default -- the guest parses the request with
+        `deny_unknown_fields`, so an older one refuses a key it does not know
+        even when its value changes nothing."""
+        return {
+            **({} if self.host_access else {"host_access": False}),
+            **({"host_loopback": True} if self.host_loopback else {}),
+        }
 
 
 class ProviderStorageKind(StrEnum):
@@ -321,6 +349,26 @@ def resumes_stopped_instances(provider: object) -> bool:
     existed.
     """
     return bool(getattr(provider, "resumes_stopped_instances", True))
+
+
+def provider_name_for(provider: object, sandbox_id: UUID) -> str:
+    """The fabric this sandbox runs on, for the instance row and the handle.
+
+    A provider that fronts several (``HostRoutingProvider``) answers per
+    sandbox; every other provider is one fabric and answers with its name.
+    """
+    name_for = getattr(provider, "name_for", None)
+    if callable(name_for):
+        return str(name_for(sandbox_id))
+    return str(getattr(provider, "name"))
+
+
+def storage_kind_for(provider: object, sandbox_id: UUID) -> ProviderStorageKind:
+    """Where this sandbox's files live; see ``ProviderStorageKind``."""
+    kind_for = getattr(provider, "storage_kind_for", None)
+    if callable(kind_for):
+        return kind_for(sandbox_id)
+    return getattr(provider, "storage_kind", ProviderStorageKind.VOLUME)
 
 
 def require_capability(provider: object, capability: ProviderCapability) -> None:

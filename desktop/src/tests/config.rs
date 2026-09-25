@@ -222,37 +222,18 @@ fn switching_connection_says_what_it_is_about_to_do() {
 }
 
 #[test]
-fn local_models_are_reached_through_a_provider_endpoint_not_an_app_owned_server() {
+fn the_ai_provider_is_not_configured_from_local_settings() {
+    // Models are the organization's, on the workspace's Models page, which
+    // on a local install also suggests Ollama and LM Studio when they answer
+    // on their loopback ports. A second provider form here was a second
+    // answer to "which model?" that disagreed with the first.
     let html = include_str!("../../ui/control.html").replace("\r\n", "\n");
     let script = CONTROL.replace("\r\n", "\n");
-
-    // Ollama and LM Studio are the supported local-model path: they are
-    // ordinary OpenAI-compatible endpoints the user already runs, so they
-    // only prefill the provider form and never give Lemma a model process
-    // of its own to install, supervise, or free memory for.
-    assert!(html.contains("data-preset=\"ollama\""));
-    assert!(html.contains("data-preset=\"lmstudio\""));
-    assert!(script.contains("http://127.0.0.1:11434/v1"));
-    assert!(script.contains("http://127.0.0.1:1234/v1"));
+    assert!(!html.contains("data-page=\"ai\""));
+    assert!(!html.contains("data-preset="));
+    assert!(!script.contains("discover_provider_models"));
+    assert!(!script.contains("apply_operator_config"));
     assert!(!script.contains("local_ai_action"));
-    assert!(!html.contains("data-page=\"models\""));
-}
-
-#[test]
-fn the_default_model_is_chosen_from_the_providers_own_list() {
-    let html = include_str!("../../ui/control.html").replace("\r\n", "\n");
-    let script = CONTROL.replace("\r\n", "\n");
-
-    // Typing a model id from memory was the old contract and the reason a
-    // correct provider could still be applied with a model it does not
-    // serve. The default is now a <select> populated by the probe, and the
-    // free-text list it replaced must not come back.
-    assert!(html.contains("<select id=\"ai-model\">"));
-    assert!(!html.contains("id=\"ai-models\""));
-    // The probe answers the press that made it, rather than broadcasting to
-    // whichever page happens to be listening.
-    assert!(script.contains("const models = await invoke(\"discover_provider_models\""));
-    assert!(!script.contains("config.models"));
 }
 
 #[test]

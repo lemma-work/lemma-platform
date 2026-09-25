@@ -25,7 +25,10 @@ use crate::paths::LocalPaths;
 use crate::protocol::{
     append_bounded_journal, authenticate, error_event, load_or_create_token, read_bounded_line,
 };
-use crate::sharing::{EnableSharingRequest, SharingController, SharingMode, TunnelProvider};
+use crate::sharing::{
+    EnableSharingRequest, SetWhoCanJoinRequest, SharingController, SharingMode, TunnelProvider,
+    WhoCanJoin,
+};
 use crate::state::StateSnapshot;
 use crate::update_transaction::UpdateTransaction;
 use crate::PROTOCOL_VERSION;
@@ -33,7 +36,7 @@ use crate::PROTOCOL_VERSION;
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Bump whenever Desktop must replace a durable daemon even when the public
 // app/host-pack release has not changed (for example, a test-build hotfix).
-const DAEMON_API_REVISION: u64 = 6;
+const DAEMON_API_REVISION: u64 = 7;
 
 /// Broadcasts held for a subscriber that is not keeping up.
 ///
@@ -89,6 +92,7 @@ mod config_ops;
 pub mod dispatch;
 mod environment;
 mod handshake;
+mod loopback_ports;
 mod monitors;
 mod reset_ops;
 mod sharing_ops;
@@ -221,6 +225,17 @@ impl Daemon {
                 "the record of an in-flight update could not be read: {error}; \
                  check this installation before updating it again"
             )),
+        }
+        // Before anything starts the runtime, so the relay never serves a
+        // connection without knowing every port that is Lemma's.
+        if let Some(runtime) = managed_runtime.as_ref() {
+            runtime.set_lemma_ports(loopback_ports::daemon_lemma_ports(
+                host_processes.clone(),
+                sharing.clone(),
+                Arc::clone(&agent_host),
+            ));
+            let owner_switch = Arc::clone(&agent_host);
+            runtime.set_host_execution(Arc::new(move || owner_switch.host_execution_enabled()));
         }
         Ok(Arc::new(Self {
             paths,

@@ -70,10 +70,12 @@ way a scenario says, do not edit the scenario.
 |---|---|---|
 | Backend unit | `make test-backend-unit` | Every push that touches the backend, via `e2e.yml`. **Required**, through `Backend E2E passed`. |
 | Backend e2e | `make test-e2e-fast` | Every push that touches the backend, via `e2e.yml`. **Required**, as one aggregated check. |
-| Backend + Agent Host | `make desktop-agent-host-e2e` | Backend, frontend, TypeScript SDK or desktop changes, in Desktop contracts CI. **Required.** Builds the Rust host and checks real HTTP streaming and disconnect recovery with a scripted provider. |
+| Backend + Agent Host | `make desktop-agent-host-e2e` | Backend, frontend, TypeScript SDK or desktop changes, in Desktop contracts CI. **Required.** Builds the Rust host and checks real HTTP streaming and disconnect recovery with a scripted provider, host execution under Seatbelt (macOS only), and chaos: the backend killed, the host killed and the link dropped mid-answer, each run still ending once with every event delivered once. |
 | Chat + Agent Host | `make desktop-agent-host-browser-e2e` | Same required job. Real web chat, streaming, Stop, concurrent approvals, tool approval/denial, provider failure, disconnect, and transcript reload driven by JSON ACP fixtures; no provider account. |
+| Desktop launch smoke | `desktop/e2e/launch_smoke.py` | Desktop, frontend, TypeScript SDK or backend agent-module changes, as CI's `Desktop launch smoke` on macOS. Not yet in `CI passed`. Builds the debug app, launches it in hosted mode against this checkout's stack, and walks sign-up, pairing, one Agent Host conversation and This Mac's status. No VM: local mode is not covered. The script's docstring lists what it proves and skips. |
 | Scenario gates | `make scenarios-guards`, `make scenario-coverage` | Every pull request |
 | Scenarios (fast) | `make scenarios` | Nightly, on request, or with the `run-scenarios` label |
+| Scenarios (all local lanes) | `make scenarios-all` | Locally; runs non-live journeys, sandbox cases and client conformance, then writes one report |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
 | Scenarios (live) | `make scenarios-live` | Locally, before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
 | Protected e2e | `make test-e2e-runtime` | Weekly and on every `v*` tag, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go, and what every Desktop release gate reads. It builds nothing, so a test needing a compiled artifact belongs in the lane that builds it. |

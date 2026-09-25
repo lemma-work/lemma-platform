@@ -224,6 +224,7 @@ fn operator_updates_preserve_private_runtime_endpoints() {
                 "http://192.168.64.37:3567".into(),
             ),
         ])),
+        std::path::Path::new("/runtime/agent-host/config.json"),
     );
 
     assert_eq!(environment["LEMMA_OPENAI_API_KEY"], "vault-secret");
@@ -235,6 +236,11 @@ fn operator_updates_preserve_private_runtime_endpoints() {
     assert_eq!(
         environment["SUPERTOKENS_CORE_URL"],
         "http://192.168.64.37:3567"
+    );
+    // The loopback relay's grant keys off this Mac's own Agent Host.
+    assert_eq!(
+        environment["DESKTOP_AGENT_HOST_CONFIG_PATH"],
+        "/runtime/agent-host/config.json"
     );
 }
 
@@ -304,7 +310,12 @@ fn erasing_local_data_refuses_anything_but_its_exact_confirmation() {
 fn sharing_commands_refuse_before_they_take_the_lock_a_start_needs() {
     let (_root, daemon) = daemon();
 
-    for command in ["sharing.preflight", "sharing.enable", "sharing.disable"] {
+    for command in [
+        "sharing.preflight",
+        "sharing.enable",
+        "sharing.disable",
+        "sharing.access",
+    ] {
         let replies = exchange(
             &daemon,
             json!({"cmd": command, "id": command, "payload": {}}),

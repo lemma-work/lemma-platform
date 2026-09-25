@@ -7,6 +7,8 @@ mod core_data;
 mod data_binding;
 mod diagnostics;
 mod engine;
+mod host_gateway_firewall;
+mod host_loopback;
 mod images;
 mod inspect;
 mod limits;
@@ -235,7 +237,8 @@ pub(super) fn inspect() -> String {
         "Config": {"Labels": {
             "lemma.work/workload-kind": "workspace",
             "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
-            "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
+            "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}",
+            "lemma.work/hardening": SANDBOX_HARDENING_VERSION.to_string()
         }},
         "NetworkSettings": {"Ports": {
             "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}],
@@ -258,6 +261,7 @@ pub(super) fn core_parameters(postgres_image: &str) -> CoreParameters {
             postgres_password: "a".repeat(64),
             redis_password: "b".repeat(64),
         },
+        callback_ports: vec![8711, 3711],
     }
 }
 

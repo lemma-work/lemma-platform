@@ -29,6 +29,10 @@ use crate::tcp_forwarder::TcpForwarder;
 
 mod bootstrap;
 mod clock;
+// The loopback relay runs on macOS only, so off it nothing starts one and the
+// policy it would be handed goes unread. See `crate::loopback_relay`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod host_loopback;
 mod images;
 mod lifecycle;
 mod probe;
@@ -37,6 +41,7 @@ mod spec;
 
 pub(crate) use bootstrap::*;
 pub(crate) use clock::*;
+pub(crate) use host_loopback::*;
 pub(crate) use images::*;
 pub(crate) use probe::*;
 pub(crate) use services::*;
@@ -64,4 +69,7 @@ pub struct ManagedRuntimeController {
     pending_auth: Mutex<Option<thread::JoinHandle<io::Result<()>>>>,
     pending_images: Mutex<Option<thread::JoinHandle<()>>>,
     cancellation: lemma_desktop_process::Cancellation,
+    /// The paired user's loopback relay and the ports it refuses. See
+    /// `host_loopback`.
+    host_loopback: HostLoopbackState,
 }

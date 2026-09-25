@@ -185,6 +185,7 @@ def parse_control_items(
     return (
         ControlUpdates(
             capacity=body.capacity,
+            host_execution=body.host_execution,
             acknowledged_command_ids=acknowledged,
             checkpoints=checkpoints,
             rejections=rejections,
@@ -240,9 +241,11 @@ class LinkWriter:
         body: BaseModel,
         *,
         re: str | None = None,
+        id: str | None = None,
     ) -> None:
         text = LinkFrame(
             type=frame_type.value,
+            id=id,
             re=re,
             body=body.model_dump(mode="json"),
         ).model_dump_json(exclude_none=True)

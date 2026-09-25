@@ -938,3 +938,97 @@ async def test_changing_workspace_keeps_a_telegram_senders_phone_proof(
     assert resolved.internal_user_id == UUID(str(fixed_test_user["id"])), (
         "ingestion no longer recognises them, so the next message restarts signup"
     )
+
+
+async def test_a_pod_they_were_invited_to_is_offered(
+    db_session, fake_whatsapp, monkeypatch
+) -> None:
+    """A returning sender asked which workspace sees the pod waiting for them."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.identity.domain.organization_entities import (
+        OrganizationInvitationEntity,
+        OrganizationRole,
+    )
+    from app.modules.identity.infrastructure.organization_repositories import (
+        OrganizationRepository,
+    )
+    from app.modules.identity.services.first_workspace import ensure_first_workspace
+    from app.modules.identity.tests.e2e.test_first_workspace_e2e import (
+        _organization_service,
+    )
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        f"{fake_whatsapp.api_base}/v21.0",
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-invited")
+
+    sessions, coordinator = _coordinator(db_session)
+    invitee = await _stranger(sessions, email=f"invited+{uuid4().hex[:8]}@example.com")
+    owner = await _stranger(sessions, email=f"owner+{uuid4().hex[:8]}@example.com")
+    async with sessions() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        owned = await ensure_first_workspace(
+            uow,
+            organization_service=_organization_service(uow),
+            user_id=owner.id,
+            email=owner.email,
+            full_name="Grace Hopper",
+        )
+        invitation = OrganizationInvitationEntity(
+            email=invitee.email,
+            organization_id=owned.organization_id,
+            role=OrganizationRole.ORG_MEMBER,
+            pod_id=owned.pod_id,
+            pod_role="POD_USER",
+        )
+        await OrganizationRepository(uow).add_invitation(invitation)
+        await uow.commit()
+    sender_phone = "1555" + str(uuid4().int)[:7]
+
+    async def say(text: str):
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(
+                source="whatsapp",
+                payload=_whatsapp_payload(
+                    text=text,
+                    message_id=uuid4().hex,
+                    phone_number_id=surface_settings.whatsapp_phone_number_id,
+                    waba_id=surface_settings.whatsapp_waba_id,
+                    sender_phone=sender_phone,
+                ),
+            )
+        )
+
+    await say("hello")
+    async with sessions() as session:
+        pending = await session.scalar(select(PendingChatOnboarding))
+        assert pending is not None
+        binding_key = pending.binding_key
+        await session.delete(pending)
+        session.add(
+            VerifiedSurfaceIdentity(
+                binding_key=binding_key,
+                platform="WHATSAPP",
+                tenant_id=surface_settings.whatsapp_waba_id,
+                external_user_id=sender_phone,
+                user_id=invitee.id,
+            )
+        )
+        await session.commit()
+
+    await say("can you summarise my week")
+    async with sessions() as session:
+        asked = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.binding_key == binding_key
+            )
+        )
+        assert asked.step == OnboardingStep.AWAITING_POD
+        assert str(owned.pod_id) in {pod["id"] for pod in asked.offered_pods}
+        stored = await OrganizationRepository(
+            SqlAlchemyUnitOfWork(session)
+        ).get_invitation_by_id(invitation.id)
+        assert stored is not None and stored.status.value == "ACCEPTED"

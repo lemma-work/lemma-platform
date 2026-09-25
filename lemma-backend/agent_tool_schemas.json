@@ -3231,7 +3231,7 @@
   {
     "tool_name": "run_connector_operation",
     "toolset": "CONNECTORS",
-    "description": "Run an operation on an installed connector.\n\n`arguments` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. A file result larger than the inline\nlimit is written to the pod datastore and returned as a reference; pass\n`output_path` to choose where it lands.",
+    "description": "Run an operation on an installed connector.\n\n`arguments` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. To send a file (an email attachment,\na Drive upload), pass it as `{\"pod_path\": \"/me/report.pdf\"}` in the file\nargument; a file in your sandbox has to be uploaded to the pod first. A\nfile result larger than the inline limit is written to the pod datastore\nand returned as a reference; pass `output_path` to choose where it lands.",
     "input_schema": {
       "properties": {
         "auth_config": {
@@ -3244,7 +3244,7 @@
         },
         "arguments": {
           "additionalProperties": true,
-          "description": "Operation arguments, matching its input_schema.",
+          "description": "Operation arguments, matching its input_schema. A file argument takes a pod file: {\"pod_path\": \"/me/report.pdf\"}, or {\"file_id\": \"...\"}.",
           "type": "object"
         },
         "account_id": {

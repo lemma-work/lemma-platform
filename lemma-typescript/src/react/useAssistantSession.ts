@@ -825,6 +825,11 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     // Set where the buffer is cleared, read where the turn is reconciled.
     let unclaimedAnswer = false;
     let streamFailure: unknown = null;
+    // Whether this stream said anything. The reconnect backoff resets on it,
+    // not on the connection opening: a stream that opens and closes with
+    // nothing in it is a failure, and resetting on open retried that every
+    // second for as long as the conversation read RUNNING.
+    let deliveredEvent = false;
 
     try {
       for await (const event of readSSE(stream)) {
@@ -843,6 +848,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           // below, which is what the server asked for by sending this.
           continue;
         }
+        deliveredEvent = true;
         if (parsed.error) {
           const streamError = new AssistantRunError(parsed.error, parsed.errorCode, parsed.errorReason);
           setError(streamError);
@@ -936,7 +942,12 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       if (!controller.signal.aborted) {
         const syncConversationId = streamConversationId ?? conversationId;
         if (!sawTerminalStatus && syncConversationId) {
+          if (deliveredEvent) streamReconnectCountRef.current = 0;
           while (!controller.signal.aborted) {
+            // A 401 anywhere marks the shared session signed out. Nothing this
+            // loop does can succeed after that, and it would otherwise go on
+            // asking every ten seconds for as long as the view stayed open.
+            if (client.auth?.getState().status === "unauthenticated") break;
             const latestConversation = await refreshConversation(syncConversationId);
             await loadMessages({ conversationId: syncConversationId, limit: 100 });
             if (controller.signal.aborted) break;
@@ -964,7 +975,6 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
                 signal: controller.signal,
                 agent_run_id: agentRunId,
               });
-              streamReconnectCountRef.current = 0;
               return await consumeRef.current({
                 stream: newStream,
                 controller,

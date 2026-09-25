@@ -6,6 +6,9 @@ from uuid import UUID
 
 from app.core.helpers.slug import slugify
 from app.modules.identity.domain.email_domains import work_domain_from_email
+from app.modules.identity.services.invitation_acceptance import (
+    apply_accepted_invitation,
+)
 from app.modules.identity.services.membership_rules import (
     refuse_if_last_owner,
     refuse_unconferrable_org_role,
@@ -504,7 +507,7 @@ class OrganizationService:
             user_id,
             invitation.organization_id,
         )
-        if existing_member:
+        if existing_member and invitation.pod_id is None:
             raise OrganizationConflictError("User is already a member")
 
         # Resolved before anything is written, so an acceptance that cannot be
@@ -517,37 +520,15 @@ class OrganizationService:
             organization_id=invitation.organization_id,
         )
 
-        member = OrganizationMemberEntity(
-            user_id=user_id,
-            organization_id=invitation.organization_id,
-            role=invitation.role,
-        )
-
-        invitation.mark_accepted(
-            accepted_user_id=user_id,
-            accepted_email=str(user.email),
+        return await apply_accepted_invitation(
+            organization_repository=self.organization_repository,
+            pod_membership_port=self.pod_membership_port,
+            invitation=invitation,
+            user=user,
             organization_name=organization.name,
+            existing_member=existing_member,
+            pod_grant=pod_grant,
         )
-
-        await self.organization_repository.lock_seats(invitation.organization_id)
-        await self.organization_repository.update_invitation(invitation)
-        persisted_member = await self.organization_repository.add_member(member)
-
-        if pod_grant is not None:
-            user_name_parts = [
-                part for part in [user.first_name, user.last_name] if part
-            ]
-            user_name = " ".join(user_name_parts) or None
-            await self.pod_membership_port.add_member_to_pod(
-                pod_id=pod_grant.pod_id,
-                organization_member_id=persisted_member.id,
-                user_id=user_id,
-                user_email=str(user.email),
-                user_name=user_name,
-                pod_role=pod_grant.pod_role,
-            )
-
-        return persisted_member
 
     async def revoke_invitation(
         self,

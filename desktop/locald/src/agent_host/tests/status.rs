@@ -190,3 +190,25 @@ fn status_answers_while_a_stubborn_sidecar_is_still_being_stopped() {
     // Nothing is left behind.
     assert_eq!(unsafe { libc::kill(-i32::try_from(pid).unwrap(), 0) }, -1);
 }
+
+/// The loopback relay refuses the Agent Host's MCP relay ports, which it
+/// learns from the endpoint files each relay writes.
+#[test]
+fn mcp_relay_ports_are_read_from_the_endpoint_files() {
+    let root = tempdir().unwrap();
+    let directory = root.path().join("mcp-relay");
+    assert!(
+        crate::agent_host::status::mcp_relay_ports(&directory).is_empty(),
+        "no directory, no ports"
+    );
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("a.json"), r#"{"port":51001,"token":"x"}"#).unwrap();
+    std::fs::write(directory.join("b.json"), r#"{"port":51002,"token":"y"}"#).unwrap();
+    std::fs::write(directory.join("torn.json"), r#"{"port":"#).unwrap();
+    std::fs::write(directory.join("big.json"), r#"{"port":70000}"#).unwrap();
+    std::fs::write(directory.join("notes.txt"), r#"{"port":51003}"#).unwrap();
+
+    let mut ports = crate::agent_host::status::mcp_relay_ports(&directory);
+    ports.sort_unstable();
+    assert_eq!(ports, vec![51001, 51002]);
+}

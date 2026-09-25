@@ -194,8 +194,31 @@ existed only to tell the toggle which way to point.
 The workspace page is a **remote origin** to Tauri — locald serves it over
 http, and the hosted build loads `lemma.work` — so it can only reach the shell
 through a capability naming its URL. `capabilities/workspace.json` grants
-exactly `open_control_center` plus five `agent_host_*` commands, and nothing
-that touches the local stack.
+`open_control_center`, five `agent_host_*` commands, `sandbox_image_status`,
+the conversation-folder commands, `discover_provider_models` and
+`configure_ai_provider` — and, for Settings → This Mac, the commands that
+change this computer's own settings: `local_settings_snapshot`,
+`apply_local_settings`, `local_sharing`, `set_start_at_login`, `set_host_execution`,
+`repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
+`check_for_app_update`, `install_app_update`, `telemetry_status` and
+`set_telemetry_enabled`. Nothing destructive is granted: resetting data,
+reinstalling and restarting into recovery stay in Local settings.
+
+The This Mac commands carry a narrower Rust check than the Agent Host ones,
+`require_local_settings_caller`: local mode, the `main` webview, the origin
+this app navigated to, and that origin one of the shipped loopback workspace
+hosts. The capability also lists `https://lemma.work`, and that check is what
+keeps a hosted page from reaching an installation it is not. Public sharing,
+repair and installing an update each raise a native confirmation from Rust
+before acting, so the page asking is never the person agreeing.
+[Desktop architecture](desktop.md#tauri-ipc-commands-and-who-may-call-them)
+has the full table.
+
+None of these checks asks who is signed in. There is no installation owner and
+no privileged account: the boundary is the app's own window on this
+installation's loopback origin, which only the person at this Mac can drive.
+Anything account-scoped beyond that -- which user's runs this Agent Host
+serves -- follows the pairing, not the order accounts were created in.
 
 Note what those five *cannot* do. `agent_host_start` has no counterpart, and
 `agent_host_unpair` is gone: the workspace can ask this computer to be running,
@@ -212,7 +235,9 @@ navigated to.
 Sharing republishes the same workspace on a LAN address or tunnel host. Those
 are different origins, are deliberately absent from the capability, and fail the
 Rust-side check too — a visitor's browser can drive the shared Lemma, but never
-this Mac's Agent Host.
+this Mac's Agent Host. The app's own window moves to the shared origin while
+sharing is on, so it loses the This Mac settings too; the menu's Desktop
+settings… opens Local settings then, which is where sharing is turned off.
 
 Because the app declares an ACL manifest (`desktop/build.rs`), *every* app
 command now needs an explicit grant, including from the bundled pages. Adding a
@@ -344,8 +369,8 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 | Direction | `type` | Body | Answered by |
 |---|---|---|---|
 | host → Lemma | `pair` | `pairing_code`, `display_name`, `hello` | `paired` (`host_id`, `user_id`, `host_secret`), then close |
-| host → Lemma | `hello` | `hello`, `capacity` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`) |
-| host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections` | `control_ok` (`commands`, `refused`) |
+| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`) |
+| host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections`, `host_execution` | `control_ok` (`commands`, `refused`) |
 | host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
 | host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
 | host → Lemma | `mcp` | `run_id`, `conversation_id`, `token`, `method`, `params` | `mcp_ok` (`result`) or `error` |
@@ -353,7 +378,26 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 | host → Lemma | `revoke` | nothing | `revoked`, then close |
 | Lemma → host | `commands` | `commands` | the next `control` acknowledges them |
 | Lemma → host | `reconnect` | `after_ms` | the host reconnects after that delay |
-| either | `error` | `code`, `message`, `retryable` | nothing |
+| Lemma → host | `op` (with `id`) | `workspace`, `method`, `params`, `deadline_ms` | host `op_ok` (`result`) or `error` (`OP_FAILED`, `detail.kind`) |
+| either | `error` | `code`, `message`, `retryable`, `detail` (optional) | nothing |
+
+`op` is the one request Lemma makes of the host: a host-execution operation,
+answered with `re` set to its `id`. Lemma's ids and the host's are separate
+namespaces; each side matches `re` only against requests it sent. The host
+runs each `op` in a task of its own, at most `MAX_CONCURRENT_OPS` (32) at once,
+so a `process.read` long-waiting for output never holds up the reader, the
+heartbeat, or another op. An op with no answer by its `deadline_ms` is answered
+`timeout` by the host itself. A link opened without host execution (pairing,
+revocation, a platform without Seatbelt) answers every `op` with
+`exec_server_unavailable`. The methods, parameters and failure kinds are in
+[Host execution on Desktop](desktop-host-execution.md#4-the-op-frames).
+
+`host_execution` is `{enabled, platform, available}`: whether the machine's user turned
+host execution on, `macos`/`linux`/`windows`, and whether this machine can
+confine commands (macOS with `/usr/bin/sandbox-exec`). It rides on every
+`control` as well as `hello`, so turning it on or off reaches Lemma within
+seconds without a reconnect. Lemma routes a run of the host's paired user to it only when
+both booleans are true.
 
 The first frame on a connection is `pair` (no `Authorization` header) or
 `hello` (with `Authorization: Bearer <host secret>`). Anything else first is a
@@ -405,6 +449,10 @@ guarantee:
   only way one is refused. Lemma applies each update separately, so one bad
   update never blocks the rest. The host's old bisection of a refused poll is
   gone with the poll.
+- **The guarantee is tested by breaking it.** `test_agent_host_chaos_e2e.py`
+  kills the backend and closes the link while a batch is appended but not yet
+  acknowledged, and kills the host mid-turn. Every run is held to contiguous
+  sequences, one terminal event, one persisted answer and one provider prompt.
 - **MCP tool calls** are re-authorized on every call against the run's own
   token, exactly as the HTTP endpoint did. A call in flight when the socket
   drops is retried once the link is back. A parked `ask_user` is waited on with

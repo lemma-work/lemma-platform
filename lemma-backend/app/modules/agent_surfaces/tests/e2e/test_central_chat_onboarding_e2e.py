@@ -539,3 +539,105 @@ async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
         assert (
             current.revoked_at is None and current.verified_phone == user.mobile_number
         )
+
+
+async def test_whatsapp_signup_joins_the_pod_they_were_invited_to(
+    async_client, db_session, fake_whatsapp, message_store, monkeypatch
+):
+    """Invited by email, arrived by WhatsApp: the invitation is where they land."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+    from app.modules.identity.domain.organization_entities import (
+        OrganizationInvitationEntity,
+        OrganizationRole,
+    )
+    from app.modules.identity.infrastructure.organization_repositories import (
+        OrganizationRepository,
+    )
+    from app.modules.identity.services.first_workspace import ensure_first_workspace
+    from app.modules.identity.tests.e2e.test_first_workspace_e2e import (
+        _organization_service,
+    )
+    from app.modules.pod.infrastructure.models.pod_models import Pod
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        f"{fake_whatsapp.api_base}/v21.0",
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-onboarding")
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    email = f"invited-{uuid4().hex}@gmail.com"
+
+    async with sessions() as session:
+        owner = User(
+            email=f"owner-{uuid4().hex[:8]}@gmail.com", is_verified=True, is_active=True
+        )
+        session.add(owner)
+        await session.flush()
+        uow = SqlAlchemyUnitOfWork(session)
+        owned = await ensure_first_workspace(
+            uow,
+            organization_service=_organization_service(uow),
+            user_id=owner.id,
+            email=owner.email,
+            full_name="Grace Hopper",
+        )
+        invitation = OrganizationInvitationEntity(
+            email=email,
+            organization_id=owned.organization_id,
+            role=OrganizationRole.ORG_MEMBER,
+            pod_id=owned.pod_id,
+            pod_role="POD_USER",
+        )
+        await OrganizationRepository(uow).add_invitation(invitation)
+        await uow.commit()
+
+    codes: list[str] = []
+
+    async def capture(*, email: str, code: str) -> bool:
+        codes.append(code)
+        return True
+
+    coordinator = ChatOnboardingCoordinator(
+        SessionUnitOfWorkFactory(sessions),
+        challenges=EmailChallengeService(
+            sessions, send_email=capture, enforce_send_limits=allow_test_delivery
+        ),
+    )
+    sender = "15551" + str(int(uuid4().hex[:7], 16)).zfill(9)
+
+    async def say(text: str):
+        payload = _whatsapp_payload(
+            text=text,
+            message_id=uuid4().hex,
+            phone_number_id="1234567890",
+            waba_id="waba-onboarding",
+            sender_phone=sender,
+        )
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(source="whatsapp", payload=payload)
+        )
+
+    assert (await say("hello")).handled
+    assert (await say(email)).handled
+    assert (await say(codes[0])).handled
+    replies = [str(message) for message in message_store.get_all("WHATSAPP")]
+    assert any("You were invited to" in reply for reply in replies), replies
+
+    async with sessions() as session:
+        user = await session.scalar(select(User).where(User.email == email))
+        assert user is not None and user.mobile_number == f"+{sender}"
+        stored = await OrganizationRepository(
+            SqlAlchemyUnitOfWork(session)
+        ).get_invitation_by_id(invitation.id)
+        assert stored is not None and stored.status.value == "ACCEPTED"
+        own_pods = await session.scalar(
+            select(func.count(Pod.id)).where(Pod.user_id == user.id)
+        )
+        assert own_pods == 0
+        surfaces = await session.scalars(
+            select(AgentSurface.pod_id).where(AgentSurface.pod_id == owned.pod_id)
+        )
+        assert list(surfaces)

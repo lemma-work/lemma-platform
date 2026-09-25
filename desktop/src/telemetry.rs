@@ -26,7 +26,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::shell_paths::locald_root;
-use crate::{require_control_window, Webview};
+use crate::{require_settings_caller, AppHandle, Webview};
 use serde_json::Value;
 
 const KEY_ENV: &str = "LEMMA_TELEMETRY_KEY";
@@ -446,8 +446,8 @@ mod tests {
 /// nothing is ever sent, so a switch would be a control over nothing -- the
 /// page hides the whole panel rather than offering a lie.
 #[tauri::command(async)]
-pub(crate) fn telemetry_status(window: Webview) -> Result<Value, String> {
-    require_control_window(&window)?;
+pub(crate) fn telemetry_status(window: Webview, app: AppHandle) -> Result<Value, String> {
+    require_settings_caller(&window, &app)?;
     let root = root();
     Ok(serde_json::json!({
         "available": ingestion_key().is_some(),
@@ -463,8 +463,12 @@ pub(crate) fn telemetry_status(window: Webview) -> Result<Value, String> {
 /// by a new ingestion key. That is what makes it an opt-out rather than a
 /// preference.
 #[tauri::command(async)]
-pub(crate) fn set_telemetry_enabled(window: Webview, enabled: bool) -> Result<(), String> {
-    require_control_window(&window)?;
+pub(crate) fn set_telemetry_enabled(
+    window: Webview,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    require_settings_caller(&window, &app)?;
     set_enabled(&root(), enabled)
         .map_err(|error| format!("could not save your anonymous install-health choice: {error}"))
 }
@@ -503,9 +507,12 @@ mod wiring_tests {
         );
     }
 
-    /// The switch is offered to Local settings and to nothing else.
+    /// The switch is offered to Local settings and to This Mac → Advanced,
+    /// and to the second only through the local-workspace caller check: the
+    /// workspace capability also lists the hosted site, which has no install
+    /// here to speak for.
     #[test]
-    fn the_switch_is_not_reachable_from_the_workspace() {
+    fn the_switch_is_reachable_only_from_this_installations_own_pages() {
         for command in ["allow-telemetry-status", "allow-set-telemetry-enabled"] {
             assert!(
                 crate::tests::granted("control")
@@ -514,14 +521,20 @@ mod wiring_tests {
                 "{command} has to be granted to Local settings"
             );
             assert!(
-                !crate::tests::granted("workspace")
-                    .iter()
-                    .any(|p| p == command),
-                "{command} must not be reachable from a remote origin"
-            );
-            assert!(
                 !crate::tests::granted("main").iter().any(|p| p == command),
                 "{command} must not be reachable from the splash"
+            );
+        }
+        let source = include_str!("telemetry.rs").replace("\r\n", "\n");
+        for signature in [
+            "pub(crate) fn telemetry_status(",
+            "pub(crate) fn set_telemetry_enabled(",
+        ] {
+            let start = source.find(signature).expect("the command exists");
+            let head: String = source[start..].chars().take(400).collect();
+            assert!(
+                head.contains("require_settings_caller(&window, &app)?;"),
+                "{signature} must check that its caller is this installation"
             );
         }
     }

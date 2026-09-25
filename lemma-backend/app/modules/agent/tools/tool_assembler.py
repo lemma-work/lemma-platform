@@ -7,6 +7,8 @@ see the exact same tools for a given (agent, conversation).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic_ai.toolsets import AbstractToolset
 from app.modules.agent.tools.context import ConversationContext
 
@@ -23,6 +25,10 @@ from app.modules.agent.tools.registry import (
     resolve_agent_toolsets,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.agent.tools.browser.vm_browser import vm_browser_toolset
+from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+    is_workspace_cli_toolset,
+)
 
 
 async def load_agent_grant_summary(
@@ -41,6 +47,22 @@ async def load_agent_grant_summary(
     )
 
 
+HostExecutionMode = Literal["native", "sandbox"]
+
+
+def _for_host_execution(
+    toolsets: list[AbstractToolset[ConversationContext]],
+    mode: HostExecutionMode,
+) -> list[AbstractToolset[ConversationContext]]:
+    """The toolsets of a run whose commands execute on the user's Mac."""
+    had_shell = any(is_workspace_cli_toolset(toolset) for toolset in toolsets)
+    if mode == "native":
+        toolsets = [t for t in toolsets if not is_workspace_cli_toolset(t)]
+    if had_shell and vm_browser_toolset not in toolsets:
+        toolsets = [*toolsets, vm_browser_toolset]
+    return toolsets
+
+
 class RunToolAssembler:
     """Builds the ordered toolset list for an agent run / tool call."""
 
@@ -55,8 +77,25 @@ class RunToolAssembler:
         include_final_answer: bool = False,
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
+        host_execution: HostExecutionMode | None = None,
     ) -> list[AbstractToolset[ConversationContext]]:
         """Every tool this (agent, conversation) can reach.
+
+        ``host_execution`` is set on a run whose commands execute on the
+        user's Mac (docs/architecture/desktop-host-execution.md §7):
+
+        * ``"native"`` -- an Agent Host run. Lemma's command tools are withheld:
+          the coding agent already has a shell and file tools in the same
+          folder on the same Mac, and two tools that do one thing in one place
+          only confuse the model.
+        * ``"sandbox"`` -- an in-process run whose ``exec_command`` runs on the
+          Mac.
+
+        Either way the browser the person watches is still in the VM, and
+        ``agent-browser`` was reached through the shell that is now elsewhere,
+        so an agent that had the workspace CLI gets the ``browser`` tool in its
+        place. Pod, connectors, ``ask_user``, ``display_resource`` and the rest
+        stay.
 
         ``grants`` lets a caller that already loaded the agent's grant summary
         (the runner does, to build its context brief) hand it over instead of
@@ -72,6 +111,8 @@ class RunToolAssembler:
                 vision_mode=vision_mode,
                 grants=grants,
             )
+            if host_execution is not None:
+                toolsets = _for_host_execution(toolsets, host_execution)
             span.set_attribute("lemma.toolsets", len(toolsets))
             return toolsets
 

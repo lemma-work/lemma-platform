@@ -210,10 +210,19 @@ async def test_changes_ws_rejects_unauthenticated(
     notes_pod: DatastoreApi,
     test_app,
 ):
+    """A rejected session is accepted, then closed 4401.
+
+    A close before accept reaches a browser as a failed upgrade (1006), so the
+    client could never tell an expired session from a network drop.
+    """
     communicator = _ws_communicator(test_app, notes_pod.pod_id, token="")
     await communicator.send_input({"type": "websocket.connect"})
+    accepted = await communicator.receive_output(timeout=5)
+    assert accepted["type"] == "websocket.accept", accepted
     closed = await communicator.receive_output(timeout=5)
-    assert closed["type"] == "websocket.close"
+    assert closed["type"] == "websocket.close", closed
+    assert closed["code"] == 4401, closed
+    await communicator.wait(timeout=3)
 
 
 async def test_changes_ws_disconnect_immediately_after_connect(

@@ -75,7 +75,13 @@ def _fake_scopes(monkeypatch, events):
 async def test_resolve_runs_in_phase1_and_execute_runs_after_release(events):
     # A stand-in for the real ResolvedConnectorExecution: the saga reads
     # connector_id off it when deciding what to do with a file result.
-    resolved_sentinel = SimpleNamespace(connector_id="outlook", organization_id=uuid4())
+    resolved_sentinel = SimpleNamespace(
+        connector_id="outlook",
+        organization_id=uuid4(),
+        input_schema=None,
+        payload={},
+        requested_output_path=None,
+    )
     response_sentinel = SimpleNamespace(result={"ok": True})
 
     class _FakeService:

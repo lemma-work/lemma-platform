@@ -20,7 +20,8 @@ use url::Url;
 use uuid::Uuid;
 
 pub use connection::{
-    Connected, HANDSHAKE_TIMEOUT, LinkError, LinkHandle, Push, REQUEST_TIMEOUT, connect, link_url,
+    Connected, DEFAULT_OP_DEADLINE, HANDSHAKE_TIMEOUT, LinkError, LinkHandle, MAX_CONCURRENT_OPS,
+    OpHandler, Push, REQUEST_TIMEOUT, connect, connect_with, link_url,
 };
 pub use target::{is_loopback_host, validate_target_url};
 
@@ -46,7 +47,7 @@ pub async fn pair(
         display_name: display_name.to_owned(),
         hello: HostHello::current(installation_id),
     })?;
-    let (connected, answer) = connection::open(&base_url, None, (host::PAIR, body)).await?;
+    let (connected, answer) = connection::open(&base_url, None, (host::PAIR, body), None).await?;
     connected.handle.close(protocol::close::NORMAL, "paired");
     let paired: PairedBody = serde_json::from_value(answer.body)?;
     anyhow::ensure!(

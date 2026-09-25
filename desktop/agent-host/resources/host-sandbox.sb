@@ -1,0 +1,186 @@
+;; Lemma host execution: the Seatbelt profile every command an agent runs on
+;; this Mac is confined by. See docs/architecture/desktop-host-execution.md §6.
+;;
+;; Modelled on Claude Code's and Codex's macOS profiles: deny by default, then
+;; broad reads, narrow writes and an open network. Deny-by-default rather than
+;; allow-by-default because an allowed default also allows the ways out of a
+;; sandbox that are not files at all -- `launchctl submit`, `open -a Terminal`,
+;; Apple Events to another app -- each of which runs a command unconfined.
+;;
+;; Parameters, all canonical absolute paths (the kernel matches real paths, so
+;; /var and /tmp must already be spelled /private/var and /private/tmp):
+;;   ROOT              the workspace root; writable
+;;   HOME              the owner's home; what the credential denials hang off
+;;   TMP               the owner's $TMPDIR; writable
+;;   GRANT_0..GRANT_7  optional further folders the owner granted; writable
+;;
+;; This file is data and is tested as data: tests/seatbelt.rs runs real
+;; processes under it and checks each denial and allowance below.
+
+(version 1)
+(deny default)
+
+(define (home-path relative) (string-append (param "HOME") relative))
+
+;; ---------------------------------------------------------------- processes
+
+;; Children inherit this profile and cannot drop it, so fork and exec are safe
+;; to allow wholesale.
+(allow process-fork)
+(allow process-exec)
+(allow process-info* (target same-sandbox))
+(allow process-info-pidinfo)
+(allow process-info-setcontrol (target same-sandbox))
+(allow signal (target same-sandbox))
+(allow mach-priv-task-port (target same-sandbox))
+
+;; What the runtimes underneath every CLI reach for: the kernel's sysctls,
+;; shared memory and semaphores (Node, Python multiprocessing), preferences.
+(allow sysctl-read)
+(allow sysctl-write (sysctl-name "kern.tcsm_enable"))
+(allow ipc-posix-shm)
+(allow ipc-posix-sem)
+(allow user-preference-read)
+(allow iokit-open
+  (iokit-registry-entry-class "RootDomainUserClient")
+  (iokit-registry-entry-class "IOSurfaceRootUserClient"))
+
+;; The system services a command-line tool needs. Named one by one: this list
+;; is what keeps `launchctl`, LaunchServices-driven `open`, and Apple Events
+;; (the unconfined ways out) unreachable.
+(allow mach-lookup
+  ;; Logging, notifications, user and group lookups (getpwuid, id).
+  (global-name "com.apple.logd")
+  (global-name "com.apple.system.logger")
+  (global-name "com.apple.system.notification_center")
+  (global-name "com.apple.distributed_notifications@Uv3")
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.system.opendirectoryd.membership")
+  (global-name "com.apple.system.DirectoryService.libinfo_v1")
+  (global-name "com.apple.system.DirectoryService.membership_v1")
+  (global-name "com.apple.bsd.dirhelper")
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.cfprefsd.agent")
+  (global-name "com.apple.lsd.mapdb")
+  (global-name "com.apple.CoreServices.coreservicesd")
+  (global-name "com.apple.analyticsd")
+  (global-name "com.apple.diagnosticd")
+  (global-name "com.apple.PowerManagement.control")
+  (global-name "com.apple.fonts")
+  (global-name "com.apple.FontObjectsServer")
+  ;; DNS and network configuration.
+  (global-name "com.apple.dnssd.service")
+  (global-name "com.apple.SystemConfiguration.configd")
+  (global-name "com.apple.SystemConfiguration.DNSConfiguration")
+  (global-name "com.apple.networkd")
+  (global-name "com.apple.nsurlsessiond")
+  (global-name "com.apple.nesessionmanager.content-filter")
+  (global-name "com.apple.usymptomsd")
+  ;; TLS trust evaluation, and the Keychain. `gh` keeps its token in the
+  ;; login keychain and reads it through these services; git's credential
+  ;; helper does the same.
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.securityd.xpc")
+  (global-name "com.apple.security.agent")
+  (global-name "com.apple.security.authhost")
+  (global-name "com.apple.trustd")
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.ocspd")
+  ;; File watching, for `npm run dev` and every other dev server that reloads.
+  (global-name "com.apple.FSEvents"))
+
+;; ---------------------------------------------------------------- network
+
+;; Open, outbound and loopback: `npm install` needs the registry and `npm run
+;; dev` needs to listen.
+(allow network*)
+(allow system-socket)
+
+;; ---------------------------------------------------------------- reads
+
+;; Broad: a tool has to see the owner's toolchain, their repositories and the
+;; system to be of any use.
+(allow file-read*)
+
+;; ---------------------------------------------------------------- writes
+
+(allow file-write*
+  (subpath (param "ROOT"))
+  (subpath (param "TMP"))
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  ;; Package-manager caches, so installs work and are shared with the owner's
+  ;; own terminal.
+  (subpath (home-path "/.npm"))
+  (subpath (home-path "/.cache"))
+  (subpath (home-path "/Library/Caches"))
+  (subpath (home-path "/.cargo/registry"))
+  (subpath (home-path "/.rustup/tmp"))
+  (subpath (home-path "/go/pkg/mod"))
+  (subpath (home-path "/.gradle/caches"))
+  (subpath (home-path "/.m2/repository"))
+  (subpath (home-path "/.bun/install/cache"))
+  (subpath (home-path "/Library/pnpm")))
+
+(if (param "GRANT_0") (allow file-write* (subpath (param "GRANT_0"))))
+(if (param "GRANT_1") (allow file-write* (subpath (param "GRANT_1"))))
+(if (param "GRANT_2") (allow file-write* (subpath (param "GRANT_2"))))
+(if (param "GRANT_3") (allow file-write* (subpath (param "GRANT_3"))))
+(if (param "GRANT_4") (allow file-write* (subpath (param "GRANT_4"))))
+(if (param "GRANT_5") (allow file-write* (subpath (param "GRANT_5"))))
+(if (param "GRANT_6") (allow file-write* (subpath (param "GRANT_6"))))
+(if (param "GRANT_7") (allow file-write* (subpath (param "GRANT_7"))))
+
+;; ---------------------------------------------------------------- credentials
+
+;; Credentials and private data, neither readable nor writable. After every
+;; allow above on purpose: the last matching rule wins, so a granted folder or
+;; a root that happens to contain one of these still cannot reach it.
+(deny file-read* file-write*
+  (subpath (home-path "/.ssh"))
+  (subpath (home-path "/.aws"))
+  (subpath (home-path "/.gnupg"))
+  (subpath (home-path "/.config/gcloud"))
+  (subpath (home-path "/.azure"))
+  (subpath (home-path "/.kube"))
+  (literal (home-path "/.docker/config.json"))
+  (literal (home-path "/.netrc"))
+  (literal (home-path "/.npmrc"))
+  (literal (home-path "/.pypirc"))
+  (subpath (home-path "/Library/Keychains"))
+  (subpath (home-path "/Library/Application Support/Google/Chrome"))
+  (subpath (home-path "/Library/Application Support/Firefox"))
+  (subpath (home-path "/Library/Application Support/Arc"))
+  (subpath (home-path "/Library/Application Support/BraveSoftware"))
+  (subpath (home-path "/Library/Mail"))
+  (subpath (home-path "/Library/Messages"))
+  (subpath (home-path "/Library/Cookies"))
+  ;; Lemma's own data: the Agent Host's pairing secrets and journal, the
+  ;; desktop app's database and vault.
+  (subpath (home-path "/Library/Application Support/Lemma")))
+
+;; Except the login keychain file itself. `gh` and git's osxkeychain helper
+;; open it in-process to find their item, and securityd then decides whether
+;; to hand the secret over. The file is encrypted with the login password, so
+;; reading it yields nothing a command could not already ask securityd for;
+;; the rest of ~/Library/Keychains (the data-protection keychain, iCloud
+;; material) stays denied. Measured: with the whole directory denied,
+;; `gh auth token` answers "no oauth token found".
+(allow file-read*
+  (literal (home-path "/Library/Keychains"))
+  (literal (home-path "/Library/Keychains/login.keychain-db")))
+
+;; Terminals and the null device. A PTY the exec-server opens is allocated
+;; inside the sandbox, so the pseudo-tty rules have to be here too.
+(allow pseudo-tty)
+(allow file-read* file-write* file-ioctl
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/tty")
+  (literal "/dev/ptmx")
+  (literal "/dev/dtracehelper")
+  (regex #"^/dev/ttys[0-9]+$")
+  (regex #"^/dev/fd/[0-9]+$"))
+(allow file-read* file-ioctl
+  (literal "/dev/random")
+  (literal "/dev/urandom"))

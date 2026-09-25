@@ -32,3 +32,19 @@ export async function startVerification(
     }
     return "inbox";
 }
+
+/** One tick of the inbox poll.
+ *
+ *  Verified is the end of polling, whatever the refresh says. The refresh is
+ *  what carries the new claim into the session, and it used to sit inside the
+ *  poll with "ready" as the only way out — so an account whose access check
+ *  still said otherwise refreshed the session every three seconds, and on
+ *  every focus, for as long as the tab stayed open. Once is the attempt; the
+ *  Continue button on the next screen is the retry, one per click. */
+export async function checkInbox(
+    actions: Pick<VerificationActions, "refresh"> & { verified: () => Promise<boolean> },
+): Promise<"inbox" | "done"> {
+    if (!(await actions.verified())) return "inbox";
+    await actions.refresh().catch(() => false);
+    return "done";
+}

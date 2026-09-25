@@ -56,11 +56,16 @@ export class FunctionsNamespace {
     listAll: async (name: string, pageSize = 200) => {
       const items: FunctionRevisionResponse[] = [];
       let pageToken: string | null | undefined;
+      const seen = new Set<string>();
       for (;;) {
         const page = await this.revisions.list(name, { limit: pageSize, pageToken });
         items.push(...(page.items ?? []));
         pageToken = page.next_page_token;
         if (typeof pageToken !== "string" || !pageToken) return items;
+        if (seen.has(pageToken)) {
+          throw new Error(`Revision pages for function "${name}" repeated page token "${pageToken}"; stopping.`);
+        }
+        seen.add(pageToken);
       }
     },
 

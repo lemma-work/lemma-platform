@@ -262,3 +262,110 @@ async def test_unverified_email_cannot_claim_a_company_domain(signup_user, db_se
     assert organization.join_policy == OrganizationJoinPolicy.INVITE_ONLY
     assert organization.email_domain is None
     assert workspace.pod_id and workspace.assistant_id
+
+
+async def _owner_with_invitation(signup_user, uow, invitee_email: str):
+    from app.modules.identity.domain.organization_entities import (
+        OrganizationInvitationEntity,
+        OrganizationRole,
+    )
+
+    owner = await signup_user(email=f"owner-{uuid4().hex[:8]}@gmail.com")
+    owned = await ensure_first_workspace(
+        uow,
+        organization_service=_organization_service(uow),
+        user_id=UUID(owner["id"]),
+        email=owner["email"],
+        full_name="Grace Hopper",
+    )
+    invitation = OrganizationInvitationEntity(
+        email=invitee_email,
+        organization_id=owned.organization_id,
+        role=OrganizationRole.ORG_MEMBER,
+        pod_id=owned.pod_id,
+        pod_role="POD_USER",
+    )
+    await OrganizationRepository(uow).add_invitation(invitation)
+    await uow.commit()
+    return owned, invitation
+
+
+async def test_a_pending_pod_invitation_is_where_they_land(signup_user, db_session):
+    """Invited to a pod, then signed up another way: they join it, nothing new."""
+    uow = SqlAlchemyUnitOfWork(db_session)
+    invitee_email = f"ada-{uuid4().hex[:8]}@gmail.com"
+    owned, invitation = await _owner_with_invitation(signup_user, uow, invitee_email)
+    invitee = await signup_user(email=invitee_email)
+
+    workspace = await ensure_first_workspace(
+        uow,
+        organization_service=_organization_service(uow),
+        user_id=UUID(invitee["id"]),
+        email=invitee["email"],
+        full_name="Ada Lovelace",
+    )
+    await uow.commit()
+
+    assert workspace.entry == "invitation"
+    assert workspace.organization_id == owned.organization_id
+    assert workspace.pod_id == owned.pod_id
+    assert workspace.assistant_id == owned.assistant_id
+    assert workspace.pod_created is False
+    stored = await OrganizationRepository(uow).get_invitation_by_id(invitation.id)
+    assert stored is not None and stored.status.value == "ACCEPTED"
+
+
+async def test_an_invitation_to_a_deleted_pod_does_not_block_signup(
+    signup_user, db_session
+):
+    """Refused whole and skipped: they arrive the way they would have anyway."""
+    from app.modules.pod.infrastructure.models.pod_models import Pod
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    invitee_email = f"ada-{uuid4().hex[:8]}@gmail.com"
+    owned, _ = await _owner_with_invitation(signup_user, uow, invitee_email)
+    pod = await db_session.get(Pod, owned.pod_id)
+    pod.is_deleted = True
+    await uow.commit()
+    invitee = await signup_user(email=invitee_email)
+
+    workspace = await ensure_first_workspace(
+        uow,
+        organization_service=_organization_service(uow),
+        user_id=UUID(invitee["id"]),
+        email=invitee["email"],
+        full_name="Ada Lovelace",
+    )
+
+    assert workspace.entry == "new_org"
+    assert workspace.pod_id not in (None, owned.pod_id)
+
+
+async def test_an_existing_member_invited_to_a_pod_gets_the_pod(
+    signup_user, db_session
+):
+    """Already in the organization is no reason to refuse the pod."""
+    uow = SqlAlchemyUnitOfWork(db_session)
+    invitee_email = f"ada-{uuid4().hex[:8]}@gmail.com"
+    owned, invitation = await _owner_with_invitation(signup_user, uow, invitee_email)
+    invitee = await signup_user(email=invitee_email)
+    service = _organization_service(uow)
+    from app.modules.identity.domain.organization_entities import (
+        OrganizationMemberEntity,
+        OrganizationRole,
+    )
+
+    await OrganizationRepository(uow).add_member(
+        OrganizationMemberEntity(
+            user_id=UUID(invitee["id"]),
+            organization_id=owned.organization_id,
+            role=OrganizationRole.ORG_MEMBER,
+        )
+    )
+
+    await service.accept_invitation(invitation.id, UUID(invitee["id"]))
+    await uow.commit()
+
+    adapter = SqlAlchemyPodMembershipAdapter(uow)
+    assert owned.pod_id is not None
+    assert await adapter.is_pod_member(pod_id=owned.pod_id, user_id=UUID(invitee["id"]))

@@ -101,6 +101,10 @@ impl Daemon {
                 self.start_sharing_enable(request, client.clone());
                 return true;
             }
+            "sharing.access" => {
+                self.start_sharing_access(request, client.clone());
+                return true;
+            }
             "sharing.disable" => {
                 self.start_sharing_disable(id, client.clone());
                 return true;
@@ -133,8 +137,13 @@ impl Daemon {
                 );
                 return true;
             }
-            "agent-host.start" | "agent-host.stop" | "agent-host.restart" | "agent-host.pair"
-            | "agent-host.unpair" | "agent-host.refresh" => {
+            "agent-host.start"
+            | "agent-host.stop"
+            | "agent-host.restart"
+            | "agent-host.pair"
+            | "agent-host.unpair"
+            | "agent-host.refresh"
+            | "agent-host.host-execution" => {
                 self.start_agent_host_operation(command, request.clone(), client.clone());
                 return true;
             }

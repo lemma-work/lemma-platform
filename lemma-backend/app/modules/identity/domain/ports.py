@@ -210,6 +210,8 @@ class PodMembershipPort(Protocol):
         self, pod_id: UUID
     ) -> Optional[tuple[str, str | None, UUID]]: ...
 
+    async def is_pod_member(self, *, pod_id: UUID, user_id: UUID) -> bool: ...
+
     async def add_member_to_pod(
         self,
         *,
