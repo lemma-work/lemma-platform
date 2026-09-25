@@ -149,7 +149,13 @@ async def mcp_payload[DepsT: AgentContext](
     prompt: str | None = None,
     extra_tool_names: Sequence[str] = (),
 ) -> JsonObject:
-    """Build the MCP endpoint the host's bridge will call back on.
+    """Build what the host's MCP bridge needs to relay the agent's Lemma tools.
+
+    There is no URL in it. The bridge sends every tool call up the host's link
+    as an ``mcp`` frame carrying ``conversation_id`` and ``token``, and Lemma
+    re-authorizes that pair on every call; see ``agent_host_link_mcp``. A
+    conversation MCP mount used to be the other end of an HTTP URL here, and the
+    Agent Host was its only caller.
 
     ``token_expires_at`` is part of the payload because the credential inside it
     is minted once, encrypted into START_RUN once, and then used verbatim by a
@@ -177,11 +183,6 @@ async def mcp_payload[DepsT: AgentContext](
     return {
         "environment": agent_environment,
         "server_name": LEMMA_MCP_SERVER_NAME,
-        "url": (
-            f"{settings.api_url.rstrip('/')}/agent-runtime/conversations/"
-            f"{conversation_id}/mcp"
-        ),
-        "authorization": f"Bearer {token}",
         "token": token,
         "token_expires_at": _token_expiry_iso(token),
         "run_id": str(agent_run_id),

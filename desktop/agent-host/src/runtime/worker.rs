@@ -1,20 +1,20 @@
-//! One target's worker: its poll loop, and the state it carries.
+//! One target's worker: its link loop, and the state it carries.
+
+use crate::link::protocol::{ControlBody, close};
+use crate::link::{self, Connected, LinkError, LinkHandle, LinkSlot, LinkSlotOwner, Push};
+use crate::protocol::HostHello;
 
 use super::{
-    AdapterManifest, AgentDriver, ApiError, Arc, AtomicBool, BTreeMap, CommandRejection,
-    ConfigOption, Duration, EventFlusher, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL,
-    HarnessCapabilities, HashMap, HostCapacity, HostConfig, HostPaths, HostStatus, Journal,
-    LOCAL_CONTROL_INTERVAL, Ordering, OwnedTask, PathBuf, PermissionGate, PublishedHarness,
-    RETRY_MAX, RETRY_MIN, REVOKED_REFUSALS, RunCheckpoint, Semaphore, TargetClient, TargetConfig,
-    TransientBackoff, Uuid, command_rejection, deliver_events, mpsc, redact_error, watch,
+    AdapterManifest, AgentDriver, Arc, AtomicBool, BTreeMap, CommandRejection, ConfigOption,
+    Duration, EventFlusher, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL, HarnessCapabilities,
+    HashMap, HostCapacity, HostConfig, HostPaths, Journal, LOCAL_CONTROL_INTERVAL, Ordering,
+    OutboxSignal, OwnedTask, PathBuf, PermissionGate, RETRY_MAX, RETRY_MIN, REVOKED_REFUSALS,
+    RunCheckpoint, Semaphore, TargetConfig, TransientBackoff, Uuid, command_rejection,
+    deliver_events, mpsc, redact_error, watch,
 };
 
-/// The control updates one poll carries up: command acknowledgements, run
-/// checkpoints, and command rejections.
-///
-/// They travel together on the request that is also the host's capacity
-/// heartbeat and the only way commands come back down, which is why a batch the
-/// server refuses has to be narrowed rather than retried whole.
+/// The control updates one `control` frame carries up: command
+/// acknowledgements, run checkpoints, and command rejections.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ControlBatch {
     pub(crate) command_ids: Vec<Uuid>,
@@ -26,43 +26,11 @@ impl ControlBatch {
     pub(crate) fn len(&self) -> usize {
         self.command_ids.len() + self.checkpoints.len() + self.rejections.len()
     }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// The updates in `start..end`, reading the three kinds as one sequence:
-    /// acknowledgements, then checkpoints, then rejections.
-    ///
-    /// Addressing the batch by range is what lets a refusal be bisected down to
-    /// the single update the server objects to.
-    pub(crate) fn slice(&self, start: usize, end: usize) -> Self {
-        let commands = self.command_ids.len();
-        let checkpoints = self.checkpoints.len();
-        let bound =
-            |index: usize, offset: usize, length: usize| index.saturating_sub(offset).min(length);
-        Self {
-            command_ids: self.command_ids[bound(start, 0, commands)..bound(end, 0, commands)]
-                .to_vec(),
-            checkpoints: self.checkpoints
-                [bound(start, commands, checkpoints)..bound(end, commands, checkpoints)]
-                .to_vec(),
-            rejections: self.rejections[bound(start, commands + checkpoints, self.rejections.len())
-                ..bound(end, commands + checkpoints, self.rejections.len())]
-                .to_vec(),
-        }
-    }
-
-    pub(crate) fn absorb(&mut self, other: Self) {
-        self.command_ids.extend(other.command_ids);
-        self.checkpoints.extend(other.checkpoints);
-        self.rejections.extend(other.rejections);
-    }
 }
 
 pub(crate) struct TargetWorker {
     pub(crate) target: TargetConfig,
-    pub(crate) client: TargetClient,
+    pub(crate) installation_id: String,
     pub(crate) paths: HostPaths,
     pub(crate) journal: Journal,
     pub(crate) manifest: AdapterManifest,
@@ -71,7 +39,7 @@ pub(crate) struct TargetWorker {
     pub(crate) global_capacity: Arc<Semaphore>,
     pub(crate) max_runs: u16,
     pub(crate) shutdown: watch::Receiver<bool>,
-    pub(crate) harnesses: BTreeMap<Uuid, PublishedHarness>,
+    pub(crate) harnesses: BTreeMap<Uuid, crate::link::protocol::PublishedHarness>,
     /// What each probe learned, keyed by harness key. Lemma is told the same
     /// thing, but a run needs it locally and synchronously — to decide whether
     /// resuming a session is on the table, and to know which configuration
@@ -82,11 +50,11 @@ pub(crate) struct TargetWorker {
     /// Event delivery, shared with the task that drives it. Behind a lock so a
     /// shutdown flush and the delivery task cannot send the same batch twice.
     pub(crate) flusher: Arc<tokio::sync::Mutex<EventFlusher>>,
-    /// Runs whose liveness checkpoints Lemma refuses, and how many more polls
-    /// they sit out before trying again. Their leases meanwhile fall to the
-    /// server's own expiry recovery; their terminal states are never given up
-    /// on, so a run is not abandoned mid-flight by this.
-    pub(crate) refused_heartbeats: HashMap<Uuid, u32>,
+    /// Runs whose liveness checkpoints Lemma refused, and when to try them
+    /// again. Their leases meanwhile fall to the server's own expiry recovery;
+    /// their terminal states are never given up on, so a run is not abandoned
+    /// mid-flight by this.
+    pub(crate) refused_heartbeats: HashMap<Uuid, std::time::Instant>,
     pub(crate) draining: bool,
     pub(crate) refresh_due: std::time::Instant,
     /// When to re-read the local control file. See `LOCAL_CONTROL_INTERVAL`.
@@ -96,7 +64,8 @@ pub(crate) struct TargetWorker {
     /// fifteen minutes" into "install an agent, it appears".
     pub(crate) agents_changed: watch::Receiver<u64>,
     /// Consecutive refusals saying Lemma does not know this pairing. Reset by
-    /// any answered poll, so only an unbroken run of them drops the pairing.
+    /// any link that completes its handshake, so only an unbroken run of them
+    /// drops the pairing.
     pub(crate) revoked_refusals: u32,
     /// Raised by a run that failed because its agent is signed out.
     ///
@@ -108,14 +77,25 @@ pub(crate) struct TargetWorker {
     pub(crate) reprobe_requested: Arc<AtomicBool>,
     /// When to re-probe after a round that failed for something transient.
     pub(crate) transient_backoff: TransientBackoff,
-    pub(crate) events_ready: Arc<tokio::sync::Notify>,
-    /// Enriched harnesses from probes that ran off the poll loop's critical
+    /// Raised whenever the journal owes Lemma something: events to the
+    /// delivery task, control updates to the link loop.
+    pub(crate) events_ready: OutboxSignal,
+    /// Enriched harnesses from probes that ran off the link loop's critical
     /// path. Drained each iteration so a slow probe never delays a heartbeat.
     pub(crate) probed: (
         mpsc::UnboundedSender<Option<ProbedHarnesses>>,
         mpsc::UnboundedReceiver<Option<ProbedHarnesses>>,
     ),
     pub(crate) probe_task: Option<OwnedTask<()>>,
+    /// Whether the next refresh must probe every agent afresh, rather than
+    /// reuse probes of unchanged versions. Raised by everything that says the
+    /// agents may have changed -- an install, a run that found its agent
+    /// signed out, the person pressing Re-check -- and not by the scheduled
+    /// refresh, which is only a safety net.
+    pub(crate) force_probe: bool,
+    /// The link currently open, for the tasks that run beside this loop.
+    pub(crate) slot_owner: LinkSlotOwner,
+    pub(crate) link: LinkSlot,
 }
 
 /// One run in flight, and the two ways it can be stopped.
@@ -135,16 +115,14 @@ pub(crate) struct ActiveRun {
 
 /// One completed refresh: what Lemma accepted, and what the probes learned.
 pub(crate) struct ProbedHarnesses {
-    pub(crate) published: Vec<PublishedHarness>,
+    pub(crate) published: Vec<crate::link::protocol::PublishedHarness>,
     pub(crate) probes: HashMap<String, ProbedHarness>,
     /// Whether anything failed for a reason that may not fail twice.
     ///
     /// A probe that timed out on a busy machine is not a settled fact about the
-    /// installation, but the loop had no way to know that: it pushed the next
-    /// refresh a quarter of an hour out the moment this task was *spawned*, and
-    /// a successful publish of a bad snapshot never brought it back. So one
-    /// unlucky five-second window cost fifteen minutes of an agent being
-    /// reported unusable, with no way for the user to shorten it.
+    /// installation. Backing off from it reaches the ordinary refresh interval
+    /// as its ceiling, so the worst case is the old behaviour and the common
+    /// case is seconds.
     pub(crate) retry_soon: bool,
 }
 
@@ -158,6 +136,41 @@ pub(crate) struct ProbedHarnesses {
 pub(crate) struct ProbedHarness {
     pub(crate) capabilities: HarnessCapabilities,
     pub(crate) config_options: Vec<ConfigOption>,
+    /// The versions this probe was of, and whether it succeeded. A scheduled
+    /// refresh reuses a successful probe of the same versions rather than
+    /// opening another real session in the agent -- each probe is a
+    /// `session/new` that lands in the person's own session history.
+    pub(crate) adapter_version: String,
+    pub(crate) upstream_version: Option<String>,
+    pub(crate) ready: bool,
+}
+
+/// How a connected session ended.
+enum SessionEnd {
+    /// The host is shutting down, and did so gracefully.
+    Shutdown,
+    /// The link went away; reconnect, after `after` if Lemma asked for a delay.
+    Lost {
+        error: LinkError,
+        after: Option<Duration>,
+    },
+}
+
+/// How often the loop does its own bookkeeping -- reaping finished runs,
+/// enforcing cancellations, re-reading local controls, noticing probes -- while
+/// nothing else wakes it. Cheap, and short enough that a cancellation's kill
+/// deadline is kept to within a second.
+const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The longest a host waits to reconnect after Lemma restarts.
+const RESTART_JITTER_MAX_MS: u64 = 5_000;
+
+/// A random delay in `0..RESTART_JITTER_MAX_MS`, so a deploy does not bring
+/// every host back in the same instant.
+fn restart_jitter() -> Duration {
+    let mut bytes = [0_u8; 8];
+    let random = getrandom::fill(&mut bytes).map_or(0, |()| u64::from_le_bytes(bytes));
+    Duration::from_millis(random % RESTART_JITTER_MAX_MS)
 }
 
 impl TargetWorker {
@@ -175,18 +188,17 @@ impl TargetWorker {
         shutdown: watch::Receiver<bool>,
         agents_changed: watch::Receiver<u64>,
     ) -> anyhow::Result<Self> {
-        let client = TargetClient::new(target.clone(), installation_id)?;
         journal.register_target(target.target_id)?;
         let draining = target.draining;
         let flusher = Arc::new(tokio::sync::Mutex::new(EventFlusher {
             target_id: target.target_id,
             journal: journal.clone(),
-            client: client.clone(),
             rejections: HashMap::new(),
         }));
+        let (slot_owner, link) = LinkSlotOwner::new();
         Ok(Self {
             target,
-            client,
+            installation_id,
             paths,
             journal,
             manifest,
@@ -208,205 +220,345 @@ impl TargetWorker {
             revoked_refusals: 0,
             reprobe_requested: Arc::new(AtomicBool::new(false)),
             transient_backoff: TransientBackoff::new(),
-            events_ready: Arc::new(tokio::sync::Notify::new()),
+            events_ready: OutboxSignal::default(),
             probed: mpsc::unbounded_channel(),
             probe_task: None,
+            force_probe: true,
+            slot_owner,
+            link,
         })
     }
 
     pub(crate) async fn run(mut self) -> anyhow::Result<()> {
         self.recover_interrupted_runs()?;
-        // Event delivery runs alongside the poll rather than competing with it.
-        // Aborted at the end of this function; the shutdown path takes the same
-        // lock and does the last flush itself, so nothing in the journal is left
-        // behind by stopping it.
+        // Event delivery and the MCP relay run beside the link loop, and wait
+        // on the slot for whichever link is open. Aborted at the end of this
+        // function; the shutdown path takes the flusher's lock and does the
+        // last flush itself, so nothing in the journal is left behind.
         let delivery = OwnedTask(tokio::spawn(deliver_events(
             Arc::clone(&self.flusher),
-            Arc::clone(&self.events_ready),
+            self.events_ready.clone(),
+            self.link.clone(),
             self.shutdown.clone(),
         )));
-        let outcome = self.poll_loop().await;
+        let relay = crate::mcp_relay::serve(
+            &self.paths,
+            self.target.target_id,
+            self.journal.clone(),
+            self.link.clone(),
+        )
+        .map(|task| OwnedTask(tokio::spawn(task)));
+        if let Err(error) = &relay {
+            // Without the relay an agent has no Lemma tools, but it can still
+            // answer; that is a degraded run, not a reason to take this
+            // computer offline.
+            tracing::error!(%error, "could not start the MCP relay; runs will have no Lemma tools");
+        }
+        let outcome = self.link_loop().await;
         delivery.abort();
+        if let Ok(relay) = relay {
+            relay.abort();
+        }
         outcome
     }
 
-    pub(crate) async fn poll_loop(&mut self) -> anyhow::Result<()> {
+    pub(crate) fn capacity(&self) -> HostCapacity {
+        let available = u16::try_from(self.global_capacity.available_permits()).unwrap_or(u16::MAX);
+        HostCapacity {
+            max_runs: self.max_runs,
+            active_runs: self.max_runs.saturating_sub(available),
+            available_runs: if self.draining { 0 } else { available },
+        }
+    }
+
+    /// Stay connected until the host shuts down or the pairing is dropped.
+    pub(crate) async fn link_loop(&mut self) -> anyhow::Result<()> {
         let mut retry = RETRY_MIN;
-        // Cloned out of `self` once, so the select below can await it without
-        // borrowing `self` twice. A `watch` receiver tracks versions rather than
-        // edges, so a change that lands while the loop is busy elsewhere is
-        // still waiting when it next reaches the select.
-        let mut agents_changed = self.agents_changed.clone();
         loop {
-            if *self.shutdown.borrow() || self.shutdown.has_changed().is_err() {
-                return self.graceful_shutdown().await;
+            if self.shutting_down() {
+                return self.graceful_shutdown(None).await;
             }
-            self.reap_finished().await;
-            self.enforce_cancellations()?;
-            if self.controls_due <= std::time::Instant::now() {
-                self.controls_due = std::time::Instant::now() + LOCAL_CONTROL_INTERVAL;
-                self.apply_local_controls()?;
-            }
-            self.drain_published();
-            if self.reprobe_requested.swap(false, Ordering::SeqCst)
-                || self.refresh_due <= std::time::Instant::now()
-            {
-                self.refresh_harnesses();
-                self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
-            }
-            // `deliver_events` is what normally sends these, and it does so
-            // without waiting for the loop to come back around. This pass is
-            // the backstop and the connection check: it is the one place a
-            // delivery failure is turned into OFFLINE, because two writers of
-            // that state flapped it between them.
-            if let Err(error) = self.flush_events().await {
-                self.note_offline(&error.to_string())?;
-                self.wait_retry(retry).await;
-                retry = (retry * 2).min(RETRY_MAX);
-                continue;
-            }
-            let available =
-                u16::try_from(self.global_capacity.available_permits()).unwrap_or(u16::MAX);
-            let active = self.max_runs.saturating_sub(available);
-            let capacity = HostCapacity {
-                max_runs: self.max_runs,
-                active_runs: active,
-                available_runs: if self.draining { 0 } else { available },
+            self.housekeeping()?;
+            let connected = tokio::select! {
+                connected = link::connect(
+                    &self.target.base_url,
+                    &self.target.host_secret,
+                    HostHello::current(&self.installation_id),
+                    self.capacity(),
+                ) => connected,
+                _ = self.shutdown.changed() => continue,
             };
-            // Lemma holds the poll open for `POLL_HOLD`, so this is where the
-            // loop spends nearly all of its time. Anything that has to happen
-            // sooner than that needs an arm here — reaching the top of the loop
-            // is not something that happens on a schedule, it is something that
-            // happens when the poll returns.
-            //
-            // Waking here abandons the poll in flight. That is cheap for the
-            // host — the poll is a lease-based pull, so anything the server was
-            // about to hand over comes back on the next one — but it is not free
-            // for the server, which goes on holding the abandoned poll for the
-            // rest of its hold. So an arm has to be worth a stranded poll.
-            //
-            // A run's streamed output emphatically is not: it arrives dozens of
-            // times per turn, and putting it here stacked 26 concurrent polls
-            // against one idle. It has its own task now — see `deliver_events`.
-            // An agent being installed or removed happens approximately never.
-            let polled = tokio::select! {
-                result = self.poll_target(capacity) => Some(result),
-                // The agents on this machine changed. This is what makes
-                // `DISK_SCAN_INTERVAL` mean what it says: the scan itself was
-                // always cheap, but it used to be *reached* once per iteration,
-                // so noticing a newly installed agent waited out a held poll and
-                // took up to `POLL_HOLD` rather than the two seconds the
-                // interval reads as.
-                changed = agents_changed.changed() => {
-                    if changed.is_err() {
-                        return self.graceful_shutdown().await;
-                    }
-                    self.refresh_due = std::time::Instant::now();
-                    None
-                }
-            };
-            let Some(polled) = polled else {
-                continue;
-            };
-            match polled {
-                Ok(response) => {
+            let error = match connected {
+                Ok(connected) => {
                     retry = RETRY_MIN;
-                    // One answered poll proves the pairing is known, so any
-                    // refusals before it were the transient kind.
+                    // A completed handshake proves the pairing is known, so
+                    // any refusals before it were the transient kind.
                     self.revoked_refusals = 0;
                     self.journal
                         .update_target_state(self.target.target_id, "ONLINE", None)?;
-                    if response.host_status == HostStatus::Revoked {
-                        anyhow::bail!("target revoked this Agent Host");
-                    }
-                    if response.host_status == HostStatus::UpgradeRequired {
-                        anyhow::bail!("target requires a newer Agent Host protocol");
-                    }
-                    if !response.commands.is_empty() {
-                        // Harnesses publish off the poll path, so what this
-                        // host holds can be behind what Lemma minted against
-                        // in two different ways — a publish still sitting in
-                        // the channel, or no publish at all yet. Both are the
-                        // same mistake to make, and both are corrected here,
-                        // before any command is judged against a harness.
-                        self.sync_harnesses_for_commands().await;
-                    }
-                    for command in response.commands {
-                        if let Err(error) = self.handle_command(&command) {
-                            if let Some(rejection) = command_rejection(&command, &error) {
-                                self.journal
-                                    .record_rejection(self.target.target_id, &rejection)?;
+                    match self.session(connected).await? {
+                        SessionEnd::Shutdown => return Ok(()),
+                        SessionEnd::Lost { error, after } => {
+                            self.slot_owner.set(None);
+                            // Lemma restarting says so with 1012, usually
+                            // without the `reconnect` frame that would carry a
+                            // delay -- uvicorn closes sockets before the app's
+                            // own shutdown runs. Every host sees the same close
+                            // at the same instant, so each picks its own delay
+                            // rather than all reconnecting at once.
+                            let after = after.or_else(|| {
+                                matches!(
+                                    error,
+                                    LinkError::Closed {
+                                        code: close::RESTARTING,
+                                        ..
+                                    }
+                                )
+                                .then(restart_jitter)
+                            });
+                            if let Some(after) = after {
+                                self.note_offline(&error.to_string())?;
+                                self.wait_retry(after).await;
+                                continue;
                             }
-                            tracing::error!(
-                                target = %self.target.name,
-                                %error,
-                                "Agent Host command failed"
-                            );
+                            error
                         }
-                    }
-                    if response.poll_after_ms > 0 {
-                        self.wait_retry(Duration::from_millis(response.poll_after_ms))
-                            .await;
                     }
                 }
-                Err(error) => {
-                    // Lemma does not know this pairing. Stop being paired rather
-                    // than retrying forever: the target task ends either way,
-                    // but the supervisor respawns any target still in the config
-                    // — which is how a removed computer kept polling a pairing
-                    // the workspace had already destroyed, reporting
-                    // "Unreachable" for as long as the app was open.
-                    //
-                    // Not on the first refusal, though. The backend cannot tell
-                    // us whether the host was revoked or is merely missing, and
-                    // "missing" includes a machine pointed at the wrong backend
-                    // and a database restored behind its own writes. Dropping
-                    // the pairing there costs a re-pair for a condition that
-                    // heals itself. So it has to say so `REVOKED_REFUSALS`
-                    // times, across a backoff that is doubling toward
-                    // `RETRY_MAX` — long enough that no blip spans it, short
-                    // enough that a genuine revocation is over in under a
-                    // minute.
-                    if error
-                        .downcast_ref::<ApiError>()
-                        .is_some_and(ApiError::is_revoked_or_missing)
-                    {
-                        self.revoked_refusals += 1;
-                        if self.revoked_refusals >= REVOKED_REFUSALS {
-                            tracing::warn!(
-                                target = %self.target.name,
-                                refusals = self.revoked_refusals,
-                                "Lemma does not know this pairing; dropping it"
-                            );
-                            self.cancel_all("Lemma revoked this Agent Host")?;
-                            self.forget_target()?;
-                            return Err(error);
+                Err(error) => error,
+            };
+            if error.is_upgrade_required() {
+                self.note_offline("this Lemma needs a newer Agent Host")?;
+                anyhow::bail!("target requires a newer Agent Host protocol");
+            }
+            if error.is_revoked_or_missing() {
+                // Lemma does not know this pairing. Stop being paired rather
+                // than retrying forever -- but not on the first refusal: the
+                // backend cannot say whether the host was revoked or is
+                // merely missing, and "missing" includes a machine pointed at
+                // the wrong backend and a database restored behind its own
+                // writes. Dropping the pairing there costs a re-pair for a
+                // condition that heals itself.
+                self.revoked_refusals += 1;
+                if self.revoked_refusals >= REVOKED_REFUSALS {
+                    tracing::warn!(
+                        target = %self.target.name,
+                        refusals = self.revoked_refusals,
+                        "Lemma does not know this pairing; dropping it"
+                    );
+                    self.cancel_all("Lemma revoked this Agent Host")?;
+                    self.forget_target()?;
+                    return Err(error.into());
+                }
+                tracing::info!(
+                    target = %self.target.name,
+                    refusals = self.revoked_refusals,
+                    "Lemma does not know this pairing; retrying before dropping it"
+                );
+            } else if error.is_invalid_credential() {
+                self.cancel_all(
+                    "Lemma rejected this Agent Host; the target may have been revoked",
+                )?;
+                return Err(error.into());
+            }
+            self.note_offline(&error.to_string())?;
+            self.wait_retry(retry).await;
+            retry = (retry * 2).min(RETRY_MAX);
+        }
+    }
+
+    /// Everything the host does while connected.
+    ///
+    /// The link's reader, writer and this loop are separate tasks joined by
+    /// channels, so nothing here waits on a request Lemma is holding: work
+    /// happens when it is due. That is what the long poll could not do -- the
+    /// loop spent nearly all its time inside a held request, so anything that
+    /// had to happen sooner needed its own arm, and a check at the top of the
+    /// loop ran once per 25 seconds however short its own interval said.
+    async fn session(&mut self, connected: Connected) -> anyhow::Result<SessionEnd> {
+        let link = connected.handle.clone();
+        let end = self.serve_session(connected).await;
+        if !matches!(end, Ok(SessionEnd::Shutdown)) {
+            // A session ends without the link having closed -- a request on
+            // it timed out, say. Close it rather than abandon it: tasks
+            // still holding a handle (an MCP call waits without a deadline of
+            // its own) learn now that it is gone and retry on the next link,
+            // and Lemma stops counting it as this host's connection.
+            link.close(close::NORMAL, "reconnecting");
+        }
+        end
+    }
+
+    /// The body of [`Self::session`], which owns closing the link after it.
+    async fn serve_session(&mut self, connected: Connected) -> anyhow::Result<SessionEnd> {
+        let Connected {
+            handle,
+            mut pushes,
+            welcome,
+        } = connected;
+        tracing::info!(
+            target = %self.target.name,
+            heartbeat_ms = welcome.heartbeat_ms,
+            "connected to Lemma"
+        );
+        self.slot_owner.set(Some(handle.clone()));
+        // Anything the journal was holding goes out now: deliveries queued
+        // while offline, and the acknowledgements and checkpoints Lemma has
+        // been waiting on.
+        self.events_ready.notify_one();
+        let heartbeat = Duration::from_millis(welcome.heartbeat_ms.clamp(1_000, 60_000));
+        let mut heartbeat = tokio::time::interval(heartbeat);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut housekeeping = tokio::time::interval(HOUSEKEEPING_INTERVAL);
+        housekeeping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut agents_changed = self.agents_changed.clone();
+        let control_ready = self.events_ready.control();
+        let mut reconnect_after = None;
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.shutdown.changed() => {
+                    if self.shutting_down() {
+                        self.graceful_shutdown(Some((&handle, &mut pushes))).await?;
+                        handle.close(close::NORMAL, "host shutting down");
+                        return Ok(SessionEnd::Shutdown);
+                    }
+                }
+                push = pushes.recv() => match push {
+                    Some(Push::Commands(commands)) => {
+                        self.handle_commands(commands).await?;
+                        if let Err(error) = self.send_control(&handle).await {
+                            return Ok(SessionEnd::Lost { error, after: reconnect_after });
                         }
-                        tracing::info!(
-                            target = %self.target.name,
-                            refusals = self.revoked_refusals,
-                            "Lemma does not know this pairing; retrying before dropping it"
-                        );
-                        self.note_offline(&error.to_string())?;
-                        self.wait_retry(retry).await;
-                        retry = (retry * 2).min(RETRY_MAX);
-                        continue;
                     }
-                    if error
-                        .downcast_ref::<ApiError>()
-                        .is_some_and(ApiError::is_unauthorized)
-                    {
-                        self.cancel_all(
-                            "Lemma rejected this Agent Host; the target may have been revoked",
-                        )?;
-                        return Err(error);
+                    Some(Push::Reconnect(after)) => reconnect_after = Some(after),
+                    None => {
+                        let error = handle.closed().await;
+                        return Ok(SessionEnd::Lost { error, after: reconnect_after });
                     }
-                    self.note_offline(&error.to_string())?;
-                    self.wait_retry(retry).await;
-                    retry = (retry * 2).min(RETRY_MAX);
+                },
+                () = control_ready.notified() => {
+                    if let Err(error) = self.send_control(&handle).await {
+                        return Ok(SessionEnd::Lost { error, after: reconnect_after });
+                    }
+                }
+                _ = heartbeat.tick() => {
+                    if let Err(error) = self.send_control(&handle).await {
+                        return Ok(SessionEnd::Lost { error, after: reconnect_after });
+                    }
+                }
+                changed = agents_changed.changed() => {
+                    if changed.is_err() {
+                        self.graceful_shutdown(Some((&handle, &mut pushes))).await?;
+                        return Ok(SessionEnd::Shutdown);
+                    }
+                    // The agents on this machine changed: probe now, not at
+                    // the next scheduled refresh.
+                    self.refresh_due = std::time::Instant::now();
+                    self.force_probe = true;
+                    self.housekeeping()?;
+                }
+                _ = housekeeping.tick() => self.housekeeping()?,
+                error = handle.closed() => {
+                    return Ok(SessionEnd::Lost { error, after: reconnect_after });
                 }
             }
         }
+    }
+
+    /// Everything the loop does on its own clock rather than on a signal.
+    pub(crate) fn housekeeping(&mut self) -> anyhow::Result<()> {
+        self.enforce_cancellations()?;
+        self.reap_finished_now();
+        if self.controls_due <= std::time::Instant::now() {
+            self.controls_due = std::time::Instant::now() + LOCAL_CONTROL_INTERVAL;
+            self.apply_local_controls()?;
+        }
+        self.drain_published();
+        if self.reprobe_requested.swap(false, Ordering::SeqCst) {
+            self.force_probe = true;
+            self.refresh_due = std::time::Instant::now();
+        }
+        if self.refresh_due <= std::time::Instant::now() {
+            self.refresh_harnesses();
+            self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
+        }
+        Ok(())
+    }
+
+    /// Take a batch of commands, judging each against the harnesses this host
+    /// has actually published.
+    pub(crate) async fn handle_commands(
+        &mut self,
+        commands: Vec<crate::protocol::Command>,
+    ) -> anyhow::Result<()> {
+        if commands.is_empty() {
+            return Ok(());
+        }
+        // Harnesses publish off the loop, so what this host holds can be
+        // behind what Lemma minted against: a publish still sitting in the
+        // channel, or no publish at all yet. Both are corrected before any
+        // command is judged against a harness.
+        self.sync_harnesses_for_commands().await;
+        for command in commands {
+            if let Err(error) = self.handle_command(&command) {
+                if let Some(rejection) = command_rejection(&command, &error) {
+                    self.journal
+                        .record_rejection(self.target.target_id, &rejection)?;
+                }
+                tracing::error!(
+                    target = %self.target.name,
+                    %error,
+                    "Agent Host command failed"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Send what the journal owes Lemma, and take whatever it hands back.
+    ///
+    /// Also the heartbeat: it carries the non-terminal checkpoint of every run
+    /// in flight, and that is what renews each run's lease.
+    pub(crate) async fn send_control(&mut self, link: &LinkHandle) -> Result<(), LinkError> {
+        let batch = match self.control_batch() {
+            Ok(batch) => batch,
+            Err(error) => {
+                tracing::error!(%error, "could not read the journal's pending control updates");
+                ControlBatch::default()
+            }
+        };
+        let body = ControlBody {
+            capacity: self.capacity(),
+            acknowledged_command_ids: batch.command_ids.clone(),
+            checkpoints: batch.checkpoints.clone(),
+            rejections: batch.rejections.clone(),
+        };
+        let answer = match link.control(&body).await {
+            Ok(answer) => answer,
+            // A frame Lemma could not read as a whole is not something a
+            // retry fixes, and holding the rest of the host's reporting
+            // hostage to it would stop every run's heartbeat. Say so, and let
+            // the next heartbeat carry on.
+            Err(error) if error.is_request_rejected() => {
+                tracing::error!(%error, updates = batch.len(), "Lemma refused a control frame");
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        let settled = self.settle_control(&batch, &answer.refused);
+        if let Err(error) = self.journal.mark_control_applied(
+            self.target.target_id,
+            &settled.command_ids,
+            &settled.checkpoints,
+            &settled.rejections,
+        ) {
+            tracing::error!(%error, "could not record which control updates Lemma accepted");
+        }
+        if let Err(error) = self.handle_commands(answer.commands).await {
+            tracing::error!(%error, "could not take the commands a control answer carried");
+        }
+        Ok(())
     }
 
     /// Drop this pairing from the on-disk config.
@@ -436,7 +588,7 @@ impl TargetWorker {
         )?;
         tracing::info!(
             target = %self.target.name,
-            "dropped a revoked pairing; this computer will not poll it again"
+            "dropped a revoked pairing; this computer will not connect to it again"
         );
         Ok(())
     }
@@ -453,6 +605,7 @@ impl TargetWorker {
         self.draining = current.draining;
         if current.refresh_generation != self.target.refresh_generation {
             self.refresh_due = std::time::Instant::now();
+            self.force_probe = true;
         }
         self.target.draining = current.draining;
         self.target.refresh_generation = current.refresh_generation;
@@ -491,6 +644,10 @@ impl TargetWorker {
             Some(&redact_error(error)),
         )?;
         Ok(())
+    }
+
+    pub(crate) fn shutting_down(&self) -> bool {
+        *self.shutdown.borrow() || self.shutdown.has_changed().is_err()
     }
 
     pub(crate) async fn wait_retry(&mut self, duration: Duration) {

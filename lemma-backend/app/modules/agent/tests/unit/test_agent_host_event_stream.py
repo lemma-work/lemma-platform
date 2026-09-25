@@ -98,7 +98,7 @@ class TestAppendAndRead:
                 events=[
                     {
                         "sequence": 7,
-                        "type": "tool_call_upsert",
+                        "type": "tool_call",
                         "object_id": "call-1",
                         "payload": {"name": "exec", "nested": {"a": [1, 2]}},
                     }
@@ -106,7 +106,7 @@ class TestAppendAndRead:
             )
             (event,) = await stream.read(run_id=run_id, block_ms=50)
             assert event.sequence == 7
-            assert event.type == "tool_call_upsert"
+            assert event.type == "tool_call"
             assert event.object_id == "call-1"
             assert event.payload["nested"] == {"a": [1, 2]}
         finally:

@@ -100,6 +100,13 @@ class AgentHostModel(UUIDAuditBase):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Which link owns this host. Every accepted ``hello`` takes the next value,
+    # and a link closes 4409 once it learns a greater one exists -- so two
+    # handshakes racing on different replicas agree on a winner instead of
+    # each reading the other's announcement as newer and both closing.
+    link_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
 
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
 

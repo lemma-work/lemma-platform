@@ -1,5 +1,3 @@
-use agent_client_protocol::schema::v1::{ContentChunk, ImageContent, SessionUpdate, TextContent};
-
 use super::*;
 
 /// ACP names five ways a turn can end. Three of them used to arrive as an
@@ -320,48 +318,6 @@ fn a_harness_that_cannot_load_never_tries_to() {
 #[test]
 fn a_blank_session_id_is_not_worth_a_round_trip() {
     assert_eq!(session_to_resume(&spec_resuming(Some("  ")), true), None);
-}
-
-#[test]
-fn message_chunk_is_flattened_for_backend_normalizer() {
-    let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
-        TextContent::new("hi"),
-    )));
-    let (kind, _, payload) = normalize_session_update(&update).unwrap();
-    assert_eq!(kind, EventType::AgentMessageChunk);
-    assert_eq!(payload.get("text"), Some(&Value::String("hi".into())));
-}
-
-#[test]
-fn an_initial_tool_call_retains_acps_implicit_pending_status() {
-    let update: SessionUpdate = serde_json::from_value(serde_json::json!({
-        "sessionUpdate": "tool_call",
-        "toolCallId": "read-project",
-        "title": "Read README.md"
-    }))
-    .unwrap();
-    let (kind, id, payload) = normalize_session_update(&update).unwrap();
-    assert_eq!(kind, EventType::ToolCallUpsert);
-    assert_eq!(id.as_deref(), Some("read-project"));
-    assert_eq!(payload["status"], "pending");
-}
-
-#[test]
-fn image_chunk_preserves_the_standard_acp_content_block() {
-    let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Image(
-        ImageContent::new("cG5n", "image/png"),
-    )));
-    let (kind, _, payload) = normalize_session_update(&update).unwrap();
-    assert_eq!(kind, EventType::AgentMessageChunk);
-    assert_eq!(
-        payload.get("content"),
-        Some(&serde_json::json!({
-            "type": "image",
-            "data": "cG5n",
-            "mimeType": "image/png",
-        }))
-    );
-    assert!(!payload.contains_key("text"));
 }
 
 #[test]

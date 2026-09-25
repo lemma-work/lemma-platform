@@ -5,7 +5,13 @@ was a refusal: an unpaired host is told no. This scenario walks the pairing in
 the product's own order — mint a code, spend it, announce harnesses, bind a
 runtime profile, pin an agent, start a run — and then asks the question the
 promise is actually about: does the host claim the run once, however many times
-it polls?
+it reads its queue?
+
+The machine's side goes over the link WebSocket, as a real host does. Each
+"poll" below is a fresh link: ``hello``, then one ``control`` frame, and every
+command the answer or a push carried. A fresh link each time on purpose -- one
+socket de-duplicates what it has already pushed, so only a new one can show
+that an unacknowledged claim is handed out again, and under the same id.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from harness import capability, covers, journey, proves, scenario
+from harness.agent_host_link import PROTOCOL_VERSION, HostLink, pair_machine
 from harness.waiting import eventually, UNTIL_A_RUN_SETTLES
 
 pytestmark = [journey("Platform"), capability("Agent hosts")]
@@ -23,16 +30,10 @@ pytestmark = [journey("Platform"), capability("Agent hosts")]
 _HELLO = {
     "installation_id": "scenarios-install",
     "host_release": "scenarios-1.0.0",
-    "protocol_version": 2,
+    "protocol_version": PROTOCOL_VERSION,
 }
 
-#: The poll long-polls server-side for up to half a minute before answering an
-#: idle host, so each request needs a client timeout past that window.
-_POLL_TIMEOUT = 45.0
-
-
-def _host_auth(secret: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {secret}"}
+_CAPACITY = {"max_runs": 2, "active_runs": 0, "available_runs": 2}
 
 
 def _harness_snapshot() -> dict:
@@ -47,18 +48,30 @@ def _harness_snapshot() -> dict:
     }
 
 
-async def _poll(alice, secret: str, **extra):
-    return await alice.api.call(
-        "POST",
-        "/agent-host/poll",
-        headers=_host_auth(secret),
-        timeout=_POLL_TIMEOUT,
-        json={
-            "hello": _HELLO,
-            "capacity": {"max_runs": 2, "active_runs": 0, "available_runs": 2},
-            **extra,
-        },
-    )
+async def _poll(alice, secret: str) -> list[dict]:
+    """Every command one fresh link is handed: its ``control_ok`` and pushes."""
+    async with HostLink(alice.api, secret=secret) as link:
+        welcome = await link.request("hello", {"hello": _HELLO, "capacity": _CAPACITY})
+        assert welcome["type"] == "welcome", welcome
+        answer = await link.request("control", {"capacity": _CAPACITY})
+        assert answer["type"] == "control_ok", answer
+        pushed = [
+            command
+            for frame in link.pushes
+            if frame.get("type") == "commands"
+            for command in frame["body"]["commands"]
+        ]
+    return [*answer["body"]["commands"], *pushed]
+
+
+def _start_runs(commands: list[dict], *, besides: set[str]) -> list[dict]:
+    """START_RUN commands, one per command id, not already standing."""
+    unique = {
+        c["command_id"]: c
+        for c in commands
+        if c.get("kind") == "START_RUN" and c.get("command_id") not in besides
+    }
+    return list(unique.values())
 
 
 async def _pair_and_publish(alice) -> str:
@@ -67,31 +80,21 @@ async def _pair_and_publish(alice) -> str:
         "/me/runtime/agent-host-pairings",
         json={"display_name": "Scenario laptop"},
     )
-    completed = await alice.api.call(
-        "POST",
-        "/agent-host/pairings/complete",
-        json={
-            "pairing_code": pairing["pairing_code"],
-            "display_name": "Scenario laptop",
-            "hello": _HELLO,
-        },
+    paired = await pair_machine(
+        alice.api,
+        pairing_code=pairing["pairing_code"],
+        display_name="Scenario laptop",
+        hello=_HELLO,
     )
-    assert completed.status_code == 200, completed.text[:300]
-    host_secret = str(completed.json()["host_secret"])
+    host_secret = str(paired["host_secret"])
 
-    # The machine announces its harness.
-    published = await alice.api.call(
-        "PUT",
-        "/agent-host/harnesses",
-        headers=_host_auth(host_secret),
-        json={"harnesses": [_harness_snapshot()]},
-    )
-    assert published.status_code == 200, published.text[:300]
-
-    # A first poll registers the heartbeat: profile creation checks that this
-    # harness's host has been seen, as it would for a real desktop.
-    seen = await _poll(alice, host_secret)
-    assert seen.status_code == 200, seen.text[:300]
+    # The machine says hello -- which registers the heartbeat profile creation
+    # checks for, as it would for a real desktop -- and announces its harness.
+    async with HostLink(alice.api, secret=host_secret) as link:
+        welcome = await link.request("hello", {"hello": _HELLO, "capacity": _CAPACITY})
+        assert welcome["type"] == "welcome", welcome
+        published = await link.request("harnesses", {"harnesses": [_harness_snapshot()]})
+        assert published["type"] == "harnesses_ok", published
     return host_secret
 
 
@@ -99,12 +102,9 @@ async def _pair_and_publish(alice) -> str:
 @proves("PS-AGENT-041")
 @covers(
     "agent.host.pairing.create",
-    "agent.host.pairing.complete",
-    "agent.host.harnesses.publish",
     "agent.runtime.profiles.create",
     "agent.update",
     "agent.conversation.message.send",
-    "agent.host.poll",
 )
 async def test_dispatched_work_is_claimed_exactly_once(world):
     alice = await world.person("daniel")
@@ -147,13 +147,9 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
     # it makes stands for good, and a tenant that has seen an earlier run has an
     # earlier claim on it. Subtracting them keeps the question the same one it
     # always was: did *this* message become exactly one claim.
-    standing = await _poll(alice, host_secret)
     outstanding = {
         command["command_id"]
-        for command in (
-            standing.json().get("commands", []) if standing.status_code == 200 else []
-        )
-        if command.get("kind") == "START_RUN"
+        for command in _start_runs(await _poll(alice, host_secret), besides=set())
     }
 
     conversation = await alice.starts_a_conversation(in_pod=pod, with_agent=agent["name"])
@@ -175,19 +171,13 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
     )
 
     try:
-        # The claim: whatever else a poll carries, the run reaches this host as
-        # ONE START_RUN command — and after acknowledging it, never again.
+        # The claim: whatever else a link is handed, the run reaches this host as
+        # ONE START_RUN command.
 
         async def first_claim():
-            answer = await _poll(alice, host_secret)
-            if answer.status_code != 200:
-                return None
-            commands = [
-                c
-                for c in answer.json().get("commands", [])
-                if c.get("kind") == "START_RUN" and c.get("command_id") not in outstanding
-            ]
-            return commands or None
+            return (
+                _start_runs(await _poll(alice, host_secret), besides=outstanding) or None
+            )
 
         commands = await eventually(
             first_claim,
@@ -210,13 +200,7 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
         [claim] = commands
         assert claim["payload"]["workspace_cwd"] == saved_cwd
         for _ in range(2):
-            answer = await _poll(alice, host_secret)
-            assert answer.status_code == 200, answer.text[:300]
-            offers = [
-                c
-                for c in answer.json().get("commands", [])
-                if c.get("kind") == "START_RUN" and c.get("command_id") not in outstanding
-            ]
+            offers = _start_runs(await _poll(alice, host_secret), besides=outstanding)
             assert len(offers) <= 1, (
                 f"a single handout carried {len(offers)} START_RUN commands "
                 f"for one run: {[c['command_id'] for c in offers]}"

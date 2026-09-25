@@ -1,18 +1,19 @@
-"""The HTTP surface a paired computer actually speaks, over real HTTP.
+"""The link a paired computer actually speaks, over a real WebSocket.
 
-Every other Agent Host test drives repositories and services directly, so no
-test had ever issued a request to `/agent-host/*`. Three bugs shipped behind
-that gap, each hiding the next:
+Every other Agent Host test drives repositories and services directly. These
+open ``/agent-host/link`` through the whole application -- middleware, the
+global auth gate, the router -- because that is where the bugs of the HTTP
+routes it replaced hid:
 
 * the global `verify_auth` dependency has an allowlist and `/agent-host` was not
-  on it, so every one of these routes 401'd - a paired computer has no user
-  session and never will;
-* `pairings/complete` is the one route whose credential *is* its body, and
-  nothing checked that it works without a session;
-* the idle poll called `asyncio.wait_for(anext(...))`, whose timeout cancels and
-  closes the async generator, so the second idle round raised
-  StopAsyncIteration and 500'd - every host went OFFLINE five seconds after
-  connecting.
+  on it, so every host route 401'd -- a paired computer has no user session and
+  never will;
+* pairing is the one exchange whose credential *is* its body, and nothing
+  checked that it works without a session;
+* the idle wait called `asyncio.wait_for(anext(...))`, whose timeout cancels and
+  closes the async generator, so the second idle round failed and every host
+  went OFFLINE five seconds after connecting. The link's push loop waits the
+  same way, and an idle link is exercised here across several floor ticks.
 
 These use `async_client` (no session) deliberately. Reaching for
 `authenticated_client` here would re-hide exactly what needs proving.
@@ -26,13 +27,13 @@ import pytest
 from fastapi import status
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.api.controllers import agent_host_controller
 from app.modules.agent.domain.agent_host import (
     AgentHostCommandKind,
     AgentHostCommandState,
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
+from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
@@ -42,11 +43,16 @@ from app.modules.agent.infrastructure.agent_host.session_memory import (
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
+from app.modules.agent.services import agent_host_link_session, agent_host_link_store
 from app.modules.agent.tests.e2e.agent_host_helpers import (
+    HostLink,
+    app_of,
+    connected_host,
     conversation_with_a_leased_run,
     hello,
     pair,
     paired_machine,
+    publish_harnesses,
     stale_after,
 )
 
@@ -105,16 +111,12 @@ async def test_re_pairing_the_same_machine_updates_it_instead_of_duplicating(
     assert len(matching) == 1
     assert matching[0]["display_name"] == "e2e renamed"
 
-    poll_body = {
-        "hello": machine,
-        "capacity": {"max_runs": 1, "active_runs": 0, "available_runs": 1},
-    }
-    stale = await async_client.post(
-        "/agent-host/poll",
-        json=poll_body,
-        headers={"Authorization": f"Bearer {first['host_secret']}"},
-    )
-    assert stale.status_code == status.HTTP_401_UNAUTHORIZED
+    stale = await HostLink(app_of(async_client), secret=first["host_secret"]).open()
+    try:
+        stale.send("hello", {"hello": machine})
+        assert await stale.closed() == 4401
+    finally:
+        await stale.aclose()
 
 
 @pytest.mark.asyncio
@@ -129,108 +131,192 @@ async def test_a_pairing_code_is_single_use(authenticated_client, async_client):
         "hello": hello(),
     }
 
-    first = await async_client.post("/agent-host/pairings/complete", json=body)
-    assert first.status_code == status.HTTP_200_OK, first.text
+    first = await HostLink(app_of(async_client), secret=None).open()
+    try:
+        paired = await first.request("pair", body)
+        assert paired["type"] == "paired", paired
+    finally:
+        await first.aclose()
 
-    replayed = await async_client.post("/agent-host/pairings/complete", json=body)
-    assert replayed.status_code != status.HTTP_200_OK
-    assert first.json()["host_secret"] not in replayed.text
+    replayed = await HostLink(app_of(async_client), secret=None).open()
+    try:
+        refused = await replayed.request("pair", body)
+        assert refused["type"] == "error"
+        assert refused["body"]["code"] == "UNAUTHORIZED"
+        assert paired["body"]["host_secret"] not in str(refused)
+        assert await replayed.closed() == 4403
+    finally:
+        await replayed.aclose()
 
 
 @pytest.mark.asyncio
-async def test_the_colon_spelling_still_reaches_the_same_handler(
+async def test_the_http_device_routes_only_refuse(async_client):
+    """No fallback: a host that still speaks HTTP is told to update, nothing more.
+
+    Through the whole app and without a session, because a protocol-2 host has
+    none: a 401 from the global gate would read to it as retryable, and to the
+    MCP bridge as "try again", which is the opposite of the point.
+    """
+    conversation = uuid4()
+    for method, path in [
+        ("POST", "/agent-host/events/append"),
+        ("POST", "/agent-host/events:append"),
+        ("POST", "/agent-host/pairings/complete"),
+        ("POST", "/agent-host/pairings:complete"),
+        ("PUT", "/agent-host/harnesses"),
+        ("POST", "/agent-host/revoke"),
+        ("POST", f"/agent-runtime/conversations/{conversation}/mcp"),
+        ("DELETE", f"/agent-runtime/conversations/{conversation}/mcp"),
+        ("GET", f"/agent-runtime/conversations/{conversation}/interactions/call-1"),
+    ]:
+        response = await async_client.request(
+            method,
+            path,
+            json={} if method != "GET" else None,
+            headers={"Authorization": "Bearer some-old-host-secret"},
+        )
+        assert response.status_code == status.HTTP_410_GONE, (path, response.text)
+        assert response.json()["detail"]["code"] == "AGENT_HOST_UPGRADE_REQUIRED"
+
+    # None of them is on the published API surface.
+    schema = (await async_client.get("/openapi.json")).json()
+    assert not [
+        path
+        for path in schema["paths"]
+        if path.startswith(("/agent-host/", "/agent-runtime/conversations"))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_protocol_2_poll_marks_the_host_as_needing_an_update(
     authenticated_client, async_client
 ):
-    """An already-paired host keeps working after the slash rename.
+    """The one old route whose answer the old host acts on, and what the
+    person then sees; the new host reconnecting over the link clears it."""
+    paired = await pair(authenticated_client, async_client, display_name="e2e old")
 
-    `:complete` and `:append` were the shipped spelling, and the desktop app
-    has no auto-updater — an installed host keeps calling whatever it was built
-    with. Both spellings are the same function, so this asserts routing, not
-    behaviour: reaching the handler at all is the whole claim.
-    """
-    minted = await authenticated_client.post(
-        "/me/runtime/agent-host-pairings",
-        json={"display_name": "e2e legacy path", "organization_id": None},
-    )
-    paired = await async_client.post(
-        "/agent-host/pairings:complete",
-        json={
-            "pairing_code": minted.json()["pairing_code"],
-            "display_name": "e2e legacy path",
-            "hello": hello(),
-        },
-    )
-    assert paired.status_code == status.HTTP_200_OK, paired.text
+    for _ in range(2):  # the second changes nothing, and logs nothing
+        polled = await async_client.post(
+            "/agent-host/poll",
+            json={"hello": {**paired["hello"], "protocol_version": 2}},
+            headers={"Authorization": f"Bearer {paired['host_secret']}"},
+        )
+        assert polled.status_code == status.HTTP_200_OK, polled.text
+        assert polled.json() == {
+            "protocol_version": 3,
+            "host_status": "UPGRADE_REQUIRED",
+            "commands": [],
+            "poll_after_ms": 30_000,
+        }
 
-    # The events route is host-authenticated, so an unauthenticated call must
-    # be rejected by the handler rather than by the router. A 404 would mean
-    # the alias is not registered at all, which is the failure this guards.
-    appended = await async_client.post("/agent-host/events:append", json={})
-    assert appended.status_code != status.HTTP_404_NOT_FOUND, appended.text
+    hosts = (await authenticated_client.get("/me/runtime/agent-hosts")).json()
+    [host] = [item for item in hosts["items"] if item["id"] == paired["host_id"]]
+    assert host["status"] == "UPGRADE_REQUIRED"
+
+    # An unknown secret learns nothing it could not already guess.
+    stranger = await async_client.post(
+        "/agent-host/poll", json={}, headers={"Authorization": "Bearer nobody"}
+    )
+    assert stranger.json() == polled.json()
+
+    link = await connected_host(app_of(async_client), paired)
+    try:
+        hosts = (await authenticated_client.get("/me/runtime/agent-hosts")).json()
+        [host] = [item for item in hosts["items"] if item["id"] == paired["host_id"]]
+        assert host["status"] == "ONLINE"
+    finally:
+        await link.aclose()
 
 
 @pytest.mark.asyncio
-async def test_the_host_polls_with_its_secret_and_survives_an_idle_round(
+async def test_an_idle_link_stays_up_across_several_floor_ticks(
     authenticated_client, async_client, monkeypatch
 ):
-    """A poll that finds no work must stay a 200 across several idle rounds.
+    """An idle link must survive the rounds that used to kill the poll.
 
-    The idle wait is shortened so this exercises more than one round in about a
-    second; at the shipped 5s/25s it would take half a minute to reach the
-    round that used to fail.
+    The push floor is shortened so this crosses several idle rounds in well
+    under a second; at the shipped 5 seconds it would take half a minute.
     """
-    monkeypatch.setattr(agent_host_controller, "_IDLE_REPOLL_SECONDS", 0.2)
-    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 1.0)
-
-    paired = await pair(authenticated_client, async_client, display_name="e2e poller")
-    headers = {"Authorization": f"Bearer {paired['host_secret']}"}
-    poll_body = {
-        "hello": paired["hello"],
-        "capacity": {"max_runs": 1, "active_runs": 0, "available_runs": 1},
-    }
-
-    polled = await async_client.post(
-        "/agent-host/poll", json=poll_body, headers=headers
-    )
-    assert polled.status_code == status.HTTP_200_OK, polled.text
-    assert polled.json()["commands"] == []
-
-    # Polling again is what the host does forever; it must not degrade.
-    again = await async_client.post("/agent-host/poll", json=poll_body, headers=headers)
-    assert again.status_code == status.HTTP_200_OK, again.text
+    monkeypatch.setattr(agent_host_link_session, "PUSH_FLOOR_SECONDS", 0.1)
+    paired = await pair(authenticated_client, async_client, display_name="e2e idle")
+    link = await connected_host(app_of(async_client), paired)
+    try:
+        await asyncio.sleep(0.6)
+        answer = await link.request("control", {})
+        assert answer["type"] == "control_ok", answer
+        assert answer["body"] == {"commands": [], "refused": []}
+        assert link.close_code is None
+    finally:
+        await link.aclose()
 
 
 @pytest.mark.asyncio
-async def test_polling_refuses_an_unknown_or_revoked_secret(
+async def test_the_link_refuses_an_unknown_missing_or_revoked_secret(
     authenticated_client, async_client
 ):
     paired = await pair(authenticated_client, async_client, display_name="e2e revoked")
-    poll_body = {
-        "hello": paired["hello"],
-        "capacity": {"max_runs": 1, "active_runs": 0, "available_runs": 1},
-    }
+    app = app_of(async_client)
 
-    unknown = await async_client.post(
-        "/agent-host/poll",
-        json=poll_body,
-        headers={"Authorization": "Bearer not-a-real-host-secret"},
-    )
-    assert unknown.status_code == status.HTTP_401_UNAUTHORIZED
-
-    missing = await async_client.post("/agent-host/poll", json=poll_body)
-    assert missing.status_code == status.HTTP_401_UNAUTHORIZED
+    for secret, code in [("not-a-real-host-secret", 4401), (None, 4403)]:
+        link = await HostLink(app, secret=secret).open()
+        try:
+            link.send("hello", {"hello": paired["hello"]})
+            assert await link.closed() == code
+        finally:
+            await link.aclose()
 
     revoked = await authenticated_client.delete(
         f"/me/runtime/agent-hosts/{paired['host_id']}"
     )
     assert revoked.status_code == status.HTTP_200_OK, revoked.text
 
-    after = await async_client.post(
-        "/agent-host/poll",
-        json=poll_body,
-        headers={"Authorization": f"Bearer {paired['host_secret']}"},
-    )
-    assert after.status_code == status.HTTP_401_UNAUTHORIZED
+    after = await HostLink(app, secret=paired["host_secret"]).open()
+    try:
+        after.send("hello", {"hello": paired["hello"]})
+        assert await after.closed() == 4401
+        assert after.close_reason == "AGENT_HOST_REVOKED_OR_MISSING"
+    finally:
+        await after.aclose()
+
+
+@pytest.mark.asyncio
+async def test_revoking_a_host_closes_the_link_it_already_has(
+    authenticated_client, async_client
+):
+    """The secret dies at commit; the socket that authenticated before then
+    has to be told, or it keeps working until the host next reconnects."""
+    paired = await pair(authenticated_client, async_client, display_name="e2e live")
+    link = await connected_host(app_of(async_client), paired)
+    try:
+        revoked = await authenticated_client.delete(
+            f"/me/runtime/agent-hosts/{paired['host_id']}"
+        )
+        assert revoked.status_code == status.HTTP_200_OK, revoked.text
+        assert await link.closed() == 4401
+    finally:
+        await link.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_newer_link_for_the_same_host_supersedes_the_older(
+    authenticated_client, async_client
+):
+    """A network drop can leave a half-open socket on some replica; the host's
+    reconnect must win, so commands go out on one socket at a time."""
+    paired = await pair(authenticated_client, async_client, display_name="e2e twice")
+    app = app_of(async_client)
+    older = await connected_host(app, paired)
+    newer = None
+    try:
+        await asyncio.sleep(0.2)  # let the older link's subscription settle
+        newer = await connected_host(app, paired)
+        assert await older.closed() == 4409
+        answer = await newer.request("control", {})
+        assert answer["type"] == "control_ok", answer
+    finally:
+        await older.aclose()
+        if newer is not None:
+            await newer.aclose()
 
 
 @pytest.mark.asyncio
@@ -239,27 +325,24 @@ async def test_a_paired_host_publishes_the_harnesses_the_workspace_can_use(
 ):
     """Publishing is what turns a paired machine into pickable chat models."""
     paired = await pair(authenticated_client, async_client, display_name="e2e agents")
-    headers = {"Authorization": f"Bearer {paired['host_secret']}"}
 
-    published = await async_client.put(
-        "/agent-host/harnesses",
-        json={
-            "harnesses": [
-                {
-                    "harness_key": "opencode",
-                    "display_name": "OpenCode",
-                    "adapter_version": "1.0.0",
-                    "upstream_version": "0.1.0",
-                    "health": "READY",
-                    "config_revision": "rev-1",
-                    "config_options": [],
-                    "stale_after": stale_after(),
-                }
-            ]
-        },
-        headers=headers,
+    published = await publish_harnesses(
+        async_client,
+        paired,
+        [
+            {
+                "harness_key": "opencode",
+                "display_name": "OpenCode",
+                "adapter_version": "1.0.0",
+                "upstream_version": "0.1.0",
+                "health": "READY",
+                "config_revision": "rev-1",
+                "config_options": [],
+                "stale_after": stale_after(),
+            }
+        ],
     )
-    assert published.status_code == status.HTTP_200_OK, published.text
+    assert published["type"] == "harnesses_ok", published
 
     harnesses = await authenticated_client.get(
         f"/me/runtime/agent-hosts/{paired['host_id']}/harnesses"
@@ -404,54 +487,13 @@ def _capacity(available: int, *, max_runs: int = 2) -> dict:
     }
 
 
-async def _elapsed_poll(async_client, machine, *, capacity: dict, **body) -> tuple:
-    """One poll, and how long the server held it."""
-    started = asyncio.get_running_loop().time()
-    response = await async_client.post(
-        "/agent-host/poll",
-        json={"hello": machine["hello"], "capacity": capacity, **body},
-        headers={"Authorization": f"Bearer {machine['host_secret']}"},
-    )
-    assert response.status_code == status.HTTP_200_OK, response.text
-    return response.json(), asyncio.get_running_loop().time() - started
-
-
 @pytest.mark.asyncio
-async def test_a_saturated_host_waits_instead_of_being_told_to_come_straight_back(
-    db_session, scenario, monkeypatch
-):
-    """A host with no free slot used to be answered instantly with a zero
-    backoff, so it re-polled at round-trip speed for as long as it stayed busy —
-    and a machine left draining did it indefinitely. It has to wait like any
-    other idle host; a poke is what wakes it when a cancel arrives."""
-    monkeypatch.setattr(agent_host_controller, "_IDLE_REPOLL_SECONDS", 0.2)
-    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.8)
-    await scenario.create_org_with_pod(name_prefix="Saturated")
-    machine = await paired_machine(scenario)
+async def test_a_checkpoint_on_the_link_renews_the_lease(db_session, scenario):
+    """``control`` is the heartbeat, and its checkpoint is the lease renewal.
 
-    body, elapsed = await _elapsed_poll(
-        scenario.async_client, machine, capacity=_capacity(0)
-    )
-
-    assert body["commands"] == []
-    assert body["poll_after_ms"] == 0
-    assert elapsed >= 0.7, "a saturated host was answered instantly and would spin"
-
-
-@pytest.mark.asyncio
-async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
-    db_session, scenario, monkeypatch
-):
-    """A non-terminal checkpoint *is* the lease heartbeat, so the host resends
-    it every poll for the life of the run. Treating that as a control update
-    meant a busy host never long-polled once: it round-tripped at 1Hz for the
-    whole run, rewriting a lease row and a conversation-metadata row each time.
-
-    The first checkpoint really does advance the run and is answered promptly;
-    the identical second one must be allowed to wait.
+    A run's lease lapses in 90 seconds; a host whose checkpoints did not land
+    would see its runs reconciled away from under it while still working.
     """
-    monkeypatch.setattr(agent_host_controller, "_IDLE_REPOLL_SECONDS", 0.2)
-    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.8)
     await scenario.create_org_with_pod(name_prefix="Heartbeat")
     machine = await paired_machine(scenario)
     _, run_id = await conversation_with_a_leased_run(
@@ -461,61 +503,71 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
         harness_id=machine["harness_id"],
     )
     await db_session.commit()
-    heartbeat = {
-        "checkpoints": [
+    link = await connected_host(
+        app_of(scenario.async_client), machine, capacity=_capacity(1)
+    )
+    try:
+        answer = await link.request(
+            "control",
             {
-                "run_id": str(run_id),
-                "lease_epoch": 1,
-                "state": AgentHostRunState.RUNNING.value,
-                "detail": {"provider_session_id": "rollout-7"},
-            }
-        ]
-    }
+                "capacity": _capacity(1),
+                "checkpoints": [
+                    {
+                        "run_id": str(run_id),
+                        "lease_epoch": 1,
+                        "state": AgentHostRunState.RUNNING.value,
+                        "detail": {"provider_session_id": "rollout-7"},
+                    },
+                    {"run_id": str(run_id), "lease_epoch": 0, "state": "RUNNING"},
+                ],
+            },
+        )
+    finally:
+        await link.aclose()
 
-    # One throwaway poll first, with the hold turned right down so it costs
-    # only what it warms.
-    #
-    # The first poll of this test pays some one-off cost the later ones do not,
-    # and it lands on the call whose whole point is to return without holding --
-    # so the ceiling below was reading that cost rather than the hold it names:
-    # 14ms on a warm laptop, 790ms on a cold CI runner, against a ceiling of
-    # 700. The second poll came back in 803ms, which is the 800ms hold and
-    # almost nothing else, so whatever the cost is it is paid once per test and
-    # not per request.
-    #
-    # Deliberately not named here. It is not the secret check -- that is one
-    # sha256 and one indexed lookup -- and guessing in a comment is how the
-    # wrong cause gets believed by the next person to read it. Establishing
-    # which one-off it is would mean instrumenting the first pass on a cold
-    # runner; moving it off the measured call fixes the test either way.
-    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.05)
-    await _elapsed_poll(scenario.async_client, machine, capacity=_capacity(1))
-    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.8)
+    assert answer["type"] == "control_ok", answer
+    assert [(r["kind"], r["index"]) for r in answer["body"]["refused"]] == [
+        ("checkpoint", 1)
+    ]
+    lease = await AgentHostDispatchRepository(
+        SqlAlchemyUnitOfWork(db_session)
+    ).get_run_lease(run_id=run_id)
+    await db_session.refresh(lease)
+    assert lease.state == AgentHostRunState.RUNNING.value
 
-    advanced, advanced_elapsed = await _elapsed_poll(
-        scenario.async_client, machine, capacity=_capacity(1), **heartbeat
-    )
-    repeated, repeated_elapsed = await _elapsed_poll(
-        scenario.async_client, machine, capacity=_capacity(1), **heartbeat
-    )
 
-    # The two readings below are not symmetric, and knowing why is what stops
-    # the fragile-looking one being deleted the next time it flakes.
-    #
-    # `poll_after_ms` is the server's own account of which branch it took: it is
-    # non-zero only when a control update changed something, which is the same
-    # condition that returns without entering the idle wait. So for the advance
-    # it is already proof, and the clock below is a latency guard rather than
-    # the evidence. For the repeat there is no such proxy -- that branch answers
-    # 0 when it merely has commands to hand back -- so only the duration can
-    # show it actually waited, and that assertion is load-bearing.
-    assert advanced["poll_after_ms"] > 0
-    assert repeated["poll_after_ms"] == 0
-    assert repeated_elapsed >= 0.7, "a repeated heartbeat kept cutting the poll short"
-    assert advanced_elapsed < 0.7, (
-        "a real state advance should answer promptly rather than hold: "
-        f"{advanced_elapsed:.3f}s"
+@pytest.mark.asyncio
+async def test_a_queued_command_is_pushed_when_the_host_is_poked(
+    db_session, scenario, monkeypatch
+):
+    """A cancel must not wait for the next heartbeat, or even the floor."""
+    monkeypatch.setattr(agent_host_link_session, "PUSH_FLOOR_SECONDS", 60.0)
+    await scenario.create_org_with_pod(name_prefix="Pushed")
+    machine = await paired_machine(scenario)
+    _, run_id = await conversation_with_a_leased_run(
+        db_session,
+        scenario,
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
     )
+    await db_session.commit()
+    link = await connected_host(
+        app_of(scenario.async_client), machine, capacity=_capacity(1)
+    )
+    try:
+        await asyncio.sleep(0.2)  # the push loop subscribes after welcome
+        cancel = await AgentHostDispatchRepository(
+            SqlAlchemyUnitOfWork(db_session)
+        ).enqueue_cancel(run_id=run_id)
+        await db_session.commit()
+        await poke_host(machine["host_id"])
+
+        pushed = await link.next_push(timeout=10)
+    finally:
+        await link.aclose()
+
+    assert pushed["type"] == "commands", pushed
+    assert str(cancel.id) in {c["command_id"] for c in pushed["body"]["commands"]}
 
 
 @pytest.mark.asyncio
@@ -526,7 +578,7 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
     for is skipped *after* it has consumed a row of that limit. Enough queued
     starts therefore buried every CANCEL_RUN behind them — at exactly the moment
     cancelling matters most, because the host is saturated."""
-    monkeypatch.setattr(agent_host_controller, "_MAX_COMMANDS_PER_POLL", 3)
+    monkeypatch.setattr(agent_host_link_store, "MAX_COMMANDS_PER_READ", 3)
     await scenario.create_org_with_pod(name_prefix="Starved")
     machine = await paired_machine(scenario)
     conversation_id, run_id = await conversation_with_a_leased_run(
@@ -575,10 +627,16 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
     )
     await db_session.commit()
 
-    body, _ = await _elapsed_poll(scenario.async_client, machine, capacity=_capacity(0))
+    link = await connected_host(
+        app_of(scenario.async_client), machine, capacity=_capacity(0)
+    )
+    try:
+        answer = await link.request("control", {"capacity": _capacity(0)})
+    finally:
+        await link.aclose()
 
     assert AgentHostCommandKind.CANCEL_RUN.value in {
-        command["kind"] for command in body["commands"]
+        command["kind"] for command in answer["body"]["commands"]
     }
 
 
@@ -605,34 +663,62 @@ async def test_a_second_cancel_for_the_same_lease_is_not_queued(db_session, scen
 
 
 @pytest.mark.asyncio
-async def test_concurrent_idle_polls_all_return(
-    authenticated_client, async_client, monkeypatch
+async def test_two_machines_linked_at_once_both_answer(
+    authenticated_client, async_client
 ):
     """Two machines idling at once is the normal state of a workspace."""
-    monkeypatch.setattr(agent_host_controller, "_IDLE_REPOLL_SECONDS", 0.2)
-    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 1.0)
-
     first = await pair(authenticated_client, async_client, display_name="e2e a")
     second = await pair(authenticated_client, async_client, display_name="e2e b")
-    responses = await asyncio.gather(
-        *(
-            async_client.post(
-                "/agent-host/poll",
-                json={
-                    "hello": host["hello"],
-                    "capacity": {
-                        "max_runs": 1,
-                        "active_runs": 0,
-                        "available_runs": 1,
-                    },
-                },
-                headers={"Authorization": f"Bearer {host['host_secret']}"},
-            )
-            for host in (first, second)
-        )
-    )
+    app = app_of(async_client)
+    links = [await connected_host(app, host) for host in (first, second)]
+    try:
+        answers = await asyncio.gather(*(link.request("control", {}) for link in links))
+    finally:
+        for link in links:
+            await link.aclose()
 
-    assert [response.status_code for response in responses] == [
-        status.HTTP_200_OK,
-        status.HTTP_200_OK,
-    ]
+    assert [answer["type"] for answer in answers] == ["control_ok", "control_ok"]
+
+
+@pytest.mark.asyncio
+async def test_events_are_acknowledged_and_a_gap_is_named(db_session, scenario):
+    await scenario.create_org_with_pod(name_prefix="Events")
+    machine = await paired_machine(scenario)
+    _, run_id = await conversation_with_a_leased_run(
+        db_session,
+        scenario,
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+    )
+    await db_session.commit()
+
+    def batch(*sequences: int) -> dict:
+        return {
+            "events": [
+                {
+                    "run_id": str(run_id),
+                    "lease_epoch": 1,
+                    "sequence": sequence,
+                    "type": "agent_message_chunk",
+                    "payload": {"text": "hi"},
+                }
+                for sequence in sequences
+            ]
+        }
+
+    link = await connected_host(app_of(scenario.async_client), machine)
+    try:
+        acked = await link.request("events", batch(1, 2))
+        gap = await link.request("events", batch(5))
+        stale = await link.request(
+            "events", {"events": [{**batch(3)["events"][0], "lease_epoch": 2}]}
+        )
+    finally:
+        await link.aclose()
+        await AgentHostDispatchRepository(
+            SqlAlchemyUnitOfWork(db_session)
+        ).delete_run_events(run_id=run_id)
+
+    assert acked["body"]["ack"]["acked_through"] == 2
+    assert gap["body"]["code"] == "SEQUENCE_GAP"
+    assert stale["body"]["code"] == "STALE_LEASE"
