@@ -10522,6 +10522,343 @@
           "type": "object",
           "additionalProperties": true
         }
+      },
+      {
+        "name": "send_message",
+        "description": "Send an email, with attachments from the pod. Takes to, subject, text or html, and attachments as pod file references -- no MIME to build.",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "POST",
+          "server_url": "https://gmail.googleapis.com",
+          "path_params": [
+            "userId"
+          ],
+          "query_params": [],
+          "header_params": [],
+          "response": {
+            "binary": false
+          },
+          "path_param_defaults": {
+            "userId": "me"
+          },
+          "default_headers": {
+            "User-Agent": "lemma-connectors"
+          },
+          "path": "/gmail/v1/users/{userId}/messages/send",
+          "request_body": {
+            "content_type": "application/json",
+            "encoding": "rfc822",
+            "raw_field": "raw",
+            "thread_field": "threadId"
+          }
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "send_message",
+          "properties": {
+            "to": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "Recipient address, or a list."
+            },
+            "cc": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "Cc address, or a list."
+            },
+            "bcc": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "Bcc address, or a list."
+            },
+            "reply_to": {
+              "type": "string",
+              "description": "Reply-To address."
+            },
+            "subject": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string",
+              "description": "Plain-text body."
+            },
+            "html": {
+              "type": "string",
+              "description": "HTML body. With `text` as well, both are sent and the recipient's client picks one."
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "x-lemma-file": true,
+                "type": "object",
+                "description": "A file to attach. Pass a file reference: {\"pod_path\": \"/me/report.pdf\"} for a file in the pod, {\"file_id\": \"<pod file id>\"}, {\"url\": \"https://...\"}, or {\"base64\": \"...\", \"filename\": \"report.pdf\"} for small inline content.",
+                "properties": {
+                  "pod_path": {
+                    "type": "string",
+                    "description": "Path of a file in the pod, e.g. /me/report.pdf."
+                  },
+                  "file_id": {
+                    "type": "string",
+                    "description": "Id of a pod file."
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "A public https URL."
+                  },
+                  "base64": {
+                    "type": "string",
+                    "description": "Base64-encoded bytes."
+                  },
+                  "filename": {
+                    "type": "string",
+                    "description": "Name to send the file under. Defaults to the pod file's own name."
+                  },
+                  "media_type": {
+                    "type": "string",
+                    "description": "MIME type, when the name does not imply it."
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "pod_path"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "file_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "url"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "base64"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              },
+              "description": "Files to attach, each a pod file reference."
+            },
+            "thread_id": {
+              "type": "string",
+              "description": "Gmail thread id, to send this as a reply in that thread."
+            },
+            "in_reply_to": {
+              "type": "string",
+              "description": "Message-ID header of the message being replied to, so the recipient's client threads it too."
+            },
+            "userId": {
+              "type": "string",
+              "description": "The mailbox; `me` for the connected account."
+            }
+          },
+          "required": [
+            "to"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "create_draft",
+        "description": "Save an email as a draft, with attachments from the pod. Same fields as send_message.",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "POST",
+          "server_url": "https://gmail.googleapis.com",
+          "path_params": [
+            "userId"
+          ],
+          "query_params": [],
+          "header_params": [],
+          "response": {
+            "binary": false
+          },
+          "path_param_defaults": {
+            "userId": "me"
+          },
+          "default_headers": {
+            "User-Agent": "lemma-connectors"
+          },
+          "path": "/gmail/v1/users/{userId}/drafts",
+          "request_body": {
+            "content_type": "application/json",
+            "encoding": "rfc822",
+            "raw_field": "raw",
+            "envelope": "message",
+            "thread_field": "threadId"
+          }
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "create_draft",
+          "properties": {
+            "to": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "Recipient address, or a list."
+            },
+            "cc": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "Cc address, or a list."
+            },
+            "bcc": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "Bcc address, or a list."
+            },
+            "reply_to": {
+              "type": "string",
+              "description": "Reply-To address."
+            },
+            "subject": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string",
+              "description": "Plain-text body."
+            },
+            "html": {
+              "type": "string",
+              "description": "HTML body. With `text` as well, both are sent and the recipient's client picks one."
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "x-lemma-file": true,
+                "type": "object",
+                "description": "A file to attach. Pass a file reference: {\"pod_path\": \"/me/report.pdf\"} for a file in the pod, {\"file_id\": \"<pod file id>\"}, {\"url\": \"https://...\"}, or {\"base64\": \"...\", \"filename\": \"report.pdf\"} for small inline content.",
+                "properties": {
+                  "pod_path": {
+                    "type": "string",
+                    "description": "Path of a file in the pod, e.g. /me/report.pdf."
+                  },
+                  "file_id": {
+                    "type": "string",
+                    "description": "Id of a pod file."
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "A public https URL."
+                  },
+                  "base64": {
+                    "type": "string",
+                    "description": "Base64-encoded bytes."
+                  },
+                  "filename": {
+                    "type": "string",
+                    "description": "Name to send the file under. Defaults to the pod file's own name."
+                  },
+                  "media_type": {
+                    "type": "string",
+                    "description": "MIME type, when the name does not imply it."
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "pod_path"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "file_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "url"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "base64"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              },
+              "description": "Files to attach, each a pod file reference."
+            },
+            "thread_id": {
+              "type": "string",
+              "description": "Gmail thread id, to send this as a reply in that thread."
+            },
+            "in_reply_to": {
+              "type": "string",
+              "description": "Message-ID header of the message being replied to, so the recipient's client threads it too."
+            },
+            "userId": {
+              "type": "string",
+              "description": "The mailbox; `me` for the connected account."
+            }
+          },
+          "required": [
+            "to"
+          ],
+          "additionalProperties": false
+        }
       }
     ]
   },

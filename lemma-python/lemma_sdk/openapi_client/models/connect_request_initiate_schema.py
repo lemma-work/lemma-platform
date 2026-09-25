@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.connect_request_initiate_schema_connection_fields_type_0 import (
+        ConnectRequestInitiateSchemaConnectionFieldsType0,
+    )
+
 
 T = TypeVar("T", bound="ConnectRequestInitiateSchema")
 
@@ -18,17 +24,27 @@ class ConnectRequestInitiateSchema:
 
     Attributes:
         auth_config_id (None | Unset | UUID): Auth config ID to connect
+        connection_fields (ConnectRequestInitiateSchemaConnectionFieldsType0 | None | Unset): Per-connection values the
+            sign-in itself does not carry, such as Shopify's store `subdomain`. Validated against the connector kind's
+            `config_schema`; omit for connectors that declare none.
         connector_id (None | str | Unset): Connector ID to connect
         return_to (None | str | Unset): Path inside the app to come back to when the flow finishes. Only a rooted path
             is accepted; anything else is ignored.
     """
 
     auth_config_id: None | Unset | UUID = UNSET
+    connection_fields: (
+        ConnectRequestInitiateSchemaConnectionFieldsType0 | None | Unset
+    ) = UNSET
     connector_id: None | str | Unset = UNSET
     return_to: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.connect_request_initiate_schema_connection_fields_type_0 import (
+            ConnectRequestInitiateSchemaConnectionFieldsType0,
+        )
+
         auth_config_id: None | str | Unset
         if isinstance(self.auth_config_id, Unset):
             auth_config_id = UNSET
@@ -36,6 +52,16 @@ class ConnectRequestInitiateSchema:
             auth_config_id = str(self.auth_config_id)
         else:
             auth_config_id = self.auth_config_id
+
+        connection_fields: dict[str, Any] | None | Unset
+        if isinstance(self.connection_fields, Unset):
+            connection_fields = UNSET
+        elif isinstance(
+            self.connection_fields, ConnectRequestInitiateSchemaConnectionFieldsType0
+        ):
+            connection_fields = self.connection_fields.to_dict()
+        else:
+            connection_fields = self.connection_fields
 
         connector_id: None | str | Unset
         if isinstance(self.connector_id, Unset):
@@ -54,6 +80,8 @@ class ConnectRequestInitiateSchema:
         field_dict.update({})
         if auth_config_id is not UNSET:
             field_dict["auth_config_id"] = auth_config_id
+        if connection_fields is not UNSET:
+            field_dict["connection_fields"] = connection_fields
         if connector_id is not UNSET:
             field_dict["connector_id"] = connector_id
         if return_to is not UNSET:
@@ -63,6 +91,10 @@ class ConnectRequestInitiateSchema:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.connect_request_initiate_schema_connection_fields_type_0 import (
+            ConnectRequestInitiateSchemaConnectionFieldsType0,
+        )
+
         d = dict(src_dict)
 
         def _parse_auth_config_id(data: object) -> None | Unset | UUID:
@@ -81,6 +113,29 @@ class ConnectRequestInitiateSchema:
             return cast(None | Unset | UUID, data)
 
         auth_config_id = _parse_auth_config_id(d.pop("auth_config_id", UNSET))
+
+        def _parse_connection_fields(
+            data: object,
+        ) -> ConnectRequestInitiateSchemaConnectionFieldsType0 | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                connection_fields_type_0 = (
+                    ConnectRequestInitiateSchemaConnectionFieldsType0.from_dict(data)
+                )
+
+                return connection_fields_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(
+                ConnectRequestInitiateSchemaConnectionFieldsType0 | None | Unset, data
+            )
+
+        connection_fields = _parse_connection_fields(d.pop("connection_fields", UNSET))
 
         def _parse_connector_id(data: object) -> None | str | Unset:
             if data is None:
@@ -102,6 +157,7 @@ class ConnectRequestInitiateSchema:
 
         connect_request_initiate_schema = cls(
             auth_config_id=auth_config_id,
+            connection_fields=connection_fields,
             connector_id=connector_id,
             return_to=return_to,
         )

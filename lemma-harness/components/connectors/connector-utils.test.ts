@@ -6,6 +6,7 @@ import {
     canConnectWithDefaults,
     describeConnectorError,
     describeInstallTarget,
+    getConnectionFieldsSchema,
     getCredentialSchema,
     getKindDescription,
     getKindLabel,
@@ -521,5 +522,31 @@ describe('how an install says it is connected', () => {
     it('answers for no install at all', () => {
         expect(installUsesOAuth(null, mcpKind as KindSpec)).toBe(false);
         expect(installUsesOAuth(undefined, null)).toBe(false);
+    });
+});
+
+describe('getConnectionFieldsSchema', () => {
+    const storeName = {
+        type: 'object',
+        required: ['subdomain'],
+        properties: { subdomain: { type: 'string' } },
+    };
+
+    it('asks for the store before a Shopify sign-in', () => {
+        const shopify = { ...composioUnmanagedKind, config_schema: storeName } as KindSpec;
+        expect(getConnectionFieldsSchema(shopify)).toEqual(storeName);
+    });
+
+    it('asks nothing for an OAuth toolkit that declares no fields', () => {
+        expect(getConnectionFieldsSchema(composioOAuthKind as KindSpec)).toBeNull();
+    });
+
+    it('leaves an API-key toolkit to the credential form', () => {
+        const apiKey = {
+            kind: ConnectorKind.COMPOSIO,
+            auth_scheme: AuthScheme.API_KEY,
+            config_schema: storeName,
+        } as KindSpec;
+        expect(getConnectionFieldsSchema(apiKey)).toBeNull();
     });
 });

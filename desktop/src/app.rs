@@ -81,13 +81,11 @@ pub(crate) fn run() {
             agent_host_ui::agent_host_pair,
             agent_host_ui::agent_host_refresh,
             agent_host_ui::agent_host_open_log,
-            operator_settings::apply_operator_config,
             operator_settings::discover_provider_models,
             operator_settings::configure_ai_provider,
             operator_settings::sharing_action,
             operator_settings::close_local_settings,
             prompts::confirm_destructive_action,
-            prompts::confirm_settings_changes,
             prompts::resolve_confirmation,
             diagnostics::open_developer_tools,
             local_recovery::local_recovery_options,
@@ -97,7 +95,11 @@ pub(crate) fn run() {
             local_recovery::reset_full_reinstall,
             local_recovery::restart_into_recovery,
             app_update::check_for_app_update,
-            app_update::install_app_update
+            app_update::install_app_update,
+            workspace_settings::local_settings_snapshot,
+            workspace_settings::apply_local_settings,
+            workspace_settings::local_sharing,
+            workspace_settings::set_start_at_login
         ])
         .setup(move |app| setup(app, &mode, recovery_launch))
         .on_window_event(on_window_event)

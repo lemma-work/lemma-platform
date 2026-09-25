@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 from uuid import UUID
@@ -15,7 +16,9 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.identity.domain.email import normalize_identity_email
+from app.modules.identity.domain.errors import SignupNotAllowedError
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.services.signup_gate import get_signup_gate
 from app.modules.identity.infrastructure.supertokens_auth.provider_profile import (
     names_from_provider,
 )
@@ -40,8 +43,31 @@ from app.modules.identity.infrastructure.identity_lease import identity_lease
 logger = get_logger(__name__)
 
 
+#: See `AdmitSignup` in `override_email_password_apis`; the same gate, because
+#: an OAuth provider is just another way to arrive at the sign-up page.
+AdmitSignup = Callable[[str], Awaitable[object]]
+
+
+async def _admit_signup(email: str) -> object:
+    return await get_signup_gate().admit(email)
+
+
+async def _signup_refusal(
+    admit_signup: AdmitSignup, email: str, *, linking: bool, known: bool
+) -> SignInUpNotAllowed | None:
+    if linking or known:
+        return None
+    try:
+        await admit_signup(email)
+    except SignupNotAllowedError as refused:
+        return SignInUpNotAllowed(refused.message)
+    return None
+
+
 def override_thirdparty_functions(
     original_implementation: RecipeInterface,
+    *,
+    admit_signup: AdmitSignup = _admit_signup,
 ) -> RecipeInterface:
     original_sign_in_up = original_implementation.sign_in_up
 
@@ -85,6 +111,19 @@ def override_thirdparty_functions(
                 users, email
             ):
                 return SignInUpNotAllowed(get_emailpassword_conflict_reason())
+
+            # A sign-*up* is the case where neither Lemma nor SuperTokens knows
+            # this person yet. Anyone already here signs in regardless of the
+            # mode -- closing signup must not lock existing members out -- and
+            # a call carrying a session is linking an account, not creating one.
+            refusal = await _signup_refusal(
+                admit_signup,
+                email,
+                linking=session is not None,
+                known=local_user is not None or has_matching_thirdparty_user,
+            )
+            if refusal is not None:
+                return refusal
 
             result = await original_sign_in_up(
                 third_party_id,

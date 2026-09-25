@@ -540,9 +540,29 @@ pub(crate) async fn prepare_runtime(window: Webview, app: AppHandle) -> Result<(
 /// child process freezes the window for its whole duration -- which is how a
 /// first launch showed a black, unresponsive app for minutes while the runtime
 /// installed and the daemon came up.
-pub(crate) async fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
-    require_control_window(&window)?;
-    tauri::async_runtime::spawn_blocking(move || repair_runtime_impl(app))
-        .await
-        .map_err(|error| error.to_string())?
+pub(crate) async fn repair_runtime(window: Webview, app: AppHandle) -> Result<bool, String> {
+    require_settings_caller(&window, &app)?;
+    // Local settings asks before calling. The workspace does not get to: the
+    // repair stops the stack that is serving it, so the question is the
+    // shell's, asked natively, and a page cannot skip it.
+    let ask = !is_control_window_label(window.label());
+    tauri::async_runtime::spawn_blocking(move || {
+        if ask
+            && !confirm_destructive_action_impl(
+                app.clone(),
+                "Verify and repair Lemma?".into(),
+                format!(
+                    "Lemma stops for a moment while it checks its signed runtime files on \
+                     {THIS_COMPUTER} and replaces any that are damaged. Your pods, files and \
+                     accounts are not touched."
+                ),
+                "Verify & repair".into(),
+            )?
+        {
+            return Ok(false);
+        }
+        repair_runtime_impl(app).map(|()| true)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }

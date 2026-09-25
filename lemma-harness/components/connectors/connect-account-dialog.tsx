@@ -8,14 +8,18 @@ import { buildSchemaFormPayload, buildSchemaFormValues } from 'lemma-sdk';
 import { toast } from 'sonner';
 import type { Connector } from '@/lib/types';
 import { SchemaFields } from './schema-fields';
-import { getAppLabel, getCredentialSchema, type ConnectorKindSpec, type SchemaValues } from './connector-utils';
+import {
+    getAppLabel, getConnectionFieldsSchema, getCredentialSchema, type ConnectorKindSpec, type SchemaValues,
+} from './connector-utils';
 import { StepLoader } from '@/components/brand/loader';
 
 export interface CredentialTarget {
     connector: Connector;
     capability: ConnectorKindSpec | null;
     authConfigId: string | null;
-    mode: 'connect' | 'reconnect';
+    /** `authorize` asks only what a browser sign-in needs first, then hands
+     *  the answers to the sign-in rather than creating an account. */
+    mode: 'connect' | 'reconnect' | 'authorize';
     accountId?: string;
 }
 
@@ -30,7 +34,10 @@ export function ConnectAccountDialog({
     onOpenChange: (open: boolean) => void;
     onSubmit: (data: Record<string, unknown>) => void;
 }) {
-    const schema = getCredentialSchema(target?.capability ?? null);
+    const isAuthorize = target?.mode === 'authorize';
+    const schema = isAuthorize
+        ? getConnectionFieldsSchema(target?.capability ?? null)
+        : getCredentialSchema(target?.capability ?? null);
     const [values, setValues] = useState<SchemaValues>({});
 
     // Reset the form whenever the dialog opens for a different app / mode.
@@ -58,7 +65,9 @@ export function ConnectAccountDialog({
                 <DialogHeader>
                     <DialogTitle>{isReconnect ? 'Reconnect account' : 'Connect account'}</DialogTitle>
                     <DialogDescription>
-                        Enter the credentials for {getAppLabel(target?.connector)}. Fields come from the connector credential schema.
+                        {isAuthorize
+                            ? `${getAppLabel(target?.connector)} needs to know which account you mean before you sign in.`
+                            : `Enter the credentials for ${getAppLabel(target?.connector)}. Fields come from the connector credential schema.`}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -87,7 +96,7 @@ export function ConnectAccountDialog({
                     </Button>
                     <Button variant="primary" onClick={handleSubmit} disabled={isSubmitting}>
                         {isSubmitting ? <StepLoader size="sm" className="mr-2" /> : null}
-                        {isReconnect ? 'Reconnect' : 'Connect'}
+                        {isReconnect ? 'Reconnect' : isAuthorize ? 'Continue to sign in' : 'Connect'}
                     </Button>
                 </DialogFooter>
             </DialogContent>

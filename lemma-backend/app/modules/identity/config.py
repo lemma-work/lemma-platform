@@ -170,6 +170,45 @@ class IdentitySettings(BaseSettings):
         default=None,
         description="Registered Telegram OIDC callback URL",
     )
+    # What kind of installation this is, as opposed to `ENVIRONMENT`, which is
+    # how it is run. The two had to be separated because `ENVIRONMENT=local` is
+    # shared by a developer's `make dev` stack, the load-test compose file and
+    # Lemma Desktop, and only one of those is a single person's computer that a
+    # tunnel may put on the internet. What follows from "this is somebody's own
+    # installation" -- the invite-only signup default -- keys off this, so a
+    # dev stack that creates a hundred users per test run is not suddenly
+    # refusing the second one.
+    deployment_kind: Literal["server", "desktop"] = Field(
+        default="server",
+        description=(
+            "``desktop`` for a Lemma Desktop installation, ``server`` for hosted "
+            "and self-hosted deployments. Desktop defaults SIGNUP_MODE to "
+            "invite_only. Set by the Desktop host pack; nothing else needs to. "
+            "Env: ``DEPLOYMENT_KIND``."
+        ),
+    )
+    signup_mode: Optional[Literal["open", "invite_only", "closed"]] = Field(
+        default=None,
+        description=(
+            "Who may create an account. ``open``: anyone who reaches the sign-up "
+            "page. ``invite_only``: only an address holding a pending "
+            "organization invitation. ``closed``: nobody. Applies to every path "
+            "that creates a user -- email/password, OAuth, and email-code "
+            "sign-in. Unset means ``invite_only`` on a Desktop installation and "
+            "``open`` everywhere else. Whatever the mode, the first account on a "
+            "deployment with no accounts at all is admitted, because there is "
+            "nobody yet who could have invited it. Env: ``SIGNUP_MODE``."
+        ),
+    )
+
+    def is_desktop_installation(self) -> bool:
+        return self.deployment_kind == "desktop"
+
+    def effective_signup_mode(self) -> Literal["open", "invite_only", "closed"]:
+        if self.signup_mode is not None:
+            return self.signup_mode
+        return "invite_only" if self.is_desktop_installation() else "open"
+
     # datastore query/document-processing/kreuzberg/pdf/signed-url config moved to
     # app/modules/datastore/config.py (datastore_database_url stays here — infra).
     user_cache_ttl_seconds: int = Field(
@@ -183,7 +222,7 @@ class IdentitySettings(BaseSettings):
     # the migration desktop is making (v0.7.0 rendered SESSION_COOKIE_DOMAIN=""
     # and main renders `.lemma.localhost`). Folding blank to None would turn the
     # one setting that fixes that install into no setting at all.
-    @field_validator("session_cookie_domain", mode="before")
+    @field_validator("session_cookie_domain", "signup_mode", mode="before")
     @classmethod
     def _blank_optional_string_as_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():

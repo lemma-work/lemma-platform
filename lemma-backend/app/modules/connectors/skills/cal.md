@@ -9,31 +9,31 @@ Cal lets individuals and teams create shareable booking pages, sync external cal
 ### Check calendar availability
 When you need to see free/busy slots for a calendar before offering times.
 ```
-lemma connectors operations execute cal CAL_CHECK_CALENDAR_VERSION2 --json '{"payload": {"calendar": "google"}}'
+lemma connectors operations execute cal CAL_CHECK_CALENDAR_VERSION2 -d '{"payload": {"calendar": "google"}}'
 ```
 
 ### Add an attendee to an existing booking
 When an extra participant needs to join a scheduled event without creating a new booking.
 ```
-lemma connectors operations execute cal CAL_ADD_ATTENDEE --json '{"payload": {"name": "Jane Doe", "email": "jane.doe@example.com", "timeZone": "America/Chicago", "bookingId": 482}}'
+lemma connectors operations execute cal CAL_ADD_ATTENDEE -d '{"payload": {"name": "Jane Doe", "email": "anukul@lemma.work", "timeZone": "America/Chicago", "bookingId": 482}}'
 ```
 
 ### Cancel a booking via UID
 When a meeting is no longer needed and you have the booking’s unique identifier.
 ```
-lemma connectors operations execute cal CAL_CANCEL_BOOKING_VIA_UID --json '{"payload": {"bookingUid": "ckz4q9f8r0000p0mn8y6e4t9s", "cancellationReason": "Schedule conflict"}}'
+lemma connectors operations execute cal CAL_CANCEL_BOOKING_VIA_UID -d '{"payload": {"bookingUid": "ckz4q9f8r0000p0mn8y6e4t9s", "cancellationReason": "Schedule conflict"}}'
 ```
 
 ### Confirm a booking by UID
 When a tentative booking needs to be finalized and locked in.
 ```
-lemma connectors operations execute cal CAL_CONFIRM_BOOKING_BY_UID --json '{"payload": {"bookingUid": "ckz4q9f8r0000p0mn8y6e4t9s"}}'
+lemma connectors operations execute cal CAL_CONFIRM_BOOKING_BY_UID -d '{"payload": {"bookingUid": "ckz4q9f8r0000p0mn8y6e4t9s"}}'
 ```
 
 ### Connect a Google, Apple, or Office 365 calendar
 When syncing a personal or work calendar to Cal.com so that booked events automatically appear there.
 ```
-lemma connectors operations execute cal CAL_CONNECT_TO_CALENDAR --json '{"payload": {"calendar": "google"}}'
+lemma connectors operations execute cal CAL_CONNECT_TO_CALENDAR -d '{"payload": {"calendar": "google"}}'
 ```
 
 ## Tips

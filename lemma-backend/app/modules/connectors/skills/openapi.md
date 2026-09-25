@@ -54,3 +54,8 @@ lemma connectors run acme-api <OPERATION> -d '{"payload": {}}'
 - **Private, loopback and link-local addresses are refused** — including
   `169.254.169.254`. An internal API has to be reachable from Lemma.
 - The config schema is closed: an unknown key is rejected, not stored.
+- **File uploads take pod files.** A `multipart/form-data` or binary body field
+  takes `{"pod_path": "/me/report.pdf"}` (or `{"file_id": ...}`), read with the
+  caller's own access and sent as a proper part, with its name and content type.
+  From the CLI: `--attach body.file=/me/report.pdf`. A binary *response* lands in
+  the pod when large, or at `output_path`.

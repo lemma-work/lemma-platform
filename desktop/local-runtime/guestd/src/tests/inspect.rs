@@ -285,3 +285,28 @@ fn an_unreadable_apps_label_falls_back_instead_of_failing_the_snapshot() {
         assert_eq!(snapshot["status"]["apps"]["runtime"]["port"], 8080);
     }
 }
+
+/// The grants a container was made with are read back off its labels, and a
+/// container from before the label had the alias.
+#[test]
+fn a_snapshot_reports_the_grants_its_container_was_made_with() {
+    let mut value: Value = serde_json::from_str(&inspect()).unwrap();
+    let before_the_label = snapshot_from_inspect_with(
+        "box-1",
+        value[0].as_object().unwrap(),
+        "192.168.64.2",
+        &refused,
+    )
+    .unwrap();
+    assert_eq!(before_the_label["grants"], json!({"host_access": true}));
+
+    value[0]["Config"]["Labels"]["lemma.work/host-access"] = json!("false");
+    let narrowed = snapshot_from_inspect_with(
+        "box-1",
+        value[0].as_object().unwrap(),
+        "192.168.64.2",
+        &refused,
+    )
+    .unwrap();
+    assert_eq!(narrowed["grants"], json!({"host_access": false}));
+}

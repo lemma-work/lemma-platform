@@ -190,30 +190,28 @@ rather than degrading in a way that only shows up as confused users.
 
 ## Desktop settings
 
-### PS-OPS-040 — Desktop settings keep drafts until a deliberate decision
+### PS-OPS-040 — This computer's settings keep drafts until saved or discarded
 **Status:** manual
 
-- While a person edits Desktop settings, the system shall preserve their draft
-  during health refreshes and navigation between settings sections.
-- When a person leaves Desktop settings with unsaved changes, the system shall
-  offer Save changes, Discard, and Cancel in an app-owned confirmation.
-- When that confirmation opens, the system shall focus Cancel.
-- When a person presses Escape, the system shall preserve the draft and return
-  focus to the settings navigation action.
-- When a person chooses Save changes, the system shall save each changed section
-  before leaving settings.
-- If a section cannot be saved, the system shall retain its draft and display
-  the failure without closing settings.
-- While an admitted save is unfinished, the system shall keep settings open.
-- When a person chooses Discard, the system shall leave settings without saving
-  their remaining drafts.
+- While a person edits a form in Settings → This Mac, the system shall preserve
+  their draft during health refreshes, while they move between settings
+  sections, and after they close Settings, until the page is reloaded.
+- While a form holds unsaved changes, the system shall say so on that form and
+  keep it open.
+- When a person chooses Save, the system shall save that form alone and report
+  the outcome on it.
+- If a form cannot be saved, the system shall retain its draft and display the
+  failure on that form.
+- When a person chooses Discard changes, the system shall restore that form to
+  the saved values.
+- The system shall never display a stored credential; it shall show only that
+  one is saved, and remove one only when the person asks to.
 
-> **Verified by:** installed-app QA on each supported platform: edit multiple
-> sections, wait for health refresh, exercise each decision with mouse and
-> keyboard, and attempt an invalid provider save. Check native accessibility
-> for all three controls and confirm saved values after reopening settings.
-> Executable desktop browser and daemon tests cover the deterministic state
-> transitions; they do not replace the native window/IPC check.
+> **Verified by:** installed-app QA on each supported platform: edit two
+> forms, wait for a health refresh, move to another section and back, close
+> and reopen Settings, save one with an invalid value, then discard the other.
+> Confirm saved values after reopening. `lemma-frontend/tests/this-mac.test.ts`
+> covers what a save sends; it does not replace the native window/IPC check.
 
 **Contracts:** *(native desktop IPC; see [Desktop architecture](../../architecture/desktop.md))*
 

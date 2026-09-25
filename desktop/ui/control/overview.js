@@ -1,4 +1,4 @@
-// The Overview and Runtime pages, and the panels they share.
+// The Overview page, and the panels Diagnostics and This computer share with it.
 
 import {
   $,
@@ -11,14 +11,12 @@ import {
   summaryHtml,
   toast,
 } from "./core.js";
-import { exposureCopy, modeLabel, renderSharing } from "./sharing.js";
+import { exposureCopy, modeLabel, renderSharingControls } from "./sharing.js";
 
 export function render() {
-  if (!store.snapshot?.operator) return;
-  const readiness = store.snapshot.operator.readiness;
+  if (!store.snapshot) return;
   const services = store.snapshot.services || [];
   const appReady = Boolean(store.snapshot.state?.ready) && services.length > 0 && services.every((service) => service.running);
-  const aiReady = readiness.ai === "ready";
   const runtimeReady = Boolean(store.snapshot.managed_runtime);
   const sharing = store.snapshot.sharing || {};
   const sharingMode = sharing.mode || "this_computer";
@@ -29,10 +27,6 @@ export function render() {
   const channel = store.appUpdate && store.appUpdate.channel !== "stable" ? ` · ${store.appUpdate.channel}` : "";
   $("release").textContent = `Release ${store.snapshot.release || "development"}${channel}`;
   $("metric-app").textContent = appReady ? "Healthy" : store.state?.running ? "Starting" : "Stopped";
-  $("metric-ai").textContent = aiReady ? "Ready" : "Not configured";
-  $("metric-ai-detail").textContent = aiReady
-    ? `${store.snapshot.operator.config.ai.default_model || "Provider configured"}`
-    : "Use an installed coding agent, or configure an API provider or local model server.";
   $("metric-exposure").textContent = modeLabel(sharingMode);
   $("metric-exposure-detail").textContent = exposureCopy(sharingMode);
 
@@ -44,15 +38,10 @@ export function render() {
     pill.textContent = store.snapshot.agent_host?.running ? "Agent Host running" : "Agent Host stopped";
     pill.className = `state-pill ${store.snapshot.agent_host?.running ? "ok" : "warn"}`;
   }
-  setDot("ai", aiReady ? "ok" : "warn");
-  setDot("sharing", sharing.phase === "error" ? "bad" : sharingMode === "this_computer" ? "ok" : "warn");
-  setDot("integrations", readiness.integrations === "configured" ? "ok" : "");
-  setDot("channels", readiness.surfaces === "configured" ? "ok" : "");
-  setDot("runtime", appReady ? "ok" : "warn");
 
   const attention = [];
-  if (!appReady) attention.push({ title: "Application services need attention", copy: "Review the runtime state and reconcile services.", page: "runtime" });
-  if (sharing.last_error) attention.push({ title: "Sharing needs attention", copy: sharing.last_error, page: "sharing" });
+  if (!appReady) attention.push({ title: "Application services need attention", copy: "Reconcile or restart them below, or open Recovery.", page: "recovery" });
+  if (sharing.last_error) attention.push({ title: "Sharing needs attention", copy: sharing.last_error, page: "overview" });
   const banner = $("attention-banner");
   banner.hidden = attention.length === 0;
   if (attention.length) {
@@ -62,13 +51,14 @@ export function render() {
   }
   $("overview-attention").innerHTML = attention.length
     ? attention.map((item) => summaryHtml(item.title, item.copy, "Review", item.page)).join("")
-    : summaryHtml("Nothing urgent", "Application health checks passed. Agent setup is available in your workspace.", "Good", "");
+    : summaryHtml("Nothing urgent", "Application health checks passed. Settings for this computer are in Lemma: Settings → This Mac.", "Good", "");
   $("overview-exposure").innerHTML = summaryHtml(
     modeLabel(sharingMode),
     sharing.canonical_url || store.snapshot.state?.url || "Local address unavailable",
     sharingMode === "this_computer" ? "Private" : "Active",
-    "sharing",
+    "",
   );
+  renderSharingControls(sharing);
 
   const processHtml = services.map((service) => serviceHtml(
     service.id,
@@ -80,9 +70,7 @@ export function render() {
   const capabilityHtml = embeddings
     ? serviceHtml("Semantic search", embeddings.detail || "Optional local embeddings", embeddings.status, embeddings.status === "ready" ? "ok" : embeddings.status === "degraded" ? "bad" : "")
     : "";
-  const allServices = processHtml + capabilityHtml || "<p class=\"hint\">No application processes are running.</p>";
-  $("overview-services").innerHTML = allServices;
-  $("service-list").innerHTML = allServices;
+  $("overview-services").innerHTML = processHtml + capabilityHtml || "<p class=\"hint\">No application processes are running.</p>";
 
   $("diag-paths").textContent = store.snapshot.paths
     ? `Control  ${store.snapshot.paths.locald}\nLogs     ${store.snapshot.paths.logs}`
@@ -91,10 +79,8 @@ export function render() {
   const apiUrl = store.snapshot.state?.api_url || store.state?.api_url;
   if (workspaceUrl && apiUrl) {
     $("network-contract").innerHTML = `Main UI<br><code>${escapeHtml(workspaceUrl)}</code><br><br>API<br><code>${escapeHtml(apiUrl)}</code><br><br>Private services<br><code>loopback only · never proxied</code>`;
-    $("connector-callback").textContent = `${apiUrl.replace(/\/$/, "")}/api/v1/connectors/oauth/callback`;
   }
   renderAgentHost(store.snapshot.agent_host || {});
-  renderSharing(sharing);
 }
 
 // The anonymous install-health switch.
@@ -175,46 +161,4 @@ export function renderAgentHost(agentHost) {
     detail = targets[0]?.last_error || agentHost.last_error || "Trying to reach the workspace.";
   }
   $("agent-host-status").innerHTML = serviceHtml("Lemma Agent Host", detail, status, tone);
-}
-
-/**
- * What the sandbox panel says, and whether the download is worth offering.
- *
- * `not-prepared` is the only state where the button does something useful:
- * `ready` has nothing left to fetch, `downloading` is already doing it, and
- * `unsupported` means there is no guest that could hold an image at all.
- */
-function sandboxImageWording(imageState) {
-  if (imageState === "ready") {
-    return { text: "Downloaded. Pods can run code, shells and browsers on this computer.", offer: false };
-  }
-  if (imageState === "downloading") {
-    return { text: "Downloading…", offer: false };
-  }
-  if (imageState === "failed") {
-    return { text: "The last download did not finish. The first task in a pod will fetch it, or try again here.", offer: true };
-  }
-  if (imageState === "unsupported") {
-    return { text: "This installation runs no private runtime, so there is no sandbox image to download.", offer: false };
-  }
-  if (imageState === "not-prepared") {
-    return { text: "Not downloaded. Coding agents run natively and do not need it; download it to run pod code, shells and browsers here.", offer: true };
-  }
-  return { text: "Checking…", offer: false };
-}
-
-export function renderSandboxImage(status) {
-  const label = $("sandbox-image-state");
-  const detail = $("sandbox-image-detail");
-  const button = document.querySelector('[data-action="prepare-sandbox-image"]');
-  if (!label || !button) return;
-  const imageState = status?.state || "";
-  const wording = sandboxImageWording(imageState);
-  label.textContent = wording.text;
-  if (detail) {
-    detail.textContent = status?.detail || "";
-    detail.hidden = !status?.detail;
-  }
-  button.disabled = !wording.offer;
-  button.textContent = imageState === "failed" ? "Try the download again" : "Download sandbox image";
 }

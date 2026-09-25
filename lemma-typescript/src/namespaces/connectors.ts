@@ -25,6 +25,9 @@ type ConnectRequestInput = string | ConnectRequestInitiateSchema;
 type OperationScope = {
   organizationId: string;
   authConfigName: string;
+  /** Where `{ pod_path }` and `{ file_id }` file arguments resolve, and where a
+   *  file result lands. Implied inside a pod; name it from outside one. */
+  podId?: string;
 };
 type EnableAppOptions = Omit<AuthConfigCreateSchema, "connector_id" | "config"> & {
   config?: Record<string, unknown> | null;
@@ -79,7 +82,11 @@ export class ConnectorsNamespace {
       ));
     },
     execute: (scope: OperationScope, operationName: string, payload: Record<string, unknown>, accountId?: string) => {
-      const body: OperationExecutionRequest = { payload, account_id: accountId };
+      const body: OperationExecutionRequest = {
+        payload,
+        account_id: accountId,
+        ...(scope.podId ? { pod_id: scope.podId } : {}),
+      };
       return this.client.request(() => ConnectorsService.connectorOperationExecute(
         scope.organizationId,
         scope.authConfigName,

@@ -11,7 +11,11 @@ T = TypeVar("T", bound="OperationExecutionRequestPayload")
 
 @_attrs_define
 class OperationExecutionRequestPayload:
-    """ """
+    """The operation's arguments. A file argument takes a reference -- `{"pod_path": "/me/report.pdf"}`, `{"file_id":
+    "..."}`, `{"url": "https://..."}` or `{"base64": "...", "filename": "..."}` -- read with the caller's own access
+    before the call is made. `output_path` chooses where a file result lands in the pod.
+
+    """
 
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
