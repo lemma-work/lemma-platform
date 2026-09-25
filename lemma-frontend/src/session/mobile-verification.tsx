@@ -25,7 +25,7 @@ import {
  *  button and the QR a few pixels above belongs to a different number.
  */
 
-function Countdown({ seconds }: { seconds: number }) {
+export function Countdown({ seconds }: { seconds: number }) {
     return (
         /* No live region. It reticks every second, and a polite region around
            a clock reads the panel out sixty times a minute. */
@@ -44,7 +44,7 @@ function Countdown({ seconds }: { seconds: number }) {
  *  quietly refuse those. The two values are the light palette's own `--paper`
  *  and `--ink`, so it is still this app's white and this app's black — just
  *  not the ones this screen happens to be using. */
-function Code({ url }: { url: string }) {
+export function Code({ url }: { url: string }) {
     return (
         <div className="verify__qr">
             <div className="verify__qr-paper">
@@ -78,9 +78,11 @@ function CopyMessage({ state, onCopy }: { state: CopyState; onCopy: () => void }
     );
 }
 
-function OpenWhatsApp({ url }: { url: string }) {
+/** `quiet` where something else on the screen is the primary action — the
+ *  first-profile dialog, whose Continue must not have a twin. */
+export function OpenWhatsApp({ url, quiet = false }: { url: string; quiet?: boolean }) {
     return (
-        <a className="btn btn--primary" href={url} target="_blank" rel="noreferrer">
+        <a className={quiet ? "btn" : "btn btn--primary"} href={url} target="_blank" rel="noreferrer">
             Open WhatsApp <ExternalIcon size={13} />
         </a>
     );
