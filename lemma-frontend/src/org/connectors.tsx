@@ -282,11 +282,13 @@ function ConnectorCard({
     const [rotating, setRotating] = useState<ConnectorAccount | null>(null);
 
     const start = useMutation({
-        mutationFn: (installId: string | null) => source.startAccount(
-            orgId, connector.id, installId ?? undefined,
-            /* Back to this panel, whichever way the tab comes home. */
-            completionPath(hereWith({ settings: "connectors" })),
-        ),
+        mutationFn: ({ installId, connectionFields }: { installId: string | null; connectionFields?: Record<string, unknown> }) =>
+            source.startAccount(
+                orgId, connector.id, installId ?? undefined,
+                /* Back to this panel, whichever way the tab comes home. */
+                completionPath(hereWith({ settings: "connectors" })),
+                connectionFields,
+            ),
         onSuccess: (started) => {
             setConnecting(undefined);
             if (!started.authorizeUrl) {
@@ -334,8 +336,8 @@ function ConnectorCard({
                 orgId={orgId}
                 onGone={onChanged}
                 onRotate={install && credentialed(install) ? () => setRotating(account) : undefined}
-                onReconnect={install && !credentialed(install) ? () => start.mutate(install.id) : undefined}
-                reconnecting={start.isPending && start.variables === install?.id}
+                onReconnect={install && !credentialed(install) ? () => start.mutate({ installId: install.id }) : undefined}
+                reconnecting={start.isPending && start.variables?.installId === install?.id}
             />
         );
     };
@@ -404,13 +406,13 @@ function ConnectorCard({
                                     addressed={addressed}
                                     manage={mayInstall !== false}
                                     needsSignIn={addressed && signIn}
-                                    signingIn={start.isPending && start.variables === install.id && connecting === undefined}
+                                    signingIn={start.isPending && start.variables?.installId === install.id && connecting === undefined}
                                     onConnect={
                                         /* An addressed install connects its
                                            one account when it is added; the
                                            only thing left to do is sign in. */
                                         addressed
-                                            ? signIn ? () => start.mutate(install.id) : undefined
+                                            ? signIn ? () => start.mutate({ installId: install.id }) : undefined
                                             : () => { setError(null); setConnecting(install); }
                                     }
                                     onChanged={onChanged}
@@ -441,7 +443,7 @@ function ConnectorCard({
                     authorizeFailure={error}
                     onClose={() => setConnecting(undefined)}
                     onDone={() => { setConnecting(undefined); onChanged(); }}
-                    onAuthorize={(installId) => start.mutate(installId)}
+                    onAuthorize={(installId, connectionFields) => start.mutate({ installId, connectionFields })}
                 />
             )}
             {rotating && (

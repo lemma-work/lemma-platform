@@ -845,7 +845,10 @@ export const liveSource: PodSource = {
         return String(made.id ?? "");
     },
 
-    async startAccount(orgId: string, connectorId: string, authConfigId?: string, returnTo?: string): Promise<AccountConnect> {
+    async startAccount(
+        orgId: string, connectorId: string, authConfigId?: string, returnTo?: string,
+        connectionFields?: Record<string, unknown>,
+    ): Promise<AccountConnect> {
         const client = lemma();
         /* Read what is already usable first. The callback lands on the
            provider's side, not ours, so the only way to recognise the account
@@ -893,6 +896,7 @@ export const liveSource: PodSource = {
                 /* Without it the callback ends on the app root, in the
                    provider's tab, with nothing to say what happened. */
                 return_to: returnTo,
+                ...(connectionFields ? { connection_fields: connectionFields } : {}),
             })) as { authorization_url?: string | null };
             return { authorizeUrl: request.authorization_url ?? "", before, authConfigId: installId };
         } catch (problem) {

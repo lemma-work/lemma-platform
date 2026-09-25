@@ -126,7 +126,7 @@ async def test_a_connector_failure_is_data_not_a_dead_run(monkeypatch):
         RunConnectorOperationRequest(
             auth_config="workspace-gmail",
             operation="gmail_send_email",
-            arguments={"recipient_email": "a@b.com"},
+            arguments={"recipient_email": "anukul@lemma.work"},
         ),
     )
 
@@ -215,8 +215,13 @@ async def test_the_provider_call_happens_after_the_database_scope_closes(monkeyp
                         return_value=SimpleNamespace(input_schema=None)
                     ),
                     resolve_execution_for_auth_config=AsyncMock(
-                        return_value=SimpleNamespace()
+                        return_value=SimpleNamespace(
+                            connector_id="gmail", input_schema=None, payload={}
+                        )
                     ),
+                ),
+                files=SimpleNamespace(
+                    prepare=AsyncMock(side_effect=lambda resolved: resolved)
                 ),
             )
         finally:
@@ -230,7 +235,7 @@ async def test_the_provider_call_happens_after_the_database_scope_closes(monkeyp
             async def _execute(resolved):  # noqa: ANN001 - test stub
                 del resolved
                 events.append("provider-call")
-                return {"ok": True}
+                return SimpleNamespace(result={"ok": True})
 
             yield SimpleNamespace(execute_resolved=_execute)
         finally:
@@ -249,3 +254,94 @@ async def test_the_provider_call_happens_after_the_database_scope_closes(monkeyp
     assert events.index("resolve-scope-closed") < events.index("provider-call"), (
         f"the provider was called with the resolve scope still open: {events}"
     )
+
+
+async def test_an_attachment_is_read_as_the_agent_and_output_path_stays_lemmas(
+    monkeypatch,
+):
+    """Sending a pod file through a connector, end to end through the tool.
+
+    Two things were wrong here. A pod path in the arguments reached the
+    provider as that literal dict -- nothing read the file -- and
+    `output_path` was copied into the provider's arguments, where Composio and
+    MCP received an argument they never declared.
+    """
+    from app.modules.connectors.domain.execution_plan import (
+        ResolvedConnectorExecution,
+    )
+    from app.modules.connectors.domain.file_input import MaterializedFile
+    from app.modules.connectors.services.files.operation_files import OperationFiles
+
+    upload_schema = {
+        "type": "object",
+        "properties": {
+            "file_to_upload": {
+                "type": "object",
+                "file_uploadable": True,
+                "properties": {"name": {}, "mimetype": {}, "s3key": {}},
+            }
+        },
+    }
+    reads: list[tuple] = []
+
+    class Pod:
+        async def read_bytes(self, *, pod_id, path, ctx):  # noqa: ANN001
+            reads.append((pod_id, path, ctx))
+            return b"%PDF", "application/pdf", "q3.pdf"
+
+    captured_kwargs: dict = {}
+
+    async def resolve(**kwargs):  # noqa: ANN003 - test stub
+        captured_kwargs.update(kwargs)
+        return ResolvedConnectorExecution(
+            connector_id="googledrive",
+            operation_execution_name="GOOGLEDRIVE_UPLOAD_FILE",
+            provider="composio",
+            third_party_credentials={},
+            payload=kwargs["payload"],
+            input_schema=upload_schema,
+        )
+
+    agent_ctx = object()
+    run_ctx = _run_ctx()
+    _patch_services(
+        monkeypatch,
+        SimpleNamespace(
+            ctx=agent_ctx,
+            files=OperationFiles(Pod(), pod_id=run_ctx.deps.pod_id, ctx=agent_ctx),
+            operations=SimpleNamespace(
+                get_operation_details_for_auth_config=AsyncMock(
+                    return_value=SimpleNamespace(input_schema=None)
+                ),
+                resolve_execution_for_auth_config=resolve,
+            ),
+        ),
+    )
+    sent: list = []
+
+    @asynccontextmanager
+    async def execution():
+        async def _execute(resolved):  # noqa: ANN001 - test stub
+            sent.append(resolved.payload)
+            return SimpleNamespace(result={"id": "drive-file"})
+
+        yield SimpleNamespace(execute_resolved=_execute)
+
+    monkeypatch.setattr(adapter, "connector_execution_only", execution)
+
+    await adapter.run_connector_operation(
+        run_ctx,
+        RunConnectorOperationRequest(
+            auth_config="drive",
+            operation="GOOGLEDRIVE_UPLOAD_FILE",
+            arguments={"file_to_upload": {"pod_path": "/me/q3.pdf"}},
+            output_path="/me/out.pdf",
+        ),
+    )
+
+    assert "output_path" not in captured_kwargs["payload"]
+    assert sent == [
+        {"file_to_upload": MaterializedFile(b"%PDF", "q3.pdf", "application/pdf")}
+    ]
+    # Read in the agent's own pod, under the agent's delegated context.
+    assert reads == [(run_ctx.deps.pod_id, "/me/q3.pdf", agent_ctx)]

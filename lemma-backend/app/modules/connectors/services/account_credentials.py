@@ -24,6 +24,7 @@ from typing import Any
 
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
 from app.modules.connectors.infrastructure.kinds._install_validation import (
+    validate_against_schema,
     validate_credentials,
 )
 
@@ -57,3 +58,38 @@ def validated_account_credentials(
             )
         return credentials
     return validate_credentials(spec, credentials or {})
+
+
+def validated_connection_fields(
+    connector: ConnectorEntity,
+    kind: ConnectorKind,
+    fields: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """The per-connection fields an OAuth connect needs besides the sign-in.
+
+    Signing in says who the person is, not which tenant they mean: Shopify's
+    OAuth mode needs the store's ``subdomain`` before Composio can even build
+    the authorization URL. Those fields are Composio's
+    ``connected_account_initiation`` group, which the catalog stores as the
+    Composio spec's ``auth_config_schema``.
+
+    Returns ``None`` when nothing is declared and nothing was sent, so the
+    provider call is unchanged for the toolkits that have no such field -- which
+    is nearly all of them. Sending fields a kind does not declare is refused
+    rather than dropped, because a silently ignored store name connects the
+    person to whichever store the provider picks.
+    """
+    if fields is not None and not isinstance(fields, dict):
+        from app.modules.connectors.domain.errors import ConnectorValidationError
+
+        raise ConnectorValidationError("Connection fields must be an object.")
+    spec = connector.spec_for(kind)
+    schema = (
+        getattr(spec, "auth_config_schema", None)
+        if kind == ConnectorKind.COMPOSIO
+        else None
+    )
+    if schema is None and not fields:
+        return None
+    validated = validate_against_schema(schema, fields, what="connection fields")
+    return validated or None

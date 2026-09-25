@@ -25,6 +25,7 @@ import httpx
 import httpx2
 from fastmcp.exceptions import FastMCPError, McpError, ToolError
 
+from app.modules.connectors.domain.file_input import MaterializedFile
 from app.modules.connectors.domain.results import BinaryContentResult
 
 from app.core.log.log import get_logger
@@ -88,6 +89,22 @@ def _is_transport_failure(exc: BaseException, *, depth: int = 0) -> bool:
         if nested is not None and _is_transport_failure(nested, depth=depth + 1):
             return True
     return False
+
+
+def _as_tool_arguments(value: Any) -> Any:
+    """Tool arguments are JSON, so a file read upstream travels as base64.
+
+    MCP has no file argument of its own; a server that takes one declares a
+    base64 string (``contentEncoding: base64``), which is the only file field
+    the upstream resolver recognises on an MCP tool.
+    """
+    if isinstance(value, MaterializedFile):
+        return value.as_base64()
+    if isinstance(value, dict):
+        return {key: _as_tool_arguments(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_as_tool_arguments(item) for item in value]
+    return value
 
 
 def _flatten_message(exc: BaseException) -> str:
@@ -296,7 +313,7 @@ class McpExecutor:
                 # classification below was unreachable code that a test calling
                 # `_map_result` directly certified as working.
                 result = await client.call_tool(
-                    tool_name, payload or {}, raise_on_error=False
+                    tool_name, _as_tool_arguments(payload or {}), raise_on_error=False
                 )
         except OperationExecutionValidationError, OperationExecutionInfrastructureError:
             raise

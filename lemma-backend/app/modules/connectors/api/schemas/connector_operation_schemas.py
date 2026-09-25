@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class OperationSummary(BaseModel):
@@ -33,6 +34,22 @@ class OperationDetail(BaseModel):
     description: Optional[str] = None
     input_schema: Dict[str, Any]
     output_schema: Optional[Dict[str, Any]] = None
+
+    @field_validator("input_schema")
+    @classmethod
+    def _files_as_callers_pass_them(
+        cls, schema: dict[str, object]
+    ) -> dict[str, object]:
+        """File arguments as a caller passes them -- a pod path, a file id --
+        not as each provider receives them. Composio's `{name, mimetype,
+        s3key}` in particular is something no caller can produce. Here rather
+        than in the service so every surface that describes an operation --
+        the API, the SDKs, the agent's tools -- shows the same thing."""
+        from app.modules.connectors.services.files.file_ref import (
+            present_input_schema,
+        )
+
+        return present_input_schema(schema)
 
 
 class OperationDiscoverResponse(BaseModel):
@@ -106,8 +123,24 @@ class OperationDetailsBatchResponse(BaseModel):
 
 
 class OperationExecutionRequest(BaseModel):
-    payload: Dict[str, Any]
+    payload: Dict[str, Any] = Field(
+        description=(
+            "The operation's arguments. A file argument takes a reference -- "
+            '`{"pod_path": "/me/report.pdf"}`, `{"file_id": "..."}`, '
+            '`{"url": "https://..."}` or `{"base64": "...", "filename": "..."}` '
+            "-- read with the caller's own access before the call is made. "
+            "`output_path` chooses where a file result lands in the pod."
+        )
+    )
     account_id: str | None = None
+    pod_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The pod that `pod_path` and `file_id` references resolve in, and "
+            "that file results land in. Implied for a call made from inside a "
+            "pod; name it when calling as a person from outside one."
+        ),
+    )
 
 
 class OperationExecutionResponse(BaseModel):

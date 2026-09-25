@@ -26,6 +26,8 @@ _NAME_TO_MODULE = {
     "LemmaServerError": "errors",
     "LemmaTimeoutError": "errors",
     "Pod": "pod",
+    "pod_file": "file_refs",
+    "pod_file_by_id": "file_refs",
     "POD_DEFAULT_AGENT_SELECTOR": "resources.conversations",
     "FunctionContext": "runtime",
     "FunctionInput": "types",
@@ -54,6 +56,7 @@ if TYPE_CHECKING:
         LemmaServerError,
         LemmaTimeoutError,
     )
+    from .file_refs import pod_file, pod_file_by_id
     from .pod import Pod
     from .resources.conversations import POD_DEFAULT_AGENT_SELECTOR
     from .runtime import FunctionContext
@@ -105,6 +108,8 @@ __all__ = [
     "Metadata",
     "Pod",
     "POD_DEFAULT_AGENT_SELECTOR",
+    "pod_file",
+    "pod_file_by_id",
     "RecordData",
     "refresh_cli_session",
 ]

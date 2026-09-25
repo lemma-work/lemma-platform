@@ -240,12 +240,13 @@ lemma connectors get twitter     # kinds[].system_default_available
 
 Two shapes, and the catalog picks whichever costs the org less:
 
-- **The toolkit also takes an API key** — Shopify, Meta Ads, PostHog, Metabase
+- **The toolkit also takes an API key** — Meta Ads, PostHog, Metabase
   and a dozen others. The entry reads `API_KEY`, `system_default_available:
   true`, and it connects like any other key app: nothing for the org to set up,
   a token pasted when someone connects their account.
 - **The toolkit is OAuth only** — Twitter, Spotify, TikTok, LinkedIn Ads, Google
-  Chat, Google Contacts, Google Forms. The entry reads
+  Chat, Google Contacts, Google Forms, and Shopify (whose API-key mode is
+  refused on purpose, since its tokens cannot be refreshed). The entry reads
   `system_default_available: false`, the UI offers *Set up* rather than
   *Connect*, and the install needs the app's own OAuth client:
 
@@ -260,6 +261,17 @@ The fields are **whatever that toolkit asks for** — read them off
 wants a third one beyond the client id and secret; most want only those two. A
 `--config-source SYSTEM_DEFAULT` install of one of these is refused, and says
 what to supply instead: there is nothing for it to default to.
+
+A few OAuth toolkits also need something **per connection** that signing in
+cannot supply: Shopify has to be told which store. Those fields are the
+kind's `config_schema`, and they go on the connect request:
+
+```bash
+lemma connectors connect-requests create shopify --field subdomain=acme
+```
+
+Leaving a required field out is refused with a 400 that names it, before
+anyone is sent to the provider.
 
 ### GitHub is a first-class connector, backed by a real App
 
@@ -301,7 +313,7 @@ lemma connectors operations details workspace-gmail gmail_send_email slack_chat_
 
 # 3. Execute — payload goes under "payload"; pin an account only when needed
 lemma connectors operations execute workspace-gmail gmail_send_email \
-  --data '{"payload": {"recipient_email": "a@b.com", "subject": "Hi", "body": "Test"}}'
+  --data '{"payload": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "Test"}}'
 
 lemma connectors operations execute workspace-gmail gmail_send_email \
   --account <account-id> --file payloads/send.json
@@ -381,6 +393,35 @@ pod.connectors.execute(
 - Agents granted the connector get an operation toolset automatically; agents with
   the `WORKSPACE_CLI` toolset can also run the `lemma connectors operations …`
   commands themselves.
+
+### Files in and out
+
+A file argument — an attachment, an upload — takes a **pod file reference**, on
+every connector kind. The backend reads it with the workload's own access and
+hands it to the provider in whatever form that provider wants (a Composio
+`s3key`, a multipart part, base64 for MCP):
+
+```python
+from lemma_sdk import pod_file
+
+pod.connectors.execute("workspace-gmail", "GMAIL_SEND_EMAIL", {
+    "recipient_email": data.to,
+    "subject": "Q3 report",
+    "body": "Attached.",
+    "attachment": pod_file("/shared/reports/q3.pdf"),   # {"pod_path": ...}
+})
+```
+
+- `pod_file_by_id(id)` names a file by id. Prefer it for a file the workload
+  did not create: `/me/...` resolves against whoever runs the function, and an
+  id means the same file for everyone.
+- Write the file with `pod.files` first. Nothing in a function's scratch space
+  is reachable by path.
+- A file **result** lands in the pod when it is large, or wherever
+  `output_path` in the payload says, and comes back as
+  `{"type": "pod_file", "pod_path": ...}`.
+- Native Gmail installs have `send_message` / `create_draft`, which take `to`,
+  `subject`, `text` and `attachments` and build the MIME themselves.
 
 ### Whose account: USER-owned vs a pinned shared account
 

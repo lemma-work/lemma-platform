@@ -484,3 +484,281 @@ async def test_composio_oauth_connect_and_reconnect_human(
         await _run_smoke_op(original_account_id)
     finally:
         _cleanup_user_accounts(fixed_test_user["id"])
+
+
+@pytest.mark.provider
+@pytest.mark.human
+@pytest.mark.timeout(900)
+@pytest.mark.asyncio
+async def test_shopify_connects_through_the_orgs_own_app_human(
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session,
+):
+    """Shopify end to end: the org's own app, the store name, one consent.
+
+    Two things Shopify needs that no other default toolkit does. Composio holds
+    no Shopify credentials, so the install carries the org's client id and
+    secret. And signing in does not say which store, so the connect request
+    carries the store's ``subdomain`` -- the field that had no way through to
+    Composio, which left Shopify impossible to connect at all.
+
+    Needs a Shopify Dev Dashboard app whose redirect URLs include
+    ``https://backend.composio.dev/api/v1/auth-apps/add``, and a store to
+    install it on::
+
+        RUN_HUMAN_OAUTH=1 SHOPIFY_CLIENT_ID=... SHOPIFY_CLIENT_SECRET=... \\
+        SHOPIFY_STORE=acme pytest -m "provider and human" -k shopify -s \\
+            app/modules/connectors/tests/e2e/test_composio_real_e2e.py
+    """
+    if not _human_oauth_enabled():
+        pytest.skip("Set RUN_HUMAN_OAUTH=1 to run the human-in-the-loop OAuth test.")
+    client_id = _env_value("SHOPIFY_CLIENT_ID") or _env_value(
+        "CONNECTOR_SHOPIFY_CLIENT_ID"
+    )
+    client_secret = _env_value("SHOPIFY_CLIENT_SECRET") or _env_value(
+        "CONNECTOR_SHOPIFY_CLIENT_SECRET"
+    )
+    store = _env_value("SHOPIFY_STORE")
+    if not (client_id and client_secret and store):
+        pytest.skip("Needs SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET and SHOPIFY_STORE.")
+    composio = _composio_client()
+
+    org_id = fixed_test_org["id"]
+    await _reseed_composio_app(db_session, "shopify")
+
+    install = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/auth-configs",
+        json={
+            "connector_id": "shopify",
+            "kind": "composio",
+            "config_source": "ORG_CUSTOM",
+            "name": f"shopify-{uuid4().hex[:8]}",
+            "config": {"client_id": client_id, "client_secret": client_secret},
+        },
+    )
+    assert install.status_code == 200, install.text
+    auth_config = install.json()
+    cr_url = f"/organizations/{org_id}/connectors/connect-requests"
+
+    try:
+        # Without the store there is nowhere to send anybody: refused up
+        # front, naming the field, before Composio is asked for anything.
+        missing = await authenticated_client.post(
+            cr_url, json={"auth_config_id": auth_config["id"]}
+        )
+        assert missing.status_code == 400, missing.text
+        assert "subdomain" in missing.text
+
+        resp = await authenticated_client.post(
+            cr_url,
+            json={
+                "auth_config_id": auth_config["id"],
+                "connection_fields": {"subdomain": store},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        row = await db_session.get(ConnectRequest, UUID(body["id"]))
+        assert row is not None
+        attributes = row.attributes or {}
+
+        print("\n\n=== HUMAN ACTION REQUIRED: install the app on your store ===")
+        print(body["authorization_url"])
+        try:
+            webbrowser.open(body["authorization_url"])
+        except Exception:
+            # No browser on this machine: the URL is printed above to open by hand.
+            pass
+
+        connection_id = attributes["provider_state"]
+        _wait_for_active_connection(composio, connection_id)
+        callback = await authenticated_client.get(
+            "/connectors/connect-requests/oauth/callback",
+            params={
+                "state": attributes["state"],
+                "connectedAccountId": connection_id,
+                "format": "json",
+            },
+        )
+        assert callback.status_code == 200, callback.text
+        account = callback.json()
+        assert account["status"] == AccountStatus.CONNECTED.value
+
+        shop = await authenticated_client.post(
+            f"/organizations/{org_id}/connectors/{auth_config['name']}/operations/"
+            "SHOPIFY_GET_SHOP_DETAILS/execute",
+            json={"payload": {}, "account_id": account["id"]},
+        )
+        assert shop.status_code == 200, shop.text
+        assert store in json.dumps(shop.json())
+    finally:
+        _cleanup_user_accounts(fixed_test_user["id"])
+
+
+def _one_page_pdf(text: str) -> bytes:
+    """A real, openable one-page PDF.
+
+    The recipient opens it, so a stub that merely starts with `%PDF` -- no
+    pages, no cross-reference table -- arrives intact and still reads as a
+    broken attachment, which is exactly the report this test exists to answer.
+    """
+    stream = f"BT /F1 18 Tf 72 720 Td ({text}) Tj ET".encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    return bytes(out)
+
+
+@pytest.mark.provider
+@pytest.mark.human
+@pytest.mark.timeout(900)
+@pytest.mark.asyncio
+async def test_gmail_sends_pod_files_as_attachments_human(
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session,
+):
+    """A real email, with two pod files attached, through the REST route.
+
+    The complaint this answers: attachments could not be sent through Gmail at
+    all. Composio wants each one staged in its own storage as
+    ``{name, mimetype, s3key}``, and nothing produced that -- a caller's
+    ``{"pod_path": ...}`` went to Composio as that literal dict. Here the caller
+    names pod files, the route reads them as the caller, stages them, sends,
+    and the sent message is read back to prove the files arrived intact.
+
+    Sends a real email, so it needs a recipient as well as a consent::
+
+        RUN_HUMAN_OAUTH=1 LEMMA_E2E_GMAIL_TO=anukul@lemma.work \\
+        pytest -m "provider and human" -k gmail_sends -s \\
+            app/modules/connectors/tests/e2e/test_composio_real_e2e.py
+    """
+    if not _human_oauth_enabled():
+        pytest.skip("Set RUN_HUMAN_OAUTH=1 to run the human-in-the-loop OAuth test.")
+    recipient = _env_value("LEMMA_E2E_GMAIL_TO")
+    if not recipient:
+        pytest.skip("Needs LEMMA_E2E_GMAIL_TO, the address the test email goes to.")
+    composio = _composio_client()
+    org_id = fixed_test_org["id"]
+    await _reseed_composio_app(db_session, "gmail")
+    auth_config = await _seed_composio_auth_config(db_session, "gmail", org_id)
+
+    pod = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"gmail-attach-{uuid4().hex[:8]}",
+            "organization_id": org_id,
+            "type": "HYBRID",
+        },
+    )
+    assert pod.status_code == 201, pod.text
+    pod_id = pod.json()["id"]
+    report = _one_page_pdf("Q3 report - Lemma attachment test")
+    table = b"region,revenue\nnorth,120\nsouth,95\n"
+    for name, content, mime in (
+        ("q3-report.pdf", report, "application/pdf"),
+        ("q3-numbers.csv", table, "text/csv"),
+    ):
+        uploaded = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/files",
+            data={"directory_path": "/me/outbox", "search_enabled": "false"},
+            files={"data": (name, content, mime)},
+        )
+        assert uploaded.status_code == 201, uploaded.text
+
+    try:
+        # Consent once, through Lemma's own connect flow.
+        resp = await authenticated_client.post(
+            f"/organizations/{org_id}/connectors/connect-requests",
+            json={"auth_config_id": str(auth_config.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        row = await db_session.get(ConnectRequest, UUID(resp.json()["id"]))
+        attributes = row.attributes or {}
+        print(
+            "\n\n=== HUMAN ACTION REQUIRED: sign in to the Gmail account to send from ==="
+        )
+        print(resp.json()["authorization_url"])
+        try:
+            webbrowser.open(resp.json()["authorization_url"])
+        except Exception:
+            # No browser on this machine: the URL is printed above to open by hand.
+            pass
+        _wait_for_active_connection(composio, attributes["provider_state"])
+        callback = await authenticated_client.get(
+            "/connectors/connect-requests/oauth/callback",
+            params={
+                "state": attributes["state"],
+                "connectedAccountId": attributes["provider_state"],
+                "format": "json",
+            },
+        )
+        assert callback.status_code == 200, callback.text
+        account_id = callback.json()["id"]
+        execute = f"/organizations/{org_id}/connectors/{auth_config.name}/operations"
+
+        # What a caller is shown: pod references, not Composio's s3key object.
+        detail = await authenticated_client.get(f"{execute}/GMAIL_SEND_EMAIL")
+        assert detail.status_code == 200, detail.text
+        assert "pod_path" in json.dumps(
+            detail.json()["input_schema"]["properties"]["attachment"]
+        )
+
+        subject = f"Lemma attachment test {uuid4().hex[:6]}"
+        sent = await authenticated_client.post(
+            f"{execute}/GMAIL_SEND_EMAIL/execute",
+            json={
+                "account_id": account_id,
+                "pod_id": pod_id,
+                "payload": {
+                    "recipient_email": recipient,
+                    "subject": subject,
+                    "body": "Two files from a Lemma pod, attached by reference.",
+                    "attachment": [
+                        {"pod_path": "/me/outbox/q3-report.pdf"},
+                        {"pod_path": "/me/outbox/q3-numbers.csv"},
+                    ],
+                },
+            },
+        )
+        assert sent.status_code == 200, sent.text
+        result = sent.json()["result"] or {}
+        message_id = result.get("id") or (result.get("response_data") or {}).get("id")
+        assert message_id, result
+        print(f"\n=== sent {subject!r} to {recipient} as message {message_id} ===\n")
+
+        fetched = await authenticated_client.post(
+            f"{execute}/GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID/execute",
+            json={
+                "account_id": account_id,
+                "payload": {"message_id": message_id, "format": "full"},
+            },
+        )
+        assert fetched.status_code == 200, fetched.text
+        received = json.dumps(fetched.json())
+        assert "q3-report.pdf" in received
+        assert "q3-numbers.csv" in received
+    finally:
+        _cleanup_user_accounts(fixed_test_user["id"])
