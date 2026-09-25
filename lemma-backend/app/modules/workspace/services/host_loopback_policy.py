@@ -30,7 +30,7 @@ works as soon as it is turned on, with no container to replace.
 
 Asked each time a sandbox is provisioned, and the answer is fixed into the
 container; guestd replaces a running container whose grants differ from the
-ones a later ensure asks for, rather than reusing it with the old reach.
+ones a provision asks for, rather than reusing it with the old reach.
 """
 
 from __future__ import annotations
