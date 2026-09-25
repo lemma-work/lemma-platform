@@ -54,6 +54,7 @@ from app.modules.workspace.services.host_workspace import (
 )
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.sandbox_service import SandboxService
+from app.modules.test_support.e2e.agent_host_binary import agent_host_binary
 
 pytestmark = [
     pytest.mark.e2e,
@@ -90,13 +91,7 @@ async def _running_host(
     debug build in the repository, or ``LEMMA_AGENT_HOST_E2E_BINARY``. Default
     roots go under ``root/lemma`` rather than the developer's own ``~/lemma``.
     """
-    binary = Path(
-        os.environ.get(
-            "LEMMA_AGENT_HOST_E2E_BINARY",
-            str(_REPOSITORY / "desktop/target/debug/lemma-agent-host"),
-        )
-    )
-    assert binary.is_file(), "Build lemma-agent-host first: make desktop-agent-host-e2e"
+    binary = agent_host_binary()
     data = root / "host-data"
     shims = root / "shim-bin"
     workspaces = root / "lemma"

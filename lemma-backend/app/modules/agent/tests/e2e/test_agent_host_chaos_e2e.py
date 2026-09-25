@@ -69,6 +69,7 @@ from app.modules.agent.services.agent_host_link_store import AgentHostLinkStore
 from app.modules.agent.services.agent_host_link_wire import INTERNAL_ERROR_CLOSE
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e.waiters import eventually
+from app.modules.test_support.e2e.agent_host_binary import agent_host_binary
 
 pytestmark = [pytest.mark.e2e, pytest.mark.local_cli, pytest.mark.approval_worker]
 
@@ -265,15 +266,7 @@ class ScriptedHost:
         self.base_url = base_url
         self.traffic = root / "acp-stream.jsonl"
         self.release = self.traffic.with_suffix(".release")
-        self._binary = Path(
-            os.environ.get(
-                "LEMMA_AGENT_HOST_E2E_BINARY",
-                str(_REPOSITORY / "desktop/target/debug/lemma-agent-host"),
-            )
-        )
-        assert self._binary.is_file(), (
-            "Build lemma-agent-host first: make desktop-agent-host-e2e"
-        )
+        self._binary = agent_host_binary()
         shims = root / "shim-bin"
         shims.mkdir()
         agent = shlex.join(
