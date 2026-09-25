@@ -28,6 +28,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationAgentScope,
     ConversationAgentSelection,
+    ConversationListCursor,
     ConversationStatus,
     ConversationType,
     JsonObject,
@@ -51,6 +52,9 @@ from app.modules.agent.infrastructure.repository_status import (
 )
 
 
+from app.modules.agent.infrastructure.repositories.conversation_list_page import (
+    page_by_activity,
+)
 from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
     reconcile_conversation_to_terminal,
 )
@@ -272,9 +276,9 @@ class ConversationRepository(
         metadata_filters: JsonObject | None = None,
         parent_id: UUID | None = None,
         archived: bool = False,
-        cursor: UUID | None = None,
+        cursor: ConversationListCursor | None = None,
         limit: int = 20,
-    ) -> tuple[list[ConversationEntity], UUID | None]:
+    ) -> tuple[list[ConversationEntity], ConversationListCursor | None]:
         # One list or the other, never both: the archive is a place you go, not
         # a tail on the end of the history. Equality rather than "not archived"
         # so the same query serves both without a second code path.
@@ -292,7 +296,7 @@ class ConversationRepository(
         if agent_selection.scope is not ConversationAgentScope.ALL:
             # The assistant is named by the pod's own id, and a conversation
             # written before it had a row still names it by naming nobody. The
-            # COALESCE covers both, and `ix_agent_conv_user_pod_agent_roots_v2`
+            # COALESCE covers both, and `ix_agent_conv_user_pod_agent_roots_activity`
             # is defined on exactly this expression -- change one and the index
             # stops being used, silently.
             selected_agent_id = pod_id
@@ -314,25 +318,7 @@ class ConversationRepository(
             stmt = stmt.where(
                 ConversationModel.conversation_metadata.op("@>")(metadata_filters)
             )
-        return await self._list_conversations(stmt, cursor=cursor, limit=limit)
-
-    async def _list_conversations(
-        self,
-        stmt,
-        *,
-        cursor: UUID | None,
-        limit: int,
-    ) -> tuple[list[ConversationEntity], UUID | None]:
-        if cursor is not None:
-            stmt = stmt.where(ConversationModel.id < cursor)
-        stmt = stmt.order_by(ConversationModel.id.desc()).limit(limit + 1)
-        result = await self.session.execute(stmt)
-        rows = list(result.scalars())
-        has_more = len(rows) > limit
-        if has_more:
-            rows = rows[:limit]
-        next_cursor = rows[-1].id if has_more and rows else None
-        return [row.to_entity() for row in rows], next_cursor
+        return await page_by_activity(self.session, stmt, cursor=cursor, limit=limit)
 
     async def lock_conversation(self, conversation_id: UUID) -> None:
         await self.session.execute(
@@ -435,6 +421,10 @@ class ConversationRepository(
         # module goes through this method, so this is the one place it belongs.
         if conversation.is_archived:
             conversation.is_archived = False
+        # Same lock, same reason: this is what orders the history list, and every
+        # message -- a person's, the agent's, a tool's -- is somebody working in
+        # the conversation.
+        conversation.last_activity_at = datetime.now(timezone.utc)
         sequence_result = await self.session.execute(
             select(func.coalesce(func.max(MessageModel.sequence), -1)).where(
                 MessageModel.conversation_id == conversation_id

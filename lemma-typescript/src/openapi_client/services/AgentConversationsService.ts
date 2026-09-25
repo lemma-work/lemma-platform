@@ -20,7 +20,7 @@ import { request as __request } from '../core/request.js';
 export class AgentConversationsService {
     /**
      * List Pod Agent Conversations
-     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive.
+     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive. Ordered by last_activity_at, most recent first.
      * @param podId
      * @param agentName
      * @param status

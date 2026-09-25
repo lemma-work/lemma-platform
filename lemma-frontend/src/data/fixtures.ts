@@ -2445,8 +2445,13 @@ export const fixtureSource: PodSource = {
         throw new Error("The sample source cannot mint an embed URL.");
     },
     async listConversations() {
+        return (await fixtureSource.listConversationsPage("fixture")).items;
+    },
+    /* Two pages, so the all-conversations pane has a "More" to press in the one
+       mode that can be looked at without a session. */
+    async listConversationsPage(_podId, cursor) {
         await wait(40);
-        return [
+        const all = [
             { id: "fixture", title: "Monday launch", at: "10:14", kind: "CHAT" },
             { id: "c2", title: "Long report preview and channel layout review", at: "Fri 11 Sept", kind: "TASK" },
             { id: "c3", title: "Design partner shortlist", at: "Thu", kind: "CHAT" },
@@ -2456,6 +2461,7 @@ export const fixtureSource: PodSource = {
             { id: "c7", title: "Pricing page copy", at: "Sat 18 Jul", kind: "CHAT" },
             { id: "c8", title: "hey", at: "Fri 17 Jul", kind: "CHAT" },
         ];
+        return cursor === "2" ? { items: all.slice(6), next: null } : { items: all.slice(0, 6), next: "2" };
     },
 
     /* The sample source has no calls in it — a call needs a live session, and

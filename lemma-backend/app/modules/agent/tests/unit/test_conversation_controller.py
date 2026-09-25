@@ -12,6 +12,10 @@ from fastapi import HTTPException
 from starlette.datastructures import QueryParams
 
 from app.modules.agent.api.controllers import conversation_controller
+from app.modules.agent.api.controllers.conversation_page_token import (
+    encode_conversation_page_token,
+    parse_conversation_page_token,
+)
 from app.modules.agent.api.controllers.conversation_controller import (
     _parse_metadata_filters,
     append_message,
@@ -25,6 +29,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
     ConversationAgentScope,
+    ConversationListCursor,
 )
 from app.modules.test_support.authz import allow_all_context
 from app.modules.usage.domain.errors import UsageLimitExceededError
@@ -679,3 +684,33 @@ class TestASilentStreamStillSendsSomething:
 
         with pytest.raises(RuntimeError):
             [chunk async for chunk in with_keepalive(_dies())]
+
+
+def test_conversation_page_token_round_trips_both_sort_keys() -> None:
+    cursor = ConversationListCursor(
+        last_activity_at=datetime(2026, 9, 25, 10, 30, 1, 123456, tzinfo=timezone.utc),
+        id=uuid4(),
+    )
+
+    assert (
+        parse_conversation_page_token(encode_conversation_page_token(cursor)) == cursor
+    )
+
+
+@pytest.mark.parametrize(
+    "page_token",
+    [
+        # What the endpoint handed out while it was ordered by id alone.
+        str(uuid4()),
+        "not base64 at all!",
+        # Well-formed, but a naive timestamp is no position in a tz-aware order.
+        encode_conversation_page_token(
+            ConversationListCursor(last_activity_at=datetime(2026, 9, 25), id=uuid4())
+        ),
+    ],
+)
+def test_conversation_page_token_rejects_what_it_did_not_mint(page_token) -> None:
+    with pytest.raises(HTTPException) as caught:
+        parse_conversation_page_token(page_token)
+
+    assert caught.value.status_code == 400

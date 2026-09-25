@@ -46,6 +46,7 @@ import {
 import type {
     AccountConnect,
     Conversation,
+    ConversationPage,
     ConversationRef,
     Commitment,
     Profile,
@@ -324,6 +325,10 @@ function asGuided(raw: unknown): GuidedSetup {
         error: answer.error ?? undefined,
     };
 }
+
+/** One page of the history list. The sidebar shows a handful of these; the
+ *  all-conversations pane asks for more a page at a time. */
+const CONVERSATION_PAGE_SIZE = 25;
 
 export const liveSource: PodSource = {
     label: "live",
@@ -1056,18 +1061,33 @@ export const liveSource: PodSource = {
     },
 
     async listConversations(podId: string): Promise<ConversationRef[]> {
-        const listed = await lemma(podId).conversations.listDefault({ pod_id: podId, limit: 25 });
-        return (listed.items ?? []).map((c) => {
-            const row = c as { id: string; title?: string | null; type?: string; updated_at?: string; metadata?: Record<string, unknown> | null };
-            const bound = row.metadata?.[RESOURCE_KEY];
-            return {
-                id: row.id,
-                title: (row.title ?? "").trim() || "Untitled",
-                at: dayOf(row.updated_at) === "Today" ? clock(row.updated_at) : dayOf(row.updated_at),
-                kind: row.type ?? "CHAT",
-                boundTo: typeof bound === "string" ? bound : null,
-            };
+        return (await liveSource.listConversationsPage(podId)).items;
+    },
+
+    async listConversationsPage(podId: string, cursor?: string | null): Promise<ConversationPage> {
+        const listed = await lemma(podId).conversations.listDefault({
+            pod_id: podId,
+            limit: CONVERSATION_PAGE_SIZE,
+            page_token: cursor ?? undefined,
         });
+        return {
+            items: (listed.items ?? []).map((c) => {
+                const row = c as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; metadata?: Record<string, unknown> | null };
+                const bound = row.metadata?.[RESOURCE_KEY];
+                /* The list is ordered by last activity, so the time beside a row
+                   is that — not `updated_at`, which a rename also moves and
+                   which would put "Today" on a row sitting below yesterday's. */
+                const at = row.last_activity_at ?? row.updated_at;
+                return {
+                    id: row.id,
+                    title: (row.title ?? "").trim() || "Untitled",
+                    at: dayOf(at) === "Today" ? clock(at) : dayOf(at),
+                    kind: row.type ?? "CHAT",
+                    boundTo: typeof bound === "string" ? bound : null,
+                };
+            }),
+            next: listed.next_page_token ?? null,
+        };
     },
 
     async listCallThreads(podId: string, parentId: string): Promise<ConversationRef[]> {
@@ -1132,10 +1152,15 @@ export const liveSource: PodSource = {
         if (conversationId === NEW_CONVERSATION) {
             return { id: null, title: "", status: null, messages: [] };
         }
-        const listed = await client.conversations.listDefault({ pod_id: podId, limit: 25 });
-        const head = conversationId
-            ? (listed.items ?? []).find((c) => c.id === conversationId)
-            : ((listed.items ?? []).find((c) => c.type === "CHAT") ?? listed.items?.[0]);
+        /* By id when there is one. Finding it in the first page of the list
+           worked only while nothing past the first page could be opened. */
+        let head: Awaited<ReturnType<typeof client.conversations.get>> | undefined;
+        if (conversationId) {
+            head = await client.conversations.get(conversationId, { pod_id: podId });
+        } else {
+            const listed = await client.conversations.listDefault({ pod_id: podId, limit: CONVERSATION_PAGE_SIZE });
+            head = (listed.items ?? []).find((c) => c.type === "CHAT") ?? listed.items?.[0];
+        }
         if (!head) return { id: null, title: "", status: null, messages: [] };
 
         const page = await client.conversations.messages.list(head.id, { pod_id: podId, limit: 100 });

@@ -8,8 +8,7 @@ import type { Pod } from "@/data";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { InteractionDock } from "./interaction-dock";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
-import { applyTitle } from "./conversation-list";
-import type { ConversationRef } from "@/data";
+import { applyTitle, patchConversationLists } from "./conversation-list";
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
@@ -100,10 +99,7 @@ export function LiveConversation({
         onTitle: (title, id) => {
             const target = id ?? streamingIn.current;
             if (!target) return;
-            queryClient.setQueryData<ConversationRef[]>(
-                ["conversations", pod.id],
-                previous => applyTitle(previous, target, title),
-            );
+            patchConversationLists(queryClient, pod.id, (list) => applyTitle(list, target, title));
         },
         // Omit agentName: creation uses the pod default when no named agent is supplied.
         conversationId: conversationId === NEW_CONVERSATION ? null : conversationId,

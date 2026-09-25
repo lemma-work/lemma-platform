@@ -4,8 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { lemma } from "@/session/client";
 import { source, NEW_CONVERSATION } from "@/data";
-import type { ConversationRef, Pod } from "@/data";
-import { applyArchived, unbound } from "./conversation-list";
+import type { Pod } from "@/data";
+import { applyArchived, patchConversationLists, unbound } from "./conversation-list";
 
 import { ConversationTitle } from "./conversation-title";
 
@@ -50,10 +50,8 @@ export function History({
        and an archived conversation is still readable by id. What changes is
        this list, which is "conversations you can open here". */
     async function archive(id: string) {
-        const key = ["conversations", pod.id];
-        const previous = cache.getQueryData<ConversationRef[]>(key);
         setArchiving(id);
-        cache.setQueryData(key, applyArchived(previous, id));
+        const undo = patchConversationLists(cache, pod.id, (list) => applyArchived(list, id));
         /* Leave the pane rather than leave it pointed at something that is no
            longer in the list beside it. */
         if (id === conversationId) onPick(NEW_CONVERSATION);
@@ -66,7 +64,7 @@ export function History({
                 await lemma(pod.id).conversations.update(id, { is_archived: true }, { pod_id: pod.id });
             }
         } catch {
-            cache.setQueryData(key, previous);
+            undo();
         } finally {
             setArchiving(null);
         }
@@ -143,7 +141,9 @@ export function History({
 
             {rest > 0 && (
                 <button className="history__more" onClick={onSeeAll}>
-                    {rest} more <ArrowRightIcon size={15} />
+                    {/* No count: this list is the first page, so any number
+                        here would be a floor dressed up as a total. */}
+                    All conversations <ArrowRightIcon size={15} />
                 </button>
             )}
         </aside>

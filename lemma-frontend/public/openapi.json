@@ -3776,6 +3776,18 @@
             "title": "Is Archived",
             "type": "boolean"
           },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
           "last_run_error": {
             "anyOf": [
               {
@@ -24549,7 +24561,7 @@
     },
     "/pods/{pod_id}/conversations": {
       "get": {
-        "description": "List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive.",
+        "description": "List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive. Ordered by last_activity_at, most recent first.",
         "operationId": "agent.conversation.list",
         "parameters": [
           {

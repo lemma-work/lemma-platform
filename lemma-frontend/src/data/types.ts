@@ -259,6 +259,13 @@ export interface ConversationRef {
     boundTo?: string | null;
 }
 
+/** One page of a teammate's conversations, most recently active first.
+ *  `next` is the server's opaque token for the page after, `null` at the end. */
+export interface ConversationPage {
+    items: ConversationRef[];
+    next: string | null;
+}
+
 export interface Conversation {
     id: string | null;
     title: string;
@@ -538,7 +545,10 @@ export interface PodSource {
      *  authenticated and injects the runtime config the widget's browser SDK
      *  needs, which inline HTML in an iframe can never have. */
     widgetEmbedUrl(podId: string, conversationId: string, toolCallId: string): Promise<string>;
+    /** The first page — what the sidebar, the rail and search want. */
     listConversations(podId: string): Promise<ConversationRef[]>;
+    /** Any page, for the one place that shows every conversation. */
+    listConversationsPage(podId: string, cursor?: string | null): Promise<ConversationPage>;
     /** The call threads hanging off one conversation.
      *
      *  A call runs in a conversation of its own, parented to whatever was

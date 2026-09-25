@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { EditIcon } from "@/ui/icons";
 import { lemma } from "@/session/client";
-import { source, type ConversationRef } from "@/data";
-import { applyTitle, titleToSend, titleToShow } from "./conversation-list";
+import { source } from "@/data";
+import { applyTitle, patchConversationLists, titleToSend, titleToShow } from "./conversation-list";
 
 /** Inline renaming beside a conversation in the history sidebar. */
 export function ConversationTitle({
@@ -46,11 +46,9 @@ export function ConversationTitle({
         setEditing(false);
         if (next === (title ?? null) || (next === null && !title)) return;
 
-        const key = ["conversations", podId];
-        const previous = cache.getQueryData<ConversationRef[]>(key);
         /* Optimistic, and reverted below if the server disagrees. A rename that
            waits for a round trip to appear reads as a click that missed. */
-        cache.setQueryData(key, applyTitle(previous, conversationId!, next));
+        const undo = patchConversationLists(cache, podId, (list) => applyTitle(list, conversationId!, next));
         setSaving(true);
         setFailed(false);
         try {
@@ -61,7 +59,7 @@ export function ConversationTitle({
                 await lemma(podId).conversations.update(conversationId!, { title: next }, { pod_id: podId });
             }
         } catch {
-            cache.setQueryData(key, previous);
+            undo();
             setFailed(true);
         } finally {
             setSaving(false);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyArchived, applyTitle, titleToSend, titleToShow, unbound, UNTITLED } from "../src/thread/conversation-list.ts";
+import { allConversationsKey, applyArchived, applyTitle, patchConversationLists, titleToSend, titleToShow, unbound, UNTITLED } from "../src/thread/conversation-list.ts";
 import type { ConversationRef } from "../src/data/types.ts";
 
 function list(): ConversationRef[] {
@@ -90,4 +90,55 @@ test("the test is the binding, not the type", () => {
 test("nothing listed is nothing filtered", () => {
     assert.deepEqual(unbound(undefined), []);
     assert.deepEqual(unbound([]), []);
+});
+
+/** A QueryClient's two calls, over a plain map. */
+function fakeCache(seed: Record<string, unknown>) {
+    const store = new Map(Object.entries(seed));
+    return {
+        store,
+        getQueryData<T>(key: readonly unknown[]) {
+            return store.get(JSON.stringify(key)) as T | undefined;
+        },
+        setQueryData<T>(key: readonly unknown[], value: T | undefined) {
+            store.set(JSON.stringify(key), value);
+        },
+    };
+}
+
+test("a patch reaches the short list and every loaded page, and undoes cleanly", () => {
+    // The pane's pages are their own query. A rename made in the pane that only
+    // patched the sidebar's list would leave the old title in the row just renamed.
+    const short = list();
+    const all = {
+        pages: [
+            { items: list(), next: "2" },
+            { items: [{ id: "d", title: "Old one", at: "Mon", kind: "CHAT" }], next: null },
+        ],
+        pageParams: [null, "2"],
+    };
+    const cache = fakeCache({
+        [JSON.stringify(["conversations", "pod"])]: short,
+        [JSON.stringify(allConversationsKey("pod"))]: all,
+    });
+
+    const undo = patchConversationLists(cache, "pod", (entries) => applyTitle(entries, "d", "Renamed"));
+
+    type Pages = { pages: { items: ConversationRef[] }[] };
+    const patched = cache.getQueryData<Pages>(allConversationsKey("pod"))!;
+    assert.equal(patched.pages[0], all.pages[0], "an untouched page keeps its identity");
+    assert.equal(patched.pages[1].items[0].title, "Renamed");
+    assert.equal(cache.getQueryData(["conversations", "pod"]), short);
+
+    undo();
+
+    assert.equal(cache.getQueryData(allConversationsKey("pod")), all);
+});
+
+test("patching with nothing cached writes nothing", () => {
+    const cache = fakeCache({});
+
+    patchConversationLists(cache, "pod", (entries) => applyArchived(entries, "a"));
+
+    assert.equal(cache.store.size, 0);
 });

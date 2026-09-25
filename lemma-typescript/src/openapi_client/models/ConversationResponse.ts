@@ -13,6 +13,7 @@ export type ConversationResponse = {
     id: string;
     instructions?: (string | null);
     is_archived?: boolean;
+    last_activity_at?: (string | null);
     last_run_error?: (string | null);
     last_run_error_code?: (string | null);
     last_run_error_reason?: (string | null);

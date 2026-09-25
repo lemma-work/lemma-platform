@@ -6,7 +6,7 @@ theirs -- so they share a module rather than importing each other in a cycle."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -50,18 +50,22 @@ class ConversationModel(UUIDAuditBase):
 
     __tablename__ = "agent_conversations"
     __table_args__ = (
+        # The history list's order, `(last_activity_at, id)` descending. The
+        # agent-scoped one is on the same COALESCE the listing spells out.
         Index(
-            "ix_agent_conv_user_pod_roots",
+            "ix_agent_conv_user_pod_roots_activity",
             "user_id",
             "pod_id",
+            "last_activity_at",
             "id",
             postgresql_where=text("parent_id IS NULL"),
         ),
         Index(
-            "ix_agent_conv_user_pod_agent_roots",
+            "ix_agent_conv_user_pod_agent_roots_activity",
             "user_id",
             "pod_id",
-            text("COALESCE(agent_id, '00000000-0000-0000-0000-000000000001'::uuid)"),
+            text("COALESCE(agent_id, pod_id)"),
+            "last_activity_at",
             "id",
             postgresql_where=text("parent_id IS NULL"),
         ),
@@ -122,6 +126,15 @@ class ConversationModel(UUIDAuditBase):
     #: message clears it (`append_message`).
     is_archived: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    #: When somebody last said something here; the history list's order.
+    #: Stamped only by `append_message` -- not `updated_at`, which a rename or
+    #: a status change also moves.
+    last_activity_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
     )
 
     owner: Mapped[Any] = relationship("User", foreign_keys=[user_id])
@@ -193,6 +206,7 @@ class ConversationModel(UUIDAuditBase):
             output=self.output_data,
             metadata=self.conversation_metadata,
             is_archived=bool(self.is_archived),  # None until the INSERT.
+            last_activity_at=self.last_activity_at,
             last_run_status=latest_run.status if latest_run else None,
             last_run_error=latest_run.error if latest_run else None,
             last_run_error_code=_failure_field(latest_run, "code"),
