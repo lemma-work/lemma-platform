@@ -221,6 +221,21 @@ fn every_sandbox_drops_every_capability_and_cannot_regain_one() {
             !arguments.iter().any(|argument| argument == "--privileged"),
             "{kind:?}: {arguments:?}"
         );
+        // Bounded, and first in line for the OOM killer rather than the
+        // database; named after itself, so a rebuilt container keeps the host
+        // name its browser profile was locked under.
+        assert!(
+            pairs.contains(&("--pids-limit", "1024")),
+            "{kind:?}: {arguments:?}"
+        );
+        assert!(
+            pairs.contains(&("--oom-score-adj", "500")),
+            "{kind:?}: {arguments:?}"
+        );
+        assert!(
+            pairs.contains(&("--hostname", parameters.sandbox_id.as_str())),
+            "{kind:?}: {arguments:?}"
+        );
         // Options, all of them, before the image: the engine reads anything
         // after it as the container's command.
         assert_eq!(arguments.last().unwrap(), &parameters.image);

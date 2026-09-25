@@ -297,6 +297,37 @@ async def test_release_stops_without_deleting(
     assert instance.provider_id in _state(provider)["sandboxes"]
 
 
+async def test_a_workspace_is_quiesced_before_it_is_released(
+    provider: LemmaLocalSandboxProvider, monkeypatch
+) -> None:
+    """Chrome's profile -- the sign-ins a person made in the agent's browser
+    -- is flushed before the container stops, as Docker's release does. A
+    function has no browser, and is only stopped."""
+    order: list[str] = []
+
+    class _Runtime:
+        async def quiesce(self, *, deadline_at):
+            order.append("quiesce")
+
+        async def close(self):
+            return None
+
+    async def runtime_client(guest_id, *, deadline_at):
+        return _Runtime()
+
+    monkeypatch.setattr(provider, "_runtime_client", runtime_client)
+    workspace = await provider.create(_spec(uuid4()))
+    await provider.release(
+        workspace, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+    order.append(_state(provider)["sandboxes"][workspace.provider_id]["state"])
+    assert order == ["quiesce", "stopped"]
+
+    function = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+    await provider.release(function, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
+    assert order == ["quiesce", "stopped"]
+
+
 async def test_inspect_reports_absence_rather_than_failing(
     provider: LemmaLocalSandboxProvider,
 ) -> None:

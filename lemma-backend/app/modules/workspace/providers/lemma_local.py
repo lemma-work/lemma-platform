@@ -359,9 +359,41 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         kind: SandboxKind,
         deadline_at: datetime,
     ) -> None:
+        """Stop the sandbox, keeping its storage, after letting it quiesce.
+
+        The same order as Docker's release. Stopped cold, Chrome in a
+        workspace lost what it had not yet written to its profile -- the
+        sign-ins a person made in the agent's browser among it -- and the
+        container is rebuilt on the next ensure, so nothing else would have
+        flushed it.
+        """
+        if kind is SandboxKind.WORKSPACE:
+            await self._try_quiesce(instance, deadline_at=deadline_at)
         await self._mutate(
             "sandbox.release", instance.provider_id, deadline_at=deadline_at
         )
+
+    async def _try_quiesce(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> None:
+        """Best effort, never a reason not to release: a workspace whose
+        runtime cannot be reached is the one most in need of stopping."""
+        client: WorkspaceRuntimeClient | None = None
+        try:
+            client = await self._runtime_client(
+                instance.provider_id, deadline_at=deadline_at
+            )
+            await client.quiesce(deadline_at=deadline_at)
+        except (
+            WorkspaceRuntimeError,
+            LocalBridgeError,
+            ProviderGone,
+            asyncio.TimeoutError,
+        ):
+            return
+        finally:
+            if client is not None:
+                await client.close()
 
     async def destroy(self, name: str, *, deadline_at: datetime) -> None:
         resolved = self._guest_id_from_name(name)

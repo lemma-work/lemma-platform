@@ -11,6 +11,24 @@ use super::*;
 const SANDBOX_LOG_FILE_MIB: u32 = 16;
 const SANDBOX_LOG_FILES: u32 = 3;
 
+/// The most processes and threads one sandbox may hold at once.
+///
+/// Without one, a fork loop in any sandbox -- an agent's runaway script, a
+/// dependency's build -- exhausted the guest's pid space, and the guest is
+/// where PostgreSQL has to fork a backend for every connection. Docker's
+/// provider has run the workspace image under 512 for as long as it has
+/// existed, Chrome included; this leaves a dev server twice that.
+pub(crate) const SANDBOX_PIDS_LIMIT: u32 = 1024;
+
+/// How much more a sandbox's processes are preferred by the OOM killer.
+///
+/// Admission counts memory in use rather than ceilings (see
+/// `admit_sandbox_memory`), so sandboxes together can outgrow the guest. When
+/// they do, the kernel should take a sandbox process -- which costs somebody
+/// one command -- and not the database every account lives in. The core
+/// containers are started at `CORE_OOM_SCORE_ADJ` for the same reason.
+pub(crate) const SANDBOX_OOM_SCORE_ADJ: i32 = 500;
+
 pub(crate) fn build_run_arguments(
     parameters: &EnsureParameters,
     workspace: Option<&Path>,
@@ -96,6 +114,18 @@ pub(crate) fn build_run_arguments(
         format!("max-size={SANDBOX_LOG_FILE_MIB}m"),
         "--log-opt".into(),
         format!("max-file={SANDBOX_LOG_FILES}"),
+        "--pids-limit".into(),
+        SANDBOX_PIDS_LIMIT.to_string(),
+        "--oom-score-adj".into(),
+        SANDBOX_OOM_SCORE_ADJ.to_string(),
+        // The sandbox's own name rather than the engine's default, which is
+        // the container id and so changes every time a sandbox is made again.
+        // Chrome records the host name in its profile lock, and a profile
+        // locked by "another computer" is one it will not open -- so a
+        // workspace rebuilt after idle release came back without the browser
+        // sign-ins its profile still held.
+        "--hostname".into(),
+        parameters.sandbox_id.clone(),
     ];
     if parameters.host_access {
         arguments.extend([

@@ -31,7 +31,9 @@ pub(crate) enum ExistingContainer {
 /// hardens changes, so a running container made before that change is
 /// replaced on its next ensure rather than reused with the old, weaker
 /// arguments. A container with no label predates all of it and reads as 0.
-pub(crate) const SANDBOX_HARDENING_VERSION: u64 = 1;
+///
+/// 2: `--pids-limit`, `--oom-score-adj` and a stable `--hostname`.
+pub(crate) const SANDBOX_HARDENING_VERSION: u64 = 2;
 
 /// The grants a container is made with, as `sandbox.ensure` asks for them and
 /// as `snapshot_from_inspect` reads them back off its labels.

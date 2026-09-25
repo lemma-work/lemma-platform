@@ -251,3 +251,15 @@ fn admission_counts_for_itself_every_time() {
         .count();
     assert_eq!(counted, 2);
 }
+
+/// A new sandbox is refused while the disk it would grow into is nearly full,
+/// leaving the rest for the database; an unmeasurable disk refuses nothing.
+#[test]
+fn no_sandbox_starts_on_a_nearly_full_data_disk() {
+    let error = admit_disk(Some(SANDBOX_DISK_FLOOR_BYTES - 1)).unwrap_err();
+    assert_eq!(error.code, "resource_capacity");
+    assert!(error.retryable);
+    assert!(error.message.contains("nearly full"), "{}", error.message);
+    admit_disk(Some(SANDBOX_DISK_FLOOR_BYTES)).unwrap();
+    admit_disk(None).unwrap();
+}
