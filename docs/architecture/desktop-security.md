@@ -43,9 +43,46 @@ workspace. It is enforced by locald's gateway and, for Public, by the tunnel.
 Leaving This computer applies an environment overlay to the backend
 (`sharing_environment()` in `desktop/locald/src/daemon/environment.rs`): it
 rewrites every URL to the shared origin, turns the auth abuse controls and
-ALTCHA back on, caps desktop-auth handoffs, switches `DEBUG` off, and sets
-`SIGNUP_MODE` from the sharing preference below. Email verification stays off
-— a Desktop installation has no mail transport by default.
+ALTCHA back on, caps desktop-auth handoffs, switches `DEBUG` off, sets
+`INSTALLATION_SHARED=true`, and sets `SIGNUP_MODE` from the sharing preference
+below. Email verification stays off — a Desktop installation has no mail
+transport by default — which is why an invitation has to be *presented*, not
+merely matched by address (see below).
+
+- **ALTCHA has a key before it is switched on.** The host pack always renders
+  `AUTH_ALTCHA_HMAC_KEY`, derived from the installation secret in the
+  owner-only `host.secrets.json`, so turning ALTCHA on never leaves the
+  challenge endpoint without one. The portal asks for a proof before sign-in as
+  well as sign-up; on the LAN — plain HTTP at a private address, not a secure
+  context, so no `crypto.subtle` — it hashes in script
+  (`lemma-frontend/src/auth/sha256.ts`).
+- **`INSTALLATION_SHARED` ends local mode's relaxations.** `ENVIRONMENT` stays
+  `local`, so the backend asks `local_relaxations_allowed()` (`app/core/exposure.py`) instead
+  of `is_local_mode()` where local mode relaxes something only because nobody
+  else is connected: model providers on loopback (refused while shared, and
+  Lemma's own service ports are refused always), the loopback CORS defaults,
+  the configuration block on `/health/capabilities`, and honouring
+  `SURFACE_WEBHOOK_SECURITY_ENABLED=false`.
+- **The gateway is held while the stack changes under it.** A new gateway
+  answers every visitor `503` (with `Retry-After`) until activation has checked
+  the restarted stack *through the gateway itself* — `/runtime-config.js`, and
+  `/_lemma/api/auth/altcha/challenge`, which must answer an enabled challenge —
+  and the change is committed. Only locald's own check gets through, with a
+  per-activation token it strips before forwarding. The gateway is held again
+  while sharing is turned off (the stack restarts into local mode before the
+  tunnel stops) and while *Who can join* restarts the backend. Enabling still
+  restarts the backend and frontend, so running agent turns and open calls are
+  interrupted; the Sharing page says so before you choose.
+- **Each visitor is rate-limited as themselves.** In Public mode every
+  connection reaches the gateway from the tunnel on loopback, so the gateway
+  takes the visitor's address from the tunnel — `CF-Connecting-IP` for
+  Cloudflare, the last `X-Forwarded-For` entry for ngrok — only from a loopback
+  peer, and forwards that. On the LAN the peer is the visitor.
+- **ngrok's browser interstitial.** A free ngrok domain shows an HTML warning
+  page to a browser's first request. Activation sends
+  `ngrok-skip-browser-warning` so the check sees the real answer; visitors see
+  the interstitial once, after which their browser carries ngrok's cookie and
+  API calls go through.
 
 Published pod apps stay local-only in every mode: their routing needs wildcard
 subdomains, which a tunnel does not provide.
@@ -60,8 +97,18 @@ email-code completion used by browser email sign-in and chat onboarding
 | Mode | Who may create an account |
 | --- | --- |
 | `open` | Anyone who reaches the sign-up page |
-| `invite_only` | Only an address with a pending, unexpired organization invitation |
+| `invite_only` | Only an address with a pending, unexpired organization invitation — and, where the address is never proven, only with that invitation's id |
 | `closed` | Nobody |
+
+An invitation matched by address alone proves nothing where nobody checks the
+address belongs to the person typing it: a password sign-up with email
+verification off, which is every shared Desktop installation. There the gate
+admits an invited address only when the sign-up presents the invitation's id
+(`x-lemma-invitation`), which the portal takes from the invitation link the
+person followed (`/invitations/<id>/accept`). An unverified account is also
+never *shown* invitations by address (`list_user_invitations` answers nothing),
+never accepts them automatically, and joins no organization by its email
+domain; it accepts an invitation by opening its link.
 
 The **first account on a deployment with no accounts at all** is admitted
 whatever the mode -- there is nobody yet who could have invited it. Nothing is
@@ -81,9 +128,18 @@ preference, **Who can join** (`who_can_join` in `sharing.json`: `invite_only` by
 default, or `open`). It is part of the control snapshot, it can be changed while
 sharing is live (`sharing.access`, which restarts only the backend), and the
 Public confirmation and LAN warning on the Sharing page describe whichever is
-in force. Enabling Public from the workspace is confirmed in a native dialog
-the shell raises itself (`local_sharing`); the page cannot set the consent
-flag.
+in force.
+
+Every change that lets somebody else in is confirmed in a native dialog the
+shell raises itself, never one the page draws: sharing on the local network,
+creating a public link, changing *Who can join* to open, turning on **Run
+commands on this Mac**, and replacing or removing an OAuth app or bot
+credential this Mac already runs with (`NativeConsent` in
+`desktop/src/workspace_settings.rs`). The sentence about who may join is built
+from the join policy the request will carry — which the shell writes into the
+request — not from the saved preference. Local settings sends sharing requests
+through the same builder (`consented_sharing_request`), so neither page can set
+the Public consent flag.
 
 ## What a member gets
 
@@ -252,16 +308,45 @@ until `sandbox.ensure` next replaces them; a guest restart does.
 ## The Tauri IPC origin rule
 
 The workspace page is a remote origin to Tauri, and reaches the shell only
-through a capability that names this Mac's own local origin. A shared origin —
-the LAN address or the tunnel host — is deliberately absent from that
-capability and fails the Rust-side caller check too. The This Mac settings
-commands check more narrowly still: local mode, the loopback workspace origin
-this app navigated to, and nothing else — so the app's own window, once
-sharing has moved it to the shared address, is refused as well, and turns
-sharing off from the native Local settings instead. A visitor's browser can
-drive the shared Lemma; it can never invoke the desktop shell, the Agent Host
-or anything that touches the local stack. See
+through a capability that names this Mac's own local workspace hosts
+(`capabilities/workspace.json`). A shared origin — the LAN address or the
+tunnel host — is absent from that capability, and that ACL is what keeps it
+out. The Agent Host commands' Rust check (`require_agent_host_caller`) compares
+the page with the origin the app navigated to, which *while sharing is on is
+the shared origin* — so on its own it would not refuse one; it exists for a
+capability pattern written too loosely, not for sharing. The capability's `:*`
+port also matches the API port on the same host; the Rust checks pin the exact
+workspace origin, so a page served by the API is refused there.
+
+The This Mac settings commands check more narrowly: local mode, the loopback
+workspace origin this app navigated to, and — asked again at the moment of the
+call — a host that resolves to loopback and nothing else
+(`page_host_is_loopback`). The last matters for the public wildcard
+`app.127.0.0.1.sslip.io`, which is loopback only because public DNS says so; a
+network that answers differently later would otherwise put its own page on the
+origin those commands trust. It is not proof against a DNS-rebinding race.
+The app's own window, once sharing has moved it to the shared address, is
+refused, turns sharing off from the native Local settings, and does not try
+the shell at all (`onShellOrigin` in `lemma-frontend/src/desktop/bridge.ts`).
+
+In local mode the main window never becomes a browser for another site: a
+top-level page load on a host that is not this installation's is handed to the
+system browser and the window returns to the workspace (`main_frame_leaves_app`
+in `desktop/src/navigation.rs`; iframes are unaffected). Release builds open no
+web inspector unless `LEMMA_DESKTOP_DEVTOOLS=1`.
+
+A visitor's browser can drive the shared Lemma; it can never invoke the
+desktop shell, the Agent Host or anything that touches the local stack. See
 [The privilege boundary](agent-host.md#the-privilege-boundary).
+
+### Signing in the app through the system browser
+
+A hosted workspace signs the app in through the system browser (a request id,
+PKCE, then `lemma://auth/complete`). The browser half never completes a request
+on its own: it shows the request's short code — which the app shows too — and
+the account it will sign in, and waits for a click. A request id arrives in a
+URL, and a signed-in browser pointed at somebody else's used to complete it and
+hand them that person's session.
 
 ## What is not covered
 
