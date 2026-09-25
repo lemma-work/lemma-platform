@@ -131,6 +131,24 @@ async def get_workspace_session(
     runtime_context = workspace_runtime_context(ctx)
     if runtime is None:
         runtime = get_workspace_tool_runtime()
+    host_workspace = getattr(ctx, "host_workspace", None)
+    if host_workspace is not None:
+        # The user's Mac, chosen for this whole run; see
+        # `host_execution_selection`. Never the VM for this run, whatever the
+        # host is doing now -- a host that went away says so in the result.
+        return await runtime.get_host_session(
+            user_id=ctx.user_id,
+            pod_id=ctx.pod_id,
+            sandbox_id=host_workspace.sandbox_id,
+            root=host_workspace.root,
+            organization_id=ctx.organization_id,
+            workload_type=ctx.workload_type,
+            workload_id=ctx.workload_id,
+            workload_name=ctx.agent_name,
+            scope_key=runtime_context.scope_key,
+            session_id=session_id,
+            close_on_exit=close_on_exit,
+        )
     # Nothing names a browser session here any more. The image's
     # `AGENT_BROWSER_SESSION` is the only browser there is, so a shell that
     # inherits it, the relay, and the pane the person watches are all looking
@@ -297,8 +315,13 @@ async def exec_command_internal(
             project_notice = await prepare_project(
                 ctx,
                 workspace_session,
-                wanted=ctx.workspace_repo is not None
-                or looks_like_git_command(request.cmd),
+                # On the user's Mac, `git` and `gh` are already theirs: no
+                # clone into a VM path, no credential bridge.
+                wanted=getattr(ctx, "host_workspace", None) is None
+                and (
+                    ctx.workspace_repo is not None
+                    or looks_like_git_command(request.cmd)
+                ),
             )
             effective_timeout, effective_yield_time_ms = exec_clocks(request)
             with run_phase("tool.workspace.exec"):
@@ -465,8 +488,10 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
             project_notice = await prepare_project_directory(
                 ctx,
                 workspace_session,
-                wanted=ctx.workspace_repo is not None
-                or source_may_use_git(request.code),
+                wanted=getattr(ctx, "host_workspace", None) is None
+                and (
+                    ctx.workspace_repo is not None or source_may_use_git(request.code)
+                ),
             )
             result = await workspace_session.execute_code(
                 request.code, request.timeout_seconds

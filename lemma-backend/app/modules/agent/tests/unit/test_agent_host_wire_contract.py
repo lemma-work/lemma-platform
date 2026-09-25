@@ -47,8 +47,14 @@ from app.modules.agent.domain.agent_host_link import (
     AGENT_HOST_LINK_HEARTBEAT_MS,
     AGENT_HOST_LINK_PATH,
     LINK_CLOSE_CODES,
+    OP_FAILURE_KINDS,
+    OP_MAX_DATA_BYTES,
+    ControlBody,
+    HelloBody,
+    HostExecutionCapability,
     HostFrameType,
     LinkErrorCode,
+    OpMethod,
     ServerFrameType,
 )
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
@@ -274,3 +280,26 @@ def test_the_link_path_and_heartbeat_are_shared() -> None:
     link = CONTRACT["link"]
     assert AGENT_HOST_LINK_PATH == link["path"]
     assert AGENT_HOST_LINK_HEARTBEAT_MS == link["heartbeat_ms"]
+
+
+def test_the_host_execution_ops_are_the_ones_the_exec_server_serves() -> None:
+    """desktop-host-execution.md §4: an op one side names and the other does
+    not is a command that silently never runs."""
+    contract = CONTRACT["host_execution"]
+    methods = {
+        value
+        for name, value in vars(OpMethod).items()
+        if not name.startswith("_") and isinstance(value, str)
+    }
+    assert methods == set(contract["methods"])
+    assert OP_FAILURE_KINDS == set(contract["failure_kinds"])
+    assert LinkErrorCode.OP_FAILED.value == contract["error_code"]
+    assert OP_MAX_DATA_BYTES == contract["max_data_bytes"]
+
+
+def test_the_host_execution_capability_rides_on_hello_and_control() -> None:
+    capability = CONTRACT["host_execution"]["capability"]
+    assert set(HostExecutionCapability.model_fields) == set(capability["keys"])
+    frames = {"hello": HelloBody, "control": ControlBody}
+    for frame in capability["frames"]:
+        assert capability["field"] in frames[frame].model_fields, frame

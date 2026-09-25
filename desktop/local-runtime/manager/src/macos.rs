@@ -146,6 +146,8 @@ impl ManagedRuntime {
             .arg(&release)
             .arg("--control-socket")
             .arg(&self.control_socket)
+            .arg("--host-loopback-socket")
+            .arg(self.host_loopback_socket())
             .arg("--control-share")
             .arg(
                 self.capability_file

@@ -338,6 +338,17 @@ class WorkspaceSettings(BaseSettings):
             "no hostname rewriting is performed when absent."
         ),
     )
+    desktop_agent_host_config_path: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("DESKTOP_AGENT_HOST_CONFIG_PATH"),
+        description=(
+            "Lemma Desktop only, set by locald: the config file of the Agent "
+            "Host running on this same Mac. The host ids of its pairings are "
+            "what tell that host apart from any other host paired to this "
+            "backend, and only a user it is paired to is given the loopback "
+            "relay. Unset means no sandbox gets the relay."
+        ),
+    )
 
 
 workspace_settings = WorkspaceSettings()

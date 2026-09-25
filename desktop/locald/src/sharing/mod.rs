@@ -123,6 +123,10 @@ pub(crate) struct ActiveSharing {
 
 pub(crate) struct OwnedTunnel {
     provider: TunnelProvider,
+    /// Ports the tunnel process listens on, on this Mac's loopback: ngrok's
+    /// agent API, cloudflared's metrics. Named so the loopback relay can
+    /// refuse them -- ngrok's API can start a tunnel.
+    local_ports: Vec<u16>,
     executable: PathBuf,
     started_at: Instant,
     child: Child,
@@ -184,6 +188,20 @@ impl Drop for OwnedTunnel {
 }
 
 impl SharingController {
+    /// The loopback ports sharing is listening on right now: its gateway and
+    /// whatever the tunnel process serves locally. Empty while sharing is off.
+    pub(crate) fn listening_ports(&self) -> Vec<u16> {
+        let active = self.active.lock().expect("sharing active lock poisoned");
+        let Some(active) = active.as_ref() else {
+            return Vec::new();
+        };
+        let mut ports = vec![active.gateway.address.port()];
+        if let Some(tunnel) = active.tunnel.as_ref() {
+            ports.extend(&tunnel.local_ports);
+        }
+        ports
+    }
+
     pub fn load(
         root: &Path,
         local_origin: String,

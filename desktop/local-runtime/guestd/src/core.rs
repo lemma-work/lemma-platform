@@ -3,9 +3,13 @@
 
 use super::*;
 
+/// More than locald will ever send (it sends two); a bound, not a budget.
+const MAX_CALLBACK_PORTS: usize = 8;
+
 impl<E: Engine + 'static> GuestService<E> {
     pub(crate) fn ensure_core(&self, value: Value) -> Result<Value, GuestError> {
         let parameters = self.parse_core_parameters(value)?;
+        self.record_callback_ports(&parameters)?;
         self.ensure_core_images(&parameters)?;
         self.ensure_postgres(&parameters)?;
         self.ensure_redis(&parameters)?;
@@ -19,6 +23,7 @@ impl<E: Engine + 'static> GuestService<E> {
         stage: CoreStage,
     ) -> Result<Value, GuestError> {
         let parameters = self.parse_core_parameters(value)?;
+        self.record_callback_ports(&parameters)?;
         match stage {
             CoreStage::Images => self.ensure_core_images(&parameters)?,
             CoreStage::SandboxImages => self.ensure_sandbox_images(&parameters)?,
@@ -37,6 +42,13 @@ impl<E: Engine + 'static> GuestService<E> {
             &parameters.credentials.postgres_password,
         )?;
         validate_secret("redis_password", &parameters.credentials.redis_password)?;
+        if parameters.callback_ports.len() > MAX_CALLBACK_PORTS
+            || parameters.callback_ports.contains(&0)
+        {
+            return Err(GuestError::invalid(
+                "callback_ports must be at most eight non-zero ports",
+            ));
+        }
         let images = [
             &parameters.images.postgres,
             &parameters.images.redis,
@@ -55,6 +67,49 @@ impl<E: Engine + 'static> GuestService<E> {
             validate_image(image)?;
         }
         Ok(parameters)
+    }
+
+    /// Where the callback ports are kept, so a guestd that restarts between
+    /// `core.*` and the next `sandbox.ensure` still knows them.
+    pub(crate) fn callback_ports_path(&self) -> PathBuf {
+        self.state_root.join("run").join("callback-ports.json")
+    }
+
+    /// Keep the ports a sandbox may reach on the host gateway. An empty list
+    /// (an older locald) leaves whatever was recorded.
+    pub(crate) fn record_callback_ports(
+        &self,
+        parameters: &CoreParameters,
+    ) -> Result<(), GuestError> {
+        if parameters.callback_ports.is_empty() {
+            return Ok(());
+        }
+        let path = self.callback_ports_path();
+        let staged = path.with_extension("json.tmp");
+        let body = serde_json::to_vec(&parameters.callback_ports)
+            .map_err(|error| GuestError::engine(error.to_string()))?;
+        fs::write(&staged, body)
+            .and_then(|()| fs::rename(&staged, &path))
+            .map_err(|error| GuestError::engine(error.to_string()))
+    }
+
+    /// The recorded callback ports. None recorded is an error, not an empty
+    /// list: a sandbox started without them could reach nothing it needs on
+    /// the host, and would fail its callback wait with a misleading message.
+    pub(crate) fn callback_ports(&self) -> Result<Vec<u16>, GuestError> {
+        let raw = fs::read(self.callback_ports_path()).map_err(|_| GuestError {
+            code: "sandbox_isolation_failed".into(),
+            message: "the host's callback ports are not known yet; the managed \
+                      runtime has not been started on this guest"
+                .into(),
+            retryable: true,
+            status_code: 503,
+        })?;
+        serde_json::from_slice(&raw).map_err(|error| {
+            GuestError::engine(format!(
+                "the recorded callback ports are unreadable: {error}"
+            ))
+        })
     }
 
     pub(crate) fn ensure_postgres(&self, parameters: &CoreParameters) -> Result<(), GuestError> {

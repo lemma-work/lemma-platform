@@ -17,6 +17,7 @@ pub(crate) fn build_run_arguments(
     runtime_token: Option<&Path>,
     env_file: &Path,
     host_gateway: &str,
+    host_loopback_directory: &Path,
 ) -> Vec<String> {
     let metadata = serde_json::to_string(&parameters.metadata)
         .expect("validated sandbox metadata must serialize");
@@ -61,6 +62,8 @@ pub(crate) fn build_run_arguments(
         "--label".into(),
         format!("lemma.work/host-access={}", parameters.host_access),
         "--label".into(),
+        format!("lemma.work/host-loopback={}", parameters.host_loopback),
+        "--label".into(),
         format!("lemma.work/hardening={SANDBOX_HARDENING_VERSION}"),
         "--env-file".into(),
         env_file.display().to_string(),
@@ -98,6 +101,21 @@ pub(crate) fn build_run_arguments(
         arguments.extend([
             "--add-host".into(),
             format!("host.lemma.internal:{host_gateway}"),
+        ]);
+    }
+    // The loopback relay, for the one sandbox the backend granted it to.
+    //
+    // The directory, not the socket inside it: guestd rebinds the socket when
+    // it restarts, and a bind mount of the old socket file would go on naming
+    // an inode nobody listens on. The directory is root's and not writable
+    // here, so the sandbox can use the socket but not replace it.
+    if parameters.host_loopback {
+        arguments.extend([
+            "--mount".into(),
+            format!(
+                "type=bind,src={},dst={HOST_LOOPBACK_MOUNT}",
+                host_loopback_directory.display()
+            ),
         ]);
     }
     match parameters.workload_kind {

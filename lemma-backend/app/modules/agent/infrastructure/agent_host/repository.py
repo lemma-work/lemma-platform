@@ -37,6 +37,71 @@ from app.modules.agent.infrastructure.runtime_models import (
 _SEEN_WRITE_INTERVAL_SECONDS = 20
 
 
+def _negotiated_status(
+    hello: HostHello, capacity: dict[str, int]
+) -> tuple[int | None, AgentHostStatus]:
+    """The protocol a heartbeat negotiates, and the status it puts the host in."""
+    try:
+        protocol = hello.negotiate()
+    except ValueError:
+        return None, AgentHostStatus.UPGRADE_REQUIRED
+    explicitly_draining = capacity.get("available_runs") == 0 and capacity.get(
+        "active_runs", 0
+    ) < capacity.get("max_runs", 0)
+    return protocol, (
+        AgentHostStatus.DRAINING if explicitly_draining else AgentHostStatus.ONLINE
+    )
+
+
+#: The ``capacity`` key host execution's report is kept under. See
+#: docs/architecture/desktop-host-execution.md §2.
+HOST_EXECUTION_CAPACITY_KEY = "host_execution"
+
+
+def _stored_capacity(
+    previous: dict | None,
+    capacity: dict[str, object],
+    host_execution: dict[str, object] | None,
+) -> dict[str, object]:
+    """The row's ``capacity``: this heartbeat's run slots, and host execution.
+
+    The two arrive separately -- run slots on every frame, host execution on a
+    ``hello`` and on the ``control`` frames that carry it -- and share one
+    column. So neither replaces the other: ``None`` host execution keeps what
+    the row already said.
+    """
+    stored = {
+        key: value
+        for key, value in capacity.items()
+        if key != HOST_EXECUTION_CAPACITY_KEY
+    }
+    kept = (
+        host_execution
+        if host_execution is not None
+        else (previous or {}).get(HOST_EXECUTION_CAPACITY_KEY)
+    )
+    if kept is not None:
+        stored[HOST_EXECUTION_CAPACITY_KEY] = kept
+    return stored
+
+
+def _row_already_says(
+    host: AgentHostModel,
+    *,
+    protocol: int | None,
+    host_release: str,
+    status: AgentHostStatus,
+    capacity: dict[str, object],
+) -> bool:
+    """Whether a heartbeat would write nothing new."""
+    return (
+        host.protocol_version == protocol
+        and host.host_release == host_release
+        and host.status == status.value
+        and (host.capacity or {}) == capacity
+    )
+
+
 class AgentHostRepository:
     def __init__(self, uow: SqlAlchemyUnitOfWork):
         self.uow = uow
@@ -206,12 +271,15 @@ class AgentHostRepository:
         host_id: UUID,
         hello: HostHello,
         capacity: dict,
+        host_execution: dict[str, object] | None = None,
         now: datetime | None = None,
     ) -> AgentHostModel:
         """Record one heartbeat, rewriting the row only when something changed.
 
         ``control`` frames arrive at least every 20s; skipping no-op writes
         keeps an idle host from producing a locked row update on every one.
+        ``host_execution`` is stored inside ``capacity``; ``None`` keeps the
+        report already there (see ``_stored_capacity``).
         """
         timestamp = now or utcnow()
         host = await self.require(host_id)
@@ -220,30 +288,17 @@ class AgentHostRepository:
         if host.installation_id != hello.installation_id:
             raise AgentHostProtocolViolation("installation identity changed")
 
-        try:
-            protocol = hello.negotiate()
-            explicitly_draining = capacity.get("available_runs") == 0 and capacity.get(
-                "active_runs", 0
-            ) < capacity.get("max_runs", 0)
-            status = (
-                AgentHostStatus.DRAINING
-                if explicitly_draining
-                else AgentHostStatus.ONLINE
-            )
-        except ValueError:
-            protocol = None
-            status = AgentHostStatus.UPGRADE_REQUIRED
-
+        protocol, status = _negotiated_status(hello, capacity)
         recently_seen = host.last_seen_at is not None and host.last_seen_at > (
             timestamp - timedelta(seconds=_SEEN_WRITE_INTERVAL_SECONDS)
         )
-        unchanged = (
-            host.protocol_version == protocol
-            and host.host_release == hello.host_release
-            and host.status == status.value
-            and (host.capacity or {}) == capacity
-        )
-        if recently_seen and unchanged:
+        if recently_seen and _row_already_says(
+            host,
+            protocol=protocol,
+            host_release=hello.host_release,
+            status=status,
+            capacity=_stored_capacity(host.capacity, capacity, host_execution),
+        ):
             return host
 
         host = await self.require(host_id, for_update=True)
@@ -251,7 +306,9 @@ class AgentHostRepository:
             raise AgentHostProtocolViolation("Agent Host is revoked")
         host.protocol_version = protocol
         host.host_release = hello.host_release
-        host.capacity = capacity
+        # Merged against the row as locked, so a report written by another
+        # replica between the two reads is the one kept.
+        host.capacity = _stored_capacity(host.capacity, capacity, host_execution)
         host.status = status.value
         host.last_seen_at = timestamp
         await self.session.flush()

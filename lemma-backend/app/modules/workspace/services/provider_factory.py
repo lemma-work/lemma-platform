@@ -30,12 +30,31 @@ def build_provider(name: str | None = None):
     """
     chosen = name or workspace_settings.provider
     if chosen == "e2b":
-        return _build_e2b_provider()
+        return _with_host_execution(_build_e2b_provider())
     if chosen == "lemma_local":
-        return _build_lemma_local_provider()
+        return _with_host_execution(_build_lemma_local_provider())
     if chosen == "docker":
-        return _build_docker_provider()
+        return _with_host_execution(_build_docker_provider())
     raise RuntimeError(f"unsupported workspace provider: {chosen}")
+
+
+def _with_host_execution(provider):
+    """On a Desktop install, put this Mac beside the configured fabric.
+
+    Only host sandboxes -- ids minted by ``domain/host_execution`` for a run the
+    agent module chose to execute on the host -- ever reach the second
+    provider, so every other sandbox behaves exactly as before. Off Desktop
+    there is no Mac beside the backend, and the configured provider is returned
+    as-is.
+    """
+    from app.modules.identity.contracts.installation import is_desktop_installation
+
+    if not is_desktop_installation():
+        return provider
+    from app.modules.workspace.providers.host_routing import HostRoutingProvider
+    from app.modules.workspace.services.host_workspace import build_host_provider
+
+    return HostRoutingProvider(provider, build_host_provider())
 
 
 def _build_lemma_local_provider():

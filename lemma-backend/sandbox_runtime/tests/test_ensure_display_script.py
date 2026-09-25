@@ -416,12 +416,16 @@ class TestTheProxyIsTheServersDecision:
 class TestLoopbackFallsThroughToTheHost:
     """`localhost` in the sandbox, and the machine the person is sitting at.
 
-    On Desktop their own code runs on their computer -- a coding agent is given
-    a folder there -- so `npm run dev` listens on *their* machine while this
-    browser is in a container. Verified end to end on the real image with a
-    real Chromium: with a server on the host and nothing on that port in the
-    sandbox, `localhost:<port>` reached the host; with the sandbox serving the
-    same port, both spellings stayed in the sandbox.
+    On Desktop the owner's agent can run commands on their Mac, so `npm run
+    dev` listens on *their* machine while this browser is in a container.
+    Verified end to end on the real image with a real Chromium: with a server
+    on the host and nothing on that port in the sandbox, `localhost:<port>`
+    reached the host; with the sandbox serving the same port, both spellings
+    stayed in the sandbox.
+
+    Whether there is a host to fall through to at all is whether the loopback
+    relay's socket is there: guestd mounts it into the installation owner's
+    own workspace and nowhere else.
     """
 
     def _config(self, environment: dict[str, str]) -> dict:
@@ -429,32 +433,73 @@ class TestLoopbackFallsThroughToTheHost:
 
         return json.loads(Path(environment["AGENT_BROWSER_CONFIG"]).read_text())
 
-    def _with_host(self, tmp_path: Path, vnc_port: int, *, alias_resolves: bool):
+    @pytest.fixture
+    def relay_socket(self):
+        """A real listening Unix socket where guestd would mount the relay's.
+
+        Under /tmp: a socket path is limited to ~104 bytes on macOS, and
+        pytest's temporary directories are longer than that there.
+        """
+        import shutil
+        import tempfile
+
+        directory = Path(tempfile.mkdtemp(prefix="lemma-relay-", dir="/tmp"))
+        path = directory / "relay.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(path))
+        listener.listen(1)
+        try:
+            yield path
+        finally:
+            listener.close()
+            shutil.rmtree(directory, ignore_errors=True)
+
+    def _sandbox(self, tmp_path: Path, vnc_port: int, *, relay: Path | None):
         environment, _ = _workspace(tmp_path, browser_live=True, vnc_port=vnc_port)
-        binaries = tmp_path / "bin"
-        # `getent hosts` is how the script asks whether there is a host to fall
-        # through to at all. Every fabric except Desktop has none.
-        _stub(binaries, "getent", "exit 0" if alias_resolves else "exit 2")
+        environment["LEMMA_HOST_LOOPBACK_SOCKET"] = str(
+            relay if relay is not None else tmp_path / "no-relay" / "relay.sock"
+        )
         # The fall-through itself is its own module with its own tests; what is
         # under test here is whether this script starts one and tells Chrome.
-        _stub(binaries, "python3", "sleep 300")
+        _stub(tmp_path / "bin", "python3", "sleep 300")
         return environment
 
-    def test_a_fabric_with_no_host_is_left_alone(self, tmp_path, vnc_port) -> None:
-        """Docker and E2B have no host to fall through to.
+    def test_a_sandbox_without_the_relay_is_left_alone(
+        self, tmp_path, vnc_port
+    ) -> None:
+        """Invited people's sandboxes, Docker, E2B and Windows have no relay.
 
-        The flag is not harmless there: it would point Chrome at a proxy that
-        never starts, and Chrome fails a navigation outright when its proxy
-        refuses.
+        The flag is not harmless there: it would point Chrome at a proxy with
+        nowhere to send what it cannot serve, and Chrome fails a navigation
+        outright when its proxy refuses.
         """
-        environment = self._with_host(tmp_path, vnc_port, alias_resolves=False)
+        environment = self._sandbox(tmp_path, vnc_port, relay=None)
         _run(environment)
         arguments = self._config(environment)["args"]
         assert "--proxy-server" not in arguments
         assert "loopback" not in arguments
 
+    def test_the_owners_sandbox_points_chrome_at_the_fall_through(
+        self, tmp_path, vnc_port, relay_socket
+    ) -> None:
+        """With the relay mounted, Chrome is sent loopback through the proxy.
+
+        The proxy is already listening here, as it is on every launch after
+        the first, so the script's own start is not what is under test.
+        """
+        environment = self._sandbox(tmp_path, vnc_port, relay=relay_socket)
+        with socket.socket() as proxy:
+            proxy.bind(("127.0.0.1", 0))
+            proxy.listen(8)
+            port = proxy.getsockname()[1]
+            environment["LEMMA_HOST_FALLBACK_PORT"] = str(port)
+            _run(environment)
+        arguments = self._config(environment)["args"]
+        assert f"--proxy-server=http://127.0.0.1:{port}" in arguments
+        assert "--proxy-bypass-list=<-loopback>" in arguments
+
     def test_a_server_assigned_proxy_wins_and_the_fall_through_stands_down(
-        self, tmp_path, vnc_port
+        self, tmp_path, vnc_port, relay_socket
     ) -> None:
         """Chrome takes one `--proxy-server`, so the two cannot both be on.
 
@@ -462,7 +507,7 @@ class TestLoopbackFallsThroughToTheHost:
         pointing at their own dev server, so the residential proxy keeps the
         flag and the fall-through does not run.
         """
-        environment = self._with_host(tmp_path, vnc_port, alias_resolves=True)
+        environment = self._sandbox(tmp_path, vnc_port, relay=relay_socket)
         Path(environment["LEMMA_BROWSER_PROXY_FILE"]).parent.mkdir(
             parents=True, exist_ok=True
         )

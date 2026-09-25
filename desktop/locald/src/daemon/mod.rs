@@ -92,6 +92,7 @@ mod config_ops;
 pub mod dispatch;
 mod environment;
 mod handshake;
+mod loopback_ports;
 mod monitors;
 mod reset_ops;
 mod sharing_ops;
@@ -224,6 +225,17 @@ impl Daemon {
                 "the record of an in-flight update could not be read: {error}; \
                  check this installation before updating it again"
             )),
+        }
+        // Before anything starts the runtime, so the relay never serves a
+        // connection without knowing every port that is Lemma's.
+        if let Some(runtime) = managed_runtime.as_ref() {
+            runtime.set_lemma_ports(loopback_ports::daemon_lemma_ports(
+                host_processes.clone(),
+                sharing.clone(),
+                Arc::clone(&agent_host),
+            ));
+            let owner_switch = Arc::clone(&agent_host);
+            runtime.set_host_execution(Arc::new(move || owner_switch.host_execution_enabled()));
         }
         Ok(Arc::new(Self {
             paths,

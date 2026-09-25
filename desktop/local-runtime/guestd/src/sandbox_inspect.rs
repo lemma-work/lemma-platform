@@ -122,6 +122,11 @@ pub(crate) fn snapshot_from_inspect_with(
         .and_then(|value| value.get("lemma.work/host-access"))
         .and_then(Value::as_str)
         .is_none_or(|value| value != "false");
+    // The relay was never granted before its label existed.
+    let host_loopback = labels
+        .and_then(|value| value.get("lemma.work/host-loopback"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "true");
     // Which hardening this container was made with; see
     // `SANDBOX_HARDENING_VERSION`. No label is a container from before any.
     let hardening = labels
@@ -178,7 +183,7 @@ pub(crate) fn snapshot_from_inspect_with(
         "provider_id": provider_id,
         "image": image,
         "metadata": metadata,
-        "grants": {"host_access": host_access},
+        "grants": {"host_access": host_access, "host_loopback": host_loopback},
         "hardening": hardening,
         "status": {
             "id": sandbox_id,

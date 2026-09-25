@@ -30,6 +30,7 @@ from app.modules.agent.api.agent_host_schemas import (
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e.waiters import eventually
+from app.modules.test_support.e2e.agent_host_binary import agent_host_binary
 
 pytestmark = [pytest.mark.e2e, pytest.mark.local_cli, pytest.mark.approval_worker]
 
@@ -101,13 +102,7 @@ async def running_host(
     root: Path, base_url: str, pairing_code: SecretStr, *, scenario_file: str
 ) -> AsyncIterator[Path]:
     assert os.name == "posix", "The scripted ACP process lane runs on macOS or Linux"
-    binary = Path(
-        os.environ.get(
-            "LEMMA_AGENT_HOST_E2E_BINARY",
-            str(_REPOSITORY / "desktop/target/debug/lemma-agent-host"),
-        )
-    )
-    assert binary.is_file(), "Build lemma-agent-host first: make desktop-agent-host-e2e"
+    binary = agent_host_binary()
     fixture = _REPOSITORY / "desktop/agent-host/tests/fixtures/scripted_acp_agent.py"
     shims = root / "shim-bin"
     shims.mkdir()

@@ -58,6 +58,7 @@ pub(super) fn test_controller() -> (tempfile::TempDir, ManagedRuntimeController)
         pending_auth: Mutex::new(None),
         pending_images: Mutex::new(None),
         cancellation: lemma_desktop_process::Cancellation::default(),
+        host_loopback: HostLoopbackState::default(),
         status: Mutex::new(Some(ManagedRuntimeStatus {
             endpoint_host: Some("192.168.64.10".into()),
             host_gateway: "192.168.64.1".into(),
