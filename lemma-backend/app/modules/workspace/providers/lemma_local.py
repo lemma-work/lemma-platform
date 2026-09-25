@@ -164,7 +164,19 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             )
 
         guest_id = self._guest_id(spec.sandbox_id, spec.kind)
-        existed = await self._find(guest_id, deadline_at=spec.deadline_at) is not None
+        try:
+            existed = (
+                await self._find(guest_id, deadline_at=spec.deadline_at) is not None
+            )
+        except LocalBridgeError as exc:
+            # Not knowing is not "absent": read as absent, a failed status
+            # call reported the user's disk as recreated and moved the
+            # storage generation on while their files sat untouched.
+            if exc.retryable:
+                raise ProviderCreateAmbiguous(str(exc)) from exc
+            raise ProviderRejected(str(exc)) from exc
+        except asyncio.TimeoutError as exc:
+            raise ProviderCreateAmbiguous("managed runtime status timed out") from exc
 
         workspace = spec.kind is SandboxKind.WORKSPACE
         apps = (
@@ -277,7 +289,13 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         if resolved is None:
             return None
         guest_id, _ = resolved
-        snapshot = await self._find(guest_id, deadline_at=deadline_at)
+        try:
+            snapshot = await self._find(guest_id, deadline_at=deadline_at)
+        except LocalBridgeError as exc:
+            # As Docker's inspect does with an engine error: a guest that did
+            # not answer has not said the sandbox is gone, and the caller
+            # rebuilds -- or the sweep reclaims -- on "gone".
+            raise ProviderRejected(str(exc)) from exc
         if snapshot is None:
             return None
         return ProviderInstance(
@@ -318,7 +336,12 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             # than by holding the guest's single control channel open: that
             # channel serves one request at a time, and a long wait on it stalls
             # every other sandbox operation on the machine.
-            snapshot = await self._find(instance.provider_id, deadline_at=deadline_at)
+            try:
+                snapshot = await self._find(
+                    instance.provider_id, deadline_at=deadline_at
+                )
+            except LocalBridgeError as exc:
+                raise SandboxUnavailable(str(exc)) from exc
             if snapshot is None:
                 raise SandboxUnavailable(
                     f"function sandbox {instance.provider_id} disappeared before "
@@ -614,18 +637,17 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
     async def _find(
         self, guest_id: str, *, deadline_at: datetime
     ) -> BridgeResult | None:
-        """Absence, reported as absence.
+        """Absence, reported as absence -- and nothing else as absence.
 
         ``_status`` turns not-found into ``ProviderGone`` because a caller
         holding a handle needs that to be definitive. Here the question is
         merely "is there one?", so the same answer is a None rather than a
-        failure.
+        failure. Any other failure is raised: the guest did not answer, which
+        is not the same as saying there is none.
         """
         try:
             return await self._status(guest_id, deadline_at=deadline_at)
         except ProviderGone:
-            return None
-        except LocalBridgeError:
             return None
 
     async def _status(self, guest_id: str, *, deadline_at: datetime) -> BridgeResult:

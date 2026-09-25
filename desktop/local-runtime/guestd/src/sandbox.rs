@@ -20,7 +20,8 @@ pub(crate) enum ExistingContainer {
     /// again, and the old one removed only once the new one's preflight has
     /// passed (`GuestService::replace_and_run`).
     Replace,
-    /// Running a different generation (image or metadata): refused.
+    /// Running a different generation (image or metadata) that is not older
+    /// than the one asked for: refused.
     Conflict,
 }
 
@@ -57,7 +58,27 @@ pub(crate) fn existing_container_verdict(
         return ExistingContainer::Replace;
     }
     if snapshot["metadata"] != json!(parameters.metadata) || snapshot["image"] != parameters.image {
-        return ExistingContainer::Conflict;
+        // A *newer* generation replaces the running one. The backend moves a
+        // sandbox to a new epoch -- a new image, a forced reconcile -- by
+        // ensuring it again, and this guest's sandbox is the user's storage,
+        // so the backend never deletes it first. Refusing that as a conflict
+        // (non-retryable, and handled nowhere) left the sandbox stuck on the
+        // old generation until somebody removed the container by hand. An
+        // older or unnumbered one is still refused: that is a caller that
+        // lost a race, and must not undo the newer one.
+        let epoch = |metadata: &Value| {
+            metadata
+                .get("lemma-epoch")
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse::<u64>().ok())
+        };
+        return match (
+            epoch(&json!(parameters.metadata)),
+            epoch(&snapshot["metadata"]),
+        ) {
+            (Some(requested), Some(running)) if requested > running => ExistingContainer::Replace,
+            _ => ExistingContainer::Conflict,
+        };
     }
     // Same generation. A grant is not part of it -- it is who may reach what,
     // not what runs -- so a change is applied by making the container again

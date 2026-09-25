@@ -472,6 +472,46 @@ fn a_different_generation_is_still_refused_and_a_stopped_one_replaced() {
     );
 }
 
+/// A newer epoch replaces the running sandbox rather than being refused --
+/// that is how the backend moves one to a new image -- while an older one,
+/// a caller that lost a race, still is.
+#[test]
+fn a_newer_epoch_replaces_the_running_sandbox_and_an_older_one_is_refused() {
+    let mut asked = workspace_parameters(true);
+    let running = |epoch: &str, image: &str| {
+        json!({
+            "image": image,
+            "metadata": {"lemma-epoch": epoch},
+            "grants": {"host_access": true, "host_loopback": false},
+            "hardening": SANDBOX_HARDENING_VERSION,
+            "status": {"status": "RUNNING"},
+        })
+    };
+    asked.metadata = serde_json::from_value(json!({"lemma-epoch": "3"})).unwrap();
+    let old_image = "ghcr.io/lemma/workspace@sha256:old";
+    assert_eq!(
+        existing_container_verdict(&running("2", old_image), &asked),
+        ExistingContainer::Replace
+    );
+    assert_eq!(
+        existing_container_verdict(&running("2", &asked.image), &asked),
+        ExistingContainer::Replace
+    );
+    assert_eq!(
+        existing_container_verdict(&running("4", old_image), &asked),
+        ExistingContainer::Conflict
+    );
+    assert_eq!(
+        existing_container_verdict(&running("3", old_image), &asked),
+        ExistingContainer::Conflict,
+        "the same epoch on a different image is not a newer generation"
+    );
+    assert_eq!(
+        existing_container_verdict(&running("3", &asked.image), &asked),
+        ExistingContainer::Reuse
+    );
+}
+
 /// A running container made before the current hardening is replaced, not
 /// reused: reuse would keep the capabilities and privileges it was created
 /// with. No label at all is a container from before any hardening.

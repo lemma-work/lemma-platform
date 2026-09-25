@@ -598,3 +598,32 @@ async def test_a_function_sandbox_is_started_with_its_credential_and_gateway(
         workspace, port=8080, deadline_at=_deadline()
     )
     assert workspace_endpoint.headers == {}
+
+
+async def test_a_guest_that_does_not_answer_is_not_a_guest_with_nothing_in_it(
+    tmp_path: Path,
+) -> None:
+    """Asking whether a sandbox exists and getting no answer used to read as
+    "it does not": create reported the user's disk as new -- which moves the
+    storage generation on -- and inspect told the service to rebuild."""
+    bridge = _bridge(
+        tmp_path,
+        "import json,sys; request = json.loads(sys.stdin.read())\n"
+        "if request['operation'] == 'sandbox.status':\n"
+        "    print(json.dumps({'ok': False, 'error': {'code': 'busy',"
+        " 'message': 'guest is busy', 'retryable': True}})); sys.exit(1)\n"
+        "print(json.dumps({'ok': True, 'result': {'status': {'state': 'running'},"
+        " 'provider_id': request['parameters']['sandbox_id']}}))\n",
+    )
+    provider = LemmaLocalSandboxProvider(
+        LemmaLocalProviderConfig(executable=str(bridge)),
+        RuntimeCredentialSigner(key=b"k" * 32),
+    )
+    sandbox_id = uuid4()
+    with pytest.raises(ProviderCreateAmbiguous):
+        await provider.create(_spec(sandbox_id))
+    with pytest.raises(ProviderRejected):
+        await provider.inspect(
+            naming.container_name(sandbox_id, SandboxKind.WORKSPACE, 1),
+            deadline_at=_deadline(),
+        )
