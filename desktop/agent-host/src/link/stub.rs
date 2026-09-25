@@ -7,6 +7,7 @@
 //! it can be read, rather than inherited from a real server's defaults.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -44,6 +45,14 @@ pub(crate) struct StubState {
     pushes: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
     /// Close the next `hello` with this code instead of welcoming it.
     pub(crate) refuse_hello_with: Mutex<Option<u16>>,
+    /// Answer the next `hello` with an `error` frame and keep the socket open,
+    /// leaving it to the host to hang up.
+    pub(crate) reject_hello: Mutex<bool>,
+    /// Runs whose next event batch is refused, once each: a stream Lemma lost
+    /// and that a replay restores.
+    pub(crate) refused_once_runs: Mutex<Vec<Uuid>>,
+    /// Sockets the stand-in is serving right now, handshake or not.
+    open_sockets: AtomicUsize,
     harness_ids: Mutex<HashMap<String, Uuid>>,
 }
 
@@ -60,6 +69,10 @@ impl StubState {
                 })
                 .is_ok()
         })
+    }
+
+    pub(crate) fn open_sockets(&self) -> usize {
+        self.open_sockets.load(Ordering::SeqCst)
     }
 
     pub(crate) fn connected(&self) -> bool {
@@ -120,7 +133,18 @@ fn reply(request: &Frame, kind: &str, body: Value) -> Frame {
     }
 }
 
+/// Counts a socket as open for as long as `serve` holds it.
+struct OpenSocket(Arc<StubState>);
+
+impl Drop for OpenSocket {
+    fn drop(&mut self) {
+        self.0.open_sockets.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 async fn serve(state: Arc<StubState>, mut socket: WebSocket) {
+    state.open_sockets.fetch_add(1, Ordering::SeqCst);
+    let _open = OpenSocket(Arc::clone(&state));
     let (push_tx, mut push_rx) = mpsc::unbounded_channel::<Frame>();
     loop {
         tokio::select! {
@@ -148,6 +172,18 @@ async fn serve(state: Arc<StubState>, mut socket: WebSocket) {
                         })))
                         .await;
                     return;
+                }
+                if frame.kind == host::HELLO && std::mem::take(&mut *state.reject_hello.lock().unwrap()) {
+                    let refusal = reply(
+                        &frame,
+                        server::ERROR,
+                        json!({ "code": "REFUSED", "message": "refused", "retryable": false }),
+                    );
+                    let text = serde_json::to_string(&refusal).unwrap();
+                    if socket.send(Message::Text(text.into())).await.is_err() {
+                        return;
+                    }
+                    continue;
                 }
                 if frame.kind == host::HELLO {
                     *state.pushes.lock().unwrap() = Some(push_tx.clone());
@@ -227,7 +263,13 @@ fn answer(state: &StubState, frame: &Frame) -> Option<Frame> {
         host::EVENTS => {
             let batch: EventBatch = serde_json::from_value(frame.body.clone()).unwrap();
             let first = batch.events.first().expect("batches are never empty");
-            if state.refused_runs.lock().unwrap().contains(&first.run_id) {
+            let refused_once = {
+                let mut once = state.refused_once_runs.lock().unwrap();
+                let before = once.len();
+                once.retain(|run_id| *run_id != first.run_id);
+                once.len() != before
+            };
+            if refused_once || state.refused_runs.lock().unwrap().contains(&first.run_id) {
                 // What the backend answers for `event sequence gap`.
                 return Some(reply(
                     frame,

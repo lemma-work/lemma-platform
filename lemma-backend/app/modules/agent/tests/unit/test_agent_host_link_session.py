@@ -681,6 +681,84 @@ async def test_a_link_does_not_supersede_itself():
     await link.close()
 
 
+async def _held(channels: FakeChannels, generation: int) -> None:
+    """Wait until the link that claimed ``generation`` is blocked announcing it."""
+    for _ in range(200):
+        if generation in channels.held:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"generation {generation} never announced")
+
+
+@pytest.mark.parametrize("announced_first", ["older", "newer"])
+async def test_racing_handshakes_leave_exactly_the_newer_link(announced_first):
+    """Both subscribe before either announces; each then hears the other.
+
+    Deciding "newer" by connection id closed both, because each saw a
+    connection id that was not its own. The generation each hello claimed is
+    the order, whichever announcement lands first.
+    """
+    store, registry = FakeStore(), AgentHostLinkRegistry()
+    channels = FakeChannels(hold_announcements=True)
+    older = Link(store=store, channels=channels, registry=registry)
+    await older.open()
+    await _held(channels, 1)  # subscribed, checked ownership, now announcing
+    newer = Link(store=store, channels=channels, registry=registry)
+    await newer.open()
+    await _held(channels, 2)
+    assert channels.subscribers(host_poke_channel(store.host_id)) == 2
+
+    order = [1, 2] if announced_first == "older" else [2, 1]
+    for generation in order:
+        channels.held[generation].set()
+        await asyncio.sleep(0.05)
+
+    assert (await older.ended())[0] == LinkCloseCode.SUPERSEDED
+    await asyncio.sleep(0.1)
+    assert newer.task is not None and not newer.task.done()
+    assert newer.socket.closed is None
+    assert len(registry) == 1
+    await newer.close()
+
+
+async def test_a_newer_hello_announced_before_this_link_subscribed_still_wins():
+    """The newer link's notice went out while nobody here was listening.
+
+    It claimed its generation before announcing, so the read this link takes
+    once subscribed sees it -- and this link closes without announcing, so it
+    cannot unseat the newer one either.
+    """
+    channels = FakeChannels()
+    channels.subscribe_gate = asyncio.Event()
+    older = Link(channels=channels)
+    await older.open()
+    # A newer hello elsewhere: claimed, announced, heard by no one.
+    older.store.generation += 1
+    channels.subscribe_gate.set()
+
+    assert (await older.ended())[0] == LinkCloseCode.SUPERSEDED
+    assert not any(
+        isinstance(message, dict) and message.get("type") == "superseded"
+        for _, message in channels.published
+    )
+
+
+async def test_a_notice_without_a_generation_supersedes_nothing():
+    """An unreadable or pre-generation notice is not a reason to close."""
+    link = Link()
+    await link.open()
+    await _subscribed(link)
+
+    await link.channels.publish(
+        host_poke_channel(link.store.host_id),
+        {"type": "superseded", "connection_id": str(uuid7())},
+    )
+    await asyncio.sleep(0.05)
+
+    assert link.task is not None and not link.task.done()
+    await link.close()
+
+
 async def test_revoking_the_host_closes_its_live_link():
     link = Link()
     await link.open()
