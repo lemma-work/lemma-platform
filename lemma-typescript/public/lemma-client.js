@@ -17496,7 +17496,7 @@ var LemmaClient = (() => {
   // src/datastore-changes.ts
   var RECONNECT_BASE_DELAY_MS = 500;
   var RECONNECT_MAX_DELAY_MS = 3e4;
-  var WS_POLICY_VIOLATION = 1008;
+  var WS_UNAUTHENTICATED = 4401;
   function reconnectDelayMs(attempt) {
     const ceiling = Math.min(
       RECONNECT_MAX_DELAY_MS,
@@ -17517,21 +17517,23 @@ var LemmaClient = (() => {
     let cursor = options.since;
     let attempt = 0;
     let stopped = false;
+    let authRefreshed = false;
     let reconnectTimer = null;
     const status = (next) => {
       var _a;
       return (_a = options.onStatus) == null ? void 0 : _a.call(options, next);
     };
-    const scheduleReconnect = () => {
+    const fail = (error) => {
       var _a;
       if (stopped) return;
+      stopped = true;
+      status("closed");
+      (_a = options.onError) == null ? void 0 : _a.call(options, error);
+    };
+    const scheduleReconnect = () => {
+      if (stopped) return;
       if (options.maxRetries != null && attempt >= options.maxRetries) {
-        stopped = true;
-        status("closed");
-        (_a = options.onError) == null ? void 0 : _a.call(
-          options,
-          new Error("Datastore change stream: max reconnect attempts reached")
-        );
+        fail(new Error("Datastore change stream: max reconnect attempts reached"));
         return;
       }
       const delay = reconnectDelayMs(attempt);
@@ -17561,10 +17563,6 @@ var LemmaClient = (() => {
         return;
       }
       socket = ws;
-      ws.onopen = () => {
-        attempt = 0;
-        status("open");
-      };
       ws.onmessage = (event) => {
         var _a2;
         let frame;
@@ -17576,6 +17574,9 @@ var LemmaClient = (() => {
         if (!frame || typeof frame !== "object") return;
         const record = frame;
         if (record.type === "ready") {
+          attempt = 0;
+          authRefreshed = false;
+          status("open");
           cursor = record.since || cursor;
           if (cursor) (_a2 = options.onReady) == null ? void 0 : _a2.call(options, { since: cursor });
           return;
@@ -17589,8 +17590,20 @@ var LemmaClient = (() => {
           status("closed");
           return;
         }
-        if (event.code === WS_POLICY_VIOLATION && !options.useCookie) {
-          auth.refreshAccessToken().then(scheduleReconnect, scheduleReconnect);
+        if (event.code === WS_UNAUTHENTICATED) {
+          if (authRefreshed) {
+            fail(new Error("Datastore change stream: session rejected after refresh"));
+            return;
+          }
+          authRefreshed = true;
+          auth.refreshAccessToken().then(
+            scheduleReconnect,
+            (error) => fail(
+              new Error(
+                `Datastore change stream: session refresh failed (${error instanceof Error ? error.message : String(error)})`
+              )
+            )
+          );
           return;
         }
         scheduleReconnect();

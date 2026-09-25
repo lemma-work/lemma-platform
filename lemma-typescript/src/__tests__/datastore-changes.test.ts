@@ -105,7 +105,14 @@ describe("watchDatastoreChanges", () => {
     handle.close();
   });
 
-  it("refreshes the token and resumes from cursor after a 1008 close", async () => {
+  // refreshAccessToken (microtask) -> scheduleReconnect -> setTimeout(0) -> connect
+  const settle = async () => {
+    await flush();
+    await flush();
+    await flush();
+  };
+
+  it("refreshes the token and resumes from cursor after a 4401 close", async () => {
     const auth = makeAuth();
     const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
       onChange: vi.fn(),
@@ -115,17 +122,136 @@ describe("watchDatastoreChanges", () => {
     const first = FakeWebSocket.instances[0];
     first.onopen?.();
     first.onmessage?.({ data: JSON.stringify({ type: "ready", since: "5-0" }) });
-    first.onclose?.({ code: 1008 });
-
-    // refreshAccessToken (microtask) -> scheduleReconnect -> setTimeout(0) -> connect
-    await flush();
-    await flush();
-    await flush();
+    first.onclose?.({ code: 4401 });
+    await settle();
 
     expect(auth.refreshAccessToken).toHaveBeenCalledTimes(1);
     expect(FakeWebSocket.instances.length).toBe(2);
     expect(FakeWebSocket.instances[1].url).toContain("since=5-0");
+    expect(FakeWebSocket.instances[1].url).toContain("access_token=TOKEN");
 
+    handle.close();
+  });
+
+  it("stops when the session is still rejected after one refresh", async () => {
+    // The server accepts before it authenticates, so a rejected socket still
+    // opens: `onopen` then 4401, with no `ready` in between.
+    const auth = makeAuth();
+    const onError = vi.fn();
+    const onStatus = vi.fn();
+    const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
+      onChange: vi.fn(),
+      onError,
+      onStatus,
+    });
+    await flush();
+
+    FakeWebSocket.instances[0].onopen?.();
+    FakeWebSocket.instances[0].onclose?.({ code: 4401 });
+    await settle();
+    expect(FakeWebSocket.instances.length).toBe(2);
+
+    FakeWebSocket.instances[1].onopen?.();
+    FakeWebSocket.instances[1].onclose?.({ code: 4401 });
+    await settle();
+
+    expect(auth.refreshAccessToken).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(handle.closed).toBe(true);
+    expect(onStatus).not.toHaveBeenCalledWith("open");
+    expect(onStatus).toHaveBeenLastCalledWith("closed");
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0].message).toMatch(/session rejected after refresh/);
+  });
+
+  it("allows another refresh once the stream has gone live again", async () => {
+    const auth = makeAuth();
+    const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
+      onChange: vi.fn(),
+    });
+    await flush();
+
+    FakeWebSocket.instances[0].onclose?.({ code: 4401 });
+    await settle();
+    // The refreshed session is accepted: the budget resets on `ready`.
+    FakeWebSocket.instances[1].onmessage?.({
+      data: JSON.stringify({ type: "ready", since: "6-0" }),
+    });
+    // Much later the token expires again.
+    FakeWebSocket.instances[1].onclose?.({ code: 4401 });
+    await settle();
+
+    expect(auth.refreshAccessToken).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances.length).toBe(3);
+    expect(handle.closed).toBe(false);
+    handle.close();
+  });
+
+  it("stops when the refresh itself fails", async () => {
+    const auth = makeAuth();
+    auth.refreshAccessToken.mockRejectedValue(new Error("Session refresh failed"));
+    const onError = vi.fn();
+    const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
+      onChange: vi.fn(),
+      onError,
+    });
+    await flush();
+
+    FakeWebSocket.instances[0].onclose?.({ code: 4401 });
+    await settle();
+
+    expect(FakeWebSocket.instances.length).toBe(1);
+    expect(handle.closed).toBe(true);
+    expect(onError.mock.calls[0][0].message).toMatch(/session refresh failed/);
+  });
+
+  it("refreshes once in cookie mode too", async () => {
+    const auth = makeAuth();
+    const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
+      onChange: vi.fn(),
+      useCookie: true,
+    });
+    await flush();
+
+    FakeWebSocket.instances[0].onclose?.({ code: 4401 });
+    await settle();
+
+    expect(auth.refreshAccessToken).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(FakeWebSocket.instances[1].url).not.toContain("access_token");
+    handle.close();
+  });
+
+  it("treats other close codes as a dropped connection, not an auth failure", async () => {
+    const auth = makeAuth();
+    const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
+      onChange: vi.fn(),
+    });
+    await flush();
+
+    FakeWebSocket.instances[0].onclose?.({ code: 1008 });
+    await settle();
+
+    expect(auth.refreshAccessToken).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances.length).toBe(2);
+    handle.close();
+  });
+
+  it("reports open on ready, not on the socket opening", async () => {
+    const auth = makeAuth();
+    const onStatus = vi.fn();
+    const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
+      onChange: vi.fn(),
+      onStatus,
+    });
+    await flush();
+
+    FakeWebSocket.instances[0].onopen?.();
+    expect(onStatus).not.toHaveBeenCalledWith("open");
+    FakeWebSocket.instances[0].onmessage?.({
+      data: JSON.stringify({ type: "ready", since: "1-0" }),
+    });
+    expect(onStatus).toHaveBeenLastCalledWith("open");
     handle.close();
   });
 
