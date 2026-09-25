@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import email.utils
 import json
 import time
@@ -95,7 +97,8 @@ def _refreshed_session(payload: object) -> tuple[str, str | None] | None:
 #: Set by the server on requests from a ``lemma`` CLI older than it supports;
 #: the value is the minimum version. Only the CLI is ever sent it.
 _OUTDATED_HEADER = "x-lemma-client-outdated"
-_outdated_warned = False
+# Set once the outdated-CLI notice has been printed: once per process.
+_outdated_notice = threading.Event()
 
 
 def _warn_if_outdated(headers: Any) -> None:
@@ -104,8 +107,7 @@ def _warn_if_outdated(headers: Any) -> None:
     stderr so ``--json`` output on stdout stays parseable. Never raises: a
     notice must not turn a successful call into a failure.
     """
-    global _outdated_warned
-    if _outdated_warned or not headers:
+    if _outdated_notice.is_set() or not headers:
         return
     try:
         minimum = headers.get(_OUTDATED_HEADER)
@@ -113,7 +115,7 @@ def _warn_if_outdated(headers: Any) -> None:
         return
     if not minimum:
         return
-    _outdated_warned = True
+    _outdated_notice.set()
     import sys
 
     current = _client_header().partition("/")[2] or "unknown"

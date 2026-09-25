@@ -4,6 +4,7 @@ retry + error-mapping + timeout paths against fakes (no live backend, no sleeps)
 from __future__ import annotations
 
 import json
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -494,9 +495,8 @@ def test_401_is_not_in_the_retry_set():
 def test_outdated_header_warns_once_on_stderr(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
-    import lemma_sdk.transport as transport_mod
 
-    monkeypatch.setattr(transport_mod, "_outdated_warned", False)
+    monkeypatch.setattr("lemma_sdk.transport._outdated_notice", threading.Event())
     monkeypatch.setenv("LEMMA_CLIENT", "lemma-cli")
     headers = httpx.Headers({"X-Lemma-Client-Outdated": "0.8.1"})
     transport = make_transport()
@@ -517,9 +517,8 @@ def test_outdated_header_warns_once_on_stderr(
 def test_no_outdated_header_no_notice(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
-    import lemma_sdk.transport as transport_mod
 
-    monkeypatch.setattr(transport_mod, "_outdated_warned", False)
+    monkeypatch.setattr("lemma_sdk.transport._outdated_notice", threading.Event())
     transport = make_transport()
     endpoint = FakeEndpoint([FakeResponse(200, parsed={"ok": True})])
     transport.call(endpoint)

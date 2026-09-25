@@ -247,3 +247,42 @@ async def test_the_proxy_reuses_one_client_and_closes_it_on_shutdown() -> None:
     assert first.is_closed
     assert proxy.get_port_proxy_client() is not first
     await proxy.close_port_proxy_client()
+
+
+async def test_the_shared_client_keeps_no_sandbox_cookies() -> None:
+    """The client is process-wide; a sandbox issuing fresh cookies must not
+    grow it. The jar refuses everything a response tries to set."""
+    from app.modules.workspace.api.controllers import port_proxy_controller as proxy
+
+    client = proxy.get_port_proxy_client()
+    try:
+        client.cookies.extract_cookies(
+            httpx.Response(
+                200,
+                headers={"set-cookie": "session=abc; Path=/"},
+                request=httpx.Request("GET", "http://sandbox/"),
+            )
+        )
+        assert len(client.cookies.jar) == 0
+    finally:
+        await proxy.close_port_proxy_client()
+
+
+@pytest.mark.parametrize(
+    ("method", "headers", "expected"),
+    [
+        ("GET", [(b"content-length", b"5")], True),
+        ("OPTIONS", [(b"transfer-encoding", b"chunked")], True),
+        ("POST", [(b"content-length", b"0")], False),
+        ("GET", [], False),
+    ],
+)
+def test_a_body_is_forwarded_when_one_was_sent_whatever_the_method(
+    method: str, headers: list[tuple[bytes, bytes]], expected: bool
+) -> None:
+    from starlette.requests import Request
+
+    from app.modules.workspace.api.controllers.port_proxy_controller import _has_body
+
+    request = Request({"type": "http", "method": method, "headers": headers})
+    assert _has_body(request) is expected

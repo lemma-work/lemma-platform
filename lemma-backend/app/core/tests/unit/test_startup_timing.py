@@ -37,9 +37,13 @@ async def test_a_step_logs_its_duration(caplog) -> None:
 
 async def test_a_failing_step_is_still_logged_and_still_raises(caplog) -> None:
     caplog.set_level(logging.INFO)
+
+    async def connect() -> None:
+        raise RuntimeError("redis is down")
+
     with pytest.raises(RuntimeError):
         async with startup_step("message_bus_connect", service="lemma-test"):
-            raise RuntimeError("redis is down")
+            await connect()
 
     [entry] = _steps(caplog)
     assert entry["step"] == "message_bus_connect"

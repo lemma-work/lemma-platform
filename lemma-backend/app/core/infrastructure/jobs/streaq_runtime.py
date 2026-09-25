@@ -48,7 +48,9 @@ from app.core.observability.backlog_gauges import backlog_gauge_loop
 from app.core.observability.startup_timing import freeze_startup_heap
 from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
 from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
-from app.core.infrastructure.jobs.job_liveness import register_job_liveness_middleware
+from app.core.infrastructure.jobs.job_liveness import (
+    register_job_liveness_middleware,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
@@ -456,9 +458,8 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     started = False
     global _primary_lane_context
     try:
-        # Module-contributed worker lifespans (e.g. agent_surfaces native event
-        # receiver + dedupe-store close; datastore reindex-queue close). Entered
-        # after core startup and unwound before the core closers below.
+        # Module-contributed worker lifespans (e.g. agent_surfaces event receiver,
+        # datastore reindex queue): entered after core startup, unwound first.
         async with AsyncExitStack() as module_stack:
             await module_stack.enter_async_context(
                 outbox_dispatcher_lifespan(
@@ -469,7 +470,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 )
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
-            # Emit only after every core and module lifespan has entered.
+            # Every core and module lifespan has entered; freeze, then announce.
             logger.info("service.started", gc_frozen_objects=freeze_startup_heap())
             started = True
             # Release any secondary lanes only now that the shared broker,

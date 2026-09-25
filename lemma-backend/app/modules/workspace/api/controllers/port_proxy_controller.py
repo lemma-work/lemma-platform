@@ -19,6 +19,7 @@ an upgrade is a separate protocol, not a method.
 from __future__ import annotations
 
 from functools import lru_cache
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta, timezone
@@ -75,7 +76,13 @@ def _ws_closed() -> type[Exception]:
 
 router = APIRouter(prefix="/workspace-ports", tags=["Workspace"])
 
-_BODYLESS_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+def _has_body(request: Request) -> bool:
+    """Whether the caller sent content: a non-zero length, or chunked."""
+    length = request.headers.get("content-length")
+    if length is not None:
+        return length.strip() not in ("", "0")
+    return "transfer-encoding" in request.headers
 
 
 # One client for every proxied request. A client per request leaked whenever
@@ -84,7 +91,15 @@ _BODYLESS_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # one needs the Desktop tunnel transport and a sandbox-sized read timeout.
 @lru_cache(maxsize=1)
 def _build_port_proxy_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=httpx.Timeout(60.0), transport=sandbox_transport())
+    # A jar that stores nothing. httpx keeps every response's Set-Cookie in the
+    # client, and this client is shared by every sandbox for the life of the
+    # process -- a sandbox app issuing fresh cookies would grow it without end.
+    # Nothing reads the jar back: each request is built with its own headers.
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0),
+        transport=sandbox_transport(),
+        cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])),
+    )
 
 
 def get_port_proxy_client() -> httpx.AsyncClient:
@@ -325,10 +340,11 @@ async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Re
 
     headers = _upstream_headers(request.headers, endpoint.headers)
     content = None
-    if request.method not in _BODYLESS_METHODS:
+    if _has_body(request):
         # Streamed through rather than read whole: an upload to a sandbox app
         # must not sit in the API's memory. A declared length is kept so the
-        # upstream is not forced onto chunked encoding.
+        # upstream is not forced onto chunked encoding. Decided by what the
+        # caller sent, not by method: HTTP allows a body on GET and OPTIONS.
         if length := request.headers.get("content-length"):
             headers["content-length"] = length
         content = request.stream()
