@@ -61,6 +61,9 @@ pub use protocol::{handle_reader, GuestError, GuestRequest, GuestResponse};
 pub(crate) use pull_claim::*;
 pub(crate) use readiness::*;
 pub(crate) use sandbox::*;
+// Reached through `GuestService::ensure_network_isolation`; the rule sets
+// themselves are named directly only by the tests.
+#[cfg(test)]
 pub(crate) use sandbox_firewall::*;
 pub(crate) use sandbox_inspect::*;
 pub(crate) use sandbox_run::*;

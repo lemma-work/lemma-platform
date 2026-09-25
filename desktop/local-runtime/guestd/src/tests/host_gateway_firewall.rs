@@ -7,33 +7,73 @@ use std::collections::HashMap;
 
 const GATEWAY: &str = "192.168.64.1";
 
-/// `iptables` as far as the installer uses it: `FORWARD` and our chains.
-#[derive(Default)]
+/// `iptables`'s filter table, as far as the installers and nerdctl's CNI
+/// firewall plugin use it, with a packet walker to say what a rule set does.
 struct FakeTables {
-    forward: Vec<Vec<String>>,
     chains: HashMap<String, Vec<Vec<String>>>,
     calls: Vec<String>,
     /// Checked after every call: once a jump is in place, one always is.
     ever_guarded: bool,
 }
 
+impl Default for FakeTables {
+    fn default() -> Self {
+        let mut chains = HashMap::new();
+        for builtin in ["INPUT", "FORWARD", "OUTPUT"] {
+            chains.insert(builtin.to_owned(), Vec::new());
+        }
+        Self {
+            chains,
+            calls: Vec::new(),
+            ever_guarded: false,
+        }
+    }
+}
+
+/// One packet, as the filter table sees it.
+struct Packet<'a> {
+    input: &'a str,
+    output: &'a str,
+    source: &'a str,
+    destination: &'a str,
+    protocol: &'a str,
+    port: u16,
+    state: &'a str,
+}
+
+#[derive(Debug, PartialEq)]
+enum Verdict {
+    Accept,
+    Reject,
+}
+
 impl FakeTables {
-    fn jumps(&self) -> Vec<String> {
-        self.forward
-            .iter()
+    fn jumps_from(&self, chain: &str) -> Vec<String> {
+        self.chains
+            .get(chain)
+            .into_iter()
+            .flatten()
             .filter_map(|rule| rule.last().cloned())
             .filter(|target| target.starts_with(HOST_GATEWAY_CHAIN_PREFIX))
             .collect()
+    }
+
+    fn jumps(&self) -> Vec<String> {
+        self.jumps_from("FORWARD")
     }
 
     fn apply(&mut self, arguments: &[String]) -> bool {
         self.calls.push(arguments.join(" "));
         let rest = |from: usize| arguments[from..].to_vec();
         let done = match arguments[0].as_str() {
-            "-N" => self
-                .chains
-                .insert(arguments[1].clone(), Vec::new())
-                .is_none(),
+            "-N" => {
+                if self.chains.contains_key(&arguments[1]) {
+                    false
+                } else {
+                    self.chains.insert(arguments[1].clone(), Vec::new());
+                    true
+                }
+            }
             "-F" => match self.chains.get_mut(&arguments[1]) {
                 Some(rules) => {
                     rules.clear();
@@ -41,7 +81,14 @@ impl FakeTables {
                 }
                 None => false,
             },
-            "-X" => self.chains.remove(&arguments[1]).is_some(),
+            "-X" => {
+                let referenced = self
+                    .chains
+                    .values()
+                    .flatten()
+                    .any(|rule| rule.last() == Some(&arguments[1]));
+                !referenced && self.chains.remove(&arguments[1]).is_some()
+            }
             "-A" => match self.chains.get_mut(&arguments[1]) {
                 Some(rules) => {
                     rules.push(rest(2));
@@ -50,22 +97,32 @@ impl FakeTables {
                 None => false,
             },
             "-I" => {
-                assert_eq!(arguments[1], "FORWARD");
                 assert_eq!(arguments[2], "1", "the jump goes at the top");
                 assert!(
                     self.chains.contains_key(arguments.last().unwrap()),
                     "jumped to a chain that does not exist"
                 );
-                self.forward.insert(0, rest(3));
-                true
+                match self.chains.get_mut(&arguments[1]) {
+                    Some(rules) => {
+                        rules.insert(0, rest(3));
+                        true
+                    }
+                    None => false,
+                }
             }
-            "-C" => self.forward.contains(&rest(2)),
-            "-D" => {
-                let rule = rest(2);
-                let before = self.forward.len();
-                self.forward.retain(|existing| *existing != rule);
-                before != self.forward.len()
-            }
+            "-C" => self
+                .chains
+                .get(&arguments[1])
+                .is_some_and(|rules| rules.contains(&rest(2))),
+            "-D" => match self.chains.get_mut(&arguments[1]) {
+                Some(rules) => {
+                    let rule = rest(2);
+                    let before = rules.len();
+                    rules.retain(|existing| *existing != rule);
+                    before != rules.len()
+                }
+                None => false,
+            },
             other => panic!("unexpected iptables verb {other}"),
         };
         if !self.jumps().is_empty() {
@@ -76,12 +133,116 @@ impl FakeTables {
         done
     }
 
-    fn list_forward(&self) -> String {
-        self.forward
-            .iter()
-            .map(|rule| format!("-A FORWARD {}\n", rule.join(" ")))
+    fn list(&self, chain: &str) -> String {
+        self.chains
+            .get(chain)
+            .into_iter()
+            .flatten()
+            .map(|rule| format!("-A {chain} {}\n", rule.join(" ")))
             .collect()
     }
+
+    /// What nerdctl's CNI `firewall` plugin does when a container starts:
+    /// make its chains if they are missing (never flushing `CNI-ADMIN`), put
+    /// `CNI-FORWARD` first in `FORWARD` and `CNI-ADMIN` first in it, and
+    /// accept everything the new container sends.
+    fn cni_container_started(&mut self, address: &str) {
+        fn rule(parts: &[&str]) -> Vec<String> {
+            parts.iter().map(|part| (*part).to_owned()).collect()
+        }
+        for chain in ["CNI-FORWARD", "CNI-ADMIN"] {
+            self.chains.entry(chain.to_owned()).or_default();
+        }
+        let entry = rule(&[
+            "-m",
+            "comment",
+            "--comment",
+            "CNI firewall plugin rules",
+            "-j",
+            "CNI-FORWARD",
+        ]);
+        let forward = self.chains.get_mut("FORWARD").unwrap();
+        if !forward.contains(&entry) {
+            forward.insert(0, entry);
+        }
+        let admin = rule(&[
+            "-m",
+            "comment",
+            "--comment",
+            "CNI firewall plugin admin overrides",
+            "-j",
+            "CNI-ADMIN",
+        ]);
+        let private = self.chains.get_mut("CNI-FORWARD").unwrap();
+        if !private.contains(&admin) {
+            private.insert(0, admin);
+        }
+        private.push(rule(&[
+            "-d",
+            address,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "ACCEPT",
+        ]));
+        private.push(rule(&["-s", address, "-j", "ACCEPT"]));
+    }
+
+    /// Where `packet` ends up, walking `FORWARD` the way the kernel would.
+    fn forward(&self, packet: &Packet) -> Verdict {
+        self.walk("FORWARD", packet, 0).unwrap_or(Verdict::Accept)
+    }
+
+    fn walk(&self, chain: &str, packet: &Packet, depth: usize) -> Option<Verdict> {
+        assert!(depth < 16, "a jump loop");
+        for rule in &self.chains[chain] {
+            if !matches(rule, packet) {
+                continue;
+            }
+            let target = rule
+                .windows(2)
+                .find(|pair| pair[0] == "-j")
+                .map(|pair| pair[1].as_str())
+                .expect("every rule has a target");
+            match target {
+                "ACCEPT" => return Some(Verdict::Accept),
+                "REJECT" | "DROP" => return Some(Verdict::Reject),
+                "RETURN" => return None,
+                other => {
+                    if let Some(verdict) = self.walk(other, packet, depth + 1) {
+                        return Some(verdict);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+fn matches(rule: &[String], packet: &Packet) -> bool {
+    let mut index = 0;
+    while index < rule.len() {
+        let value = rule.get(index + 1).map(String::as_str).unwrap_or("");
+        let holds = match rule[index].as_str() {
+            "-j" => return true,
+            "-m" | "--comment" | "--reject-with" => true,
+            "-i" => value == packet.input,
+            "-o" => value == packet.output,
+            "-s" => value == packet.source,
+            "-d" => value == packet.destination,
+            "-p" => value == packet.protocol,
+            "--dport" => value == packet.port.to_string(),
+            "--ctstate" => value.split(',').any(|state| state == packet.state),
+            other => panic!("the model does not know {other}"),
+        };
+        if !holds {
+            return false;
+        }
+        index += 2;
+    }
+    true
 }
 
 fn install(tables: &RefCell<FakeTables>, ports: &[u16]) -> Result<(), GuestError> {
@@ -89,11 +250,199 @@ fn install(tables: &RefCell<FakeTables>, ports: &[u16]) -> Result<(), GuestError
         GATEWAY,
         ports,
         &|arguments| Ok(tables.borrow_mut().apply(arguments)),
-        &|chain| {
-            assert_eq!(chain, "FORWARD");
-            Ok(tables.borrow().list_forward())
-        },
+        &|chain| Ok(tables.borrow().list(chain)),
     )
+}
+
+/// Everything `sandbox.ensure` installs before a sandbox starts.
+fn install_all(tables: &RefCell<FakeTables>, ports: &[u16]) {
+    ensure_sandbox_isolation(&|arguments| Ok(tables.borrow_mut().apply(arguments))).unwrap();
+    install(tables, ports).unwrap();
+}
+
+const FIRST_SANDBOX: &str = "10.4.0.5";
+const SECOND_SANDBOX: &str = "10.4.0.6";
+
+fn from_sandbox<'a>(destination: &'a str, output: &'a str, port: u16) -> Packet<'a> {
+    Packet {
+        input: SANDBOX_BRIDGE_INTERFACE,
+        output,
+        source: FIRST_SANDBOX,
+        destination,
+        protocol: "tcp",
+        port,
+        state: "NEW",
+    }
+}
+
+/// The guard survives nerdctl's own firewall plugin, which inserts
+/// `CNI-FORWARD` above it on the first container and accepts everything
+/// each container sends. It holds for the first sandbox, for every one after
+/// it, and when the rules are re-checked after containers already run.
+#[test]
+fn the_host_gateway_guard_still_applies_after_cni_programs_its_own_chains() {
+    let tables = RefCell::new(FakeTables::default());
+    install_all(&tables, &[8711, 3711]);
+    tables.borrow_mut().cni_container_started(FIRST_SANDBOX);
+    tables.borrow_mut().cni_container_started(SECOND_SANDBOX);
+
+    let check = |tables: &FakeTables| {
+        assert_eq!(
+            tables.forward(&from_sandbox(GATEWAY, "vmnet0", 22)),
+            Verdict::Reject,
+            "a sandbox reached the Mac's ssh past CNI's accept"
+        );
+        assert_eq!(
+            tables.forward(&from_sandbox(GATEWAY, "vmnet0", 8711)),
+            Verdict::Accept,
+            "the backend's callback port must stay open"
+        );
+        let mut dns = from_sandbox(GATEWAY, "vmnet0", 53);
+        dns.protocol = "udp";
+        assert_eq!(tables.forward(&dns), Verdict::Accept);
+        assert_eq!(
+            tables.forward(&from_sandbox("1.1.1.1", "vmnet0", 443)),
+            Verdict::Accept,
+            "the internet is not the gateway"
+        );
+    };
+    check(&tables.borrow());
+
+    // guestd re-checks on the next sandbox's ensure; nothing moves.
+    install_all(&tables, &[8711, 3711]);
+    tables.borrow_mut().cni_container_started("10.4.0.7");
+    check(&tables.borrow());
+
+    // New ports once containers already run: the replacement lands in
+    // CNI-ADMIN too, and the old chain's jump goes from both.
+    install(&tables, &[9000, 3000]).unwrap();
+    let tables = tables.borrow();
+    assert_eq!(
+        tables.forward(&from_sandbox(GATEWAY, "vmnet0", 8711)),
+        Verdict::Reject
+    );
+    assert_eq!(
+        tables.forward(&from_sandbox(GATEWAY, "vmnet0", 9000)),
+        Verdict::Accept
+    );
+    let new = host_gateway_chain(GATEWAY, &[9000, 3000]);
+    assert_eq!(tables.jumps_from("CNI-ADMIN"), vec![new.clone()]);
+    assert_eq!(tables.jumps_from("FORWARD"), vec![new]);
+}
+
+/// One sandbox cannot open a connection to another -- a function sandbox's
+/// runtime executes what it is sent -- whichever way the packet goes:
+/// switched across the bridge, or hairpinned to a published port.
+#[test]
+fn a_sandbox_cannot_open_a_connection_to_another_sandbox() {
+    let tables = RefCell::new(FakeTables::default());
+    install_all(&tables, &[8711, 3711]);
+    tables.borrow_mut().cni_container_started(FIRST_SANDBOX);
+    tables.borrow_mut().cni_container_started(SECOND_SANDBOX);
+    let tables = tables.borrow();
+
+    for port in [8090, 8080, 4850] {
+        assert_eq!(
+            tables.forward(&from_sandbox(
+                SECOND_SANDBOX,
+                SANDBOX_BRIDGE_INTERFACE,
+                port
+            )),
+            Verdict::Reject,
+            "sandbox to sandbox on {port}"
+        );
+    }
+    let mut udp = from_sandbox(SECOND_SANDBOX, SANDBOX_BRIDGE_INTERFACE, 5353);
+    udp.protocol = "udp";
+    assert_eq!(tables.forward(&udp), Verdict::Reject);
+
+    // The backend's way in -- the host, through a published port, arriving
+    // on the uplink -- is untouched, and so are the replies.
+    let from_host = Packet {
+        input: "enp0s1",
+        output: SANDBOX_BRIDGE_INTERFACE,
+        source: GATEWAY,
+        destination: SECOND_SANDBOX,
+        protocol: "tcp",
+        port: 8090,
+        state: "NEW",
+    };
+    assert_eq!(tables.forward(&from_host), Verdict::Accept);
+    let reply = Packet {
+        input: SANDBOX_BRIDGE_INTERFACE,
+        output: "enp0s1",
+        source: SECOND_SANDBOX,
+        destination: GATEWAY,
+        protocol: "tcp",
+        port: 50000,
+        state: "ESTABLISHED",
+    };
+    assert_eq!(tables.forward(&reply), Verdict::Accept);
+}
+
+/// Bridged frames only reach `FORWARD` with `br_netfilter`, so the peer rule
+/// is only real with it: loaded when missing, switched on, and a guest where
+/// it cannot be starts no sandbox.
+#[test]
+fn bridged_traffic_is_made_visible_to_the_firewall_or_nothing_starts() {
+    let root = tempdir().unwrap();
+    let bridge = root.path().join("net/bridge");
+    let loaded = std::cell::Cell::new(false);
+    let load = || {
+        loaded.set(true);
+        std::fs::create_dir_all(&bridge).unwrap();
+        std::fs::write(bridge.join("bridge-nf-call-iptables"), "0\n").unwrap();
+        std::fs::write(bridge.join("bridge-nf-call-ip6tables"), "0\n").unwrap();
+        true
+    };
+    ensure_bridge_netfilter(root.path(), &load).unwrap();
+    assert!(loaded.get(), "the module was not loaded");
+    for setting in ["bridge-nf-call-iptables", "bridge-nf-call-ip6tables"] {
+        assert_eq!(
+            std::fs::read_to_string(bridge.join(setting))
+                .unwrap()
+                .trim(),
+            "1"
+        );
+    }
+
+    let missing = tempdir().unwrap();
+    let error = ensure_bridge_netfilter(missing.path(), &|| false).unwrap_err();
+    assert_eq!(error.code, "sandbox_isolation_failed");
+}
+
+/// Link-local IPv6 would walk around every IPv4 rule: nothing arriving on
+/// the bridge over IPv6 is delivered or forwarded.
+#[test]
+fn ipv6_from_the_sandbox_bridge_is_dropped() {
+    let installed: RefCell<Vec<Vec<String>>> = RefCell::new(Vec::new());
+    let ip6tables = |arguments: &[String]| -> Result<bool, String> {
+        match arguments[0].as_str() {
+            "-C" => Ok(installed
+                .borrow()
+                .iter()
+                .any(|rule| rule[..] == arguments[1..])),
+            "-I" => {
+                assert_eq!(arguments[2], "1");
+                let mut rule = vec![arguments[1].clone()];
+                rule.extend_from_slice(&arguments[3..]);
+                installed.borrow_mut().push(rule);
+                Ok(true)
+            }
+            other => panic!("unexpected ip6tables verb {other}"),
+        }
+    };
+    ensure_sandbox_ipv6_isolation(&ip6tables).unwrap();
+    ensure_sandbox_ipv6_isolation(&ip6tables).unwrap();
+    let rules: Vec<String> = installed
+        .borrow()
+        .iter()
+        .map(|rule| rule.join(" "))
+        .collect();
+    assert_eq!(
+        rules,
+        ["INPUT -i nerdctl0 -j DROP", "FORWARD -i nerdctl0 -j DROP"]
+    );
 }
 
 #[test]
@@ -149,13 +498,12 @@ fn the_rules_are_installed_once_and_jumped_to_from_the_sandbox_bridge() {
     let chain = host_gateway_chain(GATEWAY, &[8711, 3711]);
     {
         let tables = tables.borrow();
-        assert_eq!(
-            tables.forward,
-            vec![["-i", "nerdctl0", "-d", GATEWAY, "-j", &chain]
-                .iter()
-                .map(|part| (*part).to_owned())
-                .collect::<Vec<_>>()]
-        );
+        let jump: Vec<String> = ["-i", "nerdctl0", "-d", GATEWAY, "-j", &chain]
+            .iter()
+            .map(|part| (*part).to_owned())
+            .collect();
+        assert_eq!(tables.chains["FORWARD"], vec![jump.clone()]);
+        assert_eq!(tables.chains["CNI-ADMIN"], vec![jump]);
         assert_eq!(
             tables.chains[&chain],
             host_gateway_chain_rules(&[8711, 3711])
@@ -167,7 +515,10 @@ fn the_rules_are_installed_once_and_jumped_to_from_the_sandbox_bridge() {
     let calls = tables.borrow().calls.clone();
     assert_eq!(
         calls,
-        [format!("-C FORWARD -i nerdctl0 -d {GATEWAY} -j {chain}")],
+        [
+            format!("-C FORWARD -i nerdctl0 -d {GATEWAY} -j {chain}"),
+            format!("-C CNI-ADMIN -i nerdctl0 -d {GATEWAY} -j {chain}"),
+        ],
         "an unchanged rule set is checked, not rebuilt"
     );
 }

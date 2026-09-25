@@ -125,13 +125,7 @@ impl<E: Engine + 'static> GuestService<E> {
         };
         if let Some(replacing) = existing {
             if self.sandbox_isolation {
-                ensure_sandbox_isolation(&run_iptables)?;
-                ensure_host_gateway_isolation(
-                    &self.host_gateway,
-                    &self.callback_ports()?,
-                    &run_iptables,
-                    &list_iptables,
-                )?;
+                self.ensure_network_isolation()?;
             }
             // A running container being replaced is a swap, not another
             // sandbox: counting it against the ceiling would refuse exactly

@@ -301,8 +301,9 @@ fn sandbox_isolation_is_installed_idempotently_and_fails_closed() {
                 Ok(true)
             }
             "-I" => {
-                // `-I INPUT 1 ...` is checked as `-C INPUT ...`.
-                let mut rule = vec!["-I".to_owned(), "INPUT".to_owned()];
+                // `-I <hook> 1 ...` is checked as `-C <hook> ...`.
+                assert_eq!(arguments[2], "1", "a jump goes at the top");
+                let mut rule = vec!["-I".to_owned(), arguments[1].clone()];
                 rule.extend_from_slice(&arguments[3..]);
                 installed.borrow_mut().push(rule);
                 Ok(true)
@@ -312,7 +313,8 @@ fn sandbox_isolation_is_installed_idempotently_and_fails_closed() {
     };
 
     ensure_sandbox_isolation(&iptables).unwrap();
-    assert_eq!(installed.borrow().len(), 4);
+    // The four core-port rules, and the two peer rules with their two jumps.
+    assert_eq!(installed.borrow().len(), 8);
     assert!(calls
         .borrow()
         .contains(&"-I INPUT 1 -i nerdctl0 -j LEMMA-SANDBOX-ISOLATION".to_owned()));
@@ -321,7 +323,7 @@ fn sandbox_isolation_is_installed_idempotently_and_fails_closed() {
     ensure_sandbox_isolation(&iptables).unwrap();
     assert_eq!(
         installed.borrow().len(),
-        4,
+        8,
         "a second pass added duplicates"
     );
     assert!(
