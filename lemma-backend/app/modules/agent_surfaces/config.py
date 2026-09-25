@@ -312,11 +312,11 @@ def surface_webhook_verification_enabled() -> bool:
     checks stay on and the flag is a no-op; ``log_surface_webhook_security()``
     says so once at startup rather than leaving the deployment to guess.
     """
-    from app.core.config import settings
+    from app.core.exposure import local_relaxations_allowed
 
     if surface_settings.surface_webhook_security_enabled:
         return True
-    return not settings.is_local_mode()
+    return not local_relaxations_allowed()
 
 
 def log_surface_webhook_security() -> None:

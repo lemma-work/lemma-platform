@@ -7,6 +7,8 @@ import time
 from unittest.mock import AsyncMock
 
 import pytest
+
+from app.core.exposure import exposure_settings
 from fastapi.testclient import TestClient
 
 import app.app as appmod
@@ -307,6 +309,25 @@ def test_capability_health_withholds_security_posture_off_a_local_machine(
         f"{environment} disclosed its security posture: "
         f"{sorted(withheld & set(configuration))}"
     )
+
+
+def test_capability_health_withholds_security_posture_while_desktop_is_shared(
+    client, monkeypatch
+):
+    """A shared Desktop installation is `local`, and its visitors are strangers.
+
+    Sharing on the LAN or through a tunnel keeps `ENVIRONMENT=local`, so the
+    rule above let anyone who found the address read which abuse controls
+    were off. `INSTALLATION_SHARED` is what says otherwise.
+    """
+    monkeypatch.setattr(appmod.settings, "environment", "local")
+    monkeypatch.setattr(exposure_settings, "installation_shared", True)
+
+    configuration = client.get("/health/capabilities").json()["configuration"]
+
+    assert configuration["environment"] == "local"
+    assert "abuse_protection" not in configuration
+    assert "private_network_targets" not in configuration
 
 
 def test_ready_returns_503_when_db_down(client, monkeypatch):

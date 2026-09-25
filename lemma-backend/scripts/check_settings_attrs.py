@@ -80,6 +80,7 @@ BASELINE_COMMENT = (
 SETTINGS_SOURCES = {
     "app.core.config": ("settings",),
     "app.core.infrastructure.events.config": ("event_transport_settings",),
+    "app.core.exposure": ("exposure_settings",),
     "app.modules.agent.config": ("agent_settings",),
     "app.modules.agent_surfaces.config": ("surface_settings",),
     "app.modules.apps.config": ("apps_settings",),

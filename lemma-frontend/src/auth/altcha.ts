@@ -17,6 +17,7 @@
  */
 
 import { onApi } from "./config";
+import { digestSha256 } from "./sha256";
 
 export type Purpose = "signup" | "verification" | "password-reset" | "signin-risk";
 
@@ -29,17 +30,23 @@ export interface Challenge {
     signature?: string;
 }
 
-function hex(bytes: ArrayBuffer): string {
-    return Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
+function hex(bytes: Uint8Array): string {
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** The answer to one challenge, encoded the way the API reads it back.
  *
- *  Pure apart from `crypto.subtle`, which node has too — so the search is
- *  tested rather than taken on trust. Base64url, because it travels as a
- *  header value and `+` and `/` do not survive that reliably.
+ *  Pure apart from the digest, which is `crypto.subtle` where the page has it
+ *  and script where it does not — a Desktop installation shared on the local
+ *  network is plain HTTP at a private address, not a secure context, and has
+ *  no `crypto.subtle` at all. Tested either way rather than taken on trust.
+ *  Base64url, because it travels as a header value and `+` and `/` do not
+ *  survive that reliably.
  */
-export async function solve(challenge: Challenge): Promise<string | null> {
+export async function solve(
+    challenge: Challenge,
+    digest: (message: Uint8Array) => Promise<Uint8Array> = digestSha256,
+): Promise<string | null> {
     if (!challenge.enabled) return null;
     const { algorithm, salt, signature, maxnumber } = challenge;
     if (algorithm !== "SHA-256" || !challenge.challenge || !salt || !signature || maxnumber === undefined) {
@@ -49,8 +56,7 @@ export async function solve(challenge: Challenge): Promise<string | null> {
     const encoder = new TextEncoder();
     let number = 0;
     for (; number <= maxnumber; number += 1) {
-        const digest = await crypto.subtle.digest("SHA-256", encoder.encode(salt + number));
-        if (hex(digest) === challenge.challenge) break;
+        if (hex(await digest(encoder.encode(salt + number))) === challenge.challenge) break;
         /* Yield periodically. The ceiling is high enough that a slow machine
            would otherwise lock its own tab solid while somebody watches a
            button do nothing. */

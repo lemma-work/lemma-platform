@@ -347,3 +347,63 @@ fn every_control_the_pack_switches_off_is_restored_or_recorded() {
         );
     }
 }
+
+/// Sharing switches ALTCHA on, and ALTCHA without a key refuses every challenge.
+///
+/// The overlay only flips `AUTH_ALTCHA_ENABLED`; the key has to already be in
+/// the pack. When it was not, the challenge endpoint answered 503 the moment an
+/// installation was shared, and the portal -- which asks for a proof before
+/// sign-in as well as sign-up -- could sign nobody in, the owner included.
+#[test]
+fn the_pack_carries_a_stable_per_install_altcha_key() {
+    let root = tempdir().unwrap();
+    let pack = root.path().join("pack");
+    fs::create_dir_all(&pack).unwrap();
+    fixture(&pack);
+    let paths = LocalPaths::new(root.path().join("locald"));
+    paths.ensure().unwrap();
+    let render = || {
+        let output = prepare(
+            &paths,
+            &pack,
+            ManagedManifestMaterial {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+                bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        manifest["services"][0]["env"].clone()
+    };
+    let first = render();
+    let key = first["AUTH_ALTCHA_HMAC_KEY"].as_str().unwrap_or_default();
+    assert!(
+        key.len() >= 32,
+        "the ALTCHA key is missing or short: {key:?}"
+    );
+    // Its own key, not another one reused under a second name.
+    for other in ["WORKSPACE_RUNTIME_CREDENTIAL_KEY", "SECRET_ENCRYPTION_KEY"] {
+        assert_ne!(
+            first[other].as_str(),
+            Some(key),
+            "{other} doubles as the ALTCHA key"
+        );
+    }
+    // Stable across renders: a challenge issued before a restart has to verify
+    // after it.
+    assert_eq!(render()["AUTH_ALTCHA_HMAC_KEY"].as_str(), Some(key));
+
+    let (shared, _) = crate::daemon::sharing_environment(
+        "http://192.168.1.20:61234",
+        crate::sharing::SharingMode::LocalNetwork,
+        crate::sharing::WhoCanJoin::InviteOnly,
+    );
+    assert_eq!(
+        shared.get("AUTH_ALTCHA_ENABLED").map(String::as_str),
+        Some("true")
+    );
+    // The overlay must not blank the key the pack supplies.
+    assert!(!shared.contains_key("AUTH_ALTCHA_HMAC_KEY"));
+}

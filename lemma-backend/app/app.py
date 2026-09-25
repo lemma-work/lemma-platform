@@ -404,6 +404,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "X-Lemma-Client",
             "X-Lemma-App",
             "x-altcha-payload",
+            "x-lemma-invitation",
         ]
         + get_all_cors_headers(),
         # Let browser SDK clients read the correlation id off the response.

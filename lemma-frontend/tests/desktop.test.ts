@@ -107,6 +107,22 @@ test("the local bridge needs both a local deployment and the shell", () => {
     assert.equal(desktopBridgeAvailable(), false);
 });
 
+test("the app's own window on a shared address has no shell to call", async () => {
+    /* Sharing moves the window to the LAN or tunnel origin, which the shell's
+       capability does not grant; calling from there only ever failed. */
+    for (const hostname of ["192.168.1.20", "example.ngrok.app", "lemma.example.com"]) {
+        const state = page({ shell: () => null, deployment: "local", hostname, info: { mode: "local" } });
+        assert.equal(isDesktop(), false, hostname);
+        assert.equal(desktopBridgeAvailable(), false, hostname);
+        await assert.rejects(invoke("agent_host_status"), /desktop app/);
+        assert.equal(state.calls.length, 0);
+    }
+    for (const hostname of ["app.lemma.localhost", "app.127.0.0.1.sslip.io", "localhost"]) {
+        page({ shell: () => null, deployment: "local", hostname });
+        assert.equal(desktopBridgeAvailable(), true, hostname);
+    }
+});
+
 test("invoke passes the command and its arguments through", async () => {
     const state = page({ shell: () => ({ ok: true }) });
     assert.deepEqual(await invoke("agent_host_pair", { url: "u", pairingCode: "c", name: "n" }), { ok: true });

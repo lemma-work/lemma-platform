@@ -548,3 +548,38 @@ fn an_unparseable_hosted_url_opens_the_splash_rather_than_aborting_setup() {
         );
     }
 }
+
+/// A local workspace's window is not a browser for other people's sites.
+///
+/// Iframes still load anywhere `navigation_disposition` allows; this is the
+/// top-level document only, which is what a page load reports.
+#[test]
+fn a_local_window_hands_other_sites_to_the_browser() {
+    let app = "http://app.lemma.localhost:52413/";
+    let api = "http://app.lemma.localhost:52414/";
+    let leaves = |raw: &str, mode: &str| {
+        main_frame_leaves_app(&tauri::Url::parse(raw).unwrap(), mode, app, api)
+    };
+    assert!(leaves("https://example.com/login", "local"));
+    assert!(leaves("https://accounts.google.com/o/oauth2", "local"));
+    // Its own origins, its own apps, its bundled pages: stay.
+    assert!(!leaves("http://app.lemma.localhost:52413/t?pod=1", "local"));
+    assert!(!leaves("http://app.lemma.localhost:52414/files/1", "local"));
+    assert!(!leaves("http://demo.apps.lemma.localhost:52414/", "local"));
+    assert!(!leaves("tauri://localhost/index.html", "local"));
+    // Denied local destinations are `navigation_disposition`'s to refuse.
+    assert!(!leaves("http://192.168.1.1/", "local"));
+    // Hosted sign-in and billing are top-level visits elsewhere by design.
+    assert!(!leaves("https://accounts.google.com/o/oauth2", "hosted"));
+}
+
+#[test]
+fn a_release_build_opens_no_inspector_unless_asked() {
+    assert!(!main_window_devtools(false, None));
+    assert!(!main_window_devtools(false, Some("0")));
+    assert!(main_window_devtools(false, Some("1")));
+    assert!(main_window_devtools(true, None));
+    let source = include_str!("../windowing.rs").replace("\r\n", "\n");
+    assert!(!source.contains(".devtools(true)"));
+    assert!(source.contains("main_frame_leaves_app(payload.url()"));
+}

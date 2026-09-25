@@ -498,7 +498,8 @@ Each command is granted to a webview by a capability in
   packaged `control.html`.
 - **local workspace**: `require_local_settings_caller` — the `main` webview,
   in local mode, on the origin this app navigated to, and that origin a
-  shipped loopback workspace host (or the debug-only `LEMMA_DESKTOP_LOCAL_URL`).
+  shipped loopback workspace host (or the debug-only `LEMMA_DESKTOP_LOCAL_URL`)
+  whose name still resolves only to loopback when the command is called.
   Refuses the hosted site and any shared LAN or tunnel origin.
 - **settings**: `require_settings_caller` — control, or local workspace.
 - **agent host**: `require_agent_host_caller` — control, the splash, or the
@@ -513,10 +514,10 @@ Each command is granted to a webview by a capability in
 | Command | Granted to | Rust check | Notes |
 | --- | --- | --- | --- |
 | `local_settings_snapshot` | workspace | local workspace | An allowlisted view of `control.snapshot`: no install id, schema, operation ids or process details |
-| `apply_local_settings` | workspace | local workspace | `config.apply` for `integrations` or `surfaces` only |
-| `local_sharing` | workspace | local workspace | Public asks natively first; the page cannot set the consent flag |
+| `apply_local_settings` | workspace | local workspace | `config.apply` for `integrations` or `surfaces` only; replacing or removing a credential already set asks natively first |
+| `local_sharing` | workspace | local workspace | Local network, Public and opening *Who can join* ask natively first, in words built from the request; the page cannot set the consent flag |
 | `set_start_at_login` | workspace | local workspace | Rebuilds the menus so the tray's check stays true |
-| `set_host_execution` | workspace | local workspace | locald `agent-host.host-execution`; sends only `enabled`, refuses to enable without Seatbelt, answers with the fresh Agent Host status. See [Host execution](desktop-host-execution.md) |
+| `set_host_execution` | workspace | local workspace | locald `agent-host.host-execution`; sends only `enabled`, asks natively before enabling, refuses to enable without Seatbelt, answers with the fresh Agent Host status. See [Host execution](desktop-host-execution.md) |
 | `prepare_sandbox_image` | workspace | local workspace | |
 | `open_logs`, `diagnostic_logs` | main, control, workspace | native page, or local workspace | Log tails are redacted |
 | `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
@@ -525,7 +526,8 @@ Each command is granted to a webview by a capability in
 | `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Onboarding and the Models suggestions |
 | `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |
 | `open_control_center` | main, workspace | page name validated | |
-| `control_snapshot`, `sharing_action`, `agent_host_action`, `runtime_info`, `start`, `stop`, `restart`, `open_developer_tools`, `close_local_settings`, `confirm_destructive_action` | control (some also main) | control or native page | Local settings only |
+| `sharing_action` | control | control | Local settings' sharing: the same request builder and native questions as `local_sharing` |
+| `control_snapshot`, `agent_host_action`, `runtime_info`, `start`, `stop`, `restart`, `open_developer_tools`, `close_local_settings`, `confirm_destructive_action` | control (some also main) | control or native page | Local settings only |
 | `reset_local_data`, `reset_full_reinstall`, `restart_into_recovery` | control, main | native page | Destructive: never granted to a remote origin |
 
 `desktop/src/tests/misc.rs` holds every registered command to a grant and

@@ -49,7 +49,7 @@ export function ThisMacSharing() {
             thisMac.sharing(action, payload),
         onSuccess: (answer, { action }) => {
             if (answer?.cancelled) {
-                setSaid({ text: "Nothing changed. Lemma is still private to " + noun + "." });
+                setSaid({ text: action === "enable" ? "Nothing changed. Lemma is still private to " + noun + "." : "Nothing changed." });
                 return;
             }
             if (action === "preflight") {
@@ -230,6 +230,8 @@ export function ThisMacSharing() {
                 <p className="thismac-foot">
                     {!stackReady ? "Lemma has to be running before it can be shared. " : ""}
                     Sharing moves this window to the shared address, where these settings open from the menu bar.
+                    Lemma restarts its server to do it, so anything an agent is running right now stops, and
+                    open calls end.
                 </p>
             )}
 
