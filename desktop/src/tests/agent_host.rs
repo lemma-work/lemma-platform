@@ -218,3 +218,110 @@ fn every_agent_host_command_checks_its_caller() {
         "only {commands} commands were found to check"
     );
 }
+
+fn page(raw: &str) -> tauri::Url {
+    tauri::Url::parse(raw).unwrap()
+}
+
+/// The Agent Host answers the workspace this app navigated to -- and in local
+/// mode only on its loopback origin. While sharing, that origin is the shared
+/// LAN or tunnel address, which every visitor's device loads too.
+#[test]
+fn a_shared_origin_cannot_drive_this_computers_agent_host() {
+    let local = "http://app.127.0.0.1.sslip.io:52413/";
+    assert!(agent_host_origin_allowed(
+        "local",
+        &page(local),
+        local,
+        None
+    ));
+    for shared in ["http://192.168.1.20:61234/", "https://example.ngrok.app/"] {
+        assert!(
+            !agent_host_origin_allowed("local", &page(shared), shared, None),
+            "{shared} was allowed while it is the app's own address"
+        );
+    }
+    let hosted = "https://lemma.work/";
+    assert!(agent_host_origin_allowed(
+        "hosted",
+        &page(hosted),
+        hosted,
+        None
+    ));
+    assert!(!agent_host_origin_allowed(
+        "hosted",
+        &page("https://evil.example/"),
+        hosted,
+        None
+    ));
+    assert!(!agent_host_origin_allowed(
+        "undecided",
+        &page(local),
+        local,
+        None
+    ));
+}
+
+/// A page names the workspace; the shell decides what is paired. In local
+/// mode that is this installation's own API whatever the page said, and in
+/// hosted mode only the hosted site or its subdomains, over HTTPS.
+#[test]
+fn the_shell_not_the_page_decides_what_this_computer_pairs_with() {
+    let app = "http://app.127.0.0.1.sslip.io:52413/";
+    let api = "http://app.127.0.0.1.sslip.io:52414/";
+    assert_eq!(
+        agent_host_workspace_url(
+            "local",
+            app,
+            api,
+            "https://evil.example/",
+            "https://lemma.work",
+            None,
+        )
+        .unwrap(),
+        api
+    );
+    // While sharing, the app's address is the shared one: not this Mac's own.
+    assert!(agent_host_workspace_url(
+        "local",
+        "http://192.168.1.20:61234/",
+        "http://192.168.1.20:61234/_lemma/api",
+        api,
+        "https://lemma.work",
+        None,
+    )
+    .is_err());
+    // A development stack on the origin `LEMMA_DESKTOP_LOCAL_URL` names.
+    assert_eq!(
+        agent_host_workspace_url(
+            "local",
+            "http://localhost:3000/",
+            "http://localhost:8710/",
+            "",
+            "https://lemma.work",
+            Some("http://localhost:3000"),
+        )
+        .unwrap(),
+        "http://localhost:8710/"
+    );
+    for accepted in ["https://lemma.work/_lemma/api", "https://api.lemma.work/"] {
+        assert!(
+            agent_host_workspace_url("hosted", "", "", accepted, "https://lemma.work", None)
+                .is_ok(),
+            "{accepted}"
+        );
+    }
+    for refused in [
+        "https://evil.example/",
+        "https://lemma.work.evil.example/",
+        "https://notlemma.work/",
+        "http://api.lemma.work/",
+        "https://user:pass@api.lemma.work/",
+    ] {
+        assert!(
+            agent_host_workspace_url("hosted", "", "", refused, "https://lemma.work", None)
+                .is_err(),
+            "{refused} was accepted"
+        );
+    }
+}

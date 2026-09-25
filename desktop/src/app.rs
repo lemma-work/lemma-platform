@@ -79,6 +79,7 @@ pub(crate) fn run() {
             conversation_folders::adopt_conversation_folder,
             agent_host_ui::agent_host_start,
             agent_host_ui::agent_host_pair,
+            agent_host_ui::agent_host_session,
             agent_host_ui::agent_host_refresh,
             agent_host_ui::agent_host_open_log,
             operator_settings::discover_provider_models,

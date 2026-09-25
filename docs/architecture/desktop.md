@@ -449,7 +449,13 @@ Each command is granted to a webview by a capability in
   Refuses the hosted site and any shared LAN or tunnel origin.
 - **settings**: `require_settings_caller` — control, or local workspace.
 - **agent host**: `require_agent_host_caller` — control, the splash, or the
-  workspace on the origin this app navigated to (hosted or local).
+  workspace on the origin this app navigated to: the hosted site in hosted
+  mode, and in local mode only a shipped loopback workspace host (the same
+  rule as local workspace), so a shared LAN or tunnel origin is refused even
+  while the app's own window shows it. `agent_host_pair` and
+  `agent_host_session` take the page's workspace URL only to check it: the
+  shell pairs with, and reports the signed-in person to, the Lemma it itself
+  navigated to (`agent_host_workspace_url`).
 
 | Command | Granted to | Rust check | Notes |
 | --- | --- | --- | --- |
