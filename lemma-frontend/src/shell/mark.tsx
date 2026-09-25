@@ -61,6 +61,7 @@ export const Mark = memo(function Mark({
     size = 26,
     className,
     greeting,
+    still = false,
 }: {
     seed: string;
     name: string;
@@ -70,6 +71,9 @@ export const Mark = memo(function Mark({
     /** Bump to make the character wave. Ignored by pictures and emoji, which
      *  have nothing to wave with. */
     greeting?: number;
+    /** Draw the picture, not the rig, whatever the size. For a list that
+     *  would otherwise run a rig per row — see `Rail`. */
+    still?: boolean;
 }) {
     const [broken, setBroken] = useState(false);
     useEffect(() => setBroken(false), [icon]);
@@ -79,7 +83,7 @@ export const Mark = memo(function Mark({
     const box = { width: size, height: size, borderRadius: "var(--r-mark)" };
 
     const character = parsed?.kind === "url" ? characterFromUrl(parsed.url) : undefined;
-    if (character) return draw(character, size, name, className, greeting);
+    if (character) return draw(character, size, name, className, greeting, still);
 
     if (parsed?.kind === "url" && !broken) {
         return (
@@ -126,20 +130,20 @@ export const Mark = memo(function Mark({
        *which* character rather than whether to have one. */
     return draw(
         characterForSeed(identityVariantSeed(seed, parsed?.kind === "identity" ? parsed.variant : 0)),
-        size, name, className, greeting,
+        size, name, className, greeting, still,
     );
 });
 
 /** Small enough that a gesture is a few pixels of noise. */
 const ANIMATED_MIN = 30;
 
-function draw(character: CharacterName, size: number, name: string, className?: string, greeting?: number) {
+function draw(character: CharacterName, size: number, name: string, className?: string, greeting?: number, still = false) {
     /* The caller's class reaches both shapes, and it has to. A mark big enough
        to animate becomes a puppet; drop the class on that branch and a pod with
        a character for an icon produces a mark nothing can select, which is how
        a rule like `.head > .mark { display:none }` silently stops hiding
        anything. */
-    return size >= ANIMATED_MIN
+    return size >= ANIMATED_MIN && !still
         ? <CharacterPuppet character={character} size={size} label={name} className={className} greeting={greeting} />
         : <Character character={character} size={size} label={name} className={className} />;
 }
