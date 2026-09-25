@@ -206,6 +206,19 @@
 
 .connect-lead{margin:0 0 16px;font-size:13px;line-height:1.6;color:var(--ink-3)}
 
+/* A connect dialog, laid out as one. The record form it borrows was built to
+   sit inside a page, so in a dialog its actions landed 4px under the last
+   input, left-aligned, with nothing to say where the form ended — the buttons
+   read as another field. Spacing comes from the column's gap; the actions are
+   a footer, primary last in reading order and first on the right. */
+.connect-form{display:flex;flex-direction:column;gap:18px}
+.connect-form > .connect-lead,.connect-form > .connect-result,.connect-form > .library-problem{margin:0}
+.connect-form .record-form{gap:18px}
+.connect-form .record-form__field{gap:7px}
+.connect-form .record-form__field label{font-size:13px;color:var(--ink)}
+.connect-form .record-form__field small{line-height:1.55}
+.connect-form .record-form__actions{flex-direction:row-reverse;justify-content:flex-start;margin:6px 0 0;padding-top:16px;border-top:1px solid var(--line)}
+
 /* A map whose keys the tenant chooses, so it is pairs rather than inputs. */
 .connect-pairs{display:flex;flex-direction:column;gap:6px}
 .connect-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 30px;gap:6px}

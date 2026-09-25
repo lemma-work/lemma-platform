@@ -24,8 +24,15 @@ export type Kind = string;
  *  than merely unfamiliar — so these are values to compare against, not a type
  *  that forbids the rest. */
 export const COMPOSIO = "composio";
-export type AuthScheme = "OAUTH2" | "API_KEY";
+export type AuthScheme = "OAUTH2" | "API_KEY" | "NOAUTH";
 export type Discovery = "none" | "mcp" | "openapi";
+
+/** The kinds where the organization supplies the address. Necessary for a
+ *  connector to be one somebody points somewhere, and not sufficient: `http`
+ *  also carries GitHub, Slack and Gmail (signed into, over Lemma's own OAuth
+ *  client) and the WhatsApp and Telegram bots (a token, and no address at
+ *  all). See `isTenantConfigured`. */
+const ADDRESSED_KINDS: ReadonlySet<string> = new Set(["http", "sql", "mcp"]);
 
 export interface ConnectorKind {
     kind: Kind;
@@ -41,6 +48,9 @@ export interface ConnectorKind {
      *  else the toolkit wants. */
     install_config_schema?: unknown;
     supports_org_custom_oauth?: boolean;
+    /** The endpoints an organization's own OAuth app would be sent through.
+     *  Without them "bring your own app" can only strand an install. */
+    oauth2_defaults?: unknown;
     /** Whether Lemma's own credentials can install this at all. */
     system_default_available?: boolean;
     discovery?: Discovery;
@@ -73,14 +83,51 @@ export interface Install {
     config?: Record<string, unknown> | null;
 }
 
+function hasProperties(schema: unknown): boolean {
+    const properties = (schema as { properties?: unknown } | null)?.properties;
+    return Boolean(properties && typeof properties === "object" && Object.keys(properties).length > 0);
+}
+
+/** Whether this kind is something the organization points somewhere itself —
+ *  a database, an OpenAPI spec, an MCP server — rather than an app it signs
+ *  into.
+ *
+ *  "Not Composio" was the old test, and it is wrong for most of what is not
+ *  Composio. GitHub, Slack and Gmail are `http` with Lemma's own OAuth client;
+ *  WhatsApp and Telegram are `http` with a bot token. Treated as bring-your-own,
+ *  each of them offered "Add one" instead of "Connect", and the add form asked
+ *  for an address none of them has. The install schema settles it: the backend
+ *  hands every non-OAuth connector without an address an empty one.
+ */
+export function isTenantConfigured(kind: ConnectorKind | null | undefined): boolean {
+    if (!kind || !ADDRESSED_KINDS.has(kind.kind)) return false;
+    if (kind.kind === "http" && kind.auth_scheme === "OAUTH2") return false;
+    return hasProperties(installSchema(kind));
+}
+
+/** The kind of this entry that is pointed somewhere, if it has one. */
+export function tenantKind(entry: CatalogEntry): ConnectorKind | null {
+    return (entry.kinds ?? []).find((one) => isTenantConfigured(one)) ?? null;
+}
+
 /** The entries an organization points somewhere itself, rather than picks.
  *
  *  Tested on the kind rather than on the id, because the ids are catalogue
  *  data and this is a rule about what a connector *is*: one entry standing for
  *  every server, database or API of that sort.
  */
-export function isBringYourOwn(entry: { kinds?: { kind: string }[] }): boolean {
-    return (entry.kinds ?? []).some((one) => one.kind !== COMPOSIO);
+export function isBringYourOwn(entry: CatalogEntry): boolean {
+    return tenantKind(entry) !== null;
+}
+
+/** The kind a fresh install should take when nobody picked one.
+ *
+ *  Composio first where it is on offer, the same default the backend and the
+ *  harness use. Returning nothing for a connector with two kinds — the old
+ *  rule — left every such connector at "has not described what it needs". */
+export function primaryKind(entry: CatalogEntry): ConnectorKind | null {
+    const kinds = entry.kinds ?? [];
+    return kinds.find((one) => one.kind === COMPOSIO) ?? kinds[0] ?? null;
 }
 
 export function kindNamed(entry: CatalogEntry, kind: string | null | undefined): ConnectorKind | null {
@@ -90,6 +137,37 @@ export function kindNamed(entry: CatalogEntry, kind: string | null | undefined):
        as optional "when the connector offers only one", and a client picking
        the first of several would install something nobody asked for. */
     return kinds.length === 1 ? kinds[0] : null;
+}
+
+/** The kind an account on this install — or on the install about to be made —
+ *  runs under. */
+export function kindFor(entry: CatalogEntry, install: Install | null): ConnectorKind | null {
+    return install ? kindNamed(entry, install.kind) : primaryKind(entry);
+}
+
+/** Whether Lemma can create this install with nothing from the organization.
+ *
+ *  `system_default_available` alone does not answer it: the importer sets it
+ *  from "not OAuth", which says nothing about a database that still needs a
+ *  host. A managed Composio toolkit and an OAuth app Lemma holds a client for
+ *  need nothing; anything else needs whatever its install schema requires. */
+export function canInstallWithDefaults(kind: ConnectorKind | null): boolean {
+    if (!kind || !kind.system_default_available) return false;
+    if (kind.kind === COMPOSIO || kind.auth_scheme === "OAUTH2") return true;
+    if (isTenantConfigured(kind)) return false;
+    const schema = installSchema(kind) as { required?: unknown } | null;
+    return !(Array.isArray(schema?.required) && schema.required.length > 0);
+}
+
+/** A name for an install that does not collide with the ones already there.
+ *
+ *  Install names are unique per organization and an unnamed one is named after
+ *  its connector — so a second unnamed install of anything the organization
+ *  already has is refused. */
+export function freshInstallName(base: string, taken: Iterable<string>): string {
+    const used = new Set(taken);
+    if (!used.has(base)) return base;
+    for (let n = 2; ; n += 1) if (!used.has(base + "-" + n)) return base + "-" + n;
 }
 
 /** What the *organization* fills in to create an install.
@@ -125,12 +203,16 @@ export function connectSchema(kind: ConnectorKind | null): unknown {
  *  `redirect` is the browser round trip; `credentials` is a form submitted
  *  straight to the API. The install's own scheme decides, and falls back to
  *  the catalogue only when an install has not said.
+ *
+ *  Only OAuth2 redirects. `NOAUTH` is a credential post with nothing in it —
+ *  the backend refuses a connect request for anything but OAuth, so sending
+ *  one down the redirect made those connectors impossible to connect.
  */
 export type ConnectRoute = "redirect" | "credentials";
 
 export function connectRoute(install: Install | null, kind: ConnectorKind | null): ConnectRoute {
     const scheme = install?.auth_scheme ?? kind?.auth_scheme ?? "OAUTH2";
-    return scheme === "API_KEY" ? "credentials" : "redirect";
+    return scheme === "OAUTH2" ? "redirect" : "credentials";
 }
 
 /** Whether an organization has to bring its own OAuth app before anyone can
@@ -142,8 +224,17 @@ export function needsOwnApp(kind: ConnectorKind | null): boolean {
     return kind.system_default_available === false;
 }
 
+/** Whether "use your own app" is on offer beside Lemma's.
+ *
+ *  Never for a managed Composio toolkit: it runs on Lemma's Composio account
+ *  and the backend refuses an org-supplied install of it. Otherwise both
+ *  halves, as in the harness — an organization's client id and secret are
+ *  useless without endpoints to send people through, and those come from the
+ *  catalogue. */
 export function canBringOwnApp(kind: ConnectorKind | null): boolean {
-    return Boolean(kind?.supports_org_custom_oauth);
+    if (!kind) return false;
+    if (kind.kind === COMPOSIO) return needsOwnApp(kind) && hasProperties(installSchema(kind));
+    return Boolean(kind.supports_org_custom_oauth && kind.oauth2_defaults);
 }
 
 /** What re-reading an install's operations actually did.
@@ -165,6 +256,24 @@ export function discoveryNote(
     if (status === "not_applicable") return "This connector's operations are fixed, so there was nothing to re-read.";
     if (found === 0) return "Connected, but the server advertised no operations.";
     return "Found " + found + (found === 1 ? " operation." : " operations.");
+}
+
+/** What went wrong with a connector call, in words somebody can act on.
+ *
+ *  The one worth translating is the role refusal. Making an install needs an
+ *  owner or an editor, and the backend answers anyone else with a 404 naming
+ *  the organization's uuid — deliberately vague about membership, and
+ *  unreadable on a connector card. Everything else is passed through: the API
+ *  writes its messages for people. */
+export const NEEDS_EDITOR = "Only an organization owner or editor can set up a new connector. Ask one of them to enable it — then anybody can connect an account.";
+
+export function connectorProblem(problem: unknown, fallback: string): string {
+    const code = (problem as { code?: unknown } | null)?.code;
+    const message = problem instanceof Error ? problem.message : typeof problem === "string" ? problem : "";
+    if (code === "ORGANIZATION_CONNECTORS_NOT_FOUND" || /No connectors are available in organization/i.test(message)) {
+        return NEEDS_EDITOR;
+    }
+    return urlRefusal(message) ?? (message || fallback);
 }
 
 /** Why a URL was refused, said usefully.
