@@ -25,6 +25,12 @@
 //!   and never another address: the request carries a port and nothing else.
 //! - **Not a privileged port.** Below 1024 on a Mac is the system's, and
 //!   nothing a person starts with `npm run dev` binds one.
+//! - **Only a server the agent started.** Every process listening on the
+//!   port must descend from the Agent Host process locald supervises -- the
+//!   exec-server and the coding agents it runs, and whatever they start (see
+//!   [`owner`]). Anything else on the Mac's loopback -- the person's own
+//!   database, a local admin page, a password manager's helper -- is refused
+//!   whether or not anybody thought to list it.
 //! - **Not one of Lemma's own ports.** The backend, the frontend, the private
 //!   service forwards, the sharing gateway and its tunnel's local API, the
 //!   Agent Host's MCP relays -- asked for afresh on every connection (see
@@ -45,6 +51,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+pub(crate) mod owner;
+use owner::NotOwned;
 use tokio::net::TcpStream;
 #[cfg(unix)]
 use tokio::sync::oneshot;
@@ -77,11 +86,28 @@ pub(crate) type LemmaPorts = Arc<dyn Fn() -> BTreeSet<u16> + Send + Sync>;
 /// Whether this Mac's Agent Host has host execution on, as of now.
 pub(crate) type HostExecution = Arc<dyn Fn() -> bool + Send + Sync>;
 
+/// Whether whatever listens on a port was started by the agent, as of now.
+pub(crate) type ListenerOwner = Arc<dyn Fn(u16) -> Result<(), NotOwned> + Send + Sync>;
+
+/// The Agent Host process locald is running right now, if any.
+pub(crate) type AgentHostProcess = Arc<dyn Fn() -> Option<u32> + Send + Sync>;
+
+/// The real ownership check: this Mac's processes, against the Agent Host
+/// process `agent_host` names at the moment of asking.
+pub(crate) fn agent_listener_owner(agent_host: AgentHostProcess) -> ListenerOwner {
+    Arc::new(move |port| {
+        owner::agent_owns(port, agent_host(), &owner::listeners_on, &owner::parent_of)
+    })
+}
+
 /// What every connection is judged against, each part asked for afresh.
 #[derive(Clone)]
 pub(crate) struct RelayPolicy {
     pub(crate) host_execution: HostExecution,
     pub(crate) lemma_ports: LemmaPorts,
+    pub(crate) listener_owner: ListenerOwner,
+    /// The idle limit, when not `RELAY_IDLE`; only tests shorten it.
+    pub(crate) idle: Option<Duration>,
 }
 
 /// Why a request was refused. The words are what the sandbox is told.
@@ -91,6 +117,10 @@ pub(crate) enum Refusal {
     NotAPort,
     Privileged,
     LemmaPort,
+    /// Something listens there that the agent did not start.
+    NotTheAgents,
+    /// No Agent Host is running, so nothing on the Mac is the agent's.
+    NoAgentHost,
 }
 
 impl Refusal {
@@ -100,6 +130,8 @@ impl Refusal {
             Self::NotAPort => "not a port",
             Self::Privileged => "privileged ports are not relayed",
             Self::LemmaPort => "that port is one of Lemma's own",
+            Self::NotTheAgents => "that port's server was not started by Lemma's agent on this Mac",
+            Self::NoAgentHost => "Lemma's agent is not running on this Mac",
         }
     }
 }
@@ -194,6 +226,17 @@ pub(crate) enum Outcome {
     Unreachable(u16),
     /// The connection closed or stalled before naming a port.
     NoRequest,
+    /// Relayed to this port, and then ended by the relay.
+    Closed(u16, Closed),
+}
+
+/// Why the relay ended a connection it had admitted.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Closed {
+    /// "Run commands on this Mac" was turned off, or the Mac unpaired.
+    SwitchedOff,
+    /// Nothing crossed it for the idle limit.
+    Idle,
 }
 
 /// Serve one connection from the guest.
@@ -225,6 +268,28 @@ where
     } else {
         Err(Refusal::HostExecutionOff)
     };
+    // Checked after the cheap refusals and just before connecting: it walks
+    // every process's sockets, which is a few milliseconds of syscalls and so
+    // is done off the relay's own thread.
+    let admitted = match admitted {
+        Ok(port) => {
+            let owner = Arc::clone(&policy.listener_owner);
+            match tokio::task::spawn_blocking(move || owner(port)).await {
+                Ok(Ok(())) => Ok(port),
+                Ok(Err(NotOwned::NoListener)) => {
+                    refuse(
+                        &mut client,
+                        "error nothing on this Mac is listening on that port\n",
+                    )
+                    .await?;
+                    return Ok(Outcome::Unreachable(port));
+                }
+                Ok(Err(NotOwned::NotTheAgents)) => Err(Refusal::NotTheAgents),
+                Ok(Err(NotOwned::NoAgentHost)) | Err(_) => Err(Refusal::NoAgentHost),
+            }
+        }
+        Err(refusal) => Err(refusal),
+    };
     let port = match admitted {
         Ok(port) => port,
         Err(refusal) => {
@@ -246,8 +311,110 @@ where
     client.write_all(b"ok\n").await?;
     // Half-close is carried both ways: when one side finishes sending, the
     // other is told so and may still answer.
-    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
-    Ok(Outcome::Relayed(port))
+    //
+    // Admission is not the only check. A relay admitted while the switch was
+    // on used to go on carrying bytes for as long as both ends kept it open --
+    // a dev server's hot-reload socket for days -- after "Run commands on this
+    // Mac" was turned off or the Mac unpaired. So the switch is read again
+    // while it runs, and a relay nobody has used for `RELAY_IDLE` is ended.
+    let last_active = Arc::new(std::sync::Mutex::new(tokio::time::Instant::now()));
+    let mut client = Active {
+        inner: client,
+        last_active: Arc::clone(&last_active),
+    };
+    let watch = async {
+        let mut tick = tokio::time::interval(RELAY_RECHECK);
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            if !(policy.host_execution)() {
+                return Outcome::Closed(port, Closed::SwitchedOff);
+            }
+            let idle = last_active
+                .lock()
+                .expect("relay activity lock poisoned")
+                .elapsed();
+            if idle >= policy_idle(policy) {
+                return Outcome::Closed(port, Closed::Idle);
+            }
+        }
+    };
+    tokio::select! {
+        copied = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
+            copied?;
+            Ok(Outcome::Relayed(port))
+        }
+        closed = watch => Ok(closed),
+    }
+}
+
+/// How often a running relay re-reads the switch and its idle time.
+const RELAY_RECHECK: Duration = Duration::from_secs(1);
+/// How long a relay may carry nothing before it is ended. Long enough for a
+/// dev server's quiet hot-reload socket between edits; short enough that a
+/// forgotten one does not hold the Mac open for days.
+const RELAY_IDLE: Duration = Duration::from_secs(30 * 60);
+
+fn policy_idle(policy: &RelayPolicy) -> Duration {
+    policy.idle.unwrap_or(RELAY_IDLE)
+}
+
+/// A stream that records when bytes last crossed it, either way.
+struct Active<S> {
+    inner: S,
+    last_active: Arc<std::sync::Mutex<tokio::time::Instant>>,
+}
+
+impl<S> Active<S> {
+    fn touch(&self) {
+        *self
+            .last_active
+            .lock()
+            .expect("relay activity lock poisoned") = tokio::time::Instant::now();
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Active<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        let before = buffer.filled().len();
+        let polled = std::pin::Pin::new(&mut self.inner).poll_read(context, buffer);
+        if buffer.filled().len() > before {
+            self.touch();
+        }
+        polled
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Active<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let polled = std::pin::Pin::new(&mut self.inner).poll_write(context, bytes);
+        if matches!(polled, std::task::Poll::Ready(Ok(written)) if written > 0) {
+            self.touch();
+        }
+        polled
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(context)
+    }
 }
 
 /// The relay's Unix listener and the thread serving it.
@@ -384,7 +551,14 @@ mod tests {
         RelayPolicy {
             host_execution: Arc::new(|| true),
             lemma_ports: Arc::new(move || ports.clone()),
+            listener_owner: anybodys(),
+            idle: None,
         }
+    }
+
+    /// Every listener counts as the agent's: for tests about everything else.
+    fn anybodys() -> ListenerOwner {
+        Arc::new(|_| Ok(()))
     }
 
     fn no_lemma_ports() -> RelayPolicy {
@@ -445,6 +619,8 @@ mod tests {
         let ports = RelayPolicy {
             host_execution: Arc::new(|| true),
             lemma_ports: Arc::new(move || seen.lock().unwrap().clone()),
+            listener_owner: anybodys(),
+            idle: None,
         };
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = upstream.local_addr().unwrap().port();
@@ -480,6 +656,8 @@ mod tests {
         let policy = RelayPolicy {
             host_execution: Arc::new(move || switch.load(std::sync::atomic::Ordering::SeqCst)),
             lemma_ports: Arc::new(BTreeSet::new),
+            listener_owner: anybodys(),
+            idle: None,
         };
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = upstream.local_addr().unwrap().port();
@@ -657,6 +835,166 @@ mod tests {
         guest.read_to_end(&mut answer).await.unwrap();
         assert_eq!(&answer[..3], b"ok\n");
         assert_eq!(answer.len(), 3 + 1024 * 1024);
+    }
+
+    /// A server the agent did not start is refused, never connected to --
+    /// the person's own database on its usual port included -- and the check
+    /// is made for the port asked for, at the moment of asking.
+    #[tokio::test]
+    async fn a_server_the_agent_did_not_start_is_refused() {
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&asked);
+        let policy = RelayPolicy {
+            host_execution: Arc::new(|| true),
+            lemma_ports: Arc::new(BTreeSet::new),
+            listener_owner: Arc::new(move |port| {
+                seen.lock().unwrap().push(port);
+                match port {
+                    3000 => Ok(()),
+                    5432 => Err(NotOwned::NotTheAgents),
+                    4000 => Err(NotOwned::NoAgentHost),
+                    _ => Err(NotOwned::NoListener),
+                }
+            }),
+            idle: None,
+        };
+        let ask = |request: &'static str| {
+            let policy = policy.clone();
+            async move {
+                let (mut guest, relay) = UnixStream::pair().unwrap();
+                let served = tokio::spawn(async move {
+                    serve_connection(relay, &policy, |_| async {
+                        Err::<TcpStream, _>(io::Error::other("stand-in for the Mac's server"))
+                    })
+                    .await
+                });
+                guest.write_all(request.as_bytes()).await.unwrap();
+                let mut answer = String::new();
+                guest.read_to_string(&mut answer).await.unwrap();
+                (answer, served.await.unwrap().unwrap())
+            }
+        };
+
+        let (answer, outcome) = ask("5432\n").await;
+        assert_eq!(
+            answer,
+            "error that port's server was not started by Lemma's agent on this Mac\n"
+        );
+        assert_eq!(outcome, Outcome::Refused(Refusal::NotTheAgents));
+        let (_, outcome) = ask("4000\n").await;
+        assert_eq!(outcome, Outcome::Refused(Refusal::NoAgentHost));
+        let (answer, outcome) = ask("4001\n").await;
+        assert_eq!(
+            answer,
+            "error nothing on this Mac is listening on that port\n"
+        );
+        assert_eq!(outcome, Outcome::Unreachable(4001));
+        // The agent's own server gets as far as connecting.
+        let (_, outcome) = ask("3000\n").await;
+        assert_eq!(outcome, Outcome::Unreachable(3000));
+
+        // Privileged and malformed requests are refused before any process
+        // is looked at.
+        let (_, outcome) = ask("22\n").await;
+        assert_eq!(outcome, Outcome::Refused(Refusal::Privileged));
+        assert_eq!(*asked.lock().unwrap(), vec![5432, 4000, 4001, 3000]);
+    }
+
+    /// The real check, against this process standing in for the Agent Host:
+    /// our own listener is ours, and with a different Agent Host it is not.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn the_real_owner_check_follows_the_process_tree() {
+        let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        let ours = std::process::id();
+        let check = agent_listener_owner(Arc::new(move || Some(ours)));
+        let answer = tokio::task::spawn_blocking(move || check(port))
+            .await
+            .unwrap();
+        assert_eq!(answer, Ok(()));
+
+        // PID 1 is launchd, which is nobody's descendant but its own.
+        let check = agent_listener_owner(Arc::new(|| Some(u32::MAX)));
+        let answer = tokio::task::spawn_blocking(move || check(port))
+            .await
+            .unwrap();
+        assert_eq!(answer, Err(NotOwned::NotTheAgents));
+
+        let check = agent_listener_owner(Arc::new(|| None));
+        let answer = tokio::task::spawn_blocking(move || check(port))
+            .await
+            .unwrap();
+        assert_eq!(answer, Err(NotOwned::NoAgentHost));
+        drop(server);
+    }
+
+    /// A relay admitted while the switch was on is ended when it goes off,
+    /// not left carrying bytes until somebody closes it.
+    #[tokio::test]
+    async fn a_running_relay_ends_when_the_switch_goes_off() {
+        let enabled = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let switch = Arc::clone(&enabled);
+        let policy = RelayPolicy {
+            host_execution: Arc::new(move || switch.load(std::sync::atomic::Ordering::SeqCst)),
+            lemma_ports: Arc::new(BTreeSet::new),
+            listener_owner: anybodys(),
+            idle: None,
+        };
+        let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        let held = tokio::spawn(async move {
+            // Accepts and holds the connection open, sending nothing.
+            let (stream, _) = server.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            drop(stream);
+        });
+        let (mut guest, relay) = UnixStream::pair().unwrap();
+        let served =
+            tokio::spawn(async move { serve_connection(relay, &policy, connect_loopback).await });
+        guest
+            .write_all(format!("{port}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut ok = [0_u8; 3];
+        guest.read_exact(&mut ok).await.unwrap();
+        assert_eq!(&ok, b"ok\n");
+
+        enabled.store(false, std::sync::atomic::Ordering::SeqCst);
+        let outcome = tokio::time::timeout(Duration::from_secs(5), served)
+            .await
+            .expect("the relay outlived the switch")
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome, Outcome::Closed(port, Closed::SwitchedOff));
+        held.abort();
+    }
+
+    #[tokio::test]
+    async fn a_relay_nobody_uses_is_ended() {
+        let mut policy = no_lemma_ports();
+        policy.idle = Some(Duration::from_millis(1500));
+        let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        let held = tokio::spawn(async move {
+            let (stream, _) = server.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            drop(stream);
+        });
+        let (mut guest, relay) = UnixStream::pair().unwrap();
+        let served =
+            tokio::spawn(async move { serve_connection(relay, &policy, connect_loopback).await });
+        guest
+            .write_all(format!("{port}\n").as_bytes())
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), served)
+            .await
+            .expect("an idle relay was never ended")
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome, Outcome::Closed(port, Closed::Idle));
+        held.abort();
     }
 
     /// The listener end to end: a private socket, served until dropped, and

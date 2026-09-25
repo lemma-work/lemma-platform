@@ -237,6 +237,8 @@ impl Daemon {
             ));
             let owner_switch = Arc::clone(&agent_host);
             runtime.set_host_execution(Arc::new(move || owner_switch.host_execution_enabled()));
+            let supervised = Arc::clone(&agent_host);
+            runtime.set_agent_host_process(Arc::new(move || supervised.running_pid()));
         }
         Ok(Arc::new(Self {
             paths,
