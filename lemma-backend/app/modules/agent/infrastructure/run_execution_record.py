@@ -7,8 +7,9 @@ pause -- so the choice has to live somewhere those can read it back. It lives
 under one key of the run's own metadata, written with ``jsonb_set`` so no
 other key is disturbed.
 
-The same record is what a host sandbox's operations are routed by: the host a
-conversation's most recent host run chose is the host its sandbox is on
+The same record is what a host sandbox's operations are routed by: a run's
+own operations go to the host it recorded, and an operation no run is making
+goes to the host the conversation's most recent host run chose
 (``latest_host_execution``), so there is no table saying so separately.
 """
 

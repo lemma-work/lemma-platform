@@ -187,8 +187,8 @@ def _choice_value(
         return {"target": "vm"}
     return {
         "target": "host",
-        # Where this conversation's host sandbox is from now on: its
-        # operations are routed by the latest of these (host_for_host_sandbox).
+        # This run's operations are routed by this (the run's HostWorkspace
+        # carries it); one with no calling run, by the conversation's latest.
         "host_id": str(host_id),
         "sandbox_id": str(workspace.sandbox_id),
         "root": workspace.root,
