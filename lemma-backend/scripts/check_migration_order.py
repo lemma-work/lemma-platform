@@ -175,7 +175,9 @@ def main() -> int:
 
 
 def _normalise(text: str) -> str:
-    return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").strip().split("\n"))
+    return "\n".join(
+        line.rstrip() for line in text.replace("\r\n", "\n").strip().split("\n")
+    )
 
 
 def shipped_edits(
@@ -211,8 +213,11 @@ def _git(*arguments: str) -> subprocess.CompletedProcess[str]:
 def newest_shipped_reference() -> str | None:
     """The newest shipped tag this checkout descends from, if it has one."""
     listing = _git(
-        "for-each-ref", "--sort=-creatordate", "--count=40",
-        "--format=%(refname:short)", *SHIPPED_TAG_PATTERNS,
+        "for-each-ref",
+        "--sort=-creatordate",
+        "--count=40",
+        "--format=%(refname:short)",
+        *SHIPPED_TAG_PATTERNS,
     )
     if listing.returncode != 0:
         return None

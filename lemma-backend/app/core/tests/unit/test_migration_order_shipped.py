@@ -18,7 +18,9 @@ pytestmark = pytest.mark.unit
 
 
 def _load_checker() -> ModuleType:
-    script = Path(__file__).resolve().parents[4] / "scripts" / "check_migration_order.py"
+    script = (
+        Path(__file__).resolve().parents[4] / "scripts" / "check_migration_order.py"
+    )
     spec = importlib.util.spec_from_file_location("check_migration_order", script)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -34,7 +36,9 @@ SHIPPED = 'revision = "0040_x"\n\ndef upgrade():\n    op.add_column("t", c)\n'
 
 def test_an_unchanged_shipped_migration_passes() -> None:
     current = {"0040_x": SHIPPED.replace("\n", "\r\n") + "   \n"}
-    assert checker.shipped_edits(current, {"0040_x": SHIPPED}, "desktop-nightly-a") == []
+    assert (
+        checker.shipped_edits(current, {"0040_x": SHIPPED}, "desktop-nightly-a") == []
+    )
 
 
 def test_editing_a_shipped_migration_is_refused() -> None:
