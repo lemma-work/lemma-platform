@@ -5343,7 +5343,7 @@ a.reach { text-decoration: none; }
 .copy-section > pre,
 .copy-section > blockquote,
 .copy-section > details { margin: 0; }
-/* Code wraps to the column rather than scrolling sideways; room is kept on
+/* Code wraps to the column rather than scrolling sideways; space is kept on
    the right so the first line never runs under the button. */
 .copy-section > pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; padding-right: 40px; border: 0; }
 .copy-section > pre code { white-space: inherit; }
