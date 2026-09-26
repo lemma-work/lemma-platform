@@ -45,7 +45,7 @@ fn a_pack_with_a_cli_and_a_bundle_names_both_to_its_backend() {
     assert!(
         env["WORKSPACE_RUNTIME_BUNDLE_DIR"]
             .as_str()
-            .is_some_and(|path| path.ends_with("backend/assets/runtime-bundle")),
+            .is_some_and(|path| Path::new(path).ends_with("backend/assets/runtime-bundle")),
         "{env}"
     );
 }
