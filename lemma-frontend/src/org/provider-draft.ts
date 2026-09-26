@@ -5,6 +5,8 @@
  *  in the list is not sent, and that an Anthropic route sends none at all —
  *  every Claude model reads images, and the backend marks them so itself. */
 
+import type { Choice, Runtime } from "@/data/runtimes";
+
 export type ProviderProtocol = "openai" | "anthropic";
 
 /** The comma-separated Models field, as names. Blank entries and repeats go. */
@@ -121,4 +123,29 @@ export function testFailureMessage(provider: string, reason: string): string {
         return provider + " rejected this API key.";
     }
     return "Couldn't read the model list from " + provider + ". Check the key, or type a model name below.";
+}
+
+/** Whether a key can be the organization's default: organization-wide, not
+ *  retired, a provider rather than a coding agent. Matches the backend's
+ *  `can_be_organization_default`, so the page never offers a button that
+ *  would be refused. */
+export function canBeOrganizationDefault(runtime: Runtime): boolean {
+    return runtime.kind === "key" && runtime.scope === "org" && !runtime.archived;
+}
+
+/** The key to offer as everyone's model right after it was added, or `null`.
+ *
+ *  Only for the very first one: when nothing could answer before (no live
+ *  runtime at all, the server's own model included) and nobody has chosen a
+ *  default. Later keys are a choice between models, which "Make default" on
+ *  the row already offers; asking again on every add would nag. */
+export function firstProviderOffer(
+    before: Runtime[],
+    after: Runtime[],
+    organizationDefault: Choice | null,
+): Runtime | null {
+    if (organizationDefault) return null;
+    if (before.some((runtime) => !runtime.archived)) return null;
+    const known = new Set(before.map((runtime) => runtime.id));
+    return after.find((runtime) => !known.has(runtime.id) && canBeOrganizationDefault(runtime)) ?? null;
 }

@@ -115,6 +115,15 @@ export interface Choice {
     model: string;
 }
 
+/** What testing a saved provider found. `message` is always the backend's
+ *  own fixed sentence, never the provider's text; `models` is `null` when
+ *  the provider listed none it would share. */
+export interface RuntimeTest {
+    ok: boolean;
+    message: string;
+    models: string[] | null;
+}
+
 /* ── the four agents Lemma drives ──────────────────────────────────── */
 
 /** Keyed by the `harness_key` a paired computer publishes. A key that is not

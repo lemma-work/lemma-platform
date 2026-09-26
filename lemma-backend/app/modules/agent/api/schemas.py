@@ -388,6 +388,22 @@ class AgentRuntimeProfileResponse(BaseModel):
 class AgentRuntimeProfileListResponse(BaseModel):
     items: list[AgentRuntimeProfileResponse]
     default_runtime: AgentRuntimeConfig
+    # The model an owner chose for every teammate, or None when nobody has.
+    # Separate from default_runtime, which is what a run gets either way and
+    # may be a guess (the first provider) or the system model.
+    organization_default_runtime: AgentRuntimeConfig | None = None
+
+
+class SetOrganizationDefaultRuntimeRequest(BaseModel):
+    profile_id: str = Field(min_length=1)
+    # None follows the provider's own default model as it changes.
+    model_name: str | None = Field(default=None, min_length=1)
+
+
+class AgentRuntimeProfileTestResponse(BaseModel):
+    ok: bool
+    message: str
+    models: list[str] | None = None
 
 
 class CreateAgentHostRuntimeProfileRequest(BaseModel):

@@ -30,6 +30,10 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.modules.agent.domain.organization_default import (
+    ORGANIZATION_WIDE_VIEWER,
+    organization_default_of,
+)
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeModelCapability,
@@ -167,37 +171,44 @@ async def resolve_workspace_runtime(
         )
 
 
-# The user a listing is scoped to when only organization-wide profiles are
-# wanted: nobody's personal profile belongs to the nil id, so what comes back is
-# exactly what every member of the organization can see.
-_NO_ONE = UUID(int=0)
-
-
 async def organization_default_runtime(
-    uow: SqlAlchemyUnitOfWork, *, organization_id: UUID
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    organization_id: UUID,
+    server_has_model: bool = False,
 ) -> AgentRuntimeConfig | None:
-    """What a teammate runs on when neither it nor its pod names a model and
-    the deployment has none of its own, read on the caller's unit of work.
+    """What a teammate runs on when neither it nor its pod names a model, read
+    on the caller's unit of work. ``None`` means the system model.
 
     Organization-wide providers only. A run in a shared pod must not land on one
     member's personal key because that member happened to add it.
     """
     repository = AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
     profiles = await repository.get_visible(
-        organization_id=organization_id, user_id=_NO_ONE
+        organization_id=organization_id, user_id=ORGANIZATION_WIDE_VIEWER
     )
-    return choose_organization_runtime(profiles)
+    return choose_organization_runtime(profiles, server_has_model=server_has_model)
 
 
 def choose_organization_runtime(
     profiles: list[AgentRuntimeProfile],
+    *,
+    server_has_model: bool = False,
 ) -> AgentRuntimeConfig | None:
-    """The first organization-wide model provider, on its own default model.
+    """The organization's chosen model, else -- only when the deployment has no
+    model of its own -- the first organization-wide provider on its default.
+
+    The chosen model wins over the system one because an owner picked it on
+    purpose; the first-provider guess does not, because nobody picked it and a
+    deployment that ships a model meant that one.
 
     Pure, and shared by run routing and the profile listing's
     ``default_runtime``, so "Organization default -- X" in the picker names the
     model a run will actually get.
     """
+    chosen = organization_default_of(profiles)
+    if chosen is not None or server_has_model:
+        return chosen
     return choose_workspace_runtime(
         [
             profile
@@ -220,7 +231,8 @@ def choose_workspace_runtime(
     """Pick the workspace model a background call should run on, or ``None``.
 
     Pure, so the ordering is testable without a database: pod default first,
-    then organization-wide providers, then the caller's personal ones.
+    then the organization's chosen model, then organization-wide providers,
+    then the caller's personal ones.
     """
     for candidate in _candidates(profiles, pod_default=pod_default):
         entry = _pick_entry(
@@ -257,6 +269,16 @@ def _candidates(
             )
             for profile in providers
             if profile.id == pod_default.profile_id
+        )
+    organization_default = organization_default_of(providers)
+    if organization_default is not None:
+        ordered.extend(
+            _Candidate(
+                profile=profile,
+                preferred_model_name=organization_default.model_name,
+            )
+            for profile in providers
+            if profile.id == organization_default.profile_id
         )
     for scope in (RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL):
         ordered.extend(

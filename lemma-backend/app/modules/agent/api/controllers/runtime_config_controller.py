@@ -31,6 +31,7 @@ from app.modules.agent.infrastructure.repositories import (
 )
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import effective_agent_host_status
+from app.modules.agent.domain.organization_default import organization_default_of
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileScope,
     RuntimeProfileStatus,
@@ -182,21 +183,21 @@ async def list_available_runtime_profiles(
         user_id=user.id,
         include_disabled=include_disabled,
     )
+    active = [
+        profile
+        for profile, _availability in entries
+        if profile.status is RuntimeProfileStatus.ACTIVE
+    ]
     default_runtime = AgentRuntimeDefaultService().get_default()
-    if (
-        default_runtime.profile_id == runtime_system_profiles.SYSTEM_LEMMA_PROFILE_ID
-        and not runtime_system_profiles.system_profile_configured()
-    ):
+    if default_runtime.profile_id == runtime_system_profiles.SYSTEM_LEMMA_PROFILE_ID:
         # The same answer run routing gives (`default_agent_runtime_for_pod`),
         # so "Organization default -- X" names the model a run will get rather
-        # than a system model this deployment does not have.
+        # than a system model the organization chose past, or that this
+        # deployment does not have.
         default_runtime = (
             choose_organization_runtime(
-                [
-                    profile
-                    for profile, _availability in entries
-                    if profile.status is RuntimeProfileStatus.ACTIVE
-                ]
+                active,
+                server_has_model=runtime_system_profiles.system_profile_configured(),
             )
             or default_runtime
         )
@@ -206,6 +207,7 @@ async def list_available_runtime_profiles(
             for profile, availability in entries
         ],
         default_runtime=default_runtime,
+        organization_default_runtime=organization_default_of(active),
     )
 
 

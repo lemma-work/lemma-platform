@@ -42,6 +42,7 @@ import {
     type Computer,
     type LocalAgent,
     type Runtime,
+    type RuntimeTest,
 } from "./runtimes";
 import type {
     AccountConnect,
@@ -443,7 +444,7 @@ export const liveSource: PodSource = {
             return { next: result.next_page_token, items: result.items.map(t => ({ id: t.id, name: t.name, kind: "table" as const, path: t.name, updated: t.updated_at, detail: `${t.column_count ?? "—"} columns` })) };
         }
         const result = await client.files.list({ directoryPath: directory, limit: 50, pageToken: page });
-        return { next: result.next_page_token, items: result.items.map(f => ({ id: f.id, name: f.name, kind: /folder|directory/i.test(f.kind) ? "folder" as const : "file" as const, path: f.path, updated: f.updated_at, detail: f.description || f.mime_type || f.kind })) };
+        return { next: result.next_page_token, items: result.items.map(f => ({ id: f.id, name: f.name, kind: /folder|directory/i.test(f.kind) ? "folder" as const : "file" as const, path: f.path, updated: f.updated_at, detail: f.description || f.mime_type || f.kind, status: f.status })) };
     },
     async tableColumns(podId, name) { return (await lemma(podId).tables.get(name)).columns; },
     /* Nothing binds parameters here — `datastore.query` takes SQL text and
@@ -610,6 +611,28 @@ export const liveSource: PodSource = {
     async defaultRuntime(orgId: string): Promise<Choice | null> {
         const listed = await lemma().agentRuntime.listRuntimes(orgId);
         return readChoice(listed.default_runtime);
+    },
+
+    async organizationDefault(orgId: string): Promise<Choice | null> {
+        const listed = await lemma().agentRuntime.listProfiles(orgId);
+        return readChoice(listed.organization_default_runtime);
+    },
+
+    async setOrganizationDefault(orgId: string, choice: Choice | null): Promise<void> {
+        if (!choice) {
+            await lemma().agentRuntime.clearOrganizationDefault(orgId);
+            return;
+        }
+        /* An empty model follows the key's own default as it changes. */
+        await lemma().agentRuntime.setOrganizationDefault(orgId, {
+            profile_id: choice.runtimeId,
+            model_name: choice.model || null,
+        });
+    },
+
+    async testRuntime(orgId: string, runtimeId: string): Promise<RuntimeTest> {
+        const answer = await lemma().agentRuntime.testProfile(orgId, runtimeId);
+        return { ok: answer.ok, message: answer.message, models: answer.models ?? null };
     },
 
     async listComputers(): Promise<Computer[]> {

@@ -36,6 +36,7 @@ __all__ = [
     "is_retryable_stream_error",
     "connection_failure_message",
     "local_model_server_down_message",
+    "local_model_server_name",
     "retry_after_seconds",
 ]
 
@@ -135,6 +136,19 @@ def local_model_server_down_message(exc: BaseException) -> str | None:
     sends the person round the same failure again. Only the address the
     request went to is read -- never the provider's text.
     """
+    name = local_model_server_name(exc)
+    if name is None:
+        return None
+    return f"{name} isn't running on this computer. Start it, then send again."
+
+
+def local_model_server_name(exc: BaseException) -> str | None:
+    """What to call the model server a refused loopback connection was for.
+
+    ``None`` when ``exc`` is not a refused connection to this computer. Split
+    out so a caller with its own sentence -- the Models page's connection
+    test, which has nothing to "send again" -- names the server the same way.
+    """
     connect = _find_connect_failure(exc, depth=0)
     if connect is None:
         return None
@@ -145,8 +159,7 @@ def local_model_server_down_message(exc: BaseException) -> str | None:
         return None
     if url.host not in _LOOPBACK_HOSTS:
         return None
-    name = _LOCAL_SERVER_NAMES.get(url.port or 0, "The model server")
-    return f"{name} isn't running on this computer. Start it, then send again."
+    return _LOCAL_SERVER_NAMES.get(url.port or 0, "The model server")
 
 
 def _find_connect_failure(

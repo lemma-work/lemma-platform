@@ -3,9 +3,11 @@ import type { AgentRuntimeConfig } from "../openapi_client/models/AgentRuntimeCo
 import type { AgentRuntimeProfileDetailResponse } from "../openapi_client/models/AgentRuntimeProfileDetailResponse.js";
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
+import type { AgentRuntimeProfileTestResponse } from "../openapi_client/models/AgentRuntimeProfileTestResponse.js";
 import type { CreateAgentHostRuntimeProfileRequest } from "../openapi_client/models/CreateAgentHostRuntimeProfileRequest.js";
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateAnthropicCompatibleRuntimeProfileRequest.js";
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateOpenAICompatibleRuntimeProfileRequest.js";
+import type { SetOrganizationDefaultRuntimeRequest } from "../openapi_client/models/SetOrganizationDefaultRuntimeRequest.js";
 import type { UpdateAgentHostRuntimeProfileRequest } from "../openapi_client/models/UpdateAgentHostRuntimeProfileRequest.js";
 import type { UpdateAnthropicCompatibleRuntimeProfileRequest } from "../openapi_client/models/UpdateAnthropicCompatibleRuntimeProfileRequest.js";
 import type { UpdateOpenAICompatibleRuntimeProfileRequest } from "../openapi_client/models/UpdateOpenAICompatibleRuntimeProfileRequest.js";
@@ -120,6 +122,37 @@ export class AgentRuntimeNamespace {
     return this.client.request(() =>
       AgentRuntimeService.agentRuntimeProfilesRestore(orgId, profileId),
     );
+  }
+
+  /**
+   * List a saved provider's models and send its default model one short
+   * message. `ok` is false with a plain-language `message` when the key is
+   * rejected or nothing answers; the provider's own error text is never
+   * returned.
+   */
+  testProfile(orgId: string, profileId: string): Promise<AgentRuntimeProfileTestResponse> {
+    return this.client.request(() =>
+      AgentRuntimeService.agentRuntimeProfilesTest(orgId, profileId),
+    );
+  }
+
+  /**
+   * Make an organization-wide model provider what every teammate that names
+   * no model runs on. Leave `model_name` out to follow the provider's own
+   * default model.
+   */
+  setOrganizationDefault(
+    orgId: string,
+    request: SetOrganizationDefaultRuntimeRequest,
+  ): Promise<AgentRuntimeConfig> {
+    return this.client.request(() =>
+      AgentRuntimeService.agentRuntimeDefaultSet(orgId, request),
+    );
+  }
+
+  /** Stop choosing a model for the organization. */
+  clearOrganizationDefault(orgId: string): Promise<void> {
+    return this.client.request(() => AgentRuntimeService.agentRuntimeDefaultClear(orgId));
   }
 
   /**

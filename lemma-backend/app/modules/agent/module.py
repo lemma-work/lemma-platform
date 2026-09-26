@@ -74,6 +74,9 @@ def _routers():
     from app.modules.agent.api.controllers.runtime_config_controller import (
         router as runtime_config,
     )
+    from app.modules.agent.api.controllers.runtime_default_controller import (
+        router as runtime_default,
+    )
     from app.modules.agent.api.controllers.tool_controller import router as tool
     from app.modules.agent.api.controllers.conversation_controller import (
         router as conversation,
@@ -91,6 +94,7 @@ def _routers():
         agent_host_link,
         agent_host_legacy,
         runtime_config,
+        runtime_default,
         tool,
         conversation,
         widget_serve,
