@@ -17,7 +17,7 @@ import {
 import { downloadUrl } from "@/session/client";
 import { Modal } from "@/shell/modal";
 import { useIsDesktop } from "@/desktop/bridge";
-import { CheckAgainButton, ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
+import { CheckAgainButton, OwnSettingsSwitch, ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
 import { useThisComputer } from "@/desktop/this-computer";
 import { ThisMacModelSuggestions } from "@/desktop/this-mac-models";
 import { LOCAL_SERVERS, LOCAL_SERVER_KEY, detectLocalServers, friendlyError, thisMac } from "@/desktop/this-mac";
@@ -340,7 +340,15 @@ function AgentRow({
                 /* Said only when the computer itself is reachable. When it is
                    not, its own heading already said so, and repeating it under
                    every agent is the same sentence three times. */
-                note={computer.online && !agent.ready ? withCode(agentFix(agent, here)) : undefined}
+                note={computer.online && !agent.ready
+                    ? withCode(agentFix(agent, here))
+                    /* The switch acts on this computer's Agent Host, so it is
+                       drawn only beside this computer's own agents -- here as
+                       well as under This Mac, where people add and manage
+                       them. */
+                    : here
+                        ? <OwnSettingsSwitch harness={agent.harness} name={agent.name} />
+                        : undefined}
                 state={state}
                 tone={tone}
                 quiet={!computer.online}

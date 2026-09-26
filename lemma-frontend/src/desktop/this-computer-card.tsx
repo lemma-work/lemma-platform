@@ -208,7 +208,7 @@ export function ThisComputerCard({ release, children }: { release?: string; chil
 /** Off by default: the agent starts with Lemma's instructions, skills and
  *  tools only, so what it does in a conversation is what Lemma asked of it.
  *  On, it also loads the person's own -- as in their terminal. */
-function OwnSettingsSwitch({ harness, name }: { harness: string; name: string }) {
+export function OwnSettingsSwitch({ harness, name }: { harness: string; name: string }) {
     const host = useAgentHost();
     const [problem, setProblem] = useState<string | null>(null);
     const change = useMutation({
