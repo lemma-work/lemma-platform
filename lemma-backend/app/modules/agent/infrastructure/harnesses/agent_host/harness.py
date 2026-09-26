@@ -83,6 +83,11 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     lease_terminal_detail,
     terminal_checkpoint_state,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
+    SteerSchedule,
+    forward_queued_messages,
+    record_steer_result,
+)
 from app.modules.agent.infrastructure.harnesses.agent_host.stream_reader import (
     StreamReader,
     StreamUnavailable,
@@ -103,6 +108,10 @@ DEFAULT_STREAM_BLOCK_MS = 1_000
 # it only matters for acceptance, expiry, and recovery.
 DEFAULT_LEASE_CHECK_SECONDS = 5.0
 DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
+# How often a steerable run looks for messages the person sent since. Tighter
+# than the lease check because it is what a person waits on, and cheap because
+# it is one indexed UPDATE that nearly always matches nothing.
+DEFAULT_STEER_CHECK_SECONDS = 1.0
 _RICH_CONTENT_TYPES = frozenset(
     {
         AgentHostEventType.AGENT_MESSAGE_CHUNK.value,
@@ -126,6 +135,7 @@ class RemoteHarness:
         lease_check_seconds: float = DEFAULT_LEASE_CHECK_SECONDS,
         stream_block_ms: int = DEFAULT_STREAM_BLOCK_MS,
         terminal_event_grace_seconds: float = DEFAULT_TERMINAL_EVENT_GRACE_SECONDS,
+        steer_check_seconds: float = DEFAULT_STEER_CHECK_SECONDS,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.uow_factory = uow_factory
@@ -135,6 +145,7 @@ class RemoteHarness:
         self.lease_check_seconds = lease_check_seconds
         self.stream_block_ms = stream_block_ms
         self.terminal_event_grace_seconds = terminal_event_grace_seconds
+        self.steer_check_seconds = steer_check_seconds
         # Only the credential window is measured against a wall clock, and it
         # is an hour wide. Injecting it is what lets a test prove a run
         # outliving its original token without waiting out the real hour.
@@ -226,6 +237,11 @@ class RemoteHarness:
         deadline = loop.time() + dispatch.event_timeout_seconds
         accept_deadline = loop.time() + run_config.wait_timeout_seconds
         lease_check_due_at = loop.time()
+        steering = SteerSchedule(
+            enabled=dispatch.steerable,
+            interval=self.steer_check_seconds,
+            now=loop.time(),
+        )
         terminal_checkpoint_seen_at: float | None = None
         stop_sent = False
         # Advances as refreshes land, so the run is bounded by the credential it
@@ -273,6 +289,8 @@ class RemoteHarness:
                 ):
                     yield event
                 return
+
+            await self._steer(steering, now=now, agent_run_id=agent_run_id)
 
             if now < lease_check_due_at:
                 continue
@@ -331,6 +349,13 @@ class RemoteHarness:
             if outcome.expired_state is not None:
                 yield error_event(agent_run_id, expiry_message(outcome.expired_state))
                 return
+
+    async def _steer(
+        self, steering: SteerSchedule, *, now: float, agent_run_id: UUID
+    ) -> None:
+        """Hand the host whatever the person has said since, when it is time."""
+        if steering.due(now):
+            await forward_queued_messages(self.uow_factory, agent_run_id=agent_run_id)
 
     async def _check_lease(
         self,
@@ -441,6 +466,14 @@ class RemoteHarness:
                             ),
                         )
                         await uow.commit()
+        if entry.type == AgentHostEventType.STEER_RESULT.value:
+            await record_steer_result(
+                self.uow_factory,
+                agent_run_id=agent_run_id,
+                conversation_id=conversation.id,
+                message_id=entry.object_id,
+                payload=entry.payload,
+            )
         if entry.type == AgentHostEventType.TERMINAL.value:
             await adopt_recorded_final_answer(
                 self.uow_factory, normalizer, agent_run_id=agent_run_id

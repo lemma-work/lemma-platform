@@ -120,6 +120,15 @@ impl ManagedRuntime {
         // would leave the installation permanently unable to start with
         // "managed data disk has an unexpected size".
         remove_if_present(&disk)?;
+        // locald's pre-migration clone of this disk is a copy of the data
+        // being discarded; a reset that kept it would not have erased it.
+        remove_if_present(
+            &self
+                .config
+                .local_root
+                .join("runtime/macos/data.raw.before-migration"),
+        )?;
+        remove_if_present(&self.data_disk_never_mounted)?;
         remove_if_present(&self.control_socket)?;
         Ok(reclaimed)
     }
@@ -279,7 +288,13 @@ impl ManagedRuntime {
                 )));
             }
             match self.health() {
-                Ok(status) => return Ok(status),
+                Ok(status) => {
+                    // Health requires the data disk mounted, so this boot got
+                    // past `mkfs` -- the disk is no longer a new one.
+                    #[cfg(target_os = "macos")]
+                    remove_if_present(&self.data_disk_never_mounted)?;
+                    return Ok(status);
+                }
                 Err(error) => last_error = Some(error),
             }
             thread::sleep(Duration::from_millis(250));

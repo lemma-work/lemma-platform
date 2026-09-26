@@ -24,6 +24,7 @@ from app.modules.agent.domain.entities import (
     Message as MessageEntity,
     MessageRole,
 )
+from app.modules.agent.domain.queued_messages import STEERED_INTO_RUN
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ACTIVE_AGENT_RUN_STATUSES,
@@ -36,6 +37,11 @@ from app.modules.agent.infrastructure.runtime_history_window import (
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     MessageModel,
+)
+from app.modules.agent.infrastructure.queued_message_queries import (
+    in_order,
+    stamp,
+    unclaimed_queued_messages,
 )
 from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
     list_conversations_stranded_by_a_finished_run,
@@ -459,45 +465,30 @@ class ConversationRunQueriesMixin:
         ).one()
         return bool(row.total) and not row.non_user
 
-    def _unclaimed_queued_messages(self, agent_run_id: UUID):
-        """Messages that arrived after this run started and nobody has read yet.
-
-        ``start`` stamps ``during_active_run`` on a message it appends to a run
-        already in flight, because that run loaded its history before the
-        message existed. ``steered_into_run`` is stamped back by whoever
-        delivered it into a model request, so the same predicate answers both
-        questions that matter: what to steer in next, and what is still owed an
-        answer once the run ends.
-
-        Compared as text rather than cast to boolean, because the column is free
-        JSONB -- a cast would raise on a row where something else wrote a
-        non-boolean under that key, and a miscount is the better failure.
-        """
-        return (
-            MessageModel.agent_run_id == agent_run_id,
-            MessageModel.role == MessageRole.USER.value,
-            MessageModel.message_metadata["during_active_run"].astext == "true",
-            MessageModel.message_metadata["steered_into_run"].astext.is_(None),
-        )
-
     async def count_queued_user_messages(self, agent_run_id: UUID) -> int:
         """How many of this run's queued messages are still unanswered.
 
         Counted over ``ix_agent_message_run_sequence`` rather than loading the
         run's messages, and asked once when a run ends -- so the answer is
         normally zero and costs one indexed aggregate.
+
+        A message handed to the host as a steer that never landed still counts:
+        ``steer_dispatched_at`` is not a claim, so the follow-up turn is what
+        answers it.
         """
         return int(
             await self.session.scalar(
-                select(func.count()).where(
-                    *self._unclaimed_queued_messages(agent_run_id)
-                )
+                select(func.count()).where(*unclaimed_queued_messages(agent_run_id))
             )
             or 0
         )
 
     async def claim_queued_user_messages(
-        self, agent_run_id: UUID
+        self,
+        agent_run_id: UUID,
+        *,
+        into_run_id: UUID | None = None,
+        message_ids: list[UUID] | None = None,
     ) -> list[MessageEntity]:
         """Take the messages that arrived mid-run, and mark them taken.
 
@@ -507,24 +498,39 @@ class ConversationRunQueriesMixin:
         completion sweep will not pick it up either -- but the run is FAILED, so
         the person is told, which is the recovery that was already there.
 
+        ``into_run_id`` is the run that will deliver them, when that is not the
+        run they were queued behind: the follow-up turn claims its predecessor's
+        queue, and the Agent Host harness reads that claim to know which
+        messages its prompt has to carry.
+
+        ``message_ids`` narrows the claim to messages the caller has in hand --
+        an Agent Host dispatch claims the ones its prompt already carries, and
+        must not claim one that arrived a moment later and is not in it.
+
         Returns them in the order they were appended, which the caller relies on
         to keep several bubbles of one message in sequence.
         """
-        stamped = MessageModel.message_metadata.op("||")(
-            func.jsonb_build_object("steered_into_run", str(agent_run_id))
-        )
         rows = (
             await self.session.execute(
                 update(MessageModel)
-                .where(*self._unclaimed_queued_messages(agent_run_id))
-                .values(message_metadata=stamped)
+                .where(
+                    *unclaimed_queued_messages(agent_run_id),
+                    *(
+                        (MessageModel.id.in_(message_ids),)
+                        if message_ids is not None
+                        else ()
+                    ),
+                )
+                .values(
+                    message_metadata=stamp(
+                        **{STEERED_INTO_RUN: str(into_run_id or agent_run_id)}
+                    )
+                )
                 .returning(MessageModel)
                 .execution_options(synchronize_session=False)
             )
         ).scalars()
-        return sorted(
-            (row.to_entity() for row in rows), key=lambda message: message.sequence
-        )
+        return in_order(rows)
 
     async def get_latest_agent_run_for_conversation(
         self,

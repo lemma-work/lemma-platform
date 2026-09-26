@@ -164,6 +164,32 @@ describe("watchDatastoreChanges", () => {
     expect(onError.mock.calls[0][0].message).toMatch(/session rejected after refresh/);
   });
 
+  it.each([
+    [4403, /no access to this pod's changes/],
+    [4404, /pod or table not found/],
+  ])("stops for good on a %i close without retrying", async (code, message) => {
+    const auth = makeAuth();
+    const onError = vi.fn();
+    const onStatus = vi.fn();
+    const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {
+      onChange: vi.fn(),
+      onError,
+      onStatus,
+    });
+    await flush();
+
+    FakeWebSocket.instances[0].onopen?.();
+    FakeWebSocket.instances[0].onclose?.({ code });
+    await settle();
+
+    expect(FakeWebSocket.instances.length).toBe(1);
+    expect(auth.refreshAccessToken).not.toHaveBeenCalled();
+    expect(handle.closed).toBe(true);
+    expect(onStatus).toHaveBeenLastCalledWith("closed");
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0].message).toMatch(message);
+  });
+
   it("allows another refresh once the stream has gone live again", async () => {
     const auth = makeAuth();
     const handle = watchDatastoreChanges("https://api.x.test", auth, "POD", {

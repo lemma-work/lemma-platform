@@ -4,7 +4,7 @@ use super::{
     AcpRunRequest, ActiveRun, Arc, AtomicBool, CANCEL_GRACE, Checkpoint, ConfigOption, Duration,
     EnvVariable, EventType, JournalCallbacks, JsonMap, McpServer, McpServerStdio, Ordering,
     OwnedSemaphorePermit, OwnedTask, PERMISSION_DECISION_TIMEOUT, ResolvedAdapter, RunSpec,
-    RunState, StreamSegments, TargetWorker, Utc, Value, adapter_failure_message,
+    RunState, SteerInbox, StreamSegments, TargetWorker, Utc, Value, adapter_failure_message,
     authentication_hint, host_directory_instructions, prepare_run_directory,
     publish_generated_images, redact_error, terminal_failure, terminal_failure_detail, watch,
 };
@@ -26,6 +26,7 @@ impl TargetWorker {
         let permissions = self.permissions.clone();
         let events_ready = self.events_ready.clone();
         let reprobe_requested = Arc::clone(&self.reprobe_requested);
+        let clock_offset = self.clock_offset;
         let run_id = spec.agent_run_id;
         let credential = crate::runtime::credentials::RunCredential::new(&paths.root, run_id);
         let retire_credential = crate::runtime::credentials::RetireOnDrop(Arc::clone(&credential));
@@ -33,6 +34,7 @@ impl TargetWorker {
         // can name the agent rather than describing it as an internal error.
         let adapter_name = adapter.spec.display_name.clone();
         let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (steer_tx, steer_inbox) = SteerInbox::channel();
         let handle = tokio::spawn(async move {
             let _permit = permit;
             let lease_epoch = journal
@@ -122,7 +124,7 @@ impl TargetWorker {
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
                 events_ready: events_ready.clone(),
             });
-            let remaining = (spec.run_deadline - Utc::now())
+            let remaining = (spec.run_deadline - (Utc::now() + clock_offset))
                 .to_std()
                 .unwrap_or(Duration::ZERO);
             // Kept behind, so the failure path below can still ask whether the
@@ -145,6 +147,7 @@ impl TargetWorker {
                 permission_timeout: PERMISSION_DECISION_TIMEOUT,
                 cancel: cancel_rx,
                 cancel_grace: CANCEL_GRACE,
+                steer: steer_inbox,
             };
             let outcome =
                 tokio::time::timeout(remaining, driver.run(request, callbacks.clone())).await;
@@ -268,6 +271,7 @@ impl TargetWorker {
                 cancel: cancel_tx,
                 kill_at: None,
                 credential,
+                steer: steer_tx,
             },
         );
     }

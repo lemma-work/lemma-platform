@@ -90,6 +90,16 @@ class ConnectorDetailResponseSchema(ConnectorResponseSchema):
     """Schema for connector details including operation catalog."""
 
     operations: Dict[str, OperationSummary] = Field(default_factory=dict)
+    oauth_redirect_uri: Optional[str] = Field(
+        default=None,
+        description=(
+            "The redirect URI an OAuth app registered for this deployment must "
+            "allow -- the callback every sign-in returns to. The same for every "
+            "connector; published here because this is what a person reads "
+            "while registering their own app, and a hand-built copy of it is "
+            "how a wrong path reached users as redirect_uri_mismatch."
+        ),
+    )
 
 
 class ConnectorListResponseSchema(BaseModel):

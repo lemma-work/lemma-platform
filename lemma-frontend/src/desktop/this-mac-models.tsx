@@ -68,7 +68,7 @@ function ServerRow({ server, orgId, onAdded, noun }: { server: DetectedServer; o
                     <span className="mrow__name">{server.name}</span>
                     <span className="mrow__detail">{server.models.length} {server.models.length === 1 ? "model" : "models"} · running on {noun}</span>
                 </span>
-                <span className="mrow__note">Free, and nothing leaves {noun}. Teammates on other devices use it through {noun}.</span>
+                <span className="mrow__note">Free, and nothing leaves {noun}.</span>
                 {add.isError && <span className="reachrow__error" role="alert">{friendlyError(add.error)}</span>}
             </span>
             <button className="btn mrow__add" disabled={add.isPending} onClick={() => add.mutate()}>

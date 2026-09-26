@@ -14,10 +14,14 @@ VM session's, unchanged, because the provider below speaks the same protocol.
 
 from __future__ import annotations
 
+import inspect
 import posixpath
+from collections.abc import Awaitable, Callable
+from uuid import UUID
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
+from app.modules.workspace.domain.host_execution import RunHostPin, run_pinned_host
 from app.modules.workspace.sandbox_session import SandboxWorkspaceSession
 
 
@@ -30,15 +34,52 @@ def host_path(path: str, *, base: str) -> str:
     )
 
 
+class RunPinnedClient:
+    """A sandbox client whose every call is routed by one run's record.
+
+    Wraps the session's client rather than the session's methods, so the
+    process collection loop and anything else handed ``session.client`` is
+    pinned too. See ``run_pinned_host``.
+    """
+
+    def __init__(self, client: object, pin: RunHostPin) -> None:
+        self._client = client
+        self._pin = pin
+
+    def __getattr__(self, name: str) -> object:
+        attr = getattr(self._client, name)
+        if not inspect.iscoroutinefunction(attr):
+            return attr
+        return self._pinned(attr)
+
+    def _pinned(
+        self, call: Callable[..., Awaitable[object]]
+    ) -> Callable[..., Awaitable[object]]:
+        async def pinned(*args: object, **kwargs: object) -> object:
+            with run_pinned_host(self._pin):
+                return await call(*args, **kwargs)
+
+        return pinned
+
+
 class HostWorkspaceSession(SandboxWorkspaceSession):
     """``SandboxWorkspaceSession`` rooted at a folder on the user's Mac."""
 
-    def __init__(self, *, root: str, **kwargs: object) -> None:
+    def __init__(
+        self, *, root: str, host_id: UUID | None = None, **kwargs: object
+    ) -> None:
         if not root.startswith("/"):
             raise ValueError("a host workspace root must be absolute")
         super().__init__(initial_cwd=WORKSPACE_ROOT, **kwargs)
         self.root = posixpath.normpath(root)
         self._cwd = self.root
+        if host_id is not None:
+            # The run's own Mac, from its record; without it the conversation's
+            # latest host run decides, which may be another run's.
+            self.client = RunPinnedClient(
+                self.client,
+                RunHostPin(sandbox_id=self.logical_id, host_id=host_id, root=self.root),
+            )
 
     async def exec_command(
         self,

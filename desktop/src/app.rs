@@ -79,10 +79,12 @@ pub(crate) fn run() {
             conversation_folders::adopt_conversation_folder,
             agent_host_ui::agent_host_start,
             agent_host_ui::agent_host_pair,
+            agent_host_ui::agent_host_session,
             agent_host_ui::agent_host_refresh,
             agent_host_ui::agent_host_open_log,
             operator_settings::discover_provider_models,
             operator_settings::configure_ai_provider,
+            pod_app_alias::app_frame_url,
             operator_settings::sharing_action,
             operator_settings::close_local_settings,
             prompts::confirm_destructive_action,
@@ -100,7 +102,8 @@ pub(crate) fn run() {
             workspace_settings::apply_local_settings,
             workspace_settings::local_sharing,
             workspace_settings::set_start_at_login,
-            workspace_settings::set_host_execution
+            workspace_settings::set_host_execution,
+            workspace_settings::test_server_setup
         ])
         .setup(move |app| setup(app, &mode, recovery_launch))
         .on_window_event(on_window_event)
@@ -115,6 +118,23 @@ fn setup(
     recovery_launch: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
+
+    // Before anything is started, recorded or reclaimed under this path.
+    // Release builds only: a development build runs from target/.
+    if !cfg!(debug_assertions) {
+        if let Some(problem) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| launch_location_problem(&exe))
+        {
+            use tauri_plugin_dialog::DialogExt;
+            append_install_log(&format!("launch refused: {problem}"));
+            app.dialog()
+                .message(problem)
+                .title("Move Lemma to Applications")
+                .show(|_| std::process::exit(0));
+            return Ok(());
+        }
+    }
 
     // Before anything else reads a version: an update that did not finish is
     // the reason this launch is on the version it is on.
@@ -139,6 +159,10 @@ fn setup(
     }
 
     let resume = resume_attempt(mode);
+    if let Some(target) = resume.as_ref() {
+        // Before the window opens straight onto it.
+        grant_local_workspace_capability(&handle, &target.url);
+    }
     // Cold means this launch found nothing already serving and has to bring
     // the stack up. It is the launch that can go wrong, and the one whose
     // duration is worth knowing.
@@ -148,6 +172,9 @@ fn setup(
 
     build_main_window(&handle, mode, initial_url(mode, resume.as_ref()), true)?;
     launch_trace("window shown");
+
+    // After tao has installed its application delegate, which `build` did.
+    install_os_quit_handler(&handle);
 
     app.set_menu(build_app_menu(&handle)?)?;
     app.on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()));
@@ -238,6 +265,7 @@ fn seed_resumed_state(handle: &AppHandle, target: &ResumeTarget) {
 /// The only way from here to the splash is `stand_down`, which is what clears
 /// the optimistic state `seed_resumed_state` wrote.
 fn reconnect_after_resume(handle: &AppHandle, resumed_url: &str) {
+    cookie_migration::migrate_session_cookies(handle);
     if let Err(error) = ensure_locald(handle) {
         // The stack is serving but the daemon is not reachable, so the shell
         // cannot supervise it. Say so on the splash rather than leaving a
@@ -300,6 +328,9 @@ pub(crate) fn stand_down_state(ui: &mut UiState, failure: Option<String>) {
 /// answer. Inside `setup`, before the event loop pumps, that would freeze the
 /// splash for the whole install with no way to tell it from a hang.
 fn connect_on_launch(handle: &AppHandle) {
+    // Cookies first: the workspace is only navigated to once locald reports
+    // ready, which is after `start_impl` below.
+    cookie_migration::migrate_session_cookies(handle);
     let failure = match ensure_locald(handle) {
         Err(error) => Some((error, None)),
         Ok(_) => start_impl(handle.clone())
@@ -395,9 +426,10 @@ fn on_run_event(app: &AppHandle, event: tauri::RunEvent) {
         // items the app draws itself. Fail-safe by construction: an exit is
         // only ever held once, and only when there is something running to say
         // so about.
-        tauri::RunEvent::ExitRequested { api, .. } => {
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
             let shell: State<Shell> = app.state();
             match exit_disposition(
+                code == Some(tauri::RESTART_EXIT_CODE),
                 shell.swapping_window.load(Ordering::Acquire),
                 shell.shutdown.may_exit(),
                 shell.quit_confirmed.load(Ordering::Acquire),

@@ -79,11 +79,16 @@ it:
   you meant it — and that flag was a sixth state plane, kept per-origin, that
   nothing else in the system could see. Turning the host *off* set the same flag,
   collapsing "pause this laptop" and "never auto-pair me" into one bit.
-- **The only real "no" is removing a machine you are not at**, and that already
-  had a durable home: `agent.host.revoke` sets `revoked_at`, closes any
-  open link, and the link refuses the host from then on. It sticks because the machine is not there to
-  re-pair itself. The Remove control is hidden on this computer's own card for
-  exactly that reason.
+- **The only real "no" is removing a machine**, and that has a durable home:
+  `agent.host.revoke` sets `revoked_at`, ends the runs and commands the host
+  held, closes any open link, and the link refuses the host from then on. The
+  revoked row is a tombstone for that person and installation: a `pair` for
+  it is refused ("This computer was removed from this account…") unless the
+  frame carries `reenable: true`, which the app sends only when the person
+  presses the card's "Connect again" / "Try again" — never from the automatic
+  connection. So removing this computer from another screen sticks against the
+  next page load, and turning it back on is a click. The Remove control is
+  still hidden on this computer's own card.
 
 Hosted workspaces connect the same way. The gate used to be
 `isLocalDeployment()`, which left the cloud user — the one whose laptop and
@@ -110,8 +115,21 @@ So the consent boundary is the profile, not the pairing. Which is why there is
 no connect/disconnect: it would be ceremony in front of a step that grants
 nothing, standing in for a decision that is made one screen later.
 
-**"Paired" means paired to the workspace on screen**, judged from this machine's
-own `targets` by origin. Not the backend's host list: the host learns about a
+**"Paired" means paired to the workspace on screen, for the person signed
+in**, judged from this machine's own `targets`: by origin, by the target's
+`user_id` (which the status reports per target), and never a target the host
+turned off. Two people who sign in to the app on one Mac are two people, and
+the second is paired as themselves rather than inheriting the first one's
+pairing. The app also tells the host who is signed in (`agent_host_session`,
+locald `agent-host.session`, the hidden CLI `session --url --user`): the
+pairings to that Lemma of anybody else are paused (`session_paused` on the
+target) — they take no new runs and run no host commands — until their person
+signs in again, and signing out pauses them all. The workspace URL the shell
+pairs with or reports on is the shell's own, never the page's: in local mode
+this installation's loopback API, in hosted mode only the hosted site or its
+subdomains over HTTPS (`agent_host_workspace_url` in `desktop/src/agent_host_ui.rs`).
+The pairing code reaches the host on stdin (`connect --pairing-code-stdin`),
+not on an argument list any process on the Mac can read. Not the backend's host list: the host learns about a
 revocation by being *refused*, and it drops the target itself when Lemma refuses
 it repeatedly — so the target stops existing and the ordinary "not paired here"
 path re-pairs. Repeatedly, because `AGENT_HOST_REVOKED_OR_MISSING` is also what a
@@ -194,20 +212,23 @@ existed only to tell the toggle which way to point.
 The workspace page is a **remote origin** to Tauri — locald serves it over
 http, and the hosted build loads `lemma.work` — so it can only reach the shell
 through a capability naming its URL. `capabilities/workspace.json` grants
-`open_control_center`, five `agent_host_*` commands, `sandbox_image_status`,
+`open_control_center`, six `agent_host_*` commands, `sandbox_image_status`,
 the conversation-folder commands, `discover_provider_models` and
 `configure_ai_provider` — and, for Settings → This Mac, the commands that
 change this computer's own settings: `local_settings_snapshot`,
-`apply_local_settings`, `local_sharing`, `set_start_at_login`, `set_host_execution`,
-`repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
+`apply_local_settings`, `test_server_setup`, `local_sharing`, `set_start_at_login`,
+`set_host_execution`, `repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
 `check_for_app_update`, `install_app_update`, `telemetry_status` and
 `set_telemetry_enabled`. Nothing destructive is granted: resetting data,
 reinstalling and restarting into recovery stay in Local settings.
 
-The This Mac commands carry a narrower Rust check than the Agent Host ones,
-`require_local_settings_caller`: local mode, the `main` webview, the origin
-this app navigated to, and that origin one of the shipped loopback workspace
-hosts. The capability also lists `https://lemma.work`, and that check is what
+The Agent Host commands check `require_agent_host_caller`: the hosted site
+this app navigated to in hosted mode, and in local mode only the shipped
+loopback workspace origin -- while sharing is on, the origin this app
+navigated to is the shared LAN or tunnel address, which is refused. The This
+Mac commands carry the narrower `require_local_settings_caller`: local mode,
+the `main` webview, the origin this app navigated to, and that origin one of
+the shipped loopback workspace hosts. The capability also lists `https://lemma.work`, and that check is what
 keeps a hosted page from reaching an installation it is not. Public sharing,
 repair and installing an update each raise a native confirmation from Rust
 before acting, so the page asking is never the person agreeing.
@@ -368,12 +389,12 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 
 | Direction | `type` | Body | Answered by |
 |---|---|---|---|
-| host → Lemma | `pair` | `pairing_code`, `display_name`, `hello` | `paired` (`host_id`, `user_id`, `host_secret`), then close |
-| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`) |
+| host → Lemma | `pair` | `pairing_code`, `display_name`, `hello`, `reenable` (default false) | `paired` (`host_id`, `user_id`, `host_secret`), then close |
+| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`, `server_time`, `idempotent_tool_calls`) |
 | host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections`, `host_execution` | `control_ok` (`commands`, `refused`) |
 | host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
 | host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
-| host → Lemma | `mcp` | `run_id`, `conversation_id`, `token`, `method`, `params` | `mcp_ok` (`result`) or `error` |
+| host → Lemma | `mcp` | `run_id`, `conversation_id`, `token`, `method`, `params`, `request_id` (`tools/call`) | `mcp_ok` (`result`) or `error` |
 | host → Lemma | `interaction_wait` | `run_id`, `conversation_id`, `token`, `tool_call_id` | `interaction_ok` (`answer`), once decided |
 | host → Lemma | `revoke` | nothing | `revoked`, then close |
 | Lemma → host | `commands` | `commands` | the next `control` acknowledges them |
@@ -394,7 +415,13 @@ revocation, a platform without Seatbelt) answers every `op` with
 
 `host_execution` is `{enabled, platform, available}`: whether the machine's user turned
 host execution on, `macos`/`linux`/`windows`, and whether this machine can
-confine commands (macOS with `/usr/bin/sandbox-exec`). It rides on every
+confine commands (macOS with `/usr/bin/sandbox-exec`). Only the pairing with
+the Lemma installed on this computer -- plain HTTP to loopback, the one
+pairing that may use it (`TargetConfig::is_local_install`) -- has an op
+handler or ever reports `enabled`; every other pairing (a hosted workspace, a
+teammate's shared install) answers `op` as a host without host execution, and
+the switch is that local pairing's own (`host_execution` on the target in
+`config.json`). It rides on every
 `control` as well as `hello`, so turning it on or off reaches Lemma within
 seconds without a reconnect. Lemma routes a run of the host's paired user to it only when
 both booleans are true.
@@ -411,9 +438,9 @@ protocol violation.
 | 1012 | Lemma is restarting (after `reconnect`) | reconnects after `after_ms` |
 | 4400 | protocol violation | reconnects with backoff, and logs it |
 | 4401 | `AGENT_HOST_REVOKED_OR_MISSING` | counts toward dropping the pairing (three in a row) |
-| 4403 | malformed or missing credential | reconnects with backoff |
+| 4403 | malformed or missing credential; also a refused `pair` (`installation_revoked` for a removed computer) | reconnects with backoff, never disables the pairing |
 | 4408 | no frame from the host for `heartbeat_ms × 3` | reconnects |
-| 4409 | superseded by a newer connection for this host | stops this connection; the newer one continues |
+| 4409 | superseded by a newer connection for this host | stops this connection. A link that lasted a minute or more was a hand-over and is reopened at once; one superseded sooner is another host holding the same credential, so each consecutive one waits longer (0.5 s doubling to 5 minutes) instead of taking the link back for ever |
 | 4426 | the host's protocol is too old | reports `upgrade required` and stops; Desktop's updater takes over |
 
 ### Heartbeat and liveness
@@ -454,10 +481,73 @@ guarantee:
   acknowledged, and kills the host mid-turn. Every run is held to contiguous
   sequences, one terminal event, one persisted answer and one provider prompt.
 - **MCP tool calls** are re-authorized on every call against the run's own
-  token, exactly as the HTTP endpoint did. A call in flight when the socket
-  drops is retried once the link is back. A parked `ask_user` is waited on with
-  `interaction_wait`, which Lemma answers when the person decides. The bridge no
-  longer polls every 2 seconds.
+  token, exactly as the HTTP endpoint did, and a `run_id` they name must be a
+  run of the `conversation_id` they name, or the call is `UNAUTHORIZED`.
+- **A tool call executes at most once.** The host mints a `request_id`
+  (`^[A-Za-z0-9_-]{1,64}$`) for each `tools/call` and sends the same one on
+  every retry of that call, on any link. Lemma claims `(run_id, request_id)` in
+  Redis (`SET NX`); the first arrival executes the call in a task the link does
+  not own, so a socket that drops mid-call does not cancel it, and its outcome
+  -- the MCP result, or the failure -- is kept for an hour. A duplicate that
+  arrives while it runs waits for that outcome; one that arrives after is
+  answered from it. Nothing is executed twice
+  (`agent_host_link_tool_calls.py`). `welcome` says so with
+  `idempotent_tool_calls: true`, and a host resends a `tools/call` after a drop
+  only to a server that said it. A call without a `request_id`, from an older
+  host, runs as it arrives and goes with its link.
+- **Only a refusal before dispatch is retryable.** Authorizing the call and
+  taking its claim can fail with `retryable: true` (an auth lookup that could
+  not answer, a full link). Once the call is dispatched, every failure is
+  `retryable: false`, `INTERNAL` and `UNAVAILABLE` included: the tool may
+  already have acted.
+- **Parked interactions.** A parked `ask_user` is waited on with
+  `interaction_wait`, which Lemma answers when the person decides. Waits have
+  their own slots on the link, apart from tool calls, so a queue of questions
+  never stalls the runs still working. A wait whose run has ended is answered
+  `TERMINAL_RUN`, not held for its full half hour. The bridge no longer polls
+  every 2 seconds.
+- **Steering.** A message the person sends while a run is working reaches a
+  harness that published the `steering` capability as a `STEER_RUN` command,
+  fenced on the run's lease epoch like every run command. The run's turn sends
+  it to the agent with ACP's `_session/steering` extension and reports a
+  `steer_result` event; see
+  [Steering](agent-host-events.md#steering). Nothing about it is required for
+  correctness: a lost command or result leaves the message queued in Lemma, and
+  the follow-up turn delivers it when the current one ends.
+- **The host's MCP relay** (`mcp_relay.rs`) is a loopback port every account
+  on the Mac can reach, so a connection must present the relay token on its
+  first line within 5 seconds and in at most 64 KiB, later lines are bounded
+  at 8 MiB without being read whole first, and at most 64 connections are
+  held. It serves only runs the journal says are still going, and ends a
+  parked wait itself when its run does. An answer too large for the bridge
+  goes as an error saying so, not as a line the bridge would hang up on. The
+  bridge (`mcp_bridge`) sends the token first on each connection, marks a
+  connection gone the moment its reader ends -- a request never waits on a
+  relay that already hung up -- waits out an endpoint file left by a relay
+  that has restarted, passes an agent's `notifications/cancelled` on to the
+  relay as a `cancel`, and gives up on a listing after 2 minutes and a call
+  after 30.
+- **Clock skew.** `welcome` carries `server_time` (UTC). Command expiry is
+  stamped by Lemma's clock, so the host corrects by the difference rather than
+  refusing every command when its own clock is off, and judges a run's
+  deadline the same way. A `CANCEL_RUN` is never refused as expired: stopping
+  late is still stopping.
+- **Sleep.** A Mac that sleeps stops the heartbeat a run's lease hangs on, and
+  the run is given up once the lease and its recovery grace pass. While any
+  run holds a slot the host keeps the Mac awake with `caffeinate -i -s -w
+  <host pid>` (`runtime/awake.rs`), released when the last run ends and gone
+  with the host if it dies. `-s` covers a closed lid on power; on battery with
+  the lid closed macOS sleeps regardless.
+- **Removing a computer sticks, and ends its work.** Revoking sets
+  `revoked_at` and, in the same transaction, fails every unfinished run lease
+  on the host with `HOST_REVOKED` (the run ends with that sentence) and cancels
+  its queued and delivered commands; nothing waits for a machine that can no
+  longer connect. The row stays as a tombstone: a `pair` for that user and
+  installation is refused with `installation_revoked` ("This computer was
+  removed from this account. Connect it again from Lemma to turn it back on.")
+  and the code is left unused, so the host's automatic connection cannot undo
+  a removal. Only a `pair` with `reenable: true`, sent when the person asks
+  from the app, brings it back.
 
 **A connection closes with its last owner.** The socket's reader and writer
 tasks belong to the handles that talk on it: when the last handle is dropped

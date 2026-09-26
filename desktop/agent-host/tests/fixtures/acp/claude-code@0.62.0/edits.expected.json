@@ -1,0 +1,383 @@
+[
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "commands": [
+        "recorded"
+      ]
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39081,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01WhN4BNDMFCgFiqpXzSQ2MC",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "content": "one\n"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "write_file",
+        "source": "native",
+        "server": null,
+        "title": "Write notes.txt",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "toolu_01WhN4BNDMFCgFiqpXzSQ2MC",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "content": "one\n"
+      },
+      "tool": {
+        "name": "write_file",
+        "source": "native",
+        "server": null,
+        "title": "Write notes.txt",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01WhN4BNDMFCgFiqpXzSQ2MC",
+    "payload": {
+      "error": null,
+      "output": {
+        "message": "File created successfully at: /workspace/fixture/notes.txt (file state is current in your context — no need to Read it back)",
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "add",
+            "old_text": null,
+            "new_text": "one\n"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39196,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39196,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39327,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01Fqkfjukw1wDMbQg4tbCA6B",
+    "payload": {
+      "input": {
+        "file_path": "/workspace/fixture/notes.txt",
+        "old_string": "one",
+        "new_string": "two",
+        "replace_all": false,
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "update",
+            "old_text": "one",
+            "new_text": "two"
+          }
+        ]
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "edit_file",
+        "source": "native",
+        "server": null,
+        "title": "Edit notes.txt",
+        "kind": "edit"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39467,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01Fqkfjukw1wDMbQg4tbCA6B",
+    "payload": {
+      "error": null,
+      "output": {
+        "message": "The file /workspace/fixture/notes.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+        "changes": [
+          {
+            "file_path": "/workspace/fixture/notes.txt",
+            "kind": "update",
+            "old_text": "one",
+            "new_text": "two"
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39609,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01S2D88o1GnyHcxjxwuGvvVh",
+    "payload": {
+      "input": {
+        "query": "select:WebSearch,WebFetch",
+        "max_results": 2
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "tool_search",
+        "source": "native",
+        "server": null,
+        "title": "ToolSearch",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 39670,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01S2D88o1GnyHcxjxwuGvvVh",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "Tool: WebSearch\nTool: WebFetch"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40463,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_0157DfhmFhQTYax7WM1LPLqv",
+    "payload": {
+      "input": {
+        "query": "\"Agent Client Protocol\""
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "web_search",
+        "source": "native",
+        "server": null,
+        "title": "\"\"Agent Client Protocol\"\"",
+        "kind": "fetch"
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "toolu_0157DfhmFhQTYax7WM1LPLqv",
+    "payload": {
+      "input": {
+        "query": "\"Agent Client Protocol\""
+      },
+      "tool": {
+        "name": "web_search",
+        "source": "native",
+        "server": null,
+        "title": "\"\"Agent Client Protocol\"\"",
+        "kind": "fetch"
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01EsFAP5tN75rW3hyoP5kWnF",
+    "payload": {
+      "input": {
+        "url": "https://agentclientprotocol.com",
+        "prompt": "Summarize what this page is about in one sentence."
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "web_fetch",
+        "source": "native",
+        "server": null,
+        "title": "Fetch https://agentclientprotocol.com",
+        "kind": "fetch"
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "toolu_01EsFAP5tN75rW3hyoP5kWnF",
+    "payload": {
+      "input": {
+        "url": "https://agentclientprotocol.com",
+        "prompt": "Summarize what this page is about in one sentence."
+      },
+      "tool": {
+        "name": "web_fetch",
+        "source": "native",
+        "server": null,
+        "title": "Fetch https://agentclientprotocol.com",
+        "kind": "fetch"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 40592,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01EsFAP5tN75rW3hyoP5kWnF",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "The Agent Client Protocol is a standardized communication framework that \"decouples\" editors and coding agents, enabling them to work together interoperably rather than requiring custom integrations for each combination."
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_0157DfhmFhQTYax7WM1LPLqv",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "Web search results for query: \"\"Agent Client Protocol\"\"\n\nLinks: [{\"title\":\"The Agent Client Protocol Overview\",\"url\":\"https://www.philschmid.de/acp-overview\"},{\"title\":\"GitHub - agentclientprotocol/agent-client-protocol: A protocol for connecting any editor to any agent · GitHub\",\"url\":\"https://github.com/agentclientprotocol/agent-client-protocol\"},{\"title\":\"agent-client-protocol - crates.io: Rust Package Registry\",\"url\":\"https://crates.io/crates/agent-client-protocol\"},{\"title\":\"Agent Client Protocol (ACP): Use Any Coding Agent in Any IDE\",\"url\":\"https://www.jetbrains.com/acp/\"},{\"title\":\"Zed — Agent Client Protocol\",\"url\":\"https://zed.dev/acp\"},{\"title\":\"Introduction - Agent Client Protocol\",\"url\":\"https://agentclientprotocol.com/get-started/introduction\"},{\"title\":\"Community Providers: ACP (Agent Client Protocol)\",\"url\":\"https://ai-sdk.dev/providers/community-providers/acp\"},{\"title\":\"Agent Client Protocol (ACP) | Hacker News\",\"url\":\"https://news.ycombinator.com/item?id=45074147\"},{\"title\":\"Agent Client Protocol : The “New MCP” for IDEs and Coding Agents - YouTube\",\"url\":\"https://www.youtube.com/watch?v=Tn1Rl-qBOr4&vl=it\"},{\"title\":\"Agent Client Protocol icon\",\"url\":\"https://alternativeto.net/software/agent-client-protocol/about\"}]\n\nBased on the search results, here's what I found about the Agent Client Protocol:\n\n## Overview\n\nThe Agent Client Protocol (ACP) standardizes communication between code editors (interactive programs for viewing and editing source code) and coding agents (programs that use generative AI to autonomously modify code).\n\n## Key Features\n\nACP is a JSON-RPC 2.0 protocol that enables features like tool use, permission requests, and streaming responses.\n\n## Purpose and Benefits\n\nACP solves integration problems by providing a standardized protocol for agent-editor communication, similar to how the Language Server Protocol (LSP) standardized language server integration. Built by JetBrains and Zed, ACP helps to connect local, remote, or in-house AI agents without vendor lock-in.\n\n## Adoption\n\nACP is open source under the Apache license. The protocol is being integrated into various IDEs and used by multiple AI coding agents including Claude Code, Google's Gemini CLI, and others.\n\nThe protocol essentially creates an open ecosystem where developers can use their preferred coding agents in their favorite editors without being locked into proprietary solutions.\n\n\nREMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks."
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 41696,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CfQGGfC2qrpVHyUyPogeA",
+    "payload": {
+      "text": "done"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 41800,
+        "size": 1000000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 41800,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.2347712,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  {
+    "type": "usage",
+    "object_id": null,
+    "payload": {
+      "cached_input_tokens": 179676,
+      "input_tokens": 10,
+      "output_tokens": 633,
+      "total_tokens": 200725
+    }
+  }
+]

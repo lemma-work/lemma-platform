@@ -70,6 +70,10 @@ pub struct HostSetupSpec {
     pub max_attempts: usize,
     #[serde(default = "default_setup_retry_backoff")]
     pub retry_backoff_seconds: u64,
+    /// End the setup early only after this long with nothing written to its
+    /// log. `timeout_seconds` is then the ceiling rather than the budget.
+    #[serde(default)]
+    pub idle_timeout_seconds: Option<u64>,
     /// Whether failing this step should stop the whole stack from starting.
     ///
     /// Migrations are not optional: a backend running against a schema it does
@@ -95,6 +99,17 @@ pub struct HostSetupSpec {
     /// that declines to declare one, behaves exactly as before.
     #[serde(default)]
     pub stamp: Option<String>,
+    /// Environment variables the result also depends on, folded into `stamp`
+    /// from the environment the setup actually runs with.
+    ///
+    /// The renderer cannot put these in `stamp` itself: it sees only the host
+    /// pack's environment, while a Composio key arrives later, from the
+    /// operator configuration applied over it. The catalog's stamp was once
+    /// computed from the pack alone, so it said "no key" whatever was saved,
+    /// and adding a key never brought the Composio apps in. Values are hashed
+    /// with the stamp, never recorded as they are.
+    #[serde(default)]
+    pub stamp_env: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

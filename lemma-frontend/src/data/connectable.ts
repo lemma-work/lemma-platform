@@ -26,6 +26,10 @@
 
 export type ConnectEffort = "instant" | "guided" | "account" | "unavailable";
 
+/** What stops every route in, when something does — the backend's
+ *  `unavailable_reason`, which is the same check its create path refuses on. */
+export type UnavailableReason = "NEEDS_PUBLIC_LINK" | "NEEDS_EMAIL_DOMAIN";
+
 export interface Connectable {
     /** SLACK | TEAMS | WHATSAPP | TELEGRAM | RESEND */
     platform: string;
@@ -51,6 +55,8 @@ export interface Connectable {
     emailDomain?: string;
     credentialSchema?: unknown;
     kind?: string;
+    /** Nothing can connect here until this is fixed. */
+    unavailableReason?: UnavailableReason;
 }
 
 interface RawConnectable {
@@ -65,6 +71,7 @@ interface RawConnectable {
     system_claim?: { available?: boolean; claimed_by_pod_id?: string | null; claimed_by_surface_name?: string | null } | null;
     kind?: string;
     connect?: { system_oauth_available?: boolean; credential_schema?: unknown } | null;
+    unavailable_reason?: string | null;
 }
 
 /** What the fastest open route actually is.
@@ -75,10 +82,19 @@ interface RawConnectable {
  *  guided path is the cheapest thing left — and it is a better outcome anyway,
  *  since the bot carries your own name. */
 export function effortOf(entry: Connectable): ConnectEffort {
+    /* First: a reason means the server will refuse every route, including the
+       one-click one, and offering it is how a save failed after an account had
+       already been made. */
+    if (entry.unavailableReason) return "unavailable";
     if (entry.system && entry.systemFree) return "instant";
     if (entry.guided) return "guided";
     if (entry.account) return "account";
     return "unavailable";
+}
+
+function readReason(raw: string | null | undefined): UnavailableReason | undefined {
+    const reason = String(raw ?? "").toUpperCase();
+    return reason === "NEEDS_PUBLIC_LINK" || reason === "NEEDS_EMAIL_DOMAIN" ? reason : undefined;
 }
 
 export function readConnectable(raw: unknown): Connectable | null {
@@ -112,6 +128,7 @@ export function readConnectable(raw: unknown): Connectable | null {
         emailDomain: entry.email_domain ?? undefined,
         credentialSchema: entry.connect?.credential_schema,
         kind: entry.kind,
+        unavailableReason: readReason(entry.unavailable_reason),
     };
 
     return { ...base, effort: effortOf(base) };
@@ -141,4 +158,60 @@ const RANK: Record<ConnectEffort, number> = { instant: 0, guided: 1, account: 2,
 
 export function byEffort(a: Connectable, b: Connectable): number {
     return RANK[a.effort] - RANK[b.effort] || a.platform.localeCompare(b.platform);
+}
+
+/** Platforms that can receive with no public link, once their bot is set up:
+ *  Telegram polls and Slack uses Socket Mode. For these, "needs a public link"
+ *  is really "needs its bot token", and saying the first sends people to
+ *  sharing they do not need. */
+const PULLS = new Set(["TELEGRAM", "SLACK"]);
+
+/** What to do about a channel that cannot be connected here, in words.
+ *
+ *  `machine` is what to call the computer ("this Mac") when the reader is at a
+ *  local install and can fix it there, and null anywhere else — a hosted
+ *  workspace, or a shared address — where the fix is somebody else's. */
+export function unavailableNote(entry: Connectable, machine: string | null): string | null {
+    const name = entry.title || entry.platform.charAt(0) + entry.platform.slice(1).toLowerCase();
+    if (entry.unavailableReason === "NEEDS_EMAIL_DOMAIN") {
+        return machine
+            ? "Email needs a Resend key and an inbound domain on " + machine + "."
+            : "Email isn’t set up on this server yet.";
+    }
+    if (entry.unavailableReason === "NEEDS_PUBLIC_LINK") {
+        if (PULLS.has(entry.platform)) {
+            return machine ? name + " needs its bot set up on " + machine + " first." : name + " isn’t set up on this server yet.";
+        }
+        return machine
+            ? "Needs a public link — turn on Sharing › Public on " + machine + " first."
+            : "Needs a public link to this server first.";
+    }
+    return null;
+}
+
+/** Whether the fix for an unavailable channel is the machine's sharing, rather
+ *  than a credential form. */
+export function needsSharing(entry: Connectable): boolean {
+    return entry.unavailableReason === "NEEDS_PUBLIC_LINK" && !PULLS.has(entry.platform);
+}
+
+/** Make an account, then bind it; undo the account if the bind is refused.
+ *
+ *  Two calls that are one act to the person. An account left behind by a
+ *  refused bind has nobody on it, and the reach sheet then offered it back as
+ *  "Ready now · already connected to this organization" — a button whose only
+ *  outcome was the same refusal. The undo is best effort: the refusal is the
+ *  thing to report, not a failure to clean up after it. */
+export async function createThenBind<T>(
+    create: () => Promise<string>,
+    bind: (accountId: string) => Promise<T>,
+    undo: (accountId: string) => Promise<unknown>,
+): Promise<T> {
+    const accountId = await create();
+    try {
+        return await bind(accountId);
+    } catch (problem) {
+        await undo(accountId).catch(() => undefined);
+        throw problem;
+    }
 }

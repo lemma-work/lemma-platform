@@ -219,6 +219,10 @@ class TestReadingTheFiles:
             )
 
         assert raised.value.details["reason"] == "file_input_needs_pod"
+        from app.version import MIN_CLI_VERSION
+
+        assert "lemma update" in str(raised.value)
+        assert MIN_CLI_VERSION in str(raised.value)
 
     @pytest.mark.asyncio
     async def test_inline_base64_needs_no_pod(self):

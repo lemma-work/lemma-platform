@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from collections import OrderedDict
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -28,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
+from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_host
 from app.modules.connectors.config import connector_settings
@@ -143,7 +143,15 @@ class SqlExecutor:
     """
 
     def __init__(self) -> None:
-        self._engines: "OrderedDict[str, tuple[AsyncEngine, bytes]]" = OrderedDict()
+        # Disposal is async and the cap evicts from a sync setter, so eviction
+        # only parks the victim here; ``_engine_for`` awaits its disposal.
+        self._evicted: list[AsyncEngine] = []
+        self._engines: BoundedDict[str, tuple[AsyncEngine, bytes]] = BoundedDict(
+            connector_settings.connector_sql_engine_cache_size,
+            name="connectors.sql_engines",
+            touch_on_get=True,
+            on_evict=lambda _key, entry: self._evicted.append(entry[0]),
+        )
 
     async def execute(
         self,
@@ -272,7 +280,6 @@ class SqlExecutor:
         if cached is not None:
             engine, cached_secret = cached
             if hmac.compare_digest(cached_secret, secret):
-                self._engines.move_to_end(cache_key)
                 return engine
             # The password changed under the same connection identity. Reusing
             # the pool here would keep serving queries on connections opened
@@ -281,12 +288,17 @@ class SqlExecutor:
             await engine.dispose()
 
         engine = create_async_engine(
-            dsn, pool_size=2, max_overflow=2, pool_pre_ping=True
+            dsn,
+            pool_size=2,
+            max_overflow=2,
+            pool_pre_ping=True,
+            # Tenant SQL is one-shot text keyed by its string, so a compiled
+            # cache only retains it -- per engine, times the engine LRU above.
+            query_cache_size=0,
         )
         self._engines[cache_key] = (engine, secret)
-        self._engines.move_to_end(cache_key)
-        while len(self._engines) > connector_settings.connector_sql_engine_cache_size:
-            _evicted_key, (evicted, _secret) = self._engines.popitem(last=False)
+        while self._evicted:
+            evicted = self._evicted.pop()
             # Dropping the reference is not enough: the engine owns a live pool
             # against a customer database, and garbage collection will not close
             # those sockets promptly (or at all, for asyncpg). Without this the
@@ -297,6 +309,8 @@ class SqlExecutor:
     async def dispose_all(self) -> None:
         """Close every pooled engine. Called on process shutdown."""
         engines = [engine for engine, _secret in self._engines.values()]
+        engines.extend(self._evicted)
+        self._evicted.clear()
         self._engines.clear()
         for engine in engines:
             await engine.dispose()

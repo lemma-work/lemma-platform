@@ -417,6 +417,10 @@ class CreateOpenAICompatibleRuntimeProfileRequest(BaseModel):
     description: str | None = None
     default_model_name: str | None = Field(default=None, min_length=1)
     model_names: list[str] = Field(default_factory=list)
+    # An OpenAI-compatible `/models` list rarely says which models take image
+    # input, and the catalog treats silence as "cannot"; this is how the person
+    # adding the provider says otherwise.
+    vision_model_names: list[str] = Field(default_factory=list)
     headers: dict[str, str] = Field(default_factory=dict)
     model_settings: JsonObject = Field(default_factory=dict)
 

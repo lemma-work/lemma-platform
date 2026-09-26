@@ -55,13 +55,20 @@ one source is allowed. `file://` is accepted only when both
 `LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1` select that exact source-level test
 manifest.
 
+A packaged build refuses to run from a translocated path
+(`.../AppTranslocation/...`) or a mounted disk image (`/Volumes/...`) and asks to
+be moved to Applications: locald, the VM helper and Start at Login are all
+identified by path, and those paths change every launch.
+
 Installation:
 
 1. Validate manifest schema, release, target, source, digest, and sizes.
 2. Reserve space for the compressed downloads, expanded sizes, and 4 GiB of
    working headroom before extraction.
 3. Reuse a verified archive or resume its `.part` file with a strict
-   `Content-Range`.
+   `Content-Range`. A connection that drops, or is silent for 60 seconds
+   (the header wait and every body read), is resumed automatically up to five
+   times with backoff; a digest, range or client error is not retried.
 4. Hash the existing prefix and new bytes as they transfer.
 5. Reject redirects outside HTTPS, wrong status/size/digest, archive overlap,
    path escape, duplicate entries, symlinks, and unsafe expansion.
@@ -93,6 +100,16 @@ avoided on Apple Silicon; see the same disk-cache workaround in
 `locald/runtime/macos/data.raw` is the sole sparse mutable disk. Guest mount
 setup binds persistent paths for PostgreSQL, Redis, SuperTokens, containerd,
 and sandbox workspaces from that disk. Ephemeral runtime paths use tmpfs.
+
+The guest formats the disk only when it has no filesystem signature *and* the
+host says it is new. "New" is `data-disk-never-mounted` beside `data.raw`:
+written before the disk is created and removed only when a boot first reaches
+health, so a first boot interrupted before `mkfs` stays formattable instead of
+reporting that it needs repair. At boot `e2fsck -p` repairs a dirty filesystem;
+damage it declines to fix gets one `e2fsck -f -y` pass before the guest reports
+`needs-repair` and the app offers a reset. The VM does not start with less than
+2 GiB free on the Mac, because the sparse disk grows underneath the guest and a
+full Mac fails its writes -- Postgres's among them.
 
 The build creates a 2 GiB maximum ext4 image, populates it with numeric
 ownership preserved, shrinks it to minimum contents, and verifies the final
@@ -181,7 +198,9 @@ after a grace interval.
 
 Recovery is available from the welcome screen, desktop settings, and the tray,
 including cloud mode and daemon failures. Restart into Recovery pauses automatic
-service startup and runtime downloads. Force cleanup requires an app-owned
+service startup and runtime downloads. Reset Data from Recovery leaves Recovery (it
+starts local services to perform the reset) and clears the workspace session
+only once the daemon has accepted the reset. Force cleanup requires an app-owned
 confirmation with Cancel focused. It deletes this installation's local data,
 credentials, runtime downloads, Agent Host pairings and managed working folders;
 external project folders and cloud data are retained. It is separate from updates
@@ -214,6 +233,25 @@ The exit watchdog must exceed the combined sharing, handshake, graceful stop,
 and verified VM/process fallback deadlines. A shorter watchdog can terminate
 the cleanup worker itself and leave this installation's processes running.
 
+Quits macOS issues itself -- Dock → Quit, log out, restart, shut down -- take
+the same path. The shell adds `applicationShouldTerminate:` to tao's
+application delegate, answers `NSTerminateLater`, runs the ordinary quit, and
+replies once the stack is down (or the person declined). A logout, restart or
+shutdown is not asked about. `AppHandle::restart` (Restart into Recovery,
+restart after an update) is never treated as a quit. The daemon handles
+`SIGTERM`, `SIGINT` and `SIGHUP` by running the same shutdown as
+`shutdown-daemon`, so a session ending without the app still stops the VM
+rather than cutting it off. A shutdown that fails part-way exits the daemon
+anyway -- its admission is already closed -- and the next start reclaims what
+is left by identity. "Quit Anyway" escalates the stop already requested rather
+than sending a second one. A SIGTERM'd VM helper is given the guest's declared
+stop budget (75s) plus a margin before it is killed, by the shell and by the
+runtime manager's reclaim alike.
+
+Only one daemon runs per installation root: `lemma-locald serve` takes an
+exclusive lock on `<root>/locald.lock` before it reclaims anything, so a second
+daemon exits without touching the first one's services.
+
 ## 5. Host process contract
 
 The host-pack manifest requires exactly:
@@ -221,6 +259,27 @@ The host-pack manifest requires exactly:
 - setup: `migrations`;
 - service: `backend`;
 - service: `frontend`.
+
+Setups are skipped when their recorded stamp matches. A setup may also name
+environment variables in `stamp_env`, whose values in the environment it runs
+with are hashed into its stamp: `connector-catalog` names
+`COMPOSIO_API_KEY`, which arrives from the operator configuration rather than
+the host pack, so saving, changing or removing a Composio key imports the
+catalog again. A settings save re-runs that one setup beside the restarted
+backend when its stamp changed, rather than waiting for the next start. On
+macOS a stamp is bound to the data disk's identity (inode and birth time of `data.raw`), so a disk
+that was replaced reruns its migrations instead of skipping them against an
+empty database. `migrations` runs under a one-hour ceiling but is ended early
+only after fifteen minutes with nothing written to its log. While it runs,
+`update.json` records the `migrating` phase; a failed run stays recorded, and
+the next start reports it and migrates forward again. Before migrating a
+database that has been migrated before, locald takes an APFS clone of the data
+disk to `runtime/macos/data.raw.before-migration` (one copy, replaced each time,
+removed by a data reset) -- restoring it is a manual support step. `schema-release`
+records the release that last completed migrations. When Alembic reports that it
+cannot locate the database's revision -- data from a newer Lemma, after a
+downgrade or a nightly-to-stable switch -- the start fails once, naming the
+release to install, instead of retrying a generic setup error.
 
 The backend environment selects the all-in-one app, local auth settings,
 background embedding initialization, private service addresses, dynamic local
@@ -349,9 +408,91 @@ The backend bridge receives the runtime manager's configured WSL distribution
 alongside the installation's control socket and capability file. It must not
 fall back to the default distribution for a separate installation.
 
-The same `app.lemma.localhost` hostname is used for frontend and API on
-different ports to satisfy WKWebView cookie behavior. The CLI obtains endpoints
+### 6.1 Domains
+
+Everything is served under `lemma.localhost` (`locald/src/local_domain.rs`):
+
+| Host | Serves |
+| --- | --- |
+| `app.lemma.localhost:<frontend port>` | the workspace |
+| `app.lemma.localhost:<backend port>` | the API |
+| `<slug>.apps.lemma.localhost:<backend port>` | a pod app, routed by `Host` in the backend |
+| `app.lemma.localhost:<alias port>` | a pod app framed by the macOS workspace (below) |
+
+One host for the workspace and the API, on two ports, so the two are one site
+in every engine. `*.localhost` is loopback by resolver convention and resolved
+by the webview itself, so nothing here depends on DNS or on the network being
+up, no hostname leaves the machine, and every engine treats the workspace as a
+secure context over plain `http` (microphone, async clipboard, `crypto.subtle`).
+The session cookie is `Domain=lemma.localhost`, HttpOnly, SameSite=Lax, so it
+reaches the app hosts too; apps call the API through their own origin at
+`/_lemma` (`APP_API_VIA_APP_ORIGIN`, always on here). The CLI obtains endpoints
 from locald status/state.
+
+An earlier build served the public loopback wildcard `127.0.0.1.sslip.io`
+instead, which needed public DNS, showed every app hostname to a third party,
+and lost the secure context. It is gone; see 6.3.
+
+### 6.2 Pod apps
+
+The APIs return an app's canonical URL,
+`http://<slug>.apps.lemma.localhost:<backend port>`, built from
+`APP_BASE_DOMAIN` exactly as a hosted deployment builds `*.apps.lemma.work`.
+That URL works top-level everywhere, and framed in Chromium, Edge and
+WebView2, which treat `*.lemma.localhost` as one site.
+
+WebKit does not. It derives a site from CFNetwork's list of top-level domains,
+where `localhost` is not one, so every `*.localhost` *host* is its own site: an
+app on `<slug>.apps.lemma.localhost` framed by `app.lemma.localhost` is
+third-party and WebKit sends it no cookies. The same host on another port is
+same-site. So the macOS workspace frames an **alias**:
+
+1. The workspace, about to frame an app next to the agent, asks the shell
+   (`app_frame_url`, local workspace only) for the frame address.
+2. On macOS the shell asks locald (`app-alias.resolve`) and gets
+   `http://app.lemma.localhost:<alias port>/<same path>`; elsewhere it returns
+   the canonical URL unchanged.
+3. The alias port is a loopback listener in locald (`locald/src/app_alias`)
+   that forwards to `127.0.0.1:<backend port>` with `Host` rewritten to the
+   canonical app host, so the backend routes it like any app request. A
+   `Location` pointing at the canonical origin is rewritten to the alias; any
+   other `Host` is refused (421).
+4. The app's SDK has a relative `apiUrl` (`/_lemma`), so its API calls go to the
+   alias origin, and the `Domain=lemma.localhost` cookie is sent: same host,
+   same site.
+
+The shell lets only alias ports it handed out load, and only in a frame: an
+alias reaching the top frame sends the window back to the workspace and opens
+the app in its own window, and a new-window request from one opens the
+canonical app window. Alias ports live in `locald/app-aliases.json` (not
+`network.json`, which an older locald would reject and answer by reallocating
+the workspace's ports). One port per app host, taken from the OS when first
+needed and asked for again by number on the next start, so the alias -- and
+the app's origin, and its `localStorage` -- stays put; a port something else
+took meanwhile is replaced. At most 16 apps hold an alias; one more evicts the
+least recently used, whose listener closes. Where no alias can be had (an older
+shell), the app opens in its own window, top-level and signed in. `make
+desktop-app-alias-proof` proves the arrangement in WKWebView.
+
+LAN and public sharing are unchanged: the shell does not answer a shared
+origin, so a shared workspace frames canonical URLs, and alias listeners bind
+loopback only.
+
+### 6.3 Migrating from `127.0.0.1.sslip.io`
+
+- locald rewrites recorded workspace and API URLs on the retired host to
+  `app.lemma.localhost`, same port (`state.rs`).
+- The Agent Host moves a local pairing's `base_url` the same way when it loads
+  its config.
+- Before the first navigation to the workspace, the shell copies every cookie
+  its webview holds under `127.0.0.1.sslip.io` onto the matching
+  `lemma.localhost` name and deletes the original (`cookie_migration.rs`),
+  once, logged to the install log. People stay signed in.
+- `localStorage` and IndexedDB are per origin and cannot be moved: the
+  workspace's local preferences (open tabs, last pod, collapsed panes) reset
+  once.
+- `SESSION_COOKIE_OLDER_DOMAIN` stays `""`, which clears a host-only cookie an
+  install from before the `Domain` cookie may still hold.
 
 ## 7. Exact process ownership
 
@@ -401,26 +542,67 @@ are instead of controls the shell would refuse.
 
 | Section | Owns | Data source |
 | --- | --- | --- |
-| Overview | One health line, Start at login, Verify & repair, Open logs | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs` |
+| Overview | One health line, Start at login, Verify & repair, Open logs, a Server setup summary | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs` |
+| Server setup | One card per capability — AI model (required), Email, Connectors, Channels, Voice, Web search — each with its status, what it unlocks, a Test, and where to get its keys; then an Advanced part with state paths, addresses, log tails and anonymous install health | `local_settings_snapshot`, `apply_local_settings`, `test_server_setup`, `discover_provider_models`, `diagnostic_logs`, `telemetry_status`, `set_telemetry_enabled` |
 | Coding agents | This computer's Agent Host card, Run commands on this Mac, the workspace sandbox image | `agent_host_*`, `set_host_execution`, `local_settings_snapshot`, `prepare_sandbox_image` |
 | Sharing | This Mac / Local network / Public (ngrok or Cloudflare), who can join, a link to invite people | `local_sharing` |
 | Updates | Current version, check, install, what the channel means | `check_for_app_update`, `install_app_update` |
-| Advanced | Developer credentials (Google, GitHub, Microsoft, Composio, Deepgram; Slack, Telegram, Teams, WhatsApp, Resend), diagnostics and log tails, anonymous install health | `apply_local_settings`, `diagnostic_logs`, `telemetry_status`, `set_telemetry_enabled` |
 
-AI models are the organization's, on Organization → Models. On a local
-install that page also suggests Ollama and LM Studio when they answer on
-their default loopback ports (`discover_provider_models`, sent with an empty
-key so the stored provider key never reaches a probed endpoint), and offers
-the operator AI provider this install was set up with as **Add to
-workspace**. Adding it creates an organization provider and leaves the
-operator profile in place: that profile is the backend's `system:lemma`,
-which it falls back to for a pod with no default runtime, conversation
-titles, summaries and image reading. A keyed provider's key is asked for
-again, because the page can only learn that one is stored.
+**Server setup** configures what this computer's server needs a key for,
+each card saving one operator section:
+
+- **AI model** writes the `ai` section: a provider (OpenAI-compatible or
+  Anthropic-compatible; presets fill the address, and Ollama or LM Studio
+  answering on their default loopback ports are marked as found), its key,
+  the model teammates use, an optional model that reads images, and an
+  optional fast model. That profile is the backend's `system:lemma`, which it
+  falls back to for a pod with no default runtime. locald also names the
+  side jobs' models from it: `VISION_MODEL` (the image model, which it adds
+  to the vision names, or the default model when that reads images),
+  `CONVERSATION_TITLE_MODEL` (the fast model, else the default) and
+  `HISTORY_SUMMARIZATION_MODEL` (the fast model, when there is one). Test lists
+  the provider's models and asks the default one for a one-word answer.
+- **Email** writes the `email` section (`none`, `resend` or `smtp`, a sender
+  address, and the SMTP server with its password in the vault). Until it is
+  set up the backend keeps its local mail spool; once it is, locald switches
+  `EMAIL_TRANSPORT` to `smtp` and renders `RESEND_FROM_EMAIL` or `SMTP_*`. The
+  Resend key is the channels' `surfaces.resend_api_key` — one Resend account
+  carries mail in and out — so a Resend setup saves that section first. Test
+  checks the key's domains and then asks the backend to email the signed-in
+  person.
+- **Connectors** holds the Composio key (saving one also sets
+  `composio_enabled`) and this computer's OAuth apps for Google, Microsoft,
+  GitHub and Slack, each showing the redirect URL to register.
+- **Channels** holds Telegram's bot token and Slack's app-level token, which
+  switch polling and Socket Mode on by themselves (no public address is
+  needed), Resend's inbound domain, and WhatsApp and Teams, which say they
+  need Public sharing.
+- **Voice** is the Deepgram key; **Web search** works with no key (DuckDuckGo)
+  and switches to Brave Search when a Brave key is stored.
+
+Tests are read-only requests locald makes (`config.test`): with the typed
+credential, or the stored one when nothing was typed, to the one host each
+service publishes — so a stored key never goes anywhere a page chose. The AI
+test follows discovery's rule: a stored key only goes to the address it was
+saved for.
+
+A new local install opens a first-run checklist of the same capabilities
+once, after sign-up; everything but the AI model can be skipped, and the
+Server setup entry in Settings carries a dot while the model is missing.
+
+Organization → Models is the organization's own list. On a local install it
+also suggests Ollama and LM Studio when they answer
+(`discover_provider_models`, sent with an empty key so the stored provider key
+never reaches a probed endpoint), and offers this install's AI model as
+**Add to workspace**, which creates an organization provider and leaves the
+operator profile in place. A keyed provider's key is asked for again, because
+the page can only learn that one is stored.
 
 Connectors and channels that need an OAuth app or bot credentials this
 install does not have yet show **Set up on this Mac** where they fail, which
-opens Advanced at that form (`lemma:open-settings` with `{section, focus}`).
+opens Server setup at that form (`lemma:open-settings` with
+`{section: "this-mac-setup", focus}`); `this-mac-advanced` from an older
+caller opens Server setup at its Advanced part.
 
 The menu's Desktop settings… (⌘,) and the tray item raise
 `lemma:open-settings` in the workspace when it is local, ready and on its own
@@ -445,28 +627,44 @@ Each command is granted to a webview by a capability in
   packaged `control.html`.
 - **local workspace**: `require_local_settings_caller` — the `main` webview,
   in local mode, on the origin this app navigated to, and that origin a
-  shipped loopback workspace host (or the debug-only `LEMMA_DESKTOP_LOCAL_URL`).
-  Refuses the hosted site and any shared LAN or tunnel origin.
+  shipped loopback workspace host (or the debug-only `LEMMA_DESKTOP_LOCAL_URL`)
+  whose name still resolves only to loopback when the command is called.
+  Refuses the hosted site, any shared LAN or tunnel origin, and a pod-app
+  alias (same host, another port).
+
+`capabilities/workspace.json` lists only the hosted site. The local workspace
+is granted the same permissions at runtime on its exact origin, port included
+(`local_workspace_capability`), when locald names it: a static file could only
+say `http://app.lemma.localhost:*`, which would also match every alias port.
 - **settings**: `require_settings_caller` — control, or local workspace.
 - **agent host**: `require_agent_host_caller` — control, the splash, or the
-  workspace on the origin this app navigated to (hosted or local).
+  workspace on the origin this app navigated to: the hosted site in hosted
+  mode, and in local mode only a shipped loopback workspace host (the same
+  rule as local workspace), so a shared LAN or tunnel origin is refused even
+  while the app's own window shows it. `agent_host_pair` and
+  `agent_host_session` take the page's workspace URL only to check it: the
+  shell pairs with, and reports the signed-in person to, the Lemma it itself
+  navigated to (`agent_host_workspace_url`).
 
 | Command | Granted to | Rust check | Notes |
 | --- | --- | --- | --- |
 | `local_settings_snapshot` | workspace | local workspace | An allowlisted view of `control.snapshot`: no install id, schema, operation ids or process details |
-| `apply_local_settings` | workspace | local workspace | `config.apply` for `integrations` or `surfaces` only |
-| `local_sharing` | workspace | local workspace | Public asks natively first; the page cannot set the consent flag |
+| `apply_local_settings` | workspace | local workspace | `config.apply` for `ai`, `email`, `integrations` or `surfaces`; replacing or removing a credential already set asks natively first (for `ai` and `email`, only their keys and passwords count) |
+| `test_server_setup` | workspace | local workspace | locald `config.test`: forwards only `service`, `ai`, `api_key`, `credential` and `from_email`; writes nothing |
+| `local_sharing` | workspace | local workspace | Local network, Public and opening *Who can join* ask natively first, in words built from the request; the page cannot set the consent flag |
 | `set_start_at_login` | workspace | local workspace | Rebuilds the menus so the tray's check stays true |
-| `set_host_execution` | workspace | local workspace | locald `agent-host.host-execution`; sends only `enabled`, refuses to enable without Seatbelt, answers with the fresh Agent Host status. See [Host execution](desktop-host-execution.md) |
+| `set_host_execution` | workspace | local workspace | locald `agent-host.host-execution`; sends only `enabled`, asks natively before enabling, refuses to enable without Seatbelt, answers with the fresh Agent Host status. See [Host execution](desktop-host-execution.md) |
 | `prepare_sandbox_image` | workspace | local workspace | |
 | `open_logs`, `diagnostic_logs` | main, control, workspace | native page, or local workspace | Log tails are redacted |
 | `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
-| `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown |
+| `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown; once installed the app restarts without asking again, because the stack is already stopped and the bundle replaced |
 | `telemetry_status`, `set_telemetry_enabled` | control, workspace | settings | |
 | `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Onboarding and the Models suggestions |
 | `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |
+| `app_frame_url` | workspace | local workspace | The address to frame a pod app at: its locald alias on macOS, its own URL elsewhere. Refuses anything but this install's own apps; see §6.2 |
 | `open_control_center` | main, workspace | page name validated | |
-| `control_snapshot`, `sharing_action`, `agent_host_action`, `runtime_info`, `start`, `stop`, `restart`, `open_developer_tools`, `close_local_settings`, `confirm_destructive_action` | control (some also main) | control or native page | Local settings only |
+| `sharing_action` | control | control | Local settings' sharing: the same request builder and native questions as `local_sharing` |
+| `control_snapshot`, `agent_host_action`, `runtime_info`, `start`, `stop`, `restart`, `open_developer_tools`, `close_local_settings`, `confirm_destructive_action` | control (some also main) | control or native page | Local settings only |
 | `reset_local_data`, `reset_full_reinstall`, `restart_into_recovery` | control, main | native page | Destructive: never granted to a remote origin |
 
 `desktop/src/tests/misc.rs` holds every registered command to a grant and
@@ -532,15 +730,24 @@ The shell owns automatic startup on launch and mode changes. Loading or
 reloading the splash only observes state, so it cannot race a second start
 against the shell. Start and Retry remain explicit user actions.
 
-On macOS, host services connect to the private VM through its local IP address.
-The app and daemon carry `NSLocalNetworkUsageDescription`, and local setup
-explains this permission before installation. A blocked or unreachable guest
-connection offers Local Network settings guidance and a retry without deleting
-data; that socket error alone does not establish that permission was denied.
-Terminal connectivity does not prove app connectivity because macOS attributes
-helper access to its responsible app. Candidate qualification must exercise the
-installed app with its release signing identity and both allowed and denied
-access. See Apple's [local network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+On macOS, host services reach the private VM over virtio vsock, not over its
+network address. PostgreSQL, Redis and SuperTokens each have a vsock port that
+the guest's `lemma-service@<port>.socket` hands to `systemd-socket-proxyd` on
+the guest's loopback; guestd's control channel is vsock 42411; the backend
+reaches a sandbox's published ports through guestd's tunnel on vsock 42412
+(`sandbox_tunnel.rs`, `desktop_tunnel.py` in the backend); and the paired
+user's loopback relay comes back the other way on vsock 42413. None of these
+is a connection to a device on the local network, so none is subject to macOS
+Local Network privacy, which a background process cannot be prompted for.
+
+The guest still takes a DHCP lease from vmnet, and a sandbox's reported URL
+names that address -- the tunnel dials it from inside the guest. A guest with
+no lease keeps serving its core services and reports
+`guest_network_unavailable` for sandbox operations. The app and daemon still
+carry `NSLocalNetworkUsageDescription`, but no host path depends on the
+permission being granted; a guest that is unreachable is diagnosed through its
+vsock health channel rather than by suspecting the permission. See
+[Desktop security](desktop-security.md) for what a sandbox can reach.
 
 ## 7.2 Sharing and canonical origin
 
@@ -648,7 +855,7 @@ The desktop shell serializes its own configuration writes, replaces the file
 atomically, and refuses to overwrite malformed saved configuration. Window and
 navigation updates cannot erase a concurrently saved runtime binding. Recovery
 remains available when this file is damaged.
-This Mac → Advanced sends one section per save with its expected revision;
+This Mac → Server setup sends one section per save with its expected revision;
 the daemon serializes writes and rejects a stale revision with
 `config-conflict`. Credentials use explicit `keep`, `replace`, and `remove`
 actions and are never read back: the page only learns whether one is stored.
@@ -687,8 +894,8 @@ The section payload for `config.apply` is:
 ```
 
 `value` is the selected section's full schema; it never includes other sections.
-Valid names are `ai`, `integrations`, and `surfaces`. Credential names must
-belong to that section. Replacement requires a nonempty `value` alongside
+Valid names are `ai`, `integrations`, `surfaces` and `email`. Credential
+names must belong to that section. Replacement requires a nonempty `value` alongside
 `action: "replace"`.
 
 A local model is reached the same way as any other provider: Ollama and LM

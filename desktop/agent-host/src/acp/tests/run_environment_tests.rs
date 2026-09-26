@@ -11,7 +11,7 @@ fn the_run_credential_reaches_the_agent() {
     let mcp = json!({
         "environment": {
             "LEMMA_TOKEN": "a-delegated-session",
-            "LEMMA_BASE_URL": "http://app.127.0.0.1.sslip.io:53664",
+            "LEMMA_BASE_URL": "http://app.lemma.localhost:53664",
             "LEMMA_POD_ID": "pod-1",
         }
     });

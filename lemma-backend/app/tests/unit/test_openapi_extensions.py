@@ -110,3 +110,18 @@ def test_get_without_pagination_params_does_not_paginate():
     assert meta["paginates"] is False
     assert meta["kind"] == "query"
     assert "invalidates" not in meta
+
+
+def test_a_no_content_mutation_is_void_whatever_its_verb():
+    """A 204 has no body; an SDK told `entity` would try to parse one."""
+    no_content = {"responses": {"204": {"description": "No Content"}}}
+    meta = lemma_metadata_for(
+        "agent.conversation.message.withdraw", "delete", no_content
+    )
+    assert meta is not None and meta["result"] == "void"
+
+    with_body = {"responses": {"200": {"description": "OK"}}}
+    meta = lemma_metadata_for(
+        "agent.conversation.message.withdraw", "delete", with_body
+    )
+    assert meta is not None and meta["result"] == "entity"

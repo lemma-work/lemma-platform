@@ -71,12 +71,12 @@ SYSTEM_POD_ROLES = SYSTEM_POD_ROLE_NAMES
 
 # Scopes whose system roles are known to be fully provisioned. Entries are only
 # added when an ensure pass found nothing to write, so a rolled-back transaction
-# can never mark a scope as provisioned.
-#
-# Bounded: one entry per (organization, pod) on a process that runs for hours is
-# strictly monotonic, and the memo only saves a round trip -- re-ensuring an
-# already-provisioned scope is a no-op, so forgetting one costs nothing.
-_ENSURED_ROLE_SCOPES: BoundedSet[tuple[UUID, UUID | None]] = BoundedSet(4096)
+# can never mark a scope as provisioned. Bounded: one entry per (organization,
+# pod) on a process that runs for hours is strictly monotonic, and the memo only
+# saves a round trip -- re-ensuring an already-provisioned scope is a no-op, so
+# forgetting one costs nothing.
+_ENSURED_ROLE_SCOPES: BoundedSet[tuple[UUID, UUID | None]]
+_ENSURED_ROLE_SCOPES = BoundedSet(4096, name="authorization.ensured_role_scopes")
 
 
 @dataclass(frozen=True, slots=True)

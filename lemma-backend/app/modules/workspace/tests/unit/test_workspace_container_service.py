@@ -530,7 +530,7 @@ async def test_an_exhausted_ensure_stops_believing_what_it_knew(
     # The reason survives the loop -- it used to be bound and dropped on every
     # attempt, leaving a bare TimeoutError that said nothing.
     assert "not answering" in str(caught.value)
-    assert service._ready_directories == {}
+    assert len(service._ready_directories) == 0
     assert sandbox_health.sandbox_capability()["status"] == "unavailable"
 
     sandbox_health._capability.update({"status": "ready", "detail": "provisioned"})

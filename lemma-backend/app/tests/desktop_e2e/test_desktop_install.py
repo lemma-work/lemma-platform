@@ -244,11 +244,9 @@ async def test_the_app_is_handed_an_api_url_that_can_carry_its_session(
     the bug that shipped. The fix is a relative prefix, so the call goes to the
     app's own origin and the API is reached through the `/_lemma` door.
 
-    Under a real registrable domain the two hosts are same-site already, the
-    door is switched off deliberately, and the absolute URL is correct. Which
-    is why this cannot simply demand a leading slash: doing so would fail the
-    arrangement that works *better*, and would have to be deleted by whoever
-    turned it on -- taking the check on the broken case with it.
+    Under a real registrable domain the two hosts are same-site already and a
+    deployment may switch the door off, in which case the absolute URL is
+    correct -- so this asserts the property rather than demanding a slash.
     """
     api_url = _app_config(install, published_app)["apiUrl"]
 
@@ -349,20 +347,20 @@ async def test_a_pod_app_is_signed_in_when_the_workspace_embeds_it(
 
     Testing only the top-level case is how this shipped broken twice.
 
-    Skipped, not failed, on an install serving a base domain whose hosts are
-    not same-site: embedding genuinely cannot work there, apps open in their
-    own window instead, and a permanently red test in a supported arrangement
-    teaches people to ignore it. What stops that skip from quietly becoming
-    every run is a separate assertion, in locald's own tests, that the shipped
-    default *is* the same-site arrangement -- so reaching this skip takes
-    deliberately asking for the fallback.
+    Skipped on `lemma.localhost`, which every install now serves: framing the
+    app's canonical address there is third-party by construction, so the macOS
+    workspace frames a same-site alias of it instead -- locald's `app_alias`,
+    on the workspace's own host. That arrangement is proven in WKWebView by
+    `make desktop-app-alias-proof` (desktop/e2e/app_alias_proof), including
+    the control that this canonical-address frame is refused. This test still
+    runs, unchanged, against an install on a real registrable domain.
     """
     if install.api_via_app_origin:
         pytest.skip(
-            f"this install serves {install.base_domain}, whose hosts a browser "
-            "cannot derive a common registrable domain from, so a framed app is "
-            "third-party by construction and pod apps open in their own window. "
-            "Embedding is testable under a registrable base domain (the default)."
+            f"this install serves {install.base_domain}: a frame on the app's "
+            "own address is third-party there by construction, and the macOS "
+            "workspace frames a same-site alias instead. `make "
+            "desktop-app-alias-proof` covers that arrangement in WKWebView."
         )
     answer = _run_probe(
         published_app=published_app, install=install, account=account, mode="embedded"

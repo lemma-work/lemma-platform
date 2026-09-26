@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/sdk/lemma-client", () => ({
-  getLemmaApiBaseUrl: () => "http://app.127.0.0.1.sslip.io:53664/",
+  getLemmaApiBaseUrl: () => "http://app.lemma.localhost:53664/",
 }));
 
 import { readFileSync } from "node:fs";
@@ -40,7 +40,7 @@ describe("agent-produced image paths", () => {
     // The frontend origin serves no `/me` route, which is why a bare src 404'd.
     const href = podFileDownloadHref("pod-1", "/me/c/d/agent-output/a b.png");
     expect(href).toBe(
-      "http://app.127.0.0.1.sslip.io:53664/pods/pod-1/datastore/files/download" +
+      "http://app.lemma.localhost:53664/pods/pod-1/datastore/files/download" +
         "?path=%2Fme%2Fc%2Fd%2Fagent-output%2Fa%20b.png",
     );
   });

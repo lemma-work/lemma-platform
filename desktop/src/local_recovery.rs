@@ -48,8 +48,39 @@ pub(crate) fn reset_local_data_impl(app: AppHandle) -> Result<RecoveryOutcome, S
         return Ok(RecoveryOutcome::Cancelled);
     }
 
-    // Before anything is destroyed, and first, because the completion handler
-    // is fire-and-forget and this gets the whole reset to finish in.
+    // Recovery pauses local services, and `ensure_locald` refuses to start
+    // anything while it does -- so from Recovery, the one place this is
+    // offered as the way out, the reset always failed, after the session had
+    // already been wiped. Choosing it *is* choosing to bring local services
+    // back, exactly as picking Local on the splash is; if the reset cannot
+    // even be started, Recovery is put back as it was.
+    let shell: State<Shell> = app.state();
+    let leaving_recovery = shell.recovery_mode.swap(false, Ordering::AcqRel);
+    let started = (|| {
+        if leaving_recovery {
+            set_mode(&app, "local")?;
+        }
+        ensure_locald(&app)?;
+        send_local_operation(
+            &app,
+            json!({"cmd": "local.reset-data", "confirm": "reset-local-data"}),
+            operation_id("reset-data"),
+        )
+    })();
+    if let Err(error) = started {
+        if leaving_recovery {
+            shell.recovery_mode.store(true, Ordering::Release);
+        }
+        return Err(error);
+    }
+    if leaving_recovery {
+        let _ = std::fs::remove_file(app_support_dir().join("recovery-mode"));
+    }
+
+    // Only once the daemon has accepted the reset, and still long before it
+    // finishes: stopping services and wiping the disk take seconds, this takes
+    // none. Clearing first meant a reset that never started still signed the
+    // person out of data that was still there.
     //
     // A SuperTokens cookie minted against the database we are about to delete
     // is presented to the new one and accepted as a session that cannot do
@@ -68,13 +99,6 @@ pub(crate) fn reset_local_data_impl(app: AppHandle) -> Result<RecoveryOutcome, S
             "reset: could not clear the resume target: {error}"
         ));
     }
-
-    ensure_locald(&app)?;
-    send_local_operation(
-        &app,
-        json!({"cmd": "local.reset-data", "confirm": "reset-local-data"}),
-        operation_id("reset-data"),
-    )?;
     Ok(RecoveryOutcome::Started)
 }
 

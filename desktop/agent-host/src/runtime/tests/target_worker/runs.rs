@@ -103,6 +103,62 @@ async fn a_refresh_for_a_superseded_lease_is_ignored() {
     );
 }
 
+fn steer_command(run_id: Uuid, lease_epoch: u32) -> Command {
+    Command {
+        command_id: Uuid::new_v4(),
+        kind: CommandKind::SteerRun,
+        created_at: Utc::now(),
+        expires_at: Utc::now() + chrono::Duration::minutes(1),
+        run_id: Some(run_id),
+        lease_epoch: Some(lease_epoch),
+        payload: serde_json::json!({
+            "message_id": "message-1",
+            "prompt": [{"type": "text", "text": "Also check the tests."}],
+        }),
+    }
+}
+
+/// A `STEER_RUN` is handed to the running turn, which is what sends it.
+#[tokio::test]
+async fn a_steer_reaches_the_turn_it_was_sent_to() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let inbox = harness
+        .worker
+        .track_steerable_run(run_id, tokio::spawn(std::future::pending()));
+
+    harness
+        .worker
+        .handle_command(&steer_command(run_id, 1))
+        .unwrap();
+
+    let steer = inbox.take().unwrap().try_recv().unwrap();
+    assert_eq!(steer.message_id, "message-1");
+}
+
+/// A steer for a dispatch that has been superseded is not for this turn, and
+/// one for a run that already ended has no turn to join. Neither is an error:
+/// Lemma's follow-up turn carries the message.
+#[tokio::test]
+async fn a_steer_with_no_turn_to_join_is_dropped_quietly() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let inbox = harness
+        .worker
+        .track_steerable_run(run_id, tokio::spawn(std::future::pending()));
+
+    harness
+        .worker
+        .handle_command(&steer_command(run_id, 9))
+        .unwrap();
+    harness
+        .worker
+        .handle_command(&steer_command(Uuid::new_v4(), 1))
+        .unwrap();
+
+    assert!(inbox.take().unwrap().try_recv().is_err());
+}
+
 /// Every terminal path in `spawn_run` wakes the poll that reports it.
 ///
 /// `poll_target` snapshots the control batch when it builds the request, so a
@@ -208,4 +264,57 @@ fn start_command(harness_id: Uuid, expires_at: chrono::DateTime<Utc>) -> Command
         lease_epoch: Some(1),
         payload: serde_json::to_value(&spec).unwrap(),
     }
+}
+
+/// Command expiries are Lemma's times. A host whose clock runs ahead judged a
+/// fresh command expired -- every command, a cancel included -- until the
+/// clock was fixed; it judges by the time Lemma's `welcome` gave instead.
+#[tokio::test]
+async fn a_command_is_judged_by_lemmas_clock_not_this_ones() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    // This clock is ten minutes ahead of Lemma's.
+    harness
+        .worker
+        .note_lemma_time(Some(Utc::now() - chrono::Duration::minutes(10)));
+    let refreshed = serde_json::json!({"token": "refreshed"});
+    harness
+        .worker
+        .handle_command(&Command {
+            command_id: Uuid::new_v4(),
+            kind: CommandKind::RefreshCredential,
+            created_at: Utc::now() - chrono::Duration::minutes(10),
+            // Lemma's "in one minute", which this clock reads as nine ago.
+            expires_at: Utc::now() - chrono::Duration::minutes(9),
+            run_id: Some(run_id),
+            lease_epoch: Some(1),
+            payload: serde_json::json!({"mcp": refreshed.clone()}),
+        })
+        .expect("a command Lemma has not expired is not refused as expired");
+    assert_eq!(
+        harness
+            .journal
+            .get_run(harness.target_id, run_id)
+            .unwrap()
+            .unwrap()
+            .spec
+            .mcp,
+        refreshed
+    );
+}
+
+/// Stopping late is still stopping: a cancel is never refused as expired.
+#[tokio::test]
+async fn a_late_cancel_is_still_obeyed() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let mut cancel = super::cancel_command(run_id);
+    cancel.expires_at = Utc::now() - chrono::Duration::minutes(30);
+    harness.worker.handle_command(&cancel).unwrap();
+    let run = harness
+        .journal
+        .get_run(harness.target_id, run_id)
+        .unwrap()
+        .unwrap();
+    assert!(run.state.is_terminal(), "{:?}", run.state);
 }

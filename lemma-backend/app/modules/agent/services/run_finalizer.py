@@ -23,6 +23,7 @@ from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.transport_errors import (
+    connection_failure_message,
     is_retryable_stream_error,
 )
 from app.modules.usage.contracts import UsageLimitExceededError
@@ -86,17 +87,14 @@ def run_failure_message(exc: BaseException) -> str:
         # No mention of Retry. `ConversationRetryService.retry_failed_run`
         # accepts a failed run only while it holds nothing but user messages,
         # and a dropped stream is by definition a run that had already been
-        # talking -- so the button this sentence used to name is both refused
-        # (409) and, since `last_run_retryable` asks the same question, not
-        # offered. Advice that names a control the reader cannot use is worse
-        # than no advice.
-        return (
-            "The connection to the model provider kept dropping. Nothing you "
-            "sent was lost — send another message to pick up where it stopped."
-        )
+        # talking -- so the button would be both refused (409) and, since
+        # `last_run_retryable` asks the same question, not offered. Advice that
+        # names a control the reader cannot use is worse than no advice.
+        return connection_failure_message(exc)
     if isinstance(exc, DomainError):
         # A DomainError's message is already the sentence we would want to
-        # write. `model_not_configured` names the environment variable to set;
+        # write. `model_not_configured` names the page where a model is added
+        # (never an environment variable -- the reader may not be the operator);
         # `runtime_profile_archived` names the model that went away and where to
         # pick another. Both were authored to be read by the person whose run
         # just failed, and the generic line below replaced them with an
@@ -105,7 +103,10 @@ def run_failure_message(exc: BaseException) -> str:
         return exc.message
     if not isinstance(exc, Exception):
         return "Agent run was interrupted (timeout or shutdown)"
-    return "Agent run failed. Please check the agent runtime configuration."
+    return (
+        "The run failed. Check the model settings for this teammate "
+        "(Settings \u2192 Models)."
+    )
 
 
 def run_failure_code(exc: BaseException) -> str | None:

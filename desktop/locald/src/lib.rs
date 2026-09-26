@@ -1,7 +1,9 @@
 pub mod agent_host;
+pub mod app_alias;
 pub mod config_operations;
 pub mod daemon;
 pub mod host_process;
+pub mod instance_lock;
 mod lifecycle;
 pub mod local_domain;
 // The Mac's end of the paired user's loopback relay; served on macOS only, where the
@@ -17,6 +19,7 @@ pub mod port_reservation;
 pub mod protocol;
 pub mod provider_probe;
 pub mod reset;
+mod setup_probe;
 pub mod sharing;
 pub mod state;
 mod tcp_forwarder;

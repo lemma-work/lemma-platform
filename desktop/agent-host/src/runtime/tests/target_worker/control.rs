@@ -214,8 +214,11 @@ async fn turning_host_execution_on_is_reported_on_the_next_control() {
     let off = harness.stub.host_execution_reports.lock().unwrap().clone();
     assert_eq!(off.last().unwrap()["enabled"], false);
 
+    // The stand-in is on loopback over plain HTTP: the local pairing.
+    let mut paired = harness.worker.target.clone();
+    paired.host_execution = true;
     crate::config::HostConfig::mutate(&harness.worker.paths, |config| {
-        config.host_execution = true;
+        config.targets.push(paired.clone());
         Ok(true)
     })
     .unwrap();
@@ -243,4 +246,100 @@ async fn turning_host_execution_on_is_reported_on_the_next_control() {
         report["available"],
         cfg!(target_os = "macos") && std::path::Path::new("/usr/bin/sandbox-exec").exists()
     );
+}
+
+/// The switch is the local pairing's. A pairing with a server elsewhere that
+/// claims it -- a config edited by hand, or written by an older build whose
+/// switch was host-wide -- still runs nothing here.
+#[tokio::test]
+async fn a_pairing_with_a_server_elsewhere_never_turns_host_execution_on() {
+    let mut harness = Harness::new().await;
+    let mut remote = harness.worker.target.clone();
+    remote.host_execution = true;
+    remote.allow_insecure_http = false;
+    remote.base_url = url::Url::parse("https://lemma.example/").unwrap();
+    crate::config::HostConfig::mutate(&harness.worker.paths, |config| {
+        config.targets.push(remote.clone());
+        Ok(true)
+    })
+    .unwrap();
+    harness.worker.apply_local_controls().unwrap();
+    assert!(!harness.worker.host_execution);
+    harness.worker.send_control(&harness.link).await.unwrap();
+    let reports = harness.stub.host_execution_reports.lock().unwrap().clone();
+    assert_eq!(reports.last().unwrap()["enabled"], false);
+}
+
+/// 4403 is a credential Lemma could not read this time, and the host keeps
+/// trying with backoff; it used to give the pairing up for good at once.
+#[tokio::test]
+async fn a_refused_credential_is_retried_not_given_up() {
+    let mut harness = Harness::new().await;
+    *harness.stub.refuse_hello_with.lock().unwrap() =
+        Some(crate::link::protocol::close::INVALID_CREDENTIAL);
+    let (_changes, agents_changed) = watch::channel(0_u64);
+    harness.worker.agents_changed = agents_changed;
+    let stub = Arc::clone(&harness.stub);
+    let target_id = harness.target_id;
+    let journal = harness.journal.clone();
+    let reconnected = async move {
+        // The refusal has been used up, and the host is back.
+        while stub.refuse_hello_with.lock().unwrap().is_some() || !stub.connected() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        while journal
+            .target_status(target_id)
+            .ok()
+            .and_then(|status| serde_json::to_value(status).ok())
+            .is_none_or(|status| status["connection_state"] != "ONLINE")
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            outcome = harness.worker.link_loop() => panic!("the loop ended: {outcome:?}"),
+            () = reconnected => {}
+        }
+    })
+    .await
+    .expect("the host must come back after a 4403");
+}
+
+/// Two hosts holding one pairing take the link from each other. The one
+/// superseded within moments waits longer each time; a link that lasted was
+/// an ordinary hand-over and is taken back at once.
+#[tokio::test]
+async fn a_host_superseded_again_and_again_backs_off() {
+    let mut harness = Harness::new().await;
+    let superseded = crate::link::LinkError::Closed {
+        code: crate::link::protocol::close::SUPERSEDED,
+        reason: "superseded".into(),
+    };
+    let just_now = std::time::Instant::now();
+    let waits: Vec<Duration> = (0..4)
+        .map(|_| {
+            harness
+                .worker
+                .superseded_wait(&superseded, just_now)
+                .unwrap()
+        })
+        .collect();
+    assert!(waits.windows(2).all(|pair| pair[1] > pair[0]), "{waits:?}");
+    let long_ago = std::time::Instant::now()
+        .checked_sub(Duration::from_secs(120))
+        .unwrap();
+    assert_eq!(harness.worker.superseded_wait(&superseded, long_ago), None);
+    assert!(
+        harness
+            .worker
+            .superseded_wait(&superseded, just_now)
+            .unwrap()
+            < waits[1]
+    );
+    let other = crate::link::LinkError::Closed {
+        code: crate::link::protocol::close::RESTARTING,
+        reason: String::new(),
+    };
+    assert_eq!(harness.worker.superseded_wait(&other, just_now), None);
 }

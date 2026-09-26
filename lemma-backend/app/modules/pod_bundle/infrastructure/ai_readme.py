@@ -118,6 +118,7 @@ def build_system_polish_fn(
             usage_limits=polish_limits,
             user_id=user_id,
             organization_id=organization_id,
+            pod_id=pod_id,
         )
         usage_context = UsageExecutionContext(
             user_id=user_id,

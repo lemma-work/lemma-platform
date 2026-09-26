@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate  test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-public-prose lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate  test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-memory-hazards lint-public-prose lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -105,6 +105,7 @@ help:
 	@echo "  make lint-controller-types  # new basedpyright errors in the typed surfaces"
 	@echo "  make test-e2e-shard-ci SHARD=sandbox   # one CI shard, exactly as CI runs it"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
+	@echo "  make lint-memory-hazards   # process-lifetime memory retention shapes"
 	@echo "  make lint-public-prose   # internal hosts or dates in comments"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
 	@echo "  make lint-migration-order  # one alembic head, numbers matching apply order"
@@ -503,6 +504,14 @@ lint-controller-types:
 # Ratcheted against swallowed-errors-baseline.json.
 lint-swallowed-errors:
 	uv run python scripts/check_swallowed_errors.py
+
+# Memory-hazard gate (enforced in CI). Unbounded caches, runtime-mutated
+# module-level containers, unclosed httpx clients, whole-body reads, tracing
+# without limits and fire-and-forget tasks each retain memory for the life of
+# the process. Ratcheted against memory-hazards-baseline.json; `--report` shows
+# the existing debt per rule and per file.
+lint-memory-hazards:
+	uv run python scripts/check_memory_hazards.py
 
 # Public-prose gate (enforced in CI). This repository is public, and
 # CONTRIBUTING's "Code and comments" already forbids internal hostnames,

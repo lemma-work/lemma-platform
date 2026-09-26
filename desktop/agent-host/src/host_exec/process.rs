@@ -215,11 +215,6 @@ impl ProcessTable {
 
     pub async fn start(&self, policy: &PathPolicy, raw: Value) -> Result<Value, OpFailure> {
         let request: StartParams = params(raw)?;
-        if let Some(operation) = &request.operation_id
-            && let Some(existing) = lock(&self.tables).by_operation.get(operation)
-        {
-            return Ok(json!({ "process_id": existing }));
-        }
         let (program, arguments, command) = match (&request.shell_command, &request.argv) {
             (Some(command), None) => (
                 shell().to_owned(),
@@ -260,11 +255,13 @@ impl ProcessTable {
         // The process is addressed by the caller's `operation_id` when it gave
         // one: Lemma's sandbox protocol keys every process by the id it chose,
         // and reads, input and termination all name that id, never one this
-        // server invented. A retry with the same id was answered above.
-        let id = request
+        // server invented.
+        let operation = request
             .operation_id
             .clone()
-            .filter(|operation| !operation.is_empty())
+            .filter(|operation| !operation.is_empty());
+        let id = operation
+            .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let spawn = Spawn {
             id: id.clone(),
@@ -275,19 +272,39 @@ impl ProcessTable {
             environment,
             limit,
         };
-        let managed = match request.tty {
-            Some(tty) => spawn.pty(&tty)?,
-            None => spawn.pipes()?,
+        // Checked, spawned and registered under one hold of the table, so two
+        // tries of one `operation_id` arriving together start one process, and
+        // a process is never running without an entry that `kill_all` reaches.
+        // Spawning is a fork and an exec, with no await in between.
+        let managed = {
+            let mut tables = lock(&self.tables);
+            if let Some(operation) = &operation
+                && let Some(existing) = tables.by_operation.get(operation)
+            {
+                return Ok(json!({ "process_id": existing }));
+            }
+            let managed = match request.tty {
+                Some(tty) => spawn.pty(&tty)?,
+                None => spawn.pipes()?,
+            };
+            if let Some(operation) = operation {
+                tables.by_operation.insert(operation, id.clone());
+            }
+            tables.by_id.insert(id.clone(), Arc::clone(&managed));
+            managed
         };
-        if let Some(data) = initial_input {
-            write_input(&managed, data).await?;
+        if let Some(data) = initial_input
+            && let Err(failure) = write_input(&managed, data).await
+        {
+            // It never got what it was started with: stop it and forget it,
+            // so a retry starts it again rather than finding this one.
+            terminate(&managed, Duration::ZERO).await;
+            let mut tables = lock(&self.tables);
+            tables.by_id.remove(&id);
+            tables.by_operation.retain(|_, process| process != &id);
+            return Err(failure);
         }
-        let mut tables = lock(&self.tables);
-        if let Some(operation) = request.operation_id {
-            tables.by_operation.insert(operation, id.clone());
-        }
-        tables.by_id.insert(id.clone(), managed);
-        Ok(json!({ "process_id": id }))
+        Ok(json!({ "process_id": id, "group": managed.group }))
     }
 
     pub async fn read(&self, raw: Value) -> Result<Value, OpFailure> {
@@ -317,17 +334,30 @@ impl ProcessTable {
                 break;
             }
         }
-        let snapshot = lock(&managed.ring).read(request.after_sequence);
+        let (snapshot, held_back) = {
+            let ring = lock(&managed.ring);
+            let snapshot = ring.read_at_most(request.after_sequence, OP_MAX_DATA_BYTES);
+            let held_back = snapshot.next_sequence < ring.next_sequence();
+            (snapshot, held_back)
+        };
         let mut status = lock(&managed.status);
-        let read_to_end = snapshot
-            .chunks
-            .last()
-            .map_or(request.after_sequence, |chunk| chunk.sequence)
-            + 1
-            >= snapshot.next_sequence;
+        let read_to_end = !held_back
+            && snapshot
+                .chunks
+                .last()
+                .map_or(request.after_sequence, |chunk| chunk.sequence)
+                + 1
+                >= snapshot.next_sequence;
         if status.state != State::Running && read_to_end && status.drained_at.is_none() {
             status.drained_at = Some(Instant::now());
         }
+        // A process reads as exited only once its reader has all of its
+        // output: one that stopped at the per-frame cap reads on.
+        let (state, exit_code) = if read_to_end {
+            (status.state.name(), status.exit_code)
+        } else {
+            (State::Running.name(), None)
+        };
         Ok(json!({
             "chunks": snapshot.chunks.iter().map(|chunk| json!({
                 "sequence": chunk.sequence,
@@ -336,8 +366,8 @@ impl ProcessTable {
             })).collect::<Vec<_>>(),
             "next_sequence": snapshot.next_sequence,
             "truncated_before_sequence": snapshot.truncated_before_sequence,
-            "state": status.state.name(),
-            "exit_code": status.exit_code,
+            "state": state,
+            "exit_code": exit_code,
         }))
     }
 
@@ -420,12 +450,21 @@ impl ProcessTable {
 
     /// Forget processes nobody will read again.
     pub fn reap(&self) {
-        let now = Instant::now();
+        self.reap_as_of(Instant::now());
+    }
+
+    pub(crate) fn reap_as_of(&self, now: Instant) {
         let mut tables = lock(&self.tables);
         let expired: Vec<String> = tables
             .by_id
             .values()
             .filter(|managed| {
+                // A leader that exited can leave its group running -- a server
+                // it started in the background. Forgetting the entry would
+                // leave nothing that can stop it.
+                if managed.group_alive() {
+                    return false;
+                }
                 let status = lock(&managed.status);
                 status.state != State::Running
                     && (status

@@ -24,6 +24,7 @@ from app.core.concurrency.offload import run_blocking
 FUNCTION_PYTHON_VERSION = "3.14"
 FUNCTION_PYTHON_PLATFORM = "x86_64-manylinux_2_28"
 RUNTIME_ABI = "lemma-function-python-3.14-linux-x86_64-1"
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,17 +114,15 @@ class FunctionArtifactBuilder:
                 config_model=header.config_model,
                 dependency_path=("site-packages" if python_packages else None),
             )
-            archive = await run_blocking(
+            # The archive is built and hashed off the loop in one pass: files
+            # stream into an on-disk zip that is read back once, so the bundle is only ever held once, as the bytes the
+            # storage port needs.
+            archive, digest = await run_blocking(
                 self._archive,
                 build_root,
                 code,
                 manifest,
             )
-            # Offloaded like the archive build either side of it. This hashes
-            # the whole function bundle -- user code plus resolved
-            # site-packages -- so it grows with the dependency tree, and it sat
-            # on the loop between two calls that were already careful not to.
-            digest = await run_blocking(lambda: hashlib.sha256(archive).hexdigest())
             revision_hash = f"sha256:{digest}"
             artifact = FunctionArtifact(revision_hash=revision_hash, generation=uuid7())
             await self._storage_factory(function_id).write_file(
@@ -205,7 +204,12 @@ class FunctionArtifactBuilder:
         root: Path,
         code: str,
         manifest: FunctionArtifactManifest,
-    ) -> bytes:
+    ) -> tuple[bytes, str]:
+        """Zip ``root`` deterministically; return the archive and its sha256.
+
+        Members are streamed from disk into a temp-file zip (never read whole),
+        and the result is read back exactly once.
+        """
         source = root / "function.py"
         manifest_path = root / "manifest.json"
         source.write_text(code, encoding="utf-8")
@@ -232,7 +236,16 @@ class FunctionArtifactBuilder:
                     info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
                     info.compress_type = zipfile.ZIP_DEFLATED
                     info.external_attr = 0o644 << 16
-                    archive.writestr(info, path.read_bytes())
-            return output.read_bytes()
+                    # Same header writestr() would produce: it sets file_size
+                    # up front, which also decides the zip64 extra.
+                    info.file_size = path.stat().st_size
+                    with (
+                        path.open("rb") as member_in,
+                        archive.open(info, "w") as member_out,
+                    ):
+                        shutil.copyfileobj(member_in, member_out, _COPY_CHUNK_BYTES)
+            # One read into one bytes object -- the storage port takes bytes.
+            content = output.read_bytes()
+            return content, hashlib.sha256(content).hexdigest()
         finally:
             output.unlink(missing_ok=True)

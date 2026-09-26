@@ -123,6 +123,13 @@ const retryBtn = document.getElementById("retry");
 const prepareWindowsBtn = document.getElementById("prepare-windows");
 const resetDataBtn = document.getElementById("reset-data");
 const fullReinstallBtn = document.getElementById("full-reinstall");
+const keepDataLink = document.getElementById("keep-data");
+const errorRecoveryBtn = document.getElementById("error-recovery");
+const errnote = document.getElementById("errnote");
+const cloudSetupError = document.getElementById("cloud-setup-error");
+// What the reset button is called on the screen showing it, so the label it
+// goes back to after a reset attempt is that screen's, not a hard-coded one.
+let resetLabel = "Reset local data";
 const operationStatus = document.getElementById("operation-status");
 const operationDetail = document.getElementById("operation-detail");
 const operationMeta = document.getElementById("operation-meta");
@@ -291,22 +298,28 @@ function renderState(s) {
     window.__orb?.stall();
     scene.classList.add("stalled");
     scene.classList.remove("awake");
-    say(screen.windowsSetup
-      ? "Windows needs one permission."
-      : screen.windowsRestart
-        ? "One restart, then Lemma continues."
-        : "Something stopped.");
+    say(screen.headline);
     truth.textContent = screen.windowsSetup
       ? "one-time Windows setup · no Docker Desktop or Ubuntu"
       : screen.windowsRestart
         ? "restart Windows, then reopen Lemma"
         : "";
     errdetail.textContent = screen.errorDetail;
+    errnote.textContent = screen.note;
+    errnote.hidden = !screen.note;
     errwrap.hidden = false;
+    keepDataLink.hidden = !screen.keepDataUrl;
+    if (screen.keepDataUrl) keepDataLink.href = screen.keepDataUrl;
+    errorRecoveryBtn.hidden = !screen.showRecovery;
+    resetLabel = screen.resetLabel;
+    if (!resetDataBtn.disabled) resetDataBtn.textContent = resetLabel;
+    // Keeping the data is the filled button when it is offered; erasing it
+    // steps down to an outlined one in the error colour.
+    resetDataBtn.classList.toggle("danger", Boolean(screen.keepDataUrl));
     prepareWindowsBtn.hidden = !screen.showPrepareWindows;
     prepareWindowsBtn.disabled = false;
     prepareWindowsBtn.textContent = "Set up Windows runtime";
-    showRecoveryButtons(screen.showResetData, screen.showFullReinstall);
+    showRecoveryButtons(screen.showResetData, screen.showFullReinstall && !screen.keepDataUrl);
     retryBtn.hidden = !screen.showRetry;
     openBtn.hidden = true;
     whisper.classList.remove("on");
@@ -315,6 +328,9 @@ function renderState(s) {
   if (scene.classList.contains("stalled")) window.__orb?.resume();
   scene.classList.remove("stalled");
   errwrap.hidden = true;
+  errnote.hidden = true;
+  keepDataLink.hidden = true;
+  errorRecoveryBtn.hidden = true;
   prepareWindowsBtn.hidden = true;
   retryBtn.hidden = false;
   showRecoveryButtons(false, false);
@@ -581,6 +597,7 @@ openBtn.addEventListener("click", async () => {
   }
   openBtn.disabled = true;
   openBtn.textContent = "Opening Lemma…";
+  errwrap.hidden = true;
   try {
     await window.lemmaDesktop.openApp();
   } catch (error) {
@@ -589,6 +606,15 @@ openBtn.addEventListener("click", async () => {
     say("Lemma did not open.");
     truth.textContent = "";
     errdetail.textContent = String(error || "Could not open Lemma.");
+    // The services are up; it is the window that failed. The box's Try again
+    // starts the stack, which is the wrong retry here -- and the button above
+    // already says what the right one is, so the box keeps only the log.
+    retryBtn.hidden = true;
+    errnote.hidden = true;
+    keepDataLink.hidden = true;
+    errorRecoveryBtn.hidden = true;
+    prepareWindowsBtn.hidden = true;
+    showRecoveryButtons(false, false);
     errwrap.hidden = false;
   }
 });
@@ -653,8 +679,13 @@ async function showRecoveryButtons(offer, dataIsUnreadable) {
   fullReinstallBtn.hidden = !options.fullReinstallAvailable;
   // Resetting data is the recommended move for data this release cannot
   // read; starting over is always the last resort and never the primary.
-  resetDataBtn.classList.toggle("dark", dataIsUnreadable);
+  resetDataBtn.classList.toggle("dark", dataIsUnreadable && !resetDataBtn.classList.contains("danger"));
 }
+errorRecoveryBtn.addEventListener("click", () => {
+  window.lemmaDesktop.openRecovery?.().catch((error) => {
+    errdetail.textContent = String(error);
+  });
+});
 
 resetDataBtn.addEventListener("click", async () => {
   resetDataBtn.disabled = true;
@@ -665,7 +696,7 @@ resetDataBtn.addEventListener("click", async () => {
     errdetail.textContent = String(error);
   } finally {
     resetDataBtn.disabled = false;
-    resetDataBtn.textContent = "Reset local data";
+    resetDataBtn.textContent = resetLabel;
   }
 });
 
@@ -760,6 +791,7 @@ confirmLocalBtn.addEventListener("click", async () => {
   }
 });
 document.getElementById("choose-cloud").addEventListener("click", async () => {
+  cloudSetupError.hidden = true;
   hideConnectionChoice();
   say("Taking you to Lemma Cloud.");
   truth.textContent = "lemma.work";
@@ -767,7 +799,12 @@ document.getElementById("choose-cloud").addEventListener("click", async () => {
     await window.lemmaDesktop.setConnectionMode("hosted");
   } catch (error) {
     showChooser();
-    truth.textContent = "could not open lemma.work · try again";
+    // Said where the button is, as an alert, like the local setup's failure.
+    // It was a lowercase footnote in the status line -- which the welcome
+    // screen hides, so nobody saw why pressing the button did nothing.
+    cloudSetupError.textContent = `Couldn't open Lemma Cloud. Check your connection and try again.${error ? ` (${String(error)})` : ""}`;
+    cloudSetupError.hidden = false;
+    appendLog(`ERROR ${String(error)}`);
   }
 });
 

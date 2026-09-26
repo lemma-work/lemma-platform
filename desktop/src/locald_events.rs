@@ -418,6 +418,11 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
         (ui.clone(), outcome)
     };
     perform_event_side_effects(&mut outcome);
+    // Before any navigation below: the workspace's commands are granted to its
+    // exact origin, which is only known once locald has named it.
+    if snapshot.mode == "local" && trusted_workspace_urls(&snapshot.url, &snapshot.api_url) {
+        grant_local_workspace_capability(app, &snapshot.url);
+    }
     let schedule_terminal_recovery = outcome.schedule_terminal_recovery;
     let start_after_prepare = outcome.start_after_prepare;
 

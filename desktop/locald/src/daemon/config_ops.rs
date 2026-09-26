@@ -1,5 +1,33 @@
 use super::*;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The connector catalog's setup id in the host pack.
+const CONNECTOR_CATALOG_SETUP: &str = "connector-catalog";
+
+/// Whether a catalog refresh started by a settings save is still running.
+static CATALOG_REFRESH_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Import the connector catalog again if the key it depends on changed.
+///
+/// A saved Composio key used to wait for the next start of the whole stack
+/// before its apps appeared. The setup's stamp covers the key it runs with,
+/// so this is a no-op for every save that did not change it -- and it runs
+/// beside the backend rather than in front of the save, because a catalog
+/// import reaches the network and is allowed minutes. Optional like the
+/// setup itself: a failure is logged and retried on the next start.
+fn refresh_connector_catalog(manager: Arc<HostProcessManager>) {
+    if CATALOG_REFRESH_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    thread::spawn(move || {
+        if let Err(error) = manager.run_setup_if_stale(CONNECTOR_CATALOG_SETUP) {
+            eprintln!("locald: refreshing the connector catalog failed: {error}");
+        }
+        CATALOG_REFRESH_RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
 impl Daemon {
     pub(super) fn apply_operator_config(
         self: &Arc<Self>,
@@ -87,6 +115,7 @@ impl Daemon {
                         if backend_restart_available {
                             manager.set_backend_environment(daemon.backend_environment()?);
                             manager.restart_backend()?;
+                            refresh_connector_catalog(Arc::clone(manager));
                         }
                     }
                     Ok(snapshot)
@@ -275,6 +304,29 @@ impl Daemon {
                     error_event("config-discover-failed", error.to_string(), id.as_ref()),
                 ),
             };
+        });
+    }
+
+    /// Server setup's Test: one read-only request to the service, off the
+    /// daemon's thread and outside `lifecycle`, for the reason model discovery
+    /// is -- it changes nothing, and must not wait behind a start.
+    pub(super) fn test_setup(self: &Arc<Self>, request: Value, client: &mpsc::SyncSender<String>) {
+        let id = request.get("id").cloned();
+        let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+        let daemon = Arc::clone(self);
+        let client = client.clone();
+        thread::spawn(move || {
+            let event = match daemon.operator_config.test_setup(payload) {
+                Ok(outcome) => json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "config.tested",
+                    "id": id.as_ref(),
+                    "detail": outcome.get("detail").cloned().unwrap_or(Value::Null),
+                    "models": outcome.get("models").cloned().unwrap_or(Value::Null),
+                }),
+                Err(error) => error_event("config-test-failed", error.to_string(), id.as_ref()),
+            };
+            daemon.send_direct(&client, event);
         });
     }
 }

@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiUrl, hasApiUrl, lemma } from "@/session/client";
 import { agentHost, useAgentHost, type AgentHostStatus } from "./agent-host";
 import { isDesktop } from "./bridge";
@@ -39,6 +40,11 @@ import { selectWorkspaceTarget, thisComputer } from "./this-computer";
  *  fresh start. */
 const attempted = new Set<string>();
 let lastFailure: string | null = null;
+/** Set by a person pressing "Try again", and spent by the attempt it starts:
+ *  the one kind of pairing Lemma accepts for a computer that was removed from
+ *  their account. Never set by anything automatic, which is what makes
+ *  removing a computer stick. */
+let reenableRequested = false;
 const failureListeners = new Set<() => void>();
 
 function notify() {
@@ -75,14 +81,23 @@ export function connectFailure(): string | null {
 export function retryAutoConnect() {
     attempted.clear();
     lastFailure = null;
+    reenableRequested = true;
     notify();
+}
+
+/** What Lemma says when a computer the person removed tries to pair itself
+ *  again. The card shows it as it is; pressing "Try again" is the answer. */
+export function wasRemoved(failure: string | null): boolean {
+    return Boolean(failure && /was removed from this account/i.test(failure));
 }
 
 /** Test seam. */
 export function resetAutoConnectForTests() {
     attempted.clear();
     lastFailure = null;
+    reenableRequested = false;
     failureListeners.clear();
+    sessionsTold.clear();
 }
 
 function subscribeFailure(listener: () => void) {
@@ -98,11 +113,13 @@ export interface ConnectDeps {
     /** Mint a pairing code through the session this page already has. */
     createPairing: (displayName: string) => Promise<{ pairing_code: string }>;
     host: Pick<typeof agentHost, "start" | "pair" | "refresh">;
+    /** The person signed in, whose pairing this computer should have. */
+    userId?: string | null;
 }
 
 /** Whether this status still needs anything from us for this workspace. */
-export function needsConnecting(status: AgentHostStatus, workspace: string): boolean {
-    return !(status.running && selectWorkspaceTarget(status.targets, workspace) !== null);
+export function needsConnecting(status: AgentHostStatus, workspace: string, userId: string | null = null): boolean {
+    return !(status.running && selectWorkspaceTarget(status.targets, workspace, userId) !== null);
 }
 
 /** Connect once, if this page has not already tried for this workspace.
@@ -116,16 +133,19 @@ export async function connectThisComputer(
     workspace: string,
     deps: ConnectDeps,
 ): Promise<"skipped" | "connected" | "failed"> {
-    if (!status.available || !needsConnecting(status, workspace)) return "skipped";
+    const userId = deps.userId ?? null;
+    if (!status.available || !needsConnecting(status, workspace, userId)) return "skipped";
     if (!claimAttempt(workspace)) return "skipped";
-    const pairedHere = selectWorkspaceTarget(status.targets, workspace) !== null;
+    const pairedHere = selectWorkspaceTarget(status.targets, workspace, userId) !== null;
+    const reenable = reenableRequested;
+    reenableRequested = false;
     try {
         /* Only ever starts: the supervisor has no "off" to undo. */
         if (!status.running) await deps.host.start();
         if (!pairedHere) {
             const name = pairingName();
             const pairing = await deps.createPairing(name);
-            await deps.host.pair(workspace, pairing.pairing_code, name);
+            await deps.host.pair(workspace, pairing.pairing_code, name, reenable);
         }
         /* Kick the agent scan now rather than on the next poll, so the list
            has something in it by the time anyone looks. */
@@ -145,19 +165,64 @@ function pairingName(): string {
     return noun === "this Mac" ? "My Mac" : noun === "this PC" ? "My PC" : "My computer";
 }
 
+/* ── who is signed in ─────────────────────────────────────────────── */
+
+/** Which workspace-and-person pairs this page has already told the shell. */
+const sessionsTold = new Set<string>();
+
+/** Tell this computer who is signed in to `workspace`, once per page.
+ *
+ *  Their own pairing takes work; anybody else's to the same Lemma waits until
+ *  its person is back. Best effort: an older shell has no such command, and
+ *  not knowing is no reason to interrupt anyone. */
+export async function tellSession(
+    workspace: string,
+    userId: string | null,
+    host: Pick<typeof agentHost, "session"> = agentHost,
+): Promise<void> {
+    const key = `${workspace} ${userId ?? ""}`;
+    if (sessionsTold.has(key)) return;
+    sessionsTold.add(key);
+    try {
+        await host.session(workspace, userId);
+    } catch {
+        /* Nothing to do: see above. */
+    }
+}
+
+/** Signing out: this computer's pairing of the person leaving takes no new
+ *  work until somebody signs in again. */
+export async function signedOutOfThisComputer(): Promise<void> {
+    if (!isDesktop() || !hasApiUrl()) return;
+    sessionsTold.clear();
+    await tellSession(apiUrl(), null);
+}
+
 /** Mounted once in the authenticated shell; also returns the live status and
  *  the failure, for the card that reports them. */
 export function useAutoConnectThisComputer() {
     const host = useAgentHost();
     const failure = useSyncExternalStore(subscribeFailure, connectFailure, () => null);
     const { status, refetch } = host;
+    const enabled = isDesktop() && hasApiUrl();
+    /* The same query the shell's arrival screen reads, so this is no second
+       request: who is signed in decides which pairing is this workspace's. */
+    const me = useQuery({
+        queryKey: ["current-user"],
+        queryFn: () => lemma().users.current() as Promise<{ id?: string } | undefined>,
+        enabled,
+        staleTime: 5 * 60_000,
+    });
+    const userId = me.data?.id ?? null;
 
     useEffect(() => {
-        if (!status || !isDesktop() || !hasApiUrl()) return;
+        if (!status || !enabled || !userId) return;
         const workspace = apiUrl();
+        void tellSession(workspace, userId);
         void connectThisComputer(status, workspace, {
             createPairing: (displayName) => lemma().agentHost.createPairing({ display_name: displayName }),
             host: agentHost,
+            userId,
         }).then((outcome) => {
             /* locald answers on its event stream, so the reading in hand is
                always one step behind an action. */
@@ -165,7 +230,7 @@ export function useAutoConnectThisComputer() {
         });
         /* `failure` is a dependency so that "Try again", which clears the
            guard and the failure together, runs this again. */
-    }, [status, failure, refetch]);
+    }, [status, failure, refetch, enabled, userId]);
 
-    return { ...host, connectError: failure, retryConnect: retryAutoConnect };
+    return { ...host, userId, connectError: failure, retryConnect: retryAutoConnect };
 }

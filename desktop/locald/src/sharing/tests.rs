@@ -5,6 +5,12 @@ use crate::sharing::gateway::*;
 use std::io::{Read, Write};
 use std::sync::mpsc;
 
+/// How long a read that should succeed may take before the test fails instead
+/// of hanging. Generous on purpose: it guards against a hang, not a slow
+/// machine, and a loaded shared CI runner can stall a loopback socket for
+/// seconds.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 fn read_http_head(stream: &mut std::net::TcpStream) -> Vec<u8> {
     let mut received = Vec::new();
     let mut byte = [0_u8; 1];
@@ -305,9 +311,7 @@ fn gateway_streams_sse_before_the_response_finishes_and_replaces_forwarding_head
             .unwrap();
         stream.flush().unwrap();
         first_sent.send(()).unwrap();
-        release_receive
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap();
+        release_receive.recv_timeout(HANG_GUARD).unwrap();
         stream
             .write_all(b"B\r\ndata: two\n\n\r\n0\r\n\r\n")
             .unwrap();
@@ -318,18 +322,19 @@ fn gateway_streams_sse_before_the_response_finishes_and_replaces_forwarding_head
         9,
         upstream_port,
         SharingMode::Public,
+        None,
+        "probe".into(),
     )
     .unwrap();
+    gateway.set_open(true);
     let mut client = std::net::TcpStream::connect(gateway.address).unwrap();
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(HANG_GUARD)).unwrap();
     client
         .write_all(
             b"GET /_lemma/api/events?conversation=1 HTTP/1.1\r\nHost: shared.example\r\nX-Forwarded-For: attacker\r\nForwarded: for=attacker\r\nConnection: close\r\n\r\n",
         )
         .unwrap();
-    first_received.recv_timeout(Duration::from_secs(2)).unwrap();
+    first_received.recv_timeout(HANG_GUARD).unwrap();
     let mut observed = Vec::new();
     let mut buffer = [0_u8; 512];
     while !String::from_utf8_lossy(&observed).contains("data: one") {
@@ -383,8 +388,11 @@ fn gateway_preserves_large_uploads_and_downloads() {
         9,
         upstream_port,
         SharingMode::LocalNetwork,
+        None,
+        "probe".into(),
     )
     .unwrap();
+    gateway.set_open(true);
     let response = reqwest::blocking::Client::builder()
         .no_proxy()
         .build()
@@ -429,12 +437,13 @@ fn gateway_relays_websocket_upgrades_bidirectionally() {
         upstream_port,
         9,
         SharingMode::Public,
+        None,
+        "probe".into(),
     )
     .unwrap();
+    gateway.set_open(true);
     let mut client = std::net::TcpStream::connect(gateway.address).unwrap();
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(HANG_GUARD)).unwrap();
     client
         .write_all(
             b"GET /socket HTTP/1.1\r\nHost: shared.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n",
@@ -571,5 +580,141 @@ fn local_network_warnings_say_who_can_create_an_account() {
     assert_eq!(
         local_join_warning(WhoCanJoin::InviteOnly),
         "Only people you invite can create an account."
+    );
+}
+
+fn start_held_gateway(upstream_port: u16) -> GatewayHandle {
+    GatewayHandle::start(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        upstream_port,
+        upstream_port,
+        SharingMode::Public,
+        Some(TunnelProvider::Cloudflare),
+        "the-probe-token".into(),
+    )
+    .unwrap()
+}
+
+fn gateway_get(gateway: &GatewayHandle, probe: Option<&str>) -> reqwest::blocking::Response {
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(HANG_GUARD)
+        .build()
+        .unwrap();
+    let mut request = client.get(format!("http://{}/runtime-config.js", gateway.address));
+    if let Some(token) = probe {
+        request = request.header(ACTIVATION_PROBE_HEADER, token);
+    }
+    request.send().unwrap()
+}
+
+/// A tunnel is live before the stack behind it has restarted into shared mode.
+///
+/// Until the hardened stack is verified and committed, a visitor must meet a
+/// 503 rather than the local-mode stack -- DEBUG on, no rate limit, no ALTCHA.
+/// Only locald's own activation check, carrying the per-activation token, gets
+/// through, and the token is not forwarded.
+#[test]
+fn a_held_gateway_turns_visitors_away_until_it_is_opened() {
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let upstream_port = upstream.local_addr().unwrap().port();
+    let (heads_send, heads) = mpsc::channel::<String>();
+    let server = thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = upstream.accept().unwrap();
+            let head = String::from_utf8(read_http_head(&mut stream)).unwrap();
+            heads_send.send(head).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+        }
+    });
+    let mut gateway = start_held_gateway(upstream_port);
+
+    let visitor = gateway_get(&gateway, None);
+    assert_eq!(visitor.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(visitor.headers()["retry-after"], "5");
+    let forged = gateway_get(&gateway, Some("a-guess"));
+    assert_eq!(forged.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+
+    let probe = gateway_get(&gateway, Some("the-probe-token"));
+    assert_eq!(probe.status(), reqwest::StatusCode::OK);
+    let head = heads.recv_timeout(HANG_GUARD).unwrap().to_ascii_lowercase();
+    assert!(
+        !head.contains(ACTIVATION_PROBE_HEADER),
+        "the probe token was forwarded"
+    );
+
+    gateway.set_open(true);
+    assert_eq!(
+        gateway_get(&gateway, None).status(),
+        reqwest::StatusCode::OK
+    );
+    heads.recv_timeout(HANG_GUARD).unwrap();
+
+    // Held again for a restart while shared.
+    gateway.set_open(false);
+    assert_eq!(
+        gateway_get(&gateway, None).status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
+    gateway.stop();
+    crate::join_within(server, "the upstream server");
+}
+
+/// Through a tunnel every visitor arrives from loopback; the backend's
+/// per-client limits need the address the tunnel accepted them from.
+#[test]
+fn a_public_visitor_is_identified_by_the_tunnels_own_header() {
+    let tunnel: SocketAddr = "127.0.0.1:50123".parse().unwrap();
+    let mut headers = hyper::HeaderMap::new();
+    headers.insert("cf-connecting-ip", HeaderValue::from_static("203.0.113.7"));
+    headers.insert(
+        "x-forwarded-for",
+        HeaderValue::from_static("198.51.100.1, 203.0.113.9"),
+    );
+    let ip = |mode, provider, peer| client_address(mode, provider, &headers, peer);
+    assert_eq!(
+        ip(
+            SharingMode::Public,
+            Some(TunnelProvider::Cloudflare),
+            tunnel
+        )
+        .to_string(),
+        "203.0.113.7"
+    );
+    // ngrok appends its own view; what came before is the visitor's to write.
+    assert_eq!(
+        ip(SharingMode::Public, Some(TunnelProvider::Ngrok), tunnel).to_string(),
+        "203.0.113.9"
+    );
+    // Not believed from anything but the tunnel's loopback connection, and not
+    // on the LAN, where the peer is the visitor.
+    let lan: SocketAddr = "192.168.1.44:50000".parse().unwrap();
+    assert_eq!(
+        ip(
+            SharingMode::LocalNetwork,
+            Some(TunnelProvider::Cloudflare),
+            lan
+        )
+        .to_string(),
+        "192.168.1.44"
+    );
+    assert_eq!(
+        ip(SharingMode::Public, Some(TunnelProvider::Cloudflare), lan).to_string(),
+        "192.168.1.44"
+    );
+    // A missing or malformed header falls back to the peer rather than trusting it.
+    let mut junk = hyper::HeaderMap::new();
+    junk.insert("cf-connecting-ip", HeaderValue::from_static("not-an-ip"));
+    assert_eq!(
+        client_address(
+            SharingMode::Public,
+            Some(TunnelProvider::Cloudflare),
+            &junk,
+            tunnel
+        )
+        .to_string(),
+        "127.0.0.1"
     );
 }

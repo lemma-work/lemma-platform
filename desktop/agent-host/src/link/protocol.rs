@@ -126,6 +126,16 @@ pub struct WelcomeBody {
     pub protocol_version: u16,
     /// The longest this host may go without a `control` frame.
     pub heartbeat_ms: u64,
+    /// Lemma's clock when it answered. Command expiries and run deadlines are
+    /// Lemma's times, so the host judges them against this rather than a
+    /// clock of its own that may be minutes out. Absent from an older Lemma.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_time: Option<chrono::DateTime<chrono::Utc>>,
+    /// Lemma runs a `tools/call` once per `(run_id, request_id)` and answers
+    /// a repeat with the result it kept. Only then does the host send a call
+    /// again after the link dropped under it. Absent from an older Lemma.
+    #[serde(default)]
+    pub idempotent_tool_calls: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -133,6 +143,12 @@ pub struct PairBody {
     pub pairing_code: String,
     pub display_name: String,
     pub hello: HostHello,
+    /// The person asked for this pairing, in the app, knowing this computer
+    /// was removed from their account. Without it Lemma refuses to pair an
+    /// installation that was revoked, so removing a computer sticks against
+    /// the automatic connection.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reenable: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -214,6 +230,12 @@ pub struct McpBody {
     pub method: String,
     #[serde(default)]
     pub params: Value,
+    /// One per `tools/call`, the same on every try of it. Lemma runs a call
+    /// once per `(run_id, request_id)` and answers a repeat with the stored
+    /// result, so a call can be sent again after a dropped link without
+    /// running twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

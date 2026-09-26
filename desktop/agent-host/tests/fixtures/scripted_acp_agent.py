@@ -18,6 +18,9 @@ uses what the Agent Host actually hands it:
   its turn with ``stopReason: cancelled`` the way ACP specifies. A host that
   kills the process instead never gets that far, which is how the test tells
   the two apart.
+* a ``json:`` scenario with ``"steering": true`` advertises
+  ``_session/steering`` the way the pinned Claude Code and Codex adapters do,
+  and its ``await_steer`` steps answer it.
 
 Usage: ``scripted_acp_agent.py <log-path> <mode>``. The log is JSONL; each line
 is ``{"direction": ..., "message": ...}`` so a test can assert on both the ACP
@@ -392,6 +395,36 @@ def wait_for_release():
             return
 
 
+# Named modes for the steering scenarios, because a test harness that names
+# its log after the mode cannot put a path in one.
+STEER_SCENARIOS = {
+    "steer": "steer.json",
+    "steer-unsupported": "steer-unsupported.json",
+    "steer-too-late": "steer-too-late.json",
+}
+
+
+def scenario_path():
+    """The JSON scenario this run replays, if it replays one."""
+    if MODE.startswith("json:"):
+        return pathlib.Path(MODE.removeprefix("json:"))
+    if MODE in STEER_SCENARIOS:
+        return pathlib.Path(__file__).parent / "scenarios" / STEER_SCENARIOS[MODE]
+    return None
+
+
+def advertises_steering():
+    """Whether this run's scenario says the agent accepts `_session/steering`.
+
+    Advertised the way the pinned Claude Code and Codex adapters do it, in the
+    top-level `_meta` of the `initialize` answer.
+    """
+    path = scenario_path()
+    if path is None:
+        return False
+    return json.loads(path.read_text("utf-8")).get("steering") is True
+
+
 def main():
     mcp_servers = []
     while True:
@@ -401,19 +434,19 @@ def main():
         method = message.get("method")
         request_id = message.get("id")
         if method == "initialize":
-            result(
-                request_id,
-                {
-                    "protocolVersion": 1,
-                    "agentCapabilities": {
-                        "loadSession": False,
-                        "mcpCapabilities": {"http": False, "sse": False},
-                        "promptCapabilities": {"image": False, "audio": False},
-                    },
-                    "authMethods": [],
-                    "agentInfo": {"name": "scripted-acp", "version": "1.0.0"},
+            answer = {
+                "protocolVersion": 1,
+                "agentCapabilities": {
+                    "loadSession": False,
+                    "mcpCapabilities": {"http": False, "sse": False},
+                    "promptCapabilities": {"image": False, "audio": False},
                 },
-            )
+                "authMethods": [],
+                "agentInfo": {"name": "scripted-acp", "version": "1.0.0"},
+            }
+            if advertises_steering():
+                answer["_meta"] = {"steering": {"supported": True}}
+            result(request_id, answer)
         elif method == "session/new":
             if MODE == "cwd":
                 os.chdir(message["params"]["cwd"])
@@ -421,11 +454,11 @@ def main():
             result(request_id, {"sessionId": SESSION_ID, "configOptions": []})
         elif method == "session/prompt":
             stop_reason = "end_turn"
-            if MODE.startswith("json:"):
+            if scenario_path() is not None:
                 from json_acp_scenario import run_scenario
 
                 stop_reason = run_scenario(
-                    MODE.removeprefix("json:"),
+                    scenario_path(),
                     emit,
                     read_client_message,
                     wait_for_release,

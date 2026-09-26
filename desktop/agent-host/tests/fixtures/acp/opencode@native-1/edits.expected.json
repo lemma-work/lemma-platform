@@ -299,7 +299,7 @@
       "parent_call_id": null,
       "tool": {
         "name": "tinyfish_search",
-        "source": "native",
+        "source": "mcp",
         "server": null,
         "title": "tinyfish_search",
         "kind": "other"
@@ -322,7 +322,7 @@
       "parent_call_id": null,
       "tool": {
         "name": "tinyfish_fetch_content",
-        "source": "native",
+        "source": "mcp",
         "server": null,
         "title": "tinyfish_fetch_content",
         "kind": "other"
@@ -335,7 +335,75 @@
     "payload": {
       "error": null,
       "output": {
-        "output": "{\n  \"query\": \"Agent Client Protocol\",\n  \"results\": [\n    {\n      \"position\": 1,\n      \"site_name\": \"agentclientprotocol.com\",\n      \"snippet\": \"The Agent Client Protocol (ACP) standardizes communication between code editors/IDEs and coding agents and is suitable for both local and remote scenarios. ​.\",\n      \"title\": \"Agent Client Protocol: Introduction\",\n      \"url\": \"https://agentclientprotocol.com/get-started/introduction\"\n    },\n    {\n      \"position\": 2,\n      \"site_name\": \"github.com\",\n      \"snippet\": \"The Agent Client Protocol (ACP) standardizes communication between code editors (interactive programs for viewing and editing source code) and coding agents ( ...\",\n      \"title\": \"agentclientprotocol/agent-client-protocol: A ...\",\n      \"url\": \"https://github.com/agentclientprotocol/agent-client-protocol\"\n    },\n    {\n      \"position\": 3,\n      \"site_name\": \"www.jetbrains.com\",\n      \"snippet\": \"Built by JetBrains and Zed, ACP helps to connect local, remote, or in-house AI agents without vendor lock-in.\",\n      \"title\": \"Agent Client Protocol (ACP): Use Any Coding ...\",\n      \"url\": \"https://www.jetbrains.com/acp/\"\n    },\n    {\n      \"position\": 4,\n      \"site_name\": \"agentclientprotocol.com\",\n      \"snippet\": \"Clients, frameworks, connectors, and related tools around the Agent Client Protocol.\",\n      \"title\": \"Clients\",\n      \"url\": \"https://agentclientprotocol.com/get-started/clients\"\n    },\n    {\n      \"position\": 5,\n      \"site_name\": \"agentcommunicationprotocol.dev\",\n      \"snippet\": \"What is ACP? The Agent Communication Protocol (ACP) is an open protocol for agent interoperability that solves the growing challenge of connecting AI agents ...\",\n      \"title\": \"Agent Communication Protocol: Welcome\",\n      \"url\": \"https://agentcommunicationprotocol.dev/introduction/welcome\"\n    },\n    {\n      \"position\": 6,\n      \"site_name\": \"zed.dev\",\n      \"snippet\": \"The Agent Client Protocol (ACP) is an open standard that enables any agent to integrate seamlessly with any editing environment. Universal Compatibility. Any ...\",\n      \"title\": \"Agent Client Protocol\",\n      \"url\": \"https://zed.dev/acp\"\n    },\n    {\n      \"position\": 7,\n      \"site_name\": \"ai-sdk.dev\",\n      \"snippet\": \"ACP (Agent Client Protocol) is an open protocol that enables seamless communication between AI agents and client applications. The ACP provider bridges ACP ...\",\n      \"title\": \"Community Providers: ACP (Agent Client Protocol)\",\n      \"url\": \"https://ai-sdk.dev/providers/community-providers/acp\"\n    },\n    {\n      \"date\": \"Feb 1, 2026\",\n      \"position\": 8,\n      \"site_name\": \"www.philschmid.de\",\n      \"snippet\": \"The Agent Client Protocol (ACP) is an an open standard abstracts the events and outputs of AI agents and provides a common interface for editors ...\",\n      \"title\": \"The Agent Client Protocol Overview\",\n      \"url\": \"https://www.philschmid.de/acp-overview\"\n    },\n    {\n      \"position\": 9,\n      \"site_name\": \"agentclientprotocol.com\",\n      \"snippet\": \"The Agent Client Protocol allows Agents and Clients to communicate by exposing methods that each side can call and sending notifications to inform each other of ...\",\n      \"title\": \"Overview\",\n      \"url\": \"https://agentclientprotocol.com/protocol/v1/overview\"\n    }\n  ],\n  \"total_results\": 9,\n  \"page\": 0\n}"
+        "query": "Agent Client Protocol",
+        "results": [
+          {
+            "position": 1,
+            "site_name": "agentclientprotocol.com",
+            "snippet": "The Agent Client Protocol (ACP) standardizes communication between code editors/IDEs and coding agents and is suitable for both local and remote scenarios. ​.",
+            "title": "Agent Client Protocol: Introduction",
+            "url": "https://agentclientprotocol.com/get-started/introduction"
+          },
+          {
+            "position": 2,
+            "site_name": "github.com",
+            "snippet": "The Agent Client Protocol (ACP) standardizes communication between code editors (interactive programs for viewing and editing source code) and coding agents ( ...",
+            "title": "agentclientprotocol/agent-client-protocol: A ...",
+            "url": "https://github.com/agentclientprotocol/agent-client-protocol"
+          },
+          {
+            "position": 3,
+            "site_name": "www.jetbrains.com",
+            "snippet": "Built by JetBrains and Zed, ACP helps to connect local, remote, or in-house AI agents without vendor lock-in.",
+            "title": "Agent Client Protocol (ACP): Use Any Coding ...",
+            "url": "https://www.jetbrains.com/acp/"
+          },
+          {
+            "position": 4,
+            "site_name": "agentclientprotocol.com",
+            "snippet": "Clients, frameworks, connectors, and related tools around the Agent Client Protocol.",
+            "title": "Clients",
+            "url": "https://agentclientprotocol.com/get-started/clients"
+          },
+          {
+            "position": 5,
+            "site_name": "agentcommunicationprotocol.dev",
+            "snippet": "What is ACP? The Agent Communication Protocol (ACP) is an open protocol for agent interoperability that solves the growing challenge of connecting AI agents ...",
+            "title": "Agent Communication Protocol: Welcome",
+            "url": "https://agentcommunicationprotocol.dev/introduction/welcome"
+          },
+          {
+            "position": 6,
+            "site_name": "zed.dev",
+            "snippet": "The Agent Client Protocol (ACP) is an open standard that enables any agent to integrate seamlessly with any editing environment. Universal Compatibility. Any ...",
+            "title": "Agent Client Protocol",
+            "url": "https://zed.dev/acp"
+          },
+          {
+            "position": 7,
+            "site_name": "ai-sdk.dev",
+            "snippet": "ACP (Agent Client Protocol) is an open protocol that enables seamless communication between AI agents and client applications. The ACP provider bridges ACP ...",
+            "title": "Community Providers: ACP (Agent Client Protocol)",
+            "url": "https://ai-sdk.dev/providers/community-providers/acp"
+          },
+          {
+            "date": "Feb 1, 2026",
+            "position": 8,
+            "site_name": "www.philschmid.de",
+            "snippet": "The Agent Client Protocol (ACP) is an an open standard abstracts the events and outputs of AI agents and provides a common interface for editors ...",
+            "title": "The Agent Client Protocol Overview",
+            "url": "https://www.philschmid.de/acp-overview"
+          },
+          {
+            "position": 9,
+            "site_name": "agentclientprotocol.com",
+            "snippet": "The Agent Client Protocol allows Agents and Clients to communicate by exposing methods that each side can call and sending notifications to inform each other of ...",
+            "title": "Overview",
+            "url": "https://agentclientprotocol.com/protocol/v1/overview"
+          }
+        ],
+        "total_results": 9,
+        "page": 0
       },
       "status": "completed"
     }
@@ -346,7 +414,21 @@
     "payload": {
       "error": null,
       "output": {
-        "output": "{\n  \"results\": [\n    {\n      \"url\": \"https://agentclientprotocol.com\",\n      \"final_url\": \"https://agentclientprotocol.com/get-started/introduction\",\n      \"title\": \"Introduction - Agent Client Protocol\",\n      \"description\": \"Get started with the Agent Client Protocol.\",\n      \"language\": \"en\",\n      \"text\": \"The Agent Client Protocol (ACP) standardizes communication between code editors/IDEs and coding agents and is suitable for both local and remote scenarios.\\n\\n##  Why ACP?\\n\\nAI coding agents and editors are tightly coupled but interoperability isn’t the default. Each editor must build custom integrations for every agent they want to support, and agents must implement editor-specific APIs to reach users.\\nThis creates several problems:\\n\\n* Integration overhead: Every new agent-editor combination requires custom work\\n* Limited compatibility: Agents work with only a subset of available editors\\n* Developer lock-in: Choosing an agent often means accepting their available interfaces\\n\\nACP solves this by providing a standardized protocol for agent-editor communication, similar to how the Language Server Protocol (LSP) standardized language server integration.\\nAgents that implement ACP work with any compatible editor. Editors that support ACP gain access to the entire ecosystem of ACP-compatible agents.\\nThis decoupling allows both sides to innovate independently while giving developers the freedom to choose the best tools for their workflow.\\n\\n##  Overview\\n\\nACP assumes that the user is primarily in their editor, and wants to reach out and use agents to assist them with specific tasks.\\nACP is suitable for both local and remote scenarios:\\n\\n* **Local agents** run as sub-processes of the code editor, communicating via JSON-RPC over stdio.\\n* **Remote agents** can be hosted in the cloud or on separate infrastructure, communicating over HTTP or WebSocket\\n\\nFull support for remote agents is a work in progress. We are actively\\ncollaborating with agentic platforms to ensure the protocol addresses the\\nspecific requirements of cloud-hosted and remote deployment scenarios.\\n\\nThe protocol re-uses the JSON representations used in MCP where possible, but includes custom types for useful agentic coding UX elements, like displaying diffs.\\nThe default format for user-readable text is Markdown, which allows enough flexibility to represent rich formatting without requiring that the code editor is capable of rendering HTML.\",\n      \"author\": null,\n      \"published_date\": null,\n      \"latency_ms\": 1364.0424969999003,\n      \"format\": \"markdown\"\n    }\n  ],\n  \"errors\": []\n}"
+        "results": [
+          {
+            "url": "https://agentclientprotocol.com",
+            "final_url": "https://agentclientprotocol.com/get-started/introduction",
+            "title": "Introduction - Agent Client Protocol",
+            "description": "Get started with the Agent Client Protocol.",
+            "language": "en",
+            "text": "The Agent Client Protocol (ACP) standardizes communication between code editors/IDEs and coding agents and is suitable for both local and remote scenarios.\n\n##  Why ACP?\n\nAI coding agents and editors are tightly coupled but interoperability isn’t the default. Each editor must build custom integrations for every agent they want to support, and agents must implement editor-specific APIs to reach users.\nThis creates several problems:\n\n* Integration overhead: Every new agent-editor combination requires custom work\n* Limited compatibility: Agents work with only a subset of available editors\n* Developer lock-in: Choosing an agent often means accepting their available interfaces\n\nACP solves this by providing a standardized protocol for agent-editor communication, similar to how the Language Server Protocol (LSP) standardized language server integration.\nAgents that implement ACP work with any compatible editor. Editors that support ACP gain access to the entire ecosystem of ACP-compatible agents.\nThis decoupling allows both sides to innovate independently while giving developers the freedom to choose the best tools for their workflow.\n\n##  Overview\n\nACP assumes that the user is primarily in their editor, and wants to reach out and use agents to assist them with specific tasks.\nACP is suitable for both local and remote scenarios:\n\n* **Local agents** run as sub-processes of the code editor, communicating via JSON-RPC over stdio.\n* **Remote agents** can be hosted in the cloud or on separate infrastructure, communicating over HTTP or WebSocket\n\nFull support for remote agents is a work in progress. We are actively\ncollaborating with agentic platforms to ensure the protocol addresses the\nspecific requirements of cloud-hosted and remote deployment scenarios.\n\nThe protocol re-uses the JSON representations used in MCP where possible, but includes custom types for useful agentic coding UX elements, like displaying diffs.\nThe default format for user-readable text is Markdown, which allows enough flexibility to represent rich formatting without requiring that the code editor is capable of rendering HTML.",
+            "author": null,
+            "published_date": null,
+            "latency_ms": 1364.0424969999003,
+            "format": "markdown"
+          }
+        ],
+        "errors": []
       },
       "status": "completed"
     }

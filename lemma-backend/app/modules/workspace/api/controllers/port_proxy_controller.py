@@ -9,8 +9,8 @@ Because the token is the whole credential, inbound headers that could be
 mistaken for a *different* credential are dropped rather than forwarded -- a
 sandbox must never see the caller's Lemma cookies or API key.
 
-Both halves of HTTP are here. The request half buffers, which is right for the
-small documents a sandbox app serves. The **WebSocket** half does not exist for
+Both halves of HTTP are here. The request half streams both bodies through one
+shared client rather than buffering them. The **WebSocket** half does not exist for
 convenience: a live view of the agent's browser is a frame stream, and a proxy
 that can only answer a request cannot carry one. It is a separate route because
 an upgrade is a separate protocol, not a method.
@@ -18,7 +18,10 @@ an upgrade is a separate protocol, not a method.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from functools import lru_cache
+from http.cookiejar import CookieJar, DefaultCookiePolicy
+
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -28,6 +31,7 @@ import contextlib
 import httpx
 from fastapi import APIRouter, Request, Response, WebSocket, status
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
 from app.modules.workspace.providers.desktop_tunnel import sandbox_transport
 from app.core.log.log import get_logger
@@ -71,6 +75,50 @@ def _ws_closed() -> type[Exception]:
 
 
 router = APIRouter(prefix="/workspace-ports", tags=["Workspace"])
+
+
+def _has_body(request: Request) -> bool:
+    """Whether the caller sent content: a non-zero length, or chunked."""
+    length = request.headers.get("content-length")
+    if length is not None:
+        return length.strip() not in ("", "0")
+    return "transfer-encoding" in request.headers
+
+
+# One client for every proxied request. A client per request leaked whenever
+# the caller went away before the body was streamed (nothing closed it), and
+# never reused a connection. Not the connector client in `app.core.net`: this
+# one needs the Desktop tunnel transport and a sandbox-sized read timeout.
+@lru_cache(maxsize=1)
+def _build_port_proxy_client() -> httpx.AsyncClient:
+    # A jar that stores nothing. httpx keeps every response's Set-Cookie in the
+    # client, and this client is shared by every sandbox for the life of the
+    # process -- a sandbox app issuing fresh cookies would grow it without end.
+    # Nothing reads the jar back: each request is built with its own headers.
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0),
+        transport=sandbox_transport(),
+        cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])),
+    )
+
+
+def get_port_proxy_client() -> httpx.AsyncClient:
+    """The process-wide client the HTTP half sends through."""
+    client = _build_port_proxy_client()
+    if client.is_closed:
+        _build_port_proxy_client.cache_clear()
+        client = _build_port_proxy_client()
+    return client
+
+
+async def close_port_proxy_client() -> None:
+    """Close the proxy client. Called from the app lifespan on shutdown."""
+    if _build_port_proxy_client.cache_info().currsize:
+        client = _build_port_proxy_client()
+        if not client.is_closed:
+            await client.aclose()
+    _build_port_proxy_client.cache_clear()
+
 
 # Never forwarded upstream. `host` would break virtual hosting inside the
 # sandbox; the rest are credentials for Lemma, not for the sandbox.
@@ -290,35 +338,68 @@ async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Re
     # makes the host un-influenceable by construction.
     target = httpx.URL(base_url).copy_with(path="/" + quote(path.lstrip("/"), safe="/"))
 
-    upstream = httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0), transport=sandbox_transport()
-    )
-    try:
-        proxied = await upstream.request(
+    headers = _upstream_headers(request.headers, endpoint.headers)
+    content = None
+    if _has_body(request):
+        # Streamed through rather than read whole: an upload to a sandbox app
+        # must not sit in the API's memory. A declared length is kept so the
+        # upstream is not forced onto chunked encoding. Decided by what the
+        # caller sent, not by method: HTTP allows a body on GET and OPTIONS.
+        if length := request.headers.get("content-length"):
+            headers["content-length"] = length
+        content = request.stream()
+    return await _forward(
+        get_port_proxy_client(),
+        httpx.Request(
             request.method,
             target,
             params=request.query_params,
-            headers=_upstream_headers(request.headers, endpoint.headers),
-            content=await request.body(),
-        )
-    except httpx.HTTPError:
-        await upstream.aclose()
-        return Response(status_code=status.HTTP_502_BAD_GATEWAY)
-
-    async def body():
-        try:
-            yield proxied.content
-        finally:
-            await upstream.aclose()
-
-    headers = {
-        name: value
-        for name, value in proxied.headers.items()
-        if name.lower() not in _STRIPPED_RESPONSE_HEADERS
-    }
-    headers["content-security-policy"] = f"frame-ancestors {_frame_ancestors()}"
-    return StreamingResponse(
-        body(),
-        status_code=proxied.status_code,
-        headers=headers,
+            headers=headers,
+            content=content,
+        ),
     )
+
+
+async def _forward(client: httpx.AsyncClient, outbound: httpx.Request) -> Response:
+    """Send `outbound` and stream the answer back without buffering it.
+
+    The upstream response is closed by the returned response's background task
+    once the body has been sent -- and Starlette runs that task on a client
+    disconnect too -- or here, before returning, on every path that does not
+    hand it over.
+    """
+    try:
+        proxied = await client.send(outbound, stream=True)
+    except httpx.HTTPError:
+        return Response(status_code=status.HTTP_502_BAD_GATEWAY)
+    handed_over = False
+    try:
+        headers = {
+            name: value
+            for name, value in proxied.headers.items()
+            if name.lower() not in _STRIPPED_RESPONSE_HEADERS
+        }
+        headers["content-security-policy"] = f"frame-ancestors {_frame_ancestors()}"
+        # Raw bytes, so a gzip body stays gzip under its own content-encoding
+        # header rather than being decoded and relabelled wrongly.
+        forwarded = StreamingResponse(
+            _relay(proxied),
+            status_code=proxied.status_code,
+            headers=headers,
+            background=BackgroundTask(proxied.aclose),
+        )
+        handed_over = True
+        return forwarded
+    finally:
+        if not handed_over:
+            await proxied.aclose()
+
+
+async def _relay(proxied: httpx.Response) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in proxied.aiter_raw():
+            yield chunk
+    finally:
+        # Also closed by the background task; this covers a generator that is
+        # abandoned mid-stream. `aclose` is idempotent.
+        await proxied.aclose()

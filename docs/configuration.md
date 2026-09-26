@@ -486,7 +486,7 @@ EMAIL_TRANSPORT=smtp          # smtp | filesystem
 EMAIL_OUTPUT_DIR=/tmp/lemma-emails   # filesystem transport only
 AUTH_EMAIL_VERIFICATION_REQUIRED=true
 AUTH_ABUSE_PROTECTION_ENABLED=true
-# open | invite_only | closed. Unset means open, except on Lemma Desktop.
+# open | invite_only | closed. Unset means open.
 SIGNUP_MODE=
 ```
 
@@ -502,16 +502,18 @@ one — email and password, an OAuth provider, and email-code sign-in:
   already on it for an invitation."
 - `closed` — nobody.
 
-People who already have an account sign in whatever the mode is, and the first
+People who already have an account sign in whatever the mode is — a sign-up
+for an address that already has a password is answered "you already have an
+account", with a way to sign in, never with the mode's refusal — and the first
 account on a deployment with no accounts at all is admitted whatever the mode —
 there is nobody yet who could have invited it. That check is a read, not a
 reservation: two signups racing on an empty database could both get in, so a
 server that wants a closed door from the first request should create its first
 account before exposing the sign-up page.
 
-`DEPLOYMENT_KIND=desktop` is set by Lemma Desktop's host pack and nothing else
-should set it. It changes the unset default to `invite_only`. Desktop's sharing settings set
-`SIGNUP_MODE` for you; see [Desktop security](architecture/desktop-security.md).
+Unset means `open` on Lemma Desktop too. Desktop sets `SIGNUP_MODE` only while
+the installation is shared, from its *Who can join* choice; see
+[Desktop security](architecture/desktop-security.md).
 
 **Resend is not a transport.** To send through Resend, leave
 `EMAIL_TRANSPORT=smtp`, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL`, and leave
@@ -528,6 +530,21 @@ operator gets a bare pydantic traceback rather than a message.
 domain, which meant an unconfigured deployment sent password resets from a
 domain it did not own — those fail DMARC silently and lock people out with
 nothing in the logs to explain it. Set it, or leave Resend unconfigured.
+
+**When no mail can be sent.** With `EMAIL_TRANSPORT=smtp` and neither Resend
+nor all four SMTP values set, nothing is sent and each attempt logs
+`identity.email.not_sent` at warning level with the reason. The product says so
+where it would otherwise promise mail: a new invitation comes back with
+`emailed: false` and its `accept_url`, which the People page offers to copy; a
+password reset answers that email isn't set up; and email-code sign-in refuses
+before minting a code (`EMAIL_NOT_CONFIGURED`) and points at a password instead.
+The filesystem transport is not "no mail" in this sense — it writes a spool for
+tests and the dev stack to read, and every send succeeds.
+
+On a local installation (`ENVIRONMENT=local`), a signed-in user can ask whether
+mail can be sent (`GET /users/me/email-delivery`) and send a test email to their
+own address (`POST /users/me/email-delivery/test`, rate limited per account
+while the auth abuse controls are on). Both answer 404 on any other deployment.
 
 ### Agent email surfaces
 
@@ -851,10 +868,19 @@ Each surface needs its own credentials, and none is required — a surface with 
 token is simply inactive. Local installs have no public URL, so they receive
 events by polling or socket instead of webhooks.
 
+Slack has no bot token setting. A Slack surface uses the bot token stored on
+the Slack connector account it is attached to, which somebody connects through
+OAuth. The environment names the Slack app that OAuth runs against; an
+organization can register its own app on the Slack connector's auth config
+instead, and that app's signing secret is stored there too.
+
 ```dotenv
-SLACK_BOT_TOKEN=
-SLACK_SIGNING_SECRET=
+SLACK_CLIENT_ID=              # this deployment's Slack app
+SLACK_CLIENT_SECRET=
+SLACK_SIGNING_SECRET=         # verifies webhook events from that app
+SLACK_APP_ID=                 # matches an event to that app
 ENABLE_SLACK_SOCKET_MODE=false
+SLACK_APP_TOKEN=              # app-level token, Socket Mode only
 
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=

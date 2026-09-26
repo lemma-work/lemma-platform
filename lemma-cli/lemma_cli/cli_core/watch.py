@@ -35,6 +35,12 @@ _RECONNECT_MAX_DELAY_SECONDS = 30.0
 # is missing, invalid or expired. Older servers refused the upgrade with an HTTP
 # 401/403 instead; both mean "refresh once, then give up".
 _CLOSE_UNAUTHENTICATED = 4401
+# Terminal closes no retry can fix: the caller has no access to the pod, or
+# the pod/table does not exist.
+_TERMINAL_CLOSES = {
+    4403: "No access to this pod's changes.",
+    4404: "Pod or table not found.",
+}
 
 
 def _reconnect_delay(attempt: int) -> float:
@@ -152,7 +158,11 @@ async def _run(
                     "retrying…[/dim]"
                 )
         except ConnectionClosed as exc:
-            if exc.rcvd is not None and exc.rcvd.code == _CLOSE_UNAUTHENTICATED:
+            close_code = exc.rcvd.code if exc.rcvd is not None else None
+            if close_code in _TERMINAL_CLOSES:
+                fail(_TERMINAL_CLOSES[close_code])
+                return
+            if close_code == _CLOSE_UNAUTHENTICATED:
                 auth_rejected = True
             else:
                 _err.print(f"[dim]Connection lost ({exc}); reconnecting…[/dim]")

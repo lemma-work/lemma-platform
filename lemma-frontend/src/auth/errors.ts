@@ -107,3 +107,15 @@ export function sayProblem(error: unknown): string {
     }
     return error.message;
 }
+
+/** Whether a sign-up's email complaint is "this address already has an account".
+ *
+ *  SuperTokens answers `EMAIL_ALREADY_EXISTS_ERROR` as a `FIELD_ERROR` on the
+ *  email input carrying its own sentence ("This email already exists. Please
+ *  sign in instead.") rather than a status, and the backend answers an
+ *  existing password account that way whatever the signup mode. Recognised so
+ *  the screen can offer the sign-in itself instead of printing the recipe's
+ *  words against an address that is not wrong. */
+export function isExistingAccount(emailComplaint: string | undefined): boolean {
+    return (emailComplaint ?? "").toLowerCase().includes("already exists");
+}

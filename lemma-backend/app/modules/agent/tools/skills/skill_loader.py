@@ -13,7 +13,10 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
-from app.modules.datastore.contracts.agent_tools import build_agent_skill_file_service
+from app.modules.datastore.contracts.agent_tools import (
+    build_agent_skill_file_service,
+    configured_system_skills_root,
+)
 from app.core.authorization.factory import create_authorization_data_service
 from functools import lru_cache
 
@@ -47,18 +50,14 @@ class _FileServiceScope:
     ctx: Context | None
 
 
-def _repo_root() -> Path:
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        skills_dir = parent / "lemma-skills"
-        if skills_dir.is_dir() and any(skills_dir.glob("*/SKILL.md")):
-            return parent
-    raise RuntimeError("Could not locate repository root for skills loading")
-
-
 def _skills_root() -> Path:
-    root = _repo_root() / "lemma-skills"
-    if not root.exists() or not root.is_dir():
+    # The same lookup the `/skills` overlay uses, so a packaged install that
+    # points LEMMA_SKILLS_ROOT at its bundled skills serves them here too
+    # instead of searching for a source checkout it does not have.
+    root = configured_system_skills_root()
+    if root is None:
+        raise RuntimeError("Could not locate the bundled skills directory")
+    if not root.is_dir():
         raise RuntimeError(f"Skills directory not found: {root}")
     return root
 
@@ -151,7 +150,6 @@ def _build_system_skill_catalog() -> dict[str, SkillEntry]:
     """
     skills_root = _skills_root()
     entries: dict[str, SkillEntry] = {}
-    repo_root = _repo_root()
 
     for skill_md in sorted(skills_root.glob("*/SKILL.md")):
         content = skill_md.read_text(encoding="utf-8")
@@ -163,7 +161,10 @@ def _build_system_skill_catalog() -> dict[str, SkillEntry]:
         entries[name] = SkillEntry(
             name=name,
             description=description,
-            path=str(skill_md.relative_to(repo_root)),
+            # Relative to the skills directory's parent: in a checkout that is
+            # the repository root, as it always was, and in a packaged install
+            # there is no repository to be relative to.
+            path=str(skill_md.relative_to(skills_root.parent)),
             pod_path=_skill_file_path(name),
             pod_dir=_skill_dir_path(name),
         )

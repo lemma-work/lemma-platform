@@ -28,6 +28,19 @@ impl AgentHostSupervisor {
         })
     }
 
+    /// The running sidecar's process id, if it is running.
+    ///
+    /// Read by the loopback relay, which reaches only servers descending from
+    /// this process.
+    pub(crate) fn running_pid(&self) -> Option<u32> {
+        let mut state = self.state.lock().expect("Agent Host state lock poisoned");
+        if child_running(&mut state) {
+            state.child.as_ref().map(Child::id)
+        } else {
+            None
+        }
+    }
+
     /// Process state plus what the host itself knows: which workspaces it is
     /// paired to, whether it is actually reaching them, and what work it holds.
     ///

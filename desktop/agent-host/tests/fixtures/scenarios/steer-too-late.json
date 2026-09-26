@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "steering": true,
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Finishing the only request.\n"
+            }
+          }
+        }
+      }
+    },
+    {
+      "await_steer": {
+        "outcome": "startedNewTurn"
+      }
+    },
+    {
+      "await_cancel": true
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Done."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

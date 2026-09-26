@@ -74,6 +74,8 @@ class Facts:
         self.opened: list[dict] = []
         self.records: dict[UUID, dict] = {}
         self.host_lookups: list[tuple[UUID, UUID | None]] = []
+        # Sources of the runs before the one being chosen for, newest first.
+        self.earlier: list[str | None] = ["user_message"]
 
     def build(self) -> HostExecutionFacts:
         async def usable_host(
@@ -96,7 +98,13 @@ class Facts:
                 sandbox_id=host_sandbox_id(kwargs["conversation_id"]), root=ROOT
             )
 
+        async def earlier_sources(
+            conversation_id: UUID, run_id: UUID
+        ) -> list[str | None]:
+            return self.earlier
+
         return HostExecutionFacts(
+            earlier_sources=earlier_sources,
             is_desktop=lambda: self.desktop,
             usable_host=usable_host,
             open_workspace=open_workspace,
@@ -147,6 +155,8 @@ async def test_the_paired_users_own_message_runs_on_their_mac():
     chosen = await _choose(facts)
 
     assert chosen is not None and chosen.root == ROOT
+    # The Mac chosen travels with the workspace: the run's ops are pinned to it.
+    assert chosen.host_id == HOST
     assert facts.opened[0]["host_id"] == HOST
     assert facts.opened[0]["owner_id"] == PAIRED
     assert (facts.opened[0]["day"], facts.opened[0]["slug"]) == (
@@ -214,25 +224,83 @@ async def test_a_hosted_deployment_never_runs_on_a_host():
 
 
 @pytest.mark.parametrize(
-    ("source", "started_by", "expected"),
+    ("source", "expected"),
     [
-        ("user_message", None, True),
-        ("queued_messages", None, True),
-        ("manual_retry", None, True),
-        ("approval_resume", None, True),
-        ("person", None, True),
-        ("agent_wait", None, True),
-        ("wait_resume", None, True),
-        ("agent_wait", "SCHEDULE", False),
-        ("user_message", "SCHEDULE", True),
-        ("subagent", None, False),
-        (None, None, False),
-        ("something_new", None, False),
+        ("user_message", True),
+        ("queued_messages", True),
+        ("manual_retry", True),
+        ("approval_resume", True),
+        ("person", True),
+        ("subagent", False),
+        # A teammate's reply must not drive commands on the user's Mac.
+        ("message_replies", False),
+        (None, False),
+        ("something_new", False),
     ],
 )
-def test_which_run_sources_count_as_the_run_user(source, started_by, expected):
-    conversation = _conversation(**({"started_by": started_by} if started_by else {}))
+def test_which_run_sources_count_as_the_run_user(source, expected):
+    conversation = _conversation()
     assert triggered_by_run_user(conversation, _run(conversation, source)) is expected
+
+
+@pytest.mark.parametrize(
+    ("earlier", "expected"),
+    [
+        (["user_message"], True),
+        # Wakes chain: the first run that is not a wake decides.
+        (["agent_wait", "wait_resume", "manual_retry"], True),
+        (["message_replies"], False),
+        (["agent_wait", "message_replies", "user_message"], False),
+        (["something_new"], False),
+        ([], False),
+        (["agent_wait"], False),
+    ],
+)
+@pytest.mark.parametrize("source", ["agent_wait", "wait_resume"])
+def test_a_wake_qualifies_only_through_the_run_it_continues(source, earlier, expected):
+    conversation = _conversation()
+    run = _run(conversation, source)
+    assert triggered_by_run_user(conversation, run, earlier_sources=earlier) is expected
+    # Without the earlier runs, a wake never qualifies.
+    assert not triggered_by_run_user(conversation, run)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"source": "WORKFLOW_RUN", "workflow_run_id": str(uuid4())},
+        {"workflow_run_id": str(uuid4())},
+        {"source": "SCHEDULE", "started_by": "SCHEDULE"},
+        {"started_by": "SCHEDULE"},
+        {"source": "agent_surfaces"},
+        {"source": "notification"},
+    ],
+    ids=["workflow", "workflow-id-only", "schedule", "started-by", "surface", "notice"],
+)
+@pytest.mark.parametrize("source", ["user_message", "agent_wait", "wait_resume"])
+async def test_a_conversation_something_else_opened_never_runs_on_the_host(
+    metadata, source
+):
+    """A workflow's conversation waking from its wait, or a message typed into
+    it, is still the workflow's: no run in it executes on the Mac."""
+    facts = Facts()
+    conversation = _conversation(**metadata)
+
+    assert await _choose(facts, conversation=conversation, source=source) is None
+    assert facts.opened == []
+
+
+async def test_a_wake_of_the_users_own_work_runs_on_their_mac():
+    facts = Facts()
+    facts.earlier = ["agent_wait", "user_message"]
+    assert await _choose(facts, source="agent_wait") is not None
+
+
+async def test_a_wake_of_a_teammates_reply_stays_in_the_vm():
+    facts = Facts()
+    facts.earlier = ["message_replies", "user_message"]
+    assert await _choose(facts, source="agent_wait") is None
+    assert facts.opened == []
 
 
 def test_a_sub_agent_conversation_is_not_a_person_at_the_keyboard():
@@ -390,6 +458,22 @@ def test_an_agent_host_run_with_host_execution_is_not_sent_to_sandbox_tools():
     # The sections that are not about commands are the shared ones.
     assert "ends the turn and resumes later" in runtime
     assert "lemma_exec_command" in load_agent_host_runtime_prompt()
+
+
+@pytest.mark.parametrize("host_execution", [False, True])
+def test_both_browser_sections_send_the_agent_to_lemmas_browser_skill(
+    host_execution: bool,
+):
+    """A host agent may have a stale `browser` skill installed on the Mac, and
+    older copies told it to run a start step first. Both runtimes name Lemma's
+    copy and say that opening a page is what starts the browser."""
+    runtime = " ".join(
+        load_agent_host_runtime_prompt(host_execution=host_execution).split()
+    )
+
+    assert "`lemma_load_skill`" in runtime
+    assert "not a locally installed copy" in runtime
+    assert "starts the browser itself" in runtime
 
 
 # ------------------------------------------------------ recorded on the run

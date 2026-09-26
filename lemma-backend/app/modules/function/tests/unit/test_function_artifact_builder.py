@@ -136,3 +136,52 @@ async def test_builder_reports_truncated_stderr_on_a_nonzero_exit(
     message = str(excinfo.value)
     assert "final failure reason" in message
     assert "o" * 2100 not in message
+
+
+def test_archive_streams_members_with_writestr_identical_output(tmp_path) -> None:
+    """Members are streamed from disk, but the zip must equal the writestr form.
+
+    The revision hash is the archive's sha256, so any header drift (flags,
+    zip64 extra, timestamps) would silently change every revision's identity.
+    """
+    import hashlib
+
+    from app.modules.function.domain.entities import FunctionArtifactManifest
+
+    deps = tmp_path / "site-packages" / "pkg"
+    deps.mkdir(parents=True)
+    (deps / "big.bin").write_bytes(bytes(range(256)) * 12_000)
+    (deps / "empty").write_bytes(b"")
+    (deps / "__pycache__").mkdir()
+    (deps / "__pycache__" / "x.pyc").write_bytes(b"skip")
+    manifest = FunctionArtifactManifest(
+        runtime_abi=builder_module.RUNTIME_ABI,
+        builder_digest="digest",
+        dependency_lock=(),
+        input_model="Input",
+        output_model="Output",
+        entrypoint="increment",
+        config_model=None,
+        dependency_path="site-packages",
+    )
+
+    archive, digest = FunctionArtifactBuilder._archive(tmp_path, source(), manifest)
+
+    expected_buffer = BytesIO()
+    with zipfile.ZipFile(
+        expected_buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
+    ) as expected:
+        for relative in sorted(
+            [
+                "function.py",
+                "manifest.json",
+                "site-packages/pkg/big.bin",
+                "site-packages/pkg/empty",
+            ]
+        ):
+            info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            expected.writestr(info, (tmp_path / relative).read_bytes())
+    assert archive == expected_buffer.getvalue()
+    assert digest == hashlib.sha256(archive).hexdigest()

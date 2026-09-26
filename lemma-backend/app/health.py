@@ -6,6 +6,19 @@ they move as a router rather than as a factory.
 
 `include_in_schema=False` on every route, as before: these are for probes and
 for a person with `curl`, not for the published API.
+
+Probe contract:
+
+- Liveness (`/health/live`, `/livez`, `/health`) answers one question: is this
+  process's event loop wedged? It never checks a dependency. A database
+  outage must not make every replica restart at once; restarting cannot fix
+  it and turns a degraded service into an absent one.
+- Readiness (`/health/ready`) is where dependencies live: database, Redis,
+  SuperTokens, the worker, and the schema migration state. A failing
+  dependency takes the replica out of rotation; it does not kill it.
+  The migration check is not a per-probe query: `schema_migration_state()`
+  never re-asks once the schema is current and rate-limits its re-checks
+  while it is not.
 """
 
 from opentelemetry import metrics
@@ -13,7 +26,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
-from app.version import API_VERSION
+from app.core.exposure import local_relaxations_allowed
+from app.version import API_VERSION, MIN_CLI_VERSION
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.migration_state import schema_migration_state
 from app.core.observability.dependency_incident import DependencyIncident
@@ -68,6 +82,8 @@ def _liveness_payload() -> tuple[dict, int]:
         "status": "ok" if healthy else "unhealthy",
         "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
         "api_version": API_VERSION,
+        "min_cli_version": MIN_CLI_VERSION,
+        "release": settings.release_sha or None,
     }
     return payload, 200 if healthy else 503
 
@@ -215,7 +231,9 @@ async def health_capabilities():
         "environment": settings.environment,
         "llm_mode": settings.e2e_llm_mode,
     }
-    if settings.is_local_mode():
+    # Not while shared: a Desktop installation on the LAN or a tunnel runs as
+    # `local`, and its visitors are exactly the strangers described above.
+    if local_relaxations_allowed():
         configuration |= {
             "abuse_protection": settings.auth_abuse_protection_enabled,
             "altcha": settings.auth_altcha_enabled,

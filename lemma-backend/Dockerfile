@@ -76,6 +76,9 @@ FROM python:3.14-slim-bookworm
 # fails the build.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends libjemalloc2 \
+    && ln -s "$(find /usr/lib -name libjemalloc.so.2 | head -1)" /usr/local/lib/libjemalloc.so.2 \
+    && test -e /usr/local/lib/libjemalloc.so.2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -174,6 +177,15 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH=/app \
     COMPOSIO_CACHE_DIR=/app/.composio \
     HOME=/home/appuser
+
+# jemalloc instead of glibc malloc. glibc gives each thread its own arena and
+# rarely returns a fragmented one to the OS, so every transient spike (a large
+# bulk write, a document parse in the thread pool) became a permanent new RSS
+# floor -- the step pattern the API and worker pods showed for weeks. jemalloc
+# returns dirty pages on a timer. memory_sampler logs at startup whether the
+# preload took, since a missing library fails silently.
+ENV LD_PRELOAD=/usr/local/lib/libjemalloc.so.2 \
+    MALLOC_CONF=background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000,narenas:4
 
 # The source commit this image was built from.
 #

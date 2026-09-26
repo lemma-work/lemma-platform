@@ -44,6 +44,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             ),
         )
         return await self._send(
+            kind="phone_changed",
             to_email=to_email,
             subject="Your Lemma phone number changed",
             html_content=rendered.html,
@@ -60,6 +61,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
     async def _send(
         self,
         *,
+        kind: str,
         to_email: str,
         subject: str,
         html_content: str,
@@ -71,9 +73,15 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             return False
         try:
             sender = EmailSender.from_settings()
-        except EmailNotConfiguredError:
-            logger.debug(
-                "identity.email_adapter.skipping_identity_email_because_smtp.diagnostic"
+        except EmailNotConfiguredError as not_configured:
+            # Warning, not debug: at INFO nothing below it is even formatted,
+            # so an installation with no mail set up dropped every invitation
+            # and welcome in silence. The reason is the configuration's own
+            # sentence -- which variable is missing -- and carries no secret.
+            logger.warning(
+                "identity.email.not_sent",
+                reason=str(not_configured),
+                kind=kind,
             )
             return False
 
@@ -157,6 +165,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             ),
         )
         return await self._send(
+            kind="invitation",
             to_email=to_email,
             subject=f"Invitation to join {target_label}",
             html_content=rendered.html,
@@ -191,6 +200,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             ),
         )
         return await self._send(
+            kind="welcome",
             to_email=to_email,
             subject="Welcome to Lemma",
             html_content=rendered.html,
@@ -234,6 +244,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             ),
         )
         return await self._send(
+            kind="chat_signup_code",
             to_email=to_email,
             subject="Your Lemma verification code",
             html_content=rendered.html,
@@ -267,6 +278,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             ),
         )
         return await self._send(
+            kind="invitation_accepted",
             to_email=to_email,
             subject=f"You joined {display_organization_name}",
             html_content=rendered.html,
@@ -308,6 +320,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             ),
         )
         return await self._send(
+            kind="pod_join_request",
             to_email=to_email,
             subject=f"Request to join {display_pod_name}",
             html_content=rendered.html,

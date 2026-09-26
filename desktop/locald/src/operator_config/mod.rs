@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::provider_probe::{HttpModelProviderProbe, ModelProviderProbe};
+use crate::setup_probe::{HttpSetupProbe, SetupProbe};
 pub(crate) use lemma_private_file::{
     make_private as ensure_private_file, write_atomic as write_private_atomic,
 };
@@ -21,9 +22,10 @@ pub(crate) use lemma_private_file::{
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
 
-pub(crate) const SECRET_NAMES: [&str; 19] = [
+pub(crate) const SECRET_NAMES: [&str; 21] = [
     "ai.api_key",
     "integrations.deepgram_api_key",
+    "integrations.brave_search_api_key",
     "integrations.composio_api_key",
     "integrations.composio_webhook_secret",
     "integrations.google_client_secret",
@@ -41,11 +43,13 @@ pub(crate) const SECRET_NAMES: [&str; 19] = [
     "surfaces.whatsapp_app_secret",
     "surfaces.resend_api_key",
     "surfaces.resend_signing_secret",
+    "email.smtp_password",
 ];
 
 mod apply;
 mod backend_env;
 mod config;
+mod setup_test;
 mod validate;
 mod vault;
 
@@ -62,6 +66,7 @@ pub struct OperatorConfigStore {
     path: PathBuf,
     vault: Arc<dyn SecretVault>,
     provider_probe: Arc<dyn ModelProviderProbe>,
+    setup_probe: Arc<dyn SetupProbe>,
     config: Mutex<OperatorConfig>,
     writes: Mutex<()>,
 }
@@ -93,6 +98,20 @@ impl OperatorConfigStore {
     #[cfg(test)]
     fn load_with_vault(path: PathBuf, vault: Arc<dyn SecretVault>) -> io::Result<Arc<Self>> {
         Self::load_with_vault_reporting(path, vault, &mut Vec::new())
+    }
+
+    /// A store whose Test buttons reach a stand-in rather than the services.
+    #[cfg(test)]
+    fn load_testing(
+        path: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        provider_probe: Arc<dyn ModelProviderProbe>,
+        setup_probe: Arc<dyn SetupProbe>,
+    ) -> io::Result<Arc<Self>> {
+        let store = Self::load_healing(path, vault, provider_probe, &mut Vec::new())?;
+        let mut store = Arc::try_unwrap(store).unwrap_or_else(|_| unreachable!());
+        store.setup_probe = setup_probe;
+        Ok(Arc::new(store))
     }
 
     /// A store with both collaborators substituted, for tests that assert on
@@ -178,6 +197,9 @@ impl OperatorConfigStore {
             path,
             vault,
             provider_probe,
+            setup_probe: Arc::new(HttpSetupProbe {
+                endpoints: Default::default(),
+            }),
             config: Mutex::new(config),
             writes: Mutex::new(()),
         }))

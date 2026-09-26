@@ -126,20 +126,22 @@ async def test_the_first_account_gets_in_through_a_closed_door_and_nobody_after(
 # ---------------------------------------------------------------------------
 
 
-async def _invite(db_session: AsyncSession, organization_id: str, email: str) -> None:
-    db_session.add(
-        OrganizationInvitation(
-            email=email,
-            organization_id=UUID(organization_id),
-            role=OrganizationRole.ORG_MEMBER,
-            status=OrganizationInvitationStatus.PENDING,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
-        )
+async def _invite(db_session: AsyncSession, organization_id: str, email: str) -> UUID:
+    invitation = OrganizationInvitation(
+        email=email,
+        organization_id=UUID(organization_id),
+        role=OrganizationRole.ORG_MEMBER,
+        status=OrganizationInvitationStatus.PENDING,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
     )
+    db_session.add(invitation)
     await db_session.commit()
+    return invitation.id
 
 
-async def _sign_up(async_client: AsyncClient, email: str) -> dict[str, object]:
+async def _sign_up(
+    async_client: AsyncClient, email: str, *, invitation: UUID | None = None
+) -> dict[str, object]:
     response = await async_client.post(
         "/st/auth/signup",
         json={
@@ -148,6 +150,7 @@ async def _sign_up(async_client: AsyncClient, email: str) -> dict[str, object]:
                 {"id": "password", "value": "TestPassword@123"},
             ]
         },
+        headers={"x-lemma-invitation": str(invitation)} if invitation else {},
     )
     assert response.status_code == 200, response.text
     return response.json()
@@ -174,6 +177,13 @@ async def test_invite_only_refuses_a_stranger_and_admits_an_invited_address(
     admitted = await _sign_up(async_client, invited)
     assert admitted["status"] == "OK", admitted
 
+    # Signing up again is somebody who already has an account: told to sign
+    # in, in SuperTokens' own words, rather than to go and find an invitation.
+    again = await _sign_up(async_client, invited)
+    assert again["status"] == "FIELD_ERROR", again
+    fields = cast(list[dict[str, str]], again["formFields"])
+    assert [field["id"] for field in fields] == ["email"], again
+
     monkeypatch.setattr(identity_settings, "signup_mode", "closed")
     also_invited = f"invited-{uuid4().hex[:10]}@example.com"
     await _invite(db_session, fixed_test_org["id"], also_invited)
@@ -182,6 +192,35 @@ async def test_invite_only_refuses_a_stranger_and_admits_an_invited_address(
         "status": "SIGN_UP_NOT_ALLOWED",
         "reason": SignupNotAllowedError.CLOSED_MESSAGE,
     }
+
+
+async def test_without_email_verification_an_invitation_must_be_presented(
+    async_client: AsyncClient,
+    db_session: AsyncSession,
+    fixed_test_org: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shared Desktop installation: invite-only, and no address is ever proven.
+
+    Knowing an invitee's address used to be enough to take their invitation,
+    because the gate matched by address and nothing checked the address was
+    the signer's. The id from the invitation link is what they alone hold.
+    """
+    monkeypatch.setattr(identity_settings, "signup_mode", "invite_only")
+    monkeypatch.setattr(settings, "auth_email_verification_required", False)
+    invited = f"invited-{uuid4().hex[:10]}@example.com"
+    invitation = await _invite(db_session, fixed_test_org["id"], invited)
+
+    by_address = await _sign_up(async_client, invited)
+    assert by_address == {
+        "status": "SIGN_UP_NOT_ALLOWED",
+        "reason": SignupNotAllowedError.INVITE_ONLY_MESSAGE,
+    }
+    guessed = await _sign_up(async_client, invited, invitation=uuid4())
+    assert guessed["status"] == "SIGN_UP_NOT_ALLOWED", guessed
+
+    admitted = await _sign_up(async_client, invited, invitation=invitation)
+    assert admitted["status"] == "OK", admitted
 
 
 async def test_oauth_sign_up_obeys_the_mode_and_sign_in_does_not(

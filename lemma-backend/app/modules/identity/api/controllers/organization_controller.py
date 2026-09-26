@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import reject_delegated_workload_anywhere
 from app.core.authorization.service import AuthorizationDataService
+from app.core.email.email_sender import email_delivery_configured
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import slugify
 from app.modules.identity.api.dependencies import OrganizationServiceDep
@@ -360,7 +361,9 @@ async def invite_member(
         inviter_user_id=user.id,
     )
 
-    return OrganizationInvitationResponse.model_validate(invitation)
+    link = org_service.invitation_accept_url(invitation.id)
+    emailed = email_delivery_configured()
+    return OrganizationInvitationResponse.for_inviter(invitation, link, emailed)
 
 
 @router.get(
@@ -391,9 +394,11 @@ async def list_invitations(
         cursor=page_token,
     )
 
+    link, emailed = org_service.invitation_accept_url, email_delivery_configured()
     return OrganizationInvitationListResponse(
         items=[
-            OrganizationInvitationResponse.model_validate(inv) for inv in invitations
+            OrganizationInvitationResponse.for_inviter(inv, link(inv.id), emailed)
+            for inv in invitations
         ],
         limit=limit,
         next_page_token=next_cursor,

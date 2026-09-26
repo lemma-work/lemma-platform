@@ -79,6 +79,18 @@ Three properties this depends on:
 Profile configuration and the model are re-applied to a resumed session exactly
 as to a new one, so editing a profile still takes effect on the next turn.
 
+### Messages sent while a turn is running
+
+ACP's `session/prompt` is one request per turn and v1 cannot add to it. The
+Claude Code and Codex adapters both implement the `_session/steering` extension,
+advertised in `initialize`'s `_meta`; the probe publishes it as the harness
+capability `steering`, and Lemma sends `STEER_RUN` only to a harness that has
+it. The run's driver sends each steer once its prompt is out and reports a
+`steer_result` event saying whether the adapter `injected` it. Anything short of
+that -- an adapter without steering, a turn that ended first -- is reported as
+undelivered, and Lemma's follow-up turn carries the message instead. See
+[agent-host-events.md](../../docs/architecture/agent-host-events.md#steering).
+
 ## Certified integrations
 
 The built-in adapter pack is pinned in
@@ -226,9 +238,11 @@ state. The remote device must then be revoked from Lemma separately.
 
 ## Host execution
 
-On macOS the host can also run the installation owner's Lemma agent commands
-on this computer, inside a Seatbelt sandbox, instead of in the VM. It is off
-until the owner turns it on (Settings, or the CLI):
+On macOS the host can also run the paired user's Lemma agent commands on this
+computer, inside a Seatbelt sandbox, instead of in the VM -- for the pairing
+with the Lemma installed on this computer only (plain HTTP to loopback), never
+for a hosted workspace or anybody else's install. It is off until the user
+turns it on (Settings, or the CLI, which acts on that local pairing):
 
 ```bash
 lemma-agent-host host-execution enable        # needs macOS and /usr/bin/sandbox-exec
@@ -237,7 +251,9 @@ lemma-agent-host host-execution refresh-environment   # after changing ~/.zshrc 
 lemma-agent-host host-execution disable       # also stops everything running
 ```
 
-The setting is `host_execution` in `config.json`; a running host re-reads it
+The setting is `host_execution` on the local pairing's target in
+`config.json` (an older host-wide `host_execution` is moved there when the
+config is read); a running host re-reads it
 within five seconds and reports it on its next `control` frame. Lemma sends
 `op` frames on the link; the host starts one **exec-server** per open workspace
 -- this same binary, `lemma-agent-host exec-server`, under
@@ -424,13 +440,18 @@ synthetic ACP v1 exchanges, consumed by the same ACP SDK as installed providers.
 They do not replace backend endpoints or the chat UI with mocks. The streaming
 fixtures are also shared with the Rust process-level regressions.
 
-A version-1 scenario has `steps` and an optional `stopReason`. Each step has one
-action:
+A version-1 scenario has `steps`, an optional `stopReason`, and an optional
+`steering: true` that makes the agent advertise `_session/steering` in
+`initialize` the way the pinned Claude Code and Codex adapters do. Each step has
+one action:
 
 - `send`: an actual ACP JSON-RPC notification or permission request.
 - `await_permission`: wait for a response by request `id`, then replay the
   `selected[optionId]` or `cancelled` steps. Unknown responses fail the test.
 - `await_cancel`: require the host's `session/cancel` notification.
+- `await_steer`: wait for a `_session/steering` request and answer it with the
+  step's `outcome` (`injected` by default, or `startedNewTurn`); an injected
+  steer is echoed as agent text after the step's `echo` prefix.
 - `await_release`: wait until the test client has observed live output and
   creates the traffic log's sibling `.release` file.
 - `exit`: simulate a provider process failure with the given exit code.

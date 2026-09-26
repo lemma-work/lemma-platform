@@ -27,6 +27,7 @@ from uuid import UUID
 
 from opentelemetry import trace
 
+from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.errors import (
@@ -84,10 +85,12 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
     # must produce one provisioning attempt, not one per caller.
     _inflight: dict[tuple[int, UUID], asyncio.Task[SandboxHandle]] = {}
 
-    # A just-ensured sandbox, so sequential callers skip re-verifying it. The
-    # singleflight above only collapses concurrent ones, and a single shell tool
-    # call ensures three times: session, start_process, read_process_output.
-    _recent: dict[tuple[int, UUID], tuple[float, SandboxHandle]] = {}
+    # A just-ensured sandbox, so sequential callers skip re-verifying: the
+    # singleflight above only collapses concurrent ones, and one shell tool call
+    # ensures three times. Bounded; entries drop on an expired read or a forget.
+    _recent = BoundedDict[tuple[int, UUID], tuple[float, SandboxHandle]](
+        4096, name="workspace.recent_sandbox_handles"
+    )
 
     def __init__(
         self, *, provider, uow_factory, host_loopback=no_host_loopback
@@ -214,9 +217,6 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
         """
         for key in [key for key in self._recent if key[1] == sandbox_id]:
             self._recent.pop(key, None)
-
-    #: Kept as the private spelling used by release/destroy inside this class.
-    _forget_recent = forget
 
     async def _ensure_once(self, sandbox_id: UUID) -> SandboxHandle:
         """Provision, waiting out transient provider unavailability.
@@ -504,7 +504,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
 
     async def release(self, sandbox_id: UUID) -> None:
         """Stop compute, keep the disk. The next ensure resumes the sandbox."""
-        self._forget_recent(sandbox_id)
+        self.forget(sandbox_id)
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
@@ -528,7 +528,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             await uow.commit()
 
     async def destroy(self, sandbox_id: UUID, *, delete_storage: bool = False) -> None:
-        self._forget_recent(sandbox_id)
+        self.forget(sandbox_id)
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)

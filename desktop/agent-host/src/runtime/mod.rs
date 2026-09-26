@@ -20,7 +20,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
+use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver, Steer, SteerInbox};
 use crate::adapters::{AdapterManifest, AdapterWarmup, ResolvedAdapter};
 use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::journal::{AcceptOutcome, Checkpoint, Journal};
@@ -32,6 +32,7 @@ use crate::protocol::{
 };
 
 mod artifacts;
+mod awake;
 mod callbacks;
 mod commands;
 mod control;
@@ -109,6 +110,12 @@ pub(crate) const LOCAL_CONTROL_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) const REVOKED_REFUSALS: u32 = 3;
 pub(crate) const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const RETRY_MIN: Duration = Duration::from_millis(500);
+/// A superseded link that lasted this long was a hand-over, not a fight.
+pub(crate) const SUPERSEDED_SETTLED: Duration = Duration::from_secs(60);
+/// The longest a host waits before taking its link back from another one.
+pub(crate) const SUPERSEDED_MAX_WAIT: Duration = Duration::from_secs(5 * 60);
+/// When the back-and-forth is worth a warning in the log.
+pub(crate) const SUPERSEDED_WARN_AFTER: u32 = 3;
 pub(crate) const RETRY_MAX: Duration = Duration::from_secs(30);
 /// How far event delivery is allowed to back off, and why it is not `RETRY_MAX`.
 ///

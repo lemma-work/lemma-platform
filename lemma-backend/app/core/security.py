@@ -85,11 +85,21 @@ class _ReportThrottle:
 _skew_reports = _ReportThrottle(CLOCK_SKEW_REPORT_INTERVAL_SECONDS)
 
 
-def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
-    """The `exp` the presented access token claims, without verifying it.
+# How recently a token must have been minted for an hours-late expiry to point
+# at clock skew. A token minted long ago and expired long ago is just a stale
+# cookie from a browser that has not been back -- ordinary, and not the machine's
+# fault. Only "minted just now, already long expired" means the clocks disagree.
+CLOCK_SKEW_RECENT_ISSUE_SECONDS = 3600
+
+
+def _unverified_token_times(
+    connection: HTTPConnection,
+) -> tuple[float, float | None] | None:
+    """The `(exp, iat)` the presented access token claims, without verifying it.
 
     Only ever read after verification has already failed, and only to describe
-    the failure. Nothing is authorized on the strength of it.
+    the failure. Nothing is authorized on the strength of it. `None` when there
+    is no readable `exp`; `iat` is `None` when absent.
     """
     token = connection.cookies.get("sAccessToken")
     if not token:
@@ -107,17 +117,30 @@ def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
         claims = json.loads(base64.urlsafe_b64decode(payload))
     except binascii.Error, ValueError, UnicodeDecodeError:
         return None
-    expiry = claims.get("exp") if isinstance(claims, dict) else None
-    return float(expiry) if isinstance(expiry, (int, float)) else None
+    if not isinstance(claims, dict):
+        return None
+    expiry = claims.get("exp")
+    if not isinstance(expiry, (int, float)):
+        return None
+    issued = claims.get("iat")
+    return float(expiry), float(issued) if isinstance(issued, (int, float)) else None
 
 
 def _report_expired_access_token(connection: HTTPConnection) -> None:
     """Say so when a token is expired by more than an expiry explains."""
-    expiry = _unverified_token_expiry(connection)
-    if expiry is None:
+    times = _unverified_token_times(connection)
+    if times is None:
         return
-    expired_by_seconds = int(time.time() - expiry)
+    expiry, issued = times
+    now = time.time()
+    expired_by_seconds = int(now - expiry)
     if expired_by_seconds < CLOCK_SKEW_SUSPECT_SECONDS:
+        return
+    if issued is None or now - issued > CLOCK_SKEW_RECENT_ISSUE_SECONDS:
+        logger.debug(
+            "identity.session.access_token_stale.observed",
+            expired_by_seconds=expired_by_seconds,
+        )
         return
     if not _skew_reports.should_report(time.monotonic()):
         return

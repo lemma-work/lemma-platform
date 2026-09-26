@@ -6,6 +6,7 @@ mod cleanup;
 mod discovery;
 mod migration;
 mod sections;
+mod server_setup;
 mod validation;
 mod vault_cache;
 

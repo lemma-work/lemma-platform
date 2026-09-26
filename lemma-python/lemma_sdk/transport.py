@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import email.utils
 import json
 import time
@@ -90,6 +92,37 @@ def _refreshed_session(payload: object) -> tuple[str, str | None] | None:
         return None
     rotated = payload.get("refresh_token")
     return access_token, rotated if isinstance(rotated, str) and rotated else None
+
+
+#: Set by the server on requests from a ``lemma`` CLI older than it supports;
+#: the value is the minimum version. Only the CLI is ever sent it.
+_OUTDATED_HEADER = "x-lemma-client-outdated"
+# Set once the outdated-CLI notice has been printed: once per process.
+_outdated_notice = threading.Event()
+
+
+def _warn_if_outdated(headers: Any) -> None:
+    """Tell the person, once per process and on stderr, that the CLI is stale.
+
+    stderr so ``--json`` output on stdout stays parseable. Never raises: a
+    notice must not turn a successful call into a failure.
+    """
+    if _outdated_notice.is_set() or not headers:
+        return
+    try:
+        minimum = headers.get(_OUTDATED_HEADER)
+    except AttributeError:
+        return
+    if not minimum:
+        return
+    _outdated_notice.set()
+    import sys
+
+    current = _client_header().partition("/")[2] or "unknown"
+    sys.stderr.write(
+        f"lemma: this CLI ({current}) is older than the server supports "
+        f"({minimum}). Run `lemma update` or reinstall.\n"
+    )
 
 
 class LemmaTransport:
@@ -206,6 +239,7 @@ class LemmaTransport:
 
             status_code = int(response.status_code)
             headers = getattr(response, "headers", {}) or {}
+            _warn_if_outdated(headers)
             # Short-circuit order matters: reading the verb rebuilds the
             # request, so it only happens on the rare path where a retry is
             # otherwise on the table.
@@ -267,6 +301,7 @@ class LemmaTransport:
         except httpx.TransportError as exc:
             raise LemmaConnectionError(str(exc) or "Network request failed") from exc
 
+        _warn_if_outdated(response.headers)
         if response.status_code >= 400:
             content = response.read()
             response.close()
@@ -369,6 +404,7 @@ class LemmaTransport:
                 ) from exc
 
             status_code = response.status_code
+            _warn_if_outdated(response.headers)
             if _should_retry(status_code, method) and attempt < self._max_retries:
                 time.sleep(_retry_delay(attempt, response.headers.get("retry-after")))
                 attempt += 1

@@ -224,6 +224,16 @@
     color: var(--ink-3);
 }
 
+/* A code the person compares character by character against another screen,
+   so mono and a touch larger than the note around it. */
+.auth__code {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--ink);
+}
+
 /* What the server said about one input, under that input. A password rule
    printed at the top of a form is a rule somebody reads after failing it. */
 .field__said {

@@ -16,6 +16,9 @@ def _routers():
     from app.modules.identity.api.controllers.first_workspace_controller import (
         router as first_workspace,
     )
+    from app.modules.identity.api.controllers.email_delivery_controller import (
+        router as email_delivery,
+    )
     from app.modules.identity.api.controllers.auth_controller import router as auth
     from app.modules.identity.api.controllers.email_login_controller import (
         router as email_login,
@@ -35,6 +38,7 @@ def _routers():
         # path, and a router registered later cannot claim it back from a
         # parameterised route already matched above.
         first_workspace,
+        email_delivery,
         user,
         organization_navigation,
         organization,

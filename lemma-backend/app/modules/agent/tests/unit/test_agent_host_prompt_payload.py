@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import pytest
 from pydantic_ai.tools import RunContext
@@ -121,13 +121,14 @@ def _user_prompt(
     carries_history: bool,
     messages: list[Message] | None = None,
     resumed_tool_call_id: str | None = None,
+    agent_run_id: UUID | None = None,
 ) -> str:
     payload = run_start_payload(
         agent=_agent(),
         conversation=_conversation(),
         messages=_transcript() if messages is None else messages,
         ctx=_ctx(),
-        agent_run_id=uuid7(),
+        agent_run_id=agent_run_id or uuid7(),
         runtime_instructions="",
         carries_history=carries_history,
         resumed_tool_call_id=resumed_tool_call_id,
@@ -195,6 +196,72 @@ class TestWakingUp:
         assert "Friday." in prompt
 
 
+def _in_run(
+    sequence: int,
+    role: str,
+    text: str,
+    run_id: UUID,
+    metadata: dict[str, object] | None = None,
+) -> Message:
+    message = _message(sequence, role, text)
+    message.agent_run_id = run_id
+    message.metadata = metadata or {}
+    return message
+
+
+class TestQueuedMessages:
+    """A turn answers every message that is its own, not only the newest."""
+
+    async def test_a_followup_carries_everything_said_while_the_last_turn_worked(
+        self,
+    ):
+        """Three messages typed during a turn, and the follow-up answering them.
+
+        "The latest user message" answered the last of the three, and the agent
+        -- whose session never saw the other two -- had no idea they existed.
+        """
+        working, followup = uuid7(), uuid7()
+        queued = {"during_active_run": True, "steered_into_run": str(followup)}
+        messages = [
+            _in_run(1, MessageRole.USER, "Refactor the parser.", working),
+            _in_run(2, MessageRole.USER, "Keep the old API.", working, queued),
+            _in_run(3, MessageRole.USER, "And add tests.", working, queued),
+            _in_run(4, MessageRole.ASSISTANT, "Parser refactored.", working),
+        ]
+
+        prompt = _user_prompt(
+            carries_history=False, messages=messages, agent_run_id=followup
+        )
+
+        assert "Keep the old API." in prompt
+        assert "And add tests." in prompt
+        assert prompt.index("Keep the old API.") < prompt.index("And add tests.")
+        # The session already has the turn those were queued behind.
+        assert "Refactor the parser." not in prompt
+        assert "Parser refactored." not in prompt
+
+    async def test_a_message_that_joined_before_dispatch_goes_with_the_first(self):
+        """Two quick bubbles: the second joined the run before it went out."""
+        run = uuid7()
+        messages = [
+            _in_run(1, MessageRole.USER, "Here is the log:", run),
+            _in_run(
+                2,
+                MessageRole.USER,
+                "why does it fail?",
+                run,
+                {"during_active_run": True},
+            ),
+        ]
+
+        prompt = _user_prompt(
+            carries_history=False, messages=messages, agent_run_id=run
+        )
+
+        assert "Here is the log:" in prompt
+        assert "why does it fail?" in prompt
+
+
 class TestCredentials:
     async def test_the_payload_never_carries_runtime_credentials(self):
         """This payload's destination is somebody's laptop."""
@@ -227,9 +294,9 @@ class TestCredentials:
         delivered = host_agent_environment(
             {
                 "LEMMA_TOKEN": "a-delegated-session",
-                "LEMMA_BASE_URL": "http://app.127.0.0.1.sslip.io:53664",
-                "LEMMA_AUTH_URL": "http://app.127.0.0.1.sslip.io:53663/auth",
-                "LEMMA_HOST_ORIGIN": "http://app.127.0.0.1.sslip.io:53663",
+                "LEMMA_BASE_URL": "http://app.lemma.localhost:53664",
+                "LEMMA_AUTH_URL": "http://app.lemma.localhost:53663/auth",
+                "LEMMA_HOST_ORIGIN": "http://app.lemma.localhost:53663",
                 "LEMMA_USER_ID": "user-1",
                 "LEMMA_POD_ID": "pod-1",
                 "LEMMA_ORG_ID": "org-1",

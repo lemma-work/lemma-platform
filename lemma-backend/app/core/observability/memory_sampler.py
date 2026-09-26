@@ -23,8 +23,21 @@ stall sampler uses, and the logging pipeline already declines to truncate it.
 from __future__ import annotations
 
 import asyncio
+import gc
+import json
+import os
 import time
 import tracemalloc
+import weakref
+from collections import Counter
+from typing import TYPE_CHECKING
+
+from app.core.bounded import registered_collections
+
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
 
 from app.core.config import settings
 from app.core.log.log import get_logger
@@ -63,6 +76,106 @@ def resident_bytes() -> int | None:
         return int(fields[1]) * 4096  # resident pages
     except OSError, IndexError, ValueError:
         return None
+
+
+# Engines whose SQLAlchemy compiled-statement cache is worth watching. A cache
+# keyed by SQL text grows with every distinct statement; on the datastore engine
+# that was the leak behind the API's step-shaped growth (one ~15 MB entry per
+# bulk-write row count). Weak, so a disposed engine drops out by itself.
+_watched_engines: weakref.WeakValueDictionary[str, Engine] = (
+    weakref.WeakValueDictionary()
+)
+
+
+def watch_compiled_cache(name: str, engine: Engine | AsyncEngine) -> None:
+    """Report ``engine``'s compiled-statement cache size in memory snapshots."""
+    _watched_engines[name] = (
+        engine.sync_engine if isinstance(engine, AsyncEngine) else engine
+    )
+
+
+def compiled_cache_sizes() -> dict[str, int | None]:
+    """Entries per watched engine's compiled cache; None where it is disabled."""
+    sizes: dict[str, int | None] = {}
+    for name, engine in list(_watched_engines.items()):
+        cache = getattr(engine, "_compiled_cache", None)
+        sizes[name] = None if cache is None else len(cache)
+    return sizes
+
+
+def allocator_name() -> str | None:
+    """``jemalloc`` when the image's preload took, ``glibc`` otherwise.
+
+    The Dockerfile preloads jemalloc through ``LD_PRELOAD``; a wrong path fails
+    silently and the process quietly goes back to glibc's arenas, which is the
+    fragmentation this was meant to remove. None where /proc is unavailable.
+    """
+    try:
+        with open("/proc/self/maps", encoding="utf-8", errors="replace") as handle:
+            maps = handle.read()
+    except OSError:
+        return None
+    return "jemalloc" if "libjemalloc" in maps else "glibc"
+
+
+def _compact_collections() -> str:
+    """One line per non-empty named bounded collection, largest first."""
+    stats = [s for s in registered_collections() if s["entries"]]
+    stats.sort(key=lambda s: -int(s["entries"] or 0))
+    return ", ".join(
+        f"{s['name']}={s['entries']}/{s['maxsize']} ev={s['evictions']}" for s in stats
+    )
+
+
+def memory_snapshot(*, include_objects: bool = False) -> dict[str, object]:
+    """Everything this process can say about where its memory is.
+
+    ``include_objects`` walks every gc-tracked object to count them by type.
+    That is a full-heap pass -- hundreds of milliseconds on a grown process --
+    so only the on-demand debug endpoint asks for it, never the sampler.
+    """
+    rss = resident_bytes()
+    snapshot: dict[str, object] = {
+        "rss_mib": None if rss is None else round(rss / _BYTES_PER_MIB, 1),
+        "allocator": allocator_name(),
+        "gc_counts": list(gc.get_count()),
+        "bounded_collections": registered_collections(),
+        "compiled_caches": compiled_cache_sizes(),
+        "tracemalloc_top": top_allocation_sites(),
+    }
+    total_tasks, parked = parked_task_counts()
+    snapshot["tasks"] = {"total": total_tasks, "parked_mcp": parked}
+    if include_objects:
+        counts = Counter(type(obj).__qualname__ for obj in gc.get_objects())
+        snapshot["gc_objects_total"] = sum(counts.values())
+        snapshot["gc_objects_top"] = counts.most_common(40)
+    return snapshot
+
+
+# Touch this file inside a running container (``kubectl exec <pod> -- touch
+# /tmp/lemma-memory-dump.request``) and the sampler writes a full snapshot --
+# gc object counts included -- to the log and beside it as JSON on its next
+# tick. The pods forbid ptrace, so nothing can attach to a grown process; this
+# is how one is asked what it holds without an HTTP surface to secure.
+DUMP_REQUEST_PATH = "/tmp/lemma-memory-dump.request"
+DUMP_OUTPUT_PATH = "/tmp/lemma-memory-dump.json"
+
+
+def dump_if_requested(*, service_name: str) -> bool:
+    """Write a full snapshot when the request file exists; True if it did."""
+    try:
+        os.remove(DUMP_REQUEST_PATH)
+    except OSError:
+        return False
+    snapshot = memory_snapshot(include_objects=True)
+    rendered = json.dumps(snapshot, default=str)
+    try:
+        with open(DUMP_OUTPUT_PATH, "w", encoding="utf-8") as handle:
+            handle.write(rendered)
+    except OSError:
+        pass  # the log line below still carries it
+    logger.info("runtime.memory.dump", service=service_name, snapshot=rendered)
+    return True
 
 
 class MemoryFloorTracker:
@@ -127,6 +240,8 @@ class MemoryFloorTracker:
             threshold_mib=round(self._growth_warn_bytes / _BYTES_PER_MIB, 1),
             total_tasks=total_tasks,
             parked_mcp_tasks=parked_tasks,
+            bounded_collections=_compact_collections(),
+            compiled_caches=str(compiled_cache_sizes()),
             stack_frames=top_allocation_sites(),
         )
 
@@ -199,6 +314,12 @@ async def memory_sampler(*, service_name: str) -> None:
         # memory to record and are never read back out.
         tracemalloc.start(1)
 
+    logger.info(
+        "runtime.memory.allocator",
+        service=service_name,
+        allocator=allocator_name(),
+    )
+
     tracker = MemoryFloorTracker(
         growth_warn_bytes=settings.memory_growth_warn_mib * _BYTES_PER_MIB,
         service_name=service_name,
@@ -210,6 +331,9 @@ async def memory_sampler(*, service_name: str) -> None:
     seen = 0
     while True:
         await asyncio.sleep(interval)
+        # Cheap when there is no request (one failed unlink); the heap walk
+        # only happens when someone asked for it.
+        dump_if_requested(service_name=service_name)
         rss = resident_bytes()
         if rss is None:
             continue
@@ -218,3 +342,13 @@ async def memory_sampler(*, service_name: str) -> None:
         if seen >= samples_per_window:
             tracker.close_window()
             seen = 0
+            # One line per window (12 an hour): enough to chart what the
+            # process holds against its RSS without attaching to it -- the pods
+            # allow no ptrace, so this is the only view there is.
+            logger.info(
+                "runtime.memory.snapshot",
+                service=service_name,
+                rss_mib=round(rss / _BYTES_PER_MIB, 1),
+                bounded_collections=_compact_collections(),
+                compiled_caches=str(compiled_cache_sizes()),
+            )

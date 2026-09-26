@@ -35,6 +35,7 @@ mod outcome;
 mod permission;
 mod prompt;
 mod session_setup;
+mod steering;
 mod supervision;
 
 pub use driver::*;
@@ -43,6 +44,7 @@ pub use outcome::*;
 pub(crate) use permission::*;
 pub use prompt::*;
 pub(crate) use session_setup::*;
+pub use steering::*;
 pub(crate) use supervision::*;
 
 #[cfg(test)]
@@ -83,6 +85,9 @@ pub struct AcpRunRequest {
     /// How long the agent has to honour `session/cancel` before the run is
     /// failed and the supervisor falls back to killing the process tree.
     pub cancel_grace: Duration,
+    /// Messages Lemma wants added to the turn once it is running. See
+    /// `steering`; an inbox nobody sends on is a run that is never steered.
+    pub steer: SteerInbox,
 }
 
 #[derive(Clone, Debug)]
@@ -118,6 +123,9 @@ pub struct AcpProbeOutcome {
     /// and not from reading.
     #[serde(default)]
     pub auth_methods: Value,
+    /// Whether `initialize` advertised `_session/steering`.
+    #[serde(default)]
+    pub steering: bool,
 }
 
 pub trait AcpCallbacks: Send + Sync + 'static {

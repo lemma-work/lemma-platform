@@ -32,6 +32,7 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
+    ConversationStateError,
 )
 from app.modules.agent.domain.ports import (
     AgentRepository,
@@ -49,6 +50,9 @@ from app.modules.agent.services.workspace_location import (
 )
 from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.modules.usage.contracts.execution import UsageService
+from app.modules.agent.infrastructure.queued_message_queries import (
+    QueuedMessageRepository,
+)
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -478,6 +482,44 @@ class ConversationService:
             pod_id=pod_id,
             agent_name=agent_name,
         )
+
+    async def withdraw_queued_message(
+        self,
+        *,
+        conversation_id: UUID,
+        message_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+    ) -> None:
+        """Take back a message the agent has not seen yet.
+
+        Only a queued message nobody is carrying: once a run has claimed it, or
+        a steer is on its way to a host, it may already be in the agent's
+        context, and deleting it would leave the agent answering something the
+        person can no longer see. That is a conflict, not a missing message --
+        the client drew it as queued a moment ago and should redraw it.
+        """
+        conversation = validate_conversation_access(
+            await self.conversation_repository.get_conversation(conversation_id),
+            user_id=user_id,
+            pod_id=pod_id,
+        )
+        await require_agent_action(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=conversation.agent_id,
+            action=Permissions.AGENT_EXECUTE,
+        )
+        withdrawn = await QueuedMessageRepository(
+            self.uow
+        ).withdraw_queued_user_message(
+            conversation_id=conversation.id, message_id=message_id
+        )
+        if not withdrawn:
+            raise ConversationStateError(
+                "This message is no longer waiting: the agent already has it."
+            )
+        await self.uow.commit()
 
     @property
     def wait_repository(self) -> AgentConversationWaitRepository:

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Pod } from "@/data";
 import { HIRES, BLANK, blankHire, openersFor, profileFor, type Hire } from "@/data/hires";
 import { ASKS, typedAt } from "./asking";
-import { PlusIcon, ArrowRightIcon, BackIcon, CheckIcon, ChatIcon, LinkIcon, PeopleIcon } from "@/ui/icons";
+import { PlusIcon, ArrowRightIcon, BackIcon, CheckIcon, ChatIcon, KeyIcon, LinkIcon, PeopleIcon } from "@/ui/icons";
 import { characterForSeed, variantForCharacter } from "@/shell/character";
 import { CharacterPuppet } from "@/shell/character-puppet";
 import { formatIdentityIcon, identityVariantSeed } from "@/shell/resource-icon";
@@ -12,6 +12,11 @@ import { identityGenes } from "@/identity/seeded-identity";
 import { pressSlot } from "@/identity/palette";
 import { Modal } from "@/shell/modal";
 import { ProfileView } from "./profile";
+import { makeTeammate } from "./hiring-steps";
+import { modelSetupState } from "@/shell/runs-on-state";
+import { SetUpAiModelLink } from "@/desktop/set-up-on-this-mac";
+import { useThisMacAvailability } from "@/desktop/this-mac-settings";
+import { openSettings } from "@/desktop/open-settings";
 
 /** One candidate.
  *
@@ -117,11 +122,25 @@ export function HiringView({
     const [name, setName] = useState(initialJob?.name ?? "");
     const [job, setJob] = useState(initialJob?.job ?? "");
     const [done, setDone] = useState<string[]>([]);
-    const [made, setMade] = useState<{ id: string; name: string; variant: number } | null>(null);
+    const [made, setMade] = useState<{ id: string; name: string; variant: number; faceSaved: boolean } | null>(null);
     const [error, setError] = useState<string | null>(null);
+    /* The pod an attempt at this hire already created. Kept across a retry so
+       pressing Hire again finishes that teammate instead of making a second
+       one; cleared when somebody else is picked. */
+    const created = useRef<Pod | null>(null);
     const queryClient = useQueryClient();
 
+    /* Whether a new teammate here would have a model to answer with. Same
+       queries, and the same reading, as the "runs on" picker — a new pod
+       follows the organization default, so it has no choice of its own. */
+    const runtimes = useQuery({ queryKey: ["runtimes", orgId], queryFn: () => source.listRuntimes(orgId), staleTime: 5 * 60_000 });
+    const inherited = useQuery({ queryKey: ["default-runtime", orgId], queryFn: () => source.defaultRuntime(orgId), staleTime: 5 * 60_000 });
+    const needsModel = runtimes.isSuccess && inherited.isSuccess
+        ? modelSetupState(runtimes.data.filter((one) => !one.archived), inherited.data, null) !== null
+        : false;
+
     function consider(hire: Hire) {
+        created.current = null;
         setPicked(hire.id === "blank" ? blankHire() : hire);
         setName(hire.name);
         setError(null);
@@ -143,14 +162,17 @@ export function HiringView({
                belong in this list rather than behind a progress bar with
                nothing underneath it. */
             const about = picked.id === "blank" ? job.trim() : picked.about;
-            const pod = await source.createPod(orgId, clean, about);
-            setDone(["made"]);
-
+            const character = characterForSeed(picked.seed);
             /* The archetype fixes which character; this pod's own id supplies
                the seed, and the variant landing on that character is what gets
                stored — so the face you picked is the face it keeps. */
-            const variant = variantForCharacter(pod.id, characterForSeed(picked.seed)) ?? 0;
-            if (variant !== 0) await source.setPodIcon(pod.id, formatIdentityIcon(variant));
+            const { pod, variant, faceSaved } = await makeTeammate({
+                existing: created.current,
+                create: () => source.createPod(orgId, clean, about),
+                onCreated: (fresh) => { created.current = fresh; setDone(["made"]); },
+                variantFor: (podId) => variantForCharacter(podId, character) ?? 0,
+                saveFace: (podId, chosen) => source.setPodIcon(podId, formatIdentityIcon(chosen)),
+            });
             setDone(["made", "face"]);
 
             /* Refetch rather than invalidate, and do not wait on it. Awaiting
@@ -167,7 +189,8 @@ export function HiringView({
                 old ? (old.some((entry) => entry.id === pod.id) ? old : [...old, pod]) : old,
             );
             void queryClient.refetchQueries({ queryKey: ["pods"] });
-            setMade({ id: pod.id, name: pod.name, variant });
+            created.current = null;
+            setMade({ id: pod.id, name: pod.name, variant, faceSaved });
             setStage("met");
         } catch (problem) {
             setError(problem instanceof Error ? problem.message : "Couldn’t finish setting up this teammate. Check your teammate list before trying again.");
@@ -223,6 +246,8 @@ export function HiringView({
                     hire={picked}
                     job={job}
                     orgName={orgName}
+                    needsModel={needsModel}
+                    faceSaved={made.faceSaved}
                     onOpen={(move) => onHired(made.id, move)}
                 />
             )}
@@ -544,6 +569,8 @@ function Met({
     hire,
     job,
     orgName,
+    needsModel,
+    faceSaved,
     onOpen,
 }: {
     podId: string;
@@ -552,6 +579,10 @@ function Met({
     hire: Hire;
     job: string;
     orgName: string;
+    /** No model is set up for this organization, so they cannot reply yet. */
+    needsModel: boolean;
+    /** False when the face picked on the shelf could not be stored. */
+    faceSaved: boolean;
     onOpen: (move?: FirstMove) => void;
 }) {
     const [hello, setHello] = useState(1);
@@ -581,11 +612,24 @@ function Met({
                 />
             </span>
             <h2 className="met__name">Meet {name}</h2>
-            <p className="met__line">
-                {hire.id === "blank"
-                    ? name + " is ready to learn your work. Share the context for their first task."
-                    : name + " is ready. Start with a task, then work together to set up the sources, apps and schedules for the job."}
-            </p>
+            {/* "Ready" is a claim about the next message, and without a model
+                the next message fails. Hiring still goes through — the
+                teammate is real, and setting up a model is one step away. */}
+            {needsModel ? (
+                <div className="met__line met__needs" role="status">
+                    <p>{name} needs an AI model before they can reply.</p>
+                    <SetUpModel />
+                </div>
+            ) : (
+                <p className="met__line">
+                    {hire.id === "blank"
+                        ? name + " is ready to learn your work. Share the context for their first task."
+                        : name + " is ready. Start with a task, then work together to set up the sources, apps and schedules for the job."}
+                </p>
+            )}
+            {!faceSaved && (
+                <p className="met__note">Couldn’t save the face you picked, so {name} kept the one they came with.</p>
+            )}
 
             <div className="met__moves">
                 <section className="met__move">
@@ -632,5 +676,19 @@ function Met({
                 {openers.length > 0 ? "Or just open " + name : "Open " + name}
             </button>
         </div></div>
+    );
+}
+
+/** Where the model gets set up. Inside the Lemma app on the machine it runs
+ *  on, Server setup's AI model card; anywhere else — a browser, a hosted
+ *  workspace — the organization's Models page, which is where a provider key
+ *  is added there. */
+function SetUpModel() {
+    const availability = useThisMacAvailability();
+    if (availability === "shown") return <SetUpAiModelLink compact={false} />;
+    return (
+        <button type="button" className="btn" onClick={() => openSettings("models")}>
+            <KeyIcon size={13} /> Set up a model in Settings → Models
+        </button>
     );
 }

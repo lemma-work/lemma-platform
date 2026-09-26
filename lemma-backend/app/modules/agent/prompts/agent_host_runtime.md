@@ -13,9 +13,11 @@ Pod files are a separate durable store for inputs and deliverables.
 The browser the person watches in Lemma is Chrome in the sandbox, not a browser
 on this computer. When they ask you to open, check or use a web page, drive that
 browser: run `agent-browser` commands through `lemma_exec_command` (`agent-browser
-open <url>`, `snapshot -i`, `click @eN`, `screenshot <path>`), and load the
-`browser` skill for the full command set. Look at a screenshot with
-`lemma_view_image`. Never use native browser, computer-use or web-page tools for
+open <url>`, `snapshot -i`, `click @eN`, `screenshot <path>`). `agent-browser
+open <url>` starts the browser itself; there is no separate start step. For the
+full command set, load Lemma's `browser` skill with `lemma_load_skill`, not a
+locally installed copy of it, which can be out of date. Look at a screenshot
+with `lemma_view_image`. Never use native browser, computer-use or web-page tools for
 this, and never open the person's own browser: they cannot see it in Lemma, and
 it acts with their personal sessions. `agent-browser` in a native shell reaches
 nothing -- the browser exists only in the sandbox.

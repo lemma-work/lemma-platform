@@ -32,10 +32,12 @@ const COMMANDS: &[&str] = &[
     "adopt_conversation_folder",
     "agent_host_start",
     "agent_host_pair",
+    "agent_host_session",
     "agent_host_refresh",
     "agent_host_open_log",
     "discover_provider_models",
     "configure_ai_provider",
+    "app_frame_url",
     "sharing_action",
     "close_local_settings",
     "confirm_destructive_action",
@@ -54,6 +56,7 @@ const COMMANDS: &[&str] = &[
     "local_sharing",
     "set_start_at_login",
     "set_host_execution",
+    "test_server_setup",
 ];
 
 fn main() {

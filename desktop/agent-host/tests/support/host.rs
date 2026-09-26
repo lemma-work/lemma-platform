@@ -34,7 +34,7 @@ impl HostProcess {
         .await
         .unwrap();
         lemma_agent_host::config::HostConfig {
-            host_execution: false,
+            legacy_host_execution: false,
             installation_id,
             targets: vec![target],
             max_runs: 1,
@@ -139,7 +139,7 @@ impl InProcessHost {
         .await
         .unwrap();
         let config = lemma_agent_host::config::HostConfig {
-            host_execution: false,
+            legacy_host_execution: false,
             installation_id,
             targets: vec![target],
             max_runs: 1,

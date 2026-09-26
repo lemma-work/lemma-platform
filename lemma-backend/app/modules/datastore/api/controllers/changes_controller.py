@@ -50,7 +50,7 @@ from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from app.core.pubsub.subscriber import RedisStreamReader
 from app.modules.datastore.api.dependencies import build_table_service
-from app.modules.datastore.domain.errors import DatastoreDomainError
+from app.core.domain.errors import DomainError
 from app.modules.datastore.domain.events import DATASTORE_EVENTS_STREAM
 
 logger = get_logger(__name__)
@@ -253,7 +253,12 @@ async def datastore_changes_ws(
                     Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id)
                 )
                 allowed_tables = await _visible_table_names(table_service, pod_id, ctx)
-    except DatastoreDomainError as exc:
+    # The base class, not DatastoreDomainError: a missing pod permission is
+    # raised by core authorization as a plain 403 DomainError. Caught as the
+    # datastore subclass only, it fell to the 1011 branch below -- a close
+    # every client retries -- so a browser watching a pod it cannot access
+    # reconnected forever instead of stopping on 4403.
+    except DomainError as exc:
         await websocket.close(
             code=_close_code_for(exc.status_code),
             reason=exc.message,

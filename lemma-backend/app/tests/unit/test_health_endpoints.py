@@ -7,6 +7,8 @@ import time
 from unittest.mock import AsyncMock
 
 import pytest
+
+from app.core.exposure import exposure_settings
 from fastapi.testclient import TestClient
 
 import app.app as appmod
@@ -84,6 +86,21 @@ def test_liveness_states_the_api_version(client):
 
     for path in ("/health/live", "/livez", "/health"):
         assert client.get(path).json()["api_version"] == API_VERSION, path
+
+
+def test_liveness_states_min_cli_version_and_release(client, monkeypatch):
+    from app.version import MIN_CLI_VERSION
+
+    monkeypatch.setattr(healthmod.settings, "release_sha", "a" * 40)
+    for path in ("/health/live", "/livez", "/health"):
+        body = client.get(path).json()
+        assert body["min_cli_version"] == MIN_CLI_VERSION, path
+        assert body["release"] == "a" * 40, path
+
+
+def test_liveness_release_is_null_when_unset(client, monkeypatch):
+    monkeypatch.setattr(healthmod.settings, "release_sha", "")
+    assert client.get("/health").json()["release"] is None
 
 
 def test_liveness_returns_503_when_loop_wedged(client, monkeypatch):
@@ -307,6 +324,25 @@ def test_capability_health_withholds_security_posture_off_a_local_machine(
         f"{environment} disclosed its security posture: "
         f"{sorted(withheld & set(configuration))}"
     )
+
+
+def test_capability_health_withholds_security_posture_while_desktop_is_shared(
+    client, monkeypatch
+):
+    """A shared Desktop installation is `local`, and its visitors are strangers.
+
+    Sharing on the LAN or through a tunnel keeps `ENVIRONMENT=local`, so the
+    rule above let anyone who found the address read which abuse controls
+    were off. `INSTALLATION_SHARED` is what says otherwise.
+    """
+    monkeypatch.setattr(appmod.settings, "environment", "local")
+    monkeypatch.setattr(exposure_settings, "installation_shared", True)
+
+    configuration = client.get("/health/capabilities").json()["configuration"]
+
+    assert configuration["environment"] == "local"
+    assert "abuse_protection" not in configuration
+    assert "private_network_targets" not in configuration
 
 
 def test_ready_returns_503_when_db_down(client, monkeypatch):

@@ -37,11 +37,12 @@ def test_it_is_still_a_validation_error() -> None:
     assert error.status_code == 422
 
 
-def test_a_local_runtime_without_polling_is_refused_and_says_which_setting(
+def test_a_local_runtime_without_polling_is_refused_in_the_products_terms(
     monkeypatch,
 ) -> None:
-    """The message names the setting, because "requires a public HTTPS URL" left
-    the reader to discover three env vars by reading the code."""
+    """The message is the API response, and the person reading it cannot set an
+    environment variable -- on Desktop they turn on sharing. So it names the
+    platform and the fix, and no setting; the error code is what tooling keys on."""
     from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.services import surface_service as module
 
@@ -58,7 +59,10 @@ def test_a_local_runtime_without_polling_is_refused_and_says_which_setting(
     )
     with pytest.raises(AgentSurfaceRuntimeUnsupportedError) as caught:
         service._validate_runtime_supported(surface)
-    assert "ENABLE_RESEND_POLLING_MODE" in str(caught.value)
+    message = str(caught.value)
+    assert message.startswith("Email needs a public link")
+    assert "ENABLE_" not in message
+    assert "HTTPS" not in message
 
 
 def test_polling_mode_makes_a_local_email_surface_supported(monkeypatch) -> None:

@@ -45,6 +45,10 @@ class PromotionResult:
     schema_changed: bool
 
 
+# `function_revisions.revision_number` is a Postgres INTEGER.
+_MAX_REVISION_NUMBER = 2**31 - 1
+
+
 def parse_revision_ref(ref: str) -> tuple[int | None, str | None]:
     """Split a revision reference into ``(revision_number, hash_prefix)``.
 
@@ -55,7 +59,16 @@ def parse_revision_ref(ref: str) -> tuple[int | None, str | None]:
     if not candidate:
         raise FunctionRevisionNotFoundError("No revision was named")
     numeric = candidate[1:] if candidate[0] in {"v", "r"} else candidate
-    if numeric.isdigit():
+    # A hash prefix can be all decimal digits. Past the column's range it can
+    # only be a prefix: as a number it fails the query ("value out of int32
+    # range") before the prefix fallback in the lookup ever runs.
+    # Length first: `int()` of a digit string past Python's conversion limit
+    # (4300 digits) raises instead of returning a number to compare.
+    if (
+        numeric.isdigit()
+        and len(numeric) <= len(str(_MAX_REVISION_NUMBER))
+        and int(numeric) <= _MAX_REVISION_NUMBER
+    ):
         return int(numeric), None
     return None, candidate.removeprefix("sha256:")
 

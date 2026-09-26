@@ -4,10 +4,12 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Invitation, Org } from "@/data";
-import { ArrowRightIcon, GlobeIcon, LockIcon, OrgIcon, UserIcon } from "@/ui/icons";
+import { ArrowRightIcon, GlobeIcon, LockIcon, OrgIcon, RefreshIcon, UserIcon, WarningIcon } from "@/ui/icons";
 import { LemmaLogo } from "@/ui/icons";
 import { AI_MATES, ORG } from "@/copy";
-import { canOpenToDomain, domainOf, personalNameFor, teamNameFor } from "./arrival";
+import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, personalNameFor, teamNameFor } from "./arrival";
+import { isLocalDeployment } from "@/site/config";
+import { capitalised, useThisComputer } from "@/desktop/this-computer";
 
 /** The first morning.
  *
@@ -67,6 +69,14 @@ export function ArrivalView({
     };
 
     const waiting = invitations.isPending || suggested.isPending;
+    /* A list that could not be read is not an empty one. Treating it as none
+       offered "make one" as the answer to somebody who may well have been
+       invited — the exact mistake this screen exists to avoid. */
+    const unread = invitations.isError || suggested.isError;
+    const retry = () => {
+        if (invitations.isError) void invitations.refetch();
+        if (suggested.isError) void suggested.refetch();
+    };
     const invites = useMemo(() => invitations.data ?? [], [invitations.data]);
     /* An organization that already invited you is not also a suggestion. Both
        endpoints can name it — one because somebody put your name down, the
@@ -95,7 +105,7 @@ export function ArrivalView({
                             organization the point, when the organization is
                             the thing in the way of the point, and "a place to
                             work" could have meant a desk. */}
-                        <h1>{invites.length || matches.length ? "You’ve been invited" : "Who will you be working with?"}</h1>
+                        <h1>{arrivalHeading(invites.length, matches.length)}</h1>
                         <p className="arrival__lede">
                             {invites.length
                                 ? "Accept an invitation to join your team."
@@ -103,6 +113,20 @@ export function ArrivalView({
                                     ? "You can join with your verified work email."
                                     : "This decides who else can see your " + AI_MATES + " and the work they do."}
                         </p>
+
+                        {unread && (
+                            <div className="arrival__problem arrival__unread" role="alert">
+                                <WarningIcon size={15} />
+                                <span>Couldn’t check for invitations.</span>
+                                <button
+                                    className="btn"
+                                    onClick={retry}
+                                    disabled={invitations.isFetching || suggested.isFetching}
+                                >
+                                    <RefreshIcon size={14} /> {invitations.isFetching || suggested.isFetching ? "Checking…" : "Retry"}
+                                </button>
+                            </div>
+                        )}
 
                         {invites.map((invite) => (
                             <InviteRow
@@ -141,7 +165,7 @@ export function ArrivalView({
                                with the same weight as "join the one your
                                colleagues are already in" is how an org ends up
                                with one person in it. */
-                            secondary={invites.length > 0 || matches.length > 0}
+                            secondary={invites.length > 0 || matches.length > 0 || unread}
                             busy={busy === "make"}
                             onMake={(wanted) => go("make", () => source.createOrg(wanted))}
                         />
@@ -221,10 +245,13 @@ function MakeOne({
 }) {
     const domain = domainOf(email);
     const canOpen = canOpenToDomain(email);
+    const local = isLocalDeployment();
+    const machine = capitalised(useThisComputer());
     const suggestion = useMemo(() => teamNameFor(email), [email]);
     /* A company address is a reason to expect colleagues; a Gmail one is not.
-       It is a preselection, not an answer. */
-    const [kind, setKind] = useState<"personal" | "team">(canOpen ? "team" : "personal");
+       It is a preselection, not an answer — and on a local install, where
+       nobody else can reach this server yet, it is "just me". */
+    const [kind, setKind] = useState<"personal" | "team">(() => defaultOrgKind(email, local));
     const [called, setCalled] = useState(suggestion);
     const [open, setOpen] = useState(!secondary);
 
@@ -263,6 +290,13 @@ function MakeOne({
                     <span>Create AI teammates for your team and choose who can access each one.</span>
                 </button>
             </div>
+
+            {local && (
+                <p className="arrival__note">
+                    <LockIcon size={14} />
+                    <span>Others can join once you turn on Sharing in {machine}.</span>
+                </p>
+            )}
 
             {kind === "team" ? (
                 <>

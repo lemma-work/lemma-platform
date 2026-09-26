@@ -9,7 +9,8 @@ server's half of it. Three things run per connection:
   land in the order they were sent. ``mcp`` and ``interaction_wait`` are handed
   to their own tasks instead: a tool call can take minutes and a parked
   interaction can take half an hour, and neither may stop the heartbeat that
-  follows it from being read.
+  follows it from being read. Each kind has its own slots; a named
+  ``tools/call`` outlives the socket (``agent_host_link_tool_calls``).
 * the **pusher** listens on the host's notice channel -- one subscription for
   the life of the socket -- and reads the command queue on every poke and every
   5 seconds, pushing what it finds. It also hears ``superseded`` and ``revoked``
@@ -48,7 +49,6 @@ from app.modules.agent.domain.agent_host_link import (
     CommandsBody,
     ControlBody,
     ControlOkBody,
-    ErrorBody,
     EventsOkBody,
     HarnessesBody,
     HarnessesOkBody,
@@ -100,6 +100,7 @@ from app.modules.agent.services.agent_host_link_wire import (
     SentCommands,
     bearer_secret,
     event_error,
+    log_host_reported_error,
     parse_control_items,
     validation_summary,
 )
@@ -114,9 +115,12 @@ PUSH_FLOOR_SECONDS = 5.0
 #: socket. The host de-duplicates by ``command_id`` anyway; this only stops the
 #: 5-second floor re-sending the same START_RUN twelve times a minute.
 RESEND_AFTER_SECONDS = 30.0
-#: Tool calls and parked waits one socket may have in flight at once. A host
-#: runs a handful of agents; past this it is a runaway, not a workload.
+#: Tool calls one socket may have in flight at once. A host runs a handful of
+#: agents; past this it is a runaway, not a workload.
 MAX_IN_FLIGHT_REQUESTS = 64
+#: Parked ``interaction_wait``s, apart from tool calls: a wait holds its slot
+#: as long as a person takes, and must never starve the runs still working.
+MAX_PARKED_WAITS = 64
 #: The spread a draining replica gives its hosts before they reconnect, so a
 #: deploy does not bring every host back in the same instant.
 RECONNECT_SPREAD_MS = 5_000
@@ -141,6 +145,7 @@ class AgentHostLinkSession:
         push_floor_seconds: float | None = None,
         resend_after_seconds: float | None = None,
         max_in_flight: int | None = None,
+        max_waits: int | None = None,
     ) -> None:
         # The tunables are read here rather than bound as defaults, so a test
         # that shortens the module's floor reaches the session the route builds.
@@ -157,6 +162,9 @@ class AgentHostLinkSession:
         )
         self._in_flight = asyncio.Semaphore(
             MAX_IN_FLIGHT_REQUESTS if max_in_flight is None else max_in_flight
+        )
+        self._waits = asyncio.Semaphore(
+            MAX_PARKED_WAITS if max_waits is None else max_waits
         )
         self._stopped = asyncio.Event()
         self._writer = LinkWriter(socket, on_lost=self._stopped.set)
@@ -299,13 +307,15 @@ class AgentHostLinkSession:
             HostFrameType.HARNESSES: self._harnesses,
             HostFrameType.REVOKE: self._revoke,
         }
-        concurrent: dict[str, Callable[[LinkFrame], Awaitable[None]]] = {
-            HostFrameType.MCP: self._mcp_request,
-            HostFrameType.INTERACTION_WAIT: self._interaction_wait,
+        concurrent: dict[
+            str, tuple[Callable[[LinkFrame], Awaitable[None]], asyncio.Semaphore]
+        ] = {
+            HostFrameType.MCP: (self._mcp_request, self._in_flight),
+            HostFrameType.INTERACTION_WAIT: (self._interaction_wait, self._waits),
         }
         if frame.type in in_order:
             await self._supervised(frame, in_order[frame.type])
-        elif frame.type in concurrent and self._in_flight.locked():
+        elif frame.type in concurrent and concurrent[frame.type][1].locked():
             # Refused rather than queued: waiting for a slot here would stop
             # the reader, and with it the heartbeat that renews every lease.
             await self._writer.send_error(
@@ -315,13 +325,14 @@ class AgentHostLinkSession:
                 retryable=True,
             )
         elif frame.type in concurrent:
-            await self._in_flight.acquire()
-            self._spawn(frame, concurrent[frame.type])
+            handler, slots = concurrent[frame.type]
+            await slots.acquire()
+            self._spawn(frame, handler, slots)
         elif frame.type == HostFrameType.OP_OK:
             self.ops.answer_ok(frame)
         elif frame.type == HostFrameType.ERROR:
             if not self.ops.answer_error(frame):
-                self._host_reported(frame)
+                log_host_reported_error(frame, host_id=self.host_id)
         elif frame.type in {HostFrameType.PAIR, HostFrameType.HELLO}:
             raise LinkClose(
                 LinkCloseCode.PROTOCOL_VIOLATION, f"{frame.type} after hello"
@@ -332,13 +343,16 @@ class AgentHostLinkSession:
             )
 
     def _spawn(
-        self, frame: LinkFrame, handler: Callable[[LinkFrame], Awaitable[None]]
+        self,
+        frame: LinkFrame,
+        handler: Callable[[LinkFrame], Awaitable[None]],
+        slots: asyncio.Semaphore,
     ) -> None:
         async def answer() -> None:
             try:
                 await self._supervised(frame, handler)
             finally:
-                self._in_flight.release()
+                slots.release()
 
         task = asyncio.ensure_future(answer())
         self._tasks.add(task)
@@ -354,18 +368,6 @@ class AgentHostLinkSession:
             stop=self.stop,
             host_id=self.host_id,
             connection_id=self.connection_id,
-        )
-
-    def _host_reported(self, frame: LinkFrame) -> None:
-        try:
-            body = ErrorBody.model_validate(frame.body)
-        except ValidationError:
-            body = ErrorBody(code="UNREADABLE")
-        logger.warning(
-            "agent.agent_host_link.host_reported_error",
-            host_id=str(self.host_id) if self.host_id else None,
-            error_code=body.code,
-            error_message=body.message[:512],
         )
 
     # --------------------------------------------------- the opening frame

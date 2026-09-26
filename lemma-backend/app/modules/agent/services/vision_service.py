@@ -94,7 +94,19 @@ def configured_vision_model_name() -> str | None:
 
 
 def vision_delegate_available() -> bool:
-    return configured_vision_model_name() is not None
+    """Whether a text-only run may hand images to a separate vision model.
+
+    Without a system model the delegate comes from the workspace -- whichever
+    of its providers declares a model that reads images -- and that can only be
+    known by asking the database, which this synchronous check cannot. So it
+    answers yes, and the tool reports plainly when no such model turns up.
+    """
+    # Imported here for the same reason as `_resolve_vision_model`'s imports.
+    from app.modules.agent.services.runtime_system_profiles import (
+        system_profile_configured,
+    )
+
+    return configured_vision_model_name() is not None or not system_profile_configured()
 
 
 async def _resolve_vision_model(
@@ -107,10 +119,6 @@ async def _resolve_vision_model(
     an opaque provider error several layers down.
     """
     model_name = configured_vision_model_name()
-    if not model_name:
-        raise VisionUnavailableError(
-            "No vision model is configured (set VISION_MODEL)."
-        )
 
     # AgentRuntimeConfig lives in the shared runtime module (re-exported by
     # value_objects); only RuntimeModelCapability is defined in runtime_profiles.
@@ -123,6 +131,43 @@ async def _resolve_vision_model(
         DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
         AgentRuntimeProfileService,
     )
+    from app.modules.agent.services.runtime_system_profiles import (
+        system_profile_configured,
+    )
+    from app.modules.agent.services.workspace_model_fallback import (
+        resolve_workspace_runtime,
+    )
+
+    if not system_profile_configured():
+        # No system model to point VISION_MODEL at: use a workspace model that
+        # declares it reads images, and only such a model.
+        workspace = await resolve_workspace_runtime(
+            organization_id=organization_id,
+            user_id=user_id,
+            model_name=model_name,
+            require_vision=True,
+        )
+        if workspace is None:
+            raise VisionUnavailableError(
+                "No AI model that reads images is set up. Mark a model as "
+                "reading images on one of the workspace's providers in "
+                "Settings \u2192 Models."
+            )
+        workspace_model = pydantic_ai_model_from_runtime_profile(
+            runtime_profile=workspace.public_snapshot(),
+            runtime_credentials=workspace.credentials,
+        )
+        if workspace_model is None:
+            raise VisionUnavailableError(
+                "The workspace's image-reading model could not be built from "
+                "its provider settings."
+            )
+        return workspace_model
+
+    if not model_name:
+        raise VisionUnavailableError(
+            "No vision model is configured (set VISION_MODEL)."
+        )
 
     resolved = await AgentRuntimeProfileService().resolve(
         runtime=AgentRuntimeConfig(

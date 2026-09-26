@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from uuid import UUID
 
 from opentelemetry import trace
 
+from app.core.bounded import BoundedDict
 from app.core.request_context import create_inherited_task
 
 tracer = trace.get_tracer(__name__)
@@ -66,8 +66,10 @@ class FunctionRuntimeEndpointCache:
         self._refresh_headroom_seconds = refresh_headroom_seconds
         self._clock = clock
         self._wall_clock = wall_clock
-        self._entries: OrderedDict[FunctionRuntimeEndpointKey, _CachedEndpoint] = (
-            OrderedDict()
+        # Touched explicitly on a valid hit only (re-set moves a key to the
+        # end), so ``touch_on_get`` stays off.
+        self._entries: BoundedDict[FunctionRuntimeEndpointKey, _CachedEndpoint] = (
+            BoundedDict(max_entries, name="function.runtime_endpoints")
         )
         self._inflight: dict[
             FunctionRuntimeEndpointKey,
@@ -190,7 +192,7 @@ class FunctionRuntimeEndpointCache:
             key,
             required_valid_until,
         ):
-            self._entries.move_to_end(key)
+            self._entries[key] = cached
             return cached.endpoint
         self._entries.pop(key, None)
         return None
@@ -259,9 +261,6 @@ class FunctionRuntimeEndpointCache:
                     endpoint=endpoint,
                     valid_until=self._clock() + cache_seconds,
                 )
-                self._entries.move_to_end(key)
-                while len(self._entries) > self._max_entries:
-                    self._entries.popitem(last=False)
             return endpoint
         finally:
             async with self._lock:

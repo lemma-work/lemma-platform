@@ -197,6 +197,14 @@ class TestPdfPagesRespectTheMode:
         _pdf_services(monkeypatch)
         monkeypatch.delenv("VISION_MODEL", raising=False)
         monkeypatch.setattr(agent_settings, "vision_model", None)
+        # A deployment with its own model and no VISION_MODEL: the message
+        # names the setting. Without a system model the workspace is asked
+        # instead (test_workspace_model_fallback.py).
+        monkeypatch.setattr(
+            "app.modules.agent.services.runtime_system_profiles."
+            "system_profile_configured",
+            lambda: True,
+        )
 
         result = await pod_files.pod_view_document_pages(
             _ctx(AgentVisionMode.UNAVAILABLE),

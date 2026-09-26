@@ -185,14 +185,11 @@ def test_build_bulk_statements_covers_every_record_once():
 
     statements = build_bulk_statements(ctx, ordered_keys, records, "")
 
-    expected_chunks = list(chunk_for_parameter_limit(records, len(ordered_keys)))
-    assert len(statements) == len(expected_chunks)
-    assert [
-        bulk_returning_statement(ctx, ordered_keys, chunk, "")
-        for chunk in expected_chunks
-    ] == statements
-    total = sum(len(params) // len(ordered_keys) for _sql, params in statements)
-    assert total == len(records), "a bulk write would have written a subset"
+    assert len({sql for sql, _params in statements}) == 1
+    written = [value for _sql, params in statements for value in params["c0"]]
+    assert written == [record["id"] for record in records], (
+        "a bulk write would have written a subset"
+    )
 
 
 class TestListingOrderIsAlwaysTotal:

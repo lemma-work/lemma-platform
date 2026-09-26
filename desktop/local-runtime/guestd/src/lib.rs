@@ -28,6 +28,7 @@ mod host_control;
 // Served only on Linux, by the resident guest; the relay is tested everywhere.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod host_loopback;
+mod image_check;
 mod images;
 mod network;
 mod protocol;
@@ -55,12 +56,16 @@ pub use host_loopback::HOST_LOOPBACK_VSOCK_PORT;
 pub(crate) use host_loopback::{
     host_loopback_directory, prepare_relay_directory, HOST_LOOPBACK_MOUNT,
 };
+pub(crate) use image_check::*;
 pub(crate) use images::*;
 pub(crate) use network::*;
 pub use protocol::{handle_reader, GuestError, GuestRequest, GuestResponse};
 pub(crate) use pull_claim::*;
 pub(crate) use readiness::*;
 pub(crate) use sandbox::*;
+// Reached through `GuestService::ensure_network_isolation`; the rule sets
+// themselves are named directly only by the tests.
+#[cfg(test)]
 pub(crate) use sandbox_firewall::*;
 pub(crate) use sandbox_inspect::*;
 pub(crate) use sandbox_run::*;

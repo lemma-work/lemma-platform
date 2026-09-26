@@ -14,7 +14,7 @@ both are claims about I/O that no amount of reading the code can settle.
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
+from app.core.bounded import BoundedDict
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -94,7 +94,7 @@ class _Service(WorkspaceRuntimeBundleMixin):
         # Per-instance, so one test's remembered install cannot leak into the
         # next through the class-level cache the real service shares. Same
         # type as the subject's: the eviction it does is ordering-dependent.
-        self._installed_bundles = OrderedDict()
+        self._installed_bundles = BoundedDict(_REMEMBERED_SANDBOXES)
         self._inflight_bundles = {}
 
     def _get_manager_client(self) -> _Client:

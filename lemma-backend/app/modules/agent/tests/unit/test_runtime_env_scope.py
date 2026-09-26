@@ -63,3 +63,21 @@ def test_the_environment_still_wins_over_the_file(dotenv_holding, monkeypatch):
     runtime_system_profiles._load_runtime_env()
 
     assert os.environ["LEMMA_OPENAI_DEFAULT_MODEL"] == "set-by-the-operator"
+
+
+def test_a_desktop_install_reads_no_env_file(dotenv_holding, monkeypatch):
+    """Desktop's model setup is what the app wrote, not a checkout's `.env`.
+
+    A source-mode run of the app sits inside a repository whose `.env` names a
+    developer's provider keys; reading it made "no model set up yet"
+    impossible to reach on that machine.
+    """
+    monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        runtime_system_profiles, "is_desktop_installation", lambda: True
+    )
+    dotenv_holding(LEMMA_OPENAI_API_KEY="from-a-developer-env-file")
+
+    runtime_system_profiles._load_runtime_env()
+
+    assert os.environ.get("LEMMA_OPENAI_API_KEY") is None

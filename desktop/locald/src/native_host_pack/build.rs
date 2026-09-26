@@ -132,6 +132,21 @@ pub(crate) fn build(
         ]
         .concat(),
     ));
+    // The key ALTCHA challenges are signed with, and the one sign-in counters
+    // are keyed by. Always rendered, although ALTCHA is off until sharing turns
+    // it on: the sharing overlay only flips switches, and a switch flipped with
+    // no key behind it made the challenge endpoint refuse -- so the moment an
+    // installation was shared, nobody could sign in or sign up at all. Derived
+    // like the keys above, so it lives in the same owner-only secret file and
+    // is stable across restarts, which keeps a challenge issued just before a
+    // restart answerable just after it.
+    let altcha_key = URL_SAFE.encode(Sha256::digest(
+        [
+            secrets.installation_secret.as_bytes(),
+            b"lemma-auth-altcha-hmac-v1",
+        ]
+        .concat(),
+    ));
     let frontend_port = ports.frontend_port;
     let backend_port = ports.backend_port;
     let runtime_instance_id = random_hex(16)?;
@@ -314,27 +329,14 @@ pub(crate) fn build(
         // Removable once no install can still be carrying v0.7.0 cookies.
         ("SESSION_COOKIE_OLDER_DOMAIN", String::new()),
         // The other half, and only meaningful together with the domain above:
-        // apps call the API through their own origin so the request is
-        // first-party. Off by default in the backend, because on a real domain
-        // an app subdomain and the API host are already same-site and this
-        // would widen the refresh cookie for nothing.
-        // Only where the app host and the API host are *not* already same-site.
-        //
-        // On `*.localhost` a browser can derive no registrable domain, so those
-        // two are different sites and an app's call to the API is third-party --
-        // hence the same-origin `/_lemma` door, and the widened refresh cookie
-        // that makes it work. On a real registrable domain they are same-site
-        // already and the door buys nothing but a whole-API alias on the origin
-        // that renders user-authored HTML.
-        (
-            "APP_API_VIA_APP_ORIGIN",
-            if domain.frames_carry_cookies() {
-                "false"
-            } else {
-                "true"
-            }
-            .to_owned(),
-        ),
+        // apps call the API through their own origin (`/_lemma`) so the
+        // request is first-party. Always on here: WebKit derives no site
+        // wider than the host from `*.localhost`, so an app host calling the
+        // API host is cross-site. It is also what makes the macOS alias work
+        // with no special case -- the SDK's `apiUrl` is relative, so an app
+        // framed through `app.lemma.localhost:<alias port>` calls that same
+        // origin, which forwards to the backend like every other request.
+        ("APP_API_VIA_APP_ORIGIN", "true".to_owned()),
         (
             "APP_BASE_DOMAIN",
             format!("{}:{backend_port}", domain.apps_domain()),
@@ -347,8 +349,12 @@ pub(crate) fn build(
             "LOCAL_AGENT_RUNTIME_CONFIG_PATH",
             path_text(&state.join("agent-runtime.json"))?,
         ),
-        ("EMAIL_TRANSPORT", "filesystem".to_owned()),
-        ("EMAIL_OUTPUT_DIR", path_text(&state.join("emails"))?),
+        // SMTP with no server named is "email is not set up", which the
+        // backend says as such: invitations offer their link, and a password
+        // reset or sign-in code is refused with a sentence instead of written
+        // to a spool nobody reads. Server setup's Email card fills in the
+        // server (`email_environment`).
+        ("EMAIL_TRANSPORT", "smtp".to_owned()),
         ("AUTH_EMAIL_VERIFICATION_REQUIRED", "false".to_owned()),
         (
             "AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED",
@@ -357,6 +363,7 @@ pub(crate) fn build(
         ("AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED", "false".to_owned()),
         ("AUTH_ABUSE_PROTECTION_ENABLED", "false".to_owned()),
         ("AUTH_ALTCHA_ENABLED", "false".to_owned()),
+        ("AUTH_ALTCHA_HMAC_KEY", altcha_key),
         ("DESKTOP_AUTH_CREATE_LIMIT", "0".to_owned()),
         (
             "AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED",
@@ -399,9 +406,6 @@ pub(crate) fn build(
     // on the next start, which is why that is part of the catalog's stamp
     // rather than the release alone.
     let migrations_fingerprint = migrations_fingerprint(&bindings.backend_dir);
-    let backend_env_has_composio_key = backend_env
-        .get("COMPOSIO_API_KEY")
-        .is_some_and(|value| !value.trim().is_empty());
 
     let frontend_env = BTreeMap::from([
         ("NODE_ENV", bindings.node_env.to_owned()),
@@ -484,8 +488,12 @@ pub(crate) fn build(
                 "command": argv(&bindings.python, &["-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]),
                 "cwd": path_text(&backend_dir)?,
                 "env": backend_env.clone(),
-                "timeout_seconds": 300,
-                "max_attempts": 5,
+                // A ceiling, not a budget: the migration is ended early only
+                // after fifteen minutes with nothing in its log. Five minutes
+                // flat killed long migrations mid-way and retried them.
+                "timeout_seconds": 3600,
+                "idle_timeout_seconds": 900,
+                "max_attempts": 3,
                 "retry_backoff_seconds": 3,
                 // Migrations ship inside the pack, so the pack's identity is
                 // exactly what decides whether there is anything new to apply.
@@ -526,14 +534,13 @@ pub(crate) fn build(
                 "max_attempts": 1,
                 "retry_backoff_seconds": 0,
                 "optional": true,
-                // The pack, plus whether a Composio key is present. The second
-                // half preserves the behaviour the comment above describes: a
-                // user who adds a key later gets the Composio apps on the very
-                // next start, because adding one changes this stamp.
-                "stamp": setup_stamp(&[
-                    &release_version,
-                    if backend_env_has_composio_key { "composio" } else { "native-only" },
-                ]),
+                // The pack, plus the Composio key the import actually runs
+                // with. The key comes from the operator configuration, applied
+                // over this environment at run time, so it is named here and
+                // read there (`stamp_env`): saving, changing or removing one
+                // changes the stamp, and the next run imports again.
+                "stamp": setup_stamp(&[&release_version]),
+                "stamp_env": ["COMPOSIO_API_KEY"],
             },
         ],
         "services": [

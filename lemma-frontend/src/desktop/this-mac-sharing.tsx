@@ -2,15 +2,14 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CopyIcon, PeopleIcon } from "@/ui/icons";
+import { CopyIcon, PeopleIcon, WarningIcon } from "@/ui/icons";
 import { copyText } from "./clipboard";
 import { openSettings } from "./open-settings";
 import { useThisComputer } from "./this-computer";
 import {
     enablePayload, friendlyError, joinPolicyCopy, readSharing, setupCommands, sharingBusy,
     sharingModeConsequence, sharingModeName, thisMac,
-    type Sharing, type SharingMode, type ThisMacSnapshot, type TunnelProvider, type WhoCanJoin,
-} from "./this-mac";
+    type Sharing, type SharingMode, type ThisMacSnapshot, type TunnelProvider, type WhoCanJoin, sharingPhaseWords } from "./this-mac";
 import { SettingRow, useThisMacSnapshot } from "./this-mac-settings";
 
 /** Who can reach this installation, and who may make an account once they do.
@@ -26,6 +25,8 @@ import { SettingRow, useThisMacSnapshot } from "./this-mac-settings";
  *  happens rather than after. */
 
 const MODES: SharingMode[] = ["this_computer", "local_network", "public"];
+
+const NOT_READY = "Available once Lemma has finished starting.";
 
 export function ThisMacSharing() {
     const noun = useThisComputer();
@@ -49,7 +50,7 @@ export function ThisMacSharing() {
             thisMac.sharing(action, payload),
         onSuccess: (answer, { action }) => {
             if (answer?.cancelled) {
-                setSaid({ text: "Nothing changed. Lemma is still private to " + noun + "." });
+                setSaid({ text: action === "enable" ? "Nothing changed. Lemma is still private to " + noun + "." : "Nothing changed." });
                 return;
             }
             if (action === "preflight") {
@@ -157,8 +158,13 @@ export function ThisMacSharing() {
                 />
             )}
             {sharing.last_error && <p className="thismac-said thismac-said--bad" role="alert">{sharing.last_error}</p>}
+            {/* The daemon's own cautions about the address in use -- said,
+                not parsed and dropped. */}
+            {active !== "this_computer" && sharing.warnings.map((warning) => (
+                <p className="thismac-said" key={warning}><WarningIcon size={12} /> {warning}</p>
+            ))}
             {busy && active === "this_computer" && !act.isPending && (
-                <p className="thismac-said" role="status">{sharing.phase.replace(/_/g, " ")}…</p>
+                <p className="thismac-said" role="status">{sharingPhaseWords(sharing.phase)}…</p>
             )}
 
             {selected === "local_network" && active !== "local_network" && (
@@ -170,7 +176,7 @@ export function ThisMacSharing() {
                         </select>
                     </SettingRow>
                     <div className="modal__acts thismac-acts">
-                        <button className="btn btn--primary" disabled={busy || !stackReady} onClick={() => enable("lan")}>Share on this network</button>
+                        <button className="btn btn--primary" disabled={busy || !stackReady} title={!stackReady ? NOT_READY : undefined} onClick={() => enable("lan")}>Share on this network</button>
                     </div>
                 </>
             )}
@@ -220,7 +226,7 @@ export function ThisMacSharing() {
                     )}
                     <p className="thismac-said">{sharing.apps_limitation}</p>
                     <div className="modal__acts thismac-acts">
-                        <button className="btn btn--primary" disabled={busy || !stackReady || !providerReady} onClick={() => enable("public")}>
+                        <button className="btn btn--primary" disabled={busy || !stackReady || !providerReady} title={!stackReady ? NOT_READY : undefined} onClick={() => enable("public")}>
                             Create public link…
                         </button>
                     </div>
@@ -230,6 +236,8 @@ export function ThisMacSharing() {
                 <p className="thismac-foot">
                     {!stackReady ? "Lemma has to be running before it can be shared. " : ""}
                     Sharing moves this window to the shared address, where these settings open from the menu bar.
+                    Lemma restarts its server to do it, so anything an agent is running right now stops, and
+                    open calls end.
                 </p>
             )}
 

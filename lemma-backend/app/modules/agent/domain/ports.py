@@ -242,7 +242,13 @@ class ConversationRepository(Protocol):
 
     async def count_queued_user_messages(self, agent_run_id: UUID) -> int: ...
 
-    async def claim_queued_user_messages(self, agent_run_id: UUID) -> list[Message]: ...
+    async def claim_queued_user_messages(
+        self,
+        agent_run_id: UUID,
+        *,
+        into_run_id: UUID | None = None,
+        message_ids: list[UUID] | None = None,
+    ) -> list[Message]: ...
 
     async def list_agent_runs_with_messages(
         self,

@@ -22,6 +22,7 @@ from composio import Composio
 from composio.exceptions import ComposioError as ComposioSDKError
 from composio_client import ComposioError as ComposioTransportError
 
+from app.core.config import reveal_secret
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.connectors.config import connector_settings
@@ -108,7 +109,8 @@ def _webhook_verification_client() -> Composio:
     "caching goes through Redis": this is a client handle, not data.
     """
     return Composio(
-        api_key=connector_settings.composio_api_key or "webhook-verification"
+        api_key=reveal_secret(connector_settings.composio_api_key)
+        or "webhook-verification"
     )
 
 
@@ -124,7 +126,7 @@ async def verify_webhook(payload: str, headers: dict[str, object]) -> dict[str, 
     verify, and the webhook controller already says so once for every source
     rather than each one writing the same handler.
     """
-    secret = connector_settings.composio_webhook_secret
+    secret = reveal_secret(connector_settings.composio_webhook_secret)
     if not secret:
         raise ConnectorInfrastructureError(
             "Connector webhook verification is not configured"

@@ -27,21 +27,27 @@ impl AgentHostSupervisor {
     /// Consume a one-time pairing code, then start serving that workspace.
     ///
     /// The desktop app mints the code with the user's own session and hands it
-    /// straight here, so pairing never requires a terminal.
-    pub fn pair(&self, url: &str, pairing_code: &str, name: &str) -> io::Result<()> {
+    /// straight here, so pairing never requires a terminal. The code goes to
+    /// the host on stdin, not its argument list, where any process on this
+    /// computer could read it while the exchange runs. `reenable` is the
+    /// person asking, in the app, to turn back on a computer they removed.
+    pub fn pair(
+        &self,
+        url: &str,
+        pairing_code: &str,
+        name: &str,
+        reenable: bool,
+    ) -> io::Result<()> {
         if url.trim().is_empty() || pairing_code.trim().is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "pairing needs a workspace URL and a pairing code",
             ));
         }
-        let mut arguments = vec![
-            "connect",
-            "--url",
-            url.trim(),
-            "--pairing-code",
-            pairing_code.trim(),
-        ];
+        let mut arguments = vec!["connect", "--url", url.trim(), "--pairing-code-stdin"];
+        if reenable {
+            arguments.push("--reenable");
+        }
         let name = name.trim();
         if !name.is_empty() {
             arguments.extend_from_slice(&["--name", name]);
@@ -51,9 +57,27 @@ impl AgentHostSupervisor {
         if is_loopback_http(url.trim()) {
             arguments.push("--allow-insecure-http");
         }
-        self.run_cli(&arguments)?;
+        self.run_cli_with_input(&arguments, Some(pairing_code.trim()))?;
         self.invalidate_details();
         self.start()
+    }
+
+    /// Tell the host who is signed in to the app on `url` -- `None` when
+    /// nobody is -- so pairings of anybody else take no new work meanwhile.
+    pub fn session(&self, url: &str, user_id: Option<&str>) -> io::Result<()> {
+        if url.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the session needs the workspace URL",
+            ));
+        }
+        let mut arguments = vec!["session", "--url", url.trim()];
+        if let Some(user) = user_id.map(str::trim).filter(|user| !user.is_empty()) {
+            arguments.extend_from_slice(&["--user", user]);
+        }
+        self.run_cli(&arguments)?;
+        self.invalidate_details();
+        Ok(())
     }
 
     /// Revoke this computer's identity remotely, then stop serving.
@@ -88,12 +112,34 @@ impl AgentHostSupervisor {
 
 /// The owner's host-execution setting, straight from the host's config.
 /// Absent means off, which is the host's own default.
+///
+/// The switch is the local pairing's -- the Lemma installed on this computer,
+/// paired over loopback HTTP -- and is on while that pairing's person is the
+/// one signed in (`session_paused` is off). An older host kept one host-wide
+/// `host_execution`, which the host moves onto its local pairing; read the
+/// same way here until it has.
 pub(crate) fn host_execution_enabled(config_path: &Path) -> bool {
-    std::fs::read_to_string(config_path)
+    let Some(config) = std::fs::read_to_string(config_path)
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .and_then(|config| config.get("host_execution").and_then(Value::as_bool))
-        .unwrap_or(false)
+    else {
+        return false;
+    };
+    let legacy = config.get("host_execution").and_then(Value::as_bool) == Some(true);
+    config
+        .get("targets")
+        .and_then(Value::as_array)
+        .is_some_and(|targets| {
+            targets.iter().any(|target| {
+                let flag = |key: &str| target.get(key).and_then(Value::as_bool) == Some(true);
+                let local = flag("allow_insecure_http")
+                    && target
+                        .get("base_url")
+                        .and_then(Value::as_str)
+                        .is_some_and(|url| url.starts_with("http://"));
+                local && (flag("host_execution") || legacy) && !flag("session_paused")
+            })
+        })
 }
 
 /// Whether this computer can confine commands at all: the Agent Host's own

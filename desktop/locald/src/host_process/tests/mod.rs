@@ -6,6 +6,7 @@ mod gating;
 mod ledger;
 mod logs;
 mod manifest;
+mod migrations;
 mod ports;
 mod process_groups;
 mod restart;
@@ -96,8 +97,10 @@ pub(super) fn setup(id: &str) -> HostSetupSpec {
         timeout_seconds: 10,
         max_attempts: 3,
         retry_backoff_seconds: 0,
+        idle_timeout_seconds: None,
         optional: false,
         stamp: None,
+        stamp_env: Vec::new(),
     }
 }
 

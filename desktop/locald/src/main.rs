@@ -74,8 +74,15 @@ fn run() -> io::Result<()> {
 /// the user was told only "lemma-locald exited during startup (exit status: 1)".
 fn serve() -> io::Result<()> {
     let paths = LocalPaths::discover()?;
+    // Before `Daemon::new`, which reclaims processes from the ledgers: a second
+    // daemon that did that first would stop the first daemon's services and
+    // only then discover, at bind, that it was the second.
+    let _instance = lemma_locald::instance_lock::claim(&paths.root)?;
     match Daemon::new(paths.clone()) {
-        Ok(daemon) => daemon.serve(),
+        Ok(daemon) => {
+            daemon.stop_on_termination_signals()?;
+            daemon.serve()
+        }
         Err(error) => {
             let _ = lemma_locald::protocol::append_bounded_daemon_log(
                 &paths.log,

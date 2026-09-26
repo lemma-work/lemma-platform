@@ -176,3 +176,33 @@ async def test_counting_reads_no_operation_rows(
     assert not any("input_schema" in statement for statement in reads), (
         f"the count is hydrating rows again: {reads}"
     )
+
+
+async def test_a_removed_kind_does_not_use_up_a_limited_listing(
+    db_session, connector_test_connector
+):
+    """The operation list takes a bare ``limit`` with no cursor. A row of a
+    removed kind sorted first used to be fetched, then skipped, leaving the
+    caller one result short with no way to page to it."""
+    connector_id = connector_test_connector.id
+    db_session.add(
+        ConnectorOperation(
+            id=f"{connector_id}:aaa_stale",
+            connector_id=connector_id,
+            kind="package",
+            name="aaa_stale",
+            display_name="aaa_stale",
+            description="a row whose kind no longer exists",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            execution={"kind": "package"},
+        )
+    )
+    await db_session.commit()
+    await _seed_catalog(db_session, connector_id, ["bbb_live"])
+
+    listed = await ConnectorOperationRepository(_uow(db_session)).list_by_connector(
+        connector_id, limit=1
+    )
+
+    assert [operation.name for operation in listed] == ["bbb_live"]

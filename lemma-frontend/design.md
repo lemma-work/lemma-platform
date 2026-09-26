@@ -95,16 +95,22 @@ of it renders nothing in a browser.
   `lemma:open-settings` with `{ section }`; the shell opens Settings there.
   An optional `focus` names the part to open at (Advanced's Google form).
 - **This Mac settings.** A third group in Settings, after You and the
-  organization, named with the machine's noun: Overview, Coding agents,
-  Sharing, Updates, Advanced. Only in the app's own window, on a local
+  organization, named with the machine's noun: Overview, Server setup,
+  Coding agents, Sharing, Updates. Only in the app's own window, on a local
   install, on this installation's loopback origin (`thisMacAvailability` in
   `this-mac.ts`); a browser or a shared-address visitor sees no hint of it. Each
   setting is one row — its name, one line of what it does, its control — in
   `.thismac-row`; choices reuse `.theme__modes`, lists `.mgroup`/`.mrow`,
   fields `.field`/`.check`. No environment-variable names in copy.
+- **Server setup is by capability.** One card per thing the server can do,
+  with its status (Ready, Needs setup, Optional), one line of what it
+  unlocks, a Test, and where to get its keys. Only the AI model is required;
+  a first-run checklist offers the rest once, and Settings shows a dot beside
+  Server setup while the model is missing.
 - **Configure at the point of need.** A connector or channel missing this
   computer's OAuth app or bot shows "Set up on this Mac"
-  (`SetUpOnThisMac`), only while that form is empty. Models suggests local
+  (`SetUpOnThisMac`), only while that form is empty; a run that failed for
+  want of a model offers `SetUpAiModelLink`. Models suggests local
   model servers it found answering, rather than asking for a URL.
 - **Consent belongs to the shell.** Public sharing, repair and update install
   are confirmed natively by the shell; the page never draws its own "are you

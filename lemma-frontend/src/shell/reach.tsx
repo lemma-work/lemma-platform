@@ -1,15 +1,17 @@
 import { fields } from "@/connect/schema";
 import { surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
 import { SurfaceCredentials } from "./surface-credentials";
-import { SurfaceGuide } from "./surface-setup";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
-import { credentialFormForChannel } from "@/desktop/this-mac";
+import { credentialFormForChannel, oauthFormForConnector } from "@/desktop/this-mac";
+import { useThisMacAvailability } from "@/desktop/this-mac-settings";
+import { useThisComputer } from "@/desktop/this-computer";
+import { openSettings } from "@/desktop/open-settings";
 import { SurfaceManage } from "./surface-manage";
 import { LoadingIndicator } from "@/ui/loading";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
-import { accountName, bestAccount, blurbOf, isCredentialConflict } from "@/data";
+import { accountName, bestAccount, blurbOf, isCredentialConflict, needsSharing, unavailableNote } from "@/data";
 import type { AccountConnect, Connectable, ConnectorAccount, GuidedSetup, Pod, Surface } from "@/data";
 import { BackIcon, CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
 import { KnownSender } from "@/session/mobile-verification";
@@ -85,6 +87,31 @@ const COST: Record<string, string> = {
     account: "Needs your account",
     unavailable: "Not available",
 };
+
+/** The cost line, where the generic one would mislead. A Telegram bot of
+ *  somebody's own is a token they paste, not an account they sign in to. */
+function costOf(entry: Connectable): string {
+    if (entry.effort === "account" && entry.platform === "TELEGRAM" && fields(entry.credentialSchema).length > 0) {
+        return "Needs a bot token";
+    }
+    return COST[entry.effort];
+}
+
+/** The machine's name when the reader is at it and can fix things there, and
+ *  null anywhere else — see `unavailableNote`. */
+function useFixableHere(): string | null {
+    const machine = useThisComputer();
+    return useThisMacAvailability() === "shown" ? machine : null;
+}
+
+/** What to press for a channel that cannot connect here: Sharing for the ones
+ *  that need a public link, the channel's own form for the rest. Nothing at
+ *  all off this machine, where neither is the reader's to change. */
+function Unblock({ entry, machine }: { entry: Connectable; machine: string | null }) {
+    if (!needsSharing(entry)) return <SetUpOnThisMac form={credentialFormForChannel(entry.platform)} force />;
+    if (!machine) return null;
+    return <button className="btn" onClick={() => openSettings("this-mac-sharing")}>Open Sharing</button>;
+}
 
 function ConnectedRow({ surface, pod, onDrop, onManage }: { surface: Surface; pod: Pod; onDrop: (name: string) => void; onManage: () => void }) {
     const [confirming, setConfirming] = useState(false);
@@ -477,7 +504,11 @@ function ConnectRow({
     const held = entry.effort === "account" ? bestAccount(accounts, entry.connectorId) : null;
     const ready = elsewhere ? null : held;
     const guiding = entry.effort === "guided";
-    const note = why(entry);
+    const machine = useFixableHere();
+    /* Said instead of the blurb: what the channel is matters less than why it
+       cannot be had here, and what to do about it. */
+    const blocked = unavailableNote(entry, machine);
+    const note = blocked ?? why(entry);
 
     return (
         <li className="reachrow" data-effort={entry.effort}>
@@ -505,7 +536,7 @@ function ConnectRow({
                     also the ONLY way for a second teammate, since a connected
                     account is claimable once per organization. */}
                 {/* Not when the row's own button already says exactly this. */}
-                {(entry.guided || OWN_BOT.has(entry.platform) || fields(entry.credentialSchema).length > 0) && !guiding && !(elsewhere && held) && (
+                {(entry.guided || OWN_BOT.has(entry.platform) || fields(entry.credentialSchema).length > 0) && !guiding && !(elsewhere && held) && !blocked && (
                     <button className="linkish reachrow__alt" onClick={() => onFocus(entry)}>
                         Use your own account or bot
                     </button>
@@ -513,9 +544,11 @@ function ConnectRow({
             </div>
             <div className="reachrow__acts">
                 <span className="reachrow__cost" data-effort={ready ? "instant" : entry.effort}>
-                    {ready ? COST.instant : elsewhere && held ? "Already in use" : COST[entry.effort]}
+                    {ready ? COST.instant : elsewhere && held ? "Already in use" : costOf(entry)}
                 </span>
-                {guiding ? (
+                {blocked ? (
+                    <Unblock entry={entry} machine={machine} />
+                ) : guiding ? (
                     <button className="btn" onClick={() => onFocus(entry)}>Set up</button>
                 ) : entry.effort === "instant" ? (
                     <button className="btn btn--primary" disabled={busy} onClick={() => onConnect(entry.platform)}>
@@ -565,6 +598,9 @@ function Focused({
     const [custom, setCustom] = useState(false);
     const hasCredentials = fields(entry.credentialSchema).length > 0;
     const [ownBot, setOwnBot] = useState(canOwn && (Boolean(taken) || entry.effort === "unavailable"));
+    const machine = useFixableHere();
+    /* The connector's sign-in app, where it would come from this computer. */
+    const appForm = oauthFormForConnector(entry.connectorId) ?? credentialFormForChannel(entry.platform);
 
     return (
         <div className="focused">
@@ -574,10 +610,15 @@ function Focused({
 
             <span className="focused__logo"><ChannelIcon platform={entry.platform} size={38} /></span>
 
-            <SurfaceGuide podId={pod.id} platform={entry.platform} />
+            {/* No setup guide here any more: the one the API serves is written
+                for whoever calls it — account_id, POST the surface — and was
+                shown to people deciding where a colleague should answer. */}
             {((custom || !entry.guided) && hasCredentials) ? (
                 <>
-                    <h3>Connect your {name} account</h3>
+                    <h3>{entry.platform === "TELEGRAM" ? "Use a bot you already made" : "Connect your " + name + " account"}</h3>
+                    {entry.platform === "TELEGRAM" && (
+                        <p>Paste the token @BotFather gave you when you made the bot. Send it /token to see it again.</p>
+                    )}
                     <SurfaceCredentials pod={pod} entry={entry} onDone={onDone} />
                     {entry.guided && <button className="linkish" onClick={() => setCustom(false)}>Create a new bot instead</button>}
                 </>
@@ -605,17 +646,31 @@ function Focused({
                 <>
                     <h3>Connect {name} to {pod.name}</h3>
                     <p>
-                        {name} will ask whether Lemma may act for you. Nothing is sent anywhere until you say so —
-                        this only gives {pod.name} somewhere to answer.
+                        {/* Only a Lemma-supplied app is certain to reach a
+                            consent page; without one the sign-in needs an app
+                            registered first, and promising the page was how
+                            "needs setting up by an admin" arrived as a surprise. */}
+                        {entry.hostedOAuth
+                            ? name + " will ask whether Lemma may act for you. "
+                            : name + " signs in through an app registered for this organization. "}
+                        Nothing is sent anywhere until you say so — this only gives {pod.name} somewhere to answer.
                     </p>
+                    {!entry.hostedOAuth && (
+                        <SetUpOnThisMac
+                            form={appForm}
+                            force
+                            lead={"Lemma has no " + name + " app on {machine} yet. Add one once and everyone here can connect."}
+                        />
+                    )}
                     {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : (
-                        <>
-                            <p>This platform is not configured on this deployment. Follow the setup instructions or ask your administrator.</p>
-                            {/* On a local install the administrator is the
-                                person reading, and the bot credentials are
-                                this computer's to set. */}
-                            <SetUpOnThisMac form={credentialFormForChannel(entry.platform)} />
-                        </>
+                        machine ? (
+                            /* On a local install the administrator is the
+                               person reading, and the bot credentials are
+                               this computer's to set. */
+                            <SetUpOnThisMac form={credentialFormForChannel(entry.platform)} force lead={name + " isn’t set up on {machine} yet."} />
+                        ) : (
+                            <p>{name} isn’t set up on this server yet. Whoever runs it can add it.</p>
+                        )
                     )}
                     {canOwn && (
                         <button className="linkish focused__alt" onClick={() => setOwnBot(true)}>

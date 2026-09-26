@@ -35,6 +35,15 @@ else
   # above means uncorrected damage, which mounting would only compound.
   status=0
   /usr/sbin/e2fsck -p "$device" || status=$?
+  # 4 is "errors left uncorrected": -p only fixes what is safe without a
+  # person, and refuses the rest. Stopping there offered the user nothing but
+  # erasing everything, for damage e2fsck can usually repair. One forced,
+  # answer-yes pass comes first; only damage that survives it is reported.
+  if [ "$status" -eq 4 ]; then
+    printf 'lemma-data: e2fsck -p left errors; running a full repair\n'
+    status=0
+    /usr/sbin/e2fsck -f -y "$device" || status=$?
+  fi
   if [ "$status" -ge 4 ]; then
     printf 'lemma-data: needs-repair: e2fsck exited %s\n' "$status"
     exit 1

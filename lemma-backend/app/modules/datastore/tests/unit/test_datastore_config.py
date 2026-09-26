@@ -87,6 +87,11 @@ EXPECTED = [
     ),
     ("kreuzberg_circuit_failure_threshold", "KREUZBERG_CIRCUIT_FAILURE_THRESHOLD", 5),
     ("kreuzberg_circuit_reset_seconds", "KREUZBERG_CIRCUIT_RESET_SECONDS", 30.0),
+    (
+        "kreuzberg_max_response_bytes",
+        "KREUZBERG_MAX_RESPONSE_BYTES",
+        256 * 1024 * 1024,
+    ),
     ("pdf_render_dpi", "PDF_RENDER_DPI", 150),
     ("pdf_render_max_long_edge", "PDF_RENDER_MAX_LONG_EDGE", 1568),
     ("pdf_render_jpeg_quality", "PDF_RENDER_JPEG_QUALITY", 80),

@@ -192,6 +192,10 @@ wire_enum! {
         /// carry on with every Lemma tool call returning 401 — which the agent
         /// experiences as its tools quietly vanishing mid-task.
         RefreshCredential,
+        /// Carries a message the person sent while the run was working, for
+        /// the turn still in flight. Lemma sends it only to a harness that
+        /// published `steering`, so it never reaches a host that predates it.
+        SteerRun,
     }
 }
 
@@ -285,6 +289,9 @@ wire_enum! {
         SessionUpdate,
         ConfigUpdate,
         PermissionRequest,
+        /// Whether a `STEER_RUN` reached the turn in flight; see
+        /// [`SteerResultPayload`]. `object_id` is the Lemma message it carried.
+        SteerResult,
         Terminal,
     }
 }
@@ -353,6 +360,30 @@ pub struct ToolResultPayload {
     /// Why, for anything but [`ToolStatus::Completed`].
     #[serde(default)]
     pub error: Option<String>,
+}
+
+/// The payload of a `STEER_RUN` command.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SteerRunPayload {
+    /// The Lemma message this carries, echoed back as the result's
+    /// `object_id` so Lemma can mark that message delivered.
+    pub message_id: String,
+    /// ACP content blocks, rendered by Lemma exactly as a prompt would be.
+    pub prompt: Vec<Value>,
+}
+
+/// The payload of [`EventType::SteerResult`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SteerResultPayload {
+    /// The agent put the message into the turn that was running.
+    ///
+    /// `false` means it did not, for whatever reason -- the turn ended first,
+    /// the adapter refused -- and Lemma's follow-up turn will carry it instead.
+    /// Never `true` for anything short of the adapter's own `injected`.
+    pub delivered: bool,
+    /// Why, when it was not delivered.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 /// The payload of [`EventType::Usage`]: tokens for one turn.
@@ -470,6 +501,14 @@ pub struct HarnessCapabilities {
     pub plans: bool,
     pub usage: bool,
     pub durable_session_recovery: bool,
+    /// The adapter accepts `_session/steering`: a message added to the turn
+    /// already running, rather than queued for the next `session/prompt`.
+    /// Advertised in `InitializeResponse._meta.steering.supported`.
+    ///
+    /// Defaulted so a snapshot written before this field reads back as the
+    /// one thing it was: a harness nobody asked to steer.
+    #[serde(default)]
+    pub steering: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

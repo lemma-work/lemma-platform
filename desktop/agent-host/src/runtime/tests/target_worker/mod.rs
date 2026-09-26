@@ -114,6 +114,8 @@ impl Harness {
             allow_insecure_http: true,
             draining: false,
             refresh_generation: 0,
+            session_paused: false,
+            host_execution: false,
         };
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let worker = TargetWorker::new(

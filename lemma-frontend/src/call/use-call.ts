@@ -7,6 +7,7 @@ import type { VoiceEvent } from "./routing";
 import { VoiceEvents } from "./voice-events";
 import { instructionFor } from "./voice-instructions";
 import { siteRuntime } from "@/site/runtime";
+import { newId } from "./ids";
 
 export type CallStatus = "idle" | "connecting" | "live" | "ended" | "error";
 
@@ -161,7 +162,7 @@ export function useCall({ teammate, pod, handlers }: { teammate: string; pod: st
             clientRef.current = client;
             utterancesRef.current = new UtteranceBuffer(text => {
                 if (attempt !== attemptRef.current) return;
-                const id = crypto.randomUUID(); latestRequestRef.current = id;
+                const id = newId(); latestRequestRef.current = id;
                 for (const context of events.beginRequest(id)) quietUpdates.set(id, context);
                 void handlersRef.current.route(id, text, spokenHistoryRef.current);
             });

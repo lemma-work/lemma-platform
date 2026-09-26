@@ -74,7 +74,10 @@ export function useHuddle({ pod, teammate, conversationId }: {
         try {
             const config = await fetch("/api/call/config").then(response => response.json());
             if (attempt !== setupAttempt.current) return;
-            if (!config.configured) throw new Error("Set TYPESAFE_API_KEY on the server to enable call routing.");
+            /* The button is only offered once this is known to be true (see
+               `useVoiceConfigured`); reaching here means the setting changed
+               since. Said to the person, not the operator. */
+            if (!config.configured) throw new Error("Voice calls aren’t set up on this install.");
             await openConversation();
             if (attempt !== setupAttempt.current) return;
             await startCall();

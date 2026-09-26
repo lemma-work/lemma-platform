@@ -202,3 +202,62 @@ class TestLinkLiveness:
         from datetime import datetime, timezone
 
         assert self._link(exhausted_at=datetime.now(timezone.utc)).is_live is False
+
+
+class TestCacheExpiry:
+    """The cached entry is the whole check on a hit, so it lapses with the row."""
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        async def eval(self, script, numkeys, *args):
+            self.calls.append((script, numkeys, args))
+            return 1
+
+    @classmethod
+    def _store(cls):
+        from app.modules.datastore.services.files.signed_url import SignedUrlStore
+
+        store = SignedUrlStore(redis_url="redis://unused")
+        store._redis = cls._Recorder()
+        return store
+
+    async def test_the_entry_expires_at_the_links_own_instant(self):
+        """Absolute and floored: a relative TTL rounded up and started on
+        arrival could serve a hit after `expires_at`."""
+        from datetime import datetime, timedelta, timezone
+
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=90, microseconds=999
+        )
+        store = self._store()
+        await store._cache(TestLinkLiveness._link(expires_at=expires_at))
+
+        [(script, _numkeys, args)] = store._redis.calls
+        assert "PEXPIREAT" in script
+        assert args[-1] == int(expires_at.timestamp() * 1000)
+        assert args[-1] / 1000 <= expires_at.timestamp()
+
+    async def test_a_naive_expiry_is_utc_not_local_time(self):
+        from datetime import datetime, timedelta, timezone
+
+        aware = datetime.now(timezone.utc) + timedelta(minutes=5)
+        store = self._store()
+        await store._cache(
+            TestLinkLiveness._link(expires_at=aware.replace(tzinfo=None))
+        )
+
+        [(_script, _numkeys, args)] = store._redis.calls
+        assert args[-1] == int(aware.timestamp() * 1000)
+
+    async def test_an_expired_link_is_not_cached(self):
+        from datetime import datetime, timedelta, timezone
+
+        store = self._store()
+        await store._cache(
+            TestLinkLiveness._link(
+                expires_at=datetime.now(timezone.utc) - timedelta(milliseconds=1)
+            )
+        )
+        assert store._redis.calls == []

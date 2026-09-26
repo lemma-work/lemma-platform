@@ -140,8 +140,15 @@ impl SharingController {
             SharingMode::ThisComputer => unreachable!(),
         };
 
-        let gateway =
-            GatewayHandle::start(bind_ip, self.frontend_port, self.backend_port, request.mode)?;
+        let probe_token = crate::native_host_pack::random_hex(32)?;
+        let gateway = GatewayHandle::start(
+            bind_ip,
+            self.frontend_port,
+            self.backend_port,
+            request.mode,
+            request.provider,
+            probe_token.clone(),
+        )?;
         let gateway_origin = format!("http://{}:{}", display_ip(bind_ip), gateway.address.port());
         {
             let mut state = self.state.lock().expect("sharing state lock poisoned");
@@ -192,6 +199,7 @@ impl SharingController {
         Ok(PreparedSharing {
             mode: request.mode,
             origin: canonical_url,
+            probe_token,
         })
     }
 
@@ -224,8 +232,25 @@ impl SharingController {
             state.preferences.schema_version = SHARING_SCHEMA_VERSION;
             persist_private_json(&self.preferences_path, &state.preferences)?;
         }
+        // Only now: the stack behind the gateway is the hardened one, checked
+        // through the gateway itself, and the change is recorded.
+        self.set_gateway_open(true);
         self.transition_running.store(false, Ordering::Release);
         Ok(())
+    }
+
+    /// Serve visitors, or answer them 503 while the stack behind is restarting.
+    ///
+    /// Held for every restart that happens while something outside this Mac
+    /// can reach the gateway: turning sharing on (until the hardened stack is
+    /// verified), turning it off (the stack comes back in local mode while the
+    /// tunnel is still up), and a join-policy change.
+    pub(crate) fn set_gateway_open(&self, open: bool) {
+        // An atomic store under the lock, and nothing that waits.
+        let active = self.active.lock().expect("sharing active lock poisoned");
+        if let Some(active) = active.as_ref() {
+            active.gateway.set_open(open);
+        }
     }
 
     pub fn rollback_enable(&self, message: impl Into<String>) {
@@ -244,6 +269,9 @@ impl SharingController {
             self.transition_running.store(false, Ordering::Release);
             return Ok(false);
         }
+        // The stack restarts into local mode -- DEBUG, no abuse controls --
+        // before the tunnel is torn down, so visitors are turned away first.
+        self.set_gateway_open(false);
         let mut state = self.state.lock().expect("sharing state lock poisoned");
         state.phase = "restarting".into();
         state.progress = 40;
@@ -267,6 +295,8 @@ impl SharingController {
     }
 
     pub fn abort_disable(&self, message: impl Into<String>) {
+        // Sharing stays on, behind the shared stack it was rolled back to.
+        self.set_gateway_open(true);
         let mut state = self.state.lock().expect("sharing state lock poisoned");
         state.phase = "ready".into();
         state.progress = 100;

@@ -121,6 +121,37 @@ impl Daemon {
                 self.set_ai_profile(request, client);
                 return true;
             }
+            "config.test" => {
+                self.test_setup(request, client);
+                return true;
+            }
+            // The same-site alias the macOS workspace frames a pod app
+            // through. The shell only asks for the local workspace; see
+            // `crate::app_alias` for why it exists at all.
+            "app-alias.resolve" => {
+                let url = request
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let event = match self.app_aliases.as_ref() {
+                    None => error_event(
+                        "app-alias-unavailable",
+                        "app aliases need the local Lemma to be installed",
+                        id.as_ref(),
+                    ),
+                    Some(aliases) => match aliases.alias_url(url) {
+                        Ok(alias) => json!({
+                            "v": PROTOCOL_VERSION,
+                            "event": "app-alias",
+                            "id": id.as_ref(),
+                            "url": alias,
+                        }),
+                        Err(error) => error_event("app-alias-refused", error, id.as_ref()),
+                    },
+                };
+                self.send_direct(client, event);
+                return true;
+            }
             "desktop.release" => {
                 self.release_for_desktop_exit(id.as_ref(), client);
                 return true;
@@ -143,6 +174,7 @@ impl Daemon {
             | "agent-host.pair"
             | "agent-host.unpair"
             | "agent-host.refresh"
+            | "agent-host.session"
             | "agent-host.host-execution" => {
                 self.start_agent_host_operation(command, request.clone(), client.clone());
                 return true;
