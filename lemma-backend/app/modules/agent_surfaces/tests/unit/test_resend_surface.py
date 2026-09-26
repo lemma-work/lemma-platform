@@ -159,7 +159,7 @@ async def test_minting_without_a_domain_says_so_instead_of_inventing_one(monkeyp
 
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", None)
 
-    with pytest.raises(AgentSurfaceValidationError, match="RESEND_INBOUND_DOMAIN"):
+    with pytest.raises(AgentSurfaceValidationError, match="needs an inbound domain"):
         await email_surface_provisioning.create_surface_on_minted_address(
             AsyncMock(),
             AsyncMock(),

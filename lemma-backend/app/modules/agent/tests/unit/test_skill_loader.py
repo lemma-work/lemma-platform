@@ -367,3 +367,39 @@ def test_workspace_image_creates_no_skills_directory(source: Path):
     ]
 
     assert offenders == []
+
+
+@pytest.mark.asyncio
+async def test_system_skills_follow_lemma_skills_root_without_a_pod(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A packaged install has no source checkout to walk up to.
+
+    Its skills sit wherever LEMMA_SKILLS_ROOT says, and the pod-less fallback
+    used to ignore that and raise instead of listing them.
+    """
+    skills_root = tmp_path / "packaged-skills"
+    (skills_root / "packaged-skill").mkdir(parents=True)
+    (skills_root / "packaged-skill" / "SKILL.md").write_text(
+        "---\nname: packaged-skill\ndescription: Shipped beside the binary.\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LEMMA_SKILLS_ROOT", str(skills_root))
+    skill_loader._build_system_skill_catalog.cache_clear()
+    try:
+        skills = await list_workspace_skills()
+        content = await read_workspace_skill("packaged-skill")
+    finally:
+        skill_loader._build_system_skill_catalog.cache_clear()
+
+    assert [skill["name"] for skill in skills] == ["packaged-skill"]
+    assert "Body." in content
+
+
+def test_missing_lemma_skills_root_is_reported_not_guessed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv("LEMMA_SKILLS_ROOT", str(tmp_path / "absent"))
+
+    with pytest.raises(RuntimeError, match="Skills directory not found"):
+        skill_loader._skills_root()

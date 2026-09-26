@@ -58,6 +58,17 @@ async def resolve_summarization_model[T](
         DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
         AgentRuntimeProfileService,
     )
+    from app.modules.agent.services.runtime_system_profiles import (
+        system_profile_configured,
+    )
+
+    if not system_profile_configured():
+        # The setting names a model on the system provider, and there is none.
+        # The run's own model is then the workspace's model -- the one this
+        # pod or agent was set up to run on -- so it is the fallback the
+        # module docstring promises, not a failure worth a warning on every
+        # compaction.
+        return fallback
 
     try:
         resolved = await AgentRuntimeProfileService().resolve(

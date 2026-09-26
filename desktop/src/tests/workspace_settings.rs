@@ -130,6 +130,7 @@ fn every_this_mac_command_checks_its_caller_first() {
         "pub(crate) async fn local_sharing(",
         "pub(crate) async fn set_start_at_login(",
         "pub(crate) async fn set_host_execution(",
+        "pub(crate) async fn test_server_setup(",
     ] {
         let body = function_body(&source, command);
         assert!(
@@ -437,11 +438,69 @@ fn a_page_on_a_host_that_stopped_resolving_to_this_mac_is_refused() {
 }
 
 #[test]
-fn the_workspace_writes_integrations_and_channels_only() {
-    assert!(workspace_section_allowed(&json!({"section": {"name": "integrations"}})).is_ok());
-    assert!(workspace_section_allowed(&json!({"section": {"name": "surfaces"}})).is_ok());
-    assert!(workspace_section_allowed(&json!({"section": {"name": "ai"}})).is_err());
+fn the_workspace_writes_the_server_setup_sections_only() {
+    for name in ["integrations", "surfaces", "ai", "email"] {
+        assert!(workspace_section_allowed(&json!({"section": {"name": name}})).is_ok());
+    }
+    assert!(workspace_section_allowed(&json!({"section": {"name": "sharing"}})).is_err());
     assert!(workspace_section_allowed(&json!({})).is_err());
+}
+
+#[test]
+fn replacing_the_ai_key_is_asked_and_choosing_a_model_is_not() {
+    let operator = json!({
+        "config": {"ai": {"default_model": "big", "fast_model": ""}},
+        "secrets": {"ai.api_key": true},
+    });
+    let choosing = json!({
+        "section": {"name": "ai", "value": {"default_model": "other", "fast_model": "quick"}},
+        "secrets": {},
+    });
+    assert!(credential_replacements(&operator, &choosing).is_empty());
+    let rekeying = json!({
+        "section": {"name": "ai", "value": {"default_model": "big"}},
+        "secrets": {"ai.api_key": {"action": "replace", "value": "k"}},
+    });
+    assert_eq!(credential_replacements(&operator, &rekeying), ["api key"]);
+    let unsetting = json!({
+        "section": {"name": "email", "value": {"from_email": "new@example.com"}},
+        "secrets": {"email.smtp_password": {"action": "remove"}},
+    });
+    let operator = json!({
+        "config": {"email": {"from_email": "old@example.com"}},
+        "secrets": {"email.smtp_password": true},
+    });
+    assert_eq!(
+        credential_replacements(&operator, &unsetting),
+        ["smtp password"]
+    );
+}
+
+#[test]
+fn a_setup_test_forwards_only_what_a_test_takes() {
+    let request = setup_test_request(&json!({
+        "service": "telegram",
+        "credential": "1:abc",
+        "from_email": null,
+        "install_id": "not forwarded",
+    }))
+    .unwrap();
+    assert_eq!(request["cmd"], "config.test");
+    assert_eq!(
+        request["payload"],
+        json!({"service": "telegram", "credential": "1:abc"})
+    );
+    assert!(setup_test_request(&json!({})).is_err());
+}
+
+#[test]
+fn the_setup_test_is_granted_to_the_workspace_and_registered() {
+    let capability = include_str!("../../capabilities/workspace.json").replace("\r\n", "\n");
+    assert!(capability.contains("\"allow-test-server-setup\""));
+    let app = include_str!("../app.rs").replace("\r\n", "\n");
+    assert!(app.contains("workspace_settings::test_server_setup"));
+    let build = include_str!("../../build.rs").replace("\r\n", "\n");
+    assert!(build.contains("\"test_server_setup\""));
 }
 
 #[test]

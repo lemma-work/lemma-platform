@@ -134,7 +134,8 @@ impl AgentHostSupervisor {
         if state.window_restarts >= RESTART_BUDGET {
             state.circuit_open = true;
             state.last_error = Some(format!(
-                "the Agent Host stopped {RESTART_BUDGET} times in a row;                  not restarting it again. See the Agent Host log"
+                "the Agent Host stopped {RESTART_BUDGET} times in a row, so Lemma stopped \
+                 restarting it; see the Agent Host log"
             ));
             return Ok(());
         }

@@ -34,6 +34,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
     HarnessDriverCancelled,
 )
 from app.modules.agent.infrastructure.transport_errors import (
+    connection_failure_message,
     is_retryable_stream_error,
 )
 
@@ -146,31 +147,27 @@ def user_facing_error_message(exc: Exception) -> str:
             )
         if exc.status_code in (401, 403):
             return (
-                "The model provider rejected the credential for this workspace "
-                f"(HTTP {exc.status_code}). Check that the agent runtime's API "
-                "key is present, current, and allowed to use this model."
+                "The model provider rejected this model's API key "
+                f"(HTTP {exc.status_code}). Check the key in Settings \u2192 "
+                "Models: that it is current and allowed to use this model."
             )
         if exc.status_code == 404:
             # The model is named in the log line and deliberately not here: a
             # provider's model id can carry a private deployment or endpoint
             # name, and this string is written into the transcript.
             return (
-                "The model this agent is configured with is not available on "
-                "this provider (HTTP 404). Pick another model for the agent, "
-                "or check the runtime's base URL."
+                "The model this teammate is set to use is not available on "
+                "this provider (HTTP 404). Pick another model for the teammate, "
+                "or check the provider's API base URL in Settings \u2192 Models."
             )
         return (
             f"The model provider returned an error (HTTP {exc.status_code}). "
-            "Please check the agent runtime configuration."
+            "Check the model settings for this teammate (Settings \u2192 Models)."
         )
     if is_retryable_stream_error(exc):
-        # A transport-level drop that survived every retry. Nothing was lost —
-        # each completed message was persisted — so say so, because "check the
+        # A transport-level drop that survived every retry; "check the
         # configuration" sends people hunting a bug that isn't theirs.
-        return (
-            "The connection to the model provider kept dropping. Nothing you "
-            "sent was lost — send another message to pick up where it stopped."
-        )
+        return connection_failure_message(exc)
     if isinstance(exc, UnexpectedModelBehavior):
         return (
             "A tool failed repeatedly after several attempts and the run was "
@@ -178,8 +175,8 @@ def user_facing_error_message(exc: Exception) -> str:
         )
     if isinstance(exc, UsageLimitExceeded):
         return (
-            "The agent run hit a usage limit. "
-            "Please check the agent runtime configuration."
+            "The run hit a usage limit. "
+            "Check the model settings for this teammate (Settings \u2192 Models)."
         )
     if isinstance(exc, HarnessDriverCancelled):
         # Whatever the agent was doing stopped part-way, so "try again" is the
@@ -191,7 +188,7 @@ def user_facing_error_message(exc: Exception) -> str:
         )
     return (
         "The model provider returned an error. "
-        "Please check the agent runtime configuration."
+        "Check the model settings for this teammate (Settings \u2192 Models)."
     )
 
 

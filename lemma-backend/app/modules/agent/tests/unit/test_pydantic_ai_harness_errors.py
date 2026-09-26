@@ -123,7 +123,10 @@ async def test_usage_limit_exceeded_emits_sanitized_ui_message(monkeypatch) -> N
     assert len(events) == 1
     assert events[0].type == AgentEventType.ERROR
     assert "abc123" not in events[0].data
-    assert "Please check the agent runtime configuration." in events[0].data
+    assert (
+        "Check the model settings for this teammate (Settings \u2192 Models)."
+        in events[0].data
+    )
 
 
 @pytest.mark.asyncio
@@ -157,7 +160,10 @@ async def test_generic_exception_emits_sanitized_ui_message(monkeypatch) -> None
     assert events[0].type == AgentEventType.ERROR
     assert "sk-secret-key" not in events[0].data
     assert "Authorization" not in events[0].data
-    assert "Please check the agent runtime configuration." in events[0].data
+    assert (
+        "Check the model settings for this teammate (Settings \u2192 Models)."
+        in events[0].data
+    )
 
 
 def test_provider_error_identifiers_extract_the_code_not_the_prose() -> None:
@@ -225,7 +231,7 @@ def test_quota_exhaustion_reads_as_a_limit_not_a_misconfiguration() -> None:
     assert "Nothing you sent was lost" in dropped
 
     generic = run_failure_message(ValueError("something else"))
-    assert "Agent run failed" in generic
+    assert "The run failed" in generic
 
 
 class TestAProviderRefusalSaysWhichRefusalItWas:
@@ -247,11 +253,13 @@ class TestAProviderRefusalSaysWhichRefusalItWas:
     def test_a_rejected_credential_says_so(self) -> None:
         message = self._message(401, {"error": {"type": "authentication_error"}})
 
-        assert "credential" in message
+        assert "rejected" in message
         assert "API key" in message
+        # Where the key is fixed, not a term of art for it.
+        assert "Settings \u2192 Models" in message
 
     def test_a_forbidden_credential_reads_the_same_way(self) -> None:
-        assert "credential" in self._message(403, {})
+        assert "rejected this model's API key" in self._message(403, {})
 
     def test_an_unknown_model_names_the_choice_to_change(self) -> None:
         message = self._message(404, {"error": {"type": "not_found_error"}})
@@ -278,7 +286,10 @@ class TestAProviderRefusalSaysWhichRefusalItWas:
         message = self._message(400, {"error": {"type": "invalid_request_error"}})
 
         assert "HTTP 400" in message
-        assert "Please check the agent runtime configuration." in message
+        assert (
+            "Check the model settings for this teammate (Settings \u2192 Models)."
+            in message
+        )
 
     def test_no_provider_prose_reaches_the_reader(self) -> None:
         message = self._message(

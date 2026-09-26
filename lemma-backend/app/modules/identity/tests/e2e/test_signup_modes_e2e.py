@@ -177,6 +177,13 @@ async def test_invite_only_refuses_a_stranger_and_admits_an_invited_address(
     admitted = await _sign_up(async_client, invited)
     assert admitted["status"] == "OK", admitted
 
+    # Signing up again is somebody who already has an account: told to sign
+    # in, in SuperTokens' own words, rather than to go and find an invitation.
+    again = await _sign_up(async_client, invited)
+    assert again["status"] == "FIELD_ERROR", again
+    fields = cast(list[dict[str, str]], again["formFields"])
+    assert [field["id"] for field in fields] == ["email"], again
+
     monkeypatch.setattr(identity_settings, "signup_mode", "closed")
     also_invited = f"invited-{uuid4().hex[:10]}@example.com"
     await _invite(db_session, fixed_test_org["id"], also_invited)

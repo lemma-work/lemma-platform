@@ -29,7 +29,12 @@ class OrganizationInvitationResponse:
         role (OrganizationRole): Roles for organization membership.
         status (OrganizationInvitationStatus): Statuses for organization invitations.
         updated_at (datetime.datetime):
+        accept_url (None | str | Unset): The link the invitee opens to accept, as the invitation email carries it.
+            Returned to the organization's owners and editors, so an invitation can be handed over another way when email is
+            not set up here.
         accepted_at (datetime.datetime | None | Unset):
+        emailed (bool | None | Unset): Whether this server emails invitations. False means email is not set up here: the
+            invitation exists, but nobody was sent it, so share `accept_url` with the invitee yourself.
         organization_name (None | str | Unset):
         pod_description (None | str | Unset):
         pod_id (None | Unset | UUID):
@@ -47,7 +52,9 @@ class OrganizationInvitationResponse:
     role: OrganizationRole
     status: OrganizationInvitationStatus
     updated_at: datetime.datetime
+    accept_url: None | str | Unset = UNSET
     accepted_at: datetime.datetime | None | Unset = UNSET
+    emailed: bool | None | Unset = UNSET
     organization_name: None | str | Unset = UNSET
     pod_description: None | str | Unset = UNSET
     pod_id: None | Unset | UUID = UNSET
@@ -74,6 +81,12 @@ class OrganizationInvitationResponse:
 
         updated_at = self.updated_at.isoformat()
 
+        accept_url: None | str | Unset
+        if isinstance(self.accept_url, Unset):
+            accept_url = UNSET
+        else:
+            accept_url = self.accept_url
+
         accepted_at: None | str | Unset
         if isinstance(self.accepted_at, Unset):
             accepted_at = UNSET
@@ -81,6 +94,12 @@ class OrganizationInvitationResponse:
             accepted_at = self.accepted_at.isoformat()
         else:
             accepted_at = self.accepted_at
+
+        emailed: bool | None | Unset
+        if isinstance(self.emailed, Unset):
+            emailed = UNSET
+        else:
+            emailed = self.emailed
 
         organization_name: None | str | Unset
         if isinstance(self.organization_name, Unset):
@@ -142,8 +161,12 @@ class OrganizationInvitationResponse:
                 "updated_at": updated_at,
             }
         )
+        if accept_url is not UNSET:
+            field_dict["accept_url"] = accept_url
         if accepted_at is not UNSET:
             field_dict["accepted_at"] = accepted_at
+        if emailed is not UNSET:
+            field_dict["emailed"] = emailed
         if organization_name is not UNSET:
             field_dict["organization_name"] = organization_name
         if pod_description is not UNSET:
@@ -180,6 +203,15 @@ class OrganizationInvitationResponse:
 
         updated_at = isoparse(d.pop("updated_at"))
 
+        def _parse_accept_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        accept_url = _parse_accept_url(d.pop("accept_url", UNSET))
+
         def _parse_accepted_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
                 return data
@@ -196,6 +228,15 @@ class OrganizationInvitationResponse:
             return cast(datetime.datetime | None | Unset, data)
 
         accepted_at = _parse_accepted_at(d.pop("accepted_at", UNSET))
+
+        def _parse_emailed(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        emailed = _parse_emailed(d.pop("emailed", UNSET))
 
         def _parse_organization_name(data: object) -> None | str | Unset:
             if data is None:
@@ -285,7 +326,9 @@ class OrganizationInvitationResponse:
             role=role,
             status=status,
             updated_at=updated_at,
+            accept_url=accept_url,
             accepted_at=accepted_at,
+            emailed=emailed,
             organization_name=organization_name,
             pod_description=pod_description,
             pod_id=pod_id,

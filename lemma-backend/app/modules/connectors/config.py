@@ -78,10 +78,10 @@ class ConnectorSettings(BaseSettings):
             "applies. Env: ``CONNECTOR_COMPOSIO_DEADLINE_SECONDS``."
         ),
     )
-    composio_api_key: Optional[str] = Field(
+    composio_api_key: Optional[SecretStr] = Field(
         default=None, description="Composio API key"
     )
-    composio_webhook_secret: Optional[str] = Field(
+    composio_webhook_secret: Optional[SecretStr] = Field(
         default=None, description="Composio webhook secret"
     )
     composio_sdk_telemetry_enabled: bool = Field(
@@ -204,7 +204,7 @@ class ConnectorSettings(BaseSettings):
             "Env: CONNECTOR_GITHUB_APP_WEBHOOK_SECRET_PREVIOUS."
         ),
     )
-    connector_encryption_key: Optional[str] = Field(
+    connector_encryption_key: Optional[SecretStr] = Field(
         default=None,
         description=(
             "Fernet key used to encrypt connector auth configs and account "

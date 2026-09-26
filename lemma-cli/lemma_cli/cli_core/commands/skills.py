@@ -11,8 +11,10 @@ skills it bundles.
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -24,6 +26,7 @@ from ..skills_bundle import (
     SkillInfo,
     bundled_skill_map,
     iter_bundled_skills,
+    parse_frontmatter,
 )
 from ..state import console, err_console, fail, state_from_ctx
 
@@ -257,6 +260,7 @@ def install_skills(
             if not dry_run and action != "unchanged":
                 _copy_skill(skill.path, target_dir)
                 written_labels.add(dest_label)
+            _move_aside_legacy_codex_copy(skill, dest_dir, dry_run=dry_run)
             rows.append(
                 {
                     "skill": skill.name,
@@ -385,9 +389,18 @@ def _upsert_action(source: Path, target_dir: Path) -> str:
     return "unchanged" if _dirs_identical(source, target_dir) else "updated"
 
 
+def _skill_files(root: Path) -> list[str]:
+    """A skill directory's files, without the install marker the bundle lacks."""
+    return sorted(
+        p.relative_to(root).as_posix()
+        for p in root.rglob("*")
+        if p.is_file() and p.name != LEMMA_SKILL_MARKER
+    )
+
+
 def _dirs_identical(a: Path, b: Path) -> bool:
-    a_files = sorted(p.relative_to(a).as_posix() for p in a.rglob("*") if p.is_file())
-    b_files = sorted(p.relative_to(b).as_posix() for p in b.rglob("*") if p.is_file())
+    a_files = _skill_files(a)
+    b_files = _skill_files(b)
     if a_files != b_files:
         return False
     return all((a / rel).read_bytes() == (b / rel).read_bytes() for rel in a_files)
@@ -398,6 +411,65 @@ def _copy_skill(source: Path, target_dir: Path) -> None:
     _remove_existing(target_dir)
     target_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, target_dir)
+    (target_dir / LEMMA_SKILL_MARKER).write_text(_MARKER_TEXT, encoding="utf-8")
+
+
+#: Written into every skill this command installs, so a later install can tell
+#: a copy it put somewhere from a skill of the same name the user wrote.
+LEMMA_SKILL_MARKER = ".lemma-skill"
+_MARKER_TEXT = "Installed by `lemma skills install`. Lemma replaces this copy.\n"
+
+
+def _codex_legacy_skills_dir() -> Path:
+    """Where Codex read user skills before it moved to ``~/.agents/skills``."""
+    codex_home = os.environ.get("CODEX_HOME")
+    return (Path(codex_home) if codex_home else Path.home() / ".codex") / "skills"
+
+
+def _move_aside_legacy_codex_copy(
+    skill: SkillInfo, dest_dir: Path, *, dry_run: bool
+) -> None:
+    """Move an old Lemma copy of ``skill`` out of Codex's legacy skills dir.
+
+    Codex still loads ``~/.codex/skills``, so a copy installed there by an
+    older CLI sits beside the fresh one in ``~/.agents/skills`` under the same
+    name, and the agent can follow the outdated instructions. Only a copy that
+    is Lemma's is touched, and it is moved out of the directory Codex scans --
+    renaming it in place would leave its SKILL.md there to be loaded -- never
+    deleted, since the user may have edited it.
+    """
+    if dest_dir.expanduser() != Path.home() / ".agents" / "skills":
+        return
+    legacy = _codex_legacy_skills_dir() / skill.name
+    if not _is_lemma_copy(legacy, skill):
+        return
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup = legacy.parent.parent / "lemma-stale-skills" / f"{skill.name}.{stamp}"
+    if dry_run:
+        err_console.print(f"Would move stale Lemma skill {legacy} to {backup}")
+        return
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(legacy), str(backup))
+    err_console.print(
+        f"Moved stale Lemma skill {legacy} to {backup}; "
+        f"Codex now reads {skill.name} from {dest_dir}."
+    )
+
+
+def _is_lemma_copy(path: Path, skill: SkillInfo) -> bool:
+    """Whether ``path`` is a copy of the bundled ``skill``, not the user's own.
+
+    A symlink is the user pointing Codex somewhere on purpose and is left
+    alone. Copies installed before the marker existed are recognised by their
+    frontmatter: the bundled skill's name, and a description about Lemma.
+    """
+    skill_md = path / "SKILL.md"
+    if path.is_symlink() or not skill_md.is_file():
+        return False
+    if (path / LEMMA_SKILL_MARKER).is_file() or _dirs_identical(skill.path, path):
+        return True
+    front = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
+    return front.get("name") == skill.name and "Lemma" in front.get("description", "")
 
 
 def _remove_existing(path: Path) -> None:

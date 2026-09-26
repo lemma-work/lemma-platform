@@ -207,6 +207,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/{organization_id}/invitations` | `org.invitation.list` | List Organization Invitations |
 | GET | `/organizations/{organization_id}/members` | `org.member.list` | List Organization Members |
 | GET | `/users/me` | `user.current.get` | Get Current User |
+| GET | `/users/me/email-delivery` | `user.email_delivery.get` | Get Email Delivery Status |
 | GET | `/users/me/profile` | `user.profile.get` | Get User Profile |
 | PATCH | `/organizations/{organization_id}` | `org.update` | Update Organization |
 | PATCH | `/organizations/{organization_id}/members/{member_id}/role` | `org.member.update_role` | Update Member Role |
@@ -214,6 +215,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/invitations/{invitation_id}/accept` | `org.invitation.accept` | Accept Invitation |
 | POST | `/organizations/{organization_id}/invitations` | `org.invitation.invite` | Invite Member |
 | POST | `/organizations/{organization_id}/join` | `org.join_auto_join` | Join Auto-Join Organization |
+| POST | `/users/me/email-delivery/test` | `user.email_delivery.test` | Send A Test Email |
 | POST | `/users/me/first-workspace` | `users.ensure_first_workspace` | Ensure The Current User Has A Workspace |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
 

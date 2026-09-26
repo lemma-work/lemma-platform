@@ -581,7 +581,7 @@ Acceptance flow:
 3. Confirm download/extraction stages show real progress and no Start button.
 4. Create a local account inside WKWebView; verify it remains authenticated.
    Confirm the marketing landing page never appears — not before signup, not
-   after signing out, and not in a LAN browser (step 10).
+   after signing out, and not in a LAN browser (step 11).
 5. Confirm the workspace does not return to the installer after Ready.
 6. Walk local onboarding: choose an installed coding agent, an API provider,
    or a local model server, then choose who can reach this installation. An
@@ -597,38 +597,52 @@ Acceptance flow:
    is still shown -- it follows the app's own window on the loopback origin,
    not the account. Open the same workspace in a browser, and from a LAN
    device while sharing, and confirm This Mac is not shown at all.
-8. With Ollama and LM Studio running, open **Settings → Models** and confirm
+8. Configure AI from **Settings → This Mac → Server setup**, which replaces the
+   Advanced credential list. It shows one card per capability -- AI model
+   (required), Email, Connectors, Channels, Voice and Web search -- each with
+   its status and a **Test** action. With no model configured, the AI model
+   card must say so and nothing may claim that AI is ready; the optional cards
+   report their own state without blocking anything. Add an API provider or a
+   local model server, run **Test**, and confirm a chat replies and gets a
+   title. Type a wrong key and confirm **Test** reports the rejection and
+   **Save** refuses it. Save a Composio key and confirm its connectors appear
+   without restarting Lemma; save a Telegram bot token and confirm the bot
+   answers without a public link. Set up Email and confirm **Send a test
+   email** arrives and an invitation is emailed. On a fresh install, confirm
+   the first-run checklist appears right after signup and leads to the same
+   cards.
+9. With Ollama and LM Studio running, open **Settings → Models** and confirm
    each is offered as **Add as provider** with its models; add one and verify
    thinking and structured tool calls. If this install had an AI provider set
    before, confirm it is offered as **Add to workspace** and that titles still
    work after adding it.
-9. From the onboarding agents step, and again from **Models**, confirm the
-   computer pairs on its own. A failed start or pairing must display the
-   failure and offer **Retry connection**, without remaining on a loading row.
-   Add a detected agent with **Use in chat**, pick it in a chat, run a
-   prompt, and approve a permission. Confirm the tray reads
-   `Agent Host: connected`. Closing the window keeps it running; Quit stops it,
-   and reopening restores the paired host. A machine with no coding agents
-   installed must say so and still let the step continue. Repeat in hosted
-   mode: the Agent Host connects without downloading the complete local stack.
-10. From **Settings → This Mac → Sharing**, enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
+10. From the onboarding agents step, and again from **Models**, confirm the
+    computer pairs on its own. A failed start or pairing must display the
+    failure and offer **Retry connection**, without remaining on a loading row.
+    Add a detected agent with **Use in chat**, pick it in a chat, run a
+    prompt, and approve a permission. Confirm the tray reads
+    `Agent Host: connected`. Closing the window keeps it running; Quit stops it,
+    and reopening restores the paired host. A machine with no coding agents
+    installed must say so and still let the step continue. Repeat in hosted
+    mode: the Agent Host connects without downloading the complete local stack.
+11. From **Settings → This Mac → Sharing**, enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
     second browser, create/sign into an account, and verify streamed chat, a
     tool call, and a file transfer. Confirm that browser is offered the account
     portal rather than the landing page. Disable it and confirm the LAN port
     closes.
-11. Verify ngrok preflight without exposing credentials. Activate a public link
+12. Verify ngrok preflight without exposing credentials. Activate a public link
     only after the native confirmation (the page cannot skip it), repeat streamed chat/file/webhook
     checks, then disable it. After `cloudflared tunnel login`, verify automatic
     setup creates one installation-owned named tunnel and DNS route, reuses it
     after disable, and still offers an existing tunnel as an advanced option.
     Quick Tunnels must not appear.
-12. Run a sandbox operation that uses `lemma` CLI against the dynamic API.
-13. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
+13. Run a sandbox operation that uses `lemma` CLI against the dynamic API.
+14. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
     the UI honestly says published pod apps remain local-only.
-14. Check the menu bar: **Desktop settings…** on ⌘, opens This Mac settings (or Local settings when the workspace is not up), and no menu
+15. Check the menu bar: **Desktop settings…** on ⌘, opens This Mac settings (or Local settings when the workspace is not up), and no menu
     item names a service. The tray's first line must report the stack's real
     state, and everything operational must sit under **Troubleshoot**.
-15. Close the window; verify schedules, the Agent Host, and active sharing
+16. Close the window; verify schedules, the Agent Host, and active sharing
     remain available from the tray. Then press ⌘Q with sharing on, the Agent
     Host paired, and the stack up: the prompt must name all three, offer closing
     the window as the alternative, and say data stays on this Mac. Cancel, and
@@ -640,15 +654,15 @@ Acceptance flow:
     no later startup stage may launch after its cancellation checkpoint, and a
     migration must reach a known outcome before cleanup. Repeated ⌘Q must not
     force interruption; the slow-shutdown fallback must explain the recovery risk.
-16. Restart and confirm ports and data persist, but LAN/Public mode does not
+17. Restart and confirm ports and data persist, but LAN/Public mode does not
     resume automatically. Close one conversation to the tray, reopen, select a
     different conversation and Quit. Launch again: the second conversation and
     its durable transcript must reopen. Repeat with Settings over that page.
     When the existing services are still healthy, check **Diagnostics → Launch
     timing** for `resume: hit`. After a full Quit, show actual service startup
     progress before restoring the remembered page.
-17. Inspect every Diagnostics source and exercise runtime repair.
-18. Quit and confirm the VM also releases its memory — `ps` must show no
+18. Inspect every Diagnostics source and exercise runtime repair.
+19. Quit and confirm the VM also releases its memory — `ps` must show no
     `lemma-vz`, and Activity Monitor no multi-GB helper, once the app is gone.
 
 Also test with blocked Hugging Face access, a failed OCI registry/DNS request,

@@ -536,6 +536,11 @@ button svg, a svg { flex-shrink:0; }
 .met__face { animation:panel-in 460ms cubic-bezier(.2,1.4,.4,1) both;outline:none; }
 .met__name { margin:0;font-size:30px;font-weight:500;letter-spacing:-.02em; }
 .met__line { margin:0;font-size:var(--t-ui);color:var(--ink-2);max-width:40ch; }
+/* Without a model the line becomes a sentence and the way to fix it. */
+.met__needs { display:flex;flex-direction:column;align-items:center;gap:10px; }
+.met__needs p { margin:0; }
+.met__needs .btn { min-height:44px; }
+.met__note { margin:0;font-size:var(--t-meta);color:var(--ink-3);max-width:40ch; }
 
 /* The first morning. Everything below the face is left-aligned against a
    column of its own — three centred cards read as a poster, and these are
@@ -1700,6 +1705,10 @@ button svg, a svg { flex-shrink:0; }
 .arrival__note code { font-size:12px; }
 
 .arrival__problem { color:var(--bad);font-size:13px;margin:14px 0 0; }
+/* The lists could not be read: said above the rungs, with the way to ask again. */
+.arrival__unread { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 16px; }
+.arrival__unread svg { flex:none; }
+.arrival__unread .btn { margin-left:auto;min-height:44px;color:var(--ink); }
 
 @media(max-width:600px) {
     .arrival-page__bar { padding:20px 18px; }

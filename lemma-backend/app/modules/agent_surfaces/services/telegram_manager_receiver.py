@@ -7,6 +7,7 @@ import httpx
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.config import reveal_secret
 from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import (
@@ -55,7 +56,7 @@ class TelegramManagerPollingReceiver:
         self._manager_token = (
             manager_token
             if manager_token is not None
-            else surface_settings.telegram_manager_bot_token
+            else reveal_secret(surface_settings.telegram_manager_bot_token)
         )
         credentials: dict[str, Any] = {"bot_token": self._manager_token or ""}
         if api_base_url:
@@ -129,19 +130,22 @@ class TelegramManagerPollingReceiver:
 
 
 async def register_telegram_manager_webhook() -> None:
+    bot_token = reveal_secret(surface_settings.telegram_manager_bot_token)
     if (
-        not surface_settings.telegram_manager_bot_token
+        not bot_token
         or not surface_settings.telegram_manager_bot_username
         or surface_settings.enable_telegram_manager_polling_mode
         or not public_https_api_url_available()
     ):
         return
-    secret = str(surface_settings.telegram_manager_webhook_secret or "").strip()
+    secret = str(
+        reveal_secret(surface_settings.telegram_manager_webhook_secret) or ""
+    ).strip()
     if not secret:
         logger.warning("agent_surfaces.telegram_manager.webhook_secret_missing")
         return
     client = TelegramClient(
-        bot_token=surface_settings.telegram_manager_bot_token,
+        bot_token=bot_token,
         timeout=20,
     )
     webhook_url = f"{settings.api_url.rstrip('/')}/surfaces/webhooks/telegram-manager"

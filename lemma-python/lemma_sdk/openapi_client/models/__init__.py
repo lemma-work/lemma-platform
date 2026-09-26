@@ -178,6 +178,8 @@ _NAME_TO_MODULE = {
     'DirectoryTreeResponse': 'directory_tree_response',
     'DisplaySizeRequest': 'display_size_request',
     'DisplaySizeResponse': 'display_size_response',
+    'EmailDeliveryStatusResponse': 'email_delivery_status_response',
+    'EmailDeliveryTestResponse': 'email_delivery_test_response',
     'EndNode': 'end_node',
     'EndNodeConfig': 'end_node_config',
     'EndNodePositionType0': 'end_node_position_type_0',
@@ -445,6 +447,7 @@ _NAME_TO_MODULE = {
     'SurfaceSlackConfigResponse': 'surface_slack_config_response',
     'SurfaceSystemClaim': 'surface_system_claim',
     'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
+    'SurfaceUnavailableReason': 'surface_unavailable_reason',
     'SurfaceUpdateRequest': 'surface_update_request',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
@@ -709,6 +712,8 @@ if TYPE_CHECKING:
     from .directory_tree_response import DirectoryTreeResponse
     from .display_size_request import DisplaySizeRequest
     from .display_size_response import DisplaySizeResponse
+    from .email_delivery_status_response import EmailDeliveryStatusResponse
+    from .email_delivery_test_response import EmailDeliveryTestResponse
     from .end_node import EndNode
     from .end_node_config import EndNodeConfig
     from .end_node_position_type_0 import EndNodePositionType0
@@ -976,6 +981,7 @@ if TYPE_CHECKING:
     from .surface_slack_config_response import SurfaceSlackConfigResponse
     from .surface_system_claim import SurfaceSystemClaim
     from .surface_telegram_config_input import SurfaceTelegramConfigInput
+    from .surface_unavailable_reason import SurfaceUnavailableReason
     from .surface_update_request import SurfaceUpdateRequest
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
@@ -1253,6 +1259,8 @@ __all__ = [
     'DirectoryTreeResponse',
     'DisplaySizeRequest',
     'DisplaySizeResponse',
+    'EmailDeliveryStatusResponse',
+    'EmailDeliveryTestResponse',
     'EndNode',
     'EndNodeConfig',
     'EndNodePositionType0',
@@ -1520,6 +1528,7 @@ __all__ = [
     'SurfaceSlackConfigResponse',
     'SurfaceSystemClaim',
     'SurfaceTelegramConfigInput',
+    'SurfaceUnavailableReason',
     'SurfaceUpdateRequest',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',

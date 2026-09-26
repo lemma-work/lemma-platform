@@ -255,7 +255,7 @@ async def test_public_sse_sanitizes_provider_failure_matrix_and_persists_failure
             None,
             "A tool failed repeatedly after several attempts",
         ),
-        ("usage_limit", None, "The agent run hit a usage limit."),
+        ("usage_limit", None, "The run hit a usage limit."),
         ("generic", None, "The model provider returned an error."),
     )
 
@@ -471,7 +471,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
         },
     )
     assert empty_catalog.status_code == status.HTTP_400_BAD_REQUEST
-    assert "provide model_names" in empty_catalog.json()["message"]
+    assert "type a model name below" in empty_catalog.json()["message"]
 
     unsafe_url = await authenticated_client.post(
         f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
@@ -2492,7 +2492,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
 
 
 @pytest.mark.asyncio
-async def test_a_server_key_without_model_names_still_lists_and_names_the_setting(
+async def test_a_server_key_without_model_names_still_lists_and_says_so(
     authenticated_client,
     fixed_test_org,
     e2e_settings,
@@ -2539,7 +2539,9 @@ async def test_a_server_key_without_model_names_still_lists_and_names_the_settin
             user_id=uuid4(),
         )
     assert raised.value.code == "model_names_not_configured"
-    assert "LEMMA_OPENAI_MODEL_NAMES" in raised.value.message
+    # Said about the provider; the setting to fill in goes to the log.
+    assert "no model names" in raised.value.message
+    assert "LEMMA_" not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2588,7 +2590,7 @@ async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
     # configuration", which is the one thing the server already knew the answer
     # to.
     assert runtime["name"] in str(events[-1]["data"]), events[-1]
-    assert "Models settings" in str(events[-1]["data"]), events[-1]
+    assert "was retired" in str(events[-1]["data"]), events[-1]
 
     durable = await authenticated_client.get(
         f"/pods/{pod['id']}/conversations/{conversation_id}"

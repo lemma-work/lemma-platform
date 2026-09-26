@@ -574,7 +574,12 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
 
             {(connectors.isPending || accounts.isPending) && <p className="empty-row">Reading…</p>}
             {(connectors.isError || accounts.isError) && (
-                <p className="empty-row">Couldn’t load connectors.</p>
+                <p className="empty-row">
+                    Couldn’t load connectors.{" "}
+                    <button className="btn" onClick={() => { void connectors.refetch(); void accounts.refetch(); }}>
+                        <RefreshIcon size={14} /> Retry
+                    </button>
+                </p>
             )}
 
             {connectors.isSuccess && accounts.isSuccess && (
@@ -632,7 +637,21 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
                                     ? "Nothing connected yet."
                                     : active === "trouble"
                                         ? "Everything connected is working."
-                                        : "Every connector is already connected."}
+                                        : all.length > 0
+                                            ? "Every connector is already connected."
+                                            /* Zero of zero is not "all of them": an empty
+                                               catalog means its import has not run or
+                                               failed, and saying everything is connected
+                                               hid that. */
+                                            : "No connectors are in the catalog yet. It may still be loading."}
+                            {!term && all.length === 0 && (
+                                <>
+                                    {" "}
+                                    <button className="btn" onClick={() => void connectors.refetch()}>
+                                        <RefreshIcon size={14} /> Retry
+                                    </button>
+                                </>
+                            )}
                         </p>
                     )}
 
@@ -665,6 +684,13 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
                     onClose={() => setAdding(false)}
                     onDone={() => { setAdding(false); refresh(); }}
                 />
+            )}
+
+            {/* Most of the catalog's breadth arrives through Composio, which a
+                local install has no key for until somebody adds one. Hidden
+                once it is set, and anywhere but this computer's own window. */}
+            {connectors.isSuccess && (
+                <SetUpOnThisMac form="composio" compact lead="Want Notion, Linear, HubSpot and more? Add a Composio key on {machine}." />
             )}
 
             {accounts.isSuccess && connectors.isSuccess && accounts.data.length > 0 && (

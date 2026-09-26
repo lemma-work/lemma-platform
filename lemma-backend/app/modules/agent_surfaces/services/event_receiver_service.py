@@ -9,6 +9,7 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 
+from app.core.config import reveal_secret
 from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
@@ -222,11 +223,11 @@ class NativeSurfaceReceiverCoordinator:
             surfaces = await repository.list_active_native_receiver_surfaces(platforms)
             account_cache: dict[UUID, dict[str, Any]] = {}
             candidates: dict[str, NativeReceiverCandidate] = {}
-            if (
-                SurfacePlatform.TELEGRAM in platforms
-                and surface_settings.telegram_bot_token
-            ):
-                token = surface_settings.telegram_bot_token.strip()
+            system_telegram_token = (
+                reveal_secret(surface_settings.telegram_bot_token) or ""
+            ).strip()
+            if SurfacePlatform.TELEGRAM in platforms and system_telegram_token:
+                token = system_telegram_token
                 key = _receiver_key("telegram", "system", token)
                 candidates[key] = NativeReceiverCandidate(
                     key=key,
@@ -434,12 +435,12 @@ async def _receiver_credentials(
 ) -> dict[str, Any] | None:
     if surface.account_id is None:
         if surface.surface_type is SurfacePlatform.TELEGRAM:
-            if not surface_settings.telegram_bot_token:
+            if not reveal_secret(surface_settings.telegram_bot_token):
                 logger.debug(
                     "agent_surfaces.event_receiver_service.telegram_system_surface_exists_but.diagnostic"
                 )
                 return None
-            return {"bot_token": surface_settings.telegram_bot_token}
+            return {"bot_token": reveal_secret(surface_settings.telegram_bot_token)}
         if surface.surface_type is SurfacePlatform.RESEND:
             return resend_receiver_credentials()
         return None
@@ -457,7 +458,7 @@ async def _receiver_credentials(
 
     if surface.surface_type is SurfacePlatform.SLACK:
         if surface.credential_mode is SurfaceCredentialMode.SYSTEM:
-            credentials["app_token"] = surface_settings.slack_app_token
+            credentials["app_token"] = reveal_secret(surface_settings.slack_app_token)
         else:
             credentials["app_token"] = _nested_credential(credentials, "app_token")
         credentials["bot_token"] = slack_access_token(credentials)

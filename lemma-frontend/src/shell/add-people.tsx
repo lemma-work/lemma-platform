@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
 import type { Pod } from "@/data";
 import { isLandingPreview } from "@/marketing/preview-mode";
+import { openSettings } from "@/desktop/open-settings";
 
 const ROLES = [
     { value: "POD_EDITOR", label: "Can edit" },
@@ -114,6 +115,21 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
                     </button>
                 ))}
             </div>
+
+            {/* Only people already in the organization can be added here, so
+                somebody who is not yet in it needs an invitation first — and
+                that lives in Settings. Said here rather than left as a dead
+                end when the list is empty or the person is missing from it. */}
+            <button
+                type="button"
+                className="linkish"
+                onClick={() => {
+                    openSettings("people");
+                    onDone();
+                }}
+            >
+                Invite someone new →
+            </button>
         </div>
     );
 }

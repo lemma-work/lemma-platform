@@ -104,6 +104,12 @@ Use `--scope project` to install into the current directory (`.claude/skills/`, 
 **project-scoped only** — run `lemma skills install --target cursor --scope project` inside the repo
 you're working in. Then restart your coding agent and ask it to build a pod.
 
+Codex still loads its older `~/.codex/skills/` (or `$CODEX_HOME/skills/`) as well, so installing into
+`~/.agents/skills/` moves any Lemma copy of the same skill found there to
+`~/.codex/lemma-stale-skills/<skill>.<timestamp>/` and says so; it is never deleted. A copy counts as
+Lemma's when it carries the `.lemma-skill` marker every install writes, or when its frontmatter names
+the same skill with a Lemma description. Symlinks and your own skills are left alone.
+
 ## Anonymous usage telemetry
 
 A CLI built with an ingestion key compiled in reports which command group you

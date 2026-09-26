@@ -99,6 +99,17 @@ pub struct HostSetupSpec {
     /// that declines to declare one, behaves exactly as before.
     #[serde(default)]
     pub stamp: Option<String>,
+    /// Environment variables the result also depends on, folded into `stamp`
+    /// from the environment the setup actually runs with.
+    ///
+    /// The renderer cannot put these in `stamp` itself: it sees only the host
+    /// pack's environment, while a Composio key arrives later, from the
+    /// operator configuration applied over it. The catalog's stamp was once
+    /// computed from the pack alone, so it said "no key" whatever was saved,
+    /// and adding a key never brought the Composio apps in. Values are hashed
+    /// with the stamp, never recorded as they are.
+    #[serde(default)]
+    pub stamp_env: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

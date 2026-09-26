@@ -8,6 +8,7 @@ from attrs import field as _attrs_field
 
 from ..models.surface_credential_mode import SurfaceCredentialMode
 from ..models.surface_platform import SurfacePlatform
+from ..models.surface_unavailable_reason import SurfaceUnavailableReason
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ class AvailableSurface:
             managed_setup_available (bool | Unset):  Default: False.
             system_claim (None | SurfaceSystemClaim | Unset):
             title (None | str | Unset):
+            unavailable_reason (None | SurfaceUnavailableReason | Unset):
     """
 
     connector_id: str
@@ -60,6 +62,7 @@ class AvailableSurface:
     managed_setup_available: bool | Unset = False
     system_claim: None | SurfaceSystemClaim | Unset = UNSET
     title: None | str | Unset = UNSET
+    unavailable_reason: None | SurfaceUnavailableReason | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -121,6 +124,14 @@ class AvailableSurface:
         else:
             title = self.title
 
+        unavailable_reason: None | str | Unset
+        if isinstance(self.unavailable_reason, Unset):
+            unavailable_reason = UNSET
+        elif isinstance(self.unavailable_reason, SurfaceUnavailableReason):
+            unavailable_reason = self.unavailable_reason.value
+        else:
+            unavailable_reason = self.unavailable_reason
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -147,6 +158,8 @@ class AvailableSurface:
             field_dict["system_claim"] = system_claim
         if title is not UNSET:
             field_dict["title"] = title
+        if unavailable_reason is not UNSET:
+            field_dict["unavailable_reason"] = unavailable_reason
 
         return field_dict
 
@@ -245,6 +258,27 @@ class AvailableSurface:
 
         title = _parse_title(d.pop("title", UNSET))
 
+        def _parse_unavailable_reason(
+            data: object,
+        ) -> None | SurfaceUnavailableReason | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                unavailable_reason_type_0 = SurfaceUnavailableReason(data)
+
+                return unavailable_reason_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | SurfaceUnavailableReason | Unset, data)
+
+        unavailable_reason = _parse_unavailable_reason(
+            d.pop("unavailable_reason", UNSET)
+        )
+
         available_surface = cls(
             connector_id=connector_id,
             kind=kind,
@@ -258,6 +292,7 @@ class AvailableSurface:
             managed_setup_available=managed_setup_available,
             system_claim=system_claim,
             title=title,
+            unavailable_reason=unavailable_reason,
         )
 
         available_surface.additional_properties = d

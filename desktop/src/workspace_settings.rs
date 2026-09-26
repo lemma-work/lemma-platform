@@ -133,7 +133,7 @@ pub(crate) fn workspace_settings_view(snapshot: &Value) -> Value {
         ),
         "services": services,
         "operator": {
-            "config": pick(&config, &["revision", "ai", "integrations", "surfaces"]),
+            "config": pick(&config, &["revision", "ai", "integrations", "surfaces", "email"]),
             "secrets": operator.get("secrets").cloned().unwrap_or(json!({})),
             "readiness": operator.get("readiness").cloned().unwrap_or(json!({})),
         },
@@ -145,14 +145,15 @@ pub(crate) fn workspace_settings_view(snapshot: &Value) -> Value {
 
 /// The operator sections the workspace may write.
 ///
-/// `ai` is absent on purpose. The workspace's models are the organization's
-/// Models page; the one path into the operator's AI profile stays
-/// `configure_ai_provider`, which merges that section alone. Integrations and
-/// surfaces are the OAuth apps and bot credentials connectors and channels run
-/// with on this install, and the workspace is where those are needed.
+/// Everything Server setup configures: the AI model this server runs its
+/// own work on, how it sends mail, and the OAuth apps, bots and keys its
+/// connectors, channels, voice and search run with. One section per save,
+/// each against its revision; `config.apply` refuses a credential from any
+/// other section. Sharing, tunnels and the runtime are not sections and are
+/// never written from here.
 pub(crate) fn workspace_section_allowed(payload: &Value) -> Result<(), String> {
     match payload.pointer("/section/name").and_then(Value::as_str) {
-        Some("integrations" | "surfaces") => Ok(()),
+        Some("integrations" | "surfaces" | "ai" | "email") => Ok(()),
         Some(other) => Err(format!("the {other} section is not changed from here")),
         None => Err("a settings change names its section".into()),
     }
@@ -359,7 +360,14 @@ pub(crate) fn consented_sharing_request(
 /// Setting one for the first time asks nothing: there is nothing of the
 /// person's to lose, and it is what the page is for. Changing one that is
 /// already there does -- it silently re-points this Mac's connectors or bots
-/// at somebody else's app. `operator` is the daemon's current operator block.
+/// at somebody else's app, or its AI work at somebody else's key.
+/// `operator` is the daemon's current operator block.
+///
+/// Plain values count only in the two sections where a value *is* a
+/// credential -- an OAuth client id, a bot's app id. The AI and email
+/// sections' plain values are choices (a model, a sender address), and
+/// asking natively before every model change would teach people to click
+/// through the question that matters.
 pub(crate) fn credential_replacements(operator: &Value, payload: &Value) -> Vec<String> {
     let mut replaced = Vec::new();
     let Some(section) = payload.pointer("/section/name").and_then(Value::as_str) else {
@@ -379,7 +387,10 @@ pub(crate) fn credential_replacements(operator: &Value, payload: &Value) -> Vec<
             }
         }
     }
-    if let Some(values) = payload.pointer("/section/value").and_then(Value::as_object) {
+    let values = matches!(section, "integrations" | "surfaces")
+        .then(|| payload.pointer("/section/value").and_then(Value::as_object))
+        .flatten();
+    if let Some(values) = values {
         let current = operator
             .pointer("/config")
             .and_then(|config| config.get(section));
@@ -450,6 +461,9 @@ fn local_settings_snapshot_impl(app: AppHandle) -> Result<Value, String> {
         "channel": release_channel(),
         "updates_supported": updates_enabled(),
         "start_at_login": app.autolaunch().is_enabled().unwrap_or(false),
+        // Whether Verify & repair has a signed runtime to download: only a
+        // downloaded runtime of this build's own release does.
+        "repair_available": runtime_info_snapshot().repair_available,
     });
     Ok(view)
 }
@@ -566,6 +580,59 @@ pub(crate) async fn set_start_at_login(
 ) -> Result<bool, String> {
     require_local_settings_caller(&window, &app)?;
     tauri::async_runtime::spawn_blocking(move || set_start_at_login_impl(app, enabled))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// The locald request behind Server setup's Test, from the page's payload.
+///
+/// Pure, so what reaches the daemon can be asserted. Only the fields a test
+/// takes are forwarded -- the daemon refuses anything else, and naming them
+/// here means a page cannot reach a daemon field this command never meant to
+/// expose.
+pub(crate) fn setup_test_request(payload: &Value) -> Result<Value, String> {
+    let service = payload
+        .get("service")
+        .and_then(Value::as_str)
+        .ok_or("a test names the service it tests")?;
+    let mut forwarded = serde_json::Map::new();
+    forwarded.insert("service".into(), Value::String(service.to_owned()));
+    for key in ["ai", "api_key", "credential", "from_email"] {
+        if let Some(value) = payload.get(key).filter(|value| !value.is_null()) {
+            forwarded.insert(key.into(), value.clone());
+        }
+    }
+    Ok(json!({
+        "cmd": "config.test",
+        "id": operation_id("workspace-setup-test"),
+        "payload": Value::Object(forwarded),
+    }))
+}
+
+fn test_server_setup_impl(app: AppHandle, payload: Value) -> Result<Value, String> {
+    if current_mode(&app) != "local" {
+        return Err(format!("{THIS_COMPUTER} runs no local Lemma to test"));
+    }
+    let request = setup_test_request(&payload)?;
+    ensure_locald(&app)?;
+    // A local model may still be loading into memory on its first answer.
+    let answer = locald_request(request, Duration::from_secs(60))?;
+    Ok(json!({
+        "detail": answer.get("detail").cloned().unwrap_or(Value::Null),
+        "models": answer.get("models").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+#[tauri::command]
+/// Server setup's Test: one read-only request to a service, made by locald
+/// with the typed credential or the stored one. Off the UI thread.
+pub(crate) async fn test_server_setup(
+    window: Webview,
+    app: AppHandle,
+    payload: Value,
+) -> Result<Value, String> {
+    require_local_settings_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || test_server_setup_impl(app, payload))
         .await
         .map_err(|error| error.to_string())?
 }

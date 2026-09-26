@@ -237,7 +237,7 @@ class AgentSettings(BaseSettings):
             "only deepgram; auto selects the first available provider."
         ),
     )
-    deepgram_api_key: Optional[str] = Field(
+    deepgram_api_key: Optional[SecretStr] = Field(
         default=None,
         description="Deepgram API key for the speech toolset (listen/say).",
     )

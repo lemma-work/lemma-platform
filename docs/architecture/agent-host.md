@@ -216,8 +216,8 @@ through a capability naming its URL. `capabilities/workspace.json` grants
 the conversation-folder commands, `discover_provider_models` and
 `configure_ai_provider` — and, for Settings → This Mac, the commands that
 change this computer's own settings: `local_settings_snapshot`,
-`apply_local_settings`, `local_sharing`, `set_start_at_login`, `set_host_execution`,
-`repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
+`apply_local_settings`, `test_server_setup`, `local_sharing`, `set_start_at_login`,
+`set_host_execution`, `repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
 `check_for_app_update`, `install_app_update`, `telemetry_status` and
 `set_telemetry_enabled`. Nothing destructive is granted: resetting data,
 reinstalling and restarting into recovery stay in Local settings.

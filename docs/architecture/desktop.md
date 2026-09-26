@@ -260,8 +260,14 @@ The host-pack manifest requires exactly:
 - service: `backend`;
 - service: `frontend`.
 
-Setups are skipped when their recorded stamp matches. On macOS a stamp is bound
-to the data disk's identity (inode and birth time of `data.raw`), so a disk
+Setups are skipped when their recorded stamp matches. A setup may also name
+environment variables in `stamp_env`, whose values in the environment it runs
+with are hashed into its stamp: `connector-catalog` names
+`COMPOSIO_API_KEY`, which arrives from the operator configuration rather than
+the host pack, so saving, changing or removing a Composio key imports the
+catalog again. A settings save re-runs that one setup beside the restarted
+backend when its stamp changed, rather than waiting for the next start. On
+macOS a stamp is bound to the data disk's identity (inode and birth time of `data.raw`), so a disk
 that was replaced reruns its migrations instead of skipping them against an
 empty database. `migrations` runs under a one-hour ceiling but is ended early
 only after fifteen minutes with nothing written to its log. While it runs,
@@ -536,26 +542,67 @@ are instead of controls the shell would refuse.
 
 | Section | Owns | Data source |
 | --- | --- | --- |
-| Overview | One health line, Start at login, Verify & repair, Open logs | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs` |
+| Overview | One health line, Start at login, Verify & repair, Open logs, a Server setup summary | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs` |
+| Server setup | One card per capability — AI model (required), Email, Connectors, Channels, Voice, Web search — each with its status, what it unlocks, a Test, and where to get its keys; then an Advanced part with state paths, addresses, log tails and anonymous install health | `local_settings_snapshot`, `apply_local_settings`, `test_server_setup`, `discover_provider_models`, `diagnostic_logs`, `telemetry_status`, `set_telemetry_enabled` |
 | Coding agents | This computer's Agent Host card, Run commands on this Mac, the workspace sandbox image | `agent_host_*`, `set_host_execution`, `local_settings_snapshot`, `prepare_sandbox_image` |
 | Sharing | This Mac / Local network / Public (ngrok or Cloudflare), who can join, a link to invite people | `local_sharing` |
 | Updates | Current version, check, install, what the channel means | `check_for_app_update`, `install_app_update` |
-| Advanced | Developer credentials (Google, GitHub, Microsoft, Composio, Deepgram; Slack, Telegram, Teams, WhatsApp, Resend), diagnostics and log tails, anonymous install health | `apply_local_settings`, `diagnostic_logs`, `telemetry_status`, `set_telemetry_enabled` |
 
-AI models are the organization's, on Organization → Models. On a local
-install that page also suggests Ollama and LM Studio when they answer on
-their default loopback ports (`discover_provider_models`, sent with an empty
-key so the stored provider key never reaches a probed endpoint), and offers
-the operator AI provider this install was set up with as **Add to
-workspace**. Adding it creates an organization provider and leaves the
-operator profile in place: that profile is the backend's `system:lemma`,
-which it falls back to for a pod with no default runtime, conversation
-titles, summaries and image reading. A keyed provider's key is asked for
-again, because the page can only learn that one is stored.
+**Server setup** configures what this computer's server needs a key for,
+each card saving one operator section:
+
+- **AI model** writes the `ai` section: a provider (OpenAI-compatible or
+  Anthropic-compatible; presets fill the address, and Ollama or LM Studio
+  answering on their default loopback ports are marked as found), its key,
+  the model teammates use, an optional model that reads images, and an
+  optional fast model. That profile is the backend's `system:lemma`, which it
+  falls back to for a pod with no default runtime. locald also names the
+  side jobs' models from it: `VISION_MODEL` (the image model, which it adds
+  to the vision names, or the default model when that reads images),
+  `CONVERSATION_TITLE_MODEL` (the fast model, else the default) and
+  `HISTORY_SUMMARIZATION_MODEL` (the fast model, when there is one). Test lists
+  the provider's models and asks the default one for a one-word answer.
+- **Email** writes the `email` section (`none`, `resend` or `smtp`, a sender
+  address, and the SMTP server with its password in the vault). Until it is
+  set up the backend keeps its local mail spool; once it is, locald switches
+  `EMAIL_TRANSPORT` to `smtp` and renders `RESEND_FROM_EMAIL` or `SMTP_*`. The
+  Resend key is the channels' `surfaces.resend_api_key` — one Resend account
+  carries mail in and out — so a Resend setup saves that section first. Test
+  checks the key's domains and then asks the backend to email the signed-in
+  person.
+- **Connectors** holds the Composio key (saving one also sets
+  `composio_enabled`) and this computer's OAuth apps for Google, Microsoft,
+  GitHub and Slack, each showing the redirect URL to register.
+- **Channels** holds Telegram's bot token and Slack's app-level token, which
+  switch polling and Socket Mode on by themselves (no public address is
+  needed), Resend's inbound domain, and WhatsApp and Teams, which say they
+  need Public sharing.
+- **Voice** is the Deepgram key; **Web search** works with no key (DuckDuckGo)
+  and switches to Brave Search when a Brave key is stored.
+
+Tests are read-only requests locald makes (`config.test`): with the typed
+credential, or the stored one when nothing was typed, to the one host each
+service publishes — so a stored key never goes anywhere a page chose. The AI
+test follows discovery's rule: a stored key only goes to the address it was
+saved for.
+
+A new local install opens a first-run checklist of the same capabilities
+once, after sign-up; everything but the AI model can be skipped, and the
+Server setup entry in Settings carries a dot while the model is missing.
+
+Organization → Models is the organization's own list. On a local install it
+also suggests Ollama and LM Studio when they answer
+(`discover_provider_models`, sent with an empty key so the stored provider key
+never reaches a probed endpoint), and offers this install's AI model as
+**Add to workspace**, which creates an organization provider and leaves the
+operator profile in place. A keyed provider's key is asked for again, because
+the page can only learn that one is stored.
 
 Connectors and channels that need an OAuth app or bot credentials this
 install does not have yet show **Set up on this Mac** where they fail, which
-opens Advanced at that form (`lemma:open-settings` with `{section, focus}`).
+opens Server setup at that form (`lemma:open-settings` with
+`{section: "this-mac-setup", focus}`); `this-mac-advanced` from an older
+caller opens Server setup at its Advanced part.
 
 The menu's Desktop settings… (⌘,) and the tray item raise
 `lemma:open-settings` in the workspace when it is local, ready and on its own
@@ -602,7 +649,8 @@ say `http://app.lemma.localhost:*`, which would also match every alias port.
 | Command | Granted to | Rust check | Notes |
 | --- | --- | --- | --- |
 | `local_settings_snapshot` | workspace | local workspace | An allowlisted view of `control.snapshot`: no install id, schema, operation ids or process details |
-| `apply_local_settings` | workspace | local workspace | `config.apply` for `integrations` or `surfaces` only; replacing or removing a credential already set asks natively first |
+| `apply_local_settings` | workspace | local workspace | `config.apply` for `ai`, `email`, `integrations` or `surfaces`; replacing or removing a credential already set asks natively first (for `ai` and `email`, only their keys and passwords count) |
+| `test_server_setup` | workspace | local workspace | locald `config.test`: forwards only `service`, `ai`, `api_key`, `credential` and `from_email`; writes nothing |
 | `local_sharing` | workspace | local workspace | Local network, Public and opening *Who can join* ask natively first, in words built from the request; the page cannot set the consent flag |
 | `set_start_at_login` | workspace | local workspace | Rebuilds the menus so the tray's check stays true |
 | `set_host_execution` | workspace | local workspace | locald `agent-host.host-execution`; sends only `enabled`, asks natively before enabling, refuses to enable without Seatbelt, answers with the fresh Agent Host status. See [Host execution](desktop-host-execution.md) |
@@ -807,7 +855,7 @@ The desktop shell serializes its own configuration writes, replaces the file
 atomically, and refuses to overwrite malformed saved configuration. Window and
 navigation updates cannot erase a concurrently saved runtime binding. Recovery
 remains available when this file is damaged.
-This Mac → Advanced sends one section per save with its expected revision;
+This Mac → Server setup sends one section per save with its expected revision;
 the daemon serializes writes and rejects a stale revision with
 `config-conflict`. Credentials use explicit `keep`, `replace`, and `remove`
 actions and are never read back: the page only learns whether one is stored.
@@ -846,8 +894,8 @@ The section payload for `config.apply` is:
 ```
 
 `value` is the selected section's full schema; it never includes other sections.
-Valid names are `ai`, `integrations`, and `surfaces`. Credential names must
-belong to that section. Replacement requires a nonempty `value` alongside
+Valid names are `ai`, `integrations`, `surfaces` and `email`. Credential
+names must belong to that section. Replacement requires a nonempty `value` alongside
 `action: "replace"`.
 
 A local model is reached the same way as any other provider: Ollama and LM

@@ -460,6 +460,22 @@ def test_an_agent_host_run_with_host_execution_is_not_sent_to_sandbox_tools():
     assert "lemma_exec_command" in load_agent_host_runtime_prompt()
 
 
+@pytest.mark.parametrize("host_execution", [False, True])
+def test_both_browser_sections_send_the_agent_to_lemmas_browser_skill(
+    host_execution: bool,
+):
+    """A host agent may have a stale `browser` skill installed on the Mac, and
+    older copies told it to run a start step first. Both runtimes name Lemma's
+    copy and say that opening a page is what starts the browser."""
+    runtime = " ".join(
+        load_agent_host_runtime_prompt(host_execution=host_execution).split()
+    )
+
+    assert "`lemma_load_skill`" in runtime
+    assert "not a locally installed copy" in runtime
+    assert "starts the browser itself" in runtime
+
+
 # ------------------------------------------------------ recorded on the run
 
 

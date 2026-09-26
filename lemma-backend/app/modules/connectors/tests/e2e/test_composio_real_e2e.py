@@ -41,6 +41,7 @@ from sqlalchemy import delete
 
 sys.path.append(str(Path(__file__).resolve().parents[5]))
 
+from app.core.config import reveal_secret
 from app.modules.connectors.config import connector_settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.account import AccountStatus
@@ -99,7 +100,9 @@ def _env_value(name: str) -> str | None:
 
 
 def _composio_api_key() -> str | None:
-    return connector_settings.composio_api_key or _env_value("COMPOSIO_API_KEY")
+    return reveal_secret(connector_settings.composio_api_key) or _env_value(
+        "COMPOSIO_API_KEY"
+    )
 
 
 def _require_composio() -> str:
@@ -137,9 +140,9 @@ def _the_code_under_test_sees_the_same_key(monkeypatch):
         return
     monkeypatch.setenv("COMPOSIO_API_KEY", key)
     monkeypatch.setattr(connector_settings, "composio_api_key", key)
-    webhook_secret = connector_settings.composio_webhook_secret or _env_value(
-        "COMPOSIO_WEBHOOK_SECRET"
-    )
+    webhook_secret = reveal_secret(
+        connector_settings.composio_webhook_secret
+    ) or _env_value("COMPOSIO_WEBHOOK_SECRET")
     if webhook_secret:
         monkeypatch.setenv("COMPOSIO_WEBHOOK_SECRET", webhook_secret)
         monkeypatch.setattr(

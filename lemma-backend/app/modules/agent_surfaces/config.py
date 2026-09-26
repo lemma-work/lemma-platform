@@ -11,7 +11,7 @@ belongs here.
 
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.settings_env import dotenv_path
 
@@ -48,7 +48,7 @@ class SurfaceSettings(BaseSettings):
             "Used to acquire Bot Framework and Graph API tokens via client_credentials grant."
         ),
     )
-    microsoft_bot_app_password: Optional[str] = Field(
+    microsoft_bot_app_password: Optional[SecretStr] = Field(
         default=None,
         description="Client secret for the Lemma Teams bot App Registration.",
     )
@@ -85,7 +85,7 @@ class SurfaceSettings(BaseSettings):
     )
 
     # Slack
-    slack_signing_secret: Optional[str] = Field(
+    slack_signing_secret: Optional[SecretStr] = Field(
         default=None,
         description="Slack signing secret for verifying native Slack webhook requests",
     )
@@ -108,13 +108,13 @@ class SurfaceSettings(BaseSettings):
             "silently renders nothing — leave unset rather than pointing at one."
         ),
     )
-    slack_app_token: Optional[str] = Field(
+    slack_app_token: Optional[SecretStr] = Field(
         default=None,
         description="Slack Socket Mode app-level token for local surface receivers",
     )
 
     # WhatsApp Business API
-    whatsapp_access_token: Optional[str] = Field(
+    whatsapp_access_token: Optional[SecretStr] = Field(
         default=None, description="WhatsApp Business API access token (NATIVE mode)"
     )
     whatsapp_onboarding_email_flow_id: str | None = None
@@ -125,10 +125,10 @@ class SurfaceSettings(BaseSettings):
     whatsapp_waba_id: Optional[str] = Field(
         default=None, description="WhatsApp Business Account ID (NATIVE mode)"
     )
-    whatsapp_verify_token: Optional[str] = Field(
+    whatsapp_verify_token: Optional[SecretStr] = Field(
         default=None, description="WhatsApp webhook verification token"
     )
-    whatsapp_app_secret: Optional[str] = Field(
+    whatsapp_app_secret: Optional[SecretStr] = Field(
         default=None,
         description="Meta app secret for verifying WhatsApp webhook signatures",
     )
@@ -141,14 +141,14 @@ class SurfaceSettings(BaseSettings):
     )
 
     # Telegram
-    telegram_bot_token: Optional[str] = Field(
+    telegram_bot_token: Optional[SecretStr] = Field(
         default=None, description="Telegram bot token (NATIVE mode)"
     )
-    telegram_webhook_secret: Optional[str] = Field(
+    telegram_webhook_secret: Optional[SecretStr] = Field(
         default=None,
         description="Secret token expected in native Telegram webhook requests",
     )
-    telegram_manager_bot_token: Optional[str] = Field(
+    telegram_manager_bot_token: Optional[SecretStr] = Field(
         default=None,
         description=(
             "Token for the Telegram control-plane bot that provisions dedicated "
@@ -161,7 +161,7 @@ class SurfaceSettings(BaseSettings):
             "Username of the Telegram control-plane bot, without or with the @ prefix."
         ),
     )
-    telegram_manager_webhook_secret: Optional[str] = Field(
+    telegram_manager_webhook_secret: Optional[SecretStr] = Field(
         default=None,
         description="Secret token expected on Telegram manager webhook requests.",
     )

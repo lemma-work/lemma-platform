@@ -24,6 +24,7 @@ import os
 from functools import lru_cache
 from typing import Any
 
+from app.core.config import reveal_secret
 from app.modules.connectors.config import connector_settings
 
 
@@ -52,7 +53,9 @@ def get_composio_client(*, allow_managed_files: bool = False) -> Any:
     and stream Composio's ``{name, mimetype, s3url}`` envelope to the pod
     datastore.
     """
-    return _build(connector_settings.composio_api_key, allow_managed_files)
+    return _build(
+        reveal_secret(connector_settings.composio_api_key), allow_managed_files
+    )
 
 
 def reset_composio_clients() -> None:

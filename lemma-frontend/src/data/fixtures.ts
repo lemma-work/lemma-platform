@@ -2136,7 +2136,6 @@ export const fixtureSource: PodSource = {
     },
     async getSurface() { throw new Error("Channel configuration is available in a connected workspace."); },
     async surfaceSetup() { throw new Error("Setup status is available in a connected workspace."); },
-    async surfaceGuide() { throw new Error("Setup instructions are available in a connected workspace."); },
     async surfaceChannels() { return { channels: [] }; },
     async updateSurface() { throw new Error("Channel configuration is available in a connected workspace."); },
     async createSurfaceAccount() { throw new Error("Connect accounts in a connected workspace."); },
@@ -2186,7 +2185,12 @@ export const fixtureSource: PodSource = {
             id: "org:key-" + (RUNTIMES.length + 1),
             name: key.name, kind: "MODEL_PROVIDER", scope: "ORGANIZATION", status: "ACTIVE",
             default_model_name: key.models[0] ?? null,
-            model_catalog: key.models.map((name) => ({ name })),
+            model_catalog: key.models.map((name) => ({
+                name,
+                capabilities: key.protocol === "anthropic" || key.visionModels?.includes(name)
+                    ? ["TEXT", "TOOLS", "VISION"]
+                    : ["TEXT", "TOOLS"],
+            })),
         }];
     },
     async addLocalAgent(_orgId: string, harnessId: string, agent) {

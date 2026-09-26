@@ -39,6 +39,8 @@ export interface AgentHostStatus {
     uptime_seconds: number | null;
     last_error: string | null;
     log: string | null;
+    /** The host kept exiting and locald stopped restarting it. Start clears it. */
+    restart_circuit_open: boolean;
     /** "Run commands on this Mac": whether the owner turned it on, and
      *  whether this computer can confine commands at all (macOS only). Null
      *  from a shell too old to say. */
@@ -59,6 +61,7 @@ export function readStatus(payload: unknown): AgentHostStatus | null {
         uptime_seconds: typeof record.uptime_seconds === "number" ? record.uptime_seconds : null,
         last_error: typeof record.last_error === "string" ? record.last_error : null,
         log: typeof record.log === "string" ? record.log : null,
+        restart_circuit_open: record.restart_circuit_open === true,
         host_execution: readHostExecution(record.host_execution),
     };
 }

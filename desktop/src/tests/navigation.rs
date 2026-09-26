@@ -55,6 +55,7 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
                 | "allow-local-sharing"
                 | "allow-set-start-at-login"
                 | "allow-set-host-execution"
+                | "allow-test-server-setup"
                 | "allow-repair-runtime"
                 | "allow-open-logs"
                 | "allow-prepare-sandbox-image"
