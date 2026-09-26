@@ -57,6 +57,9 @@ const COMMANDS: &[&str] = &[
     "set_start_at_login",
     "set_host_execution",
     "test_server_setup",
+    "delete_update_backup",
+    "free_up_disk_space",
+    "return_to_mode_chooser",
 ];
 
 fn main() {

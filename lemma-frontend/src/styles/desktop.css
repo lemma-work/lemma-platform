@@ -307,3 +307,8 @@
     .setup-card__body { padding-left: 10px; }
     .setup-form .btn, .setup-checklist .btn { min-height: 44px; }
 }
+
+/* Search model readiness on Overview: a word, coloured only when it needs
+   attention, never a badge competing with the health line above. */
+.thismac-search-model { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+.thismac-search-model--bad { color: var(--bad); white-space: normal; text-align: right; }

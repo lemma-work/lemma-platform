@@ -10,6 +10,10 @@ const LOCALD_WRITE_BACKLOG: usize = 256;
 
 pub(crate) fn install_locald_connection(app: &AppHandle, connection: LocaldConnection) {
     let shell: State<Shell> = app.state();
+    // Every connection, including one to a replacement daemon: its list,
+    // empty or not, is the one that is true now. The `state` event that
+    // follows the handshake carries it to the splash.
+    shell.ui.lock_or_recover().warnings = daemon_warnings(&connection.hello["warnings"]);
     let (sender, outbound) = mpsc::sync_channel::<String>(LOCALD_WRITE_BACKLOG);
     *shell.locald_writer.lock_or_recover() = Some(sender);
     // The one thread that touches the socket, so a write that blocks blocks

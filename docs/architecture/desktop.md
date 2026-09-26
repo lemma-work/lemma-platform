@@ -111,6 +111,31 @@ damage it declines to fix gets one `e2fsck -f -y` pass before the guest reports
 2 GiB free on the Mac, because the sparse disk grows underneath the guest and a
 full Mac fails its writes -- Postgres's among them.
 
+The disk gives space back, as far as the host lets it. The guest mounts it
+`noatime,discard`, and `lemma-guestd` runs `fstrim` on it (`core.trim`) after
+a local-data reset and after every image prune, so blocks ext4 frees can be
+returned as holes in the sparse `data.raw`. Whether they are depends on
+Virtualization.framework passing discards through for the NVMe-attached data
+disk; its headers expose no switch for it, and the guest's
+`/sys/block/*/queue/discard_max_bytes` (in the guest diagnostics, non-zero
+means discards are accepted) is the fact to check. When they are not, `fstrim`
+answers "not supported" and `core.trim` reports `supported: false` rather than
+failing.
+
+`core.prune_images` removes container images no container uses -- stopped
+ones count, since a stopped sandbox starts again from its image -- and that the
+running release does not pin. locald asks for it after the first clean start of
+a new release and otherwise weekly (`disk-hygiene.json` records the last one),
+and This Mac's **Free up space** asks for it on demand. The guest refuses to
+decide without a container listing, skips any image a pull holds a claim on,
+and never passes `--force` to `rmi`, so the engine's own in-use refusal is a
+second guard. The next `sandbox.ensure` that needs a removed image pulls it.
+
+This Mac → Overview shows the data disk's allocated size (blocks, never the
+24 GiB length), the pre-migration backup (§5), and the runtime releases, in
+`control.snapshot`'s `disk_usage` plus the releases the app adds; the
+workspace sees an allowlisted copy.
+
 The build creates a 2 GiB maximum ext4 image, populates it with numeric
 ownership preserved, shrinks it to minimum contents, and verifies the final
 logical size. Boot files ship separately from the immutable root; the root
@@ -275,7 +300,18 @@ only after fifteen minutes with nothing written to its log. While it runs,
 the next start reports it and migrates forward again. Before migrating a
 database that has been migrated before, locald takes an APFS clone of the data
 disk to `runtime/macos/data.raw.before-migration` (one copy, replaced each time,
-removed by a data reset) -- restoring it is a manual support step. `schema-release`
+removed by a data reset) -- restoring it is a manual support step. It is kept
+only as long as it can matter: locald deletes it after the first clean start
+(backend healthy) of the release `schema-release` says the database was
+migrated to, and at the latest three days after it was taken, dated by its
+inode change time because `clonefile` copies the source's birth and
+modification times. A migration `update.json` records as failed keeps it
+whatever its age -- that is the case it exists for. Until then This Mac shows it
+with a Delete button (`delete_update_backup`, asked natively). Its size is what
+deleting it frees -- APFS's `ATTR_CMNEXT_PRIVATESIZE`, the blocks it no longer
+shares with the live disk -- and "up to" its allocated size only where that
+cannot be read. Measured on one installation: 16.0 GB allocated, 0.18 GB
+private. `schema-release`
 records the release that last completed migrations. When Alembic reports that it
 cannot locate the database's revision -- data from a newer Lemma, after a
 downgrade or a nightly-to-stable switch -- the start fails once, naming the
@@ -478,6 +514,29 @@ LAN and public sharing are unchanged: the shell does not answer a shared
 origin, so a shared workspace frames canonical URLs, and alias listeners bind
 loopback only.
 
+**Duplicate session cookies.** A cookie is keyed by name, domain and path, and
+this install writes the session cookies in more than one shape: host-only while
+sharing is on (the overlay blanks `SESSION_COOKIE_DOMAIN`) and in releases
+before the `Domain` cookie, `Domain=lemma.localhost` otherwise, and the refresh
+token at SuperTokens' narrow refresh path or at `/` (`APP_API_VIA_APP_ORIGIN`).
+Turning sharing on and off leaves two copies in the jar, and the browser sends
+both. SuperTokens answers a refresh carrying two with a 200 that clears only the
+copy at `SESSION_COOKIE_OLDER_DOMAIN` and has no `front-token` header; the
+browser SDK throws on that, so a pod app, which refreshes on its first load
+(its origin has no front token of its own), showed as signed out. While sharing,
+the "older" domain is the live one, so that clear removed the session in use.
+
+`DuplicateSessionCookieMiddleware`
+(`identity/infrastructure/supertokens_auth/duplicate_session_cookies.py`) fixes
+it on the server: any request carrying a repeated `sAccessToken` or
+`sRefreshToken` gets a clear for every shape a stray could have -- host-only and
+each parent domain of the `Host` and `Origin`, at every path that could have
+sent it and at SuperTokens' refresh path -- except the live shape, and a clear
+SuperTokens aimed at the live shape is dropped. The client retries the refresh
+once when `doesSessionExist()` says no (`AuthManager.localSession`), and that
+retry now carries one copy of each cookie. If the stray was the newer session,
+the person signs in once; nothing loops.
+
 ### 6.3 Migrating from `127.0.0.1.sslip.io`
 
 - locald rewrites recorded workspace and API URLs on the retired host to
@@ -542,7 +601,7 @@ are instead of controls the shell would refuse.
 
 | Section | Owns | Data source |
 | --- | --- | --- |
-| Overview | One health line, Start at login, Verify & repair, Open logs, a Server setup summary | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs` |
+| Overview | One health line, Start at login, Verify & repair, Open logs, a Server setup summary, disk space (data disk, the pre-update backup with Delete, runtimes, Free up space) | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs`, `delete_update_backup`, `free_up_disk_space` |
 | Server setup | One card per capability — AI model (required), Email, Connectors, Channels, Voice, Web search — each with its status, what it unlocks, a Test, and where to get its keys; then an Advanced part with state paths, addresses, log tails and anonymous install health | `local_settings_snapshot`, `apply_local_settings`, `test_server_setup`, `discover_provider_models`, `diagnostic_logs`, `telemetry_status`, `set_telemetry_enabled` |
 | Coding agents | This computer's Agent Host card, Run commands on this Mac, the workspace sandbox image | `agent_host_*`, `set_host_execution`, `local_settings_snapshot`, `prepare_sandbox_image` |
 | Sharing | This Mac / Local network / Public (ngrok or Cloudflare), who can join, a link to invite people | `local_sharing` |
@@ -577,7 +636,10 @@ each card saving one operator section:
   switch polling and Socket Mode on by themselves (no public address is
   needed), Resend's inbound domain, and WhatsApp and Teams, which say they
   need Public sharing.
-- **Voice** is the Deepgram key; **Web search** works with no key (DuckDuckGo)
+- **Voice** is the Deepgram key for voice notes, and the voice-call keys
+  (Gemini for the voice, TypeSafe for routing) that the workspace's own server
+  reads: locald keeps those in the frontend's environment, never the
+  backend's, and restarts only the frontend when they change; **Web search** works with no key (DuckDuckGo)
   and switches to Brave Search when a Brave key is stored.
 
 Tests are read-only requests locald makes (`config.test`): with the typed
@@ -609,14 +671,37 @@ The menu's Desktop settings… (⌘,) and the tray item raise
 origin (`settings_destination` in `desktop/src/workspace_settings.rs`), and
 otherwise open **Local settings**, the bundled native page. Local settings
 keeps what has to work when the workspace does not: health and the running
-services (Reconcile, Restart), what is exposed with a *Return to This
-computer* button, updating the app, This computer's Agent Host (the only
-settings a cloud workspace has on the machine), Recovery (restart into
-recovery, stop, reset data, force cleanup) and Diagnostics. Stopping sharing
-stays native because sharing moves the app's window to the shared origin,
-where the workspace is deliberately given nothing. Page names that moved
-(`ai`, `sharing`, `integrations`, `channels`, `runtime`, `updates`) still
-resolve, to Overview.
+services (Start missing services, Restart), what is exposed with a *Return to
+This computer* button, updating the app, This computer's Agent Host (the only
+settings a cloud workspace has on the machine), Recovery (restart Lemma,
+restart into recovery, stop, reset data, force cleanup) and Diagnostics.
+Stopping sharing stays native because sharing moves the app's window to the
+shared origin, where the workspace is deliberately given nothing. Page names
+that moved (`ai`, `sharing`, `integrations`, `channels`, `runtime`) still
+resolve, to Overview. While the background service is not answering, Overview
+says so instead of drawing the last snapshot's health.
+
+**Updates in both modes.** `updates` names the update panel: on Overview
+locally, and moved under This computer in cloud mode, which has no Overview
+(This Mac → Updates is local-only too). The Lemma menu's **Check for
+Updates…** opens it, and opening it checks again. About 20 seconds after
+launch (`schedule_launch_update_check`; not from Recovery, and only in a build
+that can update itself) the shell asks the feed once; if it offers a newer
+version, the tray and the Lemma menu gain **Lemma X is available — Install…**,
+which opens the same panel. Nothing is downloaded from there: installing is
+still `install_app_update`, which asks natively.
+
+**Startup warnings.** What locald's start had to repair or found unfinished
+— an update that stopped mid-migration (`update-interrupted`, naming the
+version to install, or saying to start the one already installed), an
+unreadable update record, settings writes switched off because the operation
+journal could not be read, anything else it healed — is carried as
+`warnings: [{code, message, version?}]` in `hello` and `control.snapshot`.
+The shell narrows the list (`daemon_warnings`) into `lemma:state` for the
+splash and into `local_settings_snapshot` for This Mac; Local settings shows
+it above every page. Each screen adds a title and one next step (Check for
+updates, or the logs/Diagnostics). The one `local.healed` broadcast went out
+before any client had connected, which is why these were never seen.
 
 ### Tauri IPC commands and who may call them
 
@@ -655,6 +740,8 @@ say `http://app.lemma.localhost:*`, which would also match every alias port.
 | `set_start_at_login` | workspace | local workspace | Rebuilds the menus so the tray's check stays true |
 | `set_host_execution` | workspace | local workspace | locald `agent-host.host-execution`; sends only `enabled`, asks natively before enabling, refuses to enable without Seatbelt, answers with the fresh Agent Host status. See [Host execution](desktop-host-execution.md) |
 | `prepare_sandbox_image` | workspace | local workspace | |
+| `delete_update_backup` | workspace | local workspace | Asks natively, naming what deleting frees, then locald `disk.cleanup` with `delete_backup`; locald refuses while a start, stop or reset holds the lifecycle |
+| `free_up_disk_space` | workspace | local workspace | Removes runtime releases beyond the running one and one previous, then locald `disk.cleanup`: unused images and a trim, plus the backup only after the same native question. The request carries two booleans and nothing else |
 | `open_logs`, `diagnostic_logs` | main, control, workspace | native page, or local workspace | Log tails are redacted |
 | `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
 | `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown; once installed the app restarts without asking again, because the stack is already stopped and the bundle replaced |
@@ -663,6 +750,7 @@ say `http://app.lemma.localhost:*`, which would also match every alias port.
 | `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |
 | `app_frame_url` | workspace | local workspace | The address to frame a pod app at: its locald alias on macOS, its own URL elsewhere. Refuses anything but this install's own apps; see §6.2 |
 | `open_control_center` | main, workspace | page name validated | |
+| `return_to_mode_chooser` | workspace | hosted sign-in page | Cancel on the hosted sign-in: `mode_chooser_return_allowed` refuses unless the caller is the `main` webview, the app is in hosted mode, and the page is the hosted origin's `/auth` or `/auth/…` (not `/auth/desktop`). Clears the saved mode and rebuilds the window on the splash, which shows the chooser |
 | `sharing_action` | control | control | Local settings' sharing: the same request builder and native questions as `local_sharing` |
 | `control_snapshot`, `agent_host_action`, `runtime_info`, `start`, `stop`, `restart`, `open_developer_tools`, `close_local_settings`, `confirm_destructive_action` | control (some also main) | control or native page | Local settings only |
 | `reset_local_data`, `reset_full_reinstall`, `restart_into_recovery` | control, main | native page | Destructive: never granted to a remote origin |
@@ -895,7 +983,9 @@ The section payload for `config.apply` is:
 
 `value` is the selected section's full schema; it never includes other sections.
 Valid names are `ai`, `integrations`, `surfaces` and `email`. Credential
-names must belong to that section. Replacement requires a nonempty `value` alongside
+names must belong to that section. A change that spans sections sends
+`sections: [...]` instead of `section`, and restarts the backend once; its
+credentials must each belong to one of the listed sections. Replacement requires a nonempty `value` alongside
 `action: "replace"`.
 
 A local model is reached the same way as any other provider: Ollama and LM

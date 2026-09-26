@@ -29,10 +29,52 @@ pub(crate) fn event_applies_during_shutdown(event: &Value) -> bool {
 ///
 /// `log` is not handled here: it is the one kind that only forwards, and it
 /// needs no state, so the caller takes it before acquiring the lock.
+/// The startup warnings an event carries, narrowed to what the screens read.
+///
+/// Bounded in count and length, and a code is kept only if it looks like one:
+/// the list is shown on the splash and handed to the workspace, and a daemon
+/// that sent something else should cost a line, not the layout.
+pub(crate) fn daemon_warnings(value: &Value) -> Vec<DaemonWarning> {
+    const MOST: usize = 8;
+    let bounded = |text: &str, limit: usize| text.chars().take(limit).collect::<String>();
+    value
+        .as_array()
+        .map(|warnings| {
+            warnings
+                .iter()
+                .filter_map(|warning| {
+                    let code = warning.get("code")?.as_str()?;
+                    let message = warning.get("message")?.as_str()?.trim();
+                    let code_ok = !code.is_empty()
+                        && code.len() <= 64
+                        && code.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+                    (code_ok && !message.is_empty()).then(|| DaemonWarning {
+                        code: code.to_owned(),
+                        message: bounded(message, 1000),
+                        version: warning
+                            .get("version")
+                            .and_then(Value::as_str)
+                            .filter(|version| !version.is_empty())
+                            .map(|version| bounded(version, 64)),
+                    })
+                })
+                .take(MOST)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) -> EventOutcome {
     let mut outcome = EventOutcome::default();
     let event_operation_id = locald_event_operation_id(event);
     let ui = &mut *ui;
+    // A snapshot is the daemon's current word on its warnings; an event
+    // without the field (an older daemon) leaves what the handshake said.
+    if kind == "control.snapshot" {
+        if let Some(warnings) = event.get("warnings") {
+            ui.warnings = daemon_warnings(warnings);
+        }
+    }
     match kind {
         "phase" => {
             ui.phase = event["label"].as_str().unwrap_or_default().into();
@@ -314,6 +356,8 @@ fn perform_event_side_effects(outcome: &mut EventOutcome) {
             cached,
             duration_ms,
         });
+        // Nothing can be using a retired runtime once a start has succeeded.
+        crate::disk_space::prune_retired_releases_after_start();
     }
     if let Some(ResumeWrite {
         url,

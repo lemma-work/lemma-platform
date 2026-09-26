@@ -97,13 +97,16 @@ pub(crate) fn run() {
             local_recovery::reset_full_reinstall,
             local_recovery::restart_into_recovery,
             app_update::check_for_app_update,
+            connection::return_to_mode_chooser,
             app_update::install_app_update,
             workspace_settings::local_settings_snapshot,
             workspace_settings::apply_local_settings,
             workspace_settings::local_sharing,
             workspace_settings::set_start_at_login,
             workspace_settings::set_host_execution,
-            workspace_settings::test_server_setup
+            workspace_settings::test_server_setup,
+            disk_space::delete_update_backup,
+            disk_space::free_up_disk_space
         ])
         .setup(move |app| setup(app, &mode, recovery_launch))
         .on_window_event(on_window_event)
@@ -181,6 +184,7 @@ fn setup(
 
     build_tray(&handle)?;
     refresh_tray_status(&handle);
+    schedule_launch_update_check(&handle, recovery_launch);
 
     // Local mode: connect to the durable daemon immediately so splash has a
     // live event stream the moment it loads. Either way on a worker: nothing

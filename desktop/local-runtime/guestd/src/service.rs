@@ -324,6 +324,8 @@ impl<E: Engine + 'static> GuestService<E> {
             "core.status" => self.core_status(),
             "core.stop" => self.stop_core(),
             "core.reset_data" => self.reset_data(request.parameters),
+            "core.prune_images" => self.prune_images(request.parameters),
+            "core.trim" => self.trim_data_disk(),
             "sandbox.ensure" => self.ensure(request.parameters),
             "sandbox.status" => self.status(request.parameters),
             "sandbox.list" => self.list(),

@@ -623,7 +623,6 @@ fn pages_that_moved_land_on_overview_rather_than_an_error() {
         "integrations",
         "channels",
         "runtime",
-        "updates",
         "connectors",
         "surfaces",
         "services",
@@ -634,7 +633,9 @@ fn pages_that_moved_land_on_overview_rather_than_an_error() {
             "{moved}"
         );
     }
-    for kept in ["overview", "computer", "recovery", "diagnostics"] {
+    // `updates` is Check for Updates…'s destination, which the page resolves
+    // per mode; see `control_center_page`.
+    for kept in ["overview", "computer", "recovery", "diagnostics", "updates"] {
         assert_eq!(control_center_page(Some(kept)).unwrap(), kept);
     }
     assert!(control_center_page(Some("nonsense")).is_err());
@@ -662,4 +663,69 @@ fn host_execution_is_granted_to_the_workspace_and_registered() {
     assert!(app.contains("workspace_settings::set_host_execution"));
     let build = include_str!("../../build.rs").replace("\r\n", "\n");
     assert!(build.contains("\"set_host_execution\""));
+}
+
+/// Startup warnings reach the workspace narrowed: code, message and version,
+/// and nothing a daemon adds beside them.
+#[test]
+fn the_settings_view_carries_startup_warnings_and_only_their_known_fields() {
+    let view = workspace_settings_view(&json!({
+        "warnings": [
+            {"code": "update-interrupted", "message": "Install Lemma 0.9.0.", "version": "0.9.0", "path": "/secret"},
+            {"code": "NOT A CODE", "message": "dropped"},
+            {"code": "startup-repaired", "message": "   "},
+        ],
+    }));
+    assert_eq!(
+        view["warnings"],
+        json!([{"code": "update-interrupted", "message": "Install Lemma 0.9.0.", "version": "0.9.0"}])
+    );
+    // An older daemon sends none, and the page is told "none", not nothing.
+    assert_eq!(workspace_settings_view(&json!({}))["warnings"], json!([]));
+}
+
+#[test]
+fn startup_warnings_are_bounded_before_they_reach_a_screen() {
+    let many: Vec<Value> = (0..20)
+        .map(|_| json!({"code": "startup-repaired", "message": "x".repeat(5000)}))
+        .collect();
+    let warnings = daemon_warnings(&Value::Array(many));
+    assert_eq!(warnings.len(), 8);
+    assert_eq!(warnings[0].message.chars().count(), 1000);
+    assert!(daemon_warnings(&json!("not a list")).is_empty());
+}
+
+/// The splash reads warnings from `lemma:state`, which a snapshot refreshes and
+/// an event without the field leaves alone.
+#[test]
+fn a_control_snapshot_refreshes_the_warnings_the_splash_shows() {
+    let mut ui = UiState::default();
+    apply_locald_event(
+        &mut ui,
+        "control.snapshot",
+        &json!({"event": "control.snapshot", "warnings": [{"code": "settings-writes-disabled", "message": "Quit and reopen Lemma."}]}),
+    );
+    assert_eq!(ui.warnings.len(), 1);
+    assert_eq!(ui.warnings[0].code, "settings-writes-disabled");
+    apply_locald_event(
+        &mut ui,
+        "state",
+        &json!({"event": "state", "running": true}),
+    );
+    assert_eq!(
+        ui.warnings.len(),
+        1,
+        "a state event says nothing about warnings"
+    );
+    let serialized = serde_json::to_value(&ui).unwrap();
+    assert_eq!(
+        serialized["warnings"][0]["code"],
+        "settings-writes-disabled"
+    );
+    apply_locald_event(
+        &mut ui,
+        "control.snapshot",
+        &json!({"event": "control.snapshot", "warnings": []}),
+    );
+    assert!(ui.warnings.is_empty());
 }

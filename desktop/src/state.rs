@@ -20,6 +20,19 @@ impl<T> LockOrRecover<T> for std::sync::Mutex<T> {
     }
 }
 
+/// One of locald's startup warnings, as far as the shell trusts it.
+///
+/// Narrowed field by field (`daemon_warnings`) rather than forwarded as JSON:
+/// it reaches the splash and a web page, and the daemon is free to add fields
+/// neither should see.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct DaemonWarning {
+    pub(crate) code: String,
+    pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) version: Option<String>,
+}
+
 #[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UiState {
@@ -46,6 +59,10 @@ pub(crate) struct UiState {
     /// `failed`.
     pub(crate) sandbox_images: String,
     pub(crate) sandbox_images_detail: String,
+    /// What the daemon's start found that someone has to act on -- an update
+    /// that stopped mid-migration, settings writes switched off. From the
+    /// handshake, so the splash can say it before anything else loads.
+    pub(crate) warnings: Vec<DaemonWarning>,
     #[serde(skip)]
     pub(crate) active_operation_id: String,
     #[serde(skip)]
@@ -169,6 +186,9 @@ pub(crate) struct Shell {
     /// canonical app origin each fronts. Only these may load in a frame on the
     /// workspace host; see `pod_app_alias.rs`.
     pub(crate) app_aliases: Mutex<HashMap<u16, String>>,
+    /// A newer Lemma the launch-time check found, if it found one. Read when
+    /// the menus are built, so a rebuild for a mode switch keeps the entry.
+    pub(crate) available_update: Mutex<Option<String>>,
 }
 
 pub(crate) struct LocaldConnection {
@@ -206,6 +226,7 @@ impl Shell {
             daemon_stop_requested: AtomicBool::new(false),
             granted_workspace_origins: Mutex::new(BTreeSet::new()),
             app_aliases: Mutex::new(HashMap::new()),
+            available_update: Mutex::new(None),
         }
     }
 }

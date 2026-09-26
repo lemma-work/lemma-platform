@@ -52,6 +52,11 @@ impl Daemon {
             },
             "host_pack_release": self.host_processes.as_ref().map(|manager| manager.release()),
             "host_pack_root": self.host_pack_root.as_deref(),
+            // What this daemon's start found that someone has to act on. On
+            // every connection, because the shell connects after the one
+            // broadcast that announced it, and a replaced daemon's empty list
+            // is what clears the previous one's.
+            "warnings": &self.warnings,
         })
     }
 }

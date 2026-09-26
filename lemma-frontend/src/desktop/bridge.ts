@@ -83,6 +83,13 @@ export const WORKSPACE_COMMANDS = [
     "diagnostic_logs",
     "discover_provider_models",
     "test_server_setup",
+    /* Cancel on the hosted sign-in: back to the app's Cloud-or-Local chooser.
+       The shell refuses it from anywhere but that page, in hosted mode. */
+    "return_to_mode_chooser",
+    /* This Mac → Overview's disk row. Deleting the pre-update backup is
+       asked natively by the shell first. */
+    "delete_update_backup",
+    "free_up_disk_space",
 ] as const;
 
 export type WorkspaceCommand = (typeof WORKSPACE_COMMANDS)[number];

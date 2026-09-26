@@ -295,6 +295,32 @@ impl HostProcessManager {
         self.start_all()
     }
 
+    /// Restart the frontend alone, for a change only its environment carries.
+    /// The workspace page stays loaded; its next request reaches the new one.
+    pub fn restart_frontend(&self) -> io::Result<()> {
+        let _reconcile = self.reconcile_lock.lock().expect("reconcile lock poisoned");
+        self.check_running_request()?;
+        self.stop_process("frontend")?;
+        {
+            let mut state = self.state.lock().expect("host process lock poisoned");
+            state.circuit_open.remove("frontend");
+            state.circuit_trips.remove("frontend");
+            state.restart_history.remove("frontend");
+            state.restart_not_before.remove("frontend");
+        }
+        self.check_running_request()?;
+        self.spawn_if_missing("frontend")?;
+        if let Some(health) = self.health_spec("frontend") {
+            if let Err(error) = self.wait_process_health("frontend", &health) {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("frontend failed health gate after configuration: {error}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn restart_backend(&self) -> io::Result<()> {
         // Suppress crash reconciliation with ownership, not the stop signal:
         // health probes must still run and a real Stop must remain authoritative.

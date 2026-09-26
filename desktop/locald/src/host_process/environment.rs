@@ -44,6 +44,27 @@ impl HostProcessManager {
             .expect("backend environment lock poisoned") = environment;
     }
 
+    /// Replace the operator's frontend environment. True when it changed, so
+    /// the caller restarts the frontend only when there is something new.
+    pub fn set_frontend_environment(&self, environment: HashMap<String, String>) -> bool {
+        let mut current = self
+            .frontend_environment
+            .lock()
+            .expect("frontend environment lock poisoned");
+        if *current == environment {
+            return false;
+        }
+        *current = environment;
+        true
+    }
+
+    pub(crate) fn frontend_environment(&self) -> HashMap<String, String> {
+        self.frontend_environment
+            .lock()
+            .expect("frontend environment lock poisoned")
+            .clone()
+    }
+
     pub fn replace_service_environment(
         &self,
         service: &str,
@@ -88,7 +109,11 @@ impl HostProcessManager {
             .backend_environment
             .lock()
             .expect("backend environment lock poisoned");
-        for (key, value) in backend.iter() {
+        let frontend = self
+            .frontend_environment
+            .lock()
+            .expect("frontend environment lock poisoned");
+        for (key, value) in backend.iter().chain(frontend.iter()) {
             if sensitive_key(key) && value.len() >= 8 {
                 secrets.push(value);
             }

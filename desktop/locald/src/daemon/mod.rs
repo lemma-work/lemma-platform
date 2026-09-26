@@ -76,6 +76,11 @@ pub struct Daemon {
     /// State this daemon had to repair before it could start, in the operator's
     /// words rather than serde's. Empty on every healthy launch.
     healed: Vec<String>,
+    /// The same notes as `healed`, as the warnings the splash, Local settings
+    /// and This Mac show. Carried in `hello` and `control.snapshot`, because
+    /// the `local.healed` broadcast goes out before any client has connected
+    /// and so reached nobody.
+    warnings: Vec<StartupWarning>,
     /// The size and modification time of the binary this daemon started from.
     ///
     /// Measured once, here, and not again. The case it exists for is a Windows
@@ -90,6 +95,7 @@ pub struct Daemon {
 
 mod agent_host_ops;
 mod config_ops;
+mod disk_ops;
 // Public for one function: `error_diagnostic_source` names a diagnostic log
 // that the *shell* has to serve, and the two halves of that contract compile
 // into different binaries. See the guard in desktop/src/tests/diagnostics.rs.
@@ -111,7 +117,8 @@ use environment::{compose_backend_environment, validate_canonical_origin};
 // with what this overlay switches back on. The two lists live in different
 // modules and nothing else can put them side by side.
 pub(crate) use environment::sharing_environment;
-use startup_state::remember_derived_origin;
+pub use startup_state::StartupWarning;
+use startup_state::{interrupted_update_warning, remember_derived_origin, startup_warnings};
 use supervisor::{executable_stamp, prepare_compatibility_host_manifest};
 
 impl Daemon {
@@ -121,6 +128,8 @@ impl Daemon {
         // `serve`, never swallowed: replacing a credential or a config behind
         // the operator's back is how a self-heal becomes the next mystery.
         let mut healed: Vec<String> = Vec::new();
+        // Notes in `healed` that have their own wording for a person.
+        let mut specific: Vec<(String, StartupWarning)> = Vec::new();
         let token = load_or_create_token(&paths.token, &mut healed)?;
         let mut state = StateSnapshot::load(&paths.state);
         let operator_config = OperatorConfigStore::load_reporting(
@@ -231,7 +240,17 @@ impl Daemon {
         ) {
             Ok(journal) => Some(journal),
             Err(error) => {
-                healed.push(format!("settings operation history is unavailable: {error}; settings writes are disabled until it is repaired"));
+                let note = format!("settings operation history is unavailable: {error}; settings writes are disabled until it is repaired");
+                specific.push((
+                    note.clone(),
+                    StartupWarning::new(
+                        "settings-writes-disabled",
+                        "Lemma couldn't read its record of earlier settings changes, so \
+                         settings can't be changed right now. Quit and reopen Lemma; if this \
+                         stays, open Diagnostics and send the logs.",
+                    ),
+                ));
+                healed.push(note);
                 None
             }
         };
@@ -247,13 +266,37 @@ impl Daemon {
         match UpdateTransaction::load(paths.root.join("update.json")) {
             Ok(transaction) => {
                 if let Some(reason) = transaction.blocking_reason() {
+                    let release = host_processes
+                        .as_ref()
+                        .map(|manager| manager.release().to_owned());
+                    let running: Vec<&str> = std::iter::once(DAEMON_VERSION)
+                        .chain(release.as_deref())
+                        .collect();
+                    if let Some(warning) = transaction
+                        .snapshot()
+                        .and_then(|record| interrupted_update_warning(&record, &running))
+                    {
+                        specific.push((reason.clone(), warning));
+                    }
                     healed.push(reason);
                 }
             }
-            Err(error) => healed.push(format!(
-                "the record of an in-flight update could not be read: {error}; \
-                 check this installation before updating it again"
-            )),
+            Err(error) => {
+                let note = format!(
+                    "the record of an in-flight update could not be read: {error}; \
+                     check this installation before updating it again"
+                );
+                specific.push((
+                    note.clone(),
+                    StartupWarning::new(
+                        "update-record-unreadable",
+                        "Lemma couldn't read the record of an update that was in progress. \
+                         Install the newest Lemma before relying on this installation, and \
+                         don't reopen an older version.",
+                    ),
+                ));
+                healed.push(note);
+            }
         }
         // Before anything starts the runtime, so the relay never serves a
         // connection without knowing every port that is Lemma's.
@@ -289,6 +332,7 @@ impl Daemon {
             agent_lifecycle: Lifecycle::default(),
             shutdown_running: AtomicBool::new(false),
             agent_host,
+            warnings: startup_warnings(&healed, specific),
             healed,
             // Before `serve` binds the socket, which is the whole point: after
             // that a Windows installer can replace this file while this
@@ -304,6 +348,7 @@ impl Daemon {
         self.prime_backend_environment();
         self.start_host_status_monitor();
         self.start_agent_host_monitor();
+        self.start_disk_hygiene_monitor();
         if let Some(aliases) = self.app_aliases.clone() {
             // Off the accept loop: rebinding a dozen ports is quick, but the
             // shell is polling this socket and should never wait on it.

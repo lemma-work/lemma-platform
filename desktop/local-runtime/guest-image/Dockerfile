@@ -16,6 +16,9 @@ ARG GUEST_PLATFORM=macos-aarch64
 ARG UBUNTU_KERNEL_RELEASE=6.8.0-138-generic
 
 ENV DEBIAN_FRONTEND=noninteractive
+# util-linux supplies `/usr/sbin/fstrim`, which guestd's `core.trim` runs;
+# checked below so a base image that dropped it fails here, not on a Mac.
+#
 # Keep Ubuntu's kernel, modules and generated initramfs together. WSL supplies
 # its own kernel and does not need Linux boot packages in the distribution.
 RUN apt-get update \
@@ -36,6 +39,7 @@ RUN apt-get update \
         util-linux \
     && update-alternatives --set iptables /usr/sbin/iptables-legacy \
     && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy \
+    && test -x /usr/sbin/fstrim \
     && rm -rf /var/lib/apt/lists/*
 
 # The second module loop is what guestd's sandbox firewall loads or matches on

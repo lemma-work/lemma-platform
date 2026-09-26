@@ -139,7 +139,16 @@ pub(crate) fn workspace_settings_view(snapshot: &Value) -> Value {
         },
         "sharing": snapshot.get("sharing").cloned().unwrap_or(Value::Null),
         "sandbox_images": snapshot.get("sandbox_images").cloned().unwrap_or(Value::Null),
+        // Narrowed the same way the splash's copy is, so a field the daemon
+        // adds to a warning does not reach the page by default.
+        "warnings": daemon_warnings(snapshot.get("warnings").unwrap_or(&Value::Null)),
         "paths": snapshot.get("paths").cloned().unwrap_or(Value::Null),
+        // Narrowed to the figures the disk row shows; releases are added by
+        // `local_settings_snapshot_impl`, which knows where they live.
+        "disk_usage": disk_space::disk_usage_view(
+            snapshot.get("disk_usage").unwrap_or(&Value::Null),
+            Value::Null,
+        ),
     })
 }
 
@@ -486,6 +495,10 @@ fn local_settings_snapshot_impl(app: AppHandle) -> Result<Value, String> {
         Duration::from_secs(15),
     )?;
     let mut view = workspace_settings_view(&snapshot);
+    view["disk_usage"]["runtime_releases"] = disk_space::runtime_releases_usage(
+        &runtime_install_root(),
+        &disk_space::retained_release_roots(&read_config()),
+    );
     view["app"] = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "channel": release_channel(),

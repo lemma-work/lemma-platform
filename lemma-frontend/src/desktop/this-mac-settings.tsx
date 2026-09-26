@@ -13,11 +13,13 @@ import { ThisComputerCard } from "./this-computer-card";
 import { readStatus, useAgentHost } from "./agent-host";
 import {
     RELEASES_PAGE, channelLine, friendlyError, healthDetail, stuckStarting, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin, updateProblem,
-    sandboxWording, updateOffer, sharingBusy, thisMac, thisMacAvailability,
-    type ThisMacAvailability, type ThisMacSnapshot,
+    sandboxWording, updateOffer, sharingBusy, startupWarningLine, thisMac, thisMacAvailability,
+    type StartupWarning, type ThisMacAvailability, type ThisMacSnapshot,
 } from "./this-mac";
 import { ThisMacSharing } from "./this-mac-sharing";
 import { ThisMacServerSetup } from "./this-mac-setup";
+import { SearchReadinessRow } from "./search-readiness";
+import { DiskUsageRows } from "./disk-usage";
 import { needsSetup, capabilityStatus, CAPABILITIES } from "./server-setup";
 
 /** Settings → This Mac: the settings a person changes about their own
@@ -122,6 +124,7 @@ function Overview() {
                             <i aria-hidden="true" />
                             {healthLine(data, update.data ?? null)}
                         </p>
+                        <StartupWarnings warnings={data.warnings ?? []} onLogs={() => { setSaid(null); logs.mutate(); }} />
                         {stuckStarting(data, startingSince, Date.now()) && (
                             <p className="thismac-said thismac-said--bad" role="alert">
                                 {stuckStarting(data, startingSince, Date.now())} Open the logs to see why, or quit and reopen Lemma.
@@ -160,6 +163,8 @@ function Overview() {
                                 {needsSetup(data).length ? "Set up" : "Open"}
                             </button>
                         </SettingRow>
+                        <SearchReadinessRow />
+                        <DiskUsageRows />
                         {said && <p className="thismac-said" role="status">{said}</p>}
                         <p className="thismac-foot">
                             Erasing data and restarting into Recovery stay in the menu bar: Lemma → Recovery…
@@ -168,6 +173,27 @@ function Overview() {
                 );
             }}
         </Loading>
+    );
+}
+
+/** What the background service's start found, as attention lines: its
+ *  sentence, and the one place to go next. */
+function StartupWarnings({ warnings, onLogs }: { warnings: StartupWarning[]; onLogs: () => void }) {
+    if (!warnings.length) return null;
+    return (
+        <>
+            {warnings.map((warning, index) => {
+                const line = startupWarningLine(warning);
+                return (
+                    <p key={warning.code + index} className="thismac-said thismac-said--bad" role="alert" data-warning-code={warning.code}>
+                        <strong>{line.title}</strong> {warning.message}{" "}
+                        {line.next === "updates"
+                            ? <button className="linkish" onClick={() => openSettings("this-mac-updates")}>Check for updates</button>
+                            : <button className="linkish" onClick={onLogs}>Open logs</button>}
+                    </p>
+                );
+            })}
+        </>
     );
 }
 
@@ -286,8 +312,14 @@ function Updates() {
     const status = update.data ?? null;
     const offer = updateOffer(status);
     const channel = snapshot.data?.app.channel ?? status?.channel ?? "unknown";
+    const unfinished = (snapshot.data?.warnings ?? []).filter((warning) => startupWarningLine(warning).next === "updates");
     return (
         <div className="thismac">
+            {unfinished.map((warning, index) => (
+                <p key={warning.code + index} className="thismac-said thismac-said--bad" role="alert">
+                    <strong>{startupWarningLine(warning).title}</strong> {warning.message}
+                </p>
+            ))}
             <SettingRow
                 name={status ? "Lemma " + status.currentVersion : "Lemma"}
                 consequence={update.isFetching ? "Checking for updates…"

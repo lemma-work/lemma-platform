@@ -58,8 +58,12 @@ Candidates are staged beside existing releases before local services stop.
 Artifact digests distinguish builds that share a version number. Repair forces
 a fresh verified extraction without moving or deleting the prior tree; it also
 works when cached runtime marker files are missing. Staging never prunes older
-releases. Retention and installed-app upgrade qualification are separate from
-archive verification.
+releases. Retention keeps the running release and one previous
+(`installedRuntime`, `previousRuntime`): activation prunes the rest, and the
+app prunes again after the first `ready` of each launch, when nothing can still
+be using a retired one (a removal that failed at activation, which Windows does
+for a release in use, used to stay for ever). Installed-app upgrade
+qualification is separate from archive verification.
 
 The PR test DMG embeds the two compressed archives and rewrites only their
 manifest sources to trusted resource names. It must not contain expanded
@@ -718,6 +722,33 @@ a shipped artifact.
     from the previous bundle, and that the relaunched app does not bounce off
     its own single-instance lock. Repeat with Lemma in a non-writable location
     and confirm it says to download the DMG instead.
+27. **Update in cloud mode.** On Lemma Cloud with an older installed build,
+    wait about 20 seconds after launch: the tray and the Lemma menu show
+    *Lemma X is available — Install…*. Both it and Lemma → Check for
+    Updates… open Local settings on This computer with the update panel, and
+    installing still asks natively first.
+28. **Disk space after an update.** On a disposable installation, update
+    v(N-1) → v(N) so migrations run. Before the new version is ready,
+    `locald/runtime/macos/data.raw.before-migration` exists and This Mac →
+    Overview shows *Backup from before the last update* with what deleting it
+    frees (compare with `stat -f %b` × 512 for the allocated size, which is
+    much larger: the clone shares its blocks). Once Lemma is ready the file is
+    gone and `locald/locald.log` says why. Repeat with the backend made to fail
+    after migrating: the backup stays, and is removed three days after it was
+    taken -- dated by its inode change time, which nothing can set back, so the
+    unit tests hold the three-day rule and QA confirms only that it survives
+    the failed start. **Delete** asks natively; Cancel leaves it. **Free up space** removes
+    `runtime/releases/` directories beyond two, runs `nerdctl images` in the
+    guest before and after (only images no container uses and v(N) does not pin
+    disappear), and `locald/disk-hygiene.json` records the time. Compare
+    `stat -f %b locald/runtime/macos/data.raw` before and after deleting a
+    large workspace and pressing Free up space: if the allocated size does not
+    fall, check `discard_max_bytes` in the guest diagnostics -- zero means the
+    VM is not passing discards through.
+29. **Cancel hosted sign-in.** Choose Lemma Cloud on a fresh install, then
+    press Cancel on the "Sign in with your browser" screen. The app returns to
+    the Cloud-or-Local chooser, and quitting and reopening shows the chooser,
+    not the sign-in.
 
 ## Runtime state and debugging
 

@@ -131,10 +131,17 @@ impl<E: Engine + 'static> GuestService<E> {
         }
 
         let removed_workspaces = self.remove_all_workspaces()?;
+        // The database and every workspace just went; without a trim the
+        // host's `data.raw` would stay at its high-water mark. Best effort --
+        // the reset has already happened and a trim cannot undo it.
+        let trim = self
+            .trim_data_disk()
+            .unwrap_or_else(|error| json!({"supported": true, "detail": error.message}));
         Ok(json!({
             "removed_containers": removed_containers,
             "removed_volumes": removed_volumes,
             "removed_workspaces": removed_workspaces,
+            "trim": trim,
         }))
     }
 

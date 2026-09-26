@@ -47,6 +47,16 @@ pub(crate) fn secret_environment() -> [(&'static str, &'static str); 20] {
     ]
 }
 
+/// Secrets the frontend's own server reads, never the backend: live voice
+/// calls run through the workspace server's voice gateway (Gemini Live) and
+/// its call router (TypeSafe), not through the API.
+pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 2] {
+    [
+        ("integrations.gemini_api_key", "GEMINI_API_KEY"),
+        ("integrations.typesafe_api_key", "TYPESAFE_API_KEY"),
+    ]
+}
+
 /// The models the backend's side jobs run on, all on the system profile.
 ///
 /// `VISION_MODEL` names the model that reads images for a teammate whose own
@@ -165,6 +175,26 @@ pub(crate) fn current_unix_ms() -> io::Result<u64> {
 }
 
 impl OperatorConfigStore {
+    /// What the frontend is started with on top of the host pack's
+    /// environment: only the voice-call keys, when stored.
+    pub fn frontend_environment(&self) -> io::Result<HashMap<String, String>> {
+        let install_id = self
+            .config
+            .lock()
+            .expect("operator config poisoned")
+            .install_id
+            .clone();
+        let mut environment = HashMap::new();
+        for (secret, variable) in frontend_secret_environment() {
+            if let Some(value) = self.vault.get(&install_id, secret)? {
+                if !value.is_empty() {
+                    environment.insert(variable.into(), value);
+                }
+            }
+        }
+        Ok(environment)
+    }
+
     pub fn backend_environment(&self) -> io::Result<HashMap<String, String>> {
         let config = self
             .config

@@ -455,9 +455,13 @@ fn legacy_connection_preferences_require_the_released_chooser_once() {
 #[test]
 fn an_update_check_gives_up_rather_than_hanging() {
     let source = shell_source();
+    // Settings and the launch-time check ask through one function, and it is
+    // the one that carries the bound.
     let check = function_body(&source, "pub(crate) async fn check_for_app_update(");
+    assert!(check.contains("fetch_offered_update(&app)"));
+    let fetch = function_body(&source, "pub(crate) async fn fetch_offered_update(");
     assert!(
-        check.contains(".timeout(UPDATE_CHECK_TIMEOUT)"),
+        fetch.contains(".timeout(UPDATE_CHECK_TIMEOUT)"),
         "the check must bound its request to the feed"
     );
     assert!(UPDATE_CHECK_TIMEOUT <= std::time::Duration::from_secs(60));

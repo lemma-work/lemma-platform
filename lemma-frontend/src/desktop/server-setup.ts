@@ -40,7 +40,7 @@ export const CAPABILITIES: CapabilitySpec[] = [
     { id: "channels", title: "Channels", required: false,
         unlocks: "Lets teammates answer in Telegram, Slack, email, WhatsApp and Teams." },
     { id: "voice", title: "Voice", required: false,
-        unlocks: "Lets teammates reply with voice notes and read the ones they are sent." },
+        unlocks: "Lets teammates reply with voice notes, read the ones they are sent, and take live calls." },
     { id: "search", title: "Web search", required: false,
         unlocks: "Lets teammates look things up on the web." },
 ];

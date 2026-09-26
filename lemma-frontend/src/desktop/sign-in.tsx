@@ -18,6 +18,7 @@ import {
     type PendingHandoff,
 } from "./auth-handoff";
 import { timeLeft } from "./sign-in-countdown";
+import { returnToModeChooser } from "./mode-chooser";
 
 /** The app's side of a hosted sign-in: open the request, hand the person to
  *  their browser, wait. `auth-handoff.ts` has the whole exchange. */
@@ -64,17 +65,22 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
         // One request per mount; `mode` does not change under a mounted screen.
     }, []);
 
-    const cancel = () => {
+    const [leaving, setLeaving] = useState(false);
+    const cancel = async () => {
         abandoned.current = true;
         dropPending();
+        setLeaving(true);
+        /* The shell replaces this window with the chooser; nothing after a
+           success runs long enough to be seen. */
+        if (await returnToModeChooser()) return;
+        setLeaving(false);
         setStopped(true);
     };
 
-    /* Back to the choice this screen skipped. The browser tab it opened may
-       still be sitting there; the request behind it is dropped here, so
-       finishing in that tab signs nothing in. Using Lemma on this computer
-       instead is the app's Connection menu -- this page is the hosted site,
-       and cannot switch the app for itself. */
+    /* Where Cancel lands when the shell could not take the app back to its
+       chooser. The browser tab it opened may still be sitting there; the
+       request behind it is dropped here, so finishing in that tab signs
+       nothing in. */
     if (stopped) {
         return (
             <Screen
@@ -124,7 +130,7 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
                 <button className="btn" disabled={!pending} onClick={() => pending && openBrowser(pending, true)}>
                     Open the browser again
                 </button>
-                <button className="btn" onClick={cancel}>
+                <button className="btn" disabled={leaving} onClick={() => void cancel()}>
                     Cancel
                 </button>
             </div>

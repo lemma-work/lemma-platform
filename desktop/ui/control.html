@@ -58,6 +58,12 @@
         </div>
       </div>
 
+      <!-- What the background service's own start found that someone has to
+           act on: an update that stopped part-way, settings writes switched
+           off. Above every page, because a cloud user has no Overview and
+           each of these matters more than the page they happened to open. -->
+      <div id="startup-warnings" hidden></div>
+
       <section class="page" data-page="computer">
         <article class="panel">
           <div class="panel-heading"><div><h2>Installed coding agents</h2><p>Agent Host runs Claude Code, Codex, and OpenCode on this computer for your workspace. Connect it, choose which agents to use, and watch its runs from Lemma.</p></div></div>
@@ -110,9 +116,12 @@
           <article class="panel span-two">
             <div class="panel-heading"><div><h2>Recent health</h2><p>Application processes and optional capabilities.</p></div></div>
             <div id="overview-services"></div>
-            <div class="button-row"><button class="btn" data-action="start">Reconcile</button><button class="btn" data-action="restart">Restart application</button></div>
+            <div class="button-row"><button class="btn" data-action="start">Start missing services</button><button class="btn" data-action="restart">Restart application</button></div>
           </article>
-          <article class="panel span-two">
+          <!-- Moved under This computer in cloud mode (control.js), which has
+               no Overview: this panel is the only update control a cloud
+               user has. -->
+          <article class="panel span-two" id="app-update-panel">
             <div class="panel-heading">
               <div><h2>Lemma</h2><p id="app-update-summary">Checking for updates…</p></div>
               <button class="btn compact" data-action="check-app-update">Check for updates</button>
@@ -133,6 +142,10 @@
       </section>
 
       <section class="page" data-page="recovery">
+        <article class="panel">
+          <div class="panel-heading"><div><h2>Restart Lemma</h2><p>Stops and starts Lemma's services on this computer. Use this when something is stuck or not answering. Active local work is interrupted; nothing is deleted.</p></div></div>
+          <div class="button-row"><button class="btn" data-action="restart">Restart application</button><button class="btn" data-action="start">Start missing services</button></div>
+        </article>
         <article class="panel">
           <div class="panel-heading"><div><h2>Restart into Recovery</h2><p>Open Lemma without starting services or downloading a runtime. Use this if setup is stuck. This action does not erase data.</p></div></div>
           <div class="button-row"><button class="btn" data-action="restart-recovery">Restart into Recovery</button></div>

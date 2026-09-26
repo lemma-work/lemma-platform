@@ -149,6 +149,7 @@ fn client_event_finishes(command: &str, event: &str) -> bool {
         "agent-host.status" => event == "agent-host.status",
         "config.apply" => event == "config.applied",
         "runtime.prepare" => event == "done",
+        "disk.cleanup" => event == "disk.cleanup",
         // The reset broadcasts `local.data-reset` on the way past; the run is
         // over when the stack has come back up, not when the wipe finished.
         "local.reset-data" => event == "done",

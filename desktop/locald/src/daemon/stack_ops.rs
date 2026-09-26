@@ -323,6 +323,7 @@ impl Daemon {
         self.lifecycle.checkpoint()?;
         manager.mark_dependency_ready();
         manager.set_backend_environment(self.backend_environment()?);
+        manager.set_frontend_environment(self.operator_config.frontend_environment()?);
         self.lifecycle.checkpoint()?;
         manager.start_all_cancellable(|component| {
             let (label, progress, detail, log_source) = match component {
@@ -409,6 +410,8 @@ impl Daemon {
             "runtime_generation": runtime_generation,
         }));
         self.announce_sandbox_images();
+        // Backup, unused images, trim: see `disk_ops`.
+        self.after_clean_start();
         Ok(())
     }
 
@@ -479,6 +482,7 @@ impl Daemon {
             .ok_or_else(|| io::Error::other("host process manager is unavailable"))?;
         runtime.start()?;
         manager.set_backend_environment(self.backend_environment()?);
+        manager.set_frontend_environment(self.operator_config.frontend_environment()?);
         manager.restart_all()?;
         manager.mark_dependency_ready();
 

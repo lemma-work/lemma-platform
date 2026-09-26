@@ -492,3 +492,45 @@ fn the_daemon_is_spawned_into_its_own_process_group() {
     let spawn = function_body(&source, "pub(crate) fn spawn_locald(");
     assert!(spawn.contains("command.process_group(0)"), "{spawn}");
 }
+
+/// Check for Updates… is always in the Lemma menu; an available update adds
+/// one row after it, named for the version, and both open the update panel.
+#[test]
+fn the_lemma_menu_offers_an_update_check_and_names_a_waiting_update() {
+    assert_eq!(
+        lemma_menu_update_items(None),
+        vec![("check-updates", "Check for Updates\u{2026}".to_owned())]
+    );
+    assert_eq!(
+        lemma_menu_update_items(Some("0.9.1")),
+        vec![
+            ("check-updates", "Check for Updates\u{2026}".to_owned()),
+            (
+                "install-update",
+                "Lemma 0.9.1 is available \u{2014} Install\u{2026}".to_owned()
+            ),
+        ]
+    );
+    let menus = include_str!("../menus.rs").replace("\r\n", "\n");
+    assert!(menus.contains(
+        "\"check-updates\" | \"install-update\" => {\n            let _ = show_control_center_page(&app, Some(\"updates\"));"
+    ));
+    // And the page knows what "updates" means in both modes.
+    assert_eq!(control_center_page(Some("updates")).unwrap(), "updates");
+    assert!(CONTROL.contains("\"updates\""));
+}
+
+#[test]
+fn the_launch_update_check_runs_only_where_an_update_could_be_installed() {
+    assert!(launch_update_check_wanted(true, false));
+    assert!(
+        !launch_update_check_wanted(false, false),
+        "a dev or unsigned build"
+    );
+    assert!(
+        !launch_update_check_wanted(true, true),
+        "Recovery starts nothing"
+    );
+    let app = include_str!("../app.rs").replace("\r\n", "\n");
+    assert!(app.contains("schedule_launch_update_check(&handle, recovery_launch);"));
+}

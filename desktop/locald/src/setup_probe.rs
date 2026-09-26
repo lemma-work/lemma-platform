@@ -27,6 +27,7 @@ pub(crate) enum SetupService {
     Deepgram,
     Brave,
     Resend,
+    Gemini,
 }
 
 impl SetupService {
@@ -38,6 +39,7 @@ impl SetupService {
             "deepgram" => Self::Deepgram,
             "brave" => Self::Brave,
             "resend" => Self::Resend,
+            "gemini" => Self::Gemini,
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -55,6 +57,7 @@ impl SetupService {
             Self::Deepgram => "integrations.deepgram_api_key",
             Self::Brave => "integrations.brave_search_api_key",
             Self::Resend => "surfaces.resend_api_key",
+            Self::Gemini => "integrations.gemini_api_key",
         }
     }
 
@@ -66,6 +69,7 @@ impl SetupService {
             Self::Deepgram => "Deepgram",
             Self::Brave => "Brave Search",
             Self::Resend => "Resend",
+            Self::Gemini => "Google AI Studio",
         }
     }
 }
@@ -80,6 +84,7 @@ pub(crate) struct SetupEndpoints {
     pub(crate) deepgram: String,
     pub(crate) brave: String,
     pub(crate) resend: String,
+    pub(crate) gemini: String,
 }
 
 impl Default for SetupEndpoints {
@@ -91,6 +96,7 @@ impl Default for SetupEndpoints {
             deepgram: "https://api.deepgram.com".into(),
             brave: "https://api.search.brave.com".into(),
             resend: "https://api.resend.com".into(),
+            gemini: "https://generativelanguage.googleapis.com".into(),
         }
     }
 }
@@ -204,6 +210,17 @@ impl SetupProbe for HttpSetupProbe {
                 )?;
                 expect_success(service, status)?;
                 Ok("Brave Search accepted the key.".into())
+            }
+            SetupService::Gemini => {
+                // A header, not the `?key=` form, so the key is never part of
+                // a URL that could end up in an error.
+                let url = format!("{}/v1beta/models?pageSize=1", endpoints.gemini);
+                let (status, _) = send(client.get(url).header("x-goog-api-key", credential))?;
+                match status {
+                    200..=299 => Ok("Google accepted the key; voice calls can connect.".into()),
+                    400 | 401 | 403 => Err(rejected(service)),
+                    _ => Err(failed(service, status)),
+                }
             }
             SetupService::Resend => {
                 let url = format!("{}/domains", endpoints.resend);
@@ -358,6 +375,7 @@ mod tests {
                 deepgram: base.into(),
                 brave: base.into(),
                 resend: base.into(),
+                gemini: base.into(),
             },
         }
     }
@@ -415,6 +433,7 @@ mod tests {
             (SetupService::Deepgram, "authorization: token k-1"),
             (SetupService::Composio, "x-api-key: k-1"),
             (SetupService::Brave, "x-subscription-token: k-1"),
+            (SetupService::Gemini, "x-goog-api-key: k-1"),
         ] {
             let (base, server) = stand_in("200 OK", "{}");
             probe_at(&base).check(service, "k-1", "").unwrap();

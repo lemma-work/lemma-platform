@@ -22,6 +22,9 @@ impl Daemon {
             let Some(manager) = daemon.host_processes.as_ref() else {
                 return;
             };
+            if let Ok(environment) = daemon.operator_config.frontend_environment() {
+                manager.set_frontend_environment(environment);
+            }
             match daemon.backend_environment() {
                 Ok(environment) => manager.set_backend_environment(environment),
                 Err(error) => {
