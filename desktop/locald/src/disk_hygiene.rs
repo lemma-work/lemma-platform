@@ -104,7 +104,7 @@ pub(crate) fn allocated_bytes(path: &Path) -> Option<u64> {
 #[cfg(not(unix))]
 pub(crate) fn allocated_bytes(path: &Path) -> Option<u64> {
     let metadata = fs::symlink_metadata(path).ok()?;
-    metadata.is_file().then(|| metadata.len())
+    metadata.is_file().then_some(metadata.len())
 }
 
 /// Bytes deleting this file would give back right now.
