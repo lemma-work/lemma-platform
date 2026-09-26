@@ -396,12 +396,20 @@ agent.
 Nothing moves a config home -- `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or the XDG
 folders -- because that is where each keeps its sign-in, so "left out" stops
 where an agent has no switch that spares the login. **"Use my own skills and
-settings"** (Settings → This Mac → Coding agents, one switch per agent, off by
-default) puts them back: the set of such agents is `own_settings` in the Agent
+settings"** (one switch per agent, off by default, under Settings → This Mac →
+Coding agents and beside this computer's agents on Models) puts them back: the set of such agents is `own_settings` in the Agent
 Host's `config.json`, changed by `lemma-agent-host own-settings
 enable|disable <agent>`, locald's `agent-host.own-settings` and the Tauri
 command `agent_host_own_settings`, reported as `own_settings` in
 `agent-host.status`, and read by each run as it starts.
+
+Answering what a person owes works the same as in-process: an Agent Host
+run is served `respond_to_notification` and `submit_workflow_form` over MCP
+(the in-process harness gets them from its open-notifications capability),
+and what is still open rides in the turn's prompt rather than the system
+prompt, which a provider session keeps from its first turn. With host
+execution on, the runtime prompt names the release's own `lemma` CLI, which
+the host puts first on the agent's `PATH` (`WORKSPACE_HOST_CLI_ROOT`).
 
 Some things apply either way, because Lemma offers the same and its prompt
 tells the agent to use Lemma's:
