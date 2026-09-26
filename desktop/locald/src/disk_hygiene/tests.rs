@@ -103,6 +103,9 @@ fn the_private_size_is_read_only_when_the_volume_returned_it() {
     assert_eq!(parse_private_size(&[0; 8]), None);
 }
 
+/// Unix only: elsewhere `allocated_bytes` reports a file's length, because
+/// the standard library has no portable way to ask for its allocated blocks.
+#[cfg(unix)]
 #[test]
 fn usage_reports_allocated_blocks_and_no_backup_when_there_is_none() {
     let root = tempfile::tempdir().unwrap();
