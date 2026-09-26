@@ -54,7 +54,14 @@ export function runFailure(
 ): { message: string | null; noModel: boolean; retryable: boolean } {
     const failed = state === "failed";
     const fromRecord = failed && !streamError ? record : null;
-    const message = streamError?.message ?? fromRecord?.last_run_error ?? null;
+    /* The record keeps whatever ended the run, including text from an Agent
+       Host or a provider that was never written to be read. Only the
+       sentences written for people come back after a reload: the missing
+       model, and the provider refusals that send the reader to Models.
+       Anything else stays "That run failed.", as it did on the stream. */
+    const stored = fromRecord?.last_run_error ?? null;
+    const readable = stored && (needsAiModel(fromRecord) || pointsAtModels(stored)) ? stored : null;
+    const message = streamError?.message ?? readable;
     const noModel = streamError ? needsAiModel(streamError) : needsAiModel(fromRecord);
     /* Unknown means offered, as before: a record that predates the field
        should not lose the button. Never for a missing model -- the same run
