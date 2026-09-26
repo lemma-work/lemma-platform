@@ -86,6 +86,7 @@ impl Launcher for ProcessLauncher {
 
     async fn launch(&self, spec: &LaunchSpec) -> std::io::Result<Launched> {
         let snapshot = super::env::EnvironmentSnapshot::load_or_take(&self.data_root).await;
+        let owners_path = snapshot.variables.get("PATH").map(std::ffi::OsString::from);
         let mut command = if self.sandboxed {
             let mut command = tokio::process::Command::new(super::seatbelt::SANDBOX_EXEC);
             command
@@ -110,6 +111,9 @@ impl Launcher for ProcessLauncher {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        if let Some(path) = spec.confinement.path_with_cli(owners_path.as_deref()) {
+            command.env("PATH", path);
+        }
         let mut child = command.spawn()?;
         let stdin = child.stdin.take().ok_or_else(|| missing("stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| missing("stdout"))?;
@@ -718,15 +722,27 @@ impl ExecRelay {
             |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let (cache, tmp) = prepare_cache(&paths.cache, workspace)
             .map_err(|error| OpFailure::io(&error, &paths.cache))?;
+        let home = canonical(&paths.home);
+        let lemma_cli = params.lemma_cli.as_deref().and_then(|raw| {
+            let admitted = super::seatbelt::lemma_cli_root(raw, &home);
+            if admitted.is_none() {
+                tracing::warn!(
+                    cli = raw,
+                    "ignored a lemma CLI folder that is not one; commands use the owner's PATH"
+                );
+            }
+            admitted
+        });
         Ok(LaunchSpec {
             root_base: paths.root_base.clone(),
             confinement: Confinement {
                 root,
-                home: canonical(&paths.home),
+                home,
                 tmp,
                 user_tmp: canonical(&paths.tmp),
                 cache,
                 grants,
+                lemma_cli,
             },
         })
     }

@@ -19,6 +19,8 @@ still reach the same tools through the per-conversation MCP server unchanged.
 
 from __future__ import annotations
 
+from functools import partial
+
 from collections.abc import Callable
 
 from pydantic_ai.capabilities import ToolSearch, AgentCapability
@@ -163,7 +165,9 @@ def _graceful(
     return toolset  # pragma: no cover - defensive
 
 
-def _instructions_for(toolset: object) -> tuple[str, Callable[[], str]] | None:
+def _instructions_for(
+    toolset: object, *, host_execution: bool = False
+) -> tuple[str, Callable[[], str]] | None:
     """The usage guidance a toolset carries, whether it ends up visible or deferred.
 
     One lookup for both wrappers, because deferral is supposed to hide a
@@ -174,7 +178,12 @@ def _instructions_for(toolset: object) -> tuple[str, Callable[[], str]] | None:
     tool in the deferred hint while withholding that is the worst of both.
     """
     if is_workspace_cli_toolset(toolset):
-        return "workspace_cli", load_workspace_cli_prompt
+        # The VM's contract -- a persistent home, preinstalled libraries,
+        # `lit` -- is not the Mac's, and an agent told otherwise installs into
+        # a home it cannot write.
+        return "workspace_cli", partial(
+            load_workspace_cli_prompt, host_execution=host_execution
+        )
     for candidate, name, loader in _INSTRUCTED_TOOLSETS:
         if toolset is candidate:
             return name, loader
@@ -183,6 +192,8 @@ def _instructions_for(toolset: object) -> tuple[str, Callable[[], str]] | None:
 
 def _visible_capability(
     toolset: AbstractToolset[ConversationContext],
+    *,
+    host_execution: bool = False,
 ) -> AgentCapability[ConversationContext]:
     """Wrap one visible toolset as a capability.
 
@@ -194,7 +205,7 @@ def _visible_capability(
     """
     if getattr(toolset, "id", None) == TODO_TOOLSET_ID:
         return TodoCapability(_graceful(toolset))
-    guidance = _instructions_for(toolset)
+    guidance = _instructions_for(toolset, host_execution=host_execution)
     if guidance is None:
         return ToolsetCapability(_graceful(toolset))
     name, loader = guidance
@@ -205,6 +216,8 @@ def _visible_capability(
 
 def _deferred_capability(
     toolset: AbstractToolset[ConversationContext],
+    *,
+    host_execution: bool = False,
 ) -> AgentCapability[ConversationContext]:
     """Wrap one extra toolset as a deferred-loading capability.
 
@@ -217,7 +230,7 @@ def _deferred_capability(
     if not isinstance(toolset, AbstractToolset):
         return ToolsetCapability(toolset)  # pragma: no cover - defensive
     deferred = GracefulToolset(toolset).defer_loading()
-    guidance = _instructions_for(toolset)
+    guidance = _instructions_for(toolset, host_execution=host_execution)
     if guidance is None:
         return ToolsetCapability(deferred)
     name, loader = guidance
@@ -263,8 +276,9 @@ async def _build_lemma_harness_tooling(
 
     # The todo toolset (if the agent has TODO) already arrives in `full_toolsets`
     # from RunToolAssembler and is wrapped by `_visible_capability` above.
+    host_execution = getattr(ctx, "host_workspace", None) is not None
     capabilities: list[AgentCapability[ConversationContext]] = [
-        _visible_capability(obj) for obj in core
+        _visible_capability(obj, host_execution=host_execution) for obj in core
     ]
     capabilities.append(CurrentTimeCapability())
 
@@ -302,7 +316,9 @@ async def _build_lemma_harness_tooling(
         # Tool search reveals the deferred extra tools on demand (provider-native
         # on Anthropic/OpenAI, a local search_tools function on Fireworks).
         capabilities.append(ToolSearch())
-        capabilities.extend(_deferred_capability(obj) for obj in extra)
+        capabilities.extend(
+            _deferred_capability(obj, host_execution=host_execution) for obj in extra
+        )
         # ...and a static hint so the model knows those tools exist to search for.
         # Ahead of open notifications: this is the largest stable block here and
         # `deferred_hint` sorts its tool names specifically to keep it

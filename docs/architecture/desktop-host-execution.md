@@ -165,7 +165,7 @@ ranged chunks and no stream frames are needed.
 
 | `method` | `params` | `result` |
 |---|---|---|
-| `workspace.open` | `conversation_id` (uuid \| null), `root_hint` (host folder \| null), `slug` \| null, `date` (`yyyy-mm-dd`) \| null, `grants` `[path]` (≤ 8) | `root` (host absolute path), `home`, `platform` |
+| `workspace.open` | `conversation_id` (uuid \| null), `root_hint` (host folder \| null), `slug` \| null, `date` (`yyyy-mm-dd`) \| null, `grants` `[path]` (≤ 8), `lemma_cli` (folder \| absent; §6) | `root` (host absolute path), `home`, `platform` |
 | `workspace.close` | — | `{}` |
 | `process.start` | `operation_id`, `shell_command` \| `argv`, `cwd`, `environment` `[{name,value}]`, `tty` `{rows,cols}` \| null, `output_limit_bytes`, `initial_input` (b64) \| null | `process_id` |
 | `process.read` | `process_id`, `after_sequence`, `wait_ms` (≤ 30 000) | `chunks` `[{sequence, stream: stdout\|stderr\|pty, data}]`, `next_sequence`, `truncated_before_sequence`, `state` (`running`\|`exited`\|`killed`), `exit_code` |
@@ -329,6 +329,22 @@ sandbox.
   that is a **symbolic link** is denied where it really points too
   (`RESOLVED_n`, resolved by the host when the exec-server starts), because
   the kernel matches the resolved path.
+- **Lemma's own CLI.** A host pack ships the `lemma` CLI of its release,
+  `backend/bin/lemma` beside the pack's own Python, under Lemma's data folder
+  (`~/Library/Application Support/Lemma/runtime/releases/…`), which is denied
+  above. The backend names that folder in `workspace.open` (`lemma_cli`, from
+  `WORKSPACE_HOST_CLI_ROOT`, which the host pack sets), and the host decides
+  whether to take it (`seatbelt::lemma_cli_root`): a folder holding
+  `bin/lemma`, not the home folder or anything containing it, and not inside
+  any path denied above except the host packs' own
+  (`Library/Application Support/Lemma/runtime`) -- so a pairing secret or the
+  app's vault is never made readable by naming it. A folder it takes is
+  `LEMMA_CLI`, readable and not writable (nothing a command writes may be run
+  later by another conversation's `lemma`), and its `bin/` goes first on the
+  exec-server's `PATH`, so a command's `lemma` is this release's rather than
+  whatever the owner installed, if anything. The launcher finds its Python
+  from `$0`, never `cd ..`: under the profile the pack's parents are denied,
+  and `cd` through them fails.
 - **What is deliberately readable:** the login keychain file
   (`~/Library/Keychains/login.keychain-db`) and `~/.config/gh`. `gh` and git's
   osxkeychain helper open the keychain file in-process to find their item and
@@ -390,7 +406,15 @@ sandbox.
   `GPG_AGENT_INFO` and `PGPASSWORD` are removed. `PATH` is kept whole, so
   Homebrew, nvm and asdf tools resolve as they do in the user's terminal.
   `HOME` is the user's, `TMPDIR` is `TMP`, and the cache variables above point
-  into `CACHE`.
+  into `CACHE`. `PATH` has Lemma's CLI first when the workspace has one
+  (above). Each command's own environment then adds the run's Lemma identity:
+  the same delegated session a VM command gets (`LEMMA_TOKEN`, `LEMMA_USER_ID`,
+  `LEMMA_POD_ID`, `LEMMA_ORG_ID`, and `LEMMA_CONVERSATION_ID`, which the CLI's
+  conversation commands default to), with the addresses this Mac reaches the
+  backend at -- `LEMMA_BASE_URL`, `LEMMA_AUTH_URL` and `LEMMA_HOST_ORIGIN` from
+  the CLI's settings -- rather than the sandbox's `host.lemma.internal`, which
+  only the VM's containers resolve (`workspace/services/host_environment.py`).
+  `LEMMA_WORKSPACE_URL` is left out: it addresses the VM's runtime.
 
 The profile is data and is tested as data: `desktop/agent-host/tests/seatbelt.rs`
 runs on a macOS runner and proves the denials and the allowances with real
@@ -405,17 +429,26 @@ processes (§8).
   `display_resource` and the rest stay.
 - **The prompt** tells the agent it is on the user's Mac, names the root, and
   says the browser is a separate machine that reaches the Mac's `localhost`
-  through the relay.
+  through the relay. An in-process run's workspace guidance is the Mac's, not
+  the VM's (`prompts/workspace_cli_host_execution.md` replaces the sections of
+  `workspace_cli.md` that describe the VM): no persistent home to install
+  into, no preinstalled libraries, no `execute_python`, no `lit`. A skill
+  loaded on such a run is told to use the tools the run has -- `exec_command`
+  on the Mac and the `browser` tool, or on an Agent Host run its own shell and
+  `lemma_browser` -- never `lemma_exec_command`, which it was not given
+  (`skill_runtime_override`).
+- **Screenshots** are saved under `/home/user/` in the VM: the `browser` tool's
+  examples say so, since `view_image` reads any other path from the Mac.
 
 ## 8. Tests
 
 | Lane | What it proves |
 |---|---|
 | Rust unit (`make desktop-test`) | exec-server op handling, output ring and sequences, chunked write and digest, path policy including symlink escape, env scrubbing (`src/host_exec/`) |
-| Rust, macOS only (`tests/seatbelt.rs`) | under the real profile, with a test-made `HOME`: `cat ~/.ssh/x` denied, including through a symbolic link, `touch ~/x` denied; the app's WebKit and HTTPStorages data, `~/.git-credentials`, `~/.codex/auth.json`, shell history and `~/.lemma` unreadable, `~/.config/gh` readable; writes in the root, `CACHE` (through the package managers' environment variables) and both temporary folders allowed; `~/.npm/_npx`, `~/Library/pnpm`, `~/Library/Caches`, `~/.cache`, `~/.cargo/registry` and `/private/tmp` denied; in an existing repository `.git/hooks`, `.git/config` and `.git` itself kept, `.claude`, `.mcp.json`, `.envrc` and `.vscode` kept, while commit and branch work; `git init` of a fresh root works; a Unix-domain socket connect refused while names still resolve; grants; `curl` to loopback; and the real exec-server binary under `sandbox-exec`, driven through the relay |
+| Rust, macOS only (`tests/seatbelt.rs`) | under the real profile, with a test-made `HOME`: a host pack's `bin/lemma` runs with `LEMMA_CLI` set and not without it, stays unwritable, and the pairing secrets beside the pack stay unreadable; through the relay, the `lemma` a command finds is the one `workspace.open` named; `cat ~/.ssh/x` denied, including through a symbolic link, `touch ~/x` denied; the app's WebKit and HTTPStorages data, `~/.git-credentials`, `~/.codex/auth.json`, shell history and `~/.lemma` unreadable, `~/.config/gh` readable; writes in the root, `CACHE` (through the package managers' environment variables) and both temporary folders allowed; `~/.npm/_npx`, `~/Library/pnpm`, `~/Library/Caches`, `~/.cache`, `~/.cargo/registry` and `/private/tmp` denied; in an existing repository `.git/hooks`, `.git/config` and `.git` itself kept, `.claude`, `.mcp.json`, `.envrc` and `.vscode` kept, while commit and branch work; `git init` of a fresh root works; a Unix-domain socket connect refused while names still resolve; grants; `curl` to loopback; and the real exec-server binary under `sandbox-exec`, driven through the relay |
 | Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, a crashed exec-server's commands killed by the relay, root-hint admissibility, a folder under `~/lemma` given only to the workspace that owns it, a conversation re-opening in the folder it remembers (and a folder the owner binds later winning), a waiting read not blocking other ops |
 | Backend unit | provider maps every op and every failure kind; selection truth table (paired user, user with no host, another user's own host, steered, inbound, host offline, toggle off, cloud); tool filtering for Agent Host runs |
-| Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for the paired user's run on the host, and a run of a user with no host lands in the VM; after the binary restarts, the next command re-opens the workspace in the same folder with nothing about the folder stored by Lemma. Over the link: a `control` without `host_execution` keeps the stored report; a host sandbox follows the conversation's latest host run |
+| Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for the paired user's run on the host; `lemma me get` in a host command runs the CLI the backend named -- built by the host pack's own step -- and answers as the paired user, with the run's `LEMMA_CONVERSATION_ID`; and a run of a user with no host lands in the VM; after the binary restarts, the next command re-opens the workspace in the same folder with nothing about the folder stored by Lemma. Over the link: a `control` without `host_execution` keeps the stored report; a host sandbox follows the conversation's latest host run |
 
 ## 9. The backend half
 

@@ -261,6 +261,35 @@ pub(crate) fn agent_host_refresh_impl(app: AppHandle) -> Result<(), String> {
     )
 }
 
+/// Whether one coding agent on this computer loads its owner's own skills and
+/// settings as well as Lemma's (`agent-host.own-settings`).
+///
+/// Granted beside the other Agent Host commands rather than with This Mac's,
+/// because it is about the agents installed here, which a hosted workspace
+/// runs as much as a local one. It widens nothing Lemma can do on this
+/// computer: it chooses what the person's own agent reads of the person's own
+/// configuration.
+pub(crate) fn agent_host_own_settings_impl(
+    app: AppHandle,
+    harness: String,
+    enabled: bool,
+) -> Result<(), String> {
+    const AGENTS: [&str; 4] = ["claude-code", "codex", "opencode", "cursor"];
+    if !AGENTS.contains(&harness.as_str()) {
+        return Err(format!("{harness:?} is not a coding agent Lemma runs"));
+    }
+    ensure_agent_host_daemon(&app)?;
+    agent_host_request(
+        &app,
+        json!({
+            "cmd": "agent-host.own-settings",
+            "id": operation_id("agent-host-own-settings"),
+            "harness": harness,
+            "enabled": enabled,
+        }),
+    )
+}
+
 /// Whether to bring locald up at launch so the sidecar is there to be reached.
 ///
 /// Read from the files locald itself uses, so the shell can decide before locald
@@ -545,6 +574,22 @@ pub(crate) async fn agent_host_refresh(window: Webview, app: AppHandle) -> Resul
     tauri::async_runtime::spawn_blocking(move || agent_host_refresh_impl(app))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+/// Runs off the UI thread; see `agent_host_refresh`.
+pub(crate) async fn agent_host_own_settings(
+    window: Webview,
+    app: AppHandle,
+    harness: String,
+    enabled: bool,
+) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        agent_host_own_settings_impl(app, harness, enabled)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command(async)]

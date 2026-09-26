@@ -137,9 +137,11 @@ test('cloud mode opens this computer without provisioning a local stack', async 
   assert.equal(await page.locator('#page-title').textContent(), 'This computer');
   assert.equal(await page.locator('#attention-banner').isVisible(), false, 'cloud mode has no local application stack to repair');
   assert.equal(await page.getByRole('button', { name: /^Overview/ }).isDisabled(), true);
-  await page.getByRole('button', { name: 'Open agent setup in Lemma' }).click();
-  const commands = await page.evaluate(() => window.__fixture.calls.map((call) => call.command));
-  assert.equal(commands.includes('open_app'), true);
+  await page.getByRole('button', { name: 'Open coding agents in Lemma' }).click();
+  const calls = await page.evaluate(() => window.__fixture.calls);
+  const commands = calls.map((call) => call.command);
+  // A hosted workspace shows this computer's agents under Models.
+  assert.deepEqual(calls.find((call) => call.command === 'close_local_settings')?.args, { section: 'models' });
   assert.equal(commands.includes('runtime.prepare'), false);
   assert.equal(commands.includes('prepare_runtime'), false);
   assert.equal(commands.includes('start'), false);

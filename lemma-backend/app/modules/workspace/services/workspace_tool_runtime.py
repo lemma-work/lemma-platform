@@ -140,6 +140,7 @@ class WorkspaceToolRuntime:
         workload_name: str | None = None,
         scope_key: str | None = None,
         env_vars: dict[str, str] | None = None,
+        conversation_id: UUID | None = None,
     ) -> IWorkspaceSession:
         cache_key = self._get_cache_key(
             user_id=user_id,
@@ -185,6 +186,7 @@ class WorkspaceToolRuntime:
             workload_id=workload_id,
             workload_name=workload_name,
             scope=scope,
+            conversation_id=conversation_id,
         )
         if session.env_vars:
             await self.env_cache.set(
@@ -210,16 +212,22 @@ class WorkspaceToolRuntime:
         organization_id: UUID | None = None,
         workload_name: str | None = None,
         scope_key: str | None = None,
+        conversation_id: UUID | None = None,
     ) -> IWorkspaceSession:
         """A session on the owner's host sandbox, rooted at ``root``.
 
         None of the VM session's preparation applies: there is no runtime
         bundle to install and no browser proxy to start on the user's Mac, and
         the root already exists because opening the workspace made it. The
-        environment is the same delegated one, cached the same way, so the
-        owner's own `lemma` CLI works if they have it.
+        identity is the same delegated one, cached the same way, so `lemma`
+        acts as this run. Its addresses are the Mac's, not the sandbox's: the
+        sandbox reaches the backend as `host.lemma.internal`, which nothing on
+        the Mac resolves (``with_host_addresses``).
         """
         from app.modules.workspace.host_workspace_session import HostWorkspaceSession
+        from app.modules.workspace.services.host_environment import (
+            with_host_addresses,
+        )
         from app.modules.workspace.services.sandbox_composition import (
             build_local_client,
         )
@@ -246,6 +254,7 @@ class WorkspaceToolRuntime:
                 workload_name=workload_name,
                 scope=scope,
                 session_id=session_id,
+                conversation_id=conversation_id,
             )
             await self.env_cache.set(
                 cache_key,
@@ -258,7 +267,7 @@ class WorkspaceToolRuntime:
             client=build_local_client(),
             sandbox_id=sandbox_id,
             session_id=session_id,
-            env_vars=env_vars,
+            env_vars=with_host_addresses(env_vars),
             auto_close=close_on_exit,
             owns_client=False,
             output_cursor_store=self.process_store,

@@ -306,6 +306,13 @@
   (literal (home-path "/Library/Keychains"))
   (literal (home-path "/Library/Keychains/login.keychain-db")))
 
+;; Lemma's own `lemma` CLI, which the host puts first on `PATH`. It is code,
+;; shipped in a host pack under Lemma's otherwise denied data, and nothing in
+;; it is secret; the host decides which folder it is (`lemma_cli_root`), never
+;; one holding pairing secrets or anything else denied above. Read only:
+;; nothing a command writes may be run later by another conversation's `lemma`.
+(if (param "LEMMA_CLI") (allow file-read* (subpath (param "LEMMA_CLI"))))
+
 ;; Terminals and the null device. A PTY the exec-server opens is allocated
 ;; inside the sandbox, so the pseudo-tty rules have to be here too.
 (allow pseudo-tty)

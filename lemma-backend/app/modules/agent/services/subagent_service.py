@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -25,10 +26,11 @@ from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_NAME,
 )
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.domain.entities import Conversation, Message
+from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     AgentRunStatus,
+    AgentRuntimeConfig,
     JsonObject,
 )
 from app.modules.agent.infrastructure.repositories import (
@@ -39,6 +41,10 @@ from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.usage.contracts.execution import build_usage_service
+
+if TYPE_CHECKING:
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent.tools.context import BaseAgentContext
 
 
 class SubAgentError(RuntimeError):
@@ -58,9 +64,84 @@ class SubAgentHandle:
 _AWAIT_POLL_SECONDS = 1.0
 
 
+class _RunReader(Protocol):
+    async def get_agent_run(self, agent_run_id: UUID) -> AgentRun | None: ...
+
+    async def get_conversation(self, conversation_id: UUID) -> Conversation | None: ...
+
+
+class _AgentReader(Protocol):
+    async def get_by_pod_and_name(self, *, pod_id: UUID, name: str) -> Agent | None: ...
+
+
+class ParentRuntimeLookup(Protocol):
+    """Which runtime a sub-agent's conversation is pinned to, if any."""
+
+    async def __call__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        deps: BaseAgentContext,
+        *,
+        is_self: bool,
+        target_name: str | None,
+    ) -> AgentRuntimeConfig | None: ...
+
+
+async def inherited_runtime(
+    *,
+    runs: _RunReader,
+    agents: _AgentReader,
+    deps: BaseAgentContext,
+    is_self: bool,
+    target_name: str | None,
+) -> AgentRuntimeConfig | None:
+    """The runtime a sub-agent's conversation is pinned to, if any.
+
+    A sub-agent runs on what its parent is running on: the model the person
+    picked for the conversation, or the one its agent defaults to. Without
+    this the child had no runtime of its own and fell to the pod default, so a
+    conversation switched to another model -- or to a coding agent on this Mac
+    -- spawned helpers that quietly ran somewhere else. A named agent
+    configured with a runtime of its own keeps it: that choice was made for
+    that agent on purpose.
+    """
+    if not is_self and target_name is not None:
+        target = await agents.get_by_pod_and_name(pod_id=deps.pod_id, name=target_name)
+        if target is not None and target.agent_runtime is not None:
+            return None
+    if deps.agent_run_id is not None:
+        run = await runs.get_agent_run(deps.agent_run_id)
+        if run is not None and run.agent_runtime is not None:
+            return run.agent_runtime
+    parent = await runs.get_conversation(deps.conversation_id)
+    return parent.agent_runtime if parent is not None else None
+
+
+async def _parent_runtime_from(
+    uow: SqlAlchemyUnitOfWork,
+    deps: BaseAgentContext,
+    *,
+    is_self: bool,
+    target_name: str | None,
+) -> AgentRuntimeConfig | None:
+    return await inherited_runtime(
+        runs=ConversationRepository(uow),
+        agents=AgentRepository(uow),
+        deps=deps,
+        is_self=is_self,
+        target_name=target_name,
+    )
+
+
 class SubAgentService:
-    def __init__(self, uow_factory: SessionUnitOfWorkFactory):
+    def __init__(
+        self,
+        uow_factory: SessionUnitOfWorkFactory,
+        *,
+        parent_runtime: ParentRuntimeLookup | None = None,
+    ):
         self.uow_factory = uow_factory
+        self._parent_runtime = parent_runtime or _parent_runtime_from
 
     # -- context helpers ----------------------------------------------------
 
@@ -127,6 +208,9 @@ class SubAgentService:
                     agent_name=target_name,
                     user_id=deps.user_id,
                     parent_id=deps.conversation_id,
+                    agent_runtime=await self._parent_runtime(
+                        uow, deps, is_self=is_self, target_name=target_name
+                    ),
                     require_execute_grant=not is_self,
                     metadata={
                         # Source of truth for depth=1 gating (RunToolAssembler):

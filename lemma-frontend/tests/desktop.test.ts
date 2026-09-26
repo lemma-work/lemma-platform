@@ -16,7 +16,9 @@ import {
     wasRemoved,
     type ConnectDeps,
 } from "../src/desktop/auto-connect.ts";
-import { capitalised, describeThisComputer, selectWorkspaceTarget, thisComputer } from "../src/desktop/this-computer.ts";
+import {
+    capitalised, describeThisComputer, needsUpdate, plainConnectError, plainHostError, selectWorkspaceTarget, thisComputer,
+} from "../src/desktop/this-computer.ts";
 import { adoptConversationFolder, bindFolder, folderLabel, readFolder, unbindFolder } from "../src/desktop/folders.ts";
 import { sandboxImageNotice, shouldKeepPolling } from "../src/desktop/sandbox-images.ts";
 import { requestedSection } from "../src/desktop/open-settings.ts";
@@ -302,9 +304,9 @@ test("a host locald stopped restarting says so, and offers a restart rather than
     const described = describeThisComputer(stuck, null, WORKSPACE, null, "this Mac");
     assert.equal(described.label, "Stopped working");
     assert.equal(described.detail, "it kept stopping");
-    assert.equal(described.restart, true);
+    assert.equal(described.action, "restart");
     assert.equal(readStatus({ available: true, restart_circuit_open: true })?.restart_circuit_open, true);
-    assert.equal(describeThisComputer(status(), null, WORKSPACE, null).restart, undefined);
+    assert.equal(describeThisComputer(status(), null, WORKSPACE, null).action === "restart", false);
 });
 
 test("the shell's loose JSON is narrowed, or refused", () => {
@@ -342,11 +344,64 @@ test("the planes rank into one reported state", () => {
 test("a failed connection displaces connecting, and only it offers a retry", () => {
     const failed = describeThisComputer(status({ targets: [] }), null, WORKSPACE, "pairing refused", "this Mac");
     assert.equal(failed.label, "Couldn\u2019t connect");
-    assert.equal(failed.detail, "pairing refused");
+    /* The sidecar's stderr belongs in the log, not on the card. */
+    assert.match(failed.detail, /couldn\u2019t connect this Mac to this workspace/);
     assert.equal(failed.retry, true);
+    assert.equal(failed.action, "retry");
     /* Once paired here, an old connect failure is history, not the state. */
     assert.equal(describeThisComputer(status(), null, WORKSPACE, "pairing refused").label, "Connected");
     assert.equal(describeThisComputer(status({ targets: [] }), null, WORKSPACE, null).retry, false);
+});
+
+test("a stage that lasts too long is called what it is, with the thing to do about it", () => {
+    const stalled = (s: AgentHostStatus) => describeThisComputer(s, null, WORKSPACE, null, "this Mac", null, true);
+
+    /* A pairing that vanished after this page's one attempt: nothing will
+       connect it again on its own, so it says so and offers the click. */
+    const lost = stalled(status({ targets: [] }));
+    assert.equal(lost.label, "Not connected");
+    assert.equal(lost.action, "reconnect");
+    assert.equal(lost.retry, true);
+
+    /* A sidecar that never came up. */
+    const down = stalled(status({ running: false }));
+    assert.equal(down.label, "Not running");
+    assert.equal(down.action, "restart");
+
+    /* Stalling says nothing about a state that is not a stage. */
+    assert.equal(stalled(status()).label, "Connected");
+});
+
+test("a workspace that needs a newer app says update, not the protocol", () => {
+    const old = describeThisComputer(
+        status({ targets: [target({ connection_state: "OFFLINE", last_error: "this Lemma needs a newer Agent Host" })] }),
+        null, WORKSPACE, null, "this Mac",
+    );
+    assert.equal(old.label, "Update needed");
+    assert.equal(old.action, "update");
+    assert.doesNotMatch(old.detail, /Agent Host|protocol/);
+    assert.ok(needsUpdate("target requested Agent Host protocol 3 is unsupported"));
+    assert.ok(!needsUpdate("401"));
+
+    /* A build without coding agents is not a dead end either. */
+    const bare = describeThisComputer(status({ available: false }), null, WORKSPACE, null, "this Mac");
+    assert.equal(bare.action, "update");
+    assert.doesNotMatch(bare.detail, /Agent Host/);
+});
+
+test("nothing on the card is the shell's own error text", () => {
+    const unavailable = describeThisComputer(null, "agent_host_status not allowed by ACL", WORKSPACE, null, "this Mac");
+    assert.equal(unavailable.label, "Unavailable");
+    assert.doesNotMatch(unavailable.detail, /ACL/);
+    assert.equal(plainHostError("locald: connection refused (os error 61)"), "Lemma\u2019s agent service isn\u2019t responding. Restart Lemma.");
+    const removed = "This computer was removed from this account. Connect it again to use it.";
+    assert.equal(plainConnectError(removed), removed, "Lemma's own sentence is kept");
+    const unreachable = describeThisComputer(
+        status({ targets: [target({ connection_state: "OFFLINE", last_error: "tls handshake eof" })] }),
+        null, WORKSPACE, null, "this Mac",
+    );
+    assert.equal(unreachable.label, "Unreachable");
+    assert.doesNotMatch(unreachable.detail, /tls/);
 });
 
 test("the computer is named for what it is", () => {
@@ -573,4 +628,31 @@ test("the browser URL carries the marker the shell hands out", () => {
     assert.equal(url.searchParams.get("desktop_browser"), "1");
     assert.equal(requestIdFromSearch(url.search), id);
     assert.equal(requestIdFromSearch("?desktop_request=short"), null, "a malformed id is ignored");
+});
+
+/* ── "Use my own skills and settings" ──────────────────────────────── */
+
+test("the agents on their own settings are read from the shell, and an older shell cannot say", async () => {
+    const { ownSettingsRow } = await import("../src/desktop/agent-host.ts");
+    const status = readStatus({ available: true, own_settings: ["claude-code", 3] });
+    assert.deepEqual(status?.own_settings, ["claude-code"]);
+    assert.deepEqual(ownSettingsRow(status, "claude-code"), { checked: true, blocked: null });
+    assert.deepEqual(ownSettingsRow(status, "codex"), { checked: false, blocked: null });
+
+    const older = readStatus({ available: true });
+    assert.equal(older?.own_settings, null);
+    const blocked = ownSettingsRow(older, "codex");
+    assert.equal(blocked.checked, false);
+    assert.match(blocked.blocked ?? "", /Update Lemma/);
+    assert.notEqual(ownSettingsRow(null, "codex").blocked, null);
+});
+
+test("choosing an agent's own settings asks the shell for exactly that agent", async () => {
+    const { agentHost } = await import("../src/desktop/agent-host.ts");
+    const state = page({ shell: () => null, info: { version: "0.8.0", mode: "hosted", platform: "macos" } });
+    await agentHost.setOwnSettings("codex", true);
+    assert.deepEqual(state.calls.at(-1), {
+        command: "agent_host_own_settings",
+        args: { harness: "codex", enabled: true },
+    });
 });

@@ -10,6 +10,31 @@ export interface ApprovalDetails {
     /** The tool that will actually run. */
     toolName?: string;
     canApproveForSession: boolean;
+    /** What "approve for this conversation" is called, when the asker named
+     *  it — a coding agent's own "Always allow" option. */
+    sessionLabel?: string;
+    /** A coding agent on a computer asking before it uses one of its own
+     *  tools. It waits inside a live run, and not for ever: see
+     *  {@link HOST_PERMISSION_WINDOW_MS}. */
+    hostPermission?: boolean;
+}
+
+/** How long a coding agent on a computer waits for an answer before it
+ *  denies its own request and carries on. The computer decides this, not
+ *  Lemma — `PERMISSION_DECISION_TIMEOUT` in `desktop/agent-host/src/runtime/
+ *  mod.rs` — so an answer given later reaches nobody. The card has to say so
+ *  rather than look accepted. */
+export const HOST_PERMISSION_WINDOW_MS = 30 * 60_000;
+
+/** Whether a coding agent's request can no longer be answered: its window
+ *  has passed, or the run it paused has ended. */
+export function hostPermissionExpired(
+    details: Pick<ApprovalDetails, "hostPermission">,
+    { askedAtMs, nowMs, runEnded }: { askedAtMs?: number; nowMs: number; runEnded: boolean },
+): boolean {
+    if (!details.hostPermission) return false;
+    if (runEnded) return true;
+    return askedAtMs !== undefined && nowMs >= askedAtMs + HOST_PERMISSION_WINDOW_MS;
 }
 
 export interface AskOption {
@@ -101,6 +126,12 @@ function asValue(value: unknown): string {
     return keys.length ? "{ " + keys.slice(0, 3).join(", ") + (keys.length > 3 ? ", …" : "") + " }" : "{}";
 }
 
+/** The kinds a coding agent's permission options come in, folded to one
+ *  spelling the way the backend folds them (`allow_always`, `allowAlways`). */
+function optionKind(value: unknown): string {
+    return asString(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 /** Some tool names carry their command as one long string. That string is the
  *  single most useful thing on the card, so it is never truncated here — the
  *  card wraps it instead. */
@@ -110,11 +141,39 @@ export function approvalDetails(toolArgs: unknown, fallbackText?: string): Appro
     const title = asString(args.title);
     const reason = asString(args.reason);
 
-    const inner = asRecord(args.args);
+    /* A coding agent's request carries what it would run under the marker the
+       backend routes the decision by, since nothing in it is Lemma's to run. */
+    const permission = args.agent_host_permission;
+    const host = permission !== undefined && permission !== null ? asRecord(permission) : null;
+    const inner = host ? asRecord(host.input) : asRecord(args.args);
     const params = Object.entries(inner)
         .filter(([, value]) => asValue(value) !== "")
         .slice(0, 4)
         .map(([key, value]) => ({ name: toolTitle(key), value: asValue(value) }));
+
+    /* The agent's own "always" option, when it offered one. Without it,
+       "approve for this conversation" is a promise nothing keeps: the backend
+       falls back to allowing once, and the agent asks again next time. */
+    const options = host && Array.isArray(host.options) ? host.options.map(asRecord) : [];
+    const always = options.find((option) => optionKind(option.kind) === "allowalways");
+
+    if (host) {
+        const tool = toolName ? toolTitle(toolName) : "";
+        return {
+            title: title || tool || asString(fallbackText),
+            /* The host's own message is the same sentence on every request;
+               what differs, and what the reader is deciding, is which tool
+               and with what. */
+            request: tool && tool !== title
+                ? "The coding agent wants to use " + tool + " on your computer."
+                : "The coding agent is asking before it goes ahead on your computer.",
+            params,
+            toolName: toolName || undefined,
+            canApproveForSession: Boolean(always),
+            sessionLabel: always ? asString(always.name) || undefined : undefined,
+            hostPermission: true,
+        };
+    }
 
     return {
         /* Empty when the call gave nothing to name it with, and left that way
@@ -129,9 +188,8 @@ export function approvalDetails(toolArgs: unknown, fallbackText?: string): Appro
         params,
         toolName: toolName || undefined,
         /* Approving for the session keeps this kind of action from asking
-           again until it expires. Always offered here: the pod does not talk
-           to a local agent host, which is the one case upstream where "for
-           session" would promise a grant it cannot keep. */
+           again until it expires. Lemma's own approvals always can; a coding
+           agent's can only when it offered an "always" option, above. */
         canApproveForSession: true,
     };
 }

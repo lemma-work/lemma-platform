@@ -18,6 +18,7 @@ import { sendToConversation, steerConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
 import { needsAiModel, pointsAtModels, runFailure } from "./model-setup";
+import { runFailure as describeRunFailure } from "./transcript-state";
 
 /** The conversation, on the SDK's own session.
  *
@@ -530,7 +531,11 @@ export function LiveConversation({
         : null;
 
     const failure = runFailure(state, session.error, session.conversation);
-    const error = sendError ?? loadError ?? failure.message;
+    /* A coding agent's own failure stays readable after a reload too: the
+       transcript words it through `transcript-state`, never raw. */
+    const recorded = state === "failed" && !session.error ? session.conversation?.last_run_error ?? null : null;
+    const agentFailure = recorded && describeRunFailure(recorded).codingAgents ? recorded : null;
+    const error = sendError ?? loadError ?? failure.message ?? agentFailure;
     /* Whichever failure is on screen, read by its code rather than its
        words: the words differ by deployment. */
     const modelMissing = sendError ? needsAiModel(sendProblem) : !loadError && failure.noModel;
@@ -569,7 +574,14 @@ export function LiveConversation({
                 modelsAction={pointsAtModels(error)}
                 dockedId={waitingOn?.id}
             />
-            <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
+            <InteractionDock
+                interaction={waitingOn}
+                teammate={pod.teammate.name}
+                onResolve={resolve}
+                /* Not while the status is still unknown, which reads as idle
+                   for a moment after load and would flash "Expired". */
+                runEnded={session.status !== undefined && state !== "running"}
+            />
             <FolderChip folder={folder} />
             <Composer
                 placeholder={"Talk to " + pod.name + "…"}

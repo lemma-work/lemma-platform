@@ -435,9 +435,12 @@ pub(crate) fn host_execution_consent(enabled: bool) -> Option<NativeConsent> {
             "Run agents' commands on this Mac?",
             format!(
                 "Your agents' commands will run directly on {THIS_COMPUTER} instead of in \
-                 Lemma's virtual machine, confined by macOS's sandbox to the folders you \
-                 connect. Teammates' runs stay in the virtual machine. Turn this off at any \
-                 time in Settings."
+                 Lemma's virtual machine, inside macOS's sandbox. They can read most files \
+                 on {THIS_COMPUTER} (not your SSH keys, cloud and package credentials, \
+                 shell history, browser and mail data, or Lemma's own data) and write only \
+                 to the conversation's folder, the folders you connect and temporary files. \
+                 They can use your gh and git sign-ins. Teammates' runs stay in the virtual \
+                 machine. Turn this off at any time in Settings."
             ),
             "Run on this Mac",
         )
