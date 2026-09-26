@@ -350,13 +350,44 @@ pub(crate) fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .icon(tauri::include_image!("icons/tray-icon.png"))
         .icon_as_template(false)
         .menu(&menu)
-        .show_menu_on_left_click(true)
-        // No handler here. `app.on_menu_event` in setup already receives menu
-        // events from every menu this app owns, the tray's included, so
+        .show_menu_on_left_click(tray_left_click_shows_menu())
+        // No menu handler here. `app.on_menu_event` in setup already receives
+        // menu events from every menu this app owns, the tray's included, so
         // registering a second one meant every tray verb ran twice -- two
         // confirmation dialogs stacked on each other, two stops, two restarts.
+        // This one is for the icon itself, which is not a menu event.
+        .on_tray_icon_event(|tray, event| {
+            if tray_click_opens_lemma(&event) {
+                crate::app::bring_lemma_back(tray.app_handle());
+            }
+        })
         .build(app)?;
     Ok(())
+}
+
+/// Each platform's convention for its menu-bar or notification-area icon.
+///
+/// On macOS a menu bar extra opens its menu on a click. On Windows a click on
+/// the notification-area icon opens the app -- it is how somebody who closed
+/// the window gets it back -- and the menu is on the right button.
+pub(crate) fn tray_left_click_shows_menu() -> bool {
+    !cfg!(windows)
+}
+
+pub(crate) fn tray_click_opens_lemma(event: &tauri::tray::TrayIconEvent) -> bool {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+    !tray_left_click_shows_menu()
+        && matches!(
+            event,
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            }
+        )
 }
 
 pub(crate) fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
