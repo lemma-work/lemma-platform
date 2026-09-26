@@ -22,7 +22,32 @@ pub(crate) fn validate_config(config: &OperatorConfig) -> io::Result<()> {
             "vision models must be a subset of configured models",
         ));
     }
+    for (label, model) in [
+        ("image model", &config.ai.image_model),
+        ("fast model", &config.ai.fast_model),
+    ] {
+        if !model.is_empty() && !config.ai.models.contains(model) {
+            return Err(invalid(format!(
+                "the {label} must be one of the provider's models"
+            )));
+        }
+    }
     Ok(())
+}
+
+/// Choosing a model to read images is saying it can.
+///
+/// The OpenAI-compatible model list does not report modalities, so the
+/// backend declares a model image-capable only when it is named in the vision
+/// list; the chosen image model is added there rather than left for the
+/// person to also tick. Anthropic's models all read images.
+pub(crate) fn declare_image_model(ai: &mut AiProfile) {
+    if ai.protocol == "openai_compat"
+        && !ai.image_model.is_empty()
+        && !ai.vision_models.contains(&ai.image_model)
+    {
+        ai.vision_models.push(ai.image_model.clone());
+    }
 }
 
 pub(crate) fn validate_config_shape(config: &OperatorConfig) -> io::Result<()> {
@@ -55,8 +80,33 @@ pub(crate) fn validate_config_shape(config: &OperatorConfig) -> io::Result<()> {
             "Resend inbound domain",
             &config.surfaces.resend_inbound_domain,
         ),
+        ("sender address", &config.email.from_email),
+        ("SMTP host", &config.email.smtp_host),
+        ("SMTP user", &config.email.smtp_user),
     ] {
         validate_text(label, value, 2048)?;
+    }
+    validate_email_shape(&config.email)
+}
+
+pub(crate) fn validate_email_shape(email: &EmailConfig) -> io::Result<()> {
+    if !matches!(email.provider.as_str(), "none" | "resend" | "smtp") {
+        return Err(invalid("unsupported email provider"));
+    }
+    let from = email.from_email.trim();
+    if !from.is_empty() && (!from.contains('@') || from.contains(char::is_whitespace)) {
+        return Err(invalid("the sender must be an email address"));
+    }
+    if email.smtp_host.contains(char::is_whitespace)
+        || email.smtp_host.contains('/')
+        || email.smtp_host.contains(':')
+    {
+        return Err(invalid(
+            "the SMTP host is a host name only, without a scheme or port",
+        ));
+    }
+    if email.smtp_port == 0 {
+        return Err(invalid("the SMTP port must be a port number"));
     }
     Ok(())
 }
@@ -75,6 +125,8 @@ pub(crate) fn validate_ai_shape(ai: &AiProfile) -> io::Result<()> {
     }
     validate_text("AI base URL", &ai.base_url, 2048)?;
     validate_text("AI default model", &ai.default_model, 2048)?;
+    validate_text("image model", &ai.image_model, 256)?;
+    validate_text("fast model", &ai.fast_model, 256)?;
     for model in ai.models.iter().chain(&ai.vision_models) {
         validate_text("model name", model, 256)?;
     }
@@ -112,15 +164,40 @@ pub(crate) fn validate_capability_requirements(
     {
         return Err(invalid("Telegram polling requires a bot token"));
     }
+    let stored = |name: &str| secrets.get(name).copied().unwrap_or(false);
+    let email = &config.email;
+    match email.provider.as_str() {
+        "resend" if !stored("surfaces.resend_api_key") => {
+            return Err(invalid("sending with Resend requires a Resend API key"));
+        }
+        "smtp"
+            if email.smtp_host.trim().is_empty()
+                || email.smtp_user.trim().is_empty()
+                || !stored("email.smtp_password") =>
+        {
+            return Err(invalid(
+                "sending with SMTP requires a host, a user name and a password",
+            ));
+        }
+        "resend" | "smtp" if email.from_email.trim().is_empty() => {
+            return Err(invalid("sending email requires a sender address"));
+        }
+        _ => {}
+    }
     Ok(())
 }
 
+/// Whether a change needs the provider asked again.
+///
+/// Where the requests go and what they ask for by default. Choosing a
+/// different image or fast model from the list the last probe returned is
+/// not a new provider, and re-probing for it would make a model picker wait
+/// on the network -- or fail for a provider that is briefly unreachable.
 pub(crate) fn provider_profile_changed(old: &AiProfile, new: &AiProfile) -> bool {
-    let mut old = old.clone();
-    let mut new = new.clone();
-    old.last_validated_at_unix_ms = None;
-    new.last_validated_at_unix_ms = None;
-    old != new
+    old.protocol != new.protocol
+        || old.base_url != new.base_url
+        || old.allow_private_network != new.allow_private_network
+        || old.default_model != new.default_model
 }
 
 pub(crate) fn validate_secret_changes(
