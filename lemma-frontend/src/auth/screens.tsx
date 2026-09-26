@@ -11,6 +11,7 @@ import { accountAccess, completeAuth, completionDestination } from "./completion
 import { continueWithProvider } from "./provider-login";
 import { EmailCodeForm } from "./email-code-form";
 import { isLocalDeployment } from "@/site/config";
+import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import { waitingFor } from "./waiting";
 import { CharacterPuppet } from "@/shell/character-puppet";
 import { HideIcon, LemmaLogo, ShowIcon } from "@/ui/icons";
@@ -537,6 +538,8 @@ function ResetAsk() {
     const [said, setSaid] = useState<string | null>(null);
     const [sent, setSent] = useState(false);
     const [busy, setBusy] = useState(false);
+    const local = isLocalDeployment();
+    const machine = capitalised(useThisComputer());
 
     const submit = useCallback(async (event: FormEvent) => {
         event.preventDefault();
@@ -576,6 +579,20 @@ function ResetAsk() {
             lead="Tell us the address on the account and we will email you a link."
             footer={<a href={authLink(PORTAL_PATH)}>Back to sign in</a>}
         >
+            {/* Lemma on somebody's own computer has no mail until they set it
+                up, and then this form can only fail. Said first, rather than
+                as the error the form comes back with. The form stays: once
+                email is set up it works, and the backend's refusal is still
+                shown if it is not. There is deliberately no way round it
+                here -- a reset that skips the mailbox is a way into anyone's
+                account for whoever can reach this page. */}
+            {local && (
+                <p className="auth__note">
+                    Lemma on your own computer sends reset links only once email is set up
+                    ({machine} → Server setup → Email). If you can’t sign in, ask someone who can
+                    to set it up, or reset the app’s data from Lemma → Recovery… in the menu bar.
+                </p>
+            )}
             <form onSubmit={submit} noValidate>
                 <Field id="email" label="Email" type="email" autoComplete="email" autoFocus value={email} onChange={setEmail} />
                 <Problem said={said} />

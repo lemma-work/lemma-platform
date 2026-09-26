@@ -202,6 +202,30 @@ test('local review and Back do not install; explicit confirmation installs once'
   assert.deepEqual(await deploymentCalls(page), [{ command: 'set_connection_mode', args: { mode: 'local' } }]);
 });
 
+// The Cloud failure was a lowercase footnote in the status line -- which the
+// welcome screen hides -- so pressing the button appeared to do nothing.
+test('a Cloud handoff that fails says so as an alert beside the button', async t => {
+  const page = await onboarding(t);
+  await page.evaluate(() => { window.__fixture.rejectInstall = true; });
+  await page.getByRole('button', { name: 'Use Lemma Cloud', exact: true }).click();
+  const alert = page.locator('#cloud-setup-error');
+  await alert.waitFor({ state: 'visible' });
+  assert.equal(await alert.getAttribute('role'), 'alert');
+  assert.match(await alert.textContent(), /^Couldn't open Lemma Cloud\. Check your connection and try again\./);
+  await page.evaluate(() => { window.__fixture.rejectInstall = false; });
+  await page.getByRole('button', { name: 'Use Lemma Cloud', exact: true }).click();
+  await alert.waitFor({ state: 'hidden' });
+});
+
+test('the local review says a model is needed before teammates can work', async t => {
+  const page = await onboarding(t);
+  await page.getByRole('button', { name: 'Use Local Lemma', exact: true }).click();
+  assert.match(
+    await page.locator('#local-confirm').innerText(),
+    /AI provider key or a local model \(Ollama or LM Studio\) to use teammates; set it up after you sign in\./,
+  );
+});
+
 test('a failed local setup keeps an actionable error and permits a deliberate retry', async t => {
   const page = await onboarding(t);
   await page.evaluate(() => { window.__fixture.rejectInstall = true; });

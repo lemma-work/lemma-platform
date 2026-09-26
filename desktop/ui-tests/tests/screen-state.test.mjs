@@ -105,13 +105,77 @@ test('a Windows permission is a setup button, not a retry', () => {
   assert.equal(restart.showPrepareWindows, false);
 });
 
-test('a stack that could not start offers a data reset but not a reinstall', () => {
+/**
+ * A service that stopped, or a runtime that did not install, has nothing to do
+ * with the data. Offering to erase it beside Try again is how somebody loses
+ * everything to a network blip.
+ */
+test('a stack that could not start never offers to erase data', () => {
   for (const errorCode of ['locald-start-failed', 'locald-disconnected', 'runtime-install-failed']) {
     const screen = deriveScreen({ error: true, errorCode }, {});
-    assert.equal(screen.showResetData, true, errorCode);
+    assert.equal(screen.showResetData, false, errorCode);
     assert.equal(screen.showFullReinstall, false, errorCode);
     assert.equal(screen.showRetry, true, errorCode);
+    assert.equal(screen.showRecovery, true, errorCode);
   }
+});
+
+test('only the data failures offer a reset', () => {
+  for (const errorCode of ['local-data-incompatible', 'local-data-reset-incomplete']) {
+    assert.equal(deriveScreen({ error: true, errorCode }, {}).showResetData, true, errorCode);
+  }
+});
+
+test('each known failure says which thing stopped', () => {
+  const headline = (state) => deriveScreen({ error: true, ...state }, {}).headline;
+  assert.equal(headline({ errorCode: 'runtime-install-failed' }), "Lemma couldn't finish installing.");
+  assert.equal(headline({ errorCode: 'locald-disconnected' }), "Lemma's local service stopped.");
+  assert.equal(headline({ errorCode: 'locald-start-failed' }), "Lemma's local service stopped.");
+  assert.equal(headline({ errorCode: 'wsl-required' }), 'Windows needs one permission.');
+  assert.equal(headline({ errorCode: 'wsl-reboot-required' }), 'One restart, then Lemma continues.');
+  assert.equal(headline({ errorCode: 'host-operation-failed' }), 'Something stopped.');
+});
+
+test('the untouched-data note is only as strong as the failure allows', () => {
+  const note = (state) => deriveScreen({ error: true, ...state }, {}).note;
+  assert.equal(note({ errorCode: 'locald-disconnected' }), 'Your data is untouched.');
+  assert.equal(
+    note({ errorCode: 'runtime-install-failed', status: 'Lemma could not reach github.com to download its runtime.' }),
+    'Your data is untouched. Lemma needs the internet once to finish installing.',
+  );
+  // Not a download failure, so being online is not the fix and is not said.
+  assert.equal(
+    note({ errorCode: 'runtime-install-failed', status: 'This copy of Lemma and its runtime do not match.' }),
+    'Your data is untouched.',
+  );
+  assert.equal(note({ errorCode: 'host-operation-failed' }), '');
+});
+
+/**
+ * Data another release wrote is kept by going back to that release; data whose
+ * credentials were replaced is not, and must not be offered the same way out.
+ */
+test('data from another release offers the previous version before erasing', () => {
+  const screen = deriveScreen({
+    error: true,
+    errorCode: 'local-data-incompatible',
+    status: 'the workspace database on this computer was created by PostgreSQL 16 and this release runs PostgreSQL 17; local data must be reset',
+  }, {});
+  assert.equal(screen.headline, "This version of Lemma can't open your existing data.");
+  assert.equal(screen.note, 'Your data is still on this computer.');
+  assert.match(screen.keepDataUrl, /^https:\/\/github\.com\/lemma-work\/lemma-platform\/releases$/);
+  assert.equal(screen.resetLabel, 'Erase and start fresh');
+  assert.equal(screen.showResetData, true);
+  assert.equal(screen.showRetry, false);
+
+  const locked = deriveScreen({
+    error: true,
+    errorCode: 'local-data-incompatible',
+    status: "this installation's private credentials were replaced; local data must be reset",
+  }, {});
+  assert.equal(locked.keepDataUrl, '');
+  assert.equal(locked.resetLabel, 'Reset local data');
+  assert.equal(locked.headline, "Lemma can't open your existing data.");
 });
 
 test('an ordinary failure keeps Try again and nothing else', () => {
@@ -119,6 +183,7 @@ test('an ordinary failure keeps Try again and nothing else', () => {
   assert.equal(screen.showRetry, true);
   assert.equal(screen.showResetData, false);
   assert.equal(screen.showFullReinstall, false);
+  assert.equal(screen.showRecovery, false);
   assert.equal(screen.errorDetail, 'boom');
 });
 

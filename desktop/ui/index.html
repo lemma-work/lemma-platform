@@ -37,6 +37,7 @@
           <li><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a5 5 0 1 1 .8-9.9A6 6 0 0 1 19 7a5.5 5.5 0 0 1 0 11H7Z"/><path d="m12 10-2 4h4l-2 4"/></svg><div><strong>Keep work moving when you're away</strong><p>Cloud agents and schedules run even when your computer is off.</p></div></li>
         </ul>
         <button class="primary start" id="choose-cloud" type="button">Use Lemma Cloud <span aria-hidden="true">→</span></button>
+        <p class="setup-error" id="cloud-setup-error" role="alert" hidden></p>
         <p class="cloud-storage">Workspace data lives in Lemma Cloud. No local services to install.</p>
       </section>
       <section class="local-option" aria-labelledby="local-title">
@@ -65,6 +66,7 @@
         <li>A local workspace shares no data with a cloud one.</li>
         <li>First setup installs the local runtime and downloads service images. Download and storage needs depend on the release and cached files. Interrupted runtime downloads can resume.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
+        <li>You'll need an AI provider key or a local model (Ollama or LM Studio) to use teammates; set it up after you sign in.</li>
         <li id="local-network-permission">macOS may ask for Local Network access so Lemma can reach its private virtual machine on this Mac. You can manage this in System Settings > Privacy &amp; Security > Local Network.</li>
       </ul>
       <p class="setup-error" id="local-setup-error" role="alert" hidden></p>
@@ -90,12 +92,18 @@
   <button class="cta" id="open-app" type="button" hidden>Open Lemma</button>
   <div id="errwrap" role="alert" hidden>
     <p class="errbox" id="errdetail"></p>
+    <p class="errnote" id="errnote" hidden></p>
     <div class="err-actions">
       <button class="dark" id="prepare-windows" type="button" hidden>Set up Windows runtime</button>
+      <!-- A link, not a command: the splash may open nothing but its own
+           pages, and a new-window request to an outside address is handed to
+           the system browser (navigation.rs, new_window_disposition). -->
+      <a class="dark" id="keep-data" href="https://github.com/lemma-work/lemma-platform/releases" target="_blank" rel="noopener noreferrer" hidden>Keep my data — get the previous version</a>
       <button class="dark" id="retry" type="button">Try again</button>
       <button class="dark" id="reset-data" type="button" hidden>Reset local data</button>
       <button id="full-reinstall" type="button" hidden>Start over</button>
       <button id="error-logs" type="button">View log</button>
+      <button id="error-recovery" type="button" hidden>Recovery</button>
     </div>
   </div>
 
