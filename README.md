@@ -397,7 +397,7 @@ lemma-stack config set ai.protocol=openai_compat ai.base_url=http://127.0.0.1:11
 
 Secrets are stored in Keychain or Credential Manager, model access is validated
 before activation, and a failed change rolls back. See
-[configuration](docs/installation.md#configure-an-ai-provider) for hosted
+[configuration](docs/installation.md#the-ai-model) for hosted
 providers, integrations, and agent surfaces.
 
 No API key? Point it at a model on your own machine instead: start Ollama or
