@@ -219,6 +219,24 @@ class FileUseCases:
         await service.finalize_update_file(plan, updated)
         return entity
 
+    async def retry_processing(
+        self,
+        *,
+        pod_id: UUID,
+        path: str,
+        request: Request,
+        user_id: UUID,
+    ) -> DatastoreFileEntity:
+        """Authorize + re-open a failed document in one short UoW; the worker
+        picks it up from the event the row write publishes."""
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+        ) as scope:
+            service = self._build(scope.uow)
+            entity = await service.retry_processing(pod_id, path, ctx=scope.ctx)
+            # Re-read for ``allowed_actions``, which the row write does not carry.
+            return await service.get_file(entity.id, ctx=scope.ctx)
+
     async def delete_path(
         self,
         *,

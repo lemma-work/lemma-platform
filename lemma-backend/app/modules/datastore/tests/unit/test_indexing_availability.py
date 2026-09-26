@@ -114,3 +114,36 @@ def test_an_ordinary_failure_still_says_only_its_class():
         sanitize_processing_error(RuntimeError("page 4: /objects/abc.pdf"))
         == "RuntimeError: document processing failed"
     )
+
+
+def test_a_local_model_still_downloading_is_not_the_documents_fault():
+    """The first-run model download failing is classified with the embedding
+    provider, and told as "still downloading" rather than as a broken
+    deployment -- it resolves by itself once the machine is online."""
+    from app.core.embeddings.local_embedder import EmbeddingModelUnavailableError
+    from app.modules.datastore.services.search.indexing_availability import (
+        EMBEDDING_MODEL_DOWNLOADING,
+        embedding_model_is_loading,
+    )
+
+    exc = EmbeddingModelUnavailableError("ConnectionError while downloading it")
+
+    assert missing_indexing_facility(exc) == "embedding_provider"
+    assert embedding_model_is_loading(exc)
+    assert sanitize_processing_error(exc) == EMBEDDING_MODEL_DOWNLOADING
+    assert "document processing failed" not in sanitize_processing_error(exc)
+
+
+def test_a_misconfigured_local_model_names_the_setting():
+    """An unknown model name will never download; it spends attempts and says
+    which setting to change."""
+    from app.core.embeddings.local_embedder import EmbeddingModelMisconfiguredError
+    from app.modules.datastore.services.search.indexing_availability import (
+        embedding_model_is_loading,
+    )
+
+    exc = EmbeddingModelMisconfiguredError("not/a-model")
+
+    assert missing_indexing_facility(exc) == "embedding_provider"
+    assert not embedding_model_is_loading(exc)
+    assert "EMBEDDING_PROVIDER" in sanitize_processing_error(exc)

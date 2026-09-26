@@ -160,6 +160,34 @@ class DatastoreFileEntity(AggregateRoot):
             )
         )
 
+    def mark_retry_requested(self, actor_id: UUID | None = None) -> bool:
+        """Offer a failed document to processing again, with a fresh budget.
+
+        Only a failed file: one that is waiting or being read is already on
+        its way, and one that finished has nothing to retry. Returns whether
+        anything changed, so the caller writes nothing for a no-op. The event
+        is the same one a content update sends, because it is what enqueues
+        a PENDING row for the worker.
+        """
+        from app.modules.datastore.domain.events import DatastoreFileUpdatedEvent
+
+        if self.status not in (FileStatus.FAILED, FileStatus.FAILED_PERMANENT):
+            return False
+        self.status = FileStatus.PENDING
+        self.indexed_at = None
+        self.processing_attempts = 0
+        self.last_processing_error = None
+        self.add_event(
+            DatastoreFileUpdatedEvent(
+                file_id=self.id,
+                pod_id=self.pod_id,
+                actor_id=actor_id,
+                path=self.path,
+                metadata=self.metadata or {},
+            )
+        )
+        return True
+
     def mark_processing(self) -> None:
         self.status = FileStatus.PROCESSING
 

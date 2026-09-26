@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, List
+from typing import Any, List, Literal
 
 from filelock import FileLock
 
@@ -81,6 +83,65 @@ def load_extension_modules_if_local() -> None:
         )
 
 
+# How long a failed model load is remembered before the next caller may try
+# again. A first download that fails -- no internet yet, a captive portal --
+# would otherwise be retried by every queued document in turn, each one
+# re-downloading from scratch.
+LOCAL_MODEL_RETRY_COOLDOWN_SECONDS = 60.0
+
+LocalModelStatus = Literal["idle", "loading", "ready", "failed"]
+
+
+class EmbeddingModelUnavailableError(RuntimeError):
+    """The local search model could not be loaded -- the document was never judged.
+
+    Almost always the first-run download: the model is fetched once, on first
+    use, and a machine without internet at that moment cannot get it. That is
+    a fact about this installation *right now*, not about any document, so the
+    datastore refunds the processing attempt instead of spending it (see
+    ``DocumentExtractionUnavailableError`` for the same contract on the
+    extractor side) and re-drives the file once the model is back.
+
+    The wording is matched by ``indexing_availability``; keep the phrase
+    "local embedding model is not available" in the message.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(f"The local embedding model is not available yet: {reason}")
+
+
+class EmbeddingModelMisconfiguredError(RuntimeError):
+    """The configured local model cannot be loaded at all -- a standing state.
+
+    Raised for a model name FastEmbed does not know, or a missing backend.
+    Retrying will not change
+    that, so unlike ``EmbeddingModelUnavailableError`` this spends attempts
+    and ends in a terminal status naming the setting.
+    """
+
+    def __init__(self, model_name: str):
+        super().__init__(
+            f"The local embedding model {model_name!r} cannot be loaded: set "
+            "EMBEDDING_PROVIDER=local with a supported LOCAL_EMBEDDING_MODEL."
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LocalModelReadiness:
+    """Where this process's local model is: never asked for, being fetched or
+    loaded, usable, or failed at ``failed_at`` (monotonic seconds)."""
+
+    status: LocalModelStatus
+    failed_at: float | None = None
+    error_type: str | None = None
+
+    def seconds_until_retry(self, now: float | None = None) -> float:
+        if self.status != "failed" or self.failed_at is None:
+            return 0.0
+        now = time.monotonic() if now is None else now
+        return max(0.0, self.failed_at + LOCAL_MODEL_RETRY_COOLDOWN_SECONDS - now)
+
+
 class FastEmbedLocalEmbedder(Embedder):
     """CPU-only local semantic embeddings backed by FastEmbed/ONNX."""
 
@@ -100,6 +161,7 @@ class FastEmbedLocalEmbedder(Embedder):
             cache_dir or settings.local_embedding_cache_dir
         ).expanduser()
         self._model = model
+        self._readiness = LocalModelReadiness("ready" if model is not None else "idle")
         self._model_lock = Lock()
         # ONNX sessions use their own multi-core thread pools. Concurrent calls
         # on the same local model oversubscribe the CPU, increase per-file
@@ -151,6 +213,10 @@ class FastEmbedLocalEmbedder(Embedder):
             return {}
         return {"threads": threads}
 
+    def readiness(self) -> LocalModelReadiness:
+        """This instance's model state, for readiness probes and dispatch."""
+        return self._readiness
+
     def _load_model(self):
         if self._model is not None:
             return self._model
@@ -162,22 +228,57 @@ class FastEmbedLocalEmbedder(Embedder):
         with self._model_lock:
             if self._model is not None:
                 return self._model
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            lock_path = self.cache_dir / ".lemma-fastembed-init.lock"
-            with FileLock(str(lock_path)):
-                from fastembed import TextEmbedding
-
-                try:
-                    self._model = TextEmbedding(
-                        model_name=self.model_name,
-                        cache_dir=str(self.cache_dir),
-                        **self._threading_kwargs(),
-                    )
-                except Exception as exc:
-                    if not self._is_missing_model_artifact(exc):
-                        raise
-                    self._model = self._load_registered_alternate(TextEmbedding, exc)
+            cooldown = self._readiness.seconds_until_retry()
+            if cooldown > 0:
+                raise EmbeddingModelUnavailableError(
+                    f"the last attempt failed; retrying in {round(cooldown)}s"
+                )
+            self._readiness = LocalModelReadiness("loading")
+            try:
+                self._model = self._construct_model()
+            except (ValueError, ImportError) as exc:
+                # FastEmbed's refusal of an unknown model name, or no FastEmbed
+                # at all -- configuration, not connectivity.
+                self._mark_failed(exc)
+                raise EmbeddingModelMisconfiguredError(self.model_name) from exc
+            except (OSError, RuntimeError) as exc:
+                # Every way a download or load goes wrong: network and file
+                # errors (Hub and HTTP clients raise OSError subclasses) and
+                # the runtime refusing a half-written model.
+                self._mark_failed(exc)
+                raise EmbeddingModelUnavailableError(
+                    f"{type(exc).__name__} while downloading or loading it"
+                ) from exc
+            self._readiness = LocalModelReadiness("ready")
         return self._model
+
+    def _mark_failed(self, exc: Exception) -> None:
+        self._readiness = LocalModelReadiness(
+            "failed", failed_at=time.monotonic(), error_type=type(exc).__name__
+        )
+        logger.warning(
+            "embeddings.local_embedder.model_load_failed.degraded",
+            model_name=self.model_name,
+            error_type=type(exc).__name__,
+            exc_info=exc,
+        )
+
+    def _construct_model(self):
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self.cache_dir / ".lemma-fastembed-init.lock"
+        with FileLock(str(lock_path)):
+            from fastembed import TextEmbedding
+
+            try:
+                return TextEmbedding(
+                    model_name=self.model_name,
+                    cache_dir=str(self.cache_dir),
+                    **self._threading_kwargs(),
+                )
+            except Exception as exc:
+                if not self._is_missing_model_artifact(exc):
+                    raise
+                return self._load_registered_alternate(TextEmbedding, exc)
 
     @staticmethod
     def _is_missing_model_artifact(exc: Exception) -> bool:

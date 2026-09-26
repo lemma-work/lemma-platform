@@ -143,6 +143,7 @@ class DatastoreFileProcessingStateMixin:
         *,
         content_sha256: str | None,
         processing_attempt: int,
+        note: str | None = None,
     ) -> bool:
         """Return a claim to PENDING *without* spending an attempt.
 
@@ -161,7 +162,17 @@ class DatastoreFileProcessingStateMixin:
 
         Fenced on the same (status, content identity, attempt) triple as every
         other transition, so a stale worker cannot release a newer claim.
+
+        ``note`` is left in ``last_processing_error`` when given: the row is
+        PENDING, not failed, but "why is this still waiting" deserves an answer
+        (the local search model still downloading, say). Completion clears it.
         """
+        values: dict[str, object] = {
+            "status": FileStatus.PENDING.value,
+            "processing_attempts": DatastoreFile.processing_attempts - 1,
+        }
+        if note is not None:
+            values["last_processing_error"] = note
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
@@ -170,10 +181,7 @@ class DatastoreFileProcessingStateMixin:
                 _content_identity_matches(content_sha256),
                 DatastoreFile.processing_attempts == processing_attempt,
             )
-            .values(
-                status=FileStatus.PENDING.value,
-                processing_attempts=DatastoreFile.processing_attempts - 1,
-            )
+            .values(**values)
         )
         return result.rowcount > 0
 

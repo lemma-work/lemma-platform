@@ -14,6 +14,7 @@ import {
     withoutItem,
     type Pages,
 } from "./library-cache";
+import { readingProblem, withItemStatus } from "./file-status";
 
 /** Making, renaming and removing things in the library.
  *
@@ -38,8 +39,8 @@ export function useLibraryWrites(podId: string, directory: string) {
         cache.setQueryData<Pages>(key, (pages) => change(pages) as Pages);
 
     /** A row for something that exists now but has not been listed yet. */
-    function rowFor(name: string, path: string, kind: LibraryItem["kind"], detail: string): LibraryItem {
-        return { id: path, name, kind, path, updated: new Date().toISOString(), detail };
+    function rowFor(name: string, path: string, kind: LibraryItem["kind"], detail: string, status?: string): LibraryItem {
+        return { id: path, name, kind, path, updated: new Date().toISOString(), detail, status };
     }
 
     async function upload(files: File[]) {
@@ -63,7 +64,7 @@ export function useLibraryWrites(podId: string, directory: string) {
                         directoryPath: directory,
                         searchEnabled: true,
                     });
-                    patch((pages) => withItem(pages, rowFor(written.name ?? file.name, written.path, "file", describeSize(file.size))));
+                    patch((pages) => withItem(pages, rowFor(written.name ?? file.name, written.path, "file", describeSize(file.size), written.status)));
                 }
             } catch (failure) {
                 setProblem(failure instanceof Error ? failure.message : "That file did not upload.");
@@ -136,7 +137,38 @@ export function useLibraryWrites(podId: string, directory: string) {
         }
     }
 
-    return { busy, problem, clearProblem: () => setProblem(null), upload, createFolder, rename, remove };
+    /** Ask for a failed file to be read again. The row turns back to
+     *  "Reading…" at once; the server answers with the status it settled on. */
+    async function retry(item: LibraryItem) {
+        const before = cache.getQueryData<Pages>(key);
+        setBusy(item.path);
+        setProblem(null);
+        patch((pages) => withItemStatus(pages, item.path, "PENDING"));
+        try {
+            if (!sample) {
+                const read = await lemma(podId).files.retryProcessing(item.path);
+                patch((pages) => withItemStatus(pages, item.path, read.status));
+            }
+        } catch (failure) {
+            cache.setQueryData(key, before);
+            setProblem(failure instanceof Error ? failure.message : "That file was not queued again.");
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    /** Why a file could not be read. The listing leaves the error out (it can
+     *  be long), so it is read on demand, for the one row asked about. */
+    async function explain(item: LibraryItem): Promise<string> {
+        if (sample) return readingProblem(null);
+        try {
+            return readingProblem((await lemma(podId).files.get(item.path)).last_processing_error);
+        } catch {
+            return readingProblem(null);
+        }
+    }
+
+    return { busy, problem, clearProblem: () => setProblem(null), upload, createFolder, rename, remove, retry, explain };
 }
 
 /** Ask before removing something.

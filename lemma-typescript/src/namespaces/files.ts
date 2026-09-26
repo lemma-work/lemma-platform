@@ -91,6 +91,12 @@ export class FilesNamespace {
     return this.client.request(() => FilesService.fileGet(this.podId(), path));
   }
 
+  /** Queue a document whose processing failed to be read again. A file that
+   *  did not fail is returned unchanged. */
+  retryProcessing(path: string): Promise<FileDetailResponse> {
+    return this.client.request(() => FilesService.fileRetryProcessing(this.podId(), path));
+  }
+
   /**
    * Read a file by id.
    *

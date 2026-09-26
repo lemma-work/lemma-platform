@@ -34,6 +34,25 @@ class DatastoreFileRecoverySummary:
     processing_cutoff: datetime
 
 
+def _seconds_until_the_search_model_may_retry() -> float:
+    """How long until the local search model may be tried again, or 0.
+
+    The same backoff as the extractor's, for the same reason: a document
+    released because the model could not be downloaded is PENDING again at
+    once, and without this every dispatch pass would re-claim it and fail it
+    straight back. Zero for a deployment that does not embed locally.
+    """
+    from app.modules.datastore.composition import get_datastore_composition
+
+    composition = get_datastore_composition()
+    if not composition.preload_embeddings:
+        return 0.0
+    readiness = getattr(composition.embedder_provider(), "readiness", None)
+    if readiness is None:
+        return 0.0
+    return readiness().seconds_until_retry()
+
+
 class DatastoreFileRecoveryService:
     def __init__(
         self,
@@ -138,6 +157,13 @@ class DatastoreFileRecoveryService:
         )
 
         cooldown = get_kreuzberg_circuit().seconds_until_trial()
+        model_cooldown = _seconds_until_the_search_model_may_retry()
+        if model_cooldown > 0:
+            logger.info(
+                "datastore.file_recovery_service.dispatch_deferred_model_unavailable.degraded",
+                cooldown_seconds=round(model_cooldown, 1),
+            )
+        cooldown = max(cooldown, model_cooldown)
         if cooldown <= 0:
             return None
         logger.info(

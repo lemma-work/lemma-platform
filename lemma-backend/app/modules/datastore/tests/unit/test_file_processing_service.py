@@ -957,3 +957,59 @@ async def test_an_unconfigured_embedding_provider_is_persisted_as_a_deployment_f
         f"the stored failure names no setting an operator could change: {recorded}"
     )
     assert "document processing failed" not in recorded
+
+
+@pytest.mark.asyncio
+async def test_search_model_still_loading_refunds_the_attempt_and_says_so():
+    """A document indexed while the local model cannot be downloaded goes back
+    to PENDING with its attempt refunded, and the note says why it waits."""
+    from app.core.embeddings.local_embedder import EmbeddingModelUnavailableError
+    from app.modules.datastore.services.search.indexing_availability import (
+        EMBEDDING_MODEL_DOWNLOADING,
+    )
+
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="notes.txt",
+        path="/notes.txt",
+        mime_type="text/plain",
+        file_metadata={},
+        content_sha256=None,
+    )
+    # get_model, claim, claim-current check, release_claim.
+    factory = _RecordingUowFactory(
+        results=[
+            _ScalarResult(file_model),
+            _ExecuteResult(),
+            _ExecuteResult(),
+            _ExecuteResult(),
+        ]
+    )
+    service = _build_service(factory)
+    service._ensure_claim_current = AsyncMock()
+    service.document_processor.extract.return_value = DocumentExtraction(
+        markdown="hello",
+        chunks=[DocumentChunk(text="hello", page_start=1, page_end=1)],
+        images=[],
+        pages=[],
+        detected_languages=[],
+        extraction_mode="text",
+    )
+    service.search_service.index_file_chunks.side_effect = (
+        EmbeddingModelUnavailableError("ConnectionError while downloading it")
+    )
+
+    with pytest.raises(EmbeddingModelUnavailableError):
+        await service.process_file_async(file_id)
+
+    release_stmt = factory.sessions[-1].execute.await_args.args[0]
+    rendered = str(release_stmt).replace("\n", " ")
+    compiled = release_stmt.compile()
+    assert compiled.params["status"] == FileStatus.PENDING.value
+    assert "processing_attempts=(datastore_files.processing_attempts - " in rendered
+    assert compiled.params["last_processing_error"] == EMBEDDING_MODEL_DOWNLOADING
+    assert factory.active == 0

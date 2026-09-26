@@ -34,6 +34,15 @@ FAILED_PERMANENT, deliberately: unlike an extractor blip, an unconfigured
 embedding provider is a standing state, so refunding the attempt would mean an
 unbounded re-drive loop with no terminal status and nothing recorded anywhere.
 Failing with a message that names the setting stops, and says why.
+
+The one embedding failure that is *not* standing is the local model's first
+download. The model is fetched once, on first use; a machine that is offline
+at that moment recovers by itself as soon as it is online. That case arrives
+as ``EmbeddingModelUnavailableError``, is still classified ``embedding_provider``
+here (it is not the document's fault), but the processing service refunds the
+attempt for it and the dispatcher backs off until the model may be retried --
+and the note it leaves says the model is downloading, not that the deployment
+is misconfigured.
 """
 
 from __future__ import annotations
@@ -58,6 +67,16 @@ _VECTOR_EXTENSION_UNAVAILABLE = (
     "the extension. This is a deployment setting, not a problem with the "
     "document."
 )
+
+# Desktop wording on purpose: the local model is what Desktop embeds with, and
+# "the deployment" means nothing to a person running Lemma on their own Mac.
+EMBEDDING_MODEL_DOWNLOADING = (
+    "Lemma is still downloading its search model (needs internet once). Files "
+    "will become searchable when it finishes."
+)
+
+# ``EmbeddingModelUnavailableError``'s own wording -- transient, refunded.
+_EMBEDDING_MODEL_MARKERS = ("local embedding model is not available",)
 
 # The embedder's own refusal when no credentials are configured, and the
 # wording it wraps every transport failure in. Both are strings this platform
@@ -89,9 +108,27 @@ def missing_indexing_facility(exc: BaseException) -> str | None:
     raw = f"{exc} {getattr(exc, 'orig', '')}".lower()
     if any(marker in raw for marker in _VECTOR_MARKERS):
         return "vector_extension"
-    if any(marker in raw for marker in _EMBEDDING_MARKERS):
+    if any(marker in raw for marker in _EMBEDDING_MARKERS + _EMBEDDING_MODEL_MARKERS):
         return "embedding_provider"
     return None
+
+
+def embedding_model_is_loading(exc: BaseException) -> bool:
+    """Whether this failure is the local model not being available *yet*.
+
+    The one indexing failure worth refunding: it resolves by itself, so the
+    document must not be charged for it.
+    """
+    raw = str(exc).lower()
+    return any(marker in raw for marker in _EMBEDDING_MODEL_MARKERS)
+
+
+def unavailable_facility(exc: Exception) -> tuple[str, str | None]:
+    """For a refunded claim: which facility was missing, and the note to leave
+    on the row while it waits (``None`` keeps whatever it had)."""
+    if embedding_model_is_loading(exc):
+        return "embedding_model", sanitize_processing_error(exc)
+    return "extractor", None
 
 
 def sanitize_processing_error(exc: Exception) -> str:
@@ -105,6 +142,8 @@ def sanitize_processing_error(exc: Exception) -> str:
     facility = missing_indexing_facility(exc)
     if facility == "vector_extension":
         return _VECTOR_EXTENSION_UNAVAILABLE
+    if embedding_model_is_loading(exc):
+        return EMBEDDING_MODEL_DOWNLOADING
     if facility == "embedding_provider":
         return _EMBEDDING_UNAVAILABLE
     return f"{type(exc).__name__}: document processing failed"

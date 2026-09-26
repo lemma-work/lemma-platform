@@ -21,6 +21,7 @@ class _TransactionalWriter(Protocol):
     async def prepare_user_markdown(self, *args, **kwargs) -> MarkdownAttachPlan: ...
     async def write_user_markdown(self, *args, **kwargs) -> list[str]: ...
     async def finalize_user_markdown(self, *args, **kwargs) -> DatastoreFileEntity: ...
+    async def retry_processing(self, *args, **kwargs) -> DatastoreFileEntity: ...
 
 
 class FileTransactionFacade:
@@ -94,3 +95,9 @@ class FileTransactionFacade:
         return await self._writer.finalize_user_markdown(
             plan, asset_names=asset_names, ctx=ctx
         )
+
+    async def retry_processing(
+        self, pod_id: UUID, path: str, ctx: Context
+    ) -> DatastoreFileEntity:
+        """Re-queue a document whose processing failed (see the writer)."""
+        return await self._writer.retry_processing(pod_id, path, ctx.user_id, ctx=ctx)

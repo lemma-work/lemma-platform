@@ -11,6 +11,7 @@ from pathlib import Path
 from uuid import UUID
 
 from app.core.api.uploads import upload_source_sha256
+from app.core.embeddings.local_embedder import EmbeddingModelUnavailableError
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -57,6 +58,7 @@ from app.modules.datastore.services.files.page_markers import parse_page_offsets
 from app.modules.datastore.services.files.projection import FileProjection
 from app.modules.datastore.services.search.indexing_availability import (
     sanitize_processing_error,
+    unavailable_facility,
     warn_if_a_facility_is_absent,
 )
 from app.modules.datastore.services.search.postgres_search_service import (
@@ -300,22 +302,28 @@ class DatastoreFileProcessingService:
             )
         except _StaleProcessingClaim:
             return
-        except DocumentExtractionUnavailableError:
-            # The extractor was unreachable/overloaded, so nothing was learned
-            # about this document. Refund the attempt and return the row to
-            # PENDING; recovery re-drives it once the extractor is back. Without
-            # this, an outage spends the file's 3-attempt budget and terminally
-            # fails documents that are perfectly fine.
+        except (
+            DocumentExtractionUnavailableError,
+            EmbeddingModelUnavailableError,
+        ) as exc:
+            # The extractor was unreachable/overloaded, or the local search model
+            # is still downloading, so nothing was learned about this document.
+            # Refund the attempt and return the row to PENDING; recovery
+            # re-drives it once the facility is back. Without this, an outage
+            # spends the 3-attempt budget and fails documents that are fine.
+            facility, note = unavailable_facility(exc)
             async with self._file_repo() as files:
                 released = await files.release_claim(
                     file_id,
                     content_sha256=content_sha256,
                     processing_attempt=processing_attempt,
+                    note=note,
                 )
             logger.warning(
                 "datastore.file_processing_service.extraction_unavailable_claim_released.degraded",
                 file_id=file_id,
                 released=released,
+                facility=facility,
             )
             raise
         except Exception as exc:
