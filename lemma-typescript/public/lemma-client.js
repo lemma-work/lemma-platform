@@ -9348,6 +9348,30 @@ var LemmaClient = (() => {
     initializedSignature = signature;
   }
 
+  // src/reachability.ts
+  function isUnreachableStatus(status) {
+    return status >= 500 || status === 429 || status === 408 || status === 0;
+  }
+  function refreshFailureKind(error) {
+    if (!error || typeof error !== "object") return "absent";
+    const candidate = error;
+    const status = typeof candidate.status === "number" ? candidate.status : candidate.statusCode;
+    if (typeof status === "number") return isUnreachableStatus(status) ? "unreachable" : "absent";
+    return error instanceof TypeError || candidate.name === "TypeError" || candidate.name === "NetworkError" ? "unreachable" : "absent";
+  }
+  async function probeReachable(apiUrl, fetchImpl = fetch) {
+    try {
+      const response = await fetchImpl(`${apiUrl.replace(/\/$/, "")}/health/live`, {
+        method: "GET",
+        credentials: "omit",
+        cache: "no-store"
+      });
+      return !isUnreachableStatus(response.status);
+    } catch {
+      return false;
+    }
+  }
+
   // src/auth.ts
   var DEFAULT_BLOCKED_REDIRECT_PATHS = ["/login", "/signup", "/auth"];
   var SUPERTOKENS_FRONTEND_MARKER_KEYS = [
@@ -9822,18 +9846,57 @@ var LemmaClient = (() => {
       document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
       return import_session2.default.doesSessionExist();
     }
+    /**
+     * Whether the API answers at all -- its liveness probe, not a session check.
+     * What a retry after `unreachable` should wait on, so that an outage does
+     * not spend the refresh breaker's budget and trip it into a sign-out.
+     */
+    isReachable() {
+      return probeReachable(this.apiUrl);
+    }
+    /**
+     * The local session, with the reason when there is none.
+     *
+     * `doesSessionExist()` folds every failed refresh into "no": a 401, a server
+     * that did not answer, and SuperTokens' duplicate-cookie answer -- a 200
+     * with no `front-token`, which the SDK throws on without saving anything.
+     * One direct refresh tells them apart. It also is the retry the duplicate
+     * answer needs: the server cleared the stray copy on that response, so this
+     * refresh carries one cookie and succeeds. Where the SDK already knows there
+     * is no session (the update marker without a front token) it answers
+     * without touching the network.
+     */
+    async localSession() {
+      try {
+        if (await import_session2.default.doesSessionExist()) return "exists";
+      } catch (error) {
+        return refreshFailureKind(error);
+      }
+      try {
+        if (await import_session2.default.attemptRefreshingSession()) return "exists";
+      } catch (error) {
+        if (refreshFailureKind(error) === "unreachable") return "unreachable";
+      }
+      try {
+        return await this.recoverOwnOriginSession() ? "exists" : "absent";
+      } catch (error) {
+        return refreshFailureKind(error);
+      }
+    }
     async performAuthCheck(revision) {
       const unauthenticated = () => revision === this.authRevision ? this.applyUnauthenticatedState() : this.state;
+      const unreachable = () => {
+        if (revision !== this.authRevision) return this.state;
+        const next = { status: "unreachable", user: null };
+        this.setState(next);
+        return next;
+      };
       this.setState({ status: "loading", user: null });
       if (!this.injectedToken && typeof window !== "undefined") {
         ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
-        try {
-          if (!await import_session2.default.doesSessionExist() && !await this.recoverOwnOriginSession()) {
-            return unauthenticated();
-          }
-        } catch {
-          return unauthenticated();
-        }
+        const local = await this.localSession();
+        if (local === "unreachable") return unreachable();
+        if (local === "absent") return unauthenticated();
       }
       if (revision !== this.authRevision) return this.state;
       try {
@@ -9844,6 +9907,9 @@ var LemmaClient = (() => {
         if (response.status === 401) {
           return unauthenticated();
         }
+        if (isUnreachableStatus(response.status)) {
+          return unreachable();
+        }
         if (!response.ok) {
           return unauthenticated();
         }
@@ -9852,8 +9918,8 @@ var LemmaClient = (() => {
         const next = { status: "authenticated", user };
         this.setState(next);
         return next;
-      } catch {
-        return unauthenticated();
+      } catch (error) {
+        return refreshFailureKind(error) === "unreachable" ? unreachable() : unauthenticated();
       }
     }
     /**
@@ -10951,6 +11017,45 @@ var LemmaClient = (() => {
   // src/openapi_client/services/AgentRuntimeService.ts
   var AgentRuntimeService = class {
     /**
+     * Clear the Organization's Default Model
+     * @param organizationId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentRuntimeDefaultClear(organizationId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/organizations/{organization_id}/agent-runtime/default",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Set the Organization's Default Model
+     * @param organizationId
+     * @param requestBody
+     * @returns AgentRuntimeConfig Successful Response
+     * @throws ApiError
+     */
+    static agentRuntimeDefaultSet(organizationId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/organizations/{organization_id}/agent-runtime/default",
+        path: {
+          "organization_id": organizationId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Available Agent Runtime Profiles
      * @param organizationId
      * @param includeDisabled
@@ -11076,6 +11181,26 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Test a Saved Model Provider
+     * @param organizationId
+     * @param profileId
+     * @returns AgentRuntimeProfileTestResponse Successful Response
+     * @throws ApiError
+     */
+    static agentRuntimeProfilesTest(organizationId, profileId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/test",
+        path: {
+          "organization_id": organizationId,
+          "profile_id": profileId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/agent-runtime.ts
@@ -11129,6 +11254,31 @@ var LemmaClient = (() => {
       return this.client.request(
         () => AgentRuntimeService.agentRuntimeProfilesRestore(orgId, profileId)
       );
+    }
+    /**
+     * List a saved provider's models and send its default model one short
+     * message. `ok` is false with a plain-language `message` when the key is
+     * rejected or nothing answers; the provider's own error text is never
+     * returned.
+     */
+    testProfile(orgId, profileId) {
+      return this.client.request(
+        () => AgentRuntimeService.agentRuntimeProfilesTest(orgId, profileId)
+      );
+    }
+    /**
+     * Make an organization-wide model provider what every teammate that names
+     * no model runs on. Leave `model_name` out to follow the provider's own
+     * default model.
+     */
+    setOrganizationDefault(orgId, request2) {
+      return this.client.request(
+        () => AgentRuntimeService.agentRuntimeDefaultSet(orgId, request2)
+      );
+    }
+    /** Stop choosing a model for the organization. */
+    clearOrganizationDefault(orgId) {
+      return this.client.request(() => AgentRuntimeService.agentRuntimeDefaultClear(orgId));
     }
     /**
      * @deprecated Runtime defaults are now pod config (`default_profile_id`) or
@@ -12188,6 +12338,29 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Retry File Processing
+     * Queue a document whose processing failed to be read and indexed again, with a fresh retry budget. A file that did not fail is returned unchanged.
+     * @param podId
+     * @param path
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static fileRetryProcessing(podId, path) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/datastore/files/by-path/retry-processing",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "path": path
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List a document's derived child files
      * @param podId
      * @param path
@@ -12559,6 +12732,11 @@ var LemmaClient = (() => {
     }
     get(path) {
       return this.client.request(() => FilesService.fileGet(this.podId(), path));
+    }
+    /** Queue a document whose processing failed to be read again. A file that
+     *  did not fail is returned unchanged. */
+    retryProcessing(path) {
+      return this.client.request(() => FilesService.fileRetryProcessing(this.podId(), path));
     }
     /**
      * Read a file by id.

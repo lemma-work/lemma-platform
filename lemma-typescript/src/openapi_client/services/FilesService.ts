@@ -204,6 +204,32 @@ export class FilesService {
         });
     }
     /**
+     * Retry File Processing
+     * Queue a document whose processing failed to be read and indexed again, with a fresh retry budget. A file that did not fail is returned unchanged.
+     * @param podId
+     * @param path
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static fileRetryProcessing(
+        podId: string,
+        path: string,
+    ): CancelablePromise<FileDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/datastore/files/by-path/retry-processing',
+            path: {
+                'pod_id': podId,
+            },
+            query: {
+                'path': path,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * List a document's derived child files
      * @param podId
      * @param path

@@ -8,6 +8,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/me/runtime/agent-hosts/{host_id}` | `agent.host.revoke` | Revoke Agent Host |
+| DELETE | `/organizations/{organization_id}/agent-runtime/default` | `agent.runtime.default.clear` | Clear the Organization's Default Model |
 | DELETE | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.archive` | Archive Agent Runtime Profile |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
 | GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
@@ -28,6 +29,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/me/runtime/agent-host-pairings` | `agent.host.pairing.create` | Create Agent Host Pairing |
 | POST | `/organizations/{organization_id}/agent-runtime/profiles` | `agent.runtime.profiles.create` | Create Agent Runtime Profile |
 | POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore` | `agent.runtime.profiles.restore` | Restore Agent Runtime Profile |
+| POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/test` | `agent.runtime.profiles.test` | Test a Saved Model Provider |
 | POST | `/pods/{pod_id}/agents` | `agent.create` | Create Agent |
 | POST | `/pods/{pod_id}/conversations` | `agent.conversation.create` | Create Pod Agent Conversation |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/approvals/{approval_id}/decision` | `agent.conversation.approval.resolve` | Resolve User Approval |
@@ -38,6 +40,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token` | `widget.embed_token` | Mint Widget Embed URL |
 | POST | `/tools/report-feedback` | `agent.tool.report_feedback` | Agent Report Feedback |
 | POST | `/tools/web-search` | `agent.tool.web_search` | Agent Web Search |
+| PUT | `/organizations/{organization_id}/agent-runtime/default` | `agent.runtime.default.set` | Set the Organization's Default Model |
 | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.replace` | Replace Agent Resource Permissions |
 
 ## agent_surfaces
@@ -152,6 +155,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.update` | Update Table |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.update` | Update Record |
 | POST | `/pods/{pod_id}/datastore/files` | `file.upload` | Upload File |
+| POST | `/pods/{pod_id}/datastore/files/by-path/retry-processing` | `file.retry_processing` | Retry File Processing |
 | POST | `/pods/{pod_id}/datastore/files/folders` | `file.folder.create` | Create Folder |
 | POST | `/pods/{pod_id}/datastore/files/search` | `file.search` | Search Files |
 | POST | `/pods/{pod_id}/datastore/files/signed-url` | `file.signed_url` | Create a public, hit-capped signed URL for a file |

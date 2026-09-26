@@ -1401,6 +1401,16 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "organization_default_runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRuntimeConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1537,6 +1547,38 @@
           "derived_harness_kind"
         ],
         "title": "AgentRuntimeProfileResponse",
+        "type": "object"
+      },
+      "AgentRuntimeProfileTestResponse": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "models": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Models"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "title": "AgentRuntimeProfileTestResponse",
         "type": "object"
       },
       "AgentSummaryResponse": {
@@ -13206,6 +13248,32 @@
         "title": "SetDefaultSurfaceRequest",
         "type": "object"
       },
+      "SetOrganizationDefaultRuntimeRequest": {
+        "properties": {
+          "model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "profile_id": {
+            "minLength": 1,
+            "title": "Profile Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "title": "SetOrganizationDefaultRuntimeRequest",
+        "type": "object"
+      },
       "SignInOutcomeResponse": {
         "properties": {
           "origin": {
@@ -19720,6 +19788,113 @@
         }
       }
     },
+    "/organizations/{organization_id}/agent-runtime/default": {
+      "delete": {
+        "operationId": "agent.runtime.default.clear",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear the Organization's Default Model",
+        "tags": [
+          "agent_runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.runtime.default"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.runtime.default",
+          "result": "entity",
+          "verb": "clear"
+        }
+      },
+      "put": {
+        "operationId": "agent.runtime.default.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetOrganizationDefaultRuntimeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRuntimeConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set the Organization's Default Model",
+        "tags": [
+          "agent_runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.runtime.default"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.runtime.default",
+          "result": "entity",
+          "verb": "set"
+        }
+      }
+    },
     "/organizations/{organization_id}/agent-runtime/profiles": {
       "get": {
         "operationId": "agent.runtime.profiles.list",
@@ -20120,6 +20295,68 @@
           "resource": "agent.runtime.profiles",
           "result": "entity",
           "verb": "restore"
+        }
+      }
+    },
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/test": {
+      "post": {
+        "operationId": "agent.runtime.profiles.test",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRuntimeProfileTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test a Saved Model Provider",
+        "tags": [
+          "agent_runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.runtime.profiles"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.runtime.profiles",
+          "result": "entity",
+          "verb": "test"
         }
       }
     },
@@ -26120,6 +26357,69 @@
           "resource": "file.markdown",
           "result": "entity",
           "verb": "attach"
+        }
+      }
+    },
+    "/pods/{pod_id}/datastore/files/by-path/retry-processing": {
+      "post": {
+        "description": "Queue a document whose processing failed to be read and indexed again, with a fresh retry budget. A file that did not fail is returned unchanged.",
+        "operationId": "file.retry_processing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry File Processing",
+        "tags": [
+          "files"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "file"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "file",
+          "result": "entity",
+          "verb": "retry_processing"
         }
       }
     },

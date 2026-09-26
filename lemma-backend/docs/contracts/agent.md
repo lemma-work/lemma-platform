@@ -32,11 +32,14 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.list` | GET | `/pods/{pod_id}/agents` | List Agents |
 | `agent.permissions.get` | GET | `/pods/{pod_id}/agents/{agent_name}/permissions` | Get Agent Resource Permissions |
 | `agent.permissions.replace` | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | Replace Agent Resource Permissions |
+| `agent.runtime.default.clear` | DELETE | `/organizations/{organization_id}/agent-runtime/default` | Clear the Organization's Default Model |
+| `agent.runtime.default.set` | PUT | `/organizations/{organization_id}/agent-runtime/default` | Set the Organization's Default Model |
 | `agent.runtime.profiles.archive` | DELETE | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | Archive Agent Runtime Profile |
 | `agent.runtime.profiles.create` | POST | `/organizations/{organization_id}/agent-runtime/profiles` | Create Agent Runtime Profile |
 | `agent.runtime.profiles.get` | GET | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | Get Agent Runtime Profile |
 | `agent.runtime.profiles.list` | GET | `/organizations/{organization_id}/agent-runtime/profiles` | List Available Agent Runtime Profiles |
 | `agent.runtime.profiles.restore` | POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore` | Restore Agent Runtime Profile |
+| `agent.runtime.profiles.test` | POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/test` | Test a Saved Model Provider |
 | `agent.runtime.profiles.update` | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | Update Agent Runtime Profile |
 | `agent.tool.report_feedback` | POST | `/tools/report-feedback` | Agent Report Feedback |
 | `agent.tool.web_search` | POST | `/tools/web-search` | Agent Web Search |
