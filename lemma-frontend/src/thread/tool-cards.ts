@@ -13,8 +13,11 @@
  *  down with it.
  *
  *  The return shapes are the backend's, in `app/modules/agent/tools/`:
- *  `browser/models.py`, `workspace_cli/models.py`, `web/models.py`,
- *  `connectors/pydantic_adapter.py` and `snooze/models.py`. A local coding
+ *  `browser/models.py`, `workspace_cli/models.py`, `web/models.py` and
+ *  `connectors/pydantic_adapter.py`. The `snooze` card reads the retired
+ *  `snooze` tool, which older transcripts still hold; its replacement,
+ *  `wait_for` (`waiting/models.py`), answers with `waited_seconds` rather
+ *  than `slept_seconds` and has no card of its own. A local coding
  *  agent's calls arrive through the Agent Host already in the canonical
  *  vocabulary of `docs/architecture/agent-host-events.md` ("Canonical tools"),
  *  which is where the file, search and sub-agent cards read their shapes. */

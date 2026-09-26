@@ -1,6 +1,10 @@
-//! What Local settings and onboarding write: the AI provider, sharing and
-//! the sandbox image. Each one is a locald round trip the page waits on.
-//! The workspace's own settings go through `workspace_settings.rs`.
+//! Operator commands outside the workspace's Settings: Local settings'
+//! snapshot and sharing, provider model discovery, preparing the sandbox
+//! image, and `configure_ai_provider`, which only lemma-harness's onboarding
+//! invokes. Each one is a locald round trip the page waits on. The
+//! lemma-frontend workspace writes its settings -- `ai`, `email`,
+//! `integrations` and `surfaces` -- through `apply_local_settings` in
+//! `workspace_settings.rs`.
 
 use super::*;
 
@@ -107,11 +111,11 @@ pub(crate) async fn discover_provider_models(
 
 /// Point this installation at an AI provider.
 ///
-/// The one piece of operator configuration the workspace may write, and the
-/// reason is that onboarding cannot honestly ask "which model?" and then send
-/// the user to a different window to answer. Everything else the control page
-/// owns — sharing, tunnels, runtime, integrations — stays where it was: this
-/// command reaches `config.set-ai`, which merges only that section.
+/// Serves lemma-harness, whose onboarding asks "which model?" and answers it
+/// in the same window (`lemma-harness/lib/desktop/local-capabilities.ts`).
+/// The lemma-frontend workspace never invokes it: it writes the `ai` section
+/// with the rest of its settings through `apply_local_settings`. This command
+/// reaches `config.set-ai`, which merges only that section.
 ///
 /// Blocking on purpose. Applying a provider validates it against the provider
 /// and restarts the backend, and both of those can fail in ways the user needs

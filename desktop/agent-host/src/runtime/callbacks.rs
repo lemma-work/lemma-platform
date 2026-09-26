@@ -136,9 +136,9 @@ impl AcpCallbacks for JournalCallbacks {
         if let Some(cwd) = &self.host_cwd {
             detail.insert("host_cwd".to_owned(), Value::String(cwd.clone()));
         }
-        // Control polling and streaming are independent. Put the binding at
-        // the head of this run's event stream so the backend saves it before
-        // processing any answer, even while its control poll is waiting.
+        // Control frames and event delivery are independent. Put the binding
+        // at the head of this run's event stream so the backend saves it
+        // before processing any answer, whenever the next control frame goes.
         self.journal.append_event(
             self.target_id,
             self.run_id,

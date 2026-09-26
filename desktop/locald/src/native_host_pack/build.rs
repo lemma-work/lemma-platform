@@ -157,8 +157,9 @@ pub(crate) fn build(
         ("ENVIRONMENT", "local".to_owned()),
         // `ENVIRONMENT=local` is also every developer's `make dev` stack, so it
         // cannot be what tells the backend it is somebody's own computer. This
-        // is: signup defaults to invite-only (the first account on an empty
-        // installation is always admitted).
+        // is: it turns on host execution and loopback model providers, and
+        // keeps the checkout `.env` `LEMMA_*` model keys out of the runtime
+        // profiles. It does not decide who may sign up; `SIGNUP_MODE` does.
         ("DEPLOYMENT_KIND", "desktop".to_owned()),
         ("DEBUG", "true".to_owned()),
         ("LOG_LEVEL", "INFO".to_owned()),

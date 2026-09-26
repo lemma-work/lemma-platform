@@ -113,11 +113,10 @@ pub(crate) fn sharing_environment(
         // configuration block `/health` shows the scenario suite. This does.
         ("INSTALLATION_SHARED".into(), "true".into()),
         // Who may create an account, now that somebody other than this Mac's user
-        // can reach the sign-up page. Written in both directions rather than
-        // only when narrowing: the backend's own Desktop default is already
-        // invite-only, but an explicit value is what makes this overlay the
-        // single place that decides, and what a reader of the running
-        // environment can check.
+        // can reach the sign-up page. With `SIGNUP_MODE` unset the backend's
+        // signup is open, so this overlay is the only thing that restricts it.
+        // Written for every choice, `open` included, so a reader of the
+        // running environment can check what was decided.
         ("SIGNUP_MODE".into(), who_can_join.signup_mode().into()),
     ]);
     let frontend = HashMap::from([

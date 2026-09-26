@@ -371,8 +371,9 @@ async fn a_real_agent_waits_inside_its_turn_for_a_parked_tool() {
 
 /// Waking up, with a real agent on the other end.
 ///
-/// A woken run adds no user message, so Lemma prompts it with the return it
-/// synthesized for the `snooze` call it resolved — rendered exactly as
+/// A woken run adds no user message, so Lemma prompts it with the `wait_for`
+/// result it synthesized for the wait it resolved (`woke_because` saying
+/// why) — rendered exactly as
 /// `remote_payload._render_history` writes it. The hermetic tests prove that
 /// return is chosen and rendered. Only a real provider can prove the part that
 /// decides whether the feature works: that an agent resuming its own session

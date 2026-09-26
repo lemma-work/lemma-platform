@@ -108,8 +108,6 @@ export interface DescribedStatus {
     label: string;
     detail: string;
     tone: Tone;
-    /** Whether "Try again" means anything here. */
-    retry: boolean;
 }
 
 /** How long a stage on the way up may last before it is called what it is.
@@ -175,12 +173,11 @@ export function describeThisComputer(
         /* In a hosted workspace the first poll is the one that has to start
            locald, so "nothing yet" is the normal opening state. */
         return error
-            ? { label: "Unavailable", detail: plainHostError(error, noun), tone: "warn", retry: false, action: null }
+            ? { label: "Unavailable", detail: plainHostError(error, noun), tone: "warn", action: null }
             : {
                 label: "Checking",
                 detail: `Asking ${noun} which agents it can run.`,
                 tone: "muted",
-                retry: false,
                 action: null,
             };
     }
@@ -191,7 +188,6 @@ export function describeThisComputer(
             label: "Not available",
             detail: `This copy of Lemma can’t run coding agents on ${noun}. Update Lemma to get them.`,
             tone: "muted",
-            retry: false,
             action: "update",
         };
     }
@@ -202,7 +198,6 @@ export function describeThisComputer(
             label: "Stopped working",
             detail: status.last_error ?? `The Agent Host on ${noun} kept stopping. Restart it, or open its log to see why.`,
             tone: "warn",
-            retry: false,
             action: "restart",
         };
     }
@@ -218,7 +213,6 @@ export function describeThisComputer(
                 label: "Couldn’t connect",
                 detail: plainConnectError(connectError, noun),
                 tone: "warn",
-                retry: true,
                 action: "retry",
             };
         }
@@ -227,7 +221,6 @@ export function describeThisComputer(
                 label: "Not connected",
                 detail: `${Noun} isn’t connected to this workspace, and won’t connect on its own.`,
                 tone: "warn",
-                retry: true,
                 action: "reconnect",
             };
         }
@@ -235,7 +228,6 @@ export function describeThisComputer(
             label: "Connecting",
             detail: `Setting ${noun} up to run Claude Code, Codex and other local agents for this workspace.`,
             tone: "muted",
-            retry: false,
             action: null,
         };
     }
@@ -247,11 +239,10 @@ export function describeThisComputer(
                 label: "Not running",
                 detail: `Lemma’s coding-agent service on ${noun} stopped and isn’t restarting on its own.`,
                 tone: "warn",
-                retry: false,
                 action: "restart",
             };
         }
-        return { label: "Starting", detail: `Bringing ${noun} online for this workspace.`, tone: "muted", retry: false, action: null };
+        return { label: "Starting", detail: `Bringing ${noun} online for this workspace.`, tone: "muted", action: null };
     }
     if (target.connection_state === "ONLINE") {
         const runs = target.active_runs ?? 0;
@@ -259,7 +250,6 @@ export function describeThisComputer(
             label: "Connected",
             detail: runs > 0 ? `Running ${runs} ${runs === 1 ? "task" : "tasks"} now.` : "Ready for work.",
             tone: "ok",
-            retry: false,
             action: null,
         };
     }
@@ -271,7 +261,6 @@ export function describeThisComputer(
             label: "Update needed",
             detail: `This workspace needs a newer Lemma app to run coding agents on ${noun}.`,
             tone: "warn",
-            retry: false,
             action: "update",
         };
     }
@@ -280,8 +269,7 @@ export function describeThisComputer(
             label: "Unreachable",
             detail: "Can’t reach this workspace right now. Lemma keeps trying; the log says why.",
             tone: "warn",
-            retry: false,
             action: null,
         }
-        : { label: "Reconnecting", detail: "Trying to reach this workspace.", tone: "warn", retry: false, action: null };
+        : { label: "Reconnecting", detail: "Trying to reach this workspace.", tone: "warn", action: null };
 }
