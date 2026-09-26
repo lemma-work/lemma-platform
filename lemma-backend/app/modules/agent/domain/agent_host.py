@@ -102,13 +102,19 @@ class AgentHostHarnessCapabilities(BaseModel):
     ``images`` adds the vision capability to the runtime picker;
     ``load_session`` is what lets a conversation keep one provider session
     across turns, so it decides whether a run is dispatched with a
-    ``resume_session_id``. Anything else a host reports is kept verbatim by
+    ``resume_session_id``; ``steering`` decides whether a message sent mid-turn
+    is sent to the host at all. Anything else a host reports is kept verbatim by
     ``extra: allow`` rather than typed here, so the wire format stays open
     without inventing fields no code reads.
     """
 
     images: bool = False
     load_session: bool = False
+    # The adapter takes `_session/steering`, so a message sent mid-turn is
+    # handed to the running turn as a STEER_RUN instead of waiting for the next
+    # one. Only a host that knows STEER_RUN ever publishes it, which is what
+    # keeps that command away from hosts that would refuse to parse it.
+    steering: bool = False
 
     model_config = {"extra": "allow"}
 
@@ -185,6 +191,11 @@ class AgentHostCommandKind(str, Enum):
     # Lemma tool call returning 401 — which the agent experiences as its tools
     # quietly disappearing part-way through the task.
     REFRESH_CREDENTIAL = "REFRESH_CREDENTIAL"
+    # Carries a message the person sent while the run was working, for the
+    # host to deliver into the turn still in flight. Only ever sent to a
+    # harness that advertised ACP steering (`supports_steering`), so a host
+    # that predates this kind is never asked to parse it.
+    STEER_RUN = "STEER_RUN"
 
 
 class AgentHostCommandState(str, Enum):
@@ -296,6 +307,9 @@ class AgentHostEventType(str, Enum):
     SESSION_UPDATE = "session_update"
     CONFIG_UPDATE = "config_update"
     PERMISSION_REQUEST = "permission_request"
+    # Whether a STEER_RUN reached the turn in flight. ``object_id`` is the
+    # Lemma message it carried.
+    STEER_RESULT = "steer_result"
     TERMINAL = "terminal"
 
 
@@ -420,6 +434,7 @@ class AgentHostCommand(BaseModel):
             AgentHostCommandKind.CANCEL_RUN,
             AgentHostCommandKind.RESOLVE_PERMISSION,
             AgentHostCommandKind.REFRESH_CREDENTIAL,
+            AgentHostCommandKind.STEER_RUN,
         } and (self.run_id is None or self.lease_epoch is None):
             raise ValueError(f"{self.kind.value} requires run_id and lease_epoch")
         return self

@@ -53,6 +53,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunSpec,
     AgentHostRunState,
 )
+from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
     agent_host_event_stream,
@@ -412,6 +413,37 @@ class AgentHostDispatchRepository:
             payload={"encrypted_mcp": encrypted_mcp_payload},
             ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS,
             now=now,
+        )
+
+    async def enqueue_steer(
+        self,
+        *,
+        run_id: UUID,
+        message_id: UUID,
+        prompt: list[JsonObject],
+        now: datetime | None = None,
+    ) -> AgentHostCommandModel | None:
+        """Hand a run still in flight a message the person sent since.
+
+        Returns None once the run is over: the message then waits for the
+        follow-up turn, which is what would have answered it anyway.
+
+        Also None until the host has accepted the run. Control commands are
+        handed out ahead of ``START_RUN`` (see ``_CONTROL_COMMANDS_FIRST``), so a
+        steer queued earlier would reach a host with no such run and be dropped
+        there; declining it here leaves the message for the next check instead.
+        """
+
+        async def _not_accepted_yet(lease: AgentHostRunLeaseModel) -> bool:
+            return lease.accepted_at is None
+
+        return await self._enqueue_for_live_run(
+            run_id=run_id,
+            kind=AgentHostCommandKind.STEER_RUN,
+            payload={"message_id": str(message_id), "prompt": prompt},
+            ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS,
+            now=now,
+            skip_if=_not_accepted_yet,
         )
 
     async def expire_unaccepted_run(

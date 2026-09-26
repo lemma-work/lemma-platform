@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "steering": true,
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Working on the first request.\n"
+            }
+          }
+        }
+      }
+    },
+    {
+      "await_steer": {
+        "outcome": "injected",
+        "echo": "Also noted: "
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "\nDone."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

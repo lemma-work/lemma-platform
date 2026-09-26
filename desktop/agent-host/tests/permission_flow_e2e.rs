@@ -375,6 +375,7 @@ async fn an_unanswered_request_is_denied_when_the_timeout_elapses() {
                 permission_timeout: Duration::from_millis(300),
                 cancel: lemma_agent_host::acp::never_cancelled(),
                 cancel_grace: Duration::from_secs(5),
+                steer: lemma_agent_host::acp::SteerInbox::default(),
             },
             callbacks.clone(),
         )

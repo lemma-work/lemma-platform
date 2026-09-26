@@ -20,7 +20,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
+use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver, Steer, SteerInbox};
 use crate::adapters::{AdapterManifest, AdapterWarmup, ResolvedAdapter};
 use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::journal::{AcceptOutcome, Checkpoint, Journal};

@@ -74,7 +74,18 @@ def _kind(method: str) -> str:
     return "query" if method.lower() == "get" else "mutation"
 
 
-def _result(verb: str) -> str:
+def _answers_nothing(operation: Mapping[str, object]) -> bool:
+    """A 204 and no other success: whatever the verb, there is no body to read."""
+    responses = operation.get("responses")
+    if not isinstance(responses, Mapping):
+        return False
+    successes = {str(code) for code in responses if str(code).startswith("2")}
+    return successes == {"204"}
+
+
+def _result(verb: str, operation: Mapping[str, object]) -> str:
+    if _answers_nothing(operation):
+        return "void"
     if verb in COLLECTION_VERBS:
         return "collection"
     if verb in VOID_VERBS:
@@ -120,7 +131,7 @@ def lemma_metadata_for(
         "resource": override.get("resource", resource),
         "verb": override.get("verb", verb),
         "kind": override.get("kind", kind),
-        "result": override.get("result", _result(verb)),
+        "result": override.get("result", _result(verb, operation)),
         "paginates": override.get("paginates", _paginates(method, operation)),
     }
     if meta["kind"] == "mutation":

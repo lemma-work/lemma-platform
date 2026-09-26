@@ -11,6 +11,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/organizations/{organization_id}/agent-runtime/default` | `agent.runtime.default.clear` | Clear the Organization's Default Model |
 | DELETE | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.archive` | Archive Agent Runtime Profile |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
+| DELETE | `/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}` | `agent.conversation.message.withdraw` | Withdraw Queued Conversation Message |
 | GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
 | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
 | GET | `/organizations/{organization_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |

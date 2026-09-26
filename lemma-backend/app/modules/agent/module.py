@@ -81,6 +81,9 @@ def _routers():
     from app.modules.agent.api.controllers.conversation_controller import (
         router as conversation,
     )
+    from app.modules.agent.api.controllers.conversation_queue_controller import (
+        router as conversation_queue,
+    )
 
     # serve_router is included before the main widget router (more specific path).
     from app.modules.agent.api.controllers.widget_controller import (
@@ -97,6 +100,7 @@ def _routers():
         runtime_default,
         tool,
         conversation,
+        conversation_queue,
         widget_serve,
         widget,
     ]

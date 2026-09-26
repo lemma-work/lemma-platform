@@ -8,9 +8,9 @@ use super::{
     AcpCallbacks, AcpRunOutcome, Agent, CancelNotification, ConfigOption, ConnectionTo,
     ContentBlock, Duration, EventType, JsonMap, LoadSessionRequest, McpServer, NewSessionRequest,
     PathBuf, PromptRequest, SessionConfigOption, SessionConfigOptionValue, SessionOrigin,
-    SetSessionConfigOptionRequest, Value, before_prompt_deadline, cancel_requested,
-    convert_config_option, model_unavailable_payload, run_outcome, selection_is_allowed,
-    session_config_value, session_lost_payload, watch,
+    SetSessionConfigOptionRequest, SteerEvent, TurnSteering, Value, before_prompt_deadline,
+    cancel_requested, convert_config_option, model_unavailable_payload, run_outcome,
+    selection_is_allowed, session_config_value, session_lost_payload, watch,
 };
 
 pub(crate) type AcpError = agent_client_protocol::schema::v1::Error;
@@ -385,24 +385,50 @@ pub(crate) async fn prompt_turn(
     blocks: Vec<ContentBlock>,
     cancel: &mut watch::Receiver<bool>,
     cancel_grace: Duration,
+    mut steering: TurnSteering<'_>,
 ) -> Result<AcpRunOutcome, AcpError> {
     let turn = connection
         .send_request(PromptRequest::new(session_id.clone(), blocks))
         .block_task();
     tokio::pin!(turn);
     let mut asked_to_stop = false;
-    let response = tokio::select! {
-        result = &mut turn => result?,
-        () = cancel_requested(cancel) => {
-            connection.send_notification(CancelNotification::new(session_id.clone()))?;
-            asked_to_stop = true;
-            tokio::time::timeout(cancel_grace, &mut turn)
-                .await
-                .map_err(|_| internal(
-                    "the agent did not stop within the cancellation grace period",
-                ))??
+    // One loop rather than one `select!`, because a turn can now be told
+    // things while it runs: every steer Lemma sends goes out as it arrives,
+    // and every answer is recorded as it comes back, until the turn ends.
+    let response = loop {
+        tokio::select! {
+            // A stop outranks everything. Then steering, before the turn: an
+            // adapter answers a steer before the prompt it joined, and the
+            // connection hands responses over in the order they arrived -- so
+            // when both are ready, taking the turn first would report a
+            // message the agent did see as one it did not.
+            biased;
+            () = cancel_requested(cancel) => {
+                connection.send_notification(CancelNotification::new(session_id.clone()))?;
+                asked_to_stop = true;
+                break tokio::time::timeout(cancel_grace, &mut turn)
+                    .await
+                    .map_err(|_| internal(
+                        "the agent did not stop within the cancellation grace period",
+                    ))?;
+            }
+            next = steering.next() => match next {
+                SteerEvent::Arrived(steer) => steering.send(connection, &session_id, steer),
+                SteerEvent::Answered(message_id, answer) => {
+                    if steering.settle(&message_id, answer) {
+                        // The adapter started a turn of its own for a message
+                        // that arrived too late for this one. Stop it: nothing
+                        // will read what it writes. See `steering`.
+                        connection
+                            .send_notification(CancelNotification::new(session_id.clone()))?;
+                    }
+                }
+            },
+            result = &mut turn => break result,
         }
     };
+    steering.finish();
+    let response = response?;
     let stop_reason = serde_json::to_value(response.stop_reason)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))

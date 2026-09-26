@@ -2,9 +2,10 @@
 
 use super::{
     AcceptOutcome, Arc, AtomicBool, CANCEL_KILL_AFTER, Command, CommandKind, CommandRejection,
-    JournalCallbacks, PermissionDecision, RejectionCode, RunSpec, RunState, StreamSegments,
+    JournalCallbacks, PermissionDecision, RejectionCode, RunSpec, RunState, Steer, StreamSegments,
     TargetWorker, Value, redact_error, short_revision, terminal_failure,
 };
+use crate::protocol::SteerRunPayload;
 
 /// Why a command was refused, decided where the refusal happens.
 ///
@@ -119,7 +120,41 @@ impl TargetWorker {
             CommandKind::CancelRun => self.handle_cancel(command),
             CommandKind::ResolvePermission => self.handle_resolve_permission(command),
             CommandKind::RefreshCredential => self.handle_refresh_credential(command),
+            CommandKind::SteerRun => self.handle_steer(command),
         }
+    }
+
+    /// Hand a message to the turn still running for it.
+    ///
+    /// Delivery is the turn's job, not this one's: the run's driver sends it
+    /// once its prompt is out and reports what the agent said. A run already
+    /// gone has no turn to add to, which is expected rather than an error --
+    /// Lemma's follow-up turn carries the message instead.
+    pub(crate) fn handle_steer(&mut self, command: &Command) -> anyhow::Result<()> {
+        self.journal
+            .record_simple_command(self.target.target_id, command)?;
+        let run_id = command
+            .run_id
+            .ok_or_else(|| anyhow::anyhow!("steer command has no run ID"))?;
+        let payload: SteerRunPayload = serde_json::from_value(command.payload.clone())?;
+        // Fenced like a credential refresh: a steer minted for a dispatch that
+        // has since been superseded is not for the turn running now.
+        let current_epoch = self
+            .journal
+            .get_run(self.target.target_id, run_id)?
+            .map(|run| run.lease_epoch);
+        if current_epoch.is_none() || current_epoch != command.lease_epoch {
+            tracing::debug!(%run_id, "steer is for a run or lease this host is not running");
+            return Ok(());
+        }
+        let Some(active) = self.active_runs.get(&run_id) else {
+            tracing::debug!(%run_id, "no running turn to steer");
+            return Ok(());
+        };
+        if active.steer.send(Steer::from_payload(&payload)).is_err() {
+            tracing::debug!(%run_id, "the run's turn already ended; not steered");
+        }
+        Ok(())
     }
 
     /// Take a replacement Lemma MCP credential for a run still in flight.
