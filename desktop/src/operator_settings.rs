@@ -181,13 +181,44 @@ pub(crate) async fn prepare_sandbox_image(
         .map_err(|error| error.to_string())?
 }
 
+/// The workspace Settings sections Local settings may hand over to when it
+/// closes: where the coding agents on this computer are shown, in a local
+/// install and in a hosted workspace.
+pub(crate) const HANDOVER_SECTIONS: [&str; 2] = ["this-mac-agents", "models"];
+
+/// Whether leaving Local settings may open workspace Settings at `section`.
+/// A fixed list, not a pattern: the name ends up in a script evaluated in the
+/// workspace, and although `open_settings_script` serialises it, a page that
+/// may only ever ask for two things should only ever be able to.
+pub(crate) fn handover_section(section: Option<&str>) -> Result<Option<&'static str>, String> {
+    match section {
+        None => Ok(None),
+        Some(asked) => HANDOVER_SECTIONS
+            .iter()
+            .find(|known| **known == asked)
+            .map(|known| Some(*known))
+            .ok_or_else(|| format!("unknown Settings section: {asked}")),
+    }
+}
+
 #[tauri::command]
-pub(crate) fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Leave Local settings for the workspace, optionally at a Settings section
+/// -- how its coding-agents card sends someone to the place those agents are
+/// actually managed, instead of to the workspace's front page.
+pub(crate) fn close_local_settings(
+    window: Webview,
+    app: AppHandle,
+    section: Option<String>,
+) -> Result<(), String> {
     require_control_window(&window)?;
+    let section = handover_section(section.as_deref())?;
     window.close().map_err(|error| error.to_string())?;
     if let Some(main) = app.get_window("main") {
         let _ = main.show();
         let _ = main.set_focus();
+    }
+    if let Some(section) = section {
+        open_settings(&app, section, "computer");
     }
     Ok(())
 }

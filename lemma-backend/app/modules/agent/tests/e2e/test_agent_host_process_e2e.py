@@ -8,6 +8,7 @@ The provider waits for the HTTP client to observe text before it can finish.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 import signal
@@ -67,6 +68,13 @@ class AcpMessage(BaseModel):
     method: str | None = None
     params: JsonObject = Field(default_factory=dict)
     result: JsonValue = None
+
+
+class EnvironmentRecord(BaseModel):
+    """What the scripted agent recorded of the environment it started in."""
+
+    direction: Literal["environment"]
+    message: dict[str, str]
 
 
 class AcpRecord(BaseModel):
@@ -179,7 +187,9 @@ async def running_host(
                     await process.wait()
 
 
-async def ready_harness(client: httpx.AsyncClient) -> AgentHostHarnessResponse:
+async def ready_harness(
+    client: httpx.AsyncClient, harness_key: str = "cursor"
+) -> AgentHostHarnessResponse:
     response = await client.get("/me/runtime/agent-hosts")
     assert response.is_success, response.text
     hosts = AgentHostListResponse.model_validate(response.json()).items
@@ -195,17 +205,17 @@ async def ready_harness(client: httpx.AsyncClient) -> AgentHostHarnessResponse:
         label="scripted agent ready on the real Rust host",
         probe=published,
         done=lambda items: any(
-            item.harness_key == "cursor" and item.health == "READY" for item in items
+            item.harness_key == harness_key and item.health == "READY" for item in items
         ),
         timeout_seconds=45,
     )
-    return next(item for item in harnesses if item.harness_key == "cursor")
+    return next(item for item in harnesses if item.harness_key == harness_key)
 
 
 async def create_host_conversation(
-    client: httpx.AsyncClient, scenario: E2EScenario
+    client: httpx.AsyncClient, scenario: E2EScenario, harness_key: str = "cursor"
 ) -> str:
-    harness = await ready_harness(client)
+    harness = await ready_harness(client, harness_key)
     profile_id = await create_resource(
         client,
         f"/organizations/{scenario.org_id}/agent-runtime/profiles",
@@ -232,6 +242,70 @@ async def create_host_conversation(
         {"agent_name": agent_name, "title": "Full host streaming"},
     )
     return f"/pods/{scenario.pod_id}/conversations/{conversation_id}"
+
+
+@pytest.mark.asyncio
+async def test_a_coding_agent_is_started_with_lemmas_settings_and_its_run_identity(
+    scenario: E2EScenario,
+    backend_server: dict[str, str],
+    worker: object,
+    tmp_path: Path,
+) -> None:
+    """What the real host starts an agent with, as the agent sees it.
+
+    The scripted agent stands in for OpenCode here, so it is started the way
+    OpenCode is: with the person's own skills left out
+    (`acp::session_options`), which is the default. And like every agent it is
+    handed the run's Lemma identity, now including the conversation the
+    `lemma` CLI's conversation commands default to.
+    """
+    del worker
+    await scenario.create_org_with_pod(name_prefix="Host session options")
+    minted = await scenario.owner_client.post(
+        "/me/runtime/agent-host-pairings",
+        json={"display_name": "isolated session-options host"},
+    )
+    assert minted.is_success, minted.text
+    pairing = PairingCode.model_validate(minted.json())
+    base_url = backend_server["host_base_url"]
+    async with running_host(
+        tmp_path, base_url, pairing.pairing_code, scenario_file="stream.json"
+    ) as traffic:
+        async with httpx.AsyncClient(
+            base_url=base_url, headers=scenario.owner_client.headers, timeout=90
+        ) as client:
+            conversation_path = await create_host_conversation(
+                client, scenario, harness_key="opencode"
+            )
+            traffic.with_suffix(".release").write_text("continue")
+            async with asyncio.timeout(90):
+                async with client.stream(
+                    "POST",
+                    f"{conversation_path}/messages",
+                    json={"content": "Hello."},
+                ) as response:
+                    assert response.is_success, await response.aread()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: ") and '"completed"' in line:
+                            break
+
+    environments = [
+        EnvironmentRecord.model_validate_json(line).message
+        for line in traffic.read_text().splitlines()
+        if '"direction":"environment"' in line
+    ]
+    assert environments, "the scripted agent never recorded its environment"
+    # The last one is the run's: the probe that found the agent started it too,
+    # with nothing of a run's.
+    environment = environments[-1]
+    # Names only in the messages: the values are the host's environment.
+    names = sorted(environment)
+    assert environment.get("OPENCODE_DISABLE_EXTERNAL_SKILLS") == "1", names
+    assert environment.get("OPENCODE_DISABLE_CLAUDE_CODE") == "1", names
+    overlay = json.loads(environment["OPENCODE_CONFIG_CONTENT"])
+    assert overlay["permission"]["skill"] == "deny"
+    conversation_id = conversation_path.rsplit("/", 1)[-1]
+    assert environment.get("LEMMA_CONVERSATION_ID") == conversation_id, names
 
 
 @pytest.mark.asyncio

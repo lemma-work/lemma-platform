@@ -7,7 +7,7 @@ from collections.abc import Mapping
 import base64
 import binascii
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -19,8 +19,11 @@ from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     user_prompt_text,
 )
+from app.modules.workspace.contracts.host_execution import (
+    host_cli_root,
+    host_reachable_addresses,
+)
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
-from app.core.config import settings
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -45,8 +48,8 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
 
 
 from app.modules.agent.tools.skills.pydantic_adapter import (
-    LOCAL_WORKSPACE_SKILL_OVERRIDE,
     LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
+    SKILL_RUNTIME_OVERRIDES,
 )
 
 #: What a host agent is given of the user's Lemma identity. An allowlist rather
@@ -61,6 +64,7 @@ _HOST_AGENT_ENVIRONMENT = frozenset(
         "LEMMA_USER_ID",
         "LEMMA_POD_ID",
         "LEMMA_ORG_ID",
+        "LEMMA_CONVERSATION_ID",
     }
 )
 
@@ -88,12 +92,7 @@ def host_agent_environment(workspace_env: Mapping[str, str]) -> dict[str, str]:
 
 def _host_addresses() -> dict[str, str]:
     """Where the backend is reachable from the machine the host agent runs on."""
-    addresses = {
-        "LEMMA_BASE_URL": settings.cli_api_url or settings.api_url,
-        "LEMMA_AUTH_URL": settings.cli_auth_frontend_url or settings.auth_frontend_url,
-        "LEMMA_HOST_ORIGIN": settings.frontend_url,
-    }
-    return {name: value for name, value in addresses.items() if value}
+    return host_reachable_addresses()
 
 
 def run_start_payload(
@@ -150,6 +149,8 @@ async def mcp_payload[DepsT: AgentContext](
     options: HarnessOptions[DepsT],
     prompt: str | None = None,
     extra_tool_names: Sequence[str] = (),
+    workspace_service: WorkspaceSandboxService | None = None,
+    cli_root: Callable[[], str | None] = host_cli_root,
 ) -> JsonObject:
     """Build what the host's MCP bridge needs to relay the agent's Lemma tools.
 
@@ -166,7 +167,7 @@ async def mcp_payload[DepsT: AgentContext](
     returning 401, which the agent experiences as its tools quietly vanishing.
     Publishing the real expiry lets the dispatcher bound the run by it instead.
     """
-    workspace_service = WorkspaceSandboxService()
+    workspace_service = workspace_service or WorkspaceSandboxService()
     try:
         workspace_env = await workspace_service.get_env_vars(
             user_id=ctx.user_id,
@@ -177,12 +178,13 @@ async def mcp_payload[DepsT: AgentContext](
             workload_name=ctx.agent_name,
             scope=getattr(ctx, "scope", None),
             session_id=str(agent_run_id),
+            conversation_id=conversation_id,
         )
         token = workspace_env["LEMMA_TOKEN"]
         agent_environment = host_agent_environment(workspace_env)
     finally:
         await workspace_service.close()
-    return {
+    payload: JsonObject = {
         "environment": agent_environment,
         "server_name": LEMMA_MCP_SERVER_NAME,
         "token": token,
@@ -201,6 +203,12 @@ async def mcp_payload[DepsT: AgentContext](
             extra_names=extra_tool_names,
         ),
     }
+    # This release's own `lemma`, for an agent on the same Mac as this backend:
+    # the host puts its `bin/` first on the agent's PATH if it accepts it.
+    cli = cli_root()
+    if cli is not None:
+        payload["lemma_cli"] = cli
+    return payload
 
 
 def token_expires_at(mcp: JsonObject) -> datetime | None:
@@ -486,8 +494,9 @@ def _history_tool_result(result: object) -> str:
     # inside a text block, so the paragraph is escaped once by the tool and
     # again by the `json.dumps` above. Matching only the single-escaped form
     # left it in, on exactly the path it most needed removing from.
-    for encoded in _encodings_of(LOCAL_WORKSPACE_SKILL_OVERRIDE, depth=3):
-        rendered = rendered.replace(encoded, "")
+    for override in SKILL_RUNTIME_OVERRIDES:
+        for encoded in _encodings_of(override, depth=3):
+            rendered = rendered.replace(encoded, "")
     return rendered
 
 

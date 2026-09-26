@@ -149,6 +149,7 @@ async def get_workspace_session(
             scope_key=runtime_context.scope_key,
             session_id=session_id,
             close_on_exit=close_on_exit,
+            conversation_id=ctx.conversation_id,
         )
     # Nothing names a browser session here any more. The image's
     # `AGENT_BROWSER_SESSION` is the only browser there is, so a shell that
@@ -166,6 +167,7 @@ async def get_workspace_session(
         session_id=session_id,
         initial_cwd=runtime_context.initial_cwd,
         close_on_exit=close_on_exit,
+        conversation_id=ctx.conversation_id,
     )
 
 

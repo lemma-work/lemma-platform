@@ -97,7 +97,7 @@ export function render() {
   pill.className = `state-pill ${appReady && runtimeReady ? "ok" : store.state?.last_error ? "bad" : "warn"}`;
   setDot("overview", appReady ? "ok" : "warn");
   if (!LOCAL_MODE) {
-    pill.textContent = store.snapshot.agent_host?.running ? "Agent Host running" : "Agent Host stopped";
+    pill.textContent = store.snapshot.agent_host?.running ? "Coding agents running" : "Coding agents stopped";
     pill.className = `state-pill ${store.snapshot.agent_host?.running ? "ok" : "warn"}`;
   }
 
@@ -198,23 +198,36 @@ function formatUptime(seconds) {
   return hours > 0 ? `up ${hours}h ${minutes}m` : `up ${minutes}m`;
 }
 
-export function renderAgentHost(agentHost) {
+// The workspace's own "This Mac" card says the same states in the same words
+// (`describeThisComputer` in lemma-frontend/src/desktop/this-computer.ts); this
+// is the view for when the workspace will not load. It names only controls
+// that exist: Restart and Open log here, and the button that opens the
+// coding agents in Lemma. There is no switch to turn this on and nothing to
+// connect by hand -- Lemma connects this computer itself when someone signs
+// in.
+export function describeAgentHost(agentHost) {
   const targets = Array.isArray(agentHost.targets) ? agentHost.targets : [];
   const connected = targets.some((target) => target.connection_state === "ONLINE");
   const activeRuns = targets.reduce((total, target) => total + (target.active_runs || 0), 0);
+  const failure = targets.find((target) => target.last_error)?.last_error || agentHost.last_error || "";
   // Reachability, not liveness: an unpaired host and one that cannot reach its
   // workspace are both live processes that will never pick up a run.
-  let status = "unavailable";
+  let status = "not available";
   let tone = "bad";
-  let detail = "This build of Lemma does not include the Agent Host.";
+  let detail = "This copy of Lemma can’t run coding agents. Update Lemma to get them.";
   if (agentHost.available && !agentHost.running) {
-    status = "off";
-    tone = "";
-    detail = agentHost.last_error || "Turn it on from Lemma to run coding agents here.";
+    // The supervisor stops restarting a service that keeps crashing, and says
+    // so; only Restart brings it back.
+    const stopped = agentHost.restart_circuit_open || agentHost.last_error;
+    status = stopped ? "not running" : "starting";
+    tone = stopped ? "bad" : "";
+    detail = stopped
+      ? "The coding-agent service stopped and isn’t restarting on its own. Press Restart, or open the log to see why."
+      : "Bringing this computer online.";
   } else if (agentHost.available && !agentHost.paired) {
     status = "not connected";
     tone = "";
-    detail = "Connect this computer from Lemma to start running agents on it.";
+    detail = "Open Lemma and sign in; this computer connects itself.";
   } else if (agentHost.available && connected) {
     status = "connected";
     tone = "ok";
@@ -223,10 +236,21 @@ export function renderAgentHost(agentHost) {
       ? `Running ${activeRuns} task${activeRuns === 1 ? "" : "s"}`
       : "Ready for work";
     detail = uptime ? `${running} · ${uptime}` : running;
+  } else if (agentHost.available && /needs a newer Agent Host|newer Agent Host protocol|Agent Host protocol \d+ is unsupported|upgrade required/i.test(failure)) {
+    status = "update needed";
+    tone = "bad";
+    detail = "Your workspace needs a newer Lemma app. Check for updates on the Overview page.";
   } else if (agentHost.available) {
-    status = "reconnecting";
+    status = failure ? "unreachable" : "reconnecting";
     tone = "";
-    detail = targets[0]?.last_error || agentHost.last_error || "Trying to reach the workspace.";
+    detail = failure
+      ? "Can’t reach your workspace right now. Lemma keeps trying; the log says why."
+      : "Trying to reach your workspace.";
   }
-  $("agent-host-status").innerHTML = serviceHtml("Lemma Agent Host", detail, status, tone);
+  return { status, tone, detail };
+}
+
+export function renderAgentHost(agentHost) {
+  const { status, tone, detail } = describeAgentHost(agentHost);
+  $("agent-host-status").innerHTML = serviceHtml("Coding agents", detail, status, tone);
 }

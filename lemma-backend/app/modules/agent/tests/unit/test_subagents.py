@@ -14,8 +14,13 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.services import subagent_service as subagent_module
-from app.modules.agent.services.subagent_service import SubAgentError, SubAgentService
+from app.modules.agent.services.subagent_service import (
+    SubAgentError,
+    SubAgentService,
+    inherited_runtime,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -133,6 +138,11 @@ class _CaptureConvService:
         return SimpleNamespace(conversation_id=uuid4(), agent_run_id=uuid4())
 
 
+_PARENT_RUNTIME = AgentRuntimeConfig(
+    profile_id="parent-profile", model_name="the-parents-model"
+)
+
+
 def _patch_spawn(monkeypatch) -> _CaptureConvService:
     captured = _CaptureConvService()
     monkeypatch.setattr(subagent_module, "set_current_context", lambda ctx: "token")
@@ -169,7 +179,7 @@ def _default_deps(conversation_id):
 async def test_self_spawn_without_name_named_parent_bypasses_grant(monkeypatch):
     deps = _deps(uuid4())  # named parent "parent"
     captured = _patch_spawn(monkeypatch)
-    service = SubAgentService(_CommittingUowFactory())
+    service = SubAgentService(_CommittingUowFactory(), parent_runtime=_parents)
 
     await service.spawn(deps, agent_name=None, input_data={"x": 1})
 
@@ -182,7 +192,7 @@ async def test_self_spawn_without_name_named_parent_bypasses_grant(monkeypatch):
 async def test_self_spawn_with_own_name_bypasses_grant(monkeypatch):
     deps = _deps(uuid4())
     captured = _patch_spawn(monkeypatch)
-    service = SubAgentService(_CommittingUowFactory())
+    service = SubAgentService(_CommittingUowFactory(), parent_runtime=_parents)
 
     await service.spawn(deps, agent_name="parent", input_data={})
 
@@ -193,7 +203,7 @@ async def test_self_spawn_with_own_name_bypasses_grant(monkeypatch):
 async def test_self_spawn_default_agent_spawns_default_child(monkeypatch):
     deps = _default_deps(uuid4())
     captured = _patch_spawn(monkeypatch)
-    service = SubAgentService(_CommittingUowFactory())
+    service = SubAgentService(_CommittingUowFactory(), parent_runtime=_parents)
 
     await service.spawn(deps, agent_name=None, input_data={})
 
@@ -205,7 +215,7 @@ async def test_self_spawn_default_agent_spawns_default_child(monkeypatch):
 async def test_spawn_named_other_agent_enforces_grant(monkeypatch):
     deps = _deps(uuid4())  # named parent "parent"
     captured = _patch_spawn(monkeypatch)
-    service = SubAgentService(_CommittingUowFactory())
+    service = SubAgentService(_CommittingUowFactory(), parent_runtime=_parents)
 
     await service.spawn(deps, agent_name="other-agent", input_data={})
 
@@ -213,6 +223,102 @@ async def test_spawn_named_other_agent_enforces_grant(monkeypatch):
     assert captured.create_kwargs["agent_name"] == "other-agent"
     assert captured.create_kwargs["require_execute_grant"] is True
     assert captured.run_kwargs["require_execute_grant"] is True
+
+
+async def _parents(uow, deps, *, is_self, target_name):
+    """The lookup a spawn is given: this test's parent runs on `_PARENT_RUNTIME`."""
+    del uow, deps, is_self, target_name
+    return _PARENT_RUNTIME
+
+
+async def test_a_spawned_child_is_pinned_to_what_the_lookup_says(monkeypatch):
+    deps = _deps(uuid4())
+    captured = _patch_spawn(monkeypatch)
+    service = SubAgentService(_CommittingUowFactory(), parent_runtime=_parents)
+
+    await service.spawn(deps, agent_name=None, input_data="look into it")
+
+    assert captured.create_kwargs["agent_runtime"] == _PARENT_RUNTIME
+
+
+class _Runs:
+    def __init__(self, *, run_runtime=None, conversation_runtime=None):
+        self.run_runtime = run_runtime
+        self.conversation_runtime = conversation_runtime
+
+    async def get_agent_run(self, agent_run_id):
+        return SimpleNamespace(id=agent_run_id, agent_runtime=self.run_runtime)
+
+    async def get_conversation(self, conversation_id):
+        return SimpleNamespace(
+            id=conversation_id, agent_runtime=self.conversation_runtime
+        )
+
+
+class _Agents:
+    def __init__(self, runtime=None):
+        self.runtime = runtime
+
+    async def get_by_pod_and_name(self, *, pod_id, name):
+        del pod_id
+        return SimpleNamespace(name=name, agent_runtime=self.runtime)
+
+
+async def test_a_self_spawned_child_runs_on_the_parents_runtime():
+    """The model the person picked for the conversation, not the pod default."""
+    runtime = await inherited_runtime(
+        runs=_Runs(run_runtime=_PARENT_RUNTIME),
+        agents=_Agents(),
+        deps=_deps(uuid4()),
+        is_self=True,
+        target_name="parent",
+    )
+
+    assert runtime == _PARENT_RUNTIME
+
+
+async def test_without_a_run_the_parents_conversation_decides():
+    deps = _deps(uuid4())
+    deps.agent_run_id = None
+
+    runtime = await inherited_runtime(
+        runs=_Runs(conversation_runtime=_PARENT_RUNTIME),
+        agents=_Agents(),
+        deps=deps,
+        is_self=True,
+        target_name=None,
+    )
+
+    assert runtime == _PARENT_RUNTIME
+
+
+async def test_a_named_agent_without_a_runtime_inherits_the_parents():
+    runtime = await inherited_runtime(
+        runs=_Runs(run_runtime=_PARENT_RUNTIME),
+        agents=_Agents(runtime=None),
+        deps=_default_deps(uuid4()),
+        is_self=False,
+        target_name="helper",
+    )
+
+    assert runtime == _PARENT_RUNTIME
+
+
+async def test_a_named_agent_with_its_own_runtime_keeps_it():
+    own = AgentRuntimeConfig(
+        profile_id="helper-profile", model_name="the-helpers-model"
+    )
+
+    runtime = await inherited_runtime(
+        runs=_Runs(run_runtime=_PARENT_RUNTIME),
+        agents=_Agents(runtime=own),
+        deps=_deps(uuid4()),
+        is_self=False,
+        target_name="helper",
+    )
+
+    # No conversation override: the child's own agent runtime applies.
+    assert runtime is None
 
 
 # --------------------------------------------------------------------------- #

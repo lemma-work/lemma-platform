@@ -467,6 +467,115 @@ def copy_backend_assets(output: Path) -> None:
     copy_catalog_importer(backend)
 
 
+#: The `lemma` launcher host-execution commands find first on their PATH.
+#:
+#: Its own folder comes from `$0`, never from `cd ..`: the pack sits inside
+#: Lemma's data folder, which the host-execution sandbox denies except for this
+#: tree, and `cd` through a denied parent fails where a direct path works. `-I`
+#: keeps the user's `PYTHON*` variables and user site-packages out, so the CLI
+#: runs what this pack shipped and nothing the user's shell adds.
+LEMMA_CLI_LAUNCHER = """#!/bin/sh
+root="${0%/bin/lemma}"
+if [ "$root" = "$0" ]; then
+  echo "lemma: run this launcher by its path inside the Lemma host pack" >&2
+  exit 1
+fi
+exec "$root/python/bin/python3" -I -c '
+import sys
+sys.path.insert(0, sys.argv.pop(1))
+sys.argv[0] = "lemma"
+from lemma_cli.cli import main
+sys.exit(main())
+' "$root/cli" "$@"
+"""
+
+
+def install_lemma_cli(output: Path, executable: Path, wheels: Path) -> None:
+    """The `lemma` CLI of this release, for commands run on the user's Mac.
+
+    Host execution runs an agent's commands on the Mac, where the user may have
+    no `lemma` at all, or an older one than the server it would talk to. The
+    backend names this folder in `workspace.open` and the Agent Host puts its
+    `bin/` first on the commands' PATH (docs/architecture/
+    desktop-host-execution.md §6).
+
+    Installed into its own `cli/` rather than beside the backend's packages:
+    the CLI's pinned dependency set is its own lock's, not the backend's, and
+    the launcher puts `cli/` ahead of the interpreter's site-packages.
+    """
+    backend = output / "backend"
+    for project in ("lemma-python", "lemma-cli"):
+        run("uv", "build", "--wheel", "--out-dir", wheels, REPO_ROOT / project)
+    cli_wheels = [
+        one_wheel(wheels, "lemma_sdk"),
+        one_wheel(wheels, "lemma_terminal"),
+    ]
+    requirements = wheels / "lemma-cli-requirements.txt"
+    run(
+        "uv",
+        "export",
+        "--project",
+        REPO_ROOT / "lemma-cli",
+        "--frozen",
+        "--no-dev",
+        "--no-emit-project",
+        "--no-emit-package",
+        "lemma-sdk",
+        "--no-hashes",
+        "--quiet",
+        "--output-file",
+        requirements,
+    )
+    run(
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        executable,
+        "--target",
+        backend / "cli",
+        "--find-links",
+        wheels,
+        "--requirements",
+        requirements,
+        *cli_wheels,
+    )
+    # Compiled here because it cannot be later: a host command runs the CLI
+    # under a sandbox that lets it read the pack and write none of it, so a
+    # missing `.pyc` is compiled again in memory on every `lemma` call.
+    compile_python_runtime(backend / "cli", executable)
+    launcher = backend / "bin" / "lemma"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text(LEMMA_CLI_LAUNCHER, encoding="utf-8")
+    launcher.chmod(0o755)
+
+
+def one_wheel(wheels: Path, distribution: str) -> Path:
+    matches = sorted(wheels.glob(f"{distribution}-*.whl"))
+    if len(matches) != 1:
+        raise SystemExit(f"expected one wheel for {distribution}, found {matches}")
+    return matches[0]
+
+
+def build_runtime_bundle(output: Path) -> None:
+    """The first-party code the backend installs into workspace sandboxes.
+
+    The hosted backend image ships it at `/app/runtime-bundle` (see
+    `lemma-backend/Dockerfile`); without one here a Desktop sandbox ran
+    whatever `lemma` CLI and SDK its image was built with, however far behind
+    the backend that was. Built from the same sources as the pack's backend,
+    so the two move together.
+    """
+    # The builder is standard library only, so this interpreter runs it; the
+    # wheels inside it are built by `uv build`, as everywhere else here.
+    run(
+        sys.executable,
+        REPO_ROOT / "lemma-backend/scripts/build_runtime_bundle.py",
+        "--out-dir",
+        output / "backend/assets/runtime-bundle",
+    )
+
+
 def copy_catalog_importer(backend: Path) -> None:
     """The connector catalog seeder, which locald runs beside the migrations.
 
@@ -789,8 +898,10 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="lemma-host-wheels-") as wheel_dir:
         wheels = Path(wheel_dir)
-        install_python(output, args.python, wheels, args.python_root)
+        executable = install_python(output, args.python, wheels, args.python_root)
+        install_lemma_cli(output, executable, wheels)
     copy_backend_assets(output)
+    build_runtime_bundle(output)
     build_frontend(output, args.node_root)
     shutil.copy2(release_manifest, output / "release.json")
 

@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     source,
+    agentFix,
     agentLogo,
     agentSettingsChanges,
     stillLooking,
@@ -16,7 +17,8 @@ import {
 import { downloadUrl } from "@/session/client";
 import { Modal } from "@/shell/modal";
 import { useIsDesktop } from "@/desktop/bridge";
-import { ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
+import { CheckAgainButton, ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
+import { useThisComputer } from "@/desktop/this-computer";
 import { ThisMacModelSuggestions } from "@/desktop/this-mac-models";
 import { LOCAL_SERVERS, LOCAL_SERVER_KEY, detectLocalServers, friendlyError, thisMac } from "@/desktop/this-mac";
 import { useThisMacAvailability } from "@/desktop/this-mac-settings";
@@ -126,7 +128,7 @@ function Row({
     name: string;
     detail?: string;
     tag?: string;
-    note?: string;
+    note?: React.ReactNode;
     state: string;
     tone: "ok" | "warn" | "muted";
     action?: React.ReactNode;
@@ -158,6 +160,14 @@ function Row({
             </span>
         </li>
     );
+}
+
+/** A fix names the command to type between backticks; it is drawn as code,
+ *  so it reads as something to type rather than as punctuation. */
+function withCode(text: string): React.ReactNode {
+    const parts = text.split("`");
+    if (parts.length < 3) return text;
+    return parts.map((part, index) => (index % 2 === 1 ? <code key={index}>{part}</code> : part));
 }
 
 function modelCount(count: number): string {
@@ -275,12 +285,16 @@ function RuntimeRow({
 function AgentRow({
     agent,
     computer,
+    here,
     saved,
     orgId,
     onChanged,
 }: {
     agent: LocalAgent;
     computer: Computer;
+    /** What to call the computer when it is the one this app runs on — "this
+     *  Mac" — and null for any other. */
+    here: string | null;
     saved: Runtime | null;
     orgId: string;
     onChanged: () => void;
@@ -326,7 +340,7 @@ function AgentRow({
                 /* Said only when the computer itself is reachable. When it is
                    not, its own heading already said so, and repeating it under
                    every agent is the same sentence three times. */
-                note={computer.online && !agent.ready ? agent.fix : undefined}
+                note={computer.online && !agent.ready ? withCode(agentFix(agent, here)) : undefined}
                 state={state}
                 tone={tone}
                 quiet={!computer.online}
@@ -662,37 +676,55 @@ export function ModelsSection({ orgId }: { orgId: string }) {
     /* Inside the desktop app, the computer this app runs on leads the list with
        its own live status, and is not drawn a second time below. */
     const desktop = useIsDesktop();
+    const noun = useThisComputer();
     const thisHostId = useThisHostId();
     const mine = machines.find((computer) => computer.id === thisHostId) ?? null;
     const others = machines.filter((computer) => computer !== mine);
 
-    /* One computer's agents, drawn the same way wherever the computer is. */
-    const agentsOf = (computer: Computer) => (
-        stillLooking(computer) ? (
-            <p className="mgroup__empty">
-                <LoadingIndicator label="Finding coding agents" />
-            </p>
-        ) : computer.agents.length === 0 ? (
-            <p className="mgroup__empty">
-                {computer.online
-                    ? "No coding agents found. Install Claude Code, Codex, Cursor or OpenCode there and it shows up here."
-                    : "Nothing published. It reports what it finds when it is next awake."}
-            </p>
-        ) : (
-            <ul className="mlist">
-                {computer.agents.map((agent) => (
-                    <AgentRow
-                        key={agent.id}
-                        agent={agent}
-                        computer={computer}
-                        saved={savedByAgent.get(agent.id) ?? null}
-                        orgId={orgId}
-                        onChanged={refresh}
-                    />
-                ))}
-            </ul>
-        )
-    );
+    /* One computer's agents, drawn the same way wherever the computer is.
+       Only this one can be told to look again, and only it is somewhere the
+       reader can type a command right now, so only it says so. */
+    const agentsOf = (computer: Computer) => {
+        const here = computer === mine ? noun : null;
+        if (stillLooking(computer)) {
+            return (
+                <p className="mgroup__empty">
+                    <LoadingIndicator label="Finding coding agents" />
+                </p>
+            );
+        }
+        if (computer.agents.length === 0) {
+            return (
+                <div className="mgroup__empty">
+                    {!computer.online
+                        ? "Nothing published. It reports what it finds when it is next awake."
+                        : here
+                            ? <>No coding agents found. Install Claude Code, Codex, Cursor or OpenCode on {here}, then press Check again. <CheckAgainButton /></>
+                            : "No coding agents found. Install Claude Code, Codex, Cursor or OpenCode on that computer and it shows up here."}
+                </div>
+            );
+        }
+        return (
+            <>
+                <ul className="mlist">
+                    {computer.agents.map((agent) => (
+                        <AgentRow
+                            key={agent.id}
+                            agent={agent}
+                            computer={computer}
+                            here={here}
+                            saved={savedByAgent.get(agent.id) ?? null}
+                            orgId={orgId}
+                            onChanged={refresh}
+                        />
+                    ))}
+                </ul>
+                {here && computer.online && computer.agents.some((agent) => !agent.ready) && (
+                    <div className="mgroup__empty"><CheckAgainButton /></div>
+                )}
+            </>
+        );
+    };
 
     return (
         <div className="section">

@@ -141,6 +141,20 @@
       "named_by_consumer": false
     },
     {
+      "what": "the lemma CLI host commands run",
+      "path": "backend/bin/lemma",
+      "producer_writes": "\"bin\" / \"lemma\"",
+      "must_not_be_empty": true,
+      "named_by_consumer": true
+    },
+    {
+      "what": "the sandbox runtime bundle",
+      "path": "backend/assets/runtime-bundle",
+      "producer_writes": "backend/assets/runtime-bundle",
+      "must_not_be_empty": true,
+      "named_by_consumer": true
+    },
+    {
       "what": "the release manifest",
       "path": "release.json",
       "producer_writes": "release.json",

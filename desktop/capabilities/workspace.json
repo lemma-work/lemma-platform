@@ -24,6 +24,7 @@
     "allow-agent-host-session",
     "allow-agent-host-refresh",
     "allow-agent-host-open-log",
+    "allow-agent-host-own-settings",
     "allow-discover-provider-models",
     "allow-configure-ai-provider",
     "allow-app-frame-url",

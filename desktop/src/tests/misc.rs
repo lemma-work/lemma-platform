@@ -534,3 +534,16 @@ fn the_launch_update_check_runs_only_where_an_update_could_be_installed() {
     let app = include_str!("../app.rs").replace("\r\n", "\n");
     assert!(app.contains("schedule_launch_update_check(&handle, recovery_launch);"));
 }
+
+#[test]
+fn leaving_local_settings_hands_over_only_to_known_sections() {
+    use crate::operator_settings::handover_section;
+    assert_eq!(handover_section(None), Ok(None));
+    assert_eq!(
+        handover_section(Some("this-mac-agents")),
+        Ok(Some("this-mac-agents"))
+    );
+    assert_eq!(handover_section(Some("models")), Ok(Some("models")));
+    assert!(handover_section(Some("this-mac-sharing")).is_err());
+    assert!(handover_section(Some("\"}));alert(1);//")).is_err());
+}

@@ -321,6 +321,16 @@ The backend environment selects the all-in-one app, local auth settings,
 background embedding initialization, private service addresses, dynamic local
 origins, and sandbox bridge. Frontend follows the backend dependency.
 
+The pack also carries two things the hosted backend image ships, named to the
+backend only when present so an older pack starts as it did: the sandbox
+runtime bundle (`backend/assets/runtime-bundle`, `WORKSPACE_RUNTIME_BUNDLE_DIR`),
+which the backend installs into each workspace sandbox exactly as the hosted
+image's `/app/runtime-bundle` is, so a Desktop sandbox runs this release's
+`lemma` CLI and SDK rather than its image's; and the `lemma` CLI for commands
+on the Mac itself (`backend/bin/lemma` and `backend/cli`,
+`WORKSPACE_HOST_CLI_ROOT`; see
+[Host execution](desktop-host-execution.md#6-the-seatbelt-profile)).
+
 Health endpoints:
 
 - must use loopback HTTP;

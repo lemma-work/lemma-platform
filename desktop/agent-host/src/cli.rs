@@ -130,6 +130,13 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: HostExecutionAction,
     },
+    /// Whether a coding agent on this computer loads its own skills and
+    /// settings (its instructions files, skills, plugins, hooks and MCP
+    /// servers) as well as Lemma's. Off unless turned on, per agent.
+    OwnSettings {
+        #[command(subcommand)]
+        action: OwnSettingsAction,
+    },
     /// Internal: host execution's worker, speaking JSON lines on stdio. The
     /// Agent Host starts one per open workspace under `sandbox-exec`; run by
     /// hand only to debug it (see the README).
@@ -163,4 +170,12 @@ pub(crate) enum HostExecutionAction {
     /// Take a fresh snapshot of the login shell's environment, for when the
     /// owner has changed their shell profile.
     RefreshEnvironment,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum OwnSettingsAction {
+    /// Let this agent load the person's own skills and settings.
+    Enable { harness: String },
+    /// Start this agent with only Lemma's (the default).
+    Disable { harness: String },
 }

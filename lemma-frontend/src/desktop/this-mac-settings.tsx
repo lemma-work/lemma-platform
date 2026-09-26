@@ -9,10 +9,11 @@ import { useDesktopBridge } from "./bridge";
 import { openExternal } from "./open-external";
 import { openSettings } from "./open-settings";
 import { capitalised, useThisComputer } from "./this-computer";
-import { ThisComputerCard } from "./this-computer-card";
+import { ThisComputerAgents, ThisComputerCard } from "./this-computer-card";
 import { readStatus, useAgentHost } from "./agent-host";
+import { hostExecutionError, hostExecutionSwitch } from "./this-mac";
 import {
-    RELEASES_PAGE, channelLine, friendlyError, healthDetail, stuckStarting, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin, updateProblem,
+    RELEASES_PAGE, channelLine, friendlyError, healthDetail, stuckStarting, healthLine, healthState, onLocalWorkspaceOrigin, updateProblem,
     sandboxWording, updateOffer, sharingBusy, startupWarningLine, thisMac, thisMacAvailability,
     type StartupWarning, type ThisMacAvailability, type ThisMacSnapshot,
 } from "./this-mac";
@@ -233,10 +234,13 @@ function CodingAgents() {
     return (
         <div className="thismac">
             {/* The same card the Models page leads with, so this computer
-                reads the same in both places. Adding its agents for
-                teammates to pick is an organization decision and stays on
-                Models. */}
-            <ThisComputerCard />
+                reads the same in both places, with what it found: each
+                agent, its release, and what to type to update it. Adding
+                them for teammates to pick is an organization decision and
+                stays on Models. */}
+            <ThisComputerCard>
+                <ThisComputerAgents />
+            </ThisComputerCard>
             <p className="thismac-foot">
                 Choose which of its agents teammates can use in{" "}
                 <button className="linkish" onClick={() => openSettings("models")}>Models</button>.
@@ -272,9 +276,9 @@ function HostExecution() {
         /* The shell answers with the host's fresh status; the poll catches up
            with it on its next tick anyway. */
         onSuccess: (answer) => { if (readStatus(answer)) void host.refetch(); },
-        onError: (cause) => setProblem(friendlyError(cause)),
+        onError: (cause) => setProblem(hostExecutionError(cause, noun)),
     });
-    const row = hostExecutionRow(host.status);
+    const row = hostExecutionSwitch(host.status, { error: host.error, noun });
     return (
         <>
             <SettingRow name={"Run commands on " + noun} consequence={row.blocked ?? row.consequence}>

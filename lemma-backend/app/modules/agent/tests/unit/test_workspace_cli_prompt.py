@@ -42,3 +42,27 @@ def test_prompt_frames_liteparse_as_local_file_fallback():
         "Download a pod file with `lemma files download` before parsing it."
         not in prompt
     )
+
+
+def test_a_run_on_the_mac_is_told_about_the_mac_not_the_vm():
+    """Host execution: no persistent home, no preinstalled libraries, no `lit`.
+
+    The VM's fragment promised all three, and each sends an agent on the
+    user's Mac somewhere it cannot go: installing into a home folder the
+    sandbox will not let it write, importing pandas the user never installed,
+    running a parser that is not there.
+    """
+    vm = load_workspace_cli_prompt()
+    mac = load_workspace_cli_prompt(host_execution=True)
+
+    for promise in ("whole home directory persists", "NumPy", "lit parse", "/sdk/"):
+        assert promise in vm
+        assert promise not in mac
+    assert "on the user's own Mac" in mac
+    assert "`execute_python` is not available" in mac
+    # The sections the two share are one text, not two copies.
+    shared = vm[vm.index("## Lemma CLI") : vm.index("## Pod files")]
+    assert shared in mac
+    assert [line for line in mac.splitlines() if line.startswith("## ")] == [
+        line for line in vm.splitlines() if line.startswith("## ")
+    ]

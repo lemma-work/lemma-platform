@@ -154,6 +154,7 @@ pub(crate) async fn one_turn(
         AcpRunRequest {
             adapter: manifest.resolve(agent).unwrap(),
             agent_environment: std::collections::BTreeMap::default(),
+            own_settings: false,
             run_spec: RunSpec {
                 agent_run_id: run_id,
                 conversation_id,

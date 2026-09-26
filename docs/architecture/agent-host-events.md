@@ -307,6 +307,17 @@ usage. Every one of them recorded zero tokens and counted as a separate request.
 
 Before emitting it, the host releases the gated call as a `tool_call` if it was
 still being held, so the approval card follows the call it asks about.
+
+The backend writes it as a `request_approval` call whose `agent_host_permission`
+marker carries the request id, the options and the gated call's `input`. The
+web card reads that marker: it shows the input as the call's arguments, offers
+"approve for this conversation" only when an `allow_always` option exists (and
+labels it with that option's name), and says when the request runs out. The
+host denies an unanswered request itself after 30 minutes
+(`PERMISSION_DECISION_TIMEOUT`), so a card past that point, or one whose run
+has ended, reads "Expired — the agent continued without it" instead of
+offering buttons.
+
 A request that gates one of Lemma's own MCP tools never reaches Lemma. The host
 answers it itself, because Lemma already authorizes those tools on every
 call. Request ids and call ids are shortened the same way (see

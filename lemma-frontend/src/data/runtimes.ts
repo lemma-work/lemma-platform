@@ -67,6 +67,9 @@ export interface LocalAgent {
     options: AgentOption[];
     /** READY means this computer would take a run right now. */
     ready: boolean;
+    /** The computer's own word for the state — `AUTH_REQUIRED` and so on —
+     *  for the fix that depends on which computer is reading it. */
+    health: string;
     /** The state, said the way a person would say it. */
     state: string;
     /** What to do about it, when there is something to do. */
@@ -129,12 +132,36 @@ export interface RuntimeTest {
 /** Keyed by the `harness_key` a paired computer publishes. A key that is not
  *  here still draws a row — it simply wears the generic mark and its own
  *  name, which is the honest answer for an agent this app has not been taught
- *  about yet. */
-const AGENTS: Record<string, { label: string; logo: string }> = {
-    "claude-code": { label: "Claude Code", logo: "/agent-logos/claudecode.png" },
-    codex: { label: "Codex", logo: "/agent-logos/codex.png" },
-    cursor: { label: "Cursor", logo: "/agent-logos/cursor.png" },
-    opencode: { label: "OpenCode", logo: "/agent-logos/opencode.png" },
+ *  about yet.
+ *
+ *  `signIn` and `update` are the agents' own commands, typed in a terminal on
+ *  the computer the agent is on. Lemma cannot run either for anyone: signing
+ *  in is the person's own account, and updating is their own install. */
+const AGENTS: Record<string, { label: string; logo: string; signIn: string; update: string }> = {
+    "claude-code": {
+        label: "Claude Code",
+        logo: "/agent-logos/claudecode.png",
+        signIn: "claude login",
+        update: "claude update",
+    },
+    codex: {
+        label: "Codex",
+        logo: "/agent-logos/codex.png",
+        signIn: "codex login",
+        update: "npm install -g @openai/codex@latest",
+    },
+    cursor: {
+        label: "Cursor",
+        logo: "/agent-logos/cursor.png",
+        signIn: "cursor-agent login",
+        update: "cursor-agent update",
+    },
+    opencode: {
+        label: "OpenCode",
+        logo: "/agent-logos/opencode.png",
+        signIn: "opencode auth login",
+        update: "opencode upgrade",
+    },
 };
 
 export function agentLabel(harness: string): string {
@@ -143,6 +170,16 @@ export function agentLabel(harness: string): string {
 
 export function agentLogo(harness: string): string {
     return AGENTS[harness]?.logo ?? "";
+}
+
+/** The command that signs in to an agent, when this app knows it. */
+export function agentSignInCommand(harness: string): string {
+    return AGENTS[harness]?.signIn ?? "";
+}
+
+/** The command that updates an agent, when this app knows it. */
+export function agentUpdateCommand(harness: string): string {
+    return AGENTS[harness]?.update ?? "";
 }
 
 /* ── health, said out loud ─────────────────────────────────────────── */
@@ -185,11 +222,45 @@ export function agentHealth(health: string): { state: string; fix: string; ready
     };
 }
 
+/** What to do about an agent that is not ready, said for where it is.
+ *
+ *  `here` names the computer this app runs on — "this Mac" — when the agent
+ *  is on it, and is null for any other. Here the reader can act at once: the
+ *  command to type, and the button that makes this computer look again
+ *  instead of on its own quarter-hour cycle, so the words name both. On any
+ *  other computer the fix is still over there, and the generic sentence is
+ *  the honest one. */
+export function agentFix(agent: Pick<LocalAgent, "harness" | "health" | "fix">, here: string | null): string {
+    if (!here) return agent.fix;
+    const signIn = agentSignInCommand(agent.harness);
+    const update = agentUpdateCommand(agent.harness);
+    switch (agent.health) {
+        case "AUTH_REQUIRED":
+            return signIn
+                ? "Run `" + signIn + "` in Terminal, then press Check again."
+                : "Sign in to this agent on " + here + ", then press Check again.";
+        case "UNSUPPORTED_VERSION":
+            return update
+                ? "Run `" + update + "` in Terminal to update it, then press Check again."
+                : "Update this agent on " + here + " to a release Lemma supports, then press Check again.";
+        case "CONFIG_INVALID":
+            return "Its settings on " + here + " were rejected. Fix them, then press Check again.";
+        case "PROBE_FAILED":
+            return "Lemma could not start it on " + here + ". Open the log to see why, then press Check again.";
+        case "DISABLED":
+            return "Turned off in the Lemma app on " + here + ".";
+        default:
+            return agent.fix;
+    }
+}
+
 const HOST_STATUS: Record<string, string> = {
     ONLINE: "Online",
     OFFLINE: "Offline",
     DRAINING: "Finishing up",
-    UPGRADE_REQUIRED: "Needs updating",
+    /* The workspace speaks a newer protocol than that computer's Lemma app.
+       Nothing on this side can fix it; the app over there updating does. */
+    UPGRADE_REQUIRED: "Update needed",
     REVOKED: "Removed",
 };
 
@@ -411,6 +482,7 @@ export function readLocalAgent(raw: unknown): LocalAgent | null {
         defaultModel: agentDefaultModel(entry.config_options),
         options: agentOptions(entry.config_options),
         ready: health.ready,
+        health: asString(entry.health),
         state: health.state,
         fix: health.fix,
     };

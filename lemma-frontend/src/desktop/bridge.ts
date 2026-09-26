@@ -57,6 +57,13 @@ export const WORKSPACE_COMMANDS = [
     "agent_host_session",
     "agent_host_refresh",
     "agent_host_open_log",
+    /* Whether a coding agent here also loads its owner's own skills and
+       settings. About the agents on this computer, so granted with the
+       Agent Host commands, hosted workspaces included. */
+    "agent_host_own_settings",
+    /* Local settings, at a page. What "Check for updates" opens where
+       Settings → This Mac does not exist: a hosted workspace in the app. */
+    "open_control_center",
     "sandbox_image_status",
     "conversation_folder",
     "bind_conversation_folder",

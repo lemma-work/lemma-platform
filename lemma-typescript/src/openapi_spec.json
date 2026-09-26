@@ -19829,7 +19829,7 @@
           "kind": "mutation",
           "paginates": false,
           "resource": "agent.runtime.default",
-          "result": "entity",
+          "result": "void",
           "verb": "clear"
         }
       },

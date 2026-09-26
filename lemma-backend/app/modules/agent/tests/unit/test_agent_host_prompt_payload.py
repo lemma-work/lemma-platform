@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid7
 
 import pytest
@@ -704,3 +705,52 @@ class TestReplayedHistory:
 
         assert '"count": 1' in replayed
         assert '"name": "a"' in replayed
+
+
+class TestTheAgentsOwnCli:
+    """What a coding agent on the Mac is told about `lemma`."""
+
+    async def _payload(self, cli: str | None):
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            mcp_payload,
+        )
+        from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
+
+        class Workspace:
+            """The sandbox environment, without the pod row it is read from."""
+
+            async def get_env_vars(self, **kwargs: object) -> dict[str, str]:
+                return {
+                    "LEMMA_TOKEN": "a-delegated-session",
+                    "LEMMA_CONVERSATION_ID": str(kwargs["conversation_id"]),
+                }
+
+            async def close(self) -> None:
+                return None
+
+        conversation_id = uuid7()
+        return conversation_id, await mcp_payload(
+            agent_run_id=uuid7(),
+            conversation_id=conversation_id,
+            ctx=_ctx(),
+            options=HarnessOptions(model_name="gpt-5.1", toolsets=[]),
+            workspace_service=cast(WorkspaceSandboxService, Workspace()),
+            cli_root=lambda: cli,
+        )
+
+    async def test_the_cli_this_release_ships_is_named_and_the_conversation_given(
+        self,
+    ) -> None:
+        conversation_id, payload = await self._payload(
+            "/Lemma/runtime/releases/1/local-runtime/backend"
+        )
+
+        assert payload["lemma_cli"] == "/Lemma/runtime/releases/1/local-runtime/backend"
+        environment = payload["environment"]
+        assert isinstance(environment, dict)
+        assert environment["LEMMA_CONVERSATION_ID"] == str(conversation_id)
+
+    async def test_without_one_nothing_is_named(self) -> None:
+        _, payload = await self._payload(None)
+
+        assert "lemma_cli" not in payload

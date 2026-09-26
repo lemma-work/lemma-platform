@@ -31,6 +31,9 @@ _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
 _CONNECTORS_PROMPT_PATH = _PROMPT_DIR / "connectors.md"
 _REPLIES_PROMPT_PATH = _PROMPT_DIR / "replies.md"
 _WORKSPACE_CLI_PROMPT_PATH = _PROMPT_DIR / "workspace_cli.md"
+_WORKSPACE_CLI_HOST_EXECUTION_PROMPT_PATH = (
+    _PROMPT_DIR / "workspace_cli_host_execution.md"
+)
 _POD_PROMPT_PATH = _PROMPT_DIR / "pod.md"
 _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
@@ -124,8 +127,26 @@ def load_replies_prompt() -> str:
     return _read_required_prompt(_REPLIES_PROMPT_PATH)
 
 
-def load_workspace_cli_prompt() -> str:
-    return _read_required_prompt(_WORKSPACE_CLI_PROMPT_PATH)
+def load_workspace_cli_prompt(*, host_execution: bool = False) -> str:
+    """The workspace tools' contract, for the machine the commands run on.
+
+    With ``host_execution`` the sections that describe the VM -- a persistent
+    home, `/tmp`, the preinstalled libraries and `lit` -- are replaced by the
+    ones in ``workspace_cli_host_execution.md``, which describe the user's Mac
+    under host execution (docs/architecture/desktop-host-execution.md §6).
+    Sections the two share are kept once, so they cannot drift apart.
+    """
+    base = _read_required_prompt(_WORKSPACE_CLI_PROMPT_PATH)
+    if not host_execution:
+        return base
+    replacements = _prompt_sections(
+        _read_required_prompt(_WORKSPACE_CLI_HOST_EXECUTION_PROMPT_PATH),
+        heading="## ",
+    )
+    return "\n\n".join(
+        replacements.get(title, body).strip()
+        for title, body in _prompt_sections(base, heading="## ").items()
+    )
 
 
 def load_pod_prompt() -> str:
@@ -196,13 +217,13 @@ def load_agent_host_runtime_prompt(*, host_execution: bool = False) -> str:
     )
 
 
-def _prompt_sections(text: str) -> dict[str, str]:
-    """A Markdown prompt's top-level sections, by title, in order."""
+def _prompt_sections(text: str, *, heading: str = "# ") -> dict[str, str]:
+    """A Markdown prompt's sections at one heading level, by title, in order."""
     sections: dict[str, str] = {}
     title = ""
     for line in text.splitlines(keepends=True):
-        if line.startswith("# "):
-            title = line[2:].strip()
+        if line.startswith(heading):
+            title = line[len(heading) :].strip()
         sections[title] = sections.get(title, "") + line
     return sections
 

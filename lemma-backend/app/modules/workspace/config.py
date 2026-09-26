@@ -67,6 +67,17 @@ class WorkspaceSettings(BaseSettings):
             "sandboxes come to disagree about the code they are running."
         ),
     )
+    host_cli_root: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("WORKSPACE_HOST_CLI_ROOT"),
+        description=(
+            "Desktop only: the folder holding the `lemma` CLI shipped with this "
+            "backend (its `bin/lemma`), which host-execution commands on the "
+            "user's Mac find first on their PATH, so they run the CLI of this "
+            "release rather than whatever the user installed. Set by the host "
+            "pack; unset, commands use the user's own PATH."
+        ),
+    )
     workspace_profile_name: str = Field(
         default="workspace-python-v1",
         validation_alias=AliasChoices("WORKSPACE_PROFILE_NAME"),
