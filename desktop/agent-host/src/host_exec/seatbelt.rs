@@ -347,6 +347,8 @@ mod tests {
         assert_eq!(lemma_cli_root("/does/not/exist", &home), None);
     }
 
+    // Seatbelt is macOS's; PATH's separator here is the Unix one.
+    #[cfg(unix)]
     #[test]
     fn the_cli_goes_first_on_the_owners_path() {
         let confinement = Confinement {
