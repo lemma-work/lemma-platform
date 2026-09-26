@@ -194,6 +194,10 @@ async def test_conversation_mcp_client_lists_and_calls_tools(
         tools = (await client.list_tools()).tools
         tool_names = {tool.name for tool in tools}
         assert "lemma_pod_get_records" in tool_names, tool_names
+        # An Agent Host run has no capability to carry these, so the bridge
+        # serves them: answering a notification, and a workflow's form.
+        assert "lemma_respond_to_notification" in tool_names, tool_names
+        assert "lemma_submit_workflow_form" in tool_names, tool_names
         # Every exposed tool carries the lemma_ prefix this surface promises.
         assert all(name.startswith("lemma_") for name in tool_names), tool_names
 

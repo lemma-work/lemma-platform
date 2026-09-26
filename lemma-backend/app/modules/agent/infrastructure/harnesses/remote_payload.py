@@ -105,8 +105,14 @@ def run_start_payload(
     runtime_instructions: str,
     carries_history: bool,
     resumed_tool_call_id: str | None = None,
+    open_notifications: str | None = None,
 ) -> JsonObject:
     """Everything one dispatched run needs, and nothing it does not.
+
+    ``open_notifications`` is what this person still owes an answer to, as the
+    in-process harness's capability renders it. It rides in the turn's prompt,
+    not the system prompt: it changes the moment somebody answers, and the
+    system prompt is delivered once per provider session.
 
     ``carries_history`` is set when the run is not even going to try to resume a
     provider session, so the prompt has to bring the conversation with it, and
@@ -132,6 +138,7 @@ def run_start_payload(
             ),
             ctx=ctx,
             runtime_instructions=runtime_instructions,
+            open_notifications=open_notifications,
         ),
         "agent": agent.model_dump(mode="json"),
         "conversation": conversation.model_dump(
@@ -292,6 +299,7 @@ def _prompt_payload(
     messages: Sequence[Message],
     ctx: AgentContext,
     runtime_instructions: str,
+    open_notifications: str | None = None,
 ) -> JsonObject:
     sections: list[str] = []
     instructions = build_agent_instructions(
@@ -311,8 +319,11 @@ def _prompt_payload(
     # No output_schema/structured keys: nothing downstream reads them. The run
     # spec carries only system_prompt + user_prompt, and the schema reaches the
     # agent as the `lemma_final_answer` tool's inputSchema over MCP.
+    history = _render_history(messages)
+    if open_notifications:
+        history = open_notifications + ("\n\n" + history if history else "")
     return {
-        "user_prompt": prepend_runtime_notes(_render_history(messages)),
+        "user_prompt": prepend_runtime_notes(history),
         "system_prompt": "\n\n".join(section for section in sections if section),
     }
 

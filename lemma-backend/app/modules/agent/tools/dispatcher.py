@@ -150,6 +150,9 @@ class AgentToolDispatcher:
                     if include_final_answer
                     else None
                 ),
+                # The Agent Host bridge is the caller that asks for
+                # `final_answer`, and it has no capability to carry these.
+                include_notification_tools=include_final_answer,
             )
         run_ctx = self._run_context(ctx, agent_run_id)
         prepared: dict[str, PreparedTool] = {}

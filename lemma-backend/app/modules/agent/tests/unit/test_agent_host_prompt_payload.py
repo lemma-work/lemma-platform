@@ -754,3 +754,22 @@ class TestTheAgentsOwnCli:
         _, payload = await self._payload(None)
 
         assert "lemma_cli" not in payload
+
+
+def test_what_is_owed_rides_in_the_turn_not_the_system_prompt() -> None:
+    """Open notifications change the moment somebody answers, and the system
+    prompt is delivered once per provider session -- so they go with the turn,
+    ahead of its history."""
+    payload = run_start_payload(
+        agent=_agent(),
+        conversation=_conversation(),
+        messages=_transcript(),
+        ctx=_ctx(),
+        agent_run_id=uuid7(),
+        runtime_instructions="",
+        carries_history=True,
+        open_notifications="# Open notifications\nAnswer with `respond_to_notification`.",
+    )
+    prompt = payload["prompt"]
+    assert "respond_to_notification" in str(prompt["user_prompt"])
+    assert "respond_to_notification" not in str(prompt["system_prompt"])

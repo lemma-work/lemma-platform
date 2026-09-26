@@ -152,3 +152,13 @@ async def build_open_notifications_capability(
     notifications = await open_notifications_for_conversation(conversation_id)
     instructions = render_open_notifications(notifications)
     return OpenNotificationsCapability(instructions) if instructions else None
+
+
+async def open_notification_instructions(conversation_id: UUID) -> str | None:
+    """The same standing instructions, for a harness with no capabilities.
+
+    An Agent Host run reaches its tools over MCP and its instructions through
+    the prompt, so it takes the text rather than the capability.
+    """
+    capability = await build_open_notifications_capability(conversation_id)
+    return capability.get_instructions() if capability is not None else None

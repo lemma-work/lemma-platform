@@ -284,11 +284,11 @@ class AgentRunnerService:
                 # Already read while building the context, not loaded twice.
                 grants=getattr(ctx, "grant_summary", None),
                 host_execution=ctx.host_execution_mode,
+                harness_kind=resolved_runtime.harness_kind,
             )
-            # Remote harnesses (Codex/Claude-Code) reach every tool through the MCP
-            # server, so they keep the full toolset list. The in-process LEMMA
-            # harness instead shows core tools directly and defers the heavy "extra"
-            # tools over MCP, layering current-time/caching/todo capabilities.
+            # Remote harnesses reach every tool through the MCP server and keep the
+            # full list; the in-process LEMMA harness shows core tools directly,
+            # defers the rest over MCP and layers current-time/caching/todo.
             harness_toolsets: list[AbstractToolset[ConversationContext]] = full_toolsets
             harness_capabilities: list[AgentCapability[ConversationContext]] = []
             harness_model_settings: JsonObject | None = None

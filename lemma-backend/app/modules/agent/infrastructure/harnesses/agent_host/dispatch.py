@@ -21,6 +21,9 @@ from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSp
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.capabilities.open_notifications import (
+    open_notification_instructions,
+)
 from app.modules.agent.domain.queued_messages import is_queued
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
@@ -278,6 +281,7 @@ async def _admit[DepsT: AgentContext](
         messages=messages,
         ctx=ctx,
         agent_run_id=agent_run_id,
+        open_notifications=await open_notification_instructions(conversation.id),
         runtime_instructions=load_agent_host_runtime_prompt(
             host_execution=bool(getattr(ctx, "host_runs_native_commands", False))
         ),
