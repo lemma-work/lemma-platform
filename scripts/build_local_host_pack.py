@@ -17,10 +17,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# Run as `python scripts/build_local_host_pack.py` and imported by the tests as
+# `scripts.build_local_host_pack`; putting this directory on the path is what
+# lets both find the one archive writer the guest runtime also uses.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_artifacts import write_deterministic_zip
 LOCAL_WHEEL_PROJECTS = (
     "lemma-pod-bundle",
     "lemma-backend",
@@ -766,11 +770,10 @@ def archive_pack(output: Path, destination: Path) -> None:
     # a pack that is archived without this check is one that cannot be
     # installed on Windows.
     enforce_windows_path_budget(output)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(output.rglob("*")):
-            if path.is_file():
-                archive.write(path, Path("local-runtime") / path.relative_to(output))
+    # Fixed timestamps and modes, so an unchanged pack archives to the same
+    # bytes. A pack built from one commit twice still differs -- it records
+    # the digests of images built in the same run -- so nothing depends on it.
+    write_deterministic_zip(output, destination, prefix="local-runtime")
 
 
 def sha256(path: Path) -> str:

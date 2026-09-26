@@ -6,18 +6,21 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 target=""
 output=""
 guestd=""
+fingerprint=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) target="$2"; shift 2 ;;
     --output) output="$2"; shift 2 ;;
     --guestd) guestd="$2"; shift 2 ;;
+    --fingerprint) fingerprint="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-if [[ -z "$target" || -z "$output" || -z "$guestd" ]]; then
-  echo "usage: $0 --target <macos-aarch64|windows-x86_64> --guestd <path> --output <zip>" >&2
+if [[ -z "$target" || -z "$output" || -z "$guestd" || -z "$fingerprint" ]]; then
+  echo "usage: $0 --target <macos-aarch64|windows-x86_64> --guestd <path>" \
+    "--fingerprint <hex from scripts/runtime_artifacts.py fingerprint> --output <zip>" >&2
   exit 2
 fi
 mkdir -p "$(dirname "$output")"
@@ -54,6 +57,15 @@ mkdir -p "$context" "$rootfs" "$artifact"
 cp "$repo_root/desktop/local-runtime/guest-image/Dockerfile" "$context/Dockerfile"
 cp -R "$repo_root/desktop/local-runtime/guest-image/rootfs-overlay" "$context/rootfs-overlay"
 cp "$guestd" "$context/lemma-guestd"
+# The filesystem tools run in the image the guest is built from, by digest, so
+# a Canonical rebuild of the tag cannot change the disk under an unchanged
+# input fingerprint -- the Dockerfile is one of its inputs, this tag is not.
+assembly_image="$(sed -n 's/^FROM \(ubuntu:[^ ]*@sha256:[0-9a-f]\{64\}\).*/\1/p' \
+  "$repo_root/desktop/local-runtime/guest-image/Dockerfile" | head -1)"
+if [[ -z "$assembly_image" ]]; then
+  echo "the guest Dockerfile no longer names a digest-pinned ubuntu base" >&2
+  exit 1
+fi
 
 docker buildx build \
   --platform "linux/$docker_arch" \
@@ -74,7 +86,7 @@ if [[ "$target" == "macos-aarch64" ]]; then
   docker run --rm --name "$assembly_container" --platform "linux/$docker_arch" \
     --mount "type=bind,source=$rootfs_tar,target=/input/rootfs.tar,readonly" \
     --mount "type=bind,source=$artifact,target=/artifact" \
-    ubuntu:24.04 \
+    "$assembly_image" \
     bash -euc '
       apt-get update >/dev/null
       apt-get install -y --no-install-recommends e2fsprogs >/dev/null
@@ -135,37 +147,11 @@ if sys.argv[2] == "macos-aarch64":
 path.write_text(json.dumps(metadata, indent=2) + "\n")
 PY
 
-(cd "$work_dir/artifact" && zip -9 -r "$output" "$target")
-python3 - "$output" <<'PY'
-import hashlib
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-metadata = {
-    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-    "size": path.stat().st_size,
-}
-with __import__("zipfile").ZipFile(path) as archive:
-    metadata["expanded_size"] = sum(entry.file_size for entry in archive.infolist())
-    metadata["breakdown"] = {
-        "kernel_bytes": sum(
-            entry.file_size for entry in archive.infolist()
-            if entry.filename.endswith("/vmlinuz")
-        ),
-        "initrd_bytes": sum(
-            entry.file_size for entry in archive.infolist()
-            if entry.filename.endswith("/initrd")
-        ),
-        "root_bytes": sum(
-            entry.file_size for entry in archive.infolist()
-            if entry.filename.endswith(("/disk.raw", "/rootfs.tar"))
-        ),
-        "metadata_bytes": sum(
-            entry.file_size for entry in archive.infolist()
-            if entry.filename.endswith(("/runtime.json", "/packages.txt", "/kernel-release"))
-        ),
-    }
-path.with_suffix(path.suffix + ".json").write_text(json.dumps(metadata, indent=2) + "\n")
-PY
+# Deterministic: sorted entries, a fixed timestamp and normalised modes, so
+# the archive depends on the tree and nothing else. The tree itself is not
+# reproducible (mkfs, initramfs), which is why releases reuse a published
+# archive by input fingerprint rather than count on this.
+python3 "$repo_root/scripts/runtime_artifacts.py" zip \
+  --source "$work_dir/artifact" --output "$output" --compresslevel 9
+python3 "$repo_root/scripts/runtime_artifacts.py" guest-sidecar \
+  --archive "$output" --fingerprint "$fingerprint"
