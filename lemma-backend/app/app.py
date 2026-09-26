@@ -38,6 +38,9 @@ from app.core.security import verify_auth
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
+from app.modules.identity.infrastructure.supertokens_auth.duplicate_session_cookies import (
+    DuplicateSessionCookieMiddleware,
+)
 from app.modules.identity.infrastructure.supertokens_auth.abuse_middleware import (
     AuthAbuseMiddleware,
 )
@@ -465,6 +468,12 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # the public app asset endpoint. Outermost so the slug is resolved before
     # routing/auth (the rewritten /public/* path is unauthenticated).
     app.add_middleware(AppHostRoutingMiddleware)
+
+    # Outside the app-host router so it sees the path the browser used
+    # (`/_lemma/...` on an app origin): a stray session cookie's path is a
+    # prefix of that one. Inert unless a request carries a duplicate session
+    # cookie; see the module docstring.
+    app.add_middleware(DuplicateSessionCookieMiddleware)
 
     # Correlation id — added last so it is the outermost middleware and stamps
     # every response (including app-host-routed ones).

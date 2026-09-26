@@ -17,6 +17,8 @@ import { sendToConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
 import { needsAiModel, pointsAtModels, runFailure } from "./model-setup";
+import { RECONNECTED_EVENT, isTransportFailure } from "@/shell/connection";
+import { STUCK_AFTER_MS, TRANSPORT_RELOAD_MS, runLooksStuck } from "./stuck-run";
 
 /** The conversation, on the SDK's own session.
  *
@@ -96,8 +98,19 @@ export function LiveConversation({
     const streamingIn = useRef<string | null>(null);
 
     const historyRequestFailed = useRef(false);
+    /* Set below, once the session it reloads exists; read here from the
+       session's own error callback. */
+    const reloadConversationRef = useRef<() => Promise<void>>(async () => undefined);
     const session = useAssistantSession({
-        onError: () => { historyRequestFailed.current = true; },
+        onError: problem => {
+            historyRequestFailed.current = true;
+            /* The run's stream failed in transport -- a server restarting under
+               it, most often. Re-read the conversation once it is likely back;
+               the reconnect strip's recovery event covers a longer outage. */
+            if (isTransportFailure(problem)) {
+                setTimeout(() => void reloadConversationRef.current(), TRANSPORT_RELOAD_MS);
+            }
+        },
         client,
         podId: pod.id,
         /* The backend titles a conversation once its first run completes, and
@@ -213,6 +226,49 @@ export function LiveConversation({
     useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
 
     const state = stateOf(session.status);
+
+    /* After a server restart: the conversation's status, its messages, and --
+       if the run is still going -- its stream, read again. Forced, because the
+       session's reconnect loop may be asleep in its backoff, and waking it is
+       exactly what is wanted now. Failures are left to the next recovery, and
+       to the stuck-run offer below. */
+    const liveId = session.conversationId ?? openId;
+    const reloadConversation = useCallback(async () => {
+        if (!liveId || !mounted.current) return;
+        try {
+            const record = await refreshConversation(liveId);
+            await loadMessages({ conversationId: liveId, limit: 100 });
+            await resumeIfRunningRef.current(liveId, { knownConversation: record ?? undefined, force: true });
+        } catch {
+            /* Still unreachable, or the run ended while we looked: either way
+               what is on screen is what the server last said. */
+        }
+    }, [liveId, refreshConversation, loadMessages]);
+    useEffect(() => { reloadConversationRef.current = reloadConversation; }, [reloadConversation]);
+    useEffect(() => {
+        const reconnected = () => void reloadConversation();
+        window.addEventListener(RECONNECTED_EVENT, reconnected);
+        return () => window.removeEventListener(RECONNECTED_EVENT, reconnected);
+    }, [reloadConversation]);
+
+    /* "is working…" with nothing carrying the run: offer to reload rather
+       than leave it saying that for ever. */
+    const quiet = state === "running" && !session.isStreaming && !historyLoading;
+    const [stuck, setStuck] = useState(false);
+    useEffect(() => {
+        setStuck(false);
+        if (!quiet) return;
+        const startedAt = Date.now();
+        const timer = setTimeout(
+            () => setStuck(runLooksStuck("running", false, Date.now() - startedAt)),
+            STUCK_AFTER_MS,
+        );
+        return () => clearTimeout(timer);
+    }, [quiet]);
+    const reloadStuck = useCallback(() => {
+        setStuck(false);
+        void reloadConversation();
+    }, [reloadConversation]);
     const turns = useMemo(() => buildTurns(session.messages), [session.messages]);
 
     /* What the run is blocked on, read straight out of the transcript.
@@ -458,7 +514,8 @@ export function LiveConversation({
         : null;
 
     const failure = runFailure(state, session.error, session.conversation);
-    const error = sendError ?? loadError ?? failure.message;
+    const stuckMessage = stuck ? "This run stopped updating. The server may have restarted." : null;
+    const error = sendError ?? loadError ?? failure.message ?? stuckMessage;
     /* Whichever failure is on screen, read by its code rather than its
        words: the words differ by deployment. */
     const modelMissing = sendError ? needsAiModel(sendProblem) : !loadError && failure.noModel;
@@ -472,7 +529,8 @@ export function LiveConversation({
                 state={state}
                 error={error}
                 loading={historyLoading}
-                onReload={loadError ? () => setLoadAttempt(attempt => attempt + 1) : undefined}
+                onReload={loadError ? () => setLoadAttempt(attempt => attempt + 1) : stuck && error === stuckMessage ? reloadStuck : undefined}
+                reloadLabel={loadError ? "Retry" : "Reload conversation"}
                 emptyTitle={
                     conversationId === NEW_CONVERSATION || !session.conversationId
                         ? "New conversation"

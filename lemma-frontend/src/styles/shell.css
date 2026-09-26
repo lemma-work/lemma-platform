@@ -5437,3 +5437,24 @@ a.reach { text-decoration: none; }
 .modal__panel--wide > .modal__head { flex-shrink: 0; }
 .settings-who { min-width: 0; max-width: 100%; }
 .settings-who > div { min-width: 0; overflow-wrap: anywhere; }
+
+/* The server is not answering: one line across the top of the workspace, above
+   everything, until it does. Not dismissable -- it goes away on its own. */
+.reconnect-strip {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    z-index: 70;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100vw - 32px);
+    padding: 8px 14px;
+    background: var(--paper);
+    color: var(--ink-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    box-shadow: var(--depth-raise);
+    font-size: 13px;
+}

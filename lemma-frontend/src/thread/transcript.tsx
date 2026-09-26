@@ -131,6 +131,7 @@ export function Transcript({
     loadingEarlier,
     loading = false,
     onReload,
+    reloadLabel = "Retry",
     podId,
     conversationId,
     onOpenApp,
@@ -157,6 +158,9 @@ export function Transcript({
     loadingEarlier?: boolean;
     loading?: boolean;
     onReload?: () => void;
+    /** What the reload control says: "Retry" for a load that failed, or what
+     *  the caller is actually offering. */
+    reloadLabel?: string;
     podId: string;
     conversationId?: string | null;
     onOpenApp?: (name: string) => void;
@@ -382,7 +386,7 @@ export function Transcript({
                     <div className="conversation-error" role="alert">
                         <p>{noModel ? noModelSentence(teammate.name) : error}</p>
                         {noModel ? <AddModelAction /> : modelsAction && <OpenModelsAction />}
-                        {onReload && <button className="earlier" onClick={onReload} disabled={loading}>Retry</button>}
+                        {onReload && <button className="earlier" onClick={onReload} disabled={loading}>{reloadLabel}</button>}
                     </div>
                 )}
             </div>

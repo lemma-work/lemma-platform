@@ -21,6 +21,12 @@ export type {
   ResolveSafeRedirectUriOptions,
 } from "./auth.js";
 export {
+  isUnreachableStatus,
+  probeReachable,
+  reconnectDelay,
+  refreshFailureKind,
+} from "./reachability.js";
+export {
   ApiError,
   UnauthorizedError,
   ForbiddenError,

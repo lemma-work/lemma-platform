@@ -6,7 +6,11 @@
  *  `session.tsx` is rendering and redirects.
  */
 
-export type SessionStatus = "loading" | "in" | "out" | "sample" | "unconfigured";
+export type SessionStatus = "loading" | "in" | "out" | "unreachable" | "sample" | "unconfigured";
+
+/** What the SDK can say about the session. `unreachable` is the API not
+ *  answering, which is not an answer about the person at all. */
+export type SdkAuthStatus = "loading" | "authenticated" | "unauthenticated" | "unreachable";
 
 /** Is this rejection the server saying "not you"?
  *
@@ -104,7 +108,7 @@ export function transientRetryDelay(attempt: number): number {
  *  for as long as `GET /users/me` takes.
  */
 export function sessionStatus(
-    auth: "loading" | "authenticated" | "unauthenticated",
+    auth: SdkAuthStatus,
     sample: boolean,
     configured = true,
 ): SessionStatus {
@@ -112,6 +116,9 @@ export function sessionStatus(
     if (!configured) return "unconfigured";
     if (auth === "authenticated") return "in";
     if (auth === "loading") return "loading";
+    /* Only a 401 sends anyone to sign in. A server restarting under the page
+       gets a screen that waits for it instead. */
+    if (auth === "unreachable") return "unreachable";
     return "out";
 }
 
@@ -132,7 +139,7 @@ export function sessionStatus(
  *  be in: one has no backend at all, the other has nowhere to ask.
  */
 export function entersTheApp(
-    sdk: "loading" | "authenticated" | "unauthenticated",
+    sdk: SdkAuthStatus,
     direct: boolean | null,
     sample: boolean,
     configured = true,
@@ -140,6 +147,12 @@ export function entersTheApp(
     if (sample || !configured) return false;
     if (sdk === "authenticated") return true;
     return direct === true;
+}
+
+/** How long the unreachable screen waits before looking again: 1 s, 2 s, 4 s
+ *  ... capped at 30 s. Short at first because the usual cause is a restart. */
+export function unreachableRetryDelay(attempt: number): number {
+    return Math.min(1_000 * 2 ** Math.max(0, Math.min(attempt, 5)), 30_000);
 }
 
 export function doorFor(badToken: boolean, alreadySent: boolean): "token" | "stalled" | "send" {

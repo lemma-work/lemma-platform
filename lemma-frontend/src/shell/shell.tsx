@@ -54,6 +54,7 @@ import { CallScreen } from "@/call/call-screen";
 import { CallBar } from "@/call/call-bar";
 import { isLandingPreview, previewTabForStep } from "@/marketing/preview-mode";
 import { DesktopNotices } from "@/desktop/desktop-notices";
+import { ReconnectStrip } from "./reconnect-strip";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
 import { useVoiceConfigured } from "@/call/voice-config";
 import { AppFrameView } from "@/desktop/app-frame";
@@ -762,6 +763,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
             {/* The desktop app's background work: connecting this computer and
                 the sandbox download. Renders nothing in a browser. */}
             {!preview && <DesktopNotices orgId={activeOrgId} />}
+            {!preview && <ReconnectStrip />}
             {mobileOpen && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
             <aside className="side" id="app-sidebar" aria-label="Workspace navigation">
                 <div className="side__brand"><LemmaLogo compact={collapsed && !mobileOpen} /><button className="icon-button sidebar-toggle" title={collapsed ? "Expand sidebar (⌘\\)" : "Collapse sidebar (⌘\\)"} aria-label={mobileOpen ? "Close navigation" : collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} aria-controls="app-sidebar" onClick={() => { if (mobileOpen) setMobileOpen(false); else { setSidebarHidden(false); setCollapsed(v => !v); } }}><SidebarIcon size={19} /></button></div>
