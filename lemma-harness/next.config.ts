@@ -10,10 +10,6 @@ const devOrigins: string[] = [
   "127.0.2.2",
   "127.0.2.3",
   "127.1",
-  "127.0.0.1.nip.io",
-  "127-0-0-1.sslip.io",
-  "127-0-0-2.sslip.io",
-  "127-0-0-3.sslip.io",
 ];
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;

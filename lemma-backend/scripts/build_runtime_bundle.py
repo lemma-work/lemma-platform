@@ -102,6 +102,12 @@ REQUIRED_PACKAGES = (
 #: sandbox tries to run ``lemma``.
 SANDBOX_PYTHON = "/opt/lemma-python/bin/python"
 
+#: The Python version that interpreter is (``Dockerfile.workspace``,
+#: ``python:3.14.x``). The wheels are installed for it, not for whichever
+#: Python runs this build -- the Windows host-pack build runs 3.12, which
+#: the wheels' ``requires-python`` refuses.
+SANDBOX_PYTHON_VERSION = "3.14"
+
 #: A fixed timestamp for every zip entry. Any real mtime would make the archive
 #: differ between two builds of identical sources, which is exactly what the
 #: digest must not depend on.
@@ -159,6 +165,8 @@ def _unpack(wheels: list[Path], site_packages: Path) -> None:
             "pip",
             "install",
             "--no-deps",
+            "--python-version",
+            SANDBOX_PYTHON_VERSION,
             "--target",
             str(site_packages),
             *[str(wheel) for wheel in wheels],
