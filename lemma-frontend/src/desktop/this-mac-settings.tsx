@@ -6,12 +6,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isLocalDeployment } from "@/site/config";
 import { ComputerIcon, DownloadIcon, RefreshIcon, TerminalIcon, WarningIcon } from "@/ui/icons";
 import { useDesktopBridge } from "./bridge";
+import { openExternal } from "./open-external";
 import { openSettings } from "./open-settings";
 import { capitalised, useThisComputer } from "./this-computer";
 import { ThisComputerCard } from "./this-computer-card";
 import { readStatus, useAgentHost } from "./agent-host";
 import {
-    channelLine, friendlyError, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin,
+    RELEASES_PAGE, channelLine, friendlyError, healthDetail, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin, updateProblem,
     sandboxWording, updateOffer, sharingBusy, thisMac, thisMacAvailability,
     type ThisMacAvailability, type ThisMacSnapshot,
 } from "./this-mac";
@@ -105,7 +106,7 @@ function Overview() {
     });
     const repair = useMutation({
         mutationFn: () => thisMac.repair(),
-        onSuccess: (ran) => setSaid(ran ? "Lemma is checking its files and will start again in a moment." : null),
+        onSuccess: (ran) => setSaid(ran ? "Lemma is downloading its runtime again and will restart when it is done." : null),
         onError: (problem) => setSaid(friendlyError(problem)),
     });
     const logs = useMutation({ mutationFn: () => thisMac.openLogs(), onError: (problem) => setSaid(friendlyError(problem)) });
@@ -120,6 +121,11 @@ function Overview() {
                             <i aria-hidden="true" />
                             {healthLine(data, update.data ?? null)}
                         </p>
+                        {healthDetail(data) && (
+                            <p className="thismac-said thismac-said--bad" role="alert">
+                                {healthDetail(data)} Quit and reopen Lemma to restart it, or use Lemma → Recovery… in the menu bar.
+                            </p>
+                        )}
                         <SettingRow name="Start at login" consequence={`Lemma opens when you sign in to ${noun}, so teammates and channels keep answering.`}>
                             <input
                                 type="checkbox"
@@ -131,11 +137,15 @@ function Overview() {
                                 onChange={(event) => { setSaid(null); login.mutate(event.target.checked); }}
                             />
                         </SettingRow>
-                        <SettingRow name="Repair" consequence="Checks Lemma’s own files and replaces damaged ones. Your pods, files and accounts are not touched.">
-                            <button className="btn" disabled={repair.isPending} onClick={() => { setSaid(null); repair.mutate(); }}>
-                                {repair.isPending ? "Repairing…" : "Verify & repair"}
-                            </button>
-                        </SettingRow>
+                        {/* Only where the shell can do it: a bundled or older runtime
+                            has nothing it could download to replace itself with. */}
+                        {data.app.repair_available && (
+                            <SettingRow name="Repair" consequence="Downloads Lemma’s runtime again (this needs internet) and restarts Lemma. Your pods, files and accounts are not touched.">
+                                <button className="btn" disabled={repair.isPending} onClick={() => { setSaid(null); repair.mutate(); }}>
+                                    {repair.isPending ? "Repairing…" : "Verify & repair"}
+                                </button>
+                            </SettingRow>
+                        )}
                         <SettingRow name="Logs" consequence="What Lemma wrote while it ran, for when something needs explaining.">
                             <button className="linkish" onClick={() => { setSaid(null); logs.mutate(); }}><TerminalIcon size={13} /> Open logs</button>
                         </SettingRow>
@@ -210,6 +220,7 @@ function CodingAgents() {
 /** "Run commands on this Mac". Owner's runs only: the backend keeps every
  *  teammate's run in the VM whatever this says. */
 function HostExecution() {
+    const noun = useThisComputer();
     const host = useAgentHost();
     const [problem, setProblem] = useState<string | null>(null);
     const change = useMutation({
@@ -222,12 +233,12 @@ function HostExecution() {
     const row = hostExecutionRow(host.status);
     return (
         <>
-            <SettingRow name="Run commands on this Mac" consequence={row.blocked ?? row.consequence}>
+            <SettingRow name={"Run commands on " + noun} consequence={row.blocked ?? row.consequence}>
                 <input
                     type="checkbox"
                     className="thismac-switch"
                     role="switch"
-                    aria-label="Run commands on this Mac"
+                    aria-label={"Run commands on " + noun}
                     checked={change.isPending ? change.variables === true : row.checked}
                     disabled={row.blocked !== null || change.isPending}
                     title={row.blocked ?? undefined}
@@ -245,10 +256,14 @@ function Updates() {
     const snapshot = useThisMacSnapshot();
     const update = useQuery({ queryKey: ["this-mac-update"], queryFn: () => thisMac.checkUpdate(), staleTime: 10 * 60_000, retry: 0 });
     const [problem, setProblem] = useState<string | null>(null);
+    const [note, setNote] = useState<string | null>(null);
     const install = useMutation({
         mutationFn: (version: string) => thisMac.installUpdate(version),
         onSuccess: () => void update.refetch(),
-        onError: (cause) => setProblem(friendlyError(cause)),
+        onError: (cause) => {
+            const said = updateProblem(cause);
+            if (said.neutral) setNote(said.text); else setProblem(said.text);
+        },
     });
     const status = update.data ?? null;
     const offer = updateOffer(status);
@@ -258,12 +273,12 @@ function Updates() {
             <SettingRow
                 name={status ? "Lemma " + status.currentVersion : "Lemma"}
                 consequence={update.isFetching ? "Checking for updates…"
-                    : update.isError ? "Couldn’t check. " + friendlyError(update.error)
+                    : update.isError ? updateProblem(update.error).text
                         : !status ? ""
-                            : !status.updatesSupported ? channelLine(status, channel)
+                            : !status.updatesSupported ? "This build doesn’t update itself."
                                 : status.availableVersion ? `Lemma ${status.availableVersion} is available.` : "Up to date."}
             >
-                <button className="btn" disabled={update.isFetching} onClick={() => { setProblem(null); void update.refetch(); }}>
+                <button className="btn" disabled={update.isFetching} onClick={() => { setProblem(null); setNote(null); void update.refetch(); }}>
                     <RefreshIcon size={13} className={update.isFetching ? "spin" : undefined} /> Check now
                 </button>
             </SettingRow>
@@ -274,7 +289,7 @@ function Updates() {
                         disabled={Boolean(offer.blocked) || install.isPending}
                         /* The version shown, so the shell can refuse if the
                            feed moved on since; it asks natively first. */
-                        onClick={() => { setProblem(null); install.mutate(status.availableVersion!); }}
+                        onClick={() => { setProblem(null); setNote(null); install.mutate(status.availableVersion!); }}
                     >
                         {install.isPending ? "Downloading…" : "Download and install"}
                     </button>
@@ -282,7 +297,11 @@ function Updates() {
             )}
             <SettingRow name="Channel" consequence={channelLine(status, channel)}>
                 <span className="pill">{channel}</span>
+                {!status?.updatesSupported && (
+                    <button className="linkish" onClick={() => openExternal(RELEASES_PAGE)}>Releases page</button>
+                )}
             </SettingRow>
+            {note && <p className="thismac-said" role="status">{note}</p>}
             {problem && <p className="thismac-said thismac-said--bad" role="alert">{problem}</p>}
         </div>
     );

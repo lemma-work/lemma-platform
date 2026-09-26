@@ -461,6 +461,9 @@ fn local_settings_snapshot_impl(app: AppHandle) -> Result<Value, String> {
         "channel": release_channel(),
         "updates_supported": updates_enabled(),
         "start_at_login": app.autolaunch().is_enabled().unwrap_or(false),
+        // Whether Verify & repair has a signed runtime to download: only a
+        // downloaded runtime of this build's own release does.
+        "repair_available": runtime_info_snapshot().repair_available,
     });
     Ok(view)
 }

@@ -132,6 +132,12 @@ function savedLine(count: number | null): Said {
     return { text: count ? "Saved. Lemma restarted its server to use it." : "Nothing changed." };
 }
 
+/** After a save the server restarted under every open query, so everything
+ *  is read again rather than left showing what the old server said. */
+function refreshAfterSave(queryClient: ReturnType<typeof useQueryClient>, count: number | null) {
+    void (count ? queryClient.invalidateQueries() : queryClient.invalidateQueries({ queryKey: ["this-mac"] }));
+}
+
 /* ── the AI model ──────────────────────────────────────────────────── */
 
 /** Kept while this page is open, for the reason Advanced kept its drafts:
@@ -178,7 +184,7 @@ function AiModel({ snapshot }: { snapshot: ThisMacSnapshot }) {
         onSuccess: (count) => {
             if (count !== null) { aiDraftMemory = null; setKeyState(undefined); }
             setSaid(savedLine(count));
-            void queryClient.invalidateQueries({ queryKey: ["this-mac"] });
+            refreshAfterSave(queryClient, count);
         },
         onError: (problem) => {
             setSaid({ text: friendlyError(problem), bad: true });
@@ -314,7 +320,7 @@ function Email({ snapshot }: { snapshot: ThisMacSnapshot }) {
         onSuccess: (count) => {
             if (count !== null) { emailDraftMemory = null; setSecretsState({}); }
             setSaid(savedLine(count));
-            void queryClient.invalidateQueries({ queryKey: ["this-mac"] });
+            refreshAfterSave(queryClient, count);
         },
         onError: (cause) => {
             setSaid({ text: friendlyError(cause), bad: true });
@@ -444,7 +450,7 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
                 setSecretsState({});
             }
             setSaid(savedLine(count));
-            void queryClient.invalidateQueries({ queryKey: ["this-mac"] });
+            refreshAfterSave(queryClient, count);
         },
         onError: (problem) => {
             /* Some sections may have saved before this one failed; refetch so
@@ -581,6 +587,9 @@ export function ThisMacServerSetup({ focus }: { focus: string | null }) {
             <p className={"thismac-health thismac-health--" + (allReady ? "running" : "starting")} role="status">
                 <i aria-hidden="true" />
                 {allReady ? "This server has what it needs. The rest is optional." : "Set up an AI model so teammates can work."}
+            </p>
+            <p className="thismac-said">
+                Saving restarts Lemma’s server: running agents stop, and open chats reconnect when it is back.
             </p>
             <Card id="ai" snapshot={data} open={card === "ai"}><AiModel snapshot={data} /></Card>
             <Card id="email" snapshot={data} open={card === "email"}><Email snapshot={data} /></Card>

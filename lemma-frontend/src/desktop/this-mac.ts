@@ -152,7 +152,7 @@ export interface ThisMacSnapshot {
     sharing: Sharing | null;
     sandbox_images: { state: string; detail: string } | null;
     paths: { locald: string; logs: string } | null;
-    app: { version: string; channel: string; updates_supported: boolean; start_at_login: boolean };
+    app: { version: string; channel: string; updates_supported: boolean; start_at_login: boolean; repair_available: boolean };
 }
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -242,6 +242,7 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
             channel: text(app.channel, "dev"),
             updates_supported: flag(app.updates_supported),
             start_at_login: flag(app.start_at_login),
+            repair_available: flag(app.repair_available),
         },
     };
 }
@@ -382,6 +383,19 @@ export function healthState(snapshot: ThisMacSnapshot): "running" | "starting" |
     return snapshot.state.running ? "starting" : "stopped";
 }
 
+/** What is wrong, when Overview says "Needs attention": the stack's own
+ *  error, or which service stopped. Null when there is nothing to say. */
+export function healthDetail(snapshot: ThisMacSnapshot): string | null {
+    if (healthState(snapshot) !== "attention") return null;
+    if (snapshot.state.last_error) return snapshot.state.last_error;
+    const stopped = snapshot.services.filter((service) => service.circuit_open).map((service) => SERVICE_NAMES[service.id] ?? service.id);
+    return stopped.length
+        ? `Lemma’s ${stopped.join(" and ")} kept stopping, so Lemma stopped restarting ${stopped.length === 1 ? "it" : "them"}.`
+        : null;
+}
+
+const SERVICE_NAMES: Record<string, string> = { backend: "server", frontend: "workspace" };
+
 const HEALTH_WORDS = { running: "Running", starting: "Starting", attention: "Needs attention", stopped: "Stopped" } as const;
 
 /** One line: "Running · v0.8.0 · up to date". The update part only when
@@ -394,7 +408,10 @@ export function healthLine(snapshot: ThisMacSnapshot, update: AppUpdateStatus | 
         const channel = snapshot.app.channel && snapshot.app.channel !== "stable" ? " " + snapshot.app.channel : "";
         parts.push("v" + version + channel);
     }
-    if (update?.updatesSupported) parts.push(update.availableVersion ? update.availableVersion + " available" : "up to date");
+    /* Not "available" for an update that cannot be installed yet: Updates
+       says why, and the one line here should not promise it. */
+    const blocked = update?.dataCompatibility === "postgres-major-change";
+    if (update?.updatesSupported && !blocked) parts.push(update.availableVersion ? update.availableVersion + " available" : "up to date");
     return parts.join(" · ");
 }
 
@@ -452,6 +469,18 @@ export function joinPolicyCopy(whoCanJoin: WhoCanJoin, mode: SharingMode): strin
         : "Once shared, only people you invite can create an account.";
 }
 
+/** A sharing transition's phase, in words. */
+export function sharingPhaseWords(phase: string): string {
+    const words: Record<string, string> = {
+        preflight: "Checking",
+        gateway: "Starting the gateway",
+        provisioning_dns: "Setting up the address",
+        starting_tunnel: "Opening the public link",
+        restarting: "Restarting Lemma",
+    };
+    return words[phase] ?? "Working";
+}
+
 /** Whether a transition is under way, from any of the three places that say so. */
 export function sharingBusy(sharing: Sharing | null): boolean {
     if (!sharing) return false;
@@ -506,8 +535,8 @@ export function postgresMajorChangeMessage(update: AppUpdateStatus): string {
     const from = update.installedPostgresMajor;
     const to = update.candidatePostgresMajor;
     const change = from && to ? `from Postgres ${from} to Postgres ${to}` : "to a different Postgres version";
-    return `This update moves Lemma's database ${change}, which Lemma can't migrate automatically yet. `
-        + "Nothing was changed: your current version, pods, files and accounts are as they were.";
+    return `Lemma ${update.availableVersion ?? "’s next version"} moves its database ${change}, which it can’t do automatically yet, `
+        + "so it isn’t offered here. Keep using this version; your pods, files and accounts are safe.";
 }
 
 export function updateOffer(update: AppUpdateStatus | null): { blocked: string | null; cost: string } {
@@ -532,6 +561,20 @@ export function channelLine(update: AppUpdateStatus | null, channel: string): st
     if (current === "nightly") return "Nightly builds don’t update themselves. Newer ones are on the releases page.";
     if (current === "stable") return "Stable releases. Nightly builds are a separate download from the releases page.";
     return "A development build, which doesn’t update itself.";
+}
+
+/** Where newer builds are, for a build that cannot fetch them itself. */
+export const RELEASES_PAGE = "https://github.com/lemma-work/lemma-platform/releases";
+
+/** An update check or install that did not happen, in words: a declined
+ *  install is a choice, not an error, and a failed check is the network's. */
+export function updateProblem(reason: unknown): { text: string; neutral: boolean } {
+    const message = reason instanceof Error ? reason.message : String(reason ?? "");
+    if (/was not installed/i.test(message)) return { text: "Not installed. Lemma is still on this version.", neutral: true };
+    if (/could not download|network|timed out|connect|dns|resolve|fetch/i.test(message)) {
+        return { text: "Couldn’t reach the update server. Check your connection and try again.", neutral: false };
+    }
+    return { text: friendlyError(reason), neutral: false };
 }
 
 /* ── server setup: credential forms ────────────────────────────────── */
@@ -748,6 +791,8 @@ export function oauthFormForConnector(connectorId: string): CredentialForm | nul
     const id = connectorId.toLowerCase();
     if (id === "gmail" || id.startsWith("google")) return "google";
     if (id === "github") return "github";
+    /* Teams answers as the Teams bot, not through the Microsoft OAuth app. */
+    if (id === "microsoft_teams" || id === "teams") return "teams";
     if (id.startsWith("microsoft") || id.startsWith("outlook") || id === "onedrive" || id === "sharepoint") return "microsoft";
     if (id === "slack") return "slack-app";
     return null;

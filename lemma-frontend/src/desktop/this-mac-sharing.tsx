@@ -9,8 +9,7 @@ import { useThisComputer } from "./this-computer";
 import {
     enablePayload, friendlyError, joinPolicyCopy, readSharing, setupCommands, sharingBusy,
     sharingModeConsequence, sharingModeName, thisMac,
-    type Sharing, type SharingMode, type ThisMacSnapshot, type TunnelProvider, type WhoCanJoin,
-} from "./this-mac";
+    type Sharing, type SharingMode, type ThisMacSnapshot, type TunnelProvider, type WhoCanJoin, sharingPhaseWords } from "./this-mac";
 import { SettingRow, useThisMacSnapshot } from "./this-mac-settings";
 
 /** Who can reach this installation, and who may make an account once they do.
@@ -158,7 +157,7 @@ export function ThisMacSharing() {
             )}
             {sharing.last_error && <p className="thismac-said thismac-said--bad" role="alert">{sharing.last_error}</p>}
             {busy && active === "this_computer" && !act.isPending && (
-                <p className="thismac-said" role="status">{sharing.phase.replace(/_/g, " ")}…</p>
+                <p className="thismac-said" role="status">{sharingPhaseWords(sharing.phase)}…</p>
             )}
 
             {selected === "local_network" && active !== "local_network" && (

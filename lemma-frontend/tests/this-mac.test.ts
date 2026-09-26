@@ -1,7 +1,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
-    CREDENTIAL_FORMS, LOCAL_SERVER_KEY, addToWorkspace, alreadyInWorkspace, channelLine, credentialFormForChannel,
+    CREDENTIAL_FORMS, LOCAL_SERVER_KEY, addToWorkspace, healthDetail, sharingPhaseWords, updateProblem, alreadyInWorkspace, channelLine, credentialFormForChannel,
     detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, HOST_EXECUTION_CONSEQUENCE,
     hostExecutionRow, joinPolicyCopy,
     oauthFormForConnector, onLocalWorkspaceOrigin, operatorProvider, postgresMajorChangeMessage, readSnapshot,
@@ -335,6 +335,7 @@ test("connectors and channels map to the form that sets them up here", () => {
     assert.equal(oauthFormForConnector("outlook"), "microsoft");
     assert.equal(oauthFormForConnector("notion"), null);
     assert.equal(oauthFormForConnector("slack"), "slack-app");
+    assert.equal(oauthFormForConnector("microsoft_teams"), "teams");
     assert.equal(credentialFormForChannel("SLACK"), "slack");
     assert.equal(credentialFormForChannel("resend"), "resend");
     assert.equal(credentialFormForChannel("EMAIL"), "resend");
@@ -458,4 +459,34 @@ test("turning host execution on sends one boolean to one shell command", async (
         { command: "set_host_execution", args: { enabled: true } },
         { command: "set_host_execution", args: { enabled: false } },
     ]);
+});
+
+/* ── overview and updates, in words ───────────────────────────────── */
+
+test("needs attention says what stopped", () => {
+    const stopped = snapshot({ services: [{ id: "backend", running: false, circuit_open: true }, { id: "frontend", running: true }] });
+    assert.match(healthDetail(stopped)!, /server kept stopping/);
+    const failed = snapshot({ state: { ready: false, running: false, last_error: "the VM would not boot" } });
+    assert.equal(healthDetail(failed), "the VM would not boot");
+    assert.equal(healthDetail(snapshot()), null);
+});
+
+test("an update that cannot be installed yet is not announced as available", () => {
+    const blocked: AppUpdateStatus = {
+        channel: "stable", currentVersion: "0.8.0", updatesSupported: true, availableVersion: "0.9.0",
+        dataCompatibility: "postgres-major-change", installedPostgresMajor: 16, candidatePostgresMajor: 17,
+    };
+    assert.doesNotMatch(healthLine(snapshot(), blocked), /available/);
+    assert.match(healthLine(snapshot(), { ...blocked, dataCompatibility: "same" }), /0\.9\.0 available/);
+});
+
+test("a declined install is a choice, and a failed check is the network's", () => {
+    assert.deepEqual(updateProblem(new Error("The update was not installed.")), { text: "Not installed. Lemma is still on this version.", neutral: true });
+    assert.equal(updateProblem(new Error("could not download the update: dns error")).neutral, false);
+    assert.match(updateProblem(new Error("could not download the update: dns error")).text, /update server/);
+});
+
+test("sharing phases are said in words, never as keys", () => {
+    assert.equal(sharingPhaseWords("starting_tunnel"), "Opening the public link");
+    assert.equal(sharingPhaseWords("something_new"), "Working");
 });

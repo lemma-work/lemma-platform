@@ -97,6 +97,8 @@ export interface DescribedStatus {
     tone: Tone;
     /** Whether "Try again" means anything here. */
     retry: boolean;
+    /** Whether the host itself stopped and needs starting again. */
+    restart?: boolean;
 }
 
 /** The three status planes, ranked into one state.
@@ -134,6 +136,17 @@ export function describeThisComputer(
             detail: "This build of Lemma does not include the Agent Host.",
             tone: "muted",
             retry: false,
+        };
+    }
+    /* Before anything about the connection: a host that keeps exiting is
+       not "starting", however long the page waits. */
+    if (status.restart_circuit_open) {
+        return {
+            label: "Stopped working",
+            detail: status.last_error ?? `The Agent Host on ${noun} kept stopping. Restart it, or open its log to see why.`,
+            tone: "warn",
+            retry: false,
+            restart: true,
         };
     }
     const target = selectWorkspaceTarget(status.targets, workspaceUrl, userId);
