@@ -237,6 +237,11 @@ def install_auth_schemes(
     return schemes
 
 
+def _display_name(connector: ConnectorEntity) -> str:
+    """What a person calls the connector: its title, else its slug."""
+    return connector.title or connector.id
+
+
 def validate_auth_config_request(
     *,
     connector: ConnectorEntity,
@@ -307,9 +312,12 @@ def validate_auth_config_request(
         )
     if config_source == AuthConfigSource.SYSTEM_DEFAULT:
         if not system_oauth_config.has_default_oauth_config(connector):
+            # Read by the person who clicked Connect, so it names what is
+            # missing and the two ways to supply it, not the config sources.
             raise ConnectorValidationError(
-                "System default OAuth credentials are not configured for this app. "
-                "Create an org custom auth config with OAuth credentials instead."
+                f"{_display_name(connector)} needs an OAuth app before "
+                "anyone can sign in to it. Register your organization's own app, "
+                "or ask whoever runs this server to add one."
             )
         return
 

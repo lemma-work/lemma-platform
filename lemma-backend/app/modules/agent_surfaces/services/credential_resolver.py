@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.core.config import reveal_secret
 from app.modules.agent_surfaces.config import (
     resolve_resend_api_key,
     surface_settings,
@@ -107,17 +108,18 @@ def native_credentials(
     normalized = str(platform or "").upper()
     if normalized == SurfacePlatform.WHATSAPP:
         credentials = {
-            "access_token": surface_settings.whatsapp_access_token or "",
+            "access_token": reveal_secret(surface_settings.whatsapp_access_token) or "",
             "phone_number_id": surface_settings.whatsapp_phone_number_id or "",
             "waba_id": surface_settings.whatsapp_waba_id or "",
         }
-        app_secret = surface_settings.whatsapp_app_secret
+        app_secret = reveal_secret(surface_settings.whatsapp_app_secret)
         if app_secret:
             credentials["app_secret"] = app_secret
         return with_surface_identity(credentials, surface)
     if normalized == SurfacePlatform.TELEGRAM:
         return with_surface_identity(
-            {"bot_token": surface_settings.telegram_bot_token or ""}, surface
+            {"bot_token": reveal_secret(surface_settings.telegram_bot_token) or ""},
+            surface,
         )
     if normalized == SurfacePlatform.RESEND:
         return with_surface_identity(
@@ -134,11 +136,11 @@ def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
     normalized = str(platform or "").upper()
     if normalized == SurfacePlatform.WHATSAPP:
         return bool(
-            surface_settings.whatsapp_access_token
+            reveal_secret(surface_settings.whatsapp_access_token)
             and surface_settings.whatsapp_phone_number_id
         )
     if normalized == SurfacePlatform.TELEGRAM:
-        return bool(surface_settings.telegram_bot_token)
+        return bool(reveal_secret(surface_settings.telegram_bot_token))
     if normalized == SurfacePlatform.RESEND:
         # Both, because an address on an unowned domain is as unusable as no
         # key: the UI offered SYSTEM mode on the key alone and provisioning then
@@ -349,7 +351,7 @@ class SurfaceCredentialResolver:
         if account_id is None:
             return SlackWebhookCredentials(
                 app_id=None,
-                signing_secret=surface_settings.slack_signing_secret,
+                signing_secret=reveal_secret(surface_settings.slack_signing_secret),
                 uses_custom_app=False,
             )
         found = await account_with_secrets(self._uow, account_id)
@@ -406,7 +408,7 @@ class SurfaceCredentialResolver:
         self, install, *, uses_custom_app: bool
     ) -> str | None:
         if not uses_custom_app:
-            return surface_settings.slack_signing_secret
+            return reveal_secret(surface_settings.slack_signing_secret)
         if install is None:
             return None
         return await app_signing_secret(self._uow, install.id)

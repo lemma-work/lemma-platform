@@ -14,6 +14,7 @@ from uuid import UUID
 import httpx
 from redis.exceptions import RedisError
 
+from app.core.config import reveal_secret
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.services import teams_consent
@@ -165,7 +166,7 @@ class SurfaceConsentMixin:
         number, and that is the system-wide token.
         """
         if surface.surface_type is not SurfacePlatform.WHATSAPP:
-            return surface_settings.whatsapp_verify_token
+            return reveal_secret(surface_settings.whatsapp_verify_token)
         if surface.account_id is not None and self._credential_resolver is not None:
             try:
                 credentials = await self._credential_resolver.for_account(
@@ -185,7 +186,7 @@ class SurfaceConsentMixin:
             ).get_by_phone_number_id(surface.surface_identity_id)
             if number is not None and number.verify_token:
                 return number.verify_token
-        return surface_settings.whatsapp_verify_token
+        return reveal_secret(surface_settings.whatsapp_verify_token)
 
     async def _surface_admin_consent(
         self, surface: AgentSurfaceEntity
@@ -247,7 +248,7 @@ class SurfaceConsentMixin:
 
     async def _check_admin_consent_granted(self, tenant_id: str) -> bool:
         app_id = surface_settings.microsoft_bot_app_id
-        app_password = surface_settings.microsoft_bot_app_password
+        app_password = reveal_secret(surface_settings.microsoft_bot_app_password)
         if not app_id or not app_password:
             return False
 

@@ -80,5 +80,8 @@ def test_the_filter_never_asks_for_limits_it_did_not_declare() -> None:
     from app.modules.schedule.infrastructure.adapters import system_model_filter
 
     source = inspect.getsource(system_model_filter)
-    assert "resolve_system_runtime(usage_limits=FILTER_USAGE_LIMITS)" in source
+    assert (
+        "resolve_system_runtime(\n            usage_limits=FILTER_USAGE_LIMITS,"
+        in source
+    )
     assert "usage_limits=runtime.usage_limits" in source

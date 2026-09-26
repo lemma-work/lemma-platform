@@ -13,6 +13,13 @@ pub struct OperatorConfig {
     pub ai: AiProfile,
     pub integrations: IntegrationConfig,
     pub surfaces: SurfaceConfig,
+    /// Outgoing mail: invitations, password resets, sign-in codes.
+    ///
+    /// Defaulted, so a file written before this section existed still reads;
+    /// and an older build drops it on load (`migrate_config`) rather than
+    /// refusing the whole file.
+    #[serde(default)]
+    pub email: EmailConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -27,6 +34,49 @@ pub struct AiProfile {
     pub allow_private_network: bool,
     #[serde(default)]
     pub last_validated_at_unix_ms: Option<u64>,
+    /// The model that reads images for teammates whose own model cannot.
+    /// Empty: the default model reads them itself when it can, and nothing
+    /// does when it cannot.
+    #[serde(default)]
+    pub image_model: String,
+    /// A cheaper model for the small jobs -- conversation titles and history
+    /// summaries. Empty: titles use the default model and summaries the
+    /// run's own model.
+    #[serde(default)]
+    pub fast_model: String,
+}
+
+/// How this installation sends mail.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmailConfig {
+    /// `none`, `resend` or `smtp`. `none` keeps mail in the local spool the
+    /// backend writes to disk, which is what an install has before anyone
+    /// sets this up.
+    #[serde(default = "default_email_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub from_email: String,
+    #[serde(default)]
+    pub smtp_host: String,
+    #[serde(default = "default_smtp_port")]
+    pub smtp_port: u16,
+    #[serde(default)]
+    pub smtp_user: String,
+    #[serde(default = "default_true")]
+    pub smtp_use_tls: bool,
+}
+
+fn default_email_provider() -> String {
+    "none".into()
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -72,7 +122,7 @@ pub struct ApplyOperatorConfig {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum OperatorConfigUpdate {
-    Section(SectionUpdate),
+    Section(Box<SectionUpdate>),
     Legacy(Box<ApplyOperatorConfig>),
 }
 
@@ -96,6 +146,7 @@ pub enum ConfigSection {
     Ai(AiProfile),
     Integrations(IntegrationConfig),
     Surfaces(SurfaceConfig),
+    Email(EmailConfig),
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +155,25 @@ pub enum CredentialAction {
     Keep,
     Replace { value: String },
     Remove,
+}
+
+impl EmailConfig {
+    pub(crate) fn unconfigured() -> Self {
+        Self {
+            provider: default_email_provider(),
+            from_email: String::new(),
+            smtp_host: String::new(),
+            smtp_port: default_smtp_port(),
+            smtp_user: String::new(),
+            smtp_use_tls: true,
+        }
+    }
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self::unconfigured()
+    }
 }
 
 impl OperatorConfig {
@@ -133,6 +203,7 @@ impl OperatorConfig {
                 resend_inbound_domain: "".into(),
                 ..Default::default()
             },
+            email: EmailConfig::default(),
         })
     }
 }
@@ -181,6 +252,7 @@ pub(crate) fn migrate_config(mut value: Value) -> Option<OperatorConfig> {
         "ai",
         "integrations",
         "surfaces",
+        "email",
     ];
     if let Some(object) = value.as_object_mut() {
         object.retain(|key, _| known.contains(&key.as_str()));
@@ -230,6 +302,7 @@ pub(crate) fn configuration_schema() -> Value {
             {"id":"ai","label":"AI Providers","required":true,"restart_scope":["backend"]},
             {"id":"integrations","label":"Integrations","required":false,"restart_scope":["backend"]},
             {"id":"surfaces","label":"Agent Surfaces","required":false,"restart_scope":["backend"]},
+            {"id":"email","label":"Email","required":false,"restart_scope":["backend"]},
             {"id":"services","label":"Services"},
             {"id":"diagnostics","label":"Diagnostics"}
         ],

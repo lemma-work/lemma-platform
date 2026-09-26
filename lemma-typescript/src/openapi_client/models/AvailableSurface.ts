@@ -6,6 +6,7 @@ import type { SurfaceConnectDescriptor } from './SurfaceConnectDescriptor.js';
 import type { SurfaceCredentialMode } from './SurfaceCredentialMode.js';
 import type { SurfacePlatform } from './SurfacePlatform.js';
 import type { SurfaceSystemClaim } from './SurfaceSystemClaim.js';
+import type { SurfaceUnavailableReason } from './SurfaceUnavailableReason.js';
 /**
  * One connectable surface platform. ``supported_credential_modes`` is the
  * single source of truth for how it can be set up: ``[CUSTOM]`` means an account
@@ -26,4 +27,5 @@ export type AvailableSurface = {
     supported_credential_modes: Array<SurfaceCredentialMode>;
     system_claim?: (SurfaceSystemClaim | null);
     title?: (string | null);
+    unavailable_reason?: (SurfaceUnavailableReason | null);
 };

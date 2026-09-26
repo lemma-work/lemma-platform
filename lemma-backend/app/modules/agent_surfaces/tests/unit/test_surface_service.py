@@ -308,7 +308,7 @@ async def test_create_telegram_surface_uses_built_in_credentials_without_account
     repo.create.side_effect = lambda entity: entity
     enricher.resolve_binding.return_value = (None, None, None)
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.surface_settings.enable_telegram_polling_mode",
+        "app.modules.agent_surfaces.config.surface_settings.enable_telegram_polling_mode",
         True,
     )
 
@@ -348,7 +348,7 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
         "http://localhost:8711",
     )
 
-    with pytest.raises(AgentSurfaceValidationError, match="public HTTPS API URL"):
+    with pytest.raises(AgentSurfaceValidationError, match="public link"):
         await service.create_surface(
             platform=SurfacePlatform.TELEGRAM,
             pod_id=uuid4(),
@@ -965,7 +965,7 @@ async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
         "http://localhost:8711",
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.surface_settings.enable_resend_polling_mode",
+        "app.modules.agent_surfaces.config.surface_settings.enable_resend_polling_mode",
         True,
     )
     surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
@@ -980,12 +980,12 @@ async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch)
         "http://localhost:8711",
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.surface_settings.enable_resend_polling_mode",
+        "app.modules.agent_surfaces.config.surface_settings.enable_resend_polling_mode",
         False,
     )
     surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
 
-    with pytest.raises(AgentSurfaceValidationError, match="public HTTPS API URL"):
+    with pytest.raises(AgentSurfaceValidationError, match="public link"):
         _runtime_service()._validate_runtime_supported(surface)
 
 

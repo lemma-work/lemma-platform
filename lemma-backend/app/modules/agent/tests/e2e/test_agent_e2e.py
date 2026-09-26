@@ -2715,7 +2715,10 @@ class TestAgentRuntimeConfigApis:
                 "base_url": "https://api.vendor.test/v1",
                 "api_key": "vendor-secret",
                 "default_model_name": "vendor/model-pro",
-                "model_names": ["vendor/model-pro"],
+                "model_names": ["vendor/model-pro", "vendor/model-eyes"],
+                # The route's list says nothing about modalities, so the person
+                # adding it says which one reads images.
+                "vision_model_names": ["vendor/model-eyes"],
             },
         )
         assert vendor.status_code == 201, vendor.text
@@ -2725,6 +2728,10 @@ class TestAgentRuntimeConfigApis:
             "catalog_discovered": False,
         }
         assert vendor_payload["default_model_name"] == "vendor/model-pro"
+        assert {
+            item["name"]: "VISION" in item["capabilities"]
+            for item in vendor_payload["model_catalog"]
+        } == {"vendor/model-pro": False, "vendor/model-eyes": True}
 
         runner = AgentRunnerService(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
@@ -2745,6 +2752,156 @@ class TestAgentRuntimeConfigApis:
                     else "vendor-secret"
                 )
             }
+
+    async def test_a_deployment_without_a_system_model_uses_the_pods_own(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        fixed_test_user,
+        monkeypatch,
+    ):
+        """Titles, filters and the vision delegate on a workspace-only setup.
+
+        The organization is shared with other tests and may hold providers of
+        its own, so the pod's default is what makes the answer deterministic --
+        and it is also the answer that matters: the model this pod's owner
+        picked.
+        """
+        from app.modules.agent.services.workspace_model_fallback import (
+            resolve_workspace_runtime,
+        )
+
+        async def nothing_discovered(**_kwargs):
+            return []
+
+        # The route is not real; its model list comes from the request.
+        monkeypatch.setattr(
+            "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+            nothing_discovered,
+        )
+
+        created = await authenticated_client.post(
+            f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+            json={
+                "source": "OPENAI_COMPATIBLE",
+                "name": f"Workspace only {uuid4().hex[:8]}",
+                "base_url": "https://api.vendor.test/v1",
+                "api_key": "workspace-secret",
+                "default_model_name": "vendor/words",
+                "model_names": ["vendor/words", "vendor/eyes"],
+                "vision_model_names": ["vendor/eyes"],
+            },
+        )
+        assert created.status_code == 201, created.text
+        profile_id = created.json()["id"]
+        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+        pinned = await authenticated_client.put(
+            f"/pods/{pod_id}",
+            json={"config": {"default_runtime": {"profile_id": profile_id}}},
+        )
+        assert pinned.status_code == 200, pinned.text
+
+        text = await resolve_workspace_runtime(
+            organization_id=UUID(fixed_test_org["id"]),
+            user_id=UUID(fixed_test_user["id"]),
+            model_name="a-model-only-the-system-provider-serves",
+            pod_id=UUID(pod_id),
+        )
+        eyes = await resolve_workspace_runtime(
+            organization_id=UUID(fixed_test_org["id"]),
+            user_id=UUID(fixed_test_user["id"]),
+            pod_id=UUID(pod_id),
+            require_vision=True,
+        )
+
+        assert text is not None and eyes is not None
+        assert text.profile.id == profile_id
+        assert text.model is not None and text.model.name == "vendor/words"
+        assert text.credentials == {"api_key": "workspace-secret"}
+        assert eyes.profile.id == profile_id
+        assert eyes.model is not None and eyes.model.name == "vendor/eyes"
+
+    async def test_an_unpinned_teammate_runs_on_the_organizations_provider(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        db_session,
+        monkeypatch,
+    ):
+        """Adding a provider on Settings -> Models is enough to be answered.
+
+        A pod with no default of its own used to go straight to the system
+        model; on a deployment without one, every message then failed with
+        "no model is set up" beside a provider that was.
+        """
+        from app.modules.agent.services.pod_runtime_defaults import (
+            default_agent_runtime_for_pod,
+        )
+
+        # The organization is shared with other tests, so the provider's name
+        # sorts first to be the one the listing, and so the default, leads with.
+        provider = AgentRuntimeProfileModel(
+            organization_id=UUID(fixed_test_org["id"]),
+            scope="ORGANIZATION",
+            kind="MODEL_PROVIDER",
+            protocol="OPENAI_COMPATIBLE",
+            name=f"000 Org default {uuid4().hex[:8]}",
+            default_model_name="vendor/first",
+            model_catalog=[
+                {
+                    "name": name,
+                    "display_name": name,
+                    "provider_model_name": name,
+                    "capabilities": ["TEXT", "TOOLS"],
+                    "default_model_settings": {},
+                    "metadata": {},
+                }
+                for name in ("vendor/first", "vendor/second")
+            ],
+            config={"base_url": "https://org-provider.test/v1"},
+            credentials={"api_key": "org-secret"},
+            status="ACTIVE",
+            profile_metadata={"source": "e2e"},
+        )
+        db_session.add(provider)
+        await db_session.flush()
+        profile_id = str(provider.id)
+        await db_session.commit()
+        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+
+        try:
+            async with create_uow_from_session_maker(async_session_maker) as uow:
+                with_system = await default_agent_runtime_for_pod(
+                    uow, pod_id=UUID(pod_id)
+                )
+            monkeypatch.setattr(
+                "app.modules.agent.services.runtime_system_profiles."
+                "system_profile_configured",
+                lambda: False,
+            )
+            async with create_uow_from_session_maker(async_session_maker) as uow:
+                without_system = await default_agent_runtime_for_pod(
+                    uow, pod_id=UUID(pod_id)
+                )
+            listed = await authenticated_client.get(
+                f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+            )
+        finally:
+            # Retired, so later tests sharing this organization are not
+            # handed a default they never asked for.
+            archived = await authenticated_client.delete(
+                f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles/"
+                f"{profile_id}",
+            )
+            assert archived.status_code in (200, 204), archived.text
+
+        # A deployment with its own model keeps using it, exactly as before.
+        assert with_system.profile_id == "system:lemma"
+        assert without_system.profile_id == profile_id
+        assert without_system.model_name == "vendor/first"
+        # And the picker's "Organization default -- X" names the same thing.
+        assert listed.status_code == 200, listed.text
+        assert listed.json()["default_runtime"]["profile_id"] == profile_id
 
     async def test_profile_update_archive_and_restore_lifecycle(
         self,

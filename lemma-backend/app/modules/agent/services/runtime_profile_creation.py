@@ -207,15 +207,19 @@ class RuntimeProfileCreation:
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
         # below re-acquire.
-        async with connection_released(self._session()):
-            discovered_models = await discovery._discover_openai_compatible_models(
-                base_url=str(base_url),
-                api_key=api_key,
-                headers=normalized_headers,
-            )
+        try:
+            async with connection_released(self._session()):
+                discovered_models = await discovery._discover_openai_compatible_models(
+                    base_url=str(base_url),
+                    api_key=api_key,
+                    headers=normalized_headers,
+                )
+        except discovery.ProviderKeyRejectedError as exc:
+            raise ValueError(discovery.key_rejected_message(normalized_name)) from exc
         catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
+            provider_name=normalized_name,
             explicit_vision_model_names={
                 name.strip() for name in (vision_model_names or []) if name.strip()
             },
@@ -273,15 +277,21 @@ class RuntimeProfileCreation:
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
         # below re-acquire.
-        async with connection_released(self._session()):
-            discovered_models = await discovery._discover_anthropic_compatible_models(
-                base_url=str(base_url or "https://api.anthropic.com"),
-                api_key=api_key,
-                headers=normalized_headers,
-            )
+        try:
+            async with connection_released(self._session()):
+                discovered_models = (
+                    await discovery._discover_anthropic_compatible_models(
+                        base_url=str(base_url or "https://api.anthropic.com"),
+                        api_key=api_key,
+                        headers=normalized_headers,
+                    )
+                )
+        except discovery.ProviderKeyRejectedError as exc:
+            raise ValueError(discovery.key_rejected_message(normalized_name)) from exc
         catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
+            provider_name=normalized_name,
             # Anthropic/Claude models are uniformly multimodal, so every model in
             # an Anthropic-compatible profile keeps the vision tools.
             default_vision=True,

@@ -27,6 +27,7 @@ import os
 
 import pytest
 
+from app.core.config import reveal_secret
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.domain.connector_operation import ResolvedOperation
@@ -54,12 +55,12 @@ _E2E_USER_ID = os.getenv("LEMMA_E2E_COMPOSIO_USER_ID", "lemma-connector-e2e")
 
 @pytest.fixture(scope="module")
 def composio_client():
-    if not connector_settings.composio_api_key:
+    if not reveal_secret(connector_settings.composio_api_key):
         pytest.skip("COMPOSIO_API_KEY is not configured.")
     from composio import Composio
 
     os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
-    return Composio(api_key=connector_settings.composio_api_key)
+    return Composio(api_key=reveal_secret(connector_settings.composio_api_key))
 
 
 @pytest.fixture(scope="module")

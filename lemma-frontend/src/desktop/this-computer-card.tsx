@@ -40,6 +40,20 @@ export function ThisComputerCard({ release, children }: { release?: string; chil
     const [logProblem, setLogProblem] = useState<string | null>(null);
     const described = describeThisComputer(status, error, workspace(), connectError, noun, userId);
 
+    const [restarting, setRestarting] = useState(false);
+    const restart = async () => {
+        setLogProblem(null);
+        setRestarting(true);
+        try {
+            await agentHost.start();
+            await refetch();
+        } catch (problem) {
+            setLogProblem(problem instanceof Error ? problem.message : "The Agent Host could not be restarted.");
+        } finally {
+            setRestarting(false);
+        }
+    };
+
     const openLog = async () => {
         setLogProblem(null);
         try {
@@ -63,6 +77,11 @@ export function ThisComputerCard({ release, children }: { release?: string; chil
             <div className="thismac__body">
                 <p className="thismac__detail">{described.detail}</p>
                 <div className="thismac__acts">
+                    {described.restart && (
+                        <button className="btn" disabled={restarting} onClick={() => void restart()}>
+                            <RefreshIcon size={13} className={restarting ? "spin" : undefined} /> Restart
+                        </button>
+                    )}
                     {described.retry && (
                         <button className="btn" onClick={() => { retryConnect(); void refetch(); }}>
                             <RefreshIcon size={13} /> {wasRemoved(connectError) ? "Connect again" : "Try again"}

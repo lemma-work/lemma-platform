@@ -96,3 +96,26 @@ export function personalNameFor(name: string | null | undefined): string {
     const who = (name ?? "").trim().split(/\s+/)[0] ?? "";
     return who ? who + "'s Personal" : "Personal";
 }
+
+/** The heading over the arrival rungs.
+ *
+ *  "You've been invited" only when somebody did invite you. A domain match is
+ *  not an invitation — nobody put this person's name down, their company is
+ *  simply here already — and telling them they were invited sends them
+ *  looking for an email that does not exist. */
+export function arrivalHeading(invitations: number, matches: number): string {
+    if (invitations > 0) return "You’ve been invited";
+    if (matches > 0) return "Your team is already here";
+    return "Who will you be working with?";
+}
+
+/** Which kind of organization is preselected.
+ *
+ *  On a local install nobody else can reach this server until Sharing is
+ *  turned on, so "my team" would be a team of one for now — "just me" is the
+ *  honest default there, whatever the domain says. Elsewhere a company
+ *  address is a reason to expect colleagues and a shared mailbox is not. */
+export function defaultOrgKind(email: string | null | undefined, local: boolean): "personal" | "team" {
+    if (local) return "personal";
+    return canOpenToDomain(email) ? "team" : "personal";
+}

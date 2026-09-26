@@ -56,6 +56,7 @@ const COMMANDS: &[&str] = &[
     "local_sharing",
     "set_start_at_login",
     "set_host_execution",
+    "test_server_setup",
 ];
 
 fn main() {

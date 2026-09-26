@@ -106,3 +106,45 @@ export function alreadyKnown(
 export function canSetJoinPolicy(role: string | null | undefined): boolean {
     return role === "ORG_OWNER";
 }
+
+/** An invitation as its organization's owners and editors are sent it. */
+export interface InvitationForInviter {
+    email?: string | null;
+    accept_url?: string | null;
+    emailed?: boolean | null;
+}
+
+/** What to tell the inviter when nobody was emailed, or null when somebody was.
+ *
+ *  The server says `emailed: false` where email is not set up -- Lemma Desktop
+ *  until somebody configures it -- and the invitation then exists with nobody
+ *  told about it. Saying "Invited" there is how an invitation sits unanswered
+ *  for a week. Only `false` counts: an older server that never said is not
+ *  known to have failed. */
+export function unsentInvitation(invite: InvitationForInviter): { to: string; link: string | null; said: string } | null {
+    if (invite.emailed !== false) return null;
+    const to = invite.email?.trim() || "them";
+    return {
+        to,
+        link: invite.accept_url?.trim() || null,
+        said: "Email isn't set up on this server, so the invitation to " + to +
+            " wasn't emailed. Share this link with them instead.",
+    };
+}
+
+/** Whether an invitation link only opens on this computer.
+ *
+ *  The link is built from the server's own address, and on Lemma Desktop that
+ *  is a loopback one until sharing is turned on — so a link copied then and
+ *  sent to somebody opens nothing on their machine. Read from the link rather
+ *  than from the sharing state, because the link is what they will be sent. */
+export function linkOnlyOpensHere(link: string | null | undefined): boolean {
+    if (!link) return false;
+    let host: string;
+    try {
+        host = new URL(link).hostname.toLowerCase();
+    } catch {
+        return false;
+    }
+    return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+}

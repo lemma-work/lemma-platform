@@ -44,6 +44,12 @@ fn renders_packaged_managed_runtime_without_compatibility_supervisor() {
     // workspace must not fail to start because a third-party catalog was
     // unreachable.
     assert_eq!(manifest["setup"][1]["optional"], true);
+    // The Composio key comes from the operator configuration at run time,
+    // so the catalog's stamp is completed there, not here.
+    assert_eq!(
+        manifest["setup"][1]["stamp_env"],
+        serde_json::json!(["COMPOSIO_API_KEY"])
+    );
     assert_ne!(manifest["setup"][0]["optional"], serde_json::json!(true));
     // No --provider flag: native always, Composio only when a key is set,
     // which is what lets adding a key later work on the next start.

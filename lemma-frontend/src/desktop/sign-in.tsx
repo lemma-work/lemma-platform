@@ -17,6 +17,7 @@ import {
     startHandoff,
     type PendingHandoff,
 } from "./auth-handoff";
+import { timeLeft } from "./sign-in-countdown";
 
 /** The app's side of a hosted sign-in: open the request, hand the person to
  *  their browser, wait. `auth-handoff.ts` has the whole exchange. */
@@ -24,6 +25,11 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
     const [pending, setPending] = useState<PendingHandoff | null>(null);
     const [code, setCode] = useState<string | null>(null);
     const [said, setSaid] = useState<string | null>(null);
+    /* Cancelled from this screen. The wait loop reads the ref, so pressing
+       Cancel stops the polling as well as the screen. */
+    const [stopped, setStopped] = useState(false);
+    const abandoned = useRef(false);
+    const now = useNow(pending !== null && !stopped && !said);
     /* The browser is opened once per request on its own; after that only when
        asked. A reload of this page resumes the request without a second tab. */
     const opened = useRef<string | null>(null);
@@ -45,11 +51,11 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
                 setPending(handoff);
                 setCode(await handoffCode(handoff.requestId));
                 openBrowser(handoff);
-                const outcome = await awaitSession(handoff, () => cancelled);
+                const outcome = await awaitSession(handoff, () => cancelled || abandoned.current);
                 if (outcome === "signed-in") window.location.replace(landing(window.location.search));
             } catch (problem) {
                 dropPending();
-                if (!cancelled) setSaid(problem instanceof Error ? problem.message : "Sign-in could not be finished.");
+                if (!cancelled && !abandoned.current) setSaid(problem instanceof Error ? problem.message : "Sign-in could not be finished.");
             }
         })();
         return () => {
@@ -57,6 +63,32 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
         };
         // One request per mount; `mode` does not change under a mounted screen.
     }, []);
+
+    const cancel = () => {
+        abandoned.current = true;
+        dropPending();
+        setStopped(true);
+    };
+
+    /* Back to the choice this screen skipped. The browser tab it opened may
+       still be sitting there; the request behind it is dropped here, so
+       finishing in that tab signs nothing in. Using Lemma on this computer
+       instead is the app's Connection menu -- this page is the hosted site,
+       and cannot switch the app for itself. */
+    if (stopped) {
+        return (
+            <Screen
+                title="Sign-in cancelled"
+                lead="Nothing was signed in. Start again when you are ready."
+                footer="To use Lemma on this computer instead of Lemma Cloud, choose Lemma → Connection… in the menu bar."
+            >
+                <div className="screen__actions">
+                    <a className="btn btn--primary" href={PORTAL_PATH}>Sign in with your browser</a>
+                    <a className="btn" href={PORTAL_PATH + "/signup"}>Create an account</a>
+                </div>
+            </Screen>
+        );
+    }
 
     if (said) {
         return (
@@ -84,13 +116,33 @@ export function DesktopSignIn({ mode }: { mode: "in" | "up" }) {
             <p className="auth__note" role="status">
                 {pending ? "Waiting for your browser…" : <LoadingIndicator inline label="Starting sign-in" />}
             </p>
+            {/* Not a live region: a clock read aloud every second is noise. */}
+            {pending && now !== null && (
+                <p className="auth__note">This sign-in request expires in {timeLeft(pending.expiresAt, now)}.</p>
+            )}
             <div className="screen__actions">
                 <button className="btn" disabled={!pending} onClick={() => pending && openBrowser(pending, true)}>
                     Open the browser again
                 </button>
+                <button className="btn" onClick={cancel}>
+                    Cancel
+                </button>
             </div>
         </Screen>
     );
+}
+
+/** The current time, once a second while `ticking`. Null until mounted, so
+ *  the server render and the first client render agree. */
+function useNow(ticking: boolean): number | null {
+    const [now, setNow] = useState<number | null>(null);
+    useEffect(() => {
+        if (!ticking) return;
+        setNow(Date.now());
+        const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+        return () => window.clearInterval(timer);
+    }, [ticking]);
+    return now;
 }
 
 /** The account this browser is signed in as, for the confirmation to name. */

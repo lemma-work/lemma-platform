@@ -4,16 +4,19 @@ import { LoadingIndicator } from "@/ui/loading";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { EmailPassword, ThirdParty } from "./supertokens";
-import { authFailure, sayProblem, type Attempt } from "./errors";
+import { authFailure, isExistingAccount, sayProblem, type Attempt } from "./errors";
 import { PORTAL_PATH, siteOrigin } from "./config";
 import { authLink, rememberDestination, pendingDestination, destinationFrom, asksForDestination } from "./redirects";
 import { accountAccess, completeAuth, completionDestination } from "./completion";
 import { continueWithProvider } from "./provider-login";
 import { EmailCodeForm } from "./email-code-form";
+import { isLocalDeployment } from "@/site/config";
+import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import { waitingFor } from "./waiting";
 import { CharacterPuppet } from "@/shell/character-puppet";
 import { HideIcon, LemmaLogo, ShowIcon } from "@/ui/icons";
 import { GoogleMark, MicrosoftMark } from "./marks";
+import { fetchConfiguredProviders, type ProviderId } from "./login-methods";
 
 /* ── the two panes ──────────────────────────────────────────────────── */
 
@@ -286,17 +289,28 @@ function Refused() {
 
 /* ── the providers ──────────────────────────────────────────────────── */
 
-/** Google and Microsoft, which are the two the backend registers — see
+/** Google and Microsoft, which are the two the backend can register — see
  *  `build_thirdparty_providers`, where each is conditional on being
- *  configured. Nothing here can tell whether a given deployment has them, and
- *  the honest failure is the provider's own "unknown client" rather than this
- *  app guessing and hiding a working button. */
-const PROVIDERS = [
+ *  configured. Only the ones this deployment registered are drawn: it says
+ *  which through SuperTokens' `/loginmethods` (`login-methods.ts`). */
+const PROVIDERS: { id: ProviderId; name: string; Mark: typeof GoogleMark }[] = [
     { id: "google", name: "Google", Mark: GoogleMark },
     { id: "active-directory", name: "Microsoft", Mark: MicrosoftMark },
 ];
 
-function Providers({ onProblem }: { onProblem: (said: string) => void }) {
+/** The configured providers, or null until the deployment has said. Nothing
+ *  is drawn while asking, so a button never appears and then vanishes. */
+function useConfiguredProviders(): ProviderId[] | null {
+    const [configured, setConfigured] = useState<ProviderId[] | null>(null);
+    useEffect(() => {
+        let live = true;
+        void fetchConfiguredProviders().then((ids) => { if (live) setConfigured(ids); });
+        return () => { live = false; };
+    }, []);
+    return configured;
+}
+
+function Providers({ configured, onProblem }: { configured: ProviderId[]; onProblem: (said: string) => void }) {
     const [going, setGoing] = useState<string | null>(null);
 
     const leave = useCallback(async (thirdPartyId: string) => {
@@ -311,7 +325,7 @@ function Providers({ onProblem }: { onProblem: (said: string) => void }) {
 
     return (
         <div className="auth__providers">
-            {PROVIDERS.map((provider) => (
+            {PROVIDERS.filter((provider) => configured.includes(provider.id)).map((provider) => (
                 <button
                     key={provider.id}
                     className="btn auth__provider"
@@ -329,7 +343,10 @@ function Providers({ onProblem }: { onProblem: (said: string) => void }) {
 /* ── sign in and sign up ────────────────────────────────────────────── */
 
 export function SignInUp({ mode }: { mode: "in" | "up" }) {
-    const [usePassword, setUsePassword] = useState(false);
+    /* A local install sends no mail until someone sets it up, so a code it
+       emails may never arrive: a password is the way in that always works
+       there, and the code stays one click away. */
+    const [usePassword, setUsePassword] = useState(() => isLocalDeployment());
     const [existingPassword, setExistingPassword] = useState(false);
     const signingIn = mode === "in" || existingPassword;
     const attempted = useRef(false);
@@ -337,8 +354,13 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
     const [password, setPassword] = useState("");
     const [said, setSaid] = useState<string | null>(null);
     const [fields, setFields] = useState<FieldSaid>({});
+    /* Sign-up for an address that already has a password. Its own state rather
+       than a field error, because the answer is a way forward -- sign in --
+       not something to correct in what was typed. */
+    const [hasAccount, setHasAccount] = useState(false);
     const [busy, setBusy] = useState(false);
     const [authenticated, setAuthenticated] = useState(false);
+    const configured = useConfiguredProviders();
     /* Whether the cast may look. False only while the password field has the
        caret — not while it merely holds a value, because a filled password on
        a blurred form is not being typed. */
@@ -364,6 +386,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
         attempted.current = true;
         setSaid(null);
         setFields({});
+        setHasAccount(false);
         setBusy(true);
         try {
             if (authenticated) { await go(); return; }
@@ -374,7 +397,12 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
 
             if (answer.status === "OK") { setAuthenticated(true); await go(); return; }
             if (answer.status === "FIELD_ERROR") {
-                setFields(fieldErrors(answer.formFields));
+                const complaints = fieldErrors(answer.formFields);
+                if (!signingIn && isExistingAccount(complaints.email)) {
+                    delete complaints.email;
+                    setHasAccount(true);
+                }
+                setFields(complaints);
                 setBusy(false);
                 return;
             }
@@ -415,8 +443,10 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
             looking={!onPassword}
         >
             {refused && <Refused />}
-            <Providers onProblem={setSaid} />
-            <p className="auth__or"><span>or</span></p>
+            {configured && configured.length > 0 && <>
+                <Providers configured={configured} onProblem={setSaid} />
+                <p className="auth__or"><span>or</span></p>
+            </>}
             {!usePassword ? <><EmailCodeForm onAttempt={() => { attempted.current = true; }} onPassword={address => {
                 setEmail(address); setExistingPassword(true); setUsePassword(true); setSaid(null);
             }} /><Problem said={said} /></> : <form onSubmit={submit} noValidate>
@@ -427,6 +457,12 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
                     autoComplete={signingIn ? "current-password" : "new-password"}
                     onFocus={() => setOnPassword(true)} onBlur={() => setOnPassword(false)}
                     value={password} onChange={setPassword} said={fields.password} />
+                {hasAccount && <p className="auth__problem" role="alert">
+                    You already have an account with this email.{" "}
+                    <button className="linkish" type="button" onClick={() => {
+                        setHasAccount(false); setExistingPassword(true); setSaid(null);
+                    }}>Sign in</button>
+                </p>}
                 <Problem said={said} />
                 <div className="screen__actions">
                     <button className="btn btn--primary" type="submit" disabled={busy}>
@@ -436,7 +472,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
                 </div>
             </form>}
             <button className="linkish" type="button" disabled={busy} onClick={() => {
-                setUsePassword(!usePassword); setExistingPassword(false); setOnPassword(false); setSaid(null);
+                setUsePassword(!usePassword); setExistingPassword(false); setOnPassword(false); setSaid(null); setHasAccount(false);
             }}>{usePassword ? existingPassword ? "Use another email" : "Use an email code instead" : "Use a password instead"}</button>
         </Screen>
     );
@@ -502,6 +538,8 @@ function ResetAsk() {
     const [said, setSaid] = useState<string | null>(null);
     const [sent, setSent] = useState(false);
     const [busy, setBusy] = useState(false);
+    const local = isLocalDeployment();
+    const machine = capitalised(useThisComputer());
 
     const submit = useCallback(async (event: FormEvent) => {
         event.preventDefault();
@@ -541,6 +579,20 @@ function ResetAsk() {
             lead="Tell us the address on the account and we will email you a link."
             footer={<a href={authLink(PORTAL_PATH)}>Back to sign in</a>}
         >
+            {/* Lemma on somebody's own computer has no mail until they set it
+                up, and then this form can only fail. Said first, rather than
+                as the error the form comes back with. The form stays: once
+                email is set up it works, and the backend's refusal is still
+                shown if it is not. There is deliberately no way round it
+                here -- a reset that skips the mailbox is a way into anyone's
+                account for whoever can reach this page. */}
+            {local && (
+                <p className="auth__note">
+                    Lemma on your own computer sends reset links only once email is set up
+                    ({machine} → Server setup → Email). If you can’t sign in, ask someone who can
+                    to set it up, or reset the app’s data from Lemma → Recovery… in the menu bar.
+                </p>
+            )}
             <form onSubmit={submit} noValidate>
                 <Field id="email" label="Email" type="email" autoComplete="email" autoFocus value={email} onChange={setEmail} />
                 <Problem said={said} />

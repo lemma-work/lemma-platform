@@ -121,6 +121,10 @@ impl Daemon {
                 self.set_ai_profile(request, client);
                 return true;
             }
+            "config.test" => {
+                self.test_setup(request, client);
+                return true;
+            }
             // The same-site alias the macOS workspace frames a pod app
             // through. The shell only asks for the local workspace; see
             // `crate::app_alias` for why it exists at all.

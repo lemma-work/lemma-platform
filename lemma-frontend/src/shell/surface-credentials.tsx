@@ -1,33 +1,37 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { source, type Connectable, type Pod } from "@/data";
+import { createThenBind, source, type Connectable, type Pod } from "@/data";
 import { Fields } from "@/connect/fields";
 import { blank, fields, payload, problems, type Values } from "@/connect/schema";
 
+/** A credential typed here, made into an account and bound to this teammate.
+ *
+ *  A refused bind deletes the account again (`createThenBind` has why). The
+ *  values stay in the form, so trying again is one click and makes one
+ *  account. */
 export function SurfaceCredentials({ pod, entry, onDone }: { pod: Pod; entry: Connectable; onDone: () => void }) {
     const list = fields(entry.credentialSchema);
     const [values, setValues] = useState<Values>(() => blank(list));
     const [errors, setErrors] = useState<Record<string, string>>({});
-    const [accountId, setAccountId] = useState<string | null>(null);
     const connect = useMutation({
-        mutationFn: async () => {
-            // Retain the created account on a bind failure; retry must not create another account.
-            const id = accountId ?? await source.createSurfaceAccount(pod.orgId, entry, payload(list, values));
-            setAccountId(id);
+        mutationFn: () => createThenBind(
+            () => source.createSurfaceAccount(pod.orgId, entry, payload(list, values)),
+            (id) => source.connectAccount(pod.id, entry.platform, id),
+            (id) => source.disconnectAccount(pod.orgId, id),
+        ),
+        onSuccess: () => {
             setValues({});
-            return source.connectAccount(pod.id, entry.platform, id);
+            onDone();
         },
-        onSuccess: onDone,
     });
     return <form className="surface-setup" onSubmit={event => {
         event.preventDefault();
-        const next = accountId ? {} : problems(list, values);
+        const next = problems(list, values);
         setErrors(next);
         if (!Object.keys(next).length) connect.mutate();
     }}>
-        {!accountId && <Fields list={list} values={values} problems={errors} disabled={connect.isPending} onChange={(name, value) => setValues(current => ({ ...current, [name]: value }))} />}
-        {accountId && <p>Account connected. Finish attaching it to this teammate.</p>}
-        <button className="btn btn--primary" disabled={connect.isPending} type="submit">{connect.isPending ? "Connecting…" : accountId ? "Retry connection" : "Connect account"}</button>
+        <Fields list={list} values={values} problems={errors} disabled={connect.isPending} onChange={(name, value) => setValues(current => ({ ...current, [name]: value }))} />
+        <button className="btn btn--primary" disabled={connect.isPending} type="submit">{connect.isPending ? "Connecting…" : "Connect"}</button>
         {connect.isError && <p role="alert">{connect.error.message}</p>}
     </form>;
 }

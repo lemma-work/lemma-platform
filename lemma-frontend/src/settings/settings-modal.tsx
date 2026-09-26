@@ -24,6 +24,7 @@ import {
     ComputerIcon, TerminalIcon, GlobeIcon, UpgradeIcon, SettingsIcon,
 } from "@/ui/icons";
 import { ThisMacPane, isThisMacSection, useThisMacAvailability, type ThisMacSection } from "@/desktop/this-mac-settings";
+import { useServerSetupNeeds } from "@/desktop/this-mac-setup";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
 
 /** One door for everything that is not a teammate.
@@ -77,14 +78,14 @@ function thisMacEntries(noun: string): Entry[] {
     return [
         { key: "this-mac", label: "Overview", icon: ComputerIcon, title: noun,
             blurb: "Whether Lemma is running here, and how it starts." },
+        { key: "this-mac-setup", label: "Server setup", icon: SettingsIcon, title: "Server setup",
+            blurb: `What the Lemma server on ${noun.toLowerCase()} can do, and the keys it needs to do it.` },
         { key: "this-mac-agents", label: "Coding agents", icon: TerminalIcon, title: "Coding agents",
             blurb: `What runs on ${noun.toLowerCase()} for your teammates.` },
         { key: "this-mac-sharing", label: "Sharing", icon: GlobeIcon, title: "Sharing",
             blurb: "Who can reach this Lemma, and who can make an account on it." },
         { key: "this-mac-updates", label: "Updates", icon: UpgradeIcon, title: "Updates",
             blurb: "Which Lemma this is, and whether there is a newer one." },
-        { key: "this-mac-advanced", label: "Advanced", icon: SettingsIcon, title: "Advanced",
-            blurb: "Your own OAuth apps and bots, diagnostics, and install health." },
     ];
 }
 
@@ -119,10 +120,15 @@ export function SettingsModal({
     const noun = capitalised(useThisComputer());
     const thisMacAvailability = useThisMacAvailability();
     const machine = thisMacAvailability === "hidden" ? [] : thisMacEntries(noun);
+    const setupNeeds = useServerSetupNeeds();
+    /* Advanced became the last part of Server setup; a link to it opens
+       Server setup there, or at the form it named. */
+    const opening: SettingsSection = initial === "this-mac-advanced" ? "this-mac-setup" : initial;
+    const openingFocus = initial === "this-mac-advanced" ? (initialFocus ?? "advanced") : initialFocus;
     /* A This Mac section is kept while the installation is still answering
        whether you own it, so the menu's ⌘, lands where it asked. */
     const [requested, setSection] = useState<SettingsSection>(
-        [...yours, ...theirs].some((entry) => entry.key === initial) || isThisMacSection(initial) ? initial : "account",
+        [...yours, ...theirs].some((entry) => entry.key === opening) || isThisMacSection(opening) ? opening : "account",
     );
     const section: SettingsSection = isThisMacSection(requested) && thisMacAvailability === "hidden" ? "account" : requested;
     const session = useSession();
@@ -143,10 +149,12 @@ export function SettingsModal({
     const here = [...yours, ...theirs, ...thisMacEntries(noun)].find((entry) => entry.key === section) ?? yours[0];
 
     function nav(entry: Entry) {
+        const needs = entry.key === "this-mac-setup" && setupNeeds.length > 0;
         return (
             <button key={entry.key} aria-current={section === entry.key} onClick={() => setSection(entry.key)}>
                 <entry.icon size={17} />
                 {entry.label}
+                {needs && <span className="settings-nav__dot" role="img" aria-label="Needs setup" title="Needs setup" />}
             </button>
         );
     }
@@ -177,7 +185,11 @@ export function SettingsModal({
                             )}
                             {machine.length > 0 && (
                                 <optgroup label={noun}>
-                                    {machine.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+                                    {machine.map((entry) => (
+                                        <option key={entry.key} value={entry.key}>
+                                            {entry.label}{entry.key === "this-mac-setup" && setupNeeds.length ? " · needs setup" : ""}
+                                        </option>
+                                    ))}
                                 </optgroup>
                             )}
                         </select>
@@ -287,7 +299,7 @@ export function SettingsModal({
                         {org && section === "models" && <ModelsSection orgId={org.id} />}
                         {org && section === "org-usage" && <OrgUsageSection orgId={org.id} />}
                         {org && section === "team-billing" && <TeamBillingSection orgId={org.id} />}
-                        {isThisMacSection(section) && <ThisMacPane section={section} focus={section === initial ? initialFocus : null} />}
+                        {isThisMacSection(section) && <ThisMacPane section={section} focus={section === opening ? openingFocus : null} />}
                     </div>
                 </div>
             </div>

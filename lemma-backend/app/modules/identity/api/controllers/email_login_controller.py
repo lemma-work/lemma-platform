@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 
 from app.core.api.dependencies import get_uow_factory
 from app.core.config import settings
+from app.core.email.email_sender import email_delivery_state
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.identity.contracts.onboarding import email_challenge_service
@@ -44,6 +45,11 @@ from app.modules.identity.services.email_challenges import (
 from app.modules.identity.services.verified_accounts import complete_verified_account
 
 logger = get_logger(__name__)
+
+EMAIL_CODE_NOT_CONFIGURED_MESSAGE = (
+    "Email isn't set up on this Lemma, so a sign-in code can't be sent. "
+    "Use a password instead."
+)
 
 router = APIRouter(prefix="/auth/email-code", tags=["Auth"], include_in_schema=False)
 _COOKIE = "lemma_email_login_nonce"
@@ -309,6 +315,14 @@ async def _method_for(
             # correcting a typo. If a live challenge really is still in the way,
             # `start_challenge` refuses next and says it in words they can act on.
             logger.info("identity.email_login.abandon_ignored")
+    # Before a challenge is minted, so nobody is left waiting for a code that
+    # has nowhere to go -- a Lemma Desktop nobody has set email up on. The
+    # answer is the same for every address that reaches here, so it says
+    # nothing about accounts.
+    if email_delivery_state() == "not_configured":
+        raise ChallengeRejected(
+            EMAIL_CODE_NOT_CONFIGURED_MESSAGE, code="EMAIL_NOT_CONFIGURED"
+        )
     receipt = await challenges.start_challenge(
         email=email,
         binding=binding,

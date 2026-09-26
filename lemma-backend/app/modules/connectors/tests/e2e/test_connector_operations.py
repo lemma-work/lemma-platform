@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 
 sys.path.append(str(Path(__file__).resolve().parents[5]))
 
+from app.core.config import reveal_secret
 from app.modules.connectors.config import connector_settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.account import OAuthCredentials
@@ -187,13 +188,13 @@ async def _seed_real_google_calendar_account(db_session, *, user_id) -> str:
         pytest.skip(
             f"Real Google Calendar e2e requires {TEST_GOOGLE_CALENDAR_COMPOSIO_ACCOUNT_ID_ENV}."
         )
-    if not connector_settings.composio_api_key:
+    if not reveal_secret(connector_settings.composio_api_key):
         pytest.skip("Real Google Calendar e2e requires COMPOSIO_API_KEY.")
 
     try:
-        Composio(api_key=connector_settings.composio_api_key).connected_accounts.get(
-            connection_id
-        )
+        Composio(
+            api_key=reveal_secret(connector_settings.composio_api_key)
+        ).connected_accounts.get(connection_id)
     except Exception as exc:
         pytest.skip(
             "Real Google Calendar e2e requires a live Composio connected account; "

@@ -41,6 +41,7 @@ from app.modules.identity.services.email_policy import (
 )
 from app.modules.identity.services.signup_gate import get_signup_gate
 from app.core.config import settings
+from app.core.email.email_sender import EmailDeliveryState, email_delivery_state
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import func, select
@@ -63,6 +64,11 @@ AdmitSignup = Callable[[str, str | None], Awaitable[object]]
 #: The invitation a sign-up presents, from the link the invitee was sent.
 INVITATION_HEADER = "x-lemma-invitation"
 
+PASSWORD_RESET_NOT_CONFIGURED_MESSAGE = (
+    "Email isn't set up on this Lemma, so a password reset link can't be sent. "
+    "Ask whoever runs it to set up email."
+)
+
 
 async def _admit_signup(email: str, invitation_id: str | None) -> object:
     # A password sign-up proves the address only if verification is required
@@ -79,6 +85,7 @@ def override_emailpassword_apis(
     *,
     find_users: UserLookup = list_users_by_email,
     admit_signup: AdmitSignup = _admit_signup,
+    delivery_state: Callable[[], EmailDeliveryState] = email_delivery_state,
 ) -> APIInterface:
     original_sign_in_post = original_implementation.sign_in_post
     original_sign_up_post = original_implementation.sign_up_post
@@ -196,14 +203,20 @@ def override_emailpassword_apis(
         if has_passwordless_login_method(users, email):
             return SignUpPostNotAllowedResponse(get_passwordless_conflict_reason())
 
-        if not has_emailpassword_login_method(users, email):
-            conflicting_thirdparty_id = get_conflicting_thirdparty_id(
-                users, email=email
+        # Somebody who already has a password here is told to sign in, before
+        # the signup mode is asked about a new account nobody is making. Left
+        # to the gate, an invite-only installation told its own members to go
+        # and find an invitation. This is the answer the recipe gives in open
+        # mode, and `/auth/email-code/continue` already names a password
+        # account for any address, so no mode learns more than it did.
+        if has_emailpassword_login_method(users, email):
+            return EmailAlreadyExistsError()
+
+        conflicting_thirdparty_id = get_conflicting_thirdparty_id(users, email=email)
+        if conflicting_thirdparty_id is not None:
+            return SignUpPostNotAllowedResponse(
+                get_thirdparty_conflict_reason(conflicting_thirdparty_id)
             )
-            if conflicting_thirdparty_id is not None:
-                return SignUpPostNotAllowedResponse(
-                    get_thirdparty_conflict_reason(conflicting_thirdparty_id)
-                )
 
         # Last, after the checks that refuse on the address alone: a malformed
         # or conflicting address is answered with its own reason rather than
@@ -252,6 +265,11 @@ def override_emailpassword_apis(
         This one is disclosure we have already chosen to make everywhere else,
         so it has to arrive as something the person actually reads.
         """
+        # Before the address is looked at, so the answer is the same for every
+        # address and says nothing about which ones have accounts. Without it
+        # the page promises a link that the sender then fails to send.
+        if delivery_state() == "not_configured":
+            return GeneralErrorResponse(PASSWORD_RESET_NOT_CONFIGURED_MESSAGE)
         try:
             email = _normalize_form_email(form_fields)
         except ValueError:

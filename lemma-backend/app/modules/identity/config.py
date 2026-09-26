@@ -175,15 +175,14 @@ class IdentitySettings(BaseSettings):
     # shared by a developer's `make dev` stack, the load-test compose file and
     # Lemma Desktop, and only one of those is a single person's computer that a
     # tunnel may put on the internet. What follows from "this is somebody's own
-    # installation" -- the invite-only signup default -- keys off this, so a
-    # dev stack that creates a hundred users per test run is not suddenly
-    # refusing the second one.
+    # installation" -- host execution and the loopback sandbox policy -- keys
+    # off this rather than off ENVIRONMENT.
     deployment_kind: Literal["server", "desktop"] = Field(
         default="server",
         description=(
             "``desktop`` for a Lemma Desktop installation, ``server`` for hosted "
-            "and self-hosted deployments. Desktop defaults SIGNUP_MODE to "
-            "invite_only. Set by the Desktop host pack; nothing else needs to. "
+            "and self-hosted deployments. Set by the Desktop host pack; nothing "
+            "else needs to. "
             "Env: ``DEPLOYMENT_KIND``."
         ),
     )
@@ -194,8 +193,9 @@ class IdentitySettings(BaseSettings):
             "page. ``invite_only``: only an address holding a pending "
             "organization invitation. ``closed``: nobody. Applies to every path "
             "that creates a user -- email/password, OAuth, and email-code "
-            "sign-in. Unset means ``invite_only`` on a Desktop installation and "
-            "``open`` everywhere else. Whatever the mode, the first account on a "
+            "sign-in. Unset means ``open``; Desktop sets it only while the "
+            "installation is shared, from its Who can join choice. Whatever "
+            "the mode, the first account on a "
             "deployment with no accounts at all is admitted, because there is "
             "nobody yet who could have invited it. Env: ``SIGNUP_MODE``."
         ),
@@ -205,9 +205,10 @@ class IdentitySettings(BaseSettings):
         return self.deployment_kind == "desktop"
 
     def effective_signup_mode(self) -> Literal["open", "invite_only", "closed"]:
-        if self.signup_mode is not None:
-            return self.signup_mode
-        return "invite_only" if self.is_desktop_installation() else "open"
+        # Unset is open on Desktop too: until sharing is on, only the person at
+        # this Mac can reach the sign-up page, so there is nobody to keep out.
+        # Sharing always sets SIGNUP_MODE from its Who can join choice.
+        return self.signup_mode or "open"
 
     # datastore query/document-processing/kreuzberg/pdf/signed-url config moved to
     # app/modules/datastore/config.py (datastore_database_url stays here — infra).

@@ -1,7 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import type { SurfaceSetupAction, SurfaceSetupActionField } from "lemma-sdk";
-import { source } from "@/data";
 import { copyText } from "@/desktop/clipboard";
 
 export function SetupField({ field }: { field: SurfaceSetupActionField }) {
@@ -29,20 +27,4 @@ export function SetupActions({ actions }: { actions: SurfaceSetupAction[] }) {
         {action.fields?.map((field, index) => <SetupField key={index} field={field} />)}
         {action.link && <a className="btn" href={action.link} target="_blank" rel="noreferrer">{action.link_label || "Open dashboard"}</a>}
     </section>)}</>;
-}
-
-export function SurfaceGuide({ podId, platform }: { podId: string; platform: string }) {
-    const guide = useQuery({ queryKey: ["surface-guide", podId, platform], queryFn: () => source.surfaceGuide(podId, platform) });
-    return <div className="surface-setup">
-        {guide.isPending && <p role="status">Loading setup instructions…</p>}
-        {guide.isError && <button className="btn" onClick={() => void guide.refetch()}>Retry setup instructions</button>}
-        {guide.data && <details><summary>Setup instructions</summary>
-            <p>{guide.data.summary}</p>
-            {guide.data.connectors?.map((connector, index) => <section key={index}>
-                <h4>{connector.title}</h4><p>{connector.summary}</p>
-                <ol>{connector.steps?.map((step, at) => <li key={at}><b>{step.title}</b> — {step.description}</li>)}</ol>
-                {connector.notes?.map((note, at) => <p key={at}>{note}</p>)}
-            </section>)}
-        </details>}
-    </div>;
 }

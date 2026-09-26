@@ -5278,6 +5278,8 @@ button.filecard__open {
    same line carries the refusal, so nothing moves when one replaces the other. */
 .invite__hint { margin: 7px 0 0; font-size: 12px; color: var(--ink-3); min-height: 1.4em; }
 .invite__hint[data-bad="true"] { color: var(--bad); }
+.invite__unsent { display: grid; gap: 6px; margin-top: 8px; justify-items: start; }
+.invite__unsent .invite__row { width: 100%; }
 
 
 

@@ -14,6 +14,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from app.core.domain.errors import DomainError
+from app.modules.agent.services.runtime_system_profiles import (
+    is_model_not_configured,
+)
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.modules.agent.services.vision_service import (
     MAX_IMAGES_PER_CALL,
@@ -58,6 +62,17 @@ async def describe_single_image(
         return ViewImageResponse(
             success=False,
             error=f"{exc} {_NO_VISION_SUFFIX}",
+            file_path=file_path,
+            media_type=media_type,
+            source=source,
+            size_bytes=len(data),
+        )
+    except DomainError as exc:
+        if not is_model_not_configured(exc):
+            raise
+        return ViewImageResponse(
+            success=False,
+            error=f"{exc.message} {_NO_VISION_SUFFIX}",
             file_path=file_path,
             media_type=media_type,
             source=source,
@@ -114,15 +129,15 @@ async def describe_document_pages(
                 user_id=deps.user_id,
             )
         except VisionUnavailableError as exc:
-            return {
-                "success": False,
-                "path": path,
-                "error": (
-                    f"{exc} This agent's model cannot read images, so PDF pages "
-                    "cannot be viewed. Use `pod_read_file` to read the page "
-                    "text instead."
-                ),
-            }
+            return _pages_unavailable(path, str(exc))
+        except DomainError as exc:
+            # "No model is set up at all" is the same situation from the
+            # agent's side -- nothing can look at the page -- and a 503
+            # escaping here failed the tool call instead of steering the agent
+            # to the text.
+            if not is_model_not_configured(exc):
+                raise
+            return _pages_unavailable(path, exc.message)
         except VisionDescriptionError as exc:
             return {"success": False, "path": path, "error": safe_error_text(exc)}
         descriptions.append(
@@ -138,4 +153,16 @@ async def describe_document_pages(
         "pages": page_refs,
         "viewed_by": "vision_model",
         "descriptions": descriptions,
+    }
+
+
+def _pages_unavailable(path: str, reason: str) -> dict[str, object]:
+    return {
+        "success": False,
+        "path": path,
+        "error": (
+            f"{reason} This agent's model cannot read images, so PDF pages "
+            "cannot be viewed. Use `pod_read_file` to read the page "
+            "text instead."
+        ),
     }

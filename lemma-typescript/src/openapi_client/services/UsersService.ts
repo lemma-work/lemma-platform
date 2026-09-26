@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { EmailDeliveryStatusResponse } from '../models/EmailDeliveryStatusResponse.js';
+import type { EmailDeliveryTestResponse } from '../models/EmailDeliveryTestResponse.js';
 import type { FirstWorkspaceRequest } from '../models/FirstWorkspaceRequest.js';
 import type { FirstWorkspaceResponse } from '../models/FirstWorkspaceResponse.js';
 import type { UserProfileRequest } from '../models/UserProfileRequest.js';
@@ -20,6 +22,33 @@ export class UsersService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/users/me',
+        });
+    }
+    /**
+     * Get Email Delivery Status
+     * Whether this local installation can send email. Local installations only; 404 elsewhere.
+     * @returns EmailDeliveryStatusResponse Successful Response
+     * @throws ApiError
+     */
+    public static userEmailDeliveryGet(): CancelablePromise<EmailDeliveryStatusResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/users/me/email-delivery',
+        });
+    }
+    /**
+     * Send A Test Email
+     * Send a short test email to the signed-in user's own address with this installation's email settings. Local installations only; 404 elsewhere.
+     * @returns EmailDeliveryTestResponse Successful Response
+     * @throws ApiError
+     */
+    public static userEmailDeliveryTest(): CancelablePromise<EmailDeliveryTestResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/users/me/email-delivery/test',
+            errors: {
+                429: `Too many test emails; see Retry-After`,
+            },
         });
     }
     /**

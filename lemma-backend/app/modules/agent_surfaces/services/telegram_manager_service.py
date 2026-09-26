@@ -11,6 +11,7 @@ from uuid import UUID
 
 from redis.exceptions import RedisError
 
+from app.core.config import reveal_secret
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.request_context import create_background_task
 from app.modules.agent_surfaces.config import surface_settings
@@ -67,7 +68,7 @@ class TelegramManagerService:
         self._manager_token = (
             manager_token
             if manager_token is not None
-            else surface_settings.telegram_manager_bot_token
+            else reveal_secret(surface_settings.telegram_manager_bot_token)
         )
         raw_username = (
             manager_username

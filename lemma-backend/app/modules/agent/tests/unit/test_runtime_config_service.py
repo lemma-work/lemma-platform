@@ -1032,7 +1032,7 @@ async def test_create_provider_profile_requires_discovery_or_model_names(monkeyp
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
 
-    with pytest.raises(ValueError, match="provide model_names"):
+    with pytest.raises(ValueError, match="type a model name below"):
         await service.create_openai_compatible_profile(
             organization_id=uuid4(),
             name="Unknown provider",

@@ -49,7 +49,9 @@ from app.modules.agent.services.runtime_profile_creation import (
 )
 from app.modules.agent.services.runtime_system_profiles import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID as DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
+    SERVER_NO_MODEL_OPERATOR_HINT,
     SYSTEM_LEMMA_PROFILE_ID as SYSTEM_LEMMA_PROFILE_ID,
+    model_not_configured_error,
     system_lemma_profile,
     system_profile_by_id,
 )
@@ -336,13 +338,14 @@ class AgentRuntimeProfileService:
         )
         if profile is None:
             if profile_id == SYSTEM_LEMMA_PROFILE_ID:
-                raise DomainError(
-                    "No LLM model is configured on this server. "
-                    "Set LEMMA_OPENAI_API_KEY (plus LEMMA_OPENAI_BASE_URL if not OpenAI) "
-                    "or LEMMA_ANTHROPIC_API_KEY with LEMMA_DEFAULT_MODEL_TYPE=anthropic_compat.",
-                    code="model_not_configured",
-                    status_code=503,
+                # The environment variables that would fix this, for the
+                # operator; the person whose run failed is told where models
+                # are added instead.
+                logger.info(
+                    "agent.runtime_profile.model_not_configured.observed",
+                    operator_hint=SERVER_NO_MODEL_OPERATOR_HINT,
                 )
+                raise model_not_configured_error()
             archived = await self._archived_profile(
                 profile_id=profile_id,
                 organization_id=organization_id,
@@ -353,8 +356,8 @@ class AgentRuntimeProfileService:
                 # and pod defaults still pinned to this profile must say what
                 # happened instead of surfacing an opaque 500.
                 raise DomainError(
-                    f"The model {archived.name!r} was removed from this workspace. "
-                    "Pick another one, or restore it in Models settings.",
+                    f"{archived.name} was retired. Pick another model for this "
+                    "teammate, or bring it back in Settings \u2192 Models.",
                     code="runtime_profile_archived",
                     status_code=409,
                 )

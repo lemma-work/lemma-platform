@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::redirect::Policy;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::operator_config::AiProfile;
 
@@ -12,71 +12,28 @@ const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 pub(crate) trait ModelProviderProbe: Send + Sync {
     fn discover(&self, profile: &AiProfile, api_key: Option<&str>) -> io::Result<Vec<String>>;
+
+    /// Ask `model` for one tiny answer. Listing models proves the key opens
+    /// the door; this proves the model behind it actually answers.
+    fn complete(&self, profile: &AiProfile, api_key: Option<&str>, model: &str) -> io::Result<()> {
+        let _ = (profile, api_key, model);
+        Err(io::Error::other(
+            "this provider probe cannot send a test message",
+        ))
+    }
 }
 
 pub(crate) struct HttpModelProviderProbe;
 
 impl ModelProviderProbe for HttpModelProviderProbe {
     fn discover(&self, profile: &AiProfile, api_key: Option<&str>) -> io::Result<Vec<String>> {
-        let mut url = reqwest::Url::parse(&profile.base_url)
-            .map_err(|error| invalid(format!("invalid AI provider URL: {error}")))?;
-        validate_url(&url, profile.allow_private_network)?;
-        let authority = resolve_and_validate(&url, profile.allow_private_network)?;
-        {
-            let mut segments = url
-                .path_segments_mut()
-                .map_err(|_| invalid("AI provider URL cannot be a base URL"))?;
-            segments.pop_if_empty();
-            segments.push("models");
-        }
-
-        let host = url
-            .host_str()
-            .ok_or_else(|| invalid("AI provider URL is missing a host"))?
-            .to_owned();
-        let mut client = Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(8))
-            .redirect(Policy::none())
-            .no_proxy();
-        if host.parse::<IpAddr>().is_err() {
-            client = client.resolve(&host, authority);
-        }
-        let client = client
-            .build()
-            .map_err(|error| io::Error::other(format!("provider HTTP client failed: {error}")))?;
+        let (client, url) = provider_client(profile, &["models"], Duration::from_secs(8))?;
         let request = authenticated_request(client.get(url), &profile.protocol, api_key)?;
-        let response = request
-            .header("Accept", "application/json")
-            .header("User-Agent", "Lemma-Local-Provider-Validation/1")
-            .send()
-            .map_err(redacted_request_error)?;
-        let status = response.status();
-        if !status.is_success() {
-            let message = match status.as_u16() {
-                401 | 403 => "provider rejected the credential",
-                404 => "provider does not expose a compatible model-list endpoint",
-                429 => "provider rate limit or quota blocked validation",
-                _ if status.is_redirection() => {
-                    "provider redirected validation; redirects are disabled"
-                }
-                _ => "provider model-list request failed",
-            };
-            return Err(io::Error::other(format!(
-                "{message} (HTTP {})",
-                status.as_u16()
-            )));
-        }
-
-        let mut limited = response.take(MAX_RESPONSE_BYTES + 1);
-        let mut body = Vec::new();
-        limited.read_to_end(&mut body)?;
-        if body.len() as u64 > MAX_RESPONSE_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "provider response exceeded 1 MiB",
-            ));
-        }
+        let body = send_bounded(
+            request.header("Accept", "application/json"),
+            "provider model-list request failed",
+            "provider does not expose a compatible model-list endpoint",
+        )?;
         let payload: Value = serde_json::from_slice(&body).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidData, "provider returned invalid JSON")
         })?;
@@ -105,6 +62,126 @@ impl ModelProviderProbe for HttpModelProviderProbe {
         }
         Ok(models)
     }
+
+    fn complete(&self, profile: &AiProfile, api_key: Option<&str>, model: &str) -> io::Result<()> {
+        // A local model may still be loading into memory on its first request,
+        // so this waits far longer than the model list does.
+        let timeout = Duration::from_secs(45);
+        let (path, body) = match profile.protocol.as_str() {
+            "anthropic_compat" => (
+                "messages",
+                json!({
+                    "model": model,
+                    "max_tokens": 8,
+                    "messages": [{"role": "user", "content": COMPLETION_PROMPT}],
+                }),
+            ),
+            _ => (
+                "chat/completions",
+                json!({
+                    "model": model,
+                    "max_tokens": 8,
+                    "messages": [{"role": "user", "content": COMPLETION_PROMPT}],
+                }),
+            ),
+        };
+        let segments: Vec<&str> = path.split('/').collect();
+        let (client, url) = provider_client(profile, &segments, timeout)?;
+        let request = authenticated_request(client.post(url), &profile.protocol, api_key)?;
+        let body = send_bounded(
+            request.header("Accept", "application/json").json(&body),
+            "the model did not answer a test message",
+            "provider does not expose a compatible chat endpoint",
+        )?;
+        let payload: Value = serde_json::from_slice(&body).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "provider returned invalid JSON")
+        })?;
+        let answered = payload
+            .pointer("/choices/0/message")
+            .or_else(|| payload.pointer("/content/0"))
+            .is_some();
+        if !answered {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the model's answer to a test message was empty",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Small enough to cost nothing, and answerable by any chat model.
+const COMPLETION_PROMPT: &str = "Reply with the single word OK.";
+
+/// A client pinned to the validated address, and the URL under the provider's
+/// base with `segments` appended.
+fn provider_client(
+    profile: &AiProfile,
+    segments: &[&str],
+    timeout: Duration,
+) -> io::Result<(Client, reqwest::Url)> {
+    let mut url = reqwest::Url::parse(&profile.base_url)
+        .map_err(|error| invalid(format!("invalid AI provider URL: {error}")))?;
+    validate_url(&url, profile.allow_private_network)?;
+    let authority = resolve_and_validate(&url, profile.allow_private_network)?;
+    {
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|_| invalid("AI provider URL cannot be a base URL"))?;
+        path.pop_if_empty();
+        path.extend(segments);
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| invalid("AI provider URL is missing a host"))?
+        .to_owned();
+    let mut client = Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(timeout)
+        .redirect(Policy::none())
+        .no_proxy();
+    if host.parse::<IpAddr>().is_err() {
+        client = client.resolve(&host, authority);
+    }
+    let client = client
+        .build()
+        .map_err(|error| io::Error::other(format!("provider HTTP client failed: {error}")))?;
+    Ok((client, url))
+}
+
+/// Send, map a refusal to words a person can act on, and read at most
+/// `MAX_RESPONSE_BYTES` of the answer.
+fn send_bounded(request: RequestBuilder, failed: &str, not_found: &str) -> io::Result<Vec<u8>> {
+    let response = request
+        .header("User-Agent", "Lemma-Local-Provider-Validation/1")
+        .send()
+        .map_err(redacted_request_error)?;
+    let status = response.status();
+    if !status.is_success() {
+        let message = match status.as_u16() {
+            401 | 403 => "provider rejected the credential",
+            404 => not_found,
+            429 => "provider rate limit or quota blocked validation",
+            _ if status.is_redirection() => {
+                "provider redirected validation; redirects are disabled"
+            }
+            _ => failed,
+        };
+        return Err(io::Error::other(format!(
+            "{message} (HTTP {})",
+            status.as_u16()
+        )));
+    }
+    let mut limited = response.take(MAX_RESPONSE_BYTES + 1);
+    let mut body = Vec::new();
+    limited.read_to_end(&mut body)?;
+    if body.len() as u64 > MAX_RESPONSE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "provider response exceeded 1 MiB",
+        ));
+    }
+    Ok(body)
 }
 
 fn authenticated_request(
@@ -281,5 +358,39 @@ mod tests {
             vec!["alpha", "zeta"]
         );
         crate::join_within(server, "the probe's stand-in provider");
+    }
+
+    #[test]
+    fn a_test_message_goes_to_the_chat_endpoint_with_the_chosen_model() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let count = stream.read(&mut request).unwrap();
+            let body = r#"{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+            String::from_utf8_lossy(&request[..count]).into_owned()
+        });
+        let profile = AiProfile {
+            protocol: "openai_compat".into(),
+            base_url: format!("http://{address}/v1"),
+            ..Default::default()
+        };
+        HttpModelProviderProbe
+            .complete(&profile, Some("key-1"), "alpha")
+            .unwrap();
+        let request = crate::join_within(server, "the probe's stand-in provider");
+        assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
+        assert!(request.contains("\"model\":\"alpha\""));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer key-1"));
     }
 }

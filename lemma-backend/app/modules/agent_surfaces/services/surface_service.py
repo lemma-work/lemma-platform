@@ -4,9 +4,12 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 
-from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.platforms.common import (
     public_https_api_url_available,
+    receives_without_public_link,
+)
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    get_platform_capabilities,
 )
 from app.modules.agent_surfaces.platforms.telegram.mode import (
     telegram_requires_webhook_setup,
@@ -488,34 +491,25 @@ class AgentSurfaceService(
 
     def _validate_runtime_supported(self, surface: AgentSurfaceEntity) -> None:
         # No exemption for email any more: Resend receives over a webhook like
-        # everything else. The polled mailboxes were the only surfaces that
-        # needed no public URL.
+        # everything else, unless polling mode pulls it instead.
         if public_https_api_url_available():
             return
-        if (
-            surface.surface_type is SurfacePlatform.TELEGRAM
-            and surface_settings.enable_telegram_polling_mode
-        ):
+        if receives_without_public_link(surface.surface_type):
             return
-        if (
-            surface.surface_type is SurfacePlatform.SLACK
-            and surface_settings.enable_slack_socket_mode
-        ):
-            return
-        if (
-            surface.surface_type is SurfacePlatform.RESEND
-            and surface_settings.enable_resend_polling_mode
-        ):
-            # Resend sends outbound over its API and, in polling mode, pulls
-            # inbound from its received-emails API — neither needs a public
-            # callback, so a localhost/desktop runtime can run an email surface.
-            return
+        # The message is the API response, so it says what to do in the
+        # product's terms. Which setting enables a pull receiver is operator
+        # knowledge and lives in `receives_without_public_link`; the code
+        # AGENT_SURFACE_RUNTIME_UNSUPPORTED is what logs and tooling key on.
+        capabilities = get_platform_capabilities(surface.surface_type.value)
+        name = (
+            capabilities.display_name
+            if capabilities is not None
+            else surface.surface_type.value.title()
+        )
         raise AgentSurfaceRuntimeUnsupportedError(
-            f"{surface.surface_type.value} surfaces require a public HTTPS API URL "
-            "for webhook delivery in this runtime. Only Telegram polling "
-            "(ENABLE_TELEGRAM_POLLING_MODE), Slack Socket Mode "
-            "(ENABLE_SLACK_SOCKET_MODE), and Resend polling "
-            "(ENABLE_RESEND_POLLING_MODE) work without a public webhook URL."
+            f"{name} needs a public link to deliver messages to, and this "
+            "server doesn't have one. Turn on public sharing first, or pick a "
+            "channel that works without one."
         )
 
     async def _ensure_identity_is_claimable(

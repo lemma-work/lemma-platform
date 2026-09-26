@@ -39,6 +39,7 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
         model_names (list[str] | Unset):
         model_settings (CreateOpenAICompatibleRuntimeProfileRequestModelSettings | Unset):
         source (Literal['OPENAI_COMPATIBLE'] | Unset):  Default: 'OPENAI_COMPATIBLE'.
+        vision_model_names (list[str] | Unset):
     """
 
     base_url: str
@@ -52,6 +53,7 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
         UNSET
     )
     source: Literal["OPENAI_COMPATIBLE"] | Unset = "OPENAI_COMPATIBLE"
+    vision_model_names: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -91,6 +93,10 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
 
         source = self.source
 
+        vision_model_names: list[str] | Unset = UNSET
+        if not isinstance(self.vision_model_names, Unset):
+            vision_model_names = self.vision_model_names
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -113,6 +119,8 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
             field_dict["model_settings"] = model_settings
         if source is not UNSET:
             field_dict["source"] = source
+        if vision_model_names is not UNSET:
+            field_dict["vision_model_names"] = vision_model_names
 
         return field_dict
 
@@ -187,6 +195,8 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
                 f"source must match const 'OPENAI_COMPATIBLE', got '{source}'"
             )
 
+        vision_model_names = cast(list[str], d.pop("vision_model_names", UNSET))
+
         create_open_ai_compatible_runtime_profile_request = cls(
             base_url=base_url,
             name=name,
@@ -197,6 +207,7 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
             model_names=model_names,
             model_settings=model_settings,
             source=source,
+            vision_model_names=vision_model_names,
         )
 
         create_open_ai_compatible_runtime_profile_request.additional_properties = d

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canOpenToDomain, domainOf, personalNameFor, teamNameFor } from "../src/org/arrival.ts";
+import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, personalNameFor, teamNameFor } from "../src/org/arrival.ts";
 
 test("a domain is read off the address, lowercased", () => {
     assert.equal(domainOf("Alice@Acme.COM"), "acme.com");
@@ -56,4 +56,17 @@ test("a personal workspace takes the person's first name, or no name at all", ()
     // offered somebody "deepakjha0196+99's Personal".
     assert.equal(personalNameFor(""), "Personal");
     assert.equal(personalNameFor(null), "Personal");
+});
+
+test("the heading says invited only for a real invitation", () => {
+    assert.equal(arrivalHeading(1, 0), "You’ve been invited");
+    assert.equal(arrivalHeading(1, 2), "You’ve been invited");
+    assert.equal(arrivalHeading(0, 1), "Your team is already here");
+    assert.equal(arrivalHeading(0, 0), "Who will you be working with?");
+});
+
+test("a local install preselects just me, whatever the domain", () => {
+    assert.equal(defaultOrgKind("alice@acme.com", true), "personal");
+    assert.equal(defaultOrgKind("alice@acme.com", false), "team");
+    assert.equal(defaultOrgKind("alice@gmail.com", false), "personal");
 });

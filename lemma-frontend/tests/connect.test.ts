@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { REDACTED, blank, fields, isSecretName, payload, problems, unchangedSecret } from "../src/connect/schema.ts";
 import {
     canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName,
-    connectorProblem, installSchema, isBringYourOwn, isTenantConfigured, kindFor, kindNamed, needsOwnApp, primaryKind, urlRefusal,
+    connectorProblem, installSchema, isBringYourOwn, isTenantConfigured, kindFor, kindNamed, needsOwnApp, oauthAppMissing, primaryKind, urlRefusal,
     type CatalogEntry, type ConnectorKind,
 } from "../src/connect/install.ts";
 
@@ -267,4 +267,10 @@ test("the role refusal is said as the role it is", () => {
     // Everything else passes through, and a blank failure gets the fallback.
     assert.equal(connectorProblem(new Error("Invalid bot token"), "x"), "Invalid bot token");
     assert.equal(connectorProblem(null, "Could not connect."), "Could not connect.");
+});
+
+test("a missing OAuth app is recognised from the backend's words", () => {
+    assert.equal(oauthAppMissing("GitHub needs an OAuth app before anyone can sign in to it."), true);
+    assert.equal(oauthAppMissing("Invalid bot token"), false);
+    assert.equal(oauthAppMissing(null), false);
 });

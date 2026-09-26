@@ -29,6 +29,12 @@ const commandCalls = (page, names) => page.evaluate(
 
 const push = (page, state) => page.evaluate(s => window.__fixture.renderState(s), state);
 
+// The headline fades out and back in, so it is waited for rather than read.
+const lineSays = (page, text) => page.waitForFunction(
+  wanted => document.getElementById('line').textContent === wanted,
+  text,
+);
+
 test('progress is shown while starting, and reaching ready opens the workspace', async t => {
   const page = await splash(t);
 
@@ -246,16 +252,15 @@ test('unreadable data offers reset and start over instead of a pointless retry',
 
 test('a recovery action that fails reports the reason rather than restoring in silence', async t => {
   const page = await splash(t, {
-    recoveryOptions: { dataResetAvailable: false, fullReinstallAvailable: true },
+    recoveryOptions: { dataResetAvailable: true, fullReinstallAvailable: true },
   });
   await page.evaluate(() => { window.__fixture.rejectReset = true; });
   await push(page, {
     mode: 'local', phaseKey: 'error', error: true, running: false, ready: false,
-    status: 'Lemma could not start its local services', errorCode: 'locald-start-failed',
+    status: 'Local data was written by a newer version of Lemma',
+    errorCode: 'local-data-incompatible',
   });
 
-  assert.equal(await page.getByRole('button', { name: 'Reset local data', exact: true }).isVisible(), false,
-    'an unavailable tier must not be offered');
   await page.getByRole('button', { name: 'Start over', exact: true }).click();
   await page.getByText('the runtime is still holding local data', { exact: false }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Start over', exact: true }).isDisabled(), false);
@@ -275,11 +280,116 @@ test('recovery is still offered when the daemon cannot say what is available', a
   });
   await push(page, {
     mode: 'local', phaseKey: 'error', error: true, running: false, ready: false,
-    status: 'Lemma could not start its local services', errorCode: 'locald-disconnected',
+    status: 'Local data was written by a newer version of Lemma', errorCode: 'local-data-incompatible',
   });
   await page.getByRole('button', { name: 'Start over', exact: true }).waitFor({ state: 'visible' });
   assert.equal(await page.getByRole('button', { name: 'Reset local data', exact: true }).isVisible(), false,
     'the tier that needs the daemon cannot be promised when the daemon is gone');
+});
+
+// A service that stopped has nothing to do with the data. The screen used to
+// offer "Reset local data" beside Try again for it, and pressing the button on
+// offer erased everything for what a restart would have fixed.
+test('a stopped local service offers Try again, the log and Recovery, and never an erase', async t => {
+  const page = await splash(t, {
+    recoveryOptions: { dataResetAvailable: true, fullReinstallAvailable: true },
+  });
+  for (const errorCode of ['locald-disconnected', 'locald-start-failed']) {
+    await push(page, {
+      mode: 'local', phaseKey: 'error', error: true, running: false, ready: false,
+      status: 'Local service manager disconnected', errorCode,
+    });
+    await page.getByRole('button', { name: 'Recovery', exact: true }).waitFor({ state: 'visible' });
+    await lineSays(page, "Lemma's local service stopped.");
+    assert.equal(await page.getByRole('button', { name: 'Try again', exact: true }).isVisible(), true, errorCode);
+    assert.equal(await page.getByRole('button', { name: 'View log', exact: true }).isVisible(), true, errorCode);
+    assert.equal(await page.getByRole('button', { name: 'Reset local data', exact: true }).isVisible(), false, errorCode);
+    assert.equal(await page.getByRole('button', { name: 'Start over', exact: true }).isVisible(), false, errorCode);
+  }
+  await page.getByText('Your data is untouched.', { exact: true }).waitFor({ state: 'hidden' });
+  await push(page, {
+    mode: 'local', phaseKey: 'error', error: true, running: false, ready: false,
+    status: 'Local service manager disconnected', errorCode: 'locald-disconnected',
+  });
+  await page.getByText('Your data is untouched.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Recovery', exact: true }).click();
+  assert.deepEqual(
+    (await commandCalls(page, ['open_control_center', 'reset_local_data'])).map(call => call.command),
+    ['open_control_center'],
+  );
+});
+
+test('a runtime that did not install says so, and offers no erase', async t => {
+  const page = await splash(t, {
+    recoveryOptions: { dataResetAvailable: true, fullReinstallAvailable: true },
+  });
+  await push(page, {
+    mode: 'local', phaseKey: 'runtime-install', error: true, running: false, ready: false,
+    status: 'Lemma could not reach github.com to download its runtime. Check your internet connection and try again.',
+    errorCode: 'runtime-install-failed',
+  });
+  await page.getByText('Lemma needs the internet once to finish installing.', { exact: false }).waitFor();
+  await lineSays(page, "Lemma couldn't finish installing.");
+  assert.equal(await page.getByRole('button', { name: 'Reset local data', exact: true }).isVisible(), false);
+  assert.equal(await page.getByRole('button', { name: 'Try again', exact: true }).isVisible(), true);
+});
+
+// Data another release wrote is kept by going back to that release. Erasing it
+// is still there, second, and still behind the shell's own confirmation.
+test('data from another release offers the previous version first and erasing second', async t => {
+  const page = await splash(t, {
+    recoveryOptions: { dataResetAvailable: true, fullReinstallAvailable: true },
+  });
+  await push(page, {
+    mode: 'local', phaseKey: 'error', error: true, running: false, ready: false,
+    status: 'the workspace database on this computer was created by PostgreSQL 16 and this release runs PostgreSQL 17; local data must be reset',
+    errorCode: 'local-data-incompatible',
+  });
+  const keep = page.getByRole('link', { name: 'Keep my data — get the previous version', exact: true });
+  await keep.waitFor({ state: 'visible' });
+  assert.equal(await keep.getAttribute('href'), 'https://github.com/lemma-work/lemma-platform/releases');
+  assert.equal(await keep.getAttribute('target'), '_blank');
+  await lineSays(page, "This version of Lemma can't open your existing data.");
+  await page.getByText('Your data is still on this computer.', { exact: true }).waitFor();
+  const erase = page.getByRole('button', { name: 'Erase and start fresh', exact: true });
+  await erase.waitFor({ state: 'visible' });
+  assert.equal(await erase.evaluate(node => node.classList.contains('dark')), false,
+    'erasing is never the filled button when keeping the data is offered');
+  assert.equal(await page.getByRole('button', { name: 'Try again', exact: true }).isVisible(), false);
+  await erase.click();
+  assert.deepEqual(
+    (await commandCalls(page, ['reset_local_data', 'reset_full_reinstall'])).map(call => call.command),
+    ['reset_local_data'],
+  );
+  await erase.waitFor({ state: 'visible' });
+  assert.equal(await erase.textContent(), 'Erase and start fresh');
+});
+
+// The services are up and the window failed. The box's Try again starts the
+// stack, which is the wrong retry for that -- so it is not offered, and the
+// button that is offered opens.
+test('a failed Open Lemma retries opening, not starting', async t => {
+  const page = await splash(t);
+  await page.evaluate(() => { window.__fixture.rejectOpen = true; });
+  await push(page, READY);
+  const open = page.locator('#open-app');
+  // The automatic open fails first; the test starts from what it leaves.
+  await page.waitForFunction(() => window.__fixture.calls.some(call => call.command === 'open_app'));
+  await open.waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    window.__fixture.calls.length = 0;
+  });
+  await open.click();
+  await page.getByText('Lemma did not open.', { exact: true }).waitFor();
+  assert.equal(await page.locator('#errwrap').isVisible(), true);
+  assert.equal(await page.getByRole('button', { name: 'Try again', exact: true }).isVisible(), false,
+    'Try again would start the stack, not open the window');
+  assert.equal(await open.textContent(), 'Try opening Lemma again');
+  await open.click();
+  assert.deepEqual(
+    (await commandCalls(page, ['start', 'open_app'])).map(call => call.command),
+    ['open_app', 'open_app'],
+  );
 });
 
 // `open_control_center` used to return Ok before it had done anything and
