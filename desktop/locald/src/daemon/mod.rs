@@ -106,6 +106,7 @@ mod loopback_ports;
 mod monitors;
 mod reset_ops;
 mod sharing_ops;
+mod shutdown;
 mod signals;
 mod stack_ops;
 mod startup_state;
@@ -509,12 +510,6 @@ impl Daemon {
         crate::protocol::append_bounded_daemon_log(&self.paths.log, line)
     }
 
-    /// Say out loud what `Daemon::new` had to replace to get this far.
-    ///
-    /// Broadcast as well as logged: a subscriber that connects later still gets
-    /// it from the journal, and the app can surface "your configuration was
-    /// reset" instead of the operator discovering it by finding their provider
-    /// missing.
     /// Say out loud what `Daemon::new` had to replace to get this far.
     ///
     /// Broadcast as well as logged: a subscriber that connects later still gets

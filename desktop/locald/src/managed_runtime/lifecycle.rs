@@ -195,6 +195,54 @@ impl ManagedRuntimeController {
     }
 
     pub fn shutdown(&self) -> io::Result<()> {
+        self.shutdown_reporting(&|_| {})
+    }
+
+    /// `shutdown`, reporting its three waits as steps of their own: the
+    /// background workers, the guest stopping its services, and the VM
+    /// powering off. Only the whole was ever visible, and the whole was most
+    /// of every quit.
+    pub(crate) fn shutdown_reporting(
+        &self,
+        report: crate::stop_plan::Report<'_>,
+    ) -> io::Result<()> {
+        use crate::stop_plan::{run_tier, Step, StepOutcome};
+        run_tier(
+            vec![Step::new("runtime.workers", || {
+                self.release_workers();
+                Ok(())
+            })],
+            report,
+        );
+        let started = Instant::now();
+        let stopped = self.runtime.stop_timed();
+        match &stopped {
+            Ok(timings) => {
+                if let Some(duration) = timings.guest_services {
+                    let (error, detail) = match &timings.guest_report {
+                        Some(Ok(answer)) => (None, Some(answer.to_string())),
+                        Some(Err(error)) => (Some(error.clone()), None),
+                        None => (None, None),
+                    };
+                    let mut outcome =
+                        StepOutcome::measured("runtime.guest-services", duration, error);
+                    outcome.detail = detail;
+                    report(&outcome);
+                }
+                if let Some(duration) = timings.power_off {
+                    report(&StepOutcome::measured("runtime.power-off", duration, None));
+                }
+            }
+            Err(error) => report(&StepOutcome::measured(
+                "runtime.power-off",
+                started.elapsed(),
+                Some(error.to_string()),
+            )),
+        }
+        stopped.map(|_| ())
+    }
+
+    fn release_workers(&self) {
         // Before the VM goes, like `stop_infrastructure`. The keeper holds an
         // `Arc` to this controller, so leaving it running outlives the guest it
         // is correcting and ticks once a second at a control socket with
@@ -224,7 +272,6 @@ impl ManagedRuntimeController {
             let _ = images.join();
         }
         self.clear_forwarders();
-        self.runtime.stop()
     }
 
     pub fn cancel_pending_requests(&self) {

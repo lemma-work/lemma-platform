@@ -31,6 +31,8 @@ mod windows;
 mod windows_data;
 mod wsl_command;
 
+pub use lifecycle::StopTimings;
+
 pub(crate) use diagnostics::*;
 pub(crate) use guest_image::*;
 pub(crate) use private_files::*;

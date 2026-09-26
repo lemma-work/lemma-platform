@@ -44,6 +44,8 @@ mod supervision;
 pub(crate) use environment::*;
 pub(crate) use health::*;
 pub(crate) use ledger::*;
+#[cfg(test)]
+pub(crate) use lifecycle::stop_tiers;
 pub(crate) use logs::*;
 pub(crate) use manifest::*;
 pub(crate) use migrations::*;

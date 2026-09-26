@@ -24,6 +24,8 @@ pub mod reset;
 mod setup_probe;
 pub mod sharing;
 pub mod state;
+// Quitting: what stops at once, what waits, and how long each took.
+mod stop_plan;
 mod tcp_forwarder;
 pub mod update_transaction;
 pub mod vault_process;
