@@ -246,10 +246,10 @@ def test_callback_host_is_never_rewritten(monkeypatch) -> None:
     wrong host.
     """
     monkeypatch.setattr(workspace_settings, "workspace_callback_api_url", None)
-    monkeypatch.setattr(settings, "cli_api_url", "http://127-0-0-1.sslip.io:8710")
+    monkeypatch.setattr(settings, "cli_api_url", "http://app.lemma.localhost:8710")
     assert (
         WorkspaceSandboxService._resolve_workspace_api_url()
-        == "http://127-0-0-1.sslip.io:8710"
+        == "http://app.lemma.localhost:8710"
     )
 
     monkeypatch.setattr(

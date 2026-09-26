@@ -159,17 +159,17 @@ async fn a_steer_with_no_turn_to_join_is_dropped_quietly() {
     assert!(inbox.take().unwrap().try_recv().is_err());
 }
 
-/// Every terminal path in `spawn_run` wakes the poll that reports it.
+/// Every terminal path in `spawn_run` wakes the link that reports it.
 ///
-/// `poll_target` snapshots the control batch when it builds the request, so a
-/// checkpoint written a moment later waits out the whole 25-second long poll.
-/// Two of the three terminal paths notified; the third did not, and a run that
-/// failed for want of an MCP configuration sat unreported for up to that long.
+/// `events_ready.notify_one()` wakes event delivery and the link loop's
+/// `control` frame. A terminal path that skips it leaves its checkpoint in the
+/// journal until the next heartbeat, so the run it ended is reported up to a
+/// heartbeat interval late.
 ///
 /// Asserted on the source: the property is "every one of them", and reaching
 /// each from a test needs a different half-broken start command.
 #[test]
-fn every_terminal_path_wakes_the_poll_that_reports_it() {
+fn every_terminal_path_wakes_the_link_that_reports_it() {
     let source = include_str!("../../run.rs").replace("\r\n", "\n");
     let mut silent = Vec::new();
     for (offset, _) in source.match_indices("terminal_failure(") {
@@ -183,8 +183,8 @@ fn every_terminal_path_wakes_the_poll_that_reports_it() {
     }
     assert!(
         silent.is_empty(),
-        "these terminal paths return without waking the poll, so the run they \
-         ended is reported up to a long poll late: run.rs lines {silent:?}",
+        "these terminal paths return without waking the link, so the run they \
+         ended is reported up to a heartbeat late: run.rs lines {silent:?}",
     );
     assert!(
         source.matches("terminal_failure(").count() >= 3,

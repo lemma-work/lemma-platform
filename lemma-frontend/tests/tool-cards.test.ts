@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { diffLines, hostOf, parseToolCard, restLength } from "../src/thread/tool-cards.ts";
+import { diffLines, hostOf, parseToolCard, restLength, waitEnding, type WaitFor } from "../src/thread/tool-cards.ts";
 import { toolKey, toolLabel } from "../src/thread/tool-name.ts";
 import { argSummary, buildTurns, commentOf, liveNote, openSignIn, type RawMessage } from "../src/thread/turns.ts";
 
@@ -546,26 +546,78 @@ test("a malformed view_image return never throws", () => {
     assert.equal(call("view_image", { pod_file_path: 7 }, { file_path: [] }), null);
 });
 
-/* ── snooze ────────────────────────────────────────────────────────── */
+/* ── wait_for ──────────────────────────────────────────────────────── */
 
-test("a sleeping run says so, and when it is due back", () => {
-    const card = parseToolCard({
-        toolName: "snooze",
-        args: { reason: "waiting for the nightly build", seconds: 600 },
-        answered: false,
-        atMs: 1_700_000_000_000,
-    });
-    assert.equal(card?.kind, "snooze");
-    assert.equal(card && card.kind === "snooze" && card.sleeping, true);
+const waitOf = (card: ReturnType<typeof parseToolCard>): WaitFor => {
+    assert.equal(card?.kind, "wait");
+    return card as WaitFor;
+};
+
+test("a waiting run says so, and when it is due back", () => {
+    const wait = waitOf(
+        parseToolCard({
+            toolName: "wait_for",
+            args: { reason: "waiting for the nightly build", seconds: 600 },
+            answered: false,
+            atMs: 1_700_000_000_000,
+        }),
+    );
+    assert.equal(wait.waiting, true);
+    assert.equal(wait.on, "time");
     // Nothing on the wire carries a wake time; it is the call's clock plus the
     // length it asked for.
-    assert.equal(card && card.kind === "snooze" && card.wakeAtMs, 1_700_000_000_000 + 600_000);
+    assert.equal(wait.wakeAtMs, 1_700_000_000_000 + 600_000);
+    assert.equal(waitEnding(wait), "");
 });
 
-test("a woken run says what woke it", () => {
-    const card = call("snooze", { reason: "build", seconds: 600 }, { woke_because: "TIMER", slept_seconds: 600 });
-    assert.equal(card && card.kind === "snooze" && card.sleeping, false);
-    assert.equal(card && card.kind === "snooze" && card.wokeBecause, "TIMER");
+test("a woken run says what woke it, and for how long it waited", () => {
+    const wait = waitOf(
+        call("wait_for", { reason: "build", seconds: 600 }, { success: true, woke_because: "TIMER", waited_seconds: 601 }),
+    );
+    assert.equal(wait.waiting, false);
+    assert.equal(wait.wokeBecause, "TIMER");
+    assert.equal(wait.waitedSeconds, 601);
+    assert.equal(waitEnding(wait), "the time was up");
+});
+
+test("a wait on a process says what it waited on and how it ended", () => {
+    const wait = waitOf(
+        call(
+            "wait_for",
+            { reason: "the test suite", process_id: "proc-1", max_seconds: 1800 },
+            { success: true, woke_because: "TARGET_FINISHED", waited_seconds: 240, exit_code: 1 },
+        ),
+    );
+    assert.equal(wait.on, "process");
+    assert.equal(wait.seconds, undefined);
+    assert.equal(wait.maxSeconds, 1800);
+    assert.equal(wait.wakeAtMs, undefined);
+    assert.equal(waitEnding(wait), "the command finished with exit code 1");
+
+    const gone = waitOf(
+        call("wait_for", { reason: "a sub-agent", subagent_run_id: "run-1" }, { success: true, woke_because: "TARGET_GONE" }),
+    );
+    assert.equal(gone.on, "subagent");
+    assert.equal(waitEnding(gone), "lost track of the sub-agent");
+});
+
+test("the remote harness's early 'Waiting.' return is still a wait in progress", () => {
+    const wait = waitOf(call("wait_for", { reason: "build", seconds: 600 }, { success: true, message: "Waiting." }));
+    assert.equal(wait.waiting, true);
+});
+
+test("a refused wait says it could not wait, and why", () => {
+    const wait = waitOf(
+        call("wait_for", { reason: "build", seconds: 5 }, { success: false, error: "Waits under 30 seconds are rejected." }),
+    );
+    assert.equal(wait.waiting, false);
+    assert.equal(wait.error, "Waits under 30 seconds are rejected.");
+    assert.equal(waitEnding(wait), "could not wait");
+});
+
+test("a wait with no reason, or the retired snooze tool, falls back to the grey line", () => {
+    assert.equal(call("wait_for", { seconds: 600 }), null);
+    assert.equal(call("snooze", { reason: "build", seconds: 600 }), null);
 });
 
 test("a sleep is said in round numbers", () => {

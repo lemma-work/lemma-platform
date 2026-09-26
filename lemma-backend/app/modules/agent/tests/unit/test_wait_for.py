@@ -354,8 +354,8 @@ async def test_the_claimed_wait_payload_still_matches_the_wake_contract():
 
     assert claimed.timer_id == external_ref
     assert claimed.fire_at == fire_at
-    # conversation_id selects the snooze branch; wait_ref resolves the fired
-    # timer to exactly one ACTIVE wait.
+    # conversation_id selects the conversation-wait branch; wait_ref resolves
+    # the fired timer to exactly one ACTIVE wait.
     assert claimed.payload["conversation_id"] == str(conversation_id)
     assert claimed.payload["wait_ref"] == str(external_ref)
     assert claimed.payload["source"] == "agent_wait"
@@ -415,7 +415,7 @@ def sweep(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sweep_leaves_a_grace_period_before_calling_a_timer_lost(sweep):
-    """Without it the 5-minute sweep races the real timer on every snooze.
+    """Without it the 5-minute sweep races the real timer on every timed wait.
 
     Every healthy wait would then be woken by the backstop and logged as a lost
     timer at WARNING — alert noise that hides the failure it exists to report.

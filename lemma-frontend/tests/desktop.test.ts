@@ -355,11 +355,10 @@ test("a failed connection displaces connecting, and only it offers a retry", () 
     assert.equal(failed.label, "Couldn\u2019t connect");
     /* The sidecar's stderr belongs in the log, not on the card. */
     assert.match(failed.detail, /couldn\u2019t connect this Mac to this workspace/);
-    assert.equal(failed.retry, true);
     assert.equal(failed.action, "retry");
     /* Once paired here, an old connect failure is history, not the state. */
     assert.equal(describeThisComputer(status(), null, WORKSPACE, "pairing refused").label, "Connected");
-    assert.equal(describeThisComputer(status({ targets: [] }), null, WORKSPACE, null).retry, false);
+    assert.equal(describeThisComputer(status({ targets: [] }), null, WORKSPACE, null).action, null);
 });
 
 test("a stage that lasts too long is called what it is, with the thing to do about it", () => {
@@ -370,7 +369,6 @@ test("a stage that lasts too long is called what it is, with the thing to do abo
     const lost = stalled(status({ targets: [] }));
     assert.equal(lost.label, "Not connected");
     assert.equal(lost.action, "reconnect");
-    assert.equal(lost.retry, true);
 
     /* A sidecar that never came up. */
     const down = stalled(status({ running: false }));

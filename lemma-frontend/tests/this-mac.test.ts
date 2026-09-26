@@ -2,10 +2,10 @@ import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
     CREDENTIAL_FORMS, LOCAL_SERVER_KEY, STARTING_PATIENCE_MS, addToWorkspace, healthDetail, stuckStarting, sharingPhaseWords, updateProblem, alreadyInWorkspace, channelLine, credentialFormForChannel,
-    detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, HOST_EXECUTION_CONSEQUENCE,
+    detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, hostExecutionConsequence,
     hostExecutionError, hostExecutionRow, hostExecutionSwitch, joinPolicyCopy,
     oauthFormForConnector, onLocalWorkspaceOrigin, operatorProvider, postgresMajorChangeMessage, readSnapshot,
-    sandboxWording, sectionPayloads, sharingBusy, thisMac, thisMacAvailability, thisMacReachable, updateOffer,
+    asOneChange, sandboxWording, sectionPayloads, sharingBusy, thisMac, thisMacAvailability, thisMacReachable, updateOffer,
     type AppUpdateStatus, type ThisMacSnapshot,
 } from "../src/desktop/this-mac.ts";
 import { requestedFocus, requestedSection } from "../src/desktop/open-settings.ts";
@@ -275,6 +275,19 @@ test("saving a form sends its whole section, only its own secrets, and nothing i
     assert.deepEqual(google.secrets, { "integrations.google_client_secret": { action: "replace", value: "s3cret" } });
 });
 
+test("a save that spans sections is one change, so the server restarts once", () => {
+    const base = snapshot();
+    const [app] = sectionPayloads(base, "slack-app", { slack_client_id: "123.456" }, {});
+    const [bot] = sectionPayloads(base, "slack", {}, { "surfaces.slack_app_token": { action: "replace", value: "xapp" } });
+    assert.equal(asOneChange([]), null);
+    assert.equal(asOneChange([app]), app);
+    const both = asOneChange([app, bot]);
+    assert.ok(both && "sections" in both);
+    assert.deepEqual(both.sections.map((section) => section.name), ["integrations", "surfaces"]);
+    assert.deepEqual(both.secrets, { "surfaces.slack_app_token": { action: "replace", value: "xapp" } });
+    assert.equal(both.expected_revision, 4);
+});
+
 test("a secret typed and cleared is kept; removing one is its own act", () => {
     const base = snapshot({ operator: { config: { revision: 4 }, secrets: { "surfaces.telegram_bot_token": true } } });
     assert.deepEqual(sectionPayloads(base, "telegram", { telegram_polling: false }, {
@@ -429,7 +442,7 @@ test("adding it to the workspace creates the provider and leaves this computer's
 
 test("the host-execution switch reflects the Agent Host and is off-limits where nothing can confine commands", () => {
     const on = hostExecutionRow({ host_execution: { enabled: true, available: true } });
-    assert.deepEqual(on, { checked: true, blocked: null, consequence: HOST_EXECUTION_CONSEQUENCE });
+    assert.deepEqual(on, { checked: true, blocked: null, consequence: hostExecutionConsequence() });
     assert.match(on.consequence, /inside a sandbox/);
     assert.match(on.consequence, /Teammates’ runs stay in the VM/);
     assert.equal(hostExecutionRow({ host_execution: { enabled: false, available: true } }).checked, false);

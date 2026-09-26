@@ -176,9 +176,10 @@ impl Journal {
                     // session opened. A run holds a single pending-checkpoint slot,
                     // so the `Running` state that follows the first streamed token
                     // overwrites the detail of the checkpoint before it - and the
-                    // first token lands milliseconds after the prompt, well inside
-                    // one poll. Lemma needs this id to keep the conversation on one
-                    // provider session, and reads it idempotently.
+                    // first token lands milliseconds after the prompt, well before
+                    // the next control frame. Lemma needs this id to keep the
+                    // conversation on one provider session, and reads it
+                    // idempotently.
                     if let Some(session_id) = provider_session_id {
                         detail.insert(
                             "provider_session_id".to_owned(),

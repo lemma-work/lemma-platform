@@ -175,8 +175,9 @@ class TestDispatch:
     async def test_decision_is_queued_and_the_host_is_woken(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without the poke the decision waits out the host's long-poll deadline
-        while the user watches an agent that looks stuck."""
+        """The poke wakes the host's link to push the decision now; without it
+        the decision waits for the link's next push while the user watches an
+        agent that looks stuck."""
         host_id = uuid4()
         run_id = uuid7()
         enqueued: dict = {}

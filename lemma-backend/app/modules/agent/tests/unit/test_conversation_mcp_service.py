@@ -185,7 +185,7 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
 
     Every pausing tool addresses itself by ``ctx.tool_call_id``: it is the id an
     approval card is answered through, the id a decision is recorded against,
-    and the id a snooze's wake writes its return under. Nothing on the MCP wire
+    and the id a wait's wake writes its return under. Nothing on the MCP wire
     supplies one — ``tools/call`` carries a name and arguments, and the
     JSON-RPC id dies with the response — so it arrived as ``None``, and each of
     those tools has a guard that turns ``None`` into an error. An Agent Host

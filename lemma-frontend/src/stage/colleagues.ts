@@ -82,7 +82,7 @@ export interface Capability {
     icon: ToolsetIcon;
     /** Whether this says anything about *this* teammate.
      *
-     *  `USER_INTERACTION`, `TODO` and `SNOOZE` are in the fixed set the
+     *  `USER_INTERACTION`, `TODO` and `WAIT` are in the fixed set the
      *  platform hands every pod's own responder, and they describe how any
      *  agent behaves in a conversation rather than what this one can reach. So
      *  they are true, and uninformative, and drawn last and quietly — rather
@@ -112,7 +112,7 @@ const TOOLSETS: Record<string, Omit<Capability, "code">> = {
     MEMORY: { word: "Memory", says: "Remembers across conversations", icon: "memory", plain: false, tools: false },
     TODO: { word: "Plans", says: "Writes the work down, then works it", icon: "plan", plain: true, tools: true },
     USER_INTERACTION: { word: "Asks first", says: "Stops to ask a person mid-task", icon: "ask", plain: true, tools: true },
-    SNOOZE: { word: "Waits", says: "Puts work down and picks it up when the answer lands", icon: "wait", plain: true, tools: true },
+    WAIT: { word: "Waits", says: "Puts work down and picks it up when the answer lands", icon: "wait", plain: true, tools: true },
     VIEW_IMAGE: { word: "Images", says: "Looks at a screenshot the way it reads a file", icon: "image", plain: false, tools: true },
 };
 
@@ -138,7 +138,7 @@ const TOOLSETS: Record<string, Omit<Capability, "code">> = {
  */
 export const POD_DEFAULT_TOOLSETS: readonly string[] = [
     "WORKSPACE_CLI", "BROWSER", "POD", "USER_INTERACTION", "SKILLS", "WEB_SEARCH",
-    "SUBAGENTS", "SPEECH", "TODO", "MESSAGING", "SNOOZE", "MEMORY",
+    "SUBAGENTS", "SPEECH", "TODO", "MESSAGING", "WAIT", "MEMORY",
 ];
 
 export function toolsetWord(code: string): string {

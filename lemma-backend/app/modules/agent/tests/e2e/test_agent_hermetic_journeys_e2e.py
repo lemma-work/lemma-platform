@@ -2655,8 +2655,8 @@ async def test_public_agent_host_profile_update_touches_and_skips_the_harness(
     harness_id = str(machine["harness_id"])
 
     # A paired host only accepts new runs while its heartbeat is fresh, and the
-    # heartbeat rides on the 25s long poll -- which a test cannot sit through.
-    # Stamping it is the same thing that poll does, without the wait (same
+    # heartbeat is the link's `control` frame, sent every 20s by a host this
+    # test does not run. Stamping it is what that frame does (same
     # pattern as test_agent_host_vision_e2e.py's _profile_for_a_host_that,
     # which reads it back through the same session rather than a separate
     # HTTP request -- this test goes through authenticated_client, a

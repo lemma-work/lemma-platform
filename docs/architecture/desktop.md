@@ -756,7 +756,7 @@ say `http://app.lemma.localhost:*`, which would also match every alias port.
 | `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
 | `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown; once installed the app restarts without asking again, because the stack is already stopped and the bundle replaced |
 | `telemetry_status`, `set_telemetry_enabled` | control, workspace | settings | |
-| `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Onboarding and the Models suggestions |
+| `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Provider model discovery for the Models suggestions and lemma-harness onboarding; `configure_ai_provider` serves only lemma-harness, since the lemma-frontend workspace writes `ai` through `apply_local_settings` |
 | `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |
 | `app_frame_url` | workspace | local workspace | The address to frame a pod app at: its locald alias on macOS, its own URL elsewhere. Refuses anything but this install's own apps; see §6.2 |
 | `open_control_center` | main, workspace | page name validated | |

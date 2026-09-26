@@ -124,7 +124,7 @@ test("memory is named as a capability and never as a tool", () => {
 });
 
 test("the ones every teammate has are marked, and the telling ones are not", () => {
-    for (const code of ["USER_INTERACTION", "TODO", "SNOOZE"]) {
+    for (const code of ["USER_INTERACTION", "TODO", "WAIT"]) {
         assert.equal(capabilityFor(code).plain, true, code + " says nothing about this teammate");
     }
     for (const code of ["WORKSPACE_CLI", "BROWSER", "POD", "MEMORY", "SPEECH"]) {

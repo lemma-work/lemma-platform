@@ -138,15 +138,13 @@ pub(crate) fn adapter_failure_message(harness: &str, error: &str) -> Option<Stri
 impl TargetWorker {
     /// Bring the published harnesses up to date, then wait if there are none.
     ///
-    /// Two jobs, and the first is the one that is easy to miss. Draining used
-    /// to happen only at the top of a loop iteration, and commands are handled
-    /// in the *same* iteration that polled them — so a publish that landed
-    /// while the poll was open sat unread in the channel until the next
-    /// iteration, and `handle_start` compared each command against the
-    /// harnesses this host held before it. Lemma mints commands against the
-    /// revision it was just told, which is precisely the one still in the
-    /// channel, so a run naming the newest revision was rejected as superseded
-    /// by an older one, two seconds after the publish that made it current.
+    /// Two jobs, and the first is the one that is easy to miss. A publish
+    /// lands in a channel, and a command can arrive before the loop drains
+    /// it; judged then, `handle_start` would compare the command against the
+    /// harnesses this host held before that publish. Lemma mints commands
+    /// against the revision it was just told, which is precisely the one still
+    /// in the channel, so a run naming the newest revision would be rejected
+    /// as superseded by an older one.
     ///
     /// The second job is the original one: the first commands can arrive
     /// before the first publish, and rejecting those as `HARNESS_NOT_FOUND` is
@@ -154,8 +152,7 @@ impl TargetWorker {
     /// so yet.
     ///
     /// Only ever called when a command is in hand: the heartbeat must never
-    /// wait on discovery, which is the whole reason publishing moved off the
-    /// poll path.
+    /// wait on discovery, which is why publishing runs off the worker loop.
     pub(crate) async fn sync_harnesses_for_commands(&mut self) {
         self.drain_published();
         if !self.harnesses.is_empty() {
@@ -188,20 +185,14 @@ impl TargetWorker {
         }
     }
 
-    /// Publish what this machine can run, cheaply first and fully second.
+    /// Discover and probe what this machine can run, then publish it.
     ///
-    /// This is the first thing the worker loop does, and until it returns the
-    /// host has not polled once - so it has no heartbeat, the workspace reports
-    /// it OFFLINE, and creating a profile against it is refused. Probing is
-    /// what makes that slow: every probe spawns the agent, runs an ACP
-    /// `initialize` and `session/new`, and waits up to 20s. Serially, over four
-    /// adapters with one that times out, a cold start took 47s to first
-    /// heartbeat, measured.
-    ///
-    /// So the cheap half - which adapters exist and resolve - is published on
-    /// its own first, and the probes then run concurrently rather than one
-    /// after another. The machine appears with its agents almost immediately;
-    /// their config options arrive a moment later.
+    /// Spawns the work and returns at once, so the host's heartbeat -- the link
+    /// loop's `control` frame -- never waits on it. Probing is slow: every
+    /// probe spawns the agent, runs an ACP `initialize` and `session/new`, and
+    /// waits up to 20s. The probes run concurrently rather than one after
+    /// another, and the result is published once, after probing, so the
+    /// machine is online before its agents appear.
     pub(crate) fn refresh_harnesses(&mut self) {
         if self
             .probe_task
@@ -341,7 +332,7 @@ impl TargetWorker {
         };
         // Spawned, never awaited. Discovery runs each adapter's binary just to
         // read its version, and probing then opens a whole ACP session per
-        // adapter. Doing either before the first poll left the host with no
+        // adapter. Doing either before connecting left the host with no
         // heartbeat for 47 seconds, so the workspace called a working machine
         // OFFLINE and refused to bind a profile to it.
         //
@@ -350,7 +341,7 @@ impl TargetWorker {
         // an unprobed snapshot has no `config_options`, and publishing it
         // *replaced* the probed ones. Every saved `config_selections` key then
         // failed validation as "unknown configuration selection". Getting the
-        // machine online is what the poll does; the harnesses can wait for
+        // machine online is what the link does; the harnesses can wait for
         // their probe.
         self.probe_task = Some(OwnedTask(tokio::spawn(async move {
             let discovered = discover_manifest.discover();

@@ -83,7 +83,7 @@ async fn concurrent_requests_each_get_their_own_answer() {
 }
 
 /// Commands arrive without being asked for: the push is what makes a Stop
-/// reach the host in milliseconds instead of on the next poll.
+/// reach the host in milliseconds instead of on the next control answer.
 #[tokio::test]
 async fn pushed_commands_reach_the_host() {
     let stub = StubLink::start().await;

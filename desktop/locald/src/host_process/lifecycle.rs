@@ -144,9 +144,10 @@ impl HostProcessManager {
         // This used to spawn a service, wait for it to pass its full health
         // gate, and only then spawn the next — which put the frontend's entire
         // boot after the backend's, for about 2.7s of a 20s cold start that it
-        // never needed to wait for. `next start` serves a prebuilt app and does
-        // not call the backend to come up; its health check reads a static file
-        // it serves itself.
+        // never needed to wait for. The frontend is `node frontend-launcher.mjs`
+        // over the prebuilt standalone `server.mjs`, and does not call the
+        // backend to come up; its health check reads a static file it serves
+        // itself.
         //
         // Spawning in `ordered_ids` order still honours declared dependencies,
         // and honours them exactly as the supervision loop does: it requires a

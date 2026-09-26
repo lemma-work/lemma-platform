@@ -471,7 +471,7 @@ pub(crate) fn credential_consent(replaced: &[String]) -> Option<NativeConsent> {
 pub(crate) fn host_execution_consent(enabled: bool) -> Option<NativeConsent> {
     enabled.then(|| {
         NativeConsent::new(
-            "Run agents' commands on this Mac?",
+            &format!("Run agents' commands on {THIS_COMPUTER}?"),
             format!(
                 "Your agents' commands will run directly on {THIS_COMPUTER} instead of in \
                  Lemma's virtual machine, inside macOS's sandbox. They can read most files \
@@ -481,7 +481,7 @@ pub(crate) fn host_execution_consent(enabled: bool) -> Option<NativeConsent> {
                  They can use your gh and git sign-ins. Teammates' runs stay in the virtual \
                  machine. Turn this off at any time in Settings."
             ),
-            "Run on this Mac",
+            &format!("Run on {THIS_COMPUTER}"),
         )
     })
 }

@@ -29,9 +29,9 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         .map_or_else(HostPaths::platform_default, Ok)?;
     match cli.command {
         Command::Serve => {
-            // Exactly one host per data directory. Two would poll the same
-            // pairing, split commands between them, and each mark the machine
-            // draining as it exits.
+            // Exactly one host per data directory. Two would connect with the
+            // same pairing, supersede each other's link, and each mark the
+            // machine draining as it exits.
             let _single = paths.lock_single_instance()?;
             let config = HostConfig::load_or_create(&paths)?;
             let runtime = HostRuntime::new(config, paths)?;
