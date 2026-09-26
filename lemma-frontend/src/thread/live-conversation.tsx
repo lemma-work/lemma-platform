@@ -13,7 +13,7 @@ import type { ConversationRef } from "@/data";
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
-import { splitQueued } from "./queued";
+import { splitQueued, withdrawFailure, withoutSent } from "./queued";
 import { sendToConversation, steerConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
@@ -331,7 +331,7 @@ export function LiveConversation({
                 putFiles: (conversation, said) => putFiles(conversation, said),
                 append: (conversation, content) =>
                     client.conversations.appendMessage(conversation, { content }, { pod_id: pod.id }),
-                clearAttachments: () => setAttachments([]),
+                clearAttachments: sent => setAttachments(was => withoutSent(was, sent)),
                 restoreAttachments: settled => setAttachments(was => [
                     ...settled,
                     ...was.filter(one => !settled.some(back => back.key === one.key)),
@@ -362,11 +362,11 @@ export function LiveConversation({
             try {
                 await client.conversations.withdrawMessage(id, messageId, { pod_id: pod.id });
                 setWithdrawn(was => new Set([...was, messageId]));
-            } catch {
-                /* Almost always a race lost to delivery: the teammate took it in
-                   between the tray being drawn and the click. Refetching shows
-                   it where it now belongs. */
-                if (mounted.current) setSendError(pod.teammate.name + " already has that message.");
+            } catch (problem) {
+                /* Usually a race lost to delivery -- the teammate took it in
+                   between the tray being drawn and the click -- but only a 409
+                   says so. Refetching shows it wherever it now belongs. */
+                if (mounted.current) setSendError(withdrawFailure(problem, pod.teammate.name));
                 void loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
             } finally {
                 withdrawing.current.delete(messageId);
@@ -438,7 +438,7 @@ export function LiveConversation({
                            the files still looking like they were waiting to be
                            sent. By this line they are in the pod and named in
                            the message that is going. */
-                        setAttachments([]);
+                        setAttachments(was => withoutSent(was, settled));
                         try {
                             return await session.sendMessage(said, { conversationId: id, knownConversation });
                         } catch (problem) {

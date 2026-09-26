@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildTurns, type RawMessage } from "../src/thread/turns.ts";
-import { composerActions, inDeliveryOrder, isQueued, isWithdrawable, splitQueued } from "../src/thread/queued.ts";
+import { composerActions, inDeliveryOrder, isQueued, isWithdrawable, splitQueued, withdrawFailure } from "../src/thread/queued.ts";
 
 /** Talking to a teammate while it works.
  *
@@ -130,4 +130,11 @@ test("while a run is going, Send sits beside Stop as soon as there is something 
     assert.deepEqual(composerActions(true, true), { stop: true, send: true });
     assert.deepEqual(composerActions(false, false), { stop: false, send: true });
     assert.deepEqual(composerActions(false, true), { stop: false, send: true });
+});
+
+test("only a conflict says the teammate already has a message being taken back", () => {
+    assert.equal(withdrawFailure({ status: 409 }, "Ada"), "Ada already has that message.");
+    for (const problem of [{ status: 503 }, new TypeError("Failed to fetch"), "offline", null]) {
+        assert.equal(withdrawFailure(problem, "Ada"), "Could not take that message back. Try again.");
+    }
 });

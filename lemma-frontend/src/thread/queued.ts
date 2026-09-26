@@ -124,3 +124,21 @@ export function inDeliveryOrder(messages: RawMessage[]): RawMessage[] {
 export function composerActions(running: boolean, hasSomethingToSend: boolean): { stop: boolean; send: boolean } {
     return { stop: running, send: !running || hasSomethingToSend };
 }
+
+/** What to say when taking a message back did not work.
+ *
+ *  Only a 409 means the teammate has it -- delivery won the race between the
+ *  tray being drawn and the click. Anything else (offline, a server error) is
+ *  a take-back that can be tried again, and saying the teammate already has
+ *  the message would be telling the person it is too late when it is not. */
+export function withdrawFailure(problem: unknown, teammate: string): string {
+    const status = typeof problem === "object" && problem !== null ? (problem as { status?: unknown }).status : undefined;
+    return status === 409
+        ? teammate + " already has that message."
+        : "Could not take that message back. Try again.";
+}
+
+/** The composer's files without the ones a message just carried, by key. */
+export function withoutSent<T extends { key: string }>(held: T[], sent: T[]): T[] {
+    return held.filter((one) => !sent.some((gone) => gone.key === one.key));
+}

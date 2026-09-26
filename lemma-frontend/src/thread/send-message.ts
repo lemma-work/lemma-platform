@@ -37,7 +37,9 @@ export async function sendToConversation<T extends { id: string }>(text: string,
 export async function steerConversation<A>(text: string, id: string, deps: {
     putFiles: (id: string, text: string) => Promise<{ content: string; settled: A[] }>;
     append: (id: string, content: string) => Promise<unknown>;
-    clearAttachments: () => void;
+    /** Take the sent files out of the composer -- only those: one attached
+     *  while the upload was in flight belongs to the next message. */
+    clearAttachments: (sent: A[]) => void;
     restoreAttachments: (settled: A[]) => void;
     report: (message: string) => void;
 }): Promise<void> {
@@ -49,7 +51,7 @@ export async function steerConversation<A>(text: string, id: string, deps: {
         deps.report(said(problem));
         throw problem;
     }
-    deps.clearAttachments();
+    deps.clearAttachments(attached.settled);
     try {
         await deps.append(id, attached.content);
     } catch (problem) {

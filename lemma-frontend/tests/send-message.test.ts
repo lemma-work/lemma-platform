@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { sendToConversation, steerConversation } from "../src/thread/send-message.ts";
+import { withoutSent } from "../src/thread/queued.ts";
 
 test("creates and selects the conversation before sending, without waiting for the stream to end", async () => {
     const events: string[] = [];
@@ -141,4 +142,21 @@ test("a steer that goes appends what the upload produced", async () => {
         report: () => assert.fail("nothing to report"),
     });
     assert.deepEqual(appended, ["c1:see attached\n[a.png]"]);
+});
+
+test("a steer clears only the files it sent, not one attached while it uploaded", async () => {
+    type Chip = { key: string };
+    let held: Chip[] = [{ key: "a" }];
+    await steerConversation<Chip>("with a file", "c1", {
+        putFiles: async (_id, text) => {
+            /* Attached while this upload was in flight: the next message's. */
+            held = [...held, { key: "b" }];
+            return { content: text, settled: [{ key: "a" }] };
+        },
+        append: async () => undefined,
+        clearAttachments: sent => { held = withoutSent(held, sent); },
+        restoreAttachments: () => undefined,
+        report: () => assert.fail("nothing to report"),
+    });
+    assert.deepEqual(held, [{ key: "b" }]);
 });
