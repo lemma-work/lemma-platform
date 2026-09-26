@@ -151,7 +151,7 @@ async def _resolve_vision_model(
             raise VisionUnavailableError(
                 "No AI model that reads images is set up. Mark a model as "
                 "reading images on one of the workspace's providers in "
-                "Organization \u2192 Models."
+                "Settings \u2192 Models."
             )
         workspace_model = pydantic_ai_model_from_runtime_profile(
             runtime_profile=workspace.public_snapshot(),

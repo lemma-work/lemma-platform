@@ -139,6 +139,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.runtime_model_factory.provider_client_close_failed.degraded': EventSpec('warning', frozenset()),
     'agent.runtime_profile.archived_lookup_failed.degraded': EventSpec('warning', frozenset({'profile_id'})),
     'agent.runtime_profile.harness_vision_lookup_failed.degraded': EventSpec('warning', frozenset()),
+    'agent.runtime_profile.model_names_not_configured.observed': EventSpec('info', frozenset({'operator_hint'})),
+    'agent.runtime_profile.model_not_configured.observed': EventSpec('info', frozenset({'operator_hint'})),
     'agent.runtime_profile.model_substituted.degraded': EventSpec('warning', frozenset({'profile_id', 'requested_model_name', 'selected_model_name'})),
     'agent.runtime_profile.unreadable.skipped': EventSpec('warning', frozenset({'error', 'organization_id', 'profile_id'})),
     'agent.runtime_profile_service.system_profile_unconfigured.degraded': EventSpec('error', frozenset()),

@@ -31,7 +31,14 @@ from app.modules.agent.infrastructure.repositories import (
 )
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import effective_agent_host_status
-from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeProfileScope,
+    RuntimeProfileStatus,
+)
+from app.modules.agent.services import runtime_system_profiles
+from app.modules.agent.services.workspace_model_fallback import (
+    choose_organization_runtime,
+)
 from app.modules.agent.services.runtime_profile_editor import (
     AgentRuntimeProfileEditor,
 )
@@ -175,13 +182,30 @@ async def list_available_runtime_profiles(
         user_id=user.id,
         include_disabled=include_disabled,
     )
-    defaults = AgentRuntimeDefaultService()
+    default_runtime = AgentRuntimeDefaultService().get_default()
+    if (
+        default_runtime.profile_id == runtime_system_profiles.SYSTEM_LEMMA_PROFILE_ID
+        and not runtime_system_profiles.system_profile_configured()
+    ):
+        # The same answer run routing gives (`default_agent_runtime_for_pod`),
+        # so "Organization default -- X" names the model a run will get rather
+        # than a system model this deployment does not have.
+        default_runtime = (
+            choose_organization_runtime(
+                [
+                    profile
+                    for profile, _availability in entries
+                    if profile.status is RuntimeProfileStatus.ACTIVE
+                ]
+            )
+            or default_runtime
+        )
     return AgentRuntimeProfileListResponse(
         items=[
             _profile_response(profile, availability)
             for profile, availability in entries
         ],
-        default_runtime=defaults.get_default(),
+        default_runtime=default_runtime,
     )
 
 

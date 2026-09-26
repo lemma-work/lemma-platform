@@ -25,6 +25,7 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.services.runtime_profile_service import ResolvedAgentRuntime
 from app.modules.agent.services.workspace_model_fallback import (
+    choose_organization_runtime,
     choose_workspace_runtime,
     resolve_system_or_workspace_runtime,
 )
@@ -159,6 +160,25 @@ class TestChoosingAWorkspaceModel:
             )
             is None
         )
+
+
+class TestTheOrganizationsDefault:
+    """What an unpinned teammate runs on when the deployment has no model."""
+
+    def test_the_first_organization_provider_on_its_own_default(self) -> None:
+        first = _provider("Alpha", _entry("alpha-1", _TEXT), _entry("alpha-2", _TEXT))
+        second = _provider("Beta", _entry("beta-1", _TEXT))
+
+        assert choose_organization_runtime([first, second]) == AgentRuntimeConfig(
+            profile_id=first.id, model_name="alpha-1"
+        )
+
+    def test_a_members_personal_key_never_becomes_everyones(self) -> None:
+        personal = _provider(
+            "Mine", _entry("mine-1", _TEXT), scope=RuntimeProfileScope.PERSONAL
+        )
+
+        assert choose_organization_runtime([personal, _harness()]) is None
 
 
 @pytest.fixture

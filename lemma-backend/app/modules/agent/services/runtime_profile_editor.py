@@ -399,26 +399,30 @@ class AgentRuntimeProfileEditor:
         """
         secret = patch.api_secret()
         discovery_url = str(patch.base_url or "https://api.anthropic.com")
-        async with connection_released(self._session()):
-            discovered = (
-                await discovery._discover_anthropic_compatible_models(
-                    base_url=discovery_url,
-                    api_key=str(secret or ""),
-                    headers=patch.headers,
+        try:
+            async with connection_released(self._session()):
+                discovered = (
+                    await discovery._discover_anthropic_compatible_models(
+                        base_url=discovery_url,
+                        api_key=str(secret or ""),
+                        headers=patch.headers,
+                    )
+                    if is_anthropic
+                    else await discovery._discover_openai_compatible_models(
+                        base_url=discovery_url,
+                        api_key=secret,
+                        headers=patch.headers,
+                    )
                 )
-                if is_anthropic
-                else await discovery._discover_openai_compatible_models(
-                    base_url=discovery_url,
-                    api_key=secret,
-                    headers=patch.headers,
-                )
-            )
+        except discovery.ProviderKeyRejectedError as exc:
+            raise ValueError(discovery.key_rejected_message(profile.name)) from exc
         return discovery._provider_model_catalog(
             discovered_models=discovered,
             fallback_model_names=resolve_catalog_names(
                 profile, model_names, discovered
             ),
             default_vision=is_anthropic,
+            provider_name=profile.name,
         )
 
     async def archive_profile(

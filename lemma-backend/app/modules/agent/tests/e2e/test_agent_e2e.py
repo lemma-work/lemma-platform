@@ -2821,6 +2821,88 @@ class TestAgentRuntimeConfigApis:
         assert eyes.profile.id == profile_id
         assert eyes.model is not None and eyes.model.name == "vendor/eyes"
 
+    async def test_an_unpinned_teammate_runs_on_the_organizations_provider(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        db_session,
+        monkeypatch,
+    ):
+        """Adding a provider on Settings -> Models is enough to be answered.
+
+        A pod with no default of its own used to go straight to the system
+        model; on a deployment without one, every message then failed with
+        "no model is set up" beside a provider that was.
+        """
+        from app.modules.agent.services.pod_runtime_defaults import (
+            default_agent_runtime_for_pod,
+        )
+
+        # The organization is shared with other tests, so the provider's name
+        # sorts first to be the one the listing, and so the default, leads with.
+        provider = AgentRuntimeProfileModel(
+            organization_id=UUID(fixed_test_org["id"]),
+            scope="ORGANIZATION",
+            kind="MODEL_PROVIDER",
+            protocol="OPENAI_COMPATIBLE",
+            name=f"000 Org default {uuid4().hex[:8]}",
+            default_model_name="vendor/first",
+            model_catalog=[
+                {
+                    "name": name,
+                    "display_name": name,
+                    "provider_model_name": name,
+                    "capabilities": ["TEXT", "TOOLS"],
+                    "default_model_settings": {},
+                    "metadata": {},
+                }
+                for name in ("vendor/first", "vendor/second")
+            ],
+            config={"base_url": "https://org-provider.test/v1"},
+            credentials={"api_key": "org-secret"},
+            status="ACTIVE",
+            profile_metadata={"source": "e2e"},
+        )
+        db_session.add(provider)
+        await db_session.flush()
+        profile_id = str(provider.id)
+        await db_session.commit()
+        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+
+        try:
+            async with create_uow_from_session_maker(async_session_maker) as uow:
+                with_system = await default_agent_runtime_for_pod(
+                    uow, pod_id=UUID(pod_id)
+                )
+            monkeypatch.setattr(
+                "app.modules.agent.services.runtime_system_profiles."
+                "system_profile_configured",
+                lambda: False,
+            )
+            async with create_uow_from_session_maker(async_session_maker) as uow:
+                without_system = await default_agent_runtime_for_pod(
+                    uow, pod_id=UUID(pod_id)
+                )
+            listed = await authenticated_client.get(
+                f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+            )
+        finally:
+            # Retired, so later tests sharing this organization are not
+            # handed a default they never asked for.
+            archived = await authenticated_client.delete(
+                f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles/"
+                f"{profile_id}",
+            )
+            assert archived.status_code in (200, 204), archived.text
+
+        # A deployment with its own model keeps using it, exactly as before.
+        assert with_system.profile_id == "system:lemma"
+        assert without_system.profile_id == profile_id
+        assert without_system.model_name == "vendor/first"
+        # And the picker's "Organization default -- X" names the same thing.
+        assert listed.status_code == 200, listed.text
+        assert listed.json()["default_runtime"]["profile_id"] == profile_id
+
     async def test_profile_update_archive_and_restore_lifecycle(
         self,
         authenticated_client,

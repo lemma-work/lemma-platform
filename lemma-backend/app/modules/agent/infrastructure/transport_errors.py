@@ -31,7 +31,13 @@ from pydantic_ai.exceptions import (
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.core.domain.errors import DomainError
 
-__all__ = ["RETRYABLE_STATUS_CODES", "is_retryable_stream_error", "retry_after_seconds"]
+__all__ = [
+    "RETRYABLE_STATUS_CODES",
+    "is_retryable_stream_error",
+    "connection_failure_message",
+    "local_model_server_down_message",
+    "retry_after_seconds",
+]
 
 # 408 request timeout, 409 conflict (some gateways use it for "retry"),
 # 429 rate limited. Everything >=500 is treated as retryable separately.
@@ -111,3 +117,69 @@ def retry_after_seconds(exc: BaseException) -> float | None:
     except TypeError, ValueError:
         return None
     return seconds if seconds >= 0 else None
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+# The two model servers the Models page offers by name, at their default
+# ports. Anything else on this computer is "the model server": the port is
+# all there is to go on, and guessing a product from it would be wrong more
+# often than it helps.
+_LOCAL_SERVER_NAMES = {11434: "Ollama", 1234: "LM Studio"}
+
+
+def local_model_server_down_message(exc: BaseException) -> str | None:
+    """The sentence for "the model server on this computer is not running".
+
+    A refused connection to a loopback address is not a flaky network: nothing
+    is listening, and "the connection kept dropping, send another message"
+    sends the person round the same failure again. Only the address the
+    request went to is read -- never the provider's text.
+    """
+    connect = _find_connect_failure(exc, depth=0)
+    if connect is None:
+        return None
+    try:
+        url = connect.request.url
+    except RuntimeError:
+        # httpx raises when an error was built without its request.
+        return None
+    if url.host not in _LOOPBACK_HOSTS:
+        return None
+    name = _LOCAL_SERVER_NAMES.get(url.port or 0, "The model server")
+    return f"{name} isn't running on this computer. Start it, then send again."
+
+
+def _find_connect_failure(
+    exc: BaseException, *, depth: int
+) -> httpx.ConnectError | None:
+    """The `httpx.ConnectError` inside whatever the provider SDK wrapped it in."""
+    if depth > 6:
+        return None
+    if isinstance(exc, httpx.ConnectError):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for child in exc.exceptions:
+            found = _find_connect_failure(child, depth=depth + 1)
+            if found is not None:
+                return found
+        return None
+    for linked in (exc.__cause__, exc.__context__):
+        if linked is not None and linked is not exc:
+            found = _find_connect_failure(linked, depth=depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def connection_failure_message(exc: BaseException) -> str:
+    """What to say about a connection that failed after every retry.
+
+    Nothing was lost -- each completed message was persisted -- so the usual
+    answer is "send another message". Unless nothing was listening at all, on
+    this computer: then the thing to do is start the model server, and sending
+    again is the same refusal.
+    """
+    return local_model_server_down_message(exc) or (
+        "The connection to the model provider kept dropping. Nothing you "
+        "sent was lost \u2014 send another message to pick up where it stopped."
+    )

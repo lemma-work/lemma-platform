@@ -28,6 +28,7 @@ from uuid import UUID
 from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
@@ -166,6 +167,49 @@ async def resolve_workspace_runtime(
         )
 
 
+# The user a listing is scoped to when only organization-wide profiles are
+# wanted: nobody's personal profile belongs to the nil id, so what comes back is
+# exactly what every member of the organization can see.
+_NO_ONE = UUID(int=0)
+
+
+async def organization_default_runtime(
+    uow: SqlAlchemyUnitOfWork, *, organization_id: UUID
+) -> AgentRuntimeConfig | None:
+    """What a teammate runs on when neither it nor its pod names a model and
+    the deployment has none of its own, read on the caller's unit of work.
+
+    Organization-wide providers only. A run in a shared pod must not land on one
+    member's personal key because that member happened to add it.
+    """
+    repository = AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
+    profiles = await repository.get_visible(
+        organization_id=organization_id, user_id=_NO_ONE
+    )
+    return choose_organization_runtime(profiles)
+
+
+def choose_organization_runtime(
+    profiles: list[AgentRuntimeProfile],
+) -> AgentRuntimeConfig | None:
+    """The first organization-wide model provider, on its own default model.
+
+    Pure, and shared by run routing and the profile listing's
+    ``default_runtime``, so "Organization default -- X" in the picker names the
+    model a run will actually get.
+    """
+    return choose_workspace_runtime(
+        [
+            profile
+            for profile in profiles
+            if profile.scope is RuntimeProfileScope.ORGANIZATION
+        ],
+        pod_default=None,
+        model_name=None,
+        require_vision=False,
+    )
+
+
 def choose_workspace_runtime(
     profiles: list[AgentRuntimeProfile],
     *,
@@ -242,6 +286,8 @@ def _pick_entry(
 
 
 __all__ = [
+    "choose_organization_runtime",
+    "organization_default_runtime",
     "WorkspaceRuntimeResolver",
     "choose_workspace_runtime",
     "resolve_system_or_workspace_runtime",

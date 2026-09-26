@@ -80,3 +80,45 @@ export function readDiscoveredModels(answer: unknown): string[] {
     }
     return names;
 }
+
+const LOOPBACK_URL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i;
+
+/** Whether a route is a model server on this computer. */
+export function isLocalRoute(baseUrl: string | null | undefined): boolean {
+    return LOOPBACK_URL.test((baseUrl ?? "").trim());
+}
+
+function sameRoute(a: string, b: string): boolean {
+    const plain = (url: string) => url.trim().replace(/\/+$/, "").toLowerCase().replace("://localhost", "://127.0.0.1");
+    return plain(a) === plain(b);
+}
+
+/** Whether a saved provider on this computer is answering right now.
+ *
+ *  `null` when there is nothing to say: not a local route, or the check has
+ *  not run. A local route the check did not find is not answering — Ollama
+ *  or LM Studio was quit, and every run on it will be refused until it is
+ *  started again, which the row should say before a message does. */
+export function localRouteAnswering(
+    baseUrl: string | null | undefined,
+    found: { baseUrl: string }[] | undefined,
+): boolean | null {
+    if (!isLocalRoute(baseUrl) || !found) return null;
+    return found.some((server) => sameRoute(server.baseUrl, baseUrl ?? ""));
+}
+
+/** The key sent for a route that takes none. The profile schema wants one;
+ *  a local model server ignores it. Matches `LOCAL_SERVER_KEY`. */
+export function keyToSend(apiKey: string, baseUrl: string, localKey: string): string {
+    const typed = apiKey.trim();
+    return typed || (isLocalRoute(baseUrl) ? localKey : "");
+}
+
+/** A Test that failed, said as what to do about it. The lookup's own text is
+ *  read only to tell a refused key from everything else. */
+export function testFailureMessage(provider: string, reason: string): string {
+    if (/\b(401|403)\b|unauthori[sz]ed|forbidden|invalid[ _-]?api[ _-]?key|rejected/i.test(reason)) {
+        return provider + " rejected this API key.";
+    }
+    return "Couldn't read the model list from " + provider + ". Check the key, or type a model name below.";
+}

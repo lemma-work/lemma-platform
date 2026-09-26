@@ -27,6 +27,7 @@ from pydantic import HttpUrl, SecretStr
 from app.modules.agent.config import agent_settings
 from app.core.config import reveal_secret, settings
 from app.core.domain.errors import DomainError
+from app.core.log.log import get_logger
 from app.modules.identity.contracts.installation import is_desktop_installation
 from app.modules.agent.services.context_budget import (
     catalog_metadata_for,
@@ -42,6 +43,8 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileProtocol,
     RuntimeProfileScope,
 )
+
+logger = get_logger(__name__)
 
 SYSTEM_LEMMA_PROFILE_ID = "system:lemma"
 DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
@@ -308,24 +311,30 @@ MODEL_NOT_CONFIGURED_CODE = "model_not_configured"
 
 _DESKTOP_NO_MODEL_MESSAGE = (
     "No AI model is set up yet. Set up an AI model in This Mac \u2192 Server "
-    "setup, or add a provider in Organization \u2192 Models."
+    "setup, or add a provider in Settings \u2192 Models."
 )
 _SERVER_NO_MODEL_MESSAGE = (
-    "No LLM model is configured on this server. "
-    "Set LEMMA_OPENAI_API_KEY (plus LEMMA_OPENAI_BASE_URL if not OpenAI) "
-    "or LEMMA_ANTHROPIC_API_KEY with LEMMA_DEFAULT_MODEL_TYPE=anthropic_compat, "
-    "or add a provider in Organization \u2192 Models."
+    "No AI model is set up yet. Add a provider in Settings \u2192 Models."
+)
+#: For whoever reads the server's logs, never for the person whose message
+#: failed: they cannot set an environment variable, and a sentence naming one
+#: reads as a fault in the app.
+SERVER_NO_MODEL_OPERATOR_HINT = (
+    "Set LEMMA_OPENAI_API_KEY (plus LEMMA_OPENAI_BASE_URL if not OpenAI) or "
+    "LEMMA_ANTHROPIC_API_KEY with LEMMA_DEFAULT_MODEL_TYPE=anthropic_compat to "
+    "give this deployment a model of its own."
 )
 
 
 def model_not_configured_error() -> DomainError:
-    """The error for "there is no model to run on", worded for who can fix it.
+    """The error for "there is no model to run on", said to whoever sent it.
 
-    On a server that is an operator with access to the environment. On a
-    desktop install it is the person at the keyboard, who has no environment to
-    edit -- the app's own settings are where a model gets set up, so the text
-    names those. The code stays the same on both, because the web app keys its
-    "set up a model" link off it.
+    Role-neutral: the reader may be a member with no settings access at all, so
+    it names the page where a model is added rather than the environment
+    variables an operator would set (those go to the log, see
+    `SERVER_NO_MODEL_OPERATOR_HINT`). Desktop also names Server setup, because
+    there the reader is the operator. The code is the same on both, because the
+    web app keys its "add a model" action off it.
     """
     return DomainError(
         _DESKTOP_NO_MODEL_MESSAGE
@@ -369,10 +378,25 @@ def _no_models_configured(
     that is empty, so the most likely half-configuration of a fresh self-host (a
     key and no model list) explains itself instead of 500ing.
     """
+    # The settings to fill in are the operator's to read, in the log. The
+    # person whose message failed gets a sentence about the provider instead.
+    logger.info(
+        "agent.runtime_profile.model_names_not_configured.observed",
+        operator_hint=(
+            f"{credential_setting} is set but no models are configured for the "
+            f"Lemma system model provider. Set {names_setting} to a "
+            f"comma-separated list of model names, or set {default_setting}."
+        ),
+    )
+    where = (
+        "This Mac \u2192 Server setup"
+        if is_desktop_installation()
+        else "the server's AI settings"
+    )
     return DomainError(
-        f"{credential_setting} is set but no models are configured for the "
-        f"Lemma system model provider. Set {names_setting} to a "
-        f"comma-separated list of model names, or set {default_setting}.",
+        "This server's AI provider has an API key but no model names, so "
+        f"nothing can run on it yet. Name at least one model in {where}, or "
+        "add a provider in Settings \u2192 Models.",
         code="model_names_not_configured",
         status_code=503,
     )

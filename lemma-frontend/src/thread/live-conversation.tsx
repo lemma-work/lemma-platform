@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAssistantSession } from "lemma-sdk/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
-import { NEW_CONVERSATION } from "@/data";
+import { NEW_CONVERSATION, saidAboutSending } from "@/data";
 import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
@@ -16,8 +16,7 @@ import { Composer } from "./composer";
 import { sendToConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
-import { SetUpAiModelLink } from "@/desktop/set-up-on-this-mac";
-import { needsAiModel } from "./model-setup";
+import { needsAiModel, pointsAtModels, runFailure } from "./model-setup";
 
 /** The conversation, on the SDK's own session.
  *
@@ -72,6 +71,10 @@ export function LiveConversation({
     const mounted = useRef(true);
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const [sendError, setSendError] = useState<string | null>(null);
+    /* A call that failed to start is the reader's to dismiss; the same text
+       coming back later is a new failure and shows again. */
+    const [dismissedCallError, setDismissedCallError] = useState<string | null>(null);
+    const shownCallError = callError && callError !== dismissedCallError ? callError : null;
     /* The refused send itself, beside its text: its code is what says the
        failure was "no model set up", which the text is not a safe key for. */
     const [sendProblem, setSendProblem] = useState<unknown>(null);
@@ -292,7 +295,7 @@ export function LiveConversation({
                 } catch (problem) {
                     setAttachments(was => markAttachment(was, one.key, {
                         status: "failed",
-                        error: problem instanceof Error ? problem.message : "Upload failed",
+                        error: saidAboutSending(problem, "Upload failed"),
                     }));
                     throw problem;
                 }
@@ -385,7 +388,7 @@ export function LiveConversation({
                 void queryClient.invalidateQueries({ queryKey: ["conversations", pod.id] });
             } catch (problem) {
                 if (mounted.current) {
-                    setSendError(problem instanceof Error ? problem.message : "That did not send.");
+                    setSendError(saidAboutSending(problem, "That did not send."));
                     setSendProblem(problem);
                 }
                 throw problem;
@@ -454,13 +457,11 @@ export function LiveConversation({
           }
         : null;
 
-    const error = sendError ?? loadError ?? (session.error ? session.error.message : null);
-    /* Whichever failure is on screen, read by its code. The stored run is
-       consulted only when nothing newer is, so a later, different failure is
-       not dressed with a link about an earlier one. */
-    const modelMissing = sendError
-        ? needsAiModel(sendProblem)
-        : !loadError && needsAiModel(session.error, session.error ? null : session.conversation);
+    const failure = runFailure(state, session.error, session.conversation);
+    const error = sendError ?? loadError ?? failure.message;
+    /* Whichever failure is on screen, read by its code rather than its
+       words: the words differ by deployment. */
+    const modelMissing = sendError ? needsAiModel(sendProblem) : !loadError && failure.noModel;
 
     return (
         <>
@@ -491,8 +492,9 @@ export function LiveConversation({
                 onOpenFile={onOpenFile}
                 onOpenTable={onOpenTable}
                 onResolve={resolve}
-                onRetry={() => void session.retryFailedRun()}
-                errorAction={modelMissing ? <SetUpAiModelLink /> : undefined}
+                onRetry={failure.retryable && !modelMissing ? () => void session.retryFailedRun() : undefined}
+                noModel={modelMissing}
+                modelsAction={pointsAtModels(error)}
                 dockedId={waitingOn?.id}
             />
             <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
@@ -500,25 +502,31 @@ export function LiveConversation({
             <Composer
                 placeholder={"Talk to " + pod.name + "…"}
                 note={
-                    callError
-                        ? callError
-                        : /* Nothing, when the pause is on the shelf directly
-                             above this line. The note existed to point at a
-                             card somewhere up the transcript; with the card
-                             here it would be a caption on the thing it is
-                             sitting under. */
-                          waitingOn
-                          ? undefined
-                          : /* A paused sign-in is answered on another page, so
-                               nothing in this pane is going to change until
-                               somebody goes there. Saying only "waiting on
-                               you" left a blocked run reading as an idle
-                               conversation. */
-                            signingIn
-                            ? "waiting on you to sign in to " + signingIn.host
-                            : state === "waiting"
-                              ? "waiting on you"
-                              : pod.waiting || undefined
+                    /* Nothing, when the pause is on the shelf directly above
+                       this line. The note existed to point at a card somewhere
+                       up the transcript; with the card here it would be a
+                       caption on the thing it is sitting under. */
+                    waitingOn
+                        ? undefined
+                        : /* A paused sign-in is answered on another page, so
+                             nothing in this pane is going to change until
+                             somebody goes there. Saying only "waiting on you"
+                             left a blocked run reading as an idle
+                             conversation. */
+                          signingIn
+                          ? "waiting on you to sign in to " + signingIn.host
+                          : state === "waiting"
+                            ? "waiting on you"
+                            : /* Below the run's own notes: a call that did
+                                 not start is worth saying, but not in place of
+                                 "waiting on you", which is what the reader
+                                 has to act on. */
+                              shownCallError ?? (pod.waiting || undefined)
+                }
+                onDismissNote={
+                    shownCallError && !waitingOn && !signingIn && state !== "waiting"
+                        ? () => setDismissedCallError(shownCallError)
+                        : undefined
                 }
                 busy={sending || historyLoading || Boolean(loadError)}
                 canStop={state === "running"}

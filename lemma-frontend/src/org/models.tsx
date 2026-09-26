@@ -6,6 +6,7 @@ import {
     agentLogo,
     agentSettingsChanges,
     stillLooking,
+    saidAbout,
     type AgentSettings,
     type Computer,
     type LocalAgent,
@@ -16,14 +17,18 @@ import { Modal } from "@/shell/modal";
 import { useIsDesktop } from "@/desktop/bridge";
 import { ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
 import { ThisMacModelSuggestions } from "@/desktop/this-mac-models";
-import { friendlyError, thisMac } from "@/desktop/this-mac";
+import { LOCAL_SERVERS, LOCAL_SERVER_KEY, detectLocalServers, friendlyError, thisMac } from "@/desktop/this-mac";
 import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import {
     asksAboutImages,
     chosenVisionModels,
     discoveryRequest,
+    isLocalRoute,
+    keyToSend,
+    localRouteAnswering,
     modelNames,
     readDiscoveredModels,
+    testFailureMessage,
     visionCandidates,
 } from "./provider-draft";
 import { AgentSettingsFields, EditAgentSettings } from "./agent-settings";
@@ -67,6 +72,16 @@ const PRESETS: { id: string; protocol: "openai" | "anthropic"; name: string; bas
     { id: "together", protocol: "openai", name: "Together", baseUrl: "https://api.together.xyz/v1" },
     { id: "mistral", protocol: "openai", name: "Mistral", baseUrl: "https://api.mistral.ai/v1" },
 ];
+
+/* Offered only inside the Lemma app on the machine it runs on: "this
+   computer" means the one the backend can reach on loopback, which in a
+   browser against a shared server is somebody else's machine. */
+const OLLAMA_PRESET: typeof PRESETS[number] = {
+    id: "ollama-local",
+    protocol: "openai",
+    name: "Ollama (this computer)",
+    baseUrl: LOCAL_SERVERS.find((server) => server.id === "ollama")?.baseUrl ?? "",
+};
 
 /** A computer that has just been paired publishes its agents a few seconds
  *  later, and one that is waking up changes status on its own. Poll quickly
@@ -139,7 +154,19 @@ function modelCount(count: number): string {
 
 /** A saved runtime with no live agent behind it: a provider key, or a coding
  *  agent whose computer is not in this list. */
-function RuntimeRow({ runtime, orgId, onChanged }: { runtime: Runtime; orgId: string; onChanged: () => void }) {
+function RuntimeRow({
+    runtime,
+    orgId,
+    onChanged,
+    answering = null,
+}: {
+    runtime: Runtime;
+    orgId: string;
+    onChanged: () => void;
+    /** For a model server on this computer: whether it answered just now.
+     *  `null` when that is not a question this row can ask. */
+    answering?: boolean | null;
+}) {
     const [confirming, setConfirming] = useState(false);
     const archive = useMutation({
         mutationFn: () => source.archiveRuntime(orgId, runtime.id),
@@ -165,8 +192,11 @@ function RuntimeRow({ runtime, orgId, onChanged }: { runtime: Runtime; orgId: st
                identical chip on every row and crowd out the one that says
                something: this one is yours alone. */
             tag={runtime.scope === "personal" ? "yours" : undefined}
-            state={runtime.archived ? "Retired" : runtime.trouble || "Available"}
-            tone={runtime.archived ? "muted" : runtime.trouble ? "warn" : "ok"}
+            note={!runtime.archived && answering === false
+                ? "Nothing is answering at this address. Start the model server on this computer, then check again."
+                : undefined}
+            state={runtime.archived ? "Retired" : runtime.trouble || (answering === false ? "Not answering" : "Available")}
+            tone={runtime.archived ? "muted" : runtime.trouble || answering === false ? "warn" : "ok"}
             quiet={runtime.archived}
             action={
                 runtime.scope === "system" ? undefined : runtime.archived ? (
@@ -364,6 +394,8 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
     /* Testing goes through this computer's own model lookup, which only the
        Lemma app has. A browser saves and lets the backend discover. */
     const canTest = useThisMacAvailability() === "shown";
+    const presets = canTest ? [...PRESETS, OLLAMA_PRESET] : PRESETS;
+    const sentKey = keyToSend(apiKey, baseUrl, LOCAL_SERVER_KEY);
 
     const pick = (chosen: typeof PRESETS[number]) => {
         setPreset(chosen);
@@ -384,7 +416,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 ? { ok: true, models: found }
                 : { ok: false, message: "The route answered, but listed no models. Name them under Models." },
         ),
-        onError: (problem) => setTested({ ok: false, message: friendlyError(problem) }),
+        onError: (problem) => setTested({ ok: false, message: testFailureMessage(name.trim() || preset.name, friendlyError(problem)) }),
     });
 
     const add = useMutation({
@@ -392,7 +424,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
             protocol: preset.protocol,
             name: name.trim(),
             baseUrl: baseUrl.trim(),
-            apiKey: apiKey.trim(),
+            apiKey: sentKey,
             models: typed,
             visionModels: chosenVisionModels(preset.protocol, vision, candidates),
         }),
@@ -406,7 +438,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
     return (
         <Modal title="Connect a key" subtitle="Billed to you, shared with every teammate here" narrow onClose={onClose}>
             <div className="presets" role="group" aria-label="Provider">
-                {PRESETS.map((one) => (
+                {presets.map((one) => (
                     <button
                         key={one.id}
                         className={"preset" + (one.id === preset.id ? " preset--on" : "")}
@@ -422,7 +454,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 <input id="key-name" value={name} onChange={(event) => setName(event.target.value)} />
             </div>
             <div className="field">
-                <label htmlFor="key-url">Route</label>
+                <label htmlFor="key-url">API base URL</label>
                 <input
                     id="key-url"
                     value={baseUrl}
@@ -431,7 +463,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 />
             </div>
             <div className="field">
-                <label htmlFor="key-secret">API key</label>
+                <label htmlFor="key-secret">API key{isLocalRoute(baseUrl) && <em> not needed on this computer</em>}</label>
                 <input
                     id="key-secret"
                     type="password"
@@ -448,7 +480,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                     placeholder="gpt-5, o3-mini"
                     onChange={(event) => setModels(event.target.value)}
                 />
-                <span>Comma separated. Left empty, the route&rsquo;s own list is used.</span>
+                <span>Comma separated. Left empty, the provider&rsquo;s own list is used.</span>
             </div>
             {canTest && (
                 <div className="field">
@@ -488,7 +520,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 <button className="linkish" onClick={onClose}>Cancel</button>
                 <button
                     className="btn btn--primary"
-                    disabled={add.isPending || !name.trim() || !apiKey.trim()}
+                    disabled={add.isPending || !name.trim() || !sentKey}
                     onClick={() => { setError(""); add.mutate(); }}
                 >
                     {add.isPending ? "Saving…" : "Connect"}
@@ -514,9 +546,22 @@ export function ModelsSection({ orgId }: { orgId: string }) {
         refetchOnWindowFocus: true,
     });
 
+    /* Which model servers answer on this computer, to say so beside a saved
+       local provider that has stopped. Shares ThisMacModelSuggestions' cache,
+       and asks nothing outside the Lemma app on its own machine. */
+    const onThisMac = useThisMacAvailability() === "shown";
+    const localServers = useQuery({
+        queryKey: ["this-mac-model-servers"],
+        queryFn: () => detectLocalServers(),
+        enabled: onThisMac,
+        staleTime: 60_000,
+        retry: 0,
+    });
+
     const refresh = () => {
         void queryClient.invalidateQueries({ queryKey: ["runtimes", orgId] });
         void queryClient.invalidateQueries({ queryKey: ["computers"] });
+        void queryClient.invalidateQueries({ queryKey: ["this-mac-model-servers"] });
     };
 
     const all = useMemo(() => runtimes.data ?? [], [runtimes.data]);
@@ -589,14 +634,48 @@ export function ModelsSection({ orgId }: { orgId: string }) {
             </p>
 
             {reading && <p className="empty-row">Reading…</p>}
-            {runtimes.isError && <p className="empty-row">Couldn’t load models.</p>}
+            {runtimes.isError && (
+                <p className="empty-row" role="alert">
+                    {saidAbout(runtimes.error, "Couldn’t load models.")}{" "}
+                    <button className="linkish" onClick={refresh} disabled={runtimes.isFetching}>Retry</button>
+                </p>
+            )}
 
             {runtimes.isSuccess && (
                 <>
+                    {available === 0 && (
+                        /* The one state where this page is the blocker: every
+                           teammate in the organization is waiting on it. */
+                        <div className="getapp" role="status">
+                            <span className="getapp__mark"><KeyIcon size={18} /></span>
+                            <span className="getapp__body">
+                                <b>Teammates need a model to think with</b>
+                                <span>
+                                    Until one is added here, every message to a teammate comes back unanswered.
+                                    Connect a provider&rsquo;s API key, or run a model yourself with{" "}
+                                    <a href="https://ollama.com/download" target="_blank" rel="noreferrer">Ollama</a> or{" "}
+                                    <a href="https://lmstudio.ai" target="_blank" rel="noreferrer">LM Studio</a>
+                                    {onThisMac ? " — once it is running on this computer it shows up below." : " on the computer Lemma runs on."}
+                                </span>
+                            </span>
+                            {onThisMac && (
+                                <button className="btn" onClick={refresh} disabled={localServers.isFetching}>
+                                    <RefreshIcon size={13} className={localServers.isFetching ? "spin" : undefined} /> Check again
+                                </button>
+                            )}
+                        </div>
+                    )}
+
                     {rows.length > 0 && (
                         <ul className="mlist">
                             {rows.map((runtime) => (
-                                <RuntimeRow key={runtime.id} runtime={runtime} orgId={orgId} onChanged={refresh} />
+                                <RuntimeRow
+                                    key={runtime.id}
+                                    runtime={runtime}
+                                    orgId={orgId}
+                                    onChanged={refresh}
+                                    answering={onThisMac && localServers.isSuccess ? localRouteAnswering(runtime.baseUrl, localServers.data) : null}
+                                />
                             ))}
                         </ul>
                     )}
@@ -660,23 +739,6 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                         <p className="empty-row">Couldn’t load your computers.</p>
                     )}
 
-                    <div className="models__acts">
-                        <button className="btn" onClick={() => setAddingKey(true)}>
-                            <PlusIcon size={13} /> Connect a key
-                        </button>
-                        <button className="linkish" onClick={refresh} disabled={runtimes.isFetching || computers.isFetching}>
-                            <RefreshIcon size={13} className={runtimes.isFetching || computers.isFetching ? "spin" : undefined} /> Refresh
-                        </button>
-                        {/* Offered only when there is something behind it. A
-                            permanent toggle is an invitation to look at
-                            nothing. */}
-                        {retired > 0 && (
-                            <button className="linkish" onClick={() => setShowRetired((was) => !was)}>
-                                {showRetired ? "Hide retired" : "Show retired (" + retired + ")"}
-                            </button>
-                        )}
-                    </div>
-
                     {troubled > 0 && (
                         <p className="connectors__note">
                             <WarningIcon size={13} /> A teammate pinned to something unavailable stops answering
@@ -685,6 +747,25 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                     )}
                 </>
             )}
+
+            {/* Outside the success gate: a listing that failed is exactly
+                when "Connect a key" and "Refresh" are needed. */}
+            <div className="models__acts">
+                <button className="btn" onClick={() => setAddingKey(true)}>
+                    <PlusIcon size={13} /> Connect a key
+                </button>
+                <button className="linkish" onClick={refresh} disabled={runtimes.isFetching || computers.isFetching}>
+                    <RefreshIcon size={13} className={runtimes.isFetching || computers.isFetching ? "spin" : undefined} /> Refresh
+                </button>
+                {/* Offered only when there is something behind it. A
+                    permanent toggle is an invitation to look at
+                    nothing. */}
+                {retired > 0 && (
+                    <button className="linkish" onClick={() => setShowRetired((was) => !was)}>
+                        {showRetired ? "Hide retired" : "Show retired (" + retired + ")"}
+                    </button>
+                )}
+            </div>
 
             {addingKey && <AddKey orgId={orgId} onClose={() => setAddingKey(false)} onAdded={refresh} />}
         </div>

@@ -17,6 +17,7 @@ export function Composer({
     onSend,
     onStop,
     onVoice,
+    onDismissNote,
     attachments,
     onAttach,
     onRemoveAttachment,
@@ -33,6 +34,9 @@ export function Composer({
     onSend: (text: string) => void | Promise<unknown>;
     onStop?: () => void;
     onVoice?: () => void;
+    /** Makes `note` dismissible. For notes that are the reader's to clear —
+     *  a call that failed to start — not for ones that describe the run. */
+    onDismissNote?: () => void;
     /** Files waiting to go with the next message. Held by the pane rather than
      *  here, because the pane is what uploads them: it clears them once the
      *  message carrying them has gone, and leaves them alone when it has not,
@@ -205,7 +209,8 @@ export function Composer({
                     />
                     <button
                         className="composer__wave"
-                        title={onVoice ? "Start a call" : "Voice is not configured"}
+                        title={onVoice ? "Start a call" : "Voice calls aren’t set up on this install."}
+                        aria-label={onVoice ? "Start a call" : "Voice calls aren’t set up on this install."}
                         disabled={!onVoice}
                         onClick={onVoice}
                     >
@@ -231,6 +236,11 @@ export function Composer({
                     <span className="composer__note" data-bad={refused ? "" : undefined}>
                         <i />
                         {refused ?? (uploading ? "attaching…" : note)}
+                        {!refused && !uploading && note && onDismissNote && (
+                            <button type="button" className="linkish" aria-label="Dismiss" onClick={onDismissNote}>
+                                <CloseIcon size={12} />
+                            </button>
+                        )}
                     </span>
                 )}
             </div>

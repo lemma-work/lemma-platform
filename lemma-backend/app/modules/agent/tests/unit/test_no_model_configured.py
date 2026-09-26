@@ -66,22 +66,25 @@ async def test_desktop_points_at_the_apps_own_settings(
     assert error.status_code == 503
     assert error.message == (
         "No AI model is set up yet. Set up an AI model in This Mac → Server "
-        "setup, or add a provider in Organization → Models."
+        "setup, or add a provider in Settings → Models."
     )
     assert "LEMMA_" not in error.message
 
 
 @pytest.mark.asyncio
-async def test_a_server_still_names_the_settings_an_operator_sets(
+async def test_a_server_names_the_page_not_the_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The reader may be any member; environment variables go to the log."""
     _no_system_model(monkeypatch, kind="server")
 
     error = await _resolve_default()
 
     assert error.code == "model_not_configured"
-    assert "LEMMA_OPENAI_API_KEY" in error.message
-    assert "This Mac" not in error.message
+    assert error.message == (
+        "No AI model is set up yet. Add a provider in Settings \u2192 Models."
+    )
+    assert "LEMMA_" not in error.message
 
 
 def test_without_a_system_model_the_delegate_may_come_from_the_workspace(

@@ -14,7 +14,7 @@ import {
 } from "@/data";
 import { CheckIcon, ChevronDownIcon, KeyIcon, LemmaMark, SparkleIcon, TerminalIcon, WarningIcon } from "@/ui/icons";
 import { usePicker } from "@/ui/picker";
-import { SetUpAiModelLink } from "@/desktop/set-up-on-this-mac";
+import { AddModelAction } from "@/thread/add-model-action";
 import { modelSetupState } from "./runs-on-state";
 
 /** What this teammate thinks with.
@@ -114,8 +114,8 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
 
     const said = choice
         ? describeChoice(live, choice) || "Selected runtime unavailable"
-        : setup === "none"
-            ? "No AI model set up yet"
+        : setup
+            ? "No model — pick one"
             : inheritedName
                 ? "Organization default — " + inheritedName
                 : "Organization default";
@@ -151,18 +151,15 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
                 the first message would come back with. The link is drawn only
                 inside the Lemma app on the machine it runs on; elsewhere the
                 sentence names the page that fixes it. */}
-            {setup === "none" && (
+            {setup && (
                 <p className="pick__note" role="status">
                     <WarningIcon size={13} />
-                    <span>No AI model is set up yet, so this teammate cannot answer. Add a provider in Organization → Models.</span>
-                    <SetUpAiModelLink />
-                </p>
-            )}
-            {setup === "default-missing" && (
-                <p className="pick__note" role="status">
-                    <WarningIcon size={13} />
-                    <span>The organization default has no AI model behind it. Pick a model here, or set one up.</span>
-                    <SetUpAiModelLink />
+                    <span>
+                        {setup === "none"
+                            ? "No AI model is set up yet, so this teammate cannot answer. Add one in Settings → Models."
+                            : "The organization default has no model behind it. Pick one above, or add one in Settings → Models."}
+                    </span>
+                    <AddModelAction />
                 </p>
             )}
 
@@ -182,8 +179,8 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
 
                     {live.length === 0 && (
                         <p className="pick__empty">
-                            No AI model is set up yet. Organization → Models is where a key or a computer is added.
-                            <SetUpAiModelLink />
+                            No AI model is set up yet. Settings → Models is where a key or a computer is added.
+                            <AddModelAction />
                         </p>
                     )}
 

@@ -57,3 +57,22 @@ export function codeOf(problem: unknown): string {
     const code = (problem as { code?: unknown }).code;
     return typeof code === "string" ? code : "";
 }
+
+/** The sentence for "the request never reached Lemma". */
+export const UNREACHABLE = "Lemma couldn’t be reached — it may be restarting. Try again in a few seconds.";
+
+/** Whether a failure is the transport's rather than anybody's answer: the
+ *  SDK's `NetworkError`, or a bare `fetch` rejection ("Failed to fetch",
+ *  "Load failed", "NetworkError when attempting to fetch resource"). On the
+ *  desktop app the commonest cause is the local server restarting, and the
+ *  raw text of either reads as a crash. */
+export function unreachable(problem: unknown): boolean {
+    if (!problem || typeof problem !== "object") return false;
+    if ((problem as { name?: unknown }).name === "NetworkError") return true;
+    return problem instanceof TypeError && /fetch|network|load failed/i.test(problem.message);
+}
+
+/** `saidAbout`, with a transport failure said as one. */
+export function saidAboutSending(problem: unknown, fallback: string): string {
+    return unreachable(problem) ? UNREACHABLE : saidAbout(problem, fallback);
+}
