@@ -18,6 +18,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.config import reveal_secret
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.api.schemas import (
     AvailableSurface,
@@ -190,7 +191,7 @@ def _managed_setup_available(platform: SurfacePlatform) -> bool:
     if platform is not SurfacePlatform.TELEGRAM:
         return False
     return bool(
-        surface_settings.telegram_manager_bot_token
+        reveal_secret(surface_settings.telegram_manager_bot_token)
         and surface_settings.telegram_manager_bot_username
     )
 

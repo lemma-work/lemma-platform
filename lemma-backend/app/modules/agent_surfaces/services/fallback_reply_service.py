@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.core.config import reveal_secret
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -316,7 +317,7 @@ def has_delivery_credentials(
     if normalized == SurfacePlatform.TEAMS:
         return bool(
             surface_settings.microsoft_bot_app_id
-            and surface_settings.microsoft_bot_app_password
+            and reveal_secret(surface_settings.microsoft_bot_app_password)
         )
     if normalized == SurfacePlatform.RESEND:
         return bool(credentials.get("api_key"))

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from app.core.config import reveal_secret
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from sqlalchemy.exc import SQLAlchemyError
@@ -85,7 +86,8 @@ async def global_whatsapp_configuration() -> GlobalWhatsAppConfiguration:
     if shared is None:
         return _from_settings()
     return GlobalWhatsAppConfiguration(
-        access_token=surface_settings.whatsapp_access_token or shared.access_token,
+        access_token=reveal_secret(surface_settings.whatsapp_access_token)
+        or shared.access_token,
         phone_number_id=(
             surface_settings.whatsapp_phone_number_id or shared.phone_number_id
         ),
@@ -93,8 +95,10 @@ async def global_whatsapp_configuration() -> GlobalWhatsAppConfiguration:
             surface_settings.whatsapp_display_phone_number
             or shared.display_phone_number
         ),
-        app_secret=surface_settings.whatsapp_app_secret or shared.app_secret,
-        verify_token=surface_settings.whatsapp_verify_token or shared.verify_token,
+        app_secret=reveal_secret(surface_settings.whatsapp_app_secret)
+        or shared.app_secret,
+        verify_token=reveal_secret(surface_settings.whatsapp_verify_token)
+        or shared.verify_token,
         webhook_security_enabled=surface_settings.surface_webhook_security_enabled,
     )
 
@@ -165,11 +169,11 @@ async def _shared_row() -> WhatsAppNumberEntity | None:
 
 def _from_settings() -> GlobalWhatsAppConfiguration:
     return GlobalWhatsAppConfiguration(
-        access_token=surface_settings.whatsapp_access_token,
+        access_token=reveal_secret(surface_settings.whatsapp_access_token),
         phone_number_id=surface_settings.whatsapp_phone_number_id,
         display_phone_number=surface_settings.whatsapp_display_phone_number,
-        app_secret=surface_settings.whatsapp_app_secret,
-        verify_token=surface_settings.whatsapp_verify_token,
+        app_secret=reveal_secret(surface_settings.whatsapp_app_secret),
+        verify_token=reveal_secret(surface_settings.whatsapp_verify_token),
         webhook_security_enabled=surface_settings.surface_webhook_security_enabled,
     )
 
@@ -182,10 +186,10 @@ def _settings_are_complete() -> bool:
     feature it is not using.
     """
     return bool(
-        surface_settings.whatsapp_access_token
+        reveal_secret(surface_settings.whatsapp_access_token)
         and surface_settings.whatsapp_phone_number_id
-        and surface_settings.whatsapp_app_secret
-        and surface_settings.whatsapp_verify_token
+        and reveal_secret(surface_settings.whatsapp_app_secret)
+        and reveal_secret(surface_settings.whatsapp_verify_token)
     )
 
 

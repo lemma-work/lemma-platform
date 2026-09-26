@@ -27,6 +27,7 @@ from pydantic import HttpUrl, SecretStr
 from app.modules.agent.config import agent_settings
 from app.core.config import reveal_secret, settings
 from app.core.domain.errors import DomainError
+from app.modules.identity.contracts.installation import is_desktop_installation
 from app.modules.agent.services.context_budget import (
     catalog_metadata_for,
 )
@@ -66,7 +67,15 @@ def _load_runtime_env() -> None:
     Every value this module reads is `LEMMA_`-prefixed, so nothing else needs to
     be in scope. `setdefault` keeps `override=False`: a variable already in the
     environment wins.
+
+    Skipped on a desktop install. There the only model configuration is what
+    the app itself writes into the server's environment, and a source-mode run
+    of the app sits inside a checkout whose `.env` names a developer's keys --
+    which quietly answered "is a model set up?" with yes, so the first-run path
+    where nothing is configured could not be exercised at all.
     """
+    if is_desktop_installation():
+        return
     root = Path(__file__).resolve().parents[5]
     backend = Path(__file__).resolve().parents[4]
     for path in (backend / ".env", root / ".env"):
@@ -293,6 +302,57 @@ def _env_or_setting(env_name: str, setting_value: SecretStr | str | None) -> str
         return None
     normalized = value.strip()
     return normalized or None
+
+
+MODEL_NOT_CONFIGURED_CODE = "model_not_configured"
+
+_DESKTOP_NO_MODEL_MESSAGE = (
+    "No AI model is set up yet. Set up an AI model in This Mac \u2192 Server "
+    "setup, or add a provider in Organization \u2192 Models."
+)
+_SERVER_NO_MODEL_MESSAGE = (
+    "No LLM model is configured on this server. "
+    "Set LEMMA_OPENAI_API_KEY (plus LEMMA_OPENAI_BASE_URL if not OpenAI) "
+    "or LEMMA_ANTHROPIC_API_KEY with LEMMA_DEFAULT_MODEL_TYPE=anthropic_compat, "
+    "or add a provider in Organization \u2192 Models."
+)
+
+
+def model_not_configured_error() -> DomainError:
+    """The error for "there is no model to run on", worded for who can fix it.
+
+    On a server that is an operator with access to the environment. On a
+    desktop install it is the person at the keyboard, who has no environment to
+    edit -- the app's own settings are where a model gets set up, so the text
+    names those. The code stays the same on both, because the web app keys its
+    "set up a model" link off it.
+    """
+    return DomainError(
+        _DESKTOP_NO_MODEL_MESSAGE
+        if is_desktop_installation()
+        else _SERVER_NO_MODEL_MESSAGE,
+        code=MODEL_NOT_CONFIGURED_CODE,
+        status_code=503,
+    )
+
+
+def is_model_not_configured(error: DomainError) -> bool:
+    """Whether this is "there is no model", as opposed to any other failure --
+    the one case where looking at the workspace instead is right."""
+    return error.code == MODEL_NOT_CONFIGURED_CODE
+
+
+def system_profile_configured() -> bool:
+    """Whether the deployment itself supplies a model provider.
+
+    A half-configured one (a key and no model names) still counts: the operator
+    meant to supply one, and resolving it reports exactly which setting is
+    missing. Only "no credentials at all" means "look elsewhere".
+    """
+    try:
+        return system_lemma_profile() is not None
+    except DomainError:
+        return True
 
 
 def _no_models_configured(

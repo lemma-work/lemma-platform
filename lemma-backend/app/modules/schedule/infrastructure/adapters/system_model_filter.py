@@ -84,11 +84,18 @@ class SystemModelScheduleFilter:
         schedule: ScheduleEntity,
     ) -> tuple[bool, dict[str, object] | None]:
         schema = self._prepare_schema(output_schema)
-        runtime = await resolve_system_runtime(usage_limits=FILTER_USAGE_LIMITS)
         organization_id = (
             await pod_organization_id_detached(schedule.pod_id)
             if schedule.pod_id is not None
             else None
+        )
+        # Scoped to the schedule's pod and organization so a deployment with no
+        # system model filters on the model that pod already runs on.
+        runtime = await resolve_system_runtime(
+            usage_limits=FILTER_USAGE_LIMITS,
+            user_id=schedule.user_id,
+            organization_id=organization_id,
+            pod_id=schedule.pod_id,
         )
         usage_context = UsageExecutionContext(
             user_id=schedule.user_id,

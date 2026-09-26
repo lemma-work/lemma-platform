@@ -35,6 +35,9 @@ from app.modules.datastore.composition import get_datastore_composition
 from app.modules.datastore.infrastructure.repositories import DatastoreFileRepository
 from app.modules.datastore.infrastructure.storage import create_datastore_storage
 from app.modules.datastore.services.file_service import DatastoreFileService
+from app.modules.datastore.services.system_skill_files import (
+    configured_system_skills_root,
+)
 from app.modules.datastore.services.files.file_url import (
     build_file_app_url,
     build_object_url,
@@ -65,4 +68,5 @@ __all__ = [
     "build_object_url",
     "build_record_service",
     "build_table_service",
+    "configured_system_skills_root",
 ]

@@ -39,6 +39,21 @@ from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _a_system_model_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every path here is the system-model one.
+
+    Without a system provider these settings resolve against the workspace
+    instead, which `test_workspace_model_fallback.py` covers; pinning it here
+    keeps these tests about the imports rather than about whichever provider
+    keys the machine running them happens to have.
+    """
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_system_profiles.system_profile_configured",
+        lambda: True,
+    )
+
+
 def _resolved_stub(capabilities):
     """What AgentRuntimeProfileService.resolve returns, minimally."""
     return SimpleNamespace(

@@ -50,6 +50,7 @@ from app.modules.agent.services.runtime_profile_creation import (
 from app.modules.agent.services.runtime_system_profiles import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID as DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     SYSTEM_LEMMA_PROFILE_ID as SYSTEM_LEMMA_PROFILE_ID,
+    model_not_configured_error,
     system_lemma_profile,
     system_profile_by_id,
 )
@@ -336,13 +337,7 @@ class AgentRuntimeProfileService:
         )
         if profile is None:
             if profile_id == SYSTEM_LEMMA_PROFILE_ID:
-                raise DomainError(
-                    "No LLM model is configured on this server. "
-                    "Set LEMMA_OPENAI_API_KEY (plus LEMMA_OPENAI_BASE_URL if not OpenAI) "
-                    "or LEMMA_ANTHROPIC_API_KEY with LEMMA_DEFAULT_MODEL_TYPE=anthropic_compat.",
-                    code="model_not_configured",
-                    status_code=503,
-                )
+                raise model_not_configured_error()
             archived = await self._archived_profile(
                 profile_id=profile_id,
                 organization_id=organization_id,

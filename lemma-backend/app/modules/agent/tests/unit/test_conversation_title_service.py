@@ -602,6 +602,83 @@ async def test_generator_asks_for_the_configured_title_model(
     )
 
 
+class _NoSystemModel:
+    """The profile service on a deployment whose environment names no model."""
+
+    async def resolve(self, *, runtime, organization_id, user_id):
+        from app.core.domain.errors import DomainError
+
+        raise DomainError(
+            "No AI model is set up yet.", code="model_not_configured", status_code=503
+        )
+
+
+@pytest.mark.asyncio
+async def test_without_a_system_model_titles_run_on_the_pods_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployment set up only through Organization -> Models still titles."""
+    _enable_llm_titling(monkeypatch)
+    asked: list[dict] = []
+
+    async def workspace_runtime(**kwargs):
+        asked.append(kwargs)
+        return _FakeResolved()
+
+    captured: dict[str, object] = {}
+
+    class _FakeLLMAgent:
+        def __init__(self, model, system_prompt=None):
+            captured["model"] = model
+
+        async def run(self, prompt, *, usage_limits=None, model_settings=None):
+            return SimpleNamespace(output="Workspace Title")
+
+    generator = ConversationTitleGenerator(
+        runtime_profiles=_NoSystemModel,
+        model_for_profile=lambda **_: "workspace-model",
+        llm_agent=_FakeLLMAgent,
+        workspace_runtime=workspace_runtime,
+    )
+    pod_id = uuid4()
+    organization_id = uuid4()
+
+    title = await generator.generate(
+        user_id=uuid4(),
+        organization_id=organization_id,
+        pod_id=pod_id,
+        user_text="Plan a trip to Japan",
+        reply_text=None,
+    )
+
+    assert title == "Workspace Title"
+    assert captured["model"] == "workspace-model"
+    assert asked[0]["pod_id"] == pod_id
+    assert asked[0]["organization_id"] == organization_id
+    assert asked[0]["model_name"] == "accounts/fireworks/models/test-title-model"
+
+
+@pytest.mark.asyncio
+async def test_with_nothing_set_up_the_title_call_still_says_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.domain.errors import DomainError
+
+    _enable_llm_titling(monkeypatch)
+
+    async def nothing(**_):
+        return None
+
+    generator = ConversationTitleGenerator(
+        runtime_profiles=_NoSystemModel, workspace_runtime=nothing
+    )
+
+    with pytest.raises(DomainError) as caught:
+        await _ask(generator)
+
+    assert caught.value.code == "model_not_configured"
+
+
 def test_the_prompt_carries_the_reply_only_when_there_is_one() -> None:
     assert "Assistant's reply" in _build_user_prompt("hello", "sure thing")
     assert "Assistant's reply" not in _build_user_prompt("hello", None)

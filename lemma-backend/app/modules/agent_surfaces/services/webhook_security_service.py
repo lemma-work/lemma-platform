@@ -12,6 +12,7 @@ import jwt
 from redis.exceptions import RedisError
 from jwt.algorithms import RSAAlgorithm
 
+from app.core.config import reveal_secret
 from app.core.authorization.scope import uow_scope
 from app.core.config import settings
 from app.core.domain.errors import DomainError
@@ -161,20 +162,20 @@ class SurfaceWebhookSecurityService:
             self._verify_slack_signature(
                 headers=headers,
                 raw_body=raw_body,
-                signing_secret=surface_settings.slack_signing_secret,
+                signing_secret=reveal_secret(surface_settings.slack_signing_secret),
             )
             return
         if normalized == "WHATSAPP":
             self._verify_whatsapp_signature(
                 headers=headers,
                 raw_body=raw_body,
-                app_secret=surface_settings.whatsapp_app_secret,
+                app_secret=reveal_secret(surface_settings.whatsapp_app_secret),
             )
             return
         if normalized == "TELEGRAM":
             self._verify_telegram_secret(
                 headers=headers,
-                webhook_secret=surface_settings.telegram_webhook_secret,
+                webhook_secret=reveal_secret(surface_settings.telegram_webhook_secret),
             )
             return
         if normalized == "TEAMS":
@@ -239,8 +240,8 @@ class SurfaceWebhookSecurityService:
             )
             return
         if surface.surface_type is SurfacePlatform.SLACK:
-            signing_secret = (
-                surface.webhook_secret or surface_settings.slack_signing_secret
+            signing_secret = surface.webhook_secret or reveal_secret(
+                surface_settings.slack_signing_secret
             )
             async with self._resolver() as resolver:
                 if resolver is not None:
@@ -410,8 +411,8 @@ class SurfaceWebhookSecurityService:
                 return None, None
             return credentials.get("app_secret"), credentials.get("verify_token")
         return (
-            surface_settings.whatsapp_app_secret,
-            surface_settings.whatsapp_verify_token,
+            reveal_secret(surface_settings.whatsapp_app_secret),
+            reveal_secret(surface_settings.whatsapp_verify_token),
         )
 
     async def resolve_whatsapp_verify_token(

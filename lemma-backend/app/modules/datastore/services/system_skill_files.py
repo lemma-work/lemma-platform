@@ -28,6 +28,24 @@ def _repo_root_for_system_skills() -> Path | None:
     return None
 
 
+def configured_system_skills_root() -> Path | None:
+    """Where the shipped skills live, or ``None`` when this build has none.
+
+    ``LEMMA_SKILLS_ROOT`` first: a packaged install (Lemma Desktop) carries its
+    skills beside the binary, nowhere near a source checkout, so walking up
+    from this file finds nothing there. The agent's skill loader and the
+    ``/skills`` overlay read the same answer from here, so the two cannot
+    disagree about which skills exist.
+    """
+    configured_root = os.environ.get("LEMMA_SKILLS_ROOT", "").strip()
+    if configured_root:
+        return Path(configured_root).expanduser()
+    repo_root = _repo_root_for_system_skills()
+    if repo_root is not None:
+        return repo_root / "lemma-skills"
+    return None
+
+
 class SystemSkillFileProvider:
     root_path = SYSTEM_SKILLS_ROOT_PATH
 
@@ -164,12 +182,9 @@ class SystemSkillFileProvider:
     def _skills_root(self) -> Path:
         if self.skills_root is not None:
             return self.skills_root
-        configured_root = os.environ.get("LEMMA_SKILLS_ROOT", "").strip()
-        if configured_root:
-            return Path(configured_root).expanduser()
-        repo_root = _repo_root_for_system_skills()
-        if repo_root is not None:
-            return repo_root / "lemma-skills"
+        configured_root = configured_system_skills_root()
+        if configured_root is not None:
+            return configured_root
         # No bundled skills directory (e.g. a deployment that ships without
         # lemma-skills). Point at a path that does not exist so the overlay is
         # simply empty — `/skills` still exists as a folder users can populate.

@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
+from app.core.config import reveal_secret
 from app.core.api.callback_page import (
     message_html,
     render_callback_page,
@@ -65,7 +66,9 @@ async def handle_telegram_manager_webhook(
     request: Request,
     service: TelegramManagerServiceDep,
 ):
-    expected = str(surface_settings.telegram_manager_webhook_secret or "").strip()
+    expected = str(
+        reveal_secret(surface_settings.telegram_manager_webhook_secret) or ""
+    ).strip()
     provided = str(request.headers.get("x-telegram-bot-api-secret-token") or "").strip()
     if not expected:
         raise HTTPException(
@@ -245,9 +248,9 @@ async def handle_whatsapp_number_webhook(
     # something the sender chose. Select by path, verify the HMAC over the raw
     # bytes, and only then parse.
     number = await pooled_number(phone_number_id)
-    app_secret = (
-        number.app_secret if number else None
-    ) or surface_settings.whatsapp_app_secret
+    app_secret = (number.app_secret if number else None) or reveal_secret(
+        surface_settings.whatsapp_app_secret
+    )
     # Raises SurfaceWebhookAuthenticationError (a DomainError) on a bad or
     # missing signature, translated to the right status by the global handler.
     security_service.verify_whatsapp_app_secret(
@@ -417,7 +420,7 @@ async def verify_surface_webhook(
     return _webhook_verification_response(
         platform,
         dict(request.query_params),
-        whatsapp_verify_token=surface_settings.whatsapp_verify_token,
+        whatsapp_verify_token=reveal_secret(surface_settings.whatsapp_verify_token),
     )
 
 
@@ -438,9 +441,9 @@ async def verify_whatsapp_number_webhook(
     # per-number `verify_token` was not expressible before this route existed.
     # Here the path is the identifier, and it is enough.
     number = await pooled_number(phone_number_id)
-    verify_token = (
-        number.verify_token if number else None
-    ) or surface_settings.whatsapp_verify_token
+    verify_token = (number.verify_token if number else None) or reveal_secret(
+        surface_settings.whatsapp_verify_token
+    )
     # `_token_matches` is constant-time and treats an absent expected token as
     # never matching, so a number with no stored token and a deployment with
     # none in settings refuses the handshake instead of handing out the
@@ -475,7 +478,7 @@ async def verify_direct_surface_webhook(
     whatsapp_verify_token = (
         await security_service.resolve_whatsapp_verify_token(surface)
         if platform == "whatsapp"
-        else surface_settings.whatsapp_verify_token
+        else reveal_secret(surface_settings.whatsapp_verify_token)
     )
     return _webhook_verification_response(
         platform,

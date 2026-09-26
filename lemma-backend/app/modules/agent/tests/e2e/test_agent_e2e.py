@@ -2715,7 +2715,10 @@ class TestAgentRuntimeConfigApis:
                 "base_url": "https://api.vendor.test/v1",
                 "api_key": "vendor-secret",
                 "default_model_name": "vendor/model-pro",
-                "model_names": ["vendor/model-pro"],
+                "model_names": ["vendor/model-pro", "vendor/model-eyes"],
+                # The route's list says nothing about modalities, so the person
+                # adding it says which one reads images.
+                "vision_model_names": ["vendor/model-eyes"],
             },
         )
         assert vendor.status_code == 201, vendor.text
@@ -2725,6 +2728,10 @@ class TestAgentRuntimeConfigApis:
             "catalog_discovered": False,
         }
         assert vendor_payload["default_model_name"] == "vendor/model-pro"
+        assert {
+            item["name"]: "VISION" in item["capabilities"]
+            for item in vendor_payload["model_catalog"]
+        } == {"vendor/model-pro": False, "vendor/model-eyes": True}
 
         runner = AgentRunnerService(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
@@ -2745,6 +2752,74 @@ class TestAgentRuntimeConfigApis:
                     else "vendor-secret"
                 )
             }
+
+    async def test_a_deployment_without_a_system_model_uses_the_pods_own(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        fixed_test_user,
+        monkeypatch,
+    ):
+        """Titles, filters and the vision delegate on a workspace-only setup.
+
+        The organization is shared with other tests and may hold providers of
+        its own, so the pod's default is what makes the answer deterministic --
+        and it is also the answer that matters: the model this pod's owner
+        picked.
+        """
+        from app.modules.agent.services.workspace_model_fallback import (
+            resolve_workspace_runtime,
+        )
+
+        async def nothing_discovered(**_kwargs):
+            return []
+
+        # The route is not real; its model list comes from the request.
+        monkeypatch.setattr(
+            "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+            nothing_discovered,
+        )
+
+        created = await authenticated_client.post(
+            f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+            json={
+                "source": "OPENAI_COMPATIBLE",
+                "name": f"Workspace only {uuid4().hex[:8]}",
+                "base_url": "https://api.vendor.test/v1",
+                "api_key": "workspace-secret",
+                "default_model_name": "vendor/words",
+                "model_names": ["vendor/words", "vendor/eyes"],
+                "vision_model_names": ["vendor/eyes"],
+            },
+        )
+        assert created.status_code == 201, created.text
+        profile_id = created.json()["id"]
+        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+        pinned = await authenticated_client.put(
+            f"/pods/{pod_id}",
+            json={"config": {"default_runtime": {"profile_id": profile_id}}},
+        )
+        assert pinned.status_code == 200, pinned.text
+
+        text = await resolve_workspace_runtime(
+            organization_id=UUID(fixed_test_org["id"]),
+            user_id=UUID(fixed_test_user["id"]),
+            model_name="a-model-only-the-system-provider-serves",
+            pod_id=UUID(pod_id),
+        )
+        eyes = await resolve_workspace_runtime(
+            organization_id=UUID(fixed_test_org["id"]),
+            user_id=UUID(fixed_test_user["id"]),
+            pod_id=UUID(pod_id),
+            require_vision=True,
+        )
+
+        assert text is not None and eyes is not None
+        assert text.profile.id == profile_id
+        assert text.model is not None and text.model.name == "vendor/words"
+        assert text.credentials == {"api_key": "workspace-secret"}
+        assert eyes.profile.id == profile_id
+        assert eyes.model is not None and eyes.model.name == "vendor/eyes"
 
     async def test_profile_update_archive_and_restore_lifecycle(
         self,
