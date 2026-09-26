@@ -34,6 +34,7 @@ mod options;
 mod outcome;
 mod permission;
 mod prompt;
+mod session_options;
 mod session_setup;
 mod supervision;
 
@@ -42,6 +43,7 @@ pub(crate) use options::*;
 pub use outcome::*;
 pub(crate) use permission::*;
 pub use prompt::*;
+pub(crate) use session_options::*;
 pub(crate) use session_setup::*;
 pub(crate) use supervision::*;
 
@@ -57,6 +59,9 @@ pub struct AcpRunRequest {
     /// rather than here, because writing the token file needs the Agent Host's
     /// private directory and the ACP layer has no business knowing that path.
     pub agent_environment: std::collections::BTreeMap<String, String>,
+    /// Whether the person chose to have this agent load its own skills and
+    /// settings (`HostConfig::own_settings`). See `session_options`.
+    pub own_settings: bool,
     pub mcp_server: Option<McpServer>,
     /// Whether this harness advertised `loadSession` at probe time. A run only
     /// tries to resume `run_spec.resume_session_id` when it did.

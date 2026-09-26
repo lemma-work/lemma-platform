@@ -58,6 +58,9 @@ impl AgentHostSupervisor {
             "enabled": super::pairing::host_execution_enabled(&self.data_dir.join("config.json")),
             "available": super::pairing::host_execution_available(),
         });
+        status["own_settings"] = json!(super::pairing::own_settings(
+            &self.data_dir.join("config.json")
+        ));
         status
     }
 

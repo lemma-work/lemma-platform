@@ -134,11 +134,15 @@ impl TargetWorker {
                 &spec.mcp,
                 crate::acp::run_environment(&spec.mcp),
             );
+            // Read per run, so a change in Settings applies to the next turn.
+            let own_settings = crate::config::HostConfig::load_or_create(&paths)
+                .is_ok_and(|config| config.own_settings.contains(&adapter.spec.key));
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
                 scratch_directory: scratch.clone(),
                 agent_environment,
+                own_settings,
                 mcp_server: Some(mcp_server),
                 can_load_session,
                 published_config_options,

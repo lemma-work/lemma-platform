@@ -19,6 +19,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
         AcpRunRequest {
             adapter: manifest.resolve("codex").unwrap(),
             agent_environment: std::collections::BTreeMap::default(),
+            own_settings: false,
             run_spec: RunSpec {
                 agent_run_id: Uuid::new_v4(),
                 conversation_id: Uuid::new_v4(),

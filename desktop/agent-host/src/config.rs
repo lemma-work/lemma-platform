@@ -171,6 +171,14 @@ pub struct HostConfig {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub legacy_host_execution: bool,
+    /// The coding agents (adapter keys) whose person chose "Use my own skills
+    /// and settings": they start as they would in the person's terminal,
+    /// loading their own instructions, skills, plugins, hooks and MCP servers.
+    /// Every other agent leaves those out (`acp::session_options`). A setting
+    /// of this machine's, not of a pairing: it is about the agents installed
+    /// here, whichever workspace runs them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub own_settings: std::collections::BTreeSet<String>,
 }
 
 /// Drop targets this build cannot read, rather than failing the whole config.
@@ -292,6 +300,7 @@ impl HostConfig {
             targets: Vec::new(),
             max_runs: default_max_runs(),
             legacy_host_execution: false,
+            own_settings: std::collections::BTreeSet::new(),
         };
         config.save(paths)?;
         Ok(config)
@@ -535,6 +544,7 @@ mod tests {
             ],
             max_runs: default_max_runs(),
             legacy_host_execution: false,
+            own_settings: std::collections::BTreeSet::new(),
         };
         config.migrate_retired_local_hosts();
         let urls: Vec<&str> = config
@@ -637,6 +647,7 @@ mod tests {
     fn rejects_a_capacity_the_backend_would_refuse_on_every_poll() {
         let config = |max_runs| HostConfig {
             legacy_host_execution: false,
+            own_settings: std::collections::BTreeSet::default(),
             installation_id: "installation".into(),
             max_runs,
             targets: Vec::new(),
@@ -656,6 +667,7 @@ mod tests {
     fn rejects_remote_plain_http() {
         let config = HostConfig {
             legacy_host_execution: false,
+            own_settings: std::collections::BTreeSet::default(),
             installation_id: "installation".into(),
             max_runs: 1,
             targets: vec![TargetConfig {
@@ -738,6 +750,7 @@ mod tests {
             targets: vec![pairing(me), pairing(them)],
             max_runs: 1,
             legacy_host_execution: false,
+            own_settings: std::collections::BTreeSet::default(),
         };
         assert_eq!(config.apply_session(&url, Some(me)), 1);
         assert!(config.targets[0].takes_work() && config.targets[0].runs_host_commands());

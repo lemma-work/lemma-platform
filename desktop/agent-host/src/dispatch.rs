@@ -16,7 +16,7 @@ use lemma_agent_host::service::ServiceManager;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::cli::{Cli, Command, HostExecutionAction};
+use crate::cli::{Cli, Command, HostExecutionAction, OwnSettingsAction};
 use crate::console::ConsoleCallbacks;
 use crate::output::{init_logging, print_value, select_one_target, show_logs, update_targets};
 
@@ -311,6 +311,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                         // A smoke run talks to no Lemma, so it is given no
                         // credential.
                         agent_environment: std::collections::BTreeMap::default(),
+                        own_settings: false,
                         mcp_server: None,
                         can_load_session: false,
                         published_config_options: Vec::new(),
@@ -346,6 +347,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Command::HostExecution { action } => host_execution(&paths, action).await,
+        Command::OwnSettings { action } => own_settings(&paths, action),
         Command::ExecServer { root_base } => {
             #[cfg(unix)]
             {
@@ -429,5 +431,39 @@ async fn host_execution(paths: &HostPaths, action: HostExecutionAction) -> anyho
             );
         }
     }
+    Ok(())
+}
+
+/// `own-settings enable|disable <harness>`.
+///
+/// Read by each run as it starts (`runtime::run`), so a change applies to the
+/// agent's next turn without a restart.
+fn own_settings(paths: &HostPaths, action: OwnSettingsAction) -> anyhow::Result<()> {
+    let (harness, enabled) = match action {
+        OwnSettingsAction::Enable { harness } => (harness, true),
+        OwnSettingsAction::Disable { harness } => (harness, false),
+    };
+    anyhow::ensure!(
+        !harness.is_empty()
+            && harness
+                .chars()
+                .all(|character| character.is_ascii_lowercase() || character == '-'),
+        "{harness:?} is not the name of a coding agent (claude-code, codex, opencode, cursor)"
+    );
+    HostConfig::mutate(paths, |config| {
+        Ok(if enabled {
+            config.own_settings.insert(harness.clone())
+        } else {
+            config.own_settings.remove(&harness)
+        })
+    })?;
+    println!(
+        "{harness} {} its own skills and settings.",
+        if enabled {
+            "now loads"
+        } else {
+            "no longer loads"
+        }
+    );
     Ok(())
 }

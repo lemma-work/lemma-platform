@@ -181,6 +181,25 @@ that threw still said "Connecting" — and each was indistinguishable from progr
 for as long as the app stayed open. Every optimistic state on this surface owes
 the reader a way to stop being optimistic.
 
+So the two stages on the way up have an end. *Starting* becomes **Not
+running**, with **Restart**, at once when locald reports
+`restart_circuit_open` (the supervisor stopped restarting a sidecar that kept
+crashing; `agent_host_start` forgives that) and after 30 seconds otherwise.
+*Connecting* becomes **Not connected**, with **Connect again**, after 30
+seconds: the automatic connection is one attempt per page, so a pairing the
+host dropped mid-session is otherwise never retried. "Connect again" is a
+person's click, so it sends `reenable`. A pairing the workspace refused as too
+old (close 4426, "this Lemma needs a newer Agent Host") reads **Update
+needed**, with **Check for updates**, as does a build with no sidecar at all.
+The card never shows the shell's or the sidecar's error text; that is what
+**Open log** is for.
+
+A coding agent that needs signing in or updating on *this* computer names the
+command to type and offers **Check again**, which is `agent_host_refresh`: the
+host re-probes and republishes now instead of on its own 15-minute cycle.
+Settings → This Mac → Coding agents lists what was found, with each agent's
+release and its update command.
+
 locald merges the process and connection planes into `agent-host.status` and the
 `agent_host` key of `control.snapshot`, caching the journal read for two seconds
 so a polling page cannot fork the sidecar on every tick.
@@ -195,8 +214,9 @@ new endpoint.
 | Surface | Scope | Purpose |
 |---|---|---|
 | Workspace → Settings → Models | local, hosted, and plain browser | The canonical surface. "This Mac"/"This PC" card (`lemma-frontend/src/desktop/this-computer-card.tsx`) in the desktop app; cloud-only view and "Get the app" elsewhere |
+| Workspace → Settings → This Mac → Coding agents | local, in the app's own window | The same card, the agents it found with their releases and update commands, and "Run commands on this Mac" (off-limits until this computer's own pairing exists) |
 | Tray | desktop | Glanceable state and the log, without opening a window |
-| Local settings → Runtime | local mode only | Status row, restart, log — recovery when the workspace itself will not load |
+| Local settings → This computer | desktop | Status row in the card's words, Restart, log, and a button that opens Coding agents (Models, in a hosted workspace) — recovery when the workspace itself will not load |
 
 Local settings is local-mode only, so it must not be the canonical surface;
 choosing which agents this workspace may use lives in the workspace page, where a
@@ -212,7 +232,7 @@ existed only to tell the toggle which way to point.
 The workspace page is a **remote origin** to Tauri — locald serves it over
 http, and the hosted build loads `lemma.work` — so it can only reach the shell
 through a capability naming its URL. `capabilities/workspace.json` grants
-`open_control_center`, six `agent_host_*` commands, `sandbox_image_status`,
+`open_control_center`, seven `agent_host_*` commands, `sandbox_image_status`,
 the conversation-folder commands, `discover_provider_models` and
 `configure_ai_provider` — and, for Settings → This Mac, the commands that
 change this computer's own settings: `local_settings_snapshot`,
@@ -353,6 +373,63 @@ never happens.
 **A remedy named in an error must be reachable by the person reading it.** A
 corrupt adapter cache says `run doctor --repair`, and Desktop exposes no doctor
 surface — so the advice is a dead end for every user who can receive it.
+
+## What a coding agent loads
+
+Lemma is the source of truth for what a run's agent is told and can use: its
+instructions, its skills (through `lemma_load_skill`) and its tools (Lemma's
+MCP server). A coding agent on somebody's Mac also loads its own -- Claude
+Code reads `~/.claude`, Codex `~/.codex` and `~/.agents`, OpenCode those and
+`~/.config/opencode` -- and left alone they compete with Lemma's: an older
+copy of Lemma's own `browser` skill, a hook that rewrites every command, a
+plugin that drives the person's own Chrome. So each run starts its agent with
+the agent's own switches set to leave them out
+(`desktop/agent-host/src/acp/session_options.rs`), and each can be put back per
+agent.
+
+| Agent | How | Left out | Still loaded |
+|---|---|---|---|
+| Claude Code | `session/new` and `session/load` `_meta`, read by `claude-agent-acp`: `claudeCode.options` `settingSources: ["project", "local"]`, `strictMcpConfig`, `env.CLAUDE_CODE_DISABLE_AUTO_MEMORY` | `~/.claude` instructions, skills, agents, commands, plugins, hooks and settings; the person's MCP servers and claude.ai connectors; auto-memory | a bound project's own `CLAUDE.md` and `.claude/`; Claude Code's bundled skills |
+| Codex | `CODEX_CONFIG`, merged into the pinned adapter's value, which `codex-acp` sends as overrides on every thread: `skills.config` (each skill under `~/.codex/skills` and `~/.agents/skills`, `enabled: false`), `features.hooks: false` | the person's skills, hooks | Codex's bundled skills (image generation among them); a bound project's `AGENTS.md`; `~/.codex/AGENTS.md` and the person's MCP servers, which Codex has no switch for short of another `CODEX_HOME` |
+| OpenCode | `OPENCODE_DISABLE_EXTERNAL_SKILLS`, `OPENCODE_DISABLE_CLAUDE_CODE`, and `OPENCODE_CONFIG_CONTENT` `{"permission": {"skill": "deny"}}` | skills under `~/.claude` and `~/.agents`, Claude Code's instructions, the `skill` tool | `~/.config/opencode` (`AGENTS.md`, `opencode.json`) |
+| Cursor | nothing | -- | everything |
+
+Nothing moves a config home -- `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or the XDG
+folders -- because that is where each keeps its sign-in, so "left out" stops
+where an agent has no switch that spares the login. **"Use my own skills and
+settings"** (Settings → This Mac → Coding agents, one switch per agent, off by
+default) puts them back: the set of such agents is `own_settings` in the Agent
+Host's `config.json`, changed by `lemma-agent-host own-settings
+enable|disable <agent>`, locald's `agent-host.own-settings` and the Tauri
+command `agent_host_own_settings`, reported as `own_settings` in
+`agent-host.status`, and read by each run as it starts.
+
+Some things apply either way, because Lemma offers the same and its prompt
+tells the agent to use Lemma's:
+
+- **Instructions.** Claude Code is given Lemma's in `_meta.systemPrompt.append`
+  -- appended to its own system prompt, on every run, since every run starts
+  the adapter afresh -- and no longer as a `<system>` block opening the
+  prompt, where they read as the person's own words. The other agents still
+  receive the block on the turns `system_prompt_delivery` says need it.
+- **The browser.** Claude Code's browser integration is off
+  (`disallowedTools: ["mcp__claude-in-chrome"]`, `--no-chrome`): the browser
+  the person watches is Lemma's. `AskUserQuestion` stays off too, as the
+  adapter already makes it; Lemma asks through `lemma_ask_user`.
+- **The web.** When the run has `lemma_web_search`, Claude Code's `WebSearch`
+  and Codex's web search (`web_search: "disabled"`) are off; when it has
+  `lemma_web_fetch`, Claude Code's `WebFetch` and OpenCode's `webfetch`.
+- **`lemma`.** When the backend ships a CLI beside it (`lemma_cli` in the run's
+  MCP configuration, from `WORKSPACE_HOST_CLI_ROOT`; Desktop's host pack sets
+  it), its `bin/` goes first on the agent's `PATH`, so the `lemma` an agent's
+  shell runs is the release its server is, signed in as the run through the
+  `LEMMA_*` environment (with `LEMMA_CONVERSATION_ID`). The host accepts the
+  folder by the rule host execution uses
+  ([§6](desktop-host-execution.md#6-the-seatbelt-profile)).
+
+`desktop/agent-host/tests/acp_session_options_e2e.rs` holds the driver to
+delivering each of these, against a scripted agent that records what it is
+sent and the environment it starts in.
 
 ## The link
 
@@ -597,7 +674,7 @@ refusal it already understands and serve nothing else
   "target requested Agent Host protocol 3 is unsupported", and retries every
   30 seconds. It keeps its pairing, so updating Desktop is all it takes to
   reconnect. The first such poll marks the host `UPGRADE_REQUIRED`, which the
-  workspace shows as "Needs updating", and logs
+  workspace shows as "Update needed", and logs
   `agent.agent_host_legacy.upgrade_required` once.
 - Pairing, event upload, harness publication, self-revocation, and the
   `/agent-runtime/conversations/...` MCP mount return

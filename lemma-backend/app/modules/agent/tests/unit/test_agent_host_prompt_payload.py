@@ -637,3 +637,48 @@ class TestReplayedHistory:
 
         assert '"count": 1' in replayed
         assert '"name": "a"' in replayed
+
+
+class TestTheAgentsOwnCli:
+    """What a coding agent on the Mac is told about `lemma`."""
+
+    async def _payload(self, monkeypatch: pytest.MonkeyPatch, cli: str | None):
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            mcp_payload,
+        )
+        from app.modules.workspace.config import workspace_settings
+
+        async def mint(**_: object) -> str:
+            return "a-delegated-session"
+
+        monkeypatch.setattr(
+            "app.modules.identity.contracts.delegated_tokens.mint_delegated_token",
+            mint,
+        )
+        monkeypatch.setattr(workspace_settings, "host_cli_root", cli)
+        conversation_id = uuid7()
+        return conversation_id, await mcp_payload(
+            agent_run_id=uuid7(),
+            conversation_id=conversation_id,
+            ctx=_ctx(),
+            options=HarnessOptions(model_name="gpt-5.1", toolsets=[]),
+        )
+
+    async def test_the_cli_this_release_ships_is_named_and_the_conversation_given(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        conversation_id, payload = await self._payload(
+            monkeypatch, "/Lemma/runtime/releases/1/local-runtime/backend"
+        )
+
+        assert payload["lemma_cli"] == "/Lemma/runtime/releases/1/local-runtime/backend"
+        environment = payload["environment"]
+        assert isinstance(environment, dict)
+        assert environment["LEMMA_CONVERSATION_ID"] == str(conversation_id)
+
+    async def test_without_one_nothing_is_named(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, payload = await self._payload(monkeypatch, None)
+
+        assert "lemma_cli" not in payload
