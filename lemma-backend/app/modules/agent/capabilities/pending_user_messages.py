@@ -34,6 +34,7 @@ from pydantic_ai.tools import RunContext
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.log.log import get_logger
+from app.modules.agent.domain.entities import Message
 
 logger = get_logger(__name__)
 
@@ -79,12 +80,32 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
 
         for message in messages:
             ctx.enqueue(user_prompt_text(message))
+        await self._announce(messages)
         logger.info(
             "agent.pending_user_messages.steered_into_run.observed",
             agent_run_id=self._agent_run_id,
             message_count=len(messages),
         )
         return node
+
+    async def _announce(self, messages: list[Message]) -> None:
+        """Tell the person's client these are no longer waiting.
+
+        The message frame replaces a message by id, and the claim is in its
+        metadata, so a client that drew one as queued redraws it as delivered.
+        Best effort, like every live frame: a reload reads the same claim.
+        """
+        from app.modules.agent.services.realtime import (
+            message_payload,
+            publish_conversation_event,
+        )
+        from app.modules.agent.services.serialization import message_to_payload
+
+        for message in messages:
+            await publish_conversation_event(
+                message.conversation_id,
+                message_payload(message.agent_run_id, message_to_payload(message)),
+            )
 
     async def _claim(self) -> list[Any]:
         """Its own short unit of work: the run holds no session between nodes."""

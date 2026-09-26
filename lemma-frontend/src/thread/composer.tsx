@@ -6,6 +6,7 @@ import {
     tooLarge,
     type Attachment,
 } from "./attachments";
+import { composerActions, type Queued } from "./queued";
 
 export function Composer({
     placeholder,
@@ -20,6 +21,9 @@ export function Composer({
     attachments,
     onAttach,
     onRemoveAttachment,
+    queued,
+    queuedNote,
+    onWithdraw,
 }: {
     placeholder: string;
     note?: string;
@@ -42,6 +46,12 @@ export function Composer({
      *  which has nowhere to put them. */
     onAttach?: (files: File[]) => void;
     onRemoveAttachment?: (key: string) => void;
+    /** What the person said while the run was working that it has not heard
+     *  yet. Drawn here rather than in the transcript; see `queued.ts`. */
+    queued?: Queued[];
+    /** Says when they will be heard, which depends on the teammate. */
+    queuedNote?: string;
+    onWithdraw?: (id: string) => void;
 }) {
     const [draft, setDraft] = useState("");
     const [over, setOver] = useState(false);
@@ -107,6 +117,7 @@ export function Composer({
     }
 
     const uploading = held.some((one) => one.status === "uploading");
+    const actions = composerActions(canStop, canSend(draft, held));
 
     return (
         <div
@@ -126,6 +137,28 @@ export function Composer({
                 offer(Array.from(event.dataTransfer.files));
             } : undefined}
         >
+            {queued && queued.length > 0 && (
+                <div className="queued" aria-label="Waiting to be heard">
+                    {queuedNote && <span className="queued__note">{queuedNote}</span>}
+                    {queued.map((one) => (
+                        <span key={one.id} className="queued__item" data-withdrawable={one.withdrawable ? "" : undefined}>
+                            <span className="queued__text" title={one.text}>{one.text}</span>
+                            {one.withdrawable ? (
+                                <button
+                                    className="attached__drop"
+                                    aria-label={"Take back: " + one.text}
+                                    title="Take this back"
+                                    onClick={() => onWithdraw?.(one.id)}
+                                >
+                                    <CloseIcon size={12} />
+                                </button>
+                            ) : (
+                                <span className="queued__state">sending…</span>
+                            )}
+                        </span>
+                    ))}
+                </div>
+            )}
             {held.length > 0 && (
                 <div className="attached" aria-label="Attached files">
                     {held.map((one) => (
@@ -211,15 +244,16 @@ export function Composer({
                     >
                         <VoiceIcon size={21} />
                     </button>
-                    {canStop ? (
-                        <button className="composer__stop" onClick={onStop} title="Stop this run">
+                    {actions.stop && (
+                        <button className="composer__stop" onClick={onStop} title="Stop this run" aria-label="Stop this run">
                             <StopIcon size={18} weight="fill" />
                         </button>
-                    ) : (
+                    )}
+                    {actions.send && (
                         <button
                             className="composer__send"
                             aria-label="Send message"
-                            title="Send message"
+                            title={canStop ? "Send — heard as soon as the work in progress allows" : "Send message"}
                             onClick={send}
                             disabled={!canSend(draft, held) || busy}
                         >

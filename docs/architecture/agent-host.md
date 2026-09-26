@@ -506,6 +506,14 @@ guarantee:
   never stalls the runs still working. A wait whose run has ended is answered
   `TERMINAL_RUN`, not held for its full half hour. The bridge no longer polls
   every 2 seconds.
+- **Steering.** A message the person sends while a run is working reaches a
+  harness that published the `steering` capability as a `STEER_RUN` command,
+  fenced on the run's lease epoch like every run command. The run's turn sends
+  it to the agent with ACP's `_session/steering` extension and reports a
+  `steer_result` event; see
+  [Steering](agent-host-events.md#steering). Nothing about it is required for
+  correctness: a lost command or result leaves the message queued in Lemma, and
+  the follow-up turn delivers it when the current one ends.
 - **The host's MCP relay** (`mcp_relay.rs`) is a loopback port every account
   on the Mac can reach, so a connection must present the relay token on its
   first line within 5 seconds and in at most 64 KiB, later lines are bounded

@@ -2,9 +2,9 @@
 
 `PendingUserMessagesCapability` normally gets there first: it claims a mid-run
 message and steers it into the run already answering, so nothing is left owing
-by the time that run ends. These cover what it cannot reach — a run built
-without capabilities (Agent Host), and a run that died before draining — where
-the person is otherwise waiting on an answer that never comes.
+by the time that run ends. These cover what it cannot reach — an Agent Host
+harness that cannot steer, a steer that did not land, and a run that died before
+draining — where the person is otherwise waiting on an answer that never comes.
 """
 
 from datetime import datetime, timezone
@@ -53,6 +53,7 @@ def _coordinator(*, queued: int, active_run: AgentRun | None = None):
         get_active_agent_run_for_update=AsyncMock(return_value=active_run),
         get_agent_run=AsyncMock(return_value=finished),
         create_agent_run=AsyncMock(return_value=created),
+        claim_queued_user_messages=AsyncMock(return_value=[]),
     )
     uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
     coordinator = TurnCoordinator(
@@ -94,6 +95,32 @@ async def test_a_message_queued_behind_a_busy_run_gets_its_own_turn() -> None:
     assert event.conversation_id == conversation.id
     assert event.agent_run_id == created.id
     uow.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_the_followup_claims_the_queue_it_answers() -> None:
+    """Every queued message, claimed by the run that will answer it.
+
+    The claim is what an Agent Host dispatch reads to put all of them in the
+    prompt -- not only the newest -- and the claimed messages come back so the
+    person's client can stop drawing them as queued.
+    """
+    coordinator, conversation, repository, _uow, finished, created = _coordinator(
+        queued=2
+    )
+    claimed = [SimpleNamespace(id=uuid4()), SimpleNamespace(id=uuid4())]
+    repository.claim_queued_user_messages.return_value = claimed
+
+    started = await coordinator.start_queued_followup(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    assert started is not None
+    _run_id, frames = started
+    assert frames == claimed
+    call = repository.claim_queued_user_messages.await_args
+    assert call.args == (finished.id,)
+    assert call.kwargs == {"into_run_id": created.id}
 
 
 @pytest.mark.asyncio

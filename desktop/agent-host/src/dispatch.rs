@@ -323,6 +323,8 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                         // control plane, and Ctrl-C takes the whole process.
                         cancel: lemma_agent_host::acp::never_cancelled(),
                         cancel_grace: Duration::ZERO,
+                        // Nor steer one: nothing sends on an empty inbox.
+                        steer: lemma_agent_host::acp::SteerInbox::default(),
                     },
                     Arc::new(ConsoleCallbacks { json }),
                 )

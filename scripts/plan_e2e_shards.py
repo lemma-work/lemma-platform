@@ -601,6 +601,9 @@ HOST_EXECUTION_CONTRACT_PATH = (
 # Chaos runs the same built binary through a backend, a host and a link that
 # each fail mid-answer, and runs beside the two above for the same reason.
 CHAOS_CONTRACT_PATH = "app/modules/agent/tests/e2e/test_agent_host_chaos_e2e.py"
+# Steering runs the built binary and a scripted agent that advertises ACP's
+# `_session/steering`, beside the three above for the same reason.
+STEER_CONTRACT_PATH = "app/modules/agent/tests/e2e/test_agent_host_steer_e2e.py"
 DESKTOP_CONTRACT_MARKERS = "local_cli"
 
 # `sandbox-function-benchmark.yml` runs the function benchmark nightly on
@@ -707,6 +710,7 @@ def _lanes_for(
         ("desktop-contract", DESKTOP_CONTRACT_PATH),
         ("desktop-contract", HOST_EXECUTION_CONTRACT_PATH),
         ("desktop-contract", CHAOS_CONTRACT_PATH),
+        ("desktop-contract", STEER_CONTRACT_PATH),
         ("sandbox-function-benchmark", BENCHMARK_PATH),
     ):
         if path == owned_path and compiled[lane].evaluate(marks.__contains__):

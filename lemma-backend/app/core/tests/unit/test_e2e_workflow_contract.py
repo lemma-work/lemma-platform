@@ -438,6 +438,15 @@ def test_the_non_shard_lanes_match_their_workflows() -> None:
         desktop_targets["desktop-agent-host-e2e"],
         desktop_targets["desktop-agent-host-browser-e2e"],
     )
+    for owned in (
+        planner.HOST_EXECUTION_CONTRACT_PATH,
+        planner.CHAOS_CONTRACT_PATH,
+        planner.STEER_CONTRACT_PATH,
+    ):
+        assert owned in plain, (
+            f"desktop-agent-host-e2e no longer runs {owned}, which the planner "
+            f"credits to the Desktop contracts lane"
+        )
     assert (
         "-m 'not agent_host_browser'" in plain and "-m agent_host_browser" in browser
     ), (

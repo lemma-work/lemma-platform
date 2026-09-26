@@ -142,6 +142,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                 permission_timeout: Duration::ZERO,
                 cancel: lemma_agent_host::acp::never_cancelled(),
                 cancel_grace: Duration::from_secs(5),
+                steer: lemma_agent_host::acp::SteerInbox::default(),
             },
             callbacks.clone(),
         )
@@ -203,6 +204,7 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
             permission_timeout: Duration::ZERO,
             cancel: lemma_agent_host::acp::never_cancelled(),
             cancel_grace: Duration::from_secs(5),
+            steer: lemma_agent_host::acp::SteerInbox::default(),
         };
         AcpDriver
             .run(
@@ -296,6 +298,7 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
                 permission_timeout: Duration::ZERO,
                 cancel: lemma_agent_host::acp::never_cancelled(),
                 cancel_grace: Duration::from_secs(5),
+                steer: lemma_agent_host::acp::SteerInbox::default(),
             },
             callbacks.clone(),
         )

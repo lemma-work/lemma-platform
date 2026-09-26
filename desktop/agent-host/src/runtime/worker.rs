@@ -127,6 +127,8 @@ pub(crate) struct ActiveRun {
     /// Where a mid-run `REFRESH_CREDENTIAL` writes the new token. The run's
     /// task holds the other half and retires it on the way out.
     pub(crate) credential: std::sync::Arc<crate::runtime::credentials::RunCredential>,
+    /// Where a `STEER_RUN` hands its message to the run's turn.
+    pub(crate) steer: crate::acp::SteerSender,
 }
 
 /// One completed refresh: what Lemma accepted, and what the probes learned.
@@ -840,7 +842,23 @@ impl TargetWorker {
                     &self.paths.root,
                     run_id,
                 ),
+                steer: crate::acp::SteerInbox::channel().0,
             },
         );
+    }
+
+    /// `track_run`, keeping the inbox the run's turn would read steers from.
+    #[cfg(test)]
+    pub(crate) fn track_steerable_run(
+        &mut self,
+        run_id: Uuid,
+        handle: super::JoinHandle<anyhow::Result<()>>,
+    ) -> crate::acp::SteerInbox {
+        self.track_run(run_id, handle);
+        let (sender, inbox) = crate::acp::SteerInbox::channel();
+        if let Some(active) = self.active_runs.get_mut(&run_id) {
+            active.steer = sender;
+        }
+        inbox
     }
 }

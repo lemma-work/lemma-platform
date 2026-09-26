@@ -506,6 +506,44 @@
     background: var(--chrome);
     color: var(--ink);
 }
+/* ── said while the teammate was working ────────────────────────────
+   Above the box, like attachments, and for the same reason: it is something
+   already sent and not yet heard, not something still being written. */
+.queued {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 0 var(--gutter) 8px;
+}
+.queued__note {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.queued__item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+    padding: 5px 6px 5px 10px;
+    border: 1px dashed var(--line-2);
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    font-size: var(--t-ui);
+    color: var(--ink-2);
+}
+.queued__text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.queued__state {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--accent);
+}
 /* The drop target is the whole composer, so the feedback is too. A dashed
    outline on the box alone would be a smaller target than the one that
    actually accepts the file. */

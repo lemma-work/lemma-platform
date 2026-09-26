@@ -129,6 +129,7 @@ fn only_a_start_is_reported_as_a_rejection() {
         CommandKind::CancelRun,
         CommandKind::ResolvePermission,
         CommandKind::RefreshCredential,
+        CommandKind::SteerRun,
     ] {
         let command = Command {
             kind,

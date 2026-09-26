@@ -13,6 +13,7 @@ import type { ConversationRef } from "@/data";
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
+import { splitQueued } from "./queued";
 import { sendToConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
@@ -205,7 +206,16 @@ export function LiveConversation({
     useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
 
     const state = stateOf(session.status);
-    const turns = useMemo(() => buildTurns(session.messages), [session.messages]);
+    const running = state === "running";
+    /* Taken back here, and hidden until the server's list agrees. The session
+       has no way to drop a message it holds, and a reload reads the list the
+       server has already changed. */
+    const [withdrawn, setWithdrawn] = useState<ReadonlySet<string>>(() => new Set());
+    const { transcript, queued } = useMemo(
+        () => splitQueued(session.messages, running, withdrawn),
+        [session.messages, running, withdrawn],
+    );
+    const turns = useMemo(() => buildTurns(transcript), [transcript]);
 
     /* What the run is blocked on, read straight out of the transcript.
        An approval IS a tool call: `request_approval` streams in like any
@@ -297,8 +307,64 @@ export function LiveConversation({
         [client, pod.id],
     );
 
+    /** Say something to a run that is already going.
+     *
+     *  Appended, never streamed: the run already has a stream, and a second
+     *  one for the same run duplicates every event on it. The server decides
+     *  what "joining" means -- the in-process harness takes it at its next
+     *  step, a local coding agent that can be steered hears it within a second
+     *  or two, and one that cannot hears it as the next turn -- and says which
+     *  in the message's metadata, which is what the tray above the composer
+     *  reads. */
+    const steer = useCallback(
+        async (text: string, id: string) => {
+            setSendError(null);
+            const { content, settled } = await putFiles(id, text);
+            setAttachments([]);
+            try {
+                await client.conversations.appendMessage(id, { content }, { pod_id: pod.id });
+            } catch (problem) {
+                setAttachments(was => [
+                    ...settled,
+                    ...was.filter(one => !settled.some(back => back.key === one.key)),
+                ]);
+                if (mounted.current) setSendError(problem instanceof Error ? problem.message : "That did not send.");
+                throw problem;
+            }
+            /* The message arrives on the stream already open for the run. When
+               that stream has died, reattaching is what shows it -- forced,
+               because a steer never changes the status the dedup key reads. */
+            if (!session.isStreaming) {
+                void session.resumeIfRunning(id, { expectRun: true, force: true }).catch(() => undefined);
+                void loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
+            }
+        },
+        [client, pod.id, putFiles, session, loadMessages],
+    );
+
+    const withdraw = useCallback(
+        async (messageId: string) => {
+            const id = session.conversationId;
+            if (!id) return;
+            setSendError(null);
+            try {
+                await client.conversations.withdrawMessage(id, messageId, { pod_id: pod.id });
+                setWithdrawn(was => new Set([...was, messageId]));
+            } catch {
+                /* Almost always a race lost to delivery: the teammate took it in
+                   between the tray being drawn and the click. Refetching shows
+                   it where it now belongs. */
+                if (mounted.current) setSendError(pod.teammate.name + " already has that message.");
+                void loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
+            }
+        },
+        [client, pod.id, pod.teammate.name, session.conversationId, loadMessages],
+    );
+
     const send = useCallback(
         async (text: string) => {
+            const current = createdHere.current ?? session.conversationId;
+            if (running && current) return steer(text, current);
             if (sendingRef.current) return;
             sendingRef.current = true;
             setSending(true);
@@ -385,7 +451,7 @@ export function LiveConversation({
                 if (mounted.current) setSending(false);
             }
         },
-        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId],
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, running, steer],
     );
 
     const resolve = useCallback(
@@ -504,8 +570,18 @@ export function LiveConversation({
                               ? "waiting on you"
                               : pod.waiting || undefined
                 }
-                busy={sending || historyLoading || Boolean(loadError)}
-                canStop={state === "running"}
+                /* `sending` lasts as long as the stream this pane opened, which
+                   is the whole run -- so it only holds the box before the run
+                   is visibly going. After that, sending again is steering. */
+                busy={(sending && !running) || historyLoading || Boolean(loadError)}
+                canStop={running}
+                queued={queued}
+                queuedNote={
+                    queued.length === 0
+                        ? undefined
+                        : pod.teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
+                }
+                onWithdraw={id => void withdraw(id)}
                 fill={fill}
                 onFilled={onFilled}
                 attachments={attachments}

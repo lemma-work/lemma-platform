@@ -5,10 +5,11 @@ before that message existed. `PendingUserMessagesCapability` is what normally
 carries it the rest of the way — it claims the message and steers it into that
 same run, so one reply covers everything and nothing reaches here.
 
-This exists for the two cases it cannot cover: a run with no capabilities (only
-the in-process LEMMA harness is built out of them, so an Agent Host run has no
-`ctx.enqueue` to steer into), and a run that died before draining its queue.
-Both leave a person waiting on an answer that will otherwise never come.
+An Agent Host run is steered too, when its harness advertises ACP steering (see
+`harnesses/agent_host/steering.py`). This exists for what neither can cover: a
+harness that cannot steer, a steer that did not land before the turn ended, and
+a run that died before draining its queue. Each leaves a person waiting on an
+answer that will otherwise never come.
 
 Hung off `agent.run.completed` rather than off the end of the runner because
 every way a run can end publishes that event: a normal finish, a failure, and

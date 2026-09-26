@@ -55,6 +55,10 @@ pub(crate) fn capabilities_from_acp(value: &Value) -> HarnessCapabilities {
         // does not provide a durable fence proving an in-flight prompt is safe
         // to replay after a crash.
         durable_session_recovery: false,
+        // Not an ACP capability: adapters advertise it beside
+        // `agentCapabilities`, in `initialize`'s `_meta`, so the probe reports
+        // it separately and the caller sets it.
+        steering: false,
     }
 }
 
@@ -281,6 +285,7 @@ impl TargetWorker {
                         Ok(Ok(probe)) => {
                             snapshot.config_options = probe.config_options;
                             snapshot.capabilities = capabilities_from_acp(&probe.capabilities);
+                            snapshot.capabilities.steering = probe.steering;
                             snapshot.config_revision = snapshot.revision();
                             tracing::info!(
                                 harness = %snapshot.harness_key,

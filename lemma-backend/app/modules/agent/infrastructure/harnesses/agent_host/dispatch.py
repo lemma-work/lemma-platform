@@ -19,6 +19,7 @@ from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSp
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.domain.queued_messages import is_queued
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
@@ -40,6 +41,9 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
     credential_bounded_timeout,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
+    supports_steering,
 )
 from app.modules.agent.infrastructure.harnesses.remote_payload import (
     mcp_payload,
@@ -147,12 +151,27 @@ async def enqueue_run[DepsT: AgentContext](
         )
         harness_id = harness.id
         host_id = harness.host_id
+        steerable = supports_steering(harness.capabilities)
         harness_key = harness.harness_key
         config_revision = harness.config_revision
         # Set only on a run started to answer a pausing tool call. Read from
         # the run rather than passed in, because the run row is where the
         # resume recorded it and a second copy could only ever disagree.
         run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+        # Messages that joined this run before it was dispatched are already in
+        # the prompt below, so they are this run's to answer and must not also
+        # be sent as steers. Claimed by id: one that arrives after `messages`
+        # was loaded is not in the prompt, and steering is how it gets there.
+        carried = [
+            message.id
+            for message in messages
+            if message.agent_run_id == agent_run_id and is_queued(message.metadata)
+        ]
+        if carried:
+            await ConversationRepository(uow).claim_queued_user_messages(
+                agent_run_id, message_ids=carried
+            )
+            await uow.commit()
 
     payload = run_start_payload(
         agent=agent,
@@ -259,4 +278,5 @@ async def enqueue_run[DepsT: AgentContext](
         event_timeout_seconds=timeout_seconds,
         credential_bounded=credential_bounded,
         credential_expires_at=token_expires_at(mcp),
+        steerable=steerable,
     )

@@ -51,6 +51,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                     permission_timeout: Duration::ZERO,
                     cancel: lemma_agent_host::acp::never_cancelled(),
                     cancel_grace: Duration::from_secs(5),
+                    steer: lemma_agent_host::acp::SteerInbox::default(),
                 },
                 callbacks.clone(),
             )

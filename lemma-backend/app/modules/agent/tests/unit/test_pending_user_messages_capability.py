@@ -39,6 +39,7 @@ def _capability(claimed: list, *, raises: Exception | None = None):
     capability = PendingUserMessagesCapability(agent_run_id=uuid4())
     claim = AsyncMock(side_effect=raises) if raises else AsyncMock(return_value=claimed)
     capability._claim = claim  # type: ignore[method-assign]
+    capability._announce = AsyncMock()  # type: ignore[method-assign]
     return capability, claim
 
 
@@ -104,3 +105,22 @@ async def test_a_failed_claim_does_not_sink_the_turn_in_progress() -> None:
 
     assert returned is node
     assert ctx.enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_the_claim_is_announced_so_the_client_stops_showing_it_queued() -> None:
+    claimed = [_message("one more thing")]
+    capability, _claim = _capability(claimed)
+
+    await capability.before_node_run(_Ctx(), node=object())
+
+    capability._announce.assert_awaited_once_with(claimed)  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_nothing_claimed_announces_nothing() -> None:
+    capability, _claim = _capability([])
+
+    await capability.before_node_run(_Ctx(), node=object())
+
+    capability._announce.assert_not_awaited()  # type: ignore[attr-defined]

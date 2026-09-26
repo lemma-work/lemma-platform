@@ -80,6 +80,9 @@ class DispatchedRun:
     event_timeout_seconds: float
     credential_bounded: bool
     credential_expires_at: datetime | None = None
+    # The harness advertised ACP steering, so messages sent mid-turn go to the
+    # host as they arrive rather than waiting for the follow-up turn.
+    steerable: bool = False
 
     @property
     def deadline_message(self) -> str:
