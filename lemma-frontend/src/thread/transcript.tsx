@@ -137,6 +137,7 @@ export function Transcript({
     onEarlier,
     onResolve,
     onRetry,
+    errorAction,
     dockedId,
 }: {
     turns: Turn[];
@@ -163,6 +164,9 @@ export function Transcript({
     onEarlier?: () => void | boolean | Promise<void | boolean>;
     onResolve?: Resolve;
     onRetry?: () => void;
+    /** Drawn beside the error, when the error has a fix somewhere else — the
+     *  "set up an AI model" link for a run that had no model to run on. */
+    errorAction?: ReactNode;
     /** The pause `InteractionDock` is holding above the composer. It is drawn
      *  there instead of here, so here it is skipped — the alternative is the
      *  same live card twice, with two sets of buttons and one of them scrolled
@@ -359,6 +363,7 @@ export function Transcript({
                 {state === "failed" && !onReload && (
                     <div className="failed">
                         <span>{error ?? "That run failed."}</span>
+                        {errorAction}
                         {onRetry && (
                             <button className="btn" onClick={onRetry}>
                                 Try again
@@ -370,6 +375,7 @@ export function Transcript({
                 {error && (state !== "failed" || onReload) && (
                     <div className="conversation-error" role="alert">
                         <p>{error}</p>
+                        {errorAction}
                         {onReload && <button className="earlier" onClick={onReload} disabled={loading}>Retry</button>}
                     </div>
                 )}

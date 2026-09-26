@@ -16,6 +16,16 @@ import { Modal } from "@/shell/modal";
 import { useIsDesktop } from "@/desktop/bridge";
 import { ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
 import { ThisMacModelSuggestions } from "@/desktop/this-mac-models";
+import { friendlyError, thisMac } from "@/desktop/this-mac";
+import { useThisMacAvailability } from "@/desktop/this-mac-settings";
+import {
+    asksAboutImages,
+    chosenVisionModels,
+    discoveryRequest,
+    modelNames,
+    readDiscoveredModels,
+    visionCandidates,
+} from "./provider-draft";
 import { AgentSettingsFields, EditAgentSettings } from "./agent-settings";
 import {
     ComputerIcon,
@@ -339,19 +349,43 @@ function AddAgent({
     );
 }
 
+/** What a Test found: the route answered with these models, or it did not. */
+type Tested = { ok: true; models: string[] } | { ok: false; message: string };
+
 function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => void; onAdded: () => void }) {
     const [preset, setPreset] = useState(PRESETS[0]);
     const [name, setName] = useState(PRESETS[0].name);
     const [baseUrl, setBaseUrl] = useState(PRESETS[0].baseUrl);
     const [apiKey, setApiKey] = useState("");
     const [models, setModels] = useState("");
+    const [vision, setVision] = useState<string[]>([]);
+    const [tested, setTested] = useState<Tested | null>(null);
     const [error, setError] = useState("");
+    /* Testing goes through this computer's own model lookup, which only the
+       Lemma app has. A browser saves and lets the backend discover. */
+    const canTest = useThisMacAvailability() === "shown";
 
     const pick = (chosen: typeof PRESETS[number]) => {
         setPreset(chosen);
         setName(chosen.name);
         setBaseUrl(chosen.baseUrl);
+        setTested(null);
     };
+
+    const typed = modelNames(models);
+    const candidates = visionCandidates(typed, tested?.ok ? tested.models : []);
+
+    const test = useMutation({
+        mutationFn: async () => readDiscoveredModels(
+            await thisMac.discoverModels(discoveryRequest(preset.protocol, baseUrl, apiKey)),
+        ),
+        onSuccess: (found) => setTested(
+            found.length > 0
+                ? { ok: true, models: found }
+                : { ok: false, message: "The route answered, but listed no models. Name them under Models." },
+        ),
+        onError: (problem) => setTested({ ok: false, message: friendlyError(problem) }),
+    });
 
     const add = useMutation({
         mutationFn: () => source.addProviderKey(orgId, {
@@ -359,11 +393,15 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
             name: name.trim(),
             baseUrl: baseUrl.trim(),
             apiKey: apiKey.trim(),
-            models: models.split(",").map((one) => one.trim()).filter(Boolean),
+            models: typed,
+            visionModels: chosenVisionModels(preset.protocol, vision, candidates),
         }),
         onSuccess: () => { onAdded(); onClose(); },
         onError: (problem) => setError(problem instanceof Error ? problem.message : "That key could not be saved."),
     });
+
+    const toggleVision = (model: string) =>
+        setVision((was) => (was.includes(model) ? was.filter((one) => one !== model) : [...was, model]));
 
     return (
         <Modal title="Connect a key" subtitle="Billed to you, shared with every teammate here" narrow onClose={onClose}>
@@ -385,11 +423,22 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
             </div>
             <div className="field">
                 <label htmlFor="key-url">Route</label>
-                <input id="key-url" value={baseUrl} placeholder="https://…" onChange={(event) => setBaseUrl(event.target.value)} />
+                <input
+                    id="key-url"
+                    value={baseUrl}
+                    placeholder="https://…"
+                    onChange={(event) => { setBaseUrl(event.target.value); setTested(null); }}
+                />
             </div>
             <div className="field">
                 <label htmlFor="key-secret">API key</label>
-                <input id="key-secret" type="password" value={apiKey} autoComplete="off" onChange={(event) => setApiKey(event.target.value)} />
+                <input
+                    id="key-secret"
+                    type="password"
+                    value={apiKey}
+                    autoComplete="off"
+                    onChange={(event) => { setApiKey(event.target.value); setTested(null); }}
+                />
             </div>
             <div className="field">
                 <label htmlFor="key-models">Models <em>optional</em></label>
@@ -401,6 +450,39 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 />
                 <span>Comma separated. Left empty, the route&rsquo;s own list is used.</span>
             </div>
+            {canTest && (
+                <div className="field">
+                    <button
+                        className="linkish"
+                        disabled={test.isPending || !baseUrl.trim()}
+                        onClick={() => test.mutate()}
+                    >
+                        {test.isPending ? "Testing…" : "Test this key"}
+                    </button>
+                    {tested && (
+                        <span role="status" className={tested.ok ? undefined : "reachrow__error"}>
+                            {tested.ok
+                                ? "Connected. It lists " + tested.models.length + (tested.models.length === 1 ? " model." : " models.")
+                                : tested.message}
+                        </span>
+                    )}
+                </div>
+            )}
+            {/* Asked only where the route cannot say: an OpenAI-style model
+                list carries no modalities, and handing an image to a model
+                that cannot read one breaks the conversation. */}
+            {asksAboutImages(preset.protocol) && candidates.length > 0 && (
+                <div className="field" role="group" aria-labelledby="key-vision">
+                    <label id="key-vision">Reads images <em>optional</em></label>
+                    {candidates.map((model) => (
+                        <label className="check" key={model}>
+                            <input type="checkbox" checked={vision.includes(model)} onChange={() => toggleVision(model)} />
+                            <span>{model}</span>
+                        </label>
+                    ))}
+                    <span>Ticked models are handed pictures and PDF pages directly. The rest are never sent one.</span>
+                </div>
+            )}
             {error && <p className="reachrow__error">{error}</p>}
             <div className="modal__acts">
                 <button className="linkish" onClick={onClose}>Cancel</button>

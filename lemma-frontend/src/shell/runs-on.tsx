@@ -14,6 +14,8 @@ import {
 } from "@/data";
 import { CheckIcon, ChevronDownIcon, KeyIcon, LemmaMark, SparkleIcon, TerminalIcon, WarningIcon } from "@/ui/icons";
 import { usePicker } from "@/ui/picker";
+import { SetUpAiModelLink } from "@/desktop/set-up-on-this-mac";
+import { modelSetupState } from "./runs-on-state";
 
 /** What this teammate thinks with.
  *
@@ -104,6 +106,7 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
     const choice = current.data ?? null;
     const chosen = choice ? live.find((one) => one.id === choice.runtimeId) : undefined;
     const inheritedName = describeChoice(live, inherited.data ?? null);
+    const setup = runtimes.isSuccess ? modelSetupState(live, inherited.isSuccess ? inherited.data : undefined, choice) : null;
 
     if (current.isError || runtimes.isError) {
         return <p className="empty-row">Couldn’t load available runtimes.</p>;
@@ -111,9 +114,11 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
 
     const said = choice
         ? describeChoice(live, choice) || "Selected runtime unavailable"
-        : inheritedName
-            ? "Organization default — " + inheritedName
-            : "Organization default";
+        : setup === "none"
+            ? "No AI model set up yet"
+            : inheritedName
+                ? "Organization default — " + inheritedName
+                : "Organization default";
 
     return (
         <div className="pick" ref={wrap}>
@@ -142,6 +147,24 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
                     <WarningIcon size={13} /> What this teammate was pinned to is gone. Pick something else.
                 </p>
             )}
+            {/* Said before anyone sends a message, rather than as the error
+                the first message would come back with. The link is drawn only
+                inside the Lemma app on the machine it runs on; elsewhere the
+                sentence names the page that fixes it. */}
+            {setup === "none" && (
+                <p className="pick__note" role="status">
+                    <WarningIcon size={13} />
+                    <span>No AI model is set up yet, so this teammate cannot answer. Add a provider in Organization → Models.</span>
+                    <SetUpAiModelLink />
+                </p>
+            )}
+            {setup === "default-missing" && (
+                <p className="pick__note" role="status">
+                    <WarningIcon size={13} />
+                    <span>The organization default has no AI model behind it. Pick a model here, or set one up.</span>
+                    <SetUpAiModelLink />
+                </p>
+            )}
 
             {open && (
                 <div className={menuClass} role="menu">
@@ -159,7 +182,8 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
 
                     {live.length === 0 && (
                         <p className="pick__empty">
-                            Nothing connected yet. Organization settings is where a key or a computer is added.
+                            No AI model is set up yet. Organization → Models is where a key or a computer is added.
+                            <SetUpAiModelLink />
                         </p>
                     )}
 

@@ -16,6 +16,8 @@ import { Composer } from "./composer";
 import { sendToConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
+import { SetUpAiModelLink } from "@/desktop/set-up-on-this-mac";
+import { needsAiModel } from "./model-setup";
 
 /** The conversation, on the SDK's own session.
  *
@@ -70,6 +72,9 @@ export function LiveConversation({
     const mounted = useRef(true);
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const [sendError, setSendError] = useState<string | null>(null);
+    /* The refused send itself, beside its text: its code is what says the
+       failure was "no model set up", which the text is not a safe key for. */
+    const [sendProblem, setSendProblem] = useState<unknown>(null);
 
     /* What the teammate last said out loud, captured as it arrives. Reading
        it from a derived selector after the fact did not work: the backend
@@ -303,6 +308,7 @@ export function LiveConversation({
             sendingRef.current = true;
             setSending(true);
             setSendError(null);
+            setSendProblem(null);
             try {
                 await sendToConversation(text, {
                     conversationId: createdHere.current ?? session.conversationId,
@@ -378,7 +384,10 @@ export function LiveConversation({
                 });
                 void queryClient.invalidateQueries({ queryKey: ["conversations", pod.id] });
             } catch (problem) {
-                if (mounted.current) setSendError(problem instanceof Error ? problem.message : "That did not send.");
+                if (mounted.current) {
+                    setSendError(problem instanceof Error ? problem.message : "That did not send.");
+                    setSendProblem(problem);
+                }
                 throw problem;
             } finally {
                 sendingRef.current = false;
@@ -446,6 +455,12 @@ export function LiveConversation({
         : null;
 
     const error = sendError ?? loadError ?? (session.error ? session.error.message : null);
+    /* Whichever failure is on screen, read by its code. The stored run is
+       consulted only when nothing newer is, so a later, different failure is
+       not dressed with a link about an earlier one. */
+    const modelMissing = sendError
+        ? needsAiModel(sendProblem)
+        : !loadError && needsAiModel(session.error, session.error ? null : session.conversation);
 
     return (
         <>
@@ -477,6 +492,7 @@ export function LiveConversation({
                 onOpenTable={onOpenTable}
                 onResolve={resolve}
                 onRetry={() => void session.retryFailedRun()}
+                errorAction={modelMissing ? <SetUpAiModelLink /> : undefined}
                 dockedId={waitingOn?.id}
             />
             <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
