@@ -25,3 +25,36 @@ export async function sendToConversation<T extends { id: string }>(text: string,
     if (!deps.isActive()) throw new Error("Conversation changed before the message was sent.");
     await deps.send(text, id, created);
 }
+
+/** Say something to a run that is already going: attach, then append.
+ *
+ *  Every failure is said out loud before it is rethrown -- the composer only
+ *  puts the draft back, so an upload that failed and was merely rethrown left
+ *  the person looking at their text restored and no reason why. `putFiles`
+ *  marks a failed upload on its own chip; the sentence here is what says the
+ *  message did not go. Files already uploaded when the append fails are handed
+ *  back as uploaded, so a retry references them rather than uploading twice. */
+export async function steerConversation<A>(text: string, id: string, deps: {
+    putFiles: (id: string, text: string) => Promise<{ content: string; settled: A[] }>;
+    append: (id: string, content: string) => Promise<unknown>;
+    clearAttachments: () => void;
+    restoreAttachments: (settled: A[]) => void;
+    report: (message: string) => void;
+}): Promise<void> {
+    const said = (problem: unknown) => problem instanceof Error ? problem.message : "That did not send.";
+    let attached: { content: string; settled: A[] };
+    try {
+        attached = await deps.putFiles(id, text);
+    } catch (problem) {
+        deps.report(said(problem));
+        throw problem;
+    }
+    deps.clearAttachments();
+    try {
+        await deps.append(id, attached.content);
+    } catch (problem) {
+        deps.restoreAttachments(attached.settled);
+        deps.report(said(problem));
+        throw problem;
+    }
+}

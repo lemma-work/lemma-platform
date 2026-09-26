@@ -8,11 +8,13 @@ harness drives whatever comes back. They share only the run id.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSpec
@@ -27,6 +29,9 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 )
 from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
+)
+from app.modules.agent.infrastructure.queued_message_queries import (
+    QueuedMessageRepository,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.agent_host import session_memory
@@ -158,18 +163,120 @@ async def enqueue_run[DepsT: AgentContext](
         # the run rather than passed in, because the run row is where the
         # resume recorded it and a second copy could only ever disagree.
         run = await ConversationRepository(uow).get_agent_run(agent_run_id)
-        # Messages that joined this run before it was dispatched are already in
+        # Messages that joined this run before it was dispatched are carried in
         # the prompt below, so they are this run's to answer and must not also
-        # be sent as steers. Claimed by id, and only in the transaction that
-        # admits the run: one that arrives after `messages` was loaded is not in
-        # the prompt, and a dispatch that fails must leave these queued for the
-        # follow-up turn rather than claimed by a run that never went out.
-        carried = [
-            message.id
-            for message in messages
-            if message.agent_run_id == agent_run_id and is_queued(message.metadata)
-        ]
+        # be sent as steers. Claimed before the prompt is built, and the prompt
+        # is built from what the claim returned: one the person withdrew in
+        # between is not claimed, so it is not sent. Claimed by id, because one
+        # that arrived after `messages` was loaded is not in the prompt and
+        # steering is how it gets there.
+        carried = await claim_carried(uow, messages, agent_run_id=agent_run_id)
+    messages = carried.messages
+    admitted = False
+    try:
+        dispatched = await _admit(
+            uow_factory=uow_factory,
+            event_timeout_seconds=event_timeout_seconds,
+            agent=agent,
+            conversation=conversation,
+            messages=messages,
+            ctx=ctx,
+            options=options,
+            agent_run_id=agent_run_id,
+            run_config=run_config,
+            admission=_Admission(
+                resume_session_id=resume_session_id,
+                harness_id=harness_id,
+                host_id=host_id,
+                steerable=steerable,
+                harness_key=harness_key,
+                config_revision=config_revision,
+                resumed_tool_call_id=_resumed_tool_call_id(run),
+            ),
+        )
+        admitted = True
+        return dispatched
+    finally:
+        # The run never went out, so the claim is not this run's to keep: the
+        # messages go back to being queued, for the follow-up turn -- or to be
+        # withdrawn, which a claim would refuse. A `finally` rather than an
+        # `except`, because this is cleanup and the failure is not ours to
+        # judge.
+        if not admitted and carried.claimed:
+            async with uow_factory() as uow:
+                await QueuedMessageRepository(uow).release_claims(
+                    agent_run_id, message_ids=sorted(carried.claimed)
+                )
+                await uow.commit()
 
+
+@dataclass(frozen=True, slots=True)
+class Carried:
+    """The messages a dispatch sends, and which queued ones it claimed."""
+
+    messages: list[Message]
+    claimed: frozenset[UUID]
+
+
+async def claim_carried(
+    uow: SqlAlchemyUnitOfWork, messages: Sequence[Message], *, agent_run_id: UUID
+) -> Carried:
+    """Claim the queued messages this run was loaded with, and drop the rest.
+
+    A queued message the claim did not return was withdrawn -- or taken by
+    someone else -- after ``messages`` was read, so it must not go out in this
+    prompt.
+    """
+    offered = [
+        message.id
+        for message in messages
+        if message.agent_run_id == agent_run_id and is_queued(message.metadata)
+    ]
+    if not offered:
+        return Carried(messages=list(messages), claimed=frozenset())
+    claimed = frozenset(
+        message.id
+        for message in await ConversationRepository(uow).claim_queued_user_messages(
+            agent_run_id, message_ids=offered
+        )
+    )
+    await uow.commit()
+    lost = set(offered) - claimed
+    return Carried(
+        messages=[message for message in messages if message.id not in lost],
+        claimed=claimed,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _Admission:
+    """What the first read settled, which the rest of dispatch has to honour."""
+
+    resume_session_id: str | None
+    harness_id: UUID
+    host_id: UUID
+    steerable: bool
+    harness_key: str
+    config_revision: str
+    resumed_tool_call_id: str | None
+
+
+async def _admit[DepsT: AgentContext](
+    *,
+    uow_factory: UnitOfWorkFactory,
+    event_timeout_seconds: float,
+    agent: Agent,
+    conversation: Conversation,
+    messages: Sequence[Message],
+    ctx: DepsT,
+    options: HarnessOptions[DepsT],
+    agent_run_id: UUID,
+    run_config: AgentHostRunConfig,
+    admission: _Admission,
+) -> DispatchedRun:
+    resume_session_id = admission.resume_session_id
+    harness_id = admission.harness_id
+    host_id = admission.host_id
     payload = run_start_payload(
         agent=agent,
         conversation=conversation,
@@ -180,7 +287,7 @@ async def enqueue_run[DepsT: AgentContext](
             host_execution=bool(getattr(ctx, "host_runs_native_commands", False))
         ),
         carries_history=resume_session_id is None,
-        resumed_tool_call_id=_resumed_tool_call_id(run),
+        resumed_tool_call_id=admission.resumed_tool_call_id,
     )
     prompt = json_object(payload.get("prompt"))
     mcp = await mcp_payload(
@@ -234,7 +341,7 @@ async def enqueue_run[DepsT: AgentContext](
             agent_run_id=agent_run_id,
             conversation_id=conversation.id,
             harness_id=harness_id,
-            profile_revision=config_revision,
+            profile_revision=admission.config_revision,
             model_name=run_config.model_name,
             config_selections=run_config.config_selections,
             system_prompt=system_prompt,
@@ -258,10 +365,6 @@ async def enqueue_run[DepsT: AgentContext](
             encrypted_mcp_payload=encrypted_mcp,
             command_ttl_seconds=run_config.wait_timeout_seconds,
         )
-        if carried:
-            await ConversationRepository(uow).claim_queued_user_messages(
-                agent_run_id, message_ids=carried
-            )
         # A promise, committed with the command it belongs to. It becomes a
         # record only when the host reports that it prompted, so a run that
         # dies on the way out does not leave these instructions marked
@@ -275,9 +378,9 @@ async def enqueue_run[DepsT: AgentContext](
         await uow.commit()
     await poke_host(host_id)
     return DispatchedRun(
-        harness_key=harness_key,
+        harness_key=admission.harness_key,
         event_timeout_seconds=timeout_seconds,
         credential_bounded=credential_bounded,
         credential_expires_at=token_expires_at(mcp),
-        steerable=steerable,
+        steerable=admission.steerable,
     )

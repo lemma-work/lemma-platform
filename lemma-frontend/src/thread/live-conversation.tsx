@@ -14,7 +14,7 @@ import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
 import { splitQueued } from "./queued";
-import { sendToConversation } from "./send-message";
+import { sendToConversation, steerConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
 
@@ -319,18 +319,17 @@ export function LiveConversation({
     const steer = useCallback(
         async (text: string, id: string) => {
             setSendError(null);
-            const { content, settled } = await putFiles(id, text);
-            setAttachments([]);
-            try {
-                await client.conversations.appendMessage(id, { content }, { pod_id: pod.id });
-            } catch (problem) {
-                setAttachments(was => [
+            await steerConversation(text, id, {
+                putFiles: (conversation, said) => putFiles(conversation, said),
+                append: (conversation, content) =>
+                    client.conversations.appendMessage(conversation, { content }, { pod_id: pod.id }),
+                clearAttachments: () => setAttachments([]),
+                restoreAttachments: settled => setAttachments(was => [
                     ...settled,
                     ...was.filter(one => !settled.some(back => back.key === one.key)),
-                ]);
-                if (mounted.current) setSendError(problem instanceof Error ? problem.message : "That did not send.");
-                throw problem;
-            }
+                ]),
+                report: message => { if (mounted.current) setSendError(message); },
+            });
             /* The message arrives on the stream already open for the run. When
                that stream has died, reattaching is what shows it -- forced,
                because a steer never changes the status the dedup key reads. */
