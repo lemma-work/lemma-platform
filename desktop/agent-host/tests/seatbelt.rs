@@ -59,6 +59,7 @@ fn sandbox() -> Sandbox {
             user_tmp,
             cache,
             grants: Vec::new(),
+            lemma_cli: None,
         },
         _directory: directory,
         home,
@@ -109,6 +110,48 @@ fn credentials_in_the_home_folder_cannot_be_read() {
     sandbox.is_denied("ls ~/.ssh");
     // Neither by way of a link the command makes in its own root.
     sandbox.is_denied("ln -sf ~/.ssh/id_ed25519 ./key && cat ./key");
+}
+
+#[test]
+fn lemmas_cli_runs_from_a_host_pack_while_the_rest_of_lemmas_data_stays_denied() {
+    let mut sandbox = sandbox();
+    let lemma = sandbox.home.join("Library/Application Support/Lemma");
+    std::fs::create_dir_all(lemma.join("agent-host")).unwrap();
+    std::fs::write(lemma.join("agent-host/config.json"), "PAIRING SECRET").unwrap();
+    let pack = lemma.join("runtime/releases/1.0.0-abc/local-runtime/backend");
+    std::fs::create_dir_all(pack.join("bin")).unwrap();
+    std::fs::write(pack.join("VERSION"), "1.0.0").unwrap();
+    std::fs::write(
+        pack.join("bin/lemma"),
+        // Its own folder from `$0`, not `cd ..`: under the profile the
+        // parent's parent is Lemma's data, and `cd` through it fails.
+        "#!/bin/sh\ncat \"${0%/bin/lemma}/VERSION\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        pack.join("bin/lemma"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+
+    // Without the parameter the pack is Lemma's data like the rest.
+    sandbox.is_denied(&format!("'{}/bin/lemma'", pack.display()));
+
+    let root = lemma_agent_host::host_exec::seatbelt::lemma_cli_root(
+        pack.to_str().unwrap(),
+        &sandbox.home,
+    )
+    .expect("a host pack's CLI is admitted");
+    sandbox.confinement.lemma_cli = Some(root);
+    assert_eq!(
+        sandbox
+            .succeeds(&format!("'{}/bin/lemma'", pack.display()))
+            .trim(),
+        "1.0.0"
+    );
+    // Read only, and only the pack: the pairing beside it is still secret.
+    sandbox.is_denied(&format!("touch '{}/bin/evil'", pack.display()));
+    sandbox.is_denied(&format!("cat '{}/agent-host/config.json'", lemma.display()));
 }
 
 #[test]
@@ -414,4 +457,68 @@ async fn the_exec_server_runs_confined() {
 
     op(&relay, "workspace.close", json!({})).await.unwrap();
     assert!(Path::new(&sandbox.root).join("r/.git").is_dir());
+}
+
+/// Lemma's own CLI, named by Lemma in `workspace.open`, is the `lemma` a
+/// command finds: first on `PATH`, and readable though it sits inside
+/// Lemma's otherwise denied data.
+#[tokio::test]
+async fn the_cli_lemma_names_is_first_on_path_under_the_profile() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sandbox = sandbox();
+    let data = sandbox.home.join("agent-host-data");
+    std::fs::create_dir_all(&data).unwrap();
+    let pack = sandbox
+        .home
+        .join("Library/Application Support/Lemma/runtime/releases/1.0.0-abc/local-runtime/backend");
+    std::fs::create_dir_all(pack.join("bin")).unwrap();
+    std::fs::write(
+        pack.join("bin/lemma"),
+        "#!/bin/sh\necho \"lemma from the pack $*\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        pack.join("bin/lemma"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let relay = ExecRelay::new(
+        Arc::new(ProcessLauncher {
+            executable: PathBuf::from(env!("CARGO_BIN_EXE_lemma-agent-host")),
+            data_root: data,
+            sandboxed: true,
+        }),
+        RelayPaths {
+            root_base: sandbox.home.join("lemma"),
+            home: sandbox.home.clone(),
+            tmp: sandbox.confinement.user_tmp.clone(),
+            cache: sandbox.confinement.cache.clone(),
+            folders: sandbox.home.join("no-folders.json"),
+            roots: sandbox.home.join("agent-host-data/conversation-roots.json"),
+            target: uuid::Uuid::from_u128(1),
+        },
+    );
+    relay.set_enabled(true);
+    op(
+        &relay,
+        "workspace.open",
+        json!({ "slug": "seatbelt", "date": "2026-09-25", "lemma_cli": pack }),
+    )
+    .await
+    .unwrap();
+
+    let (code, output) = run_to_exit(&relay, "command -v lemma && lemma whoami").await;
+    assert_eq!(code, 0, "{output}");
+    let canonical = std::fs::canonicalize(&pack).unwrap();
+    assert!(
+        output.starts_with(&format!("{}/bin/lemma", canonical.display())),
+        "{output}"
+    );
+    assert!(output.contains("lemma from the pack whoami"), "{output}");
+    // The owner's own tools are still on the PATH behind it.
+    let (code, output) = run_to_exit(&relay, "command -v git").await;
+    assert_eq!(code, 0, "{output}");
+
+    op(&relay, "workspace.close", json!({})).await.unwrap();
 }
