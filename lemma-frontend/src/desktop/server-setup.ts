@@ -1,6 +1,6 @@
 import {
     CREDENTIAL_FORMS, LOCAL_SERVERS, formConfigured, meaningfulIntent, stored,
-    type EmailConfig, type EmailProvider, type OperatorAi, type SectionPayload, type SecretIntent,
+    type EmailConfig, type EmailProvider, type OperatorAi, type SectionPayload, type SectionsPayload, type SecretIntent,
     type SetupGroup, type SurfaceConfig, type ThisMacSnapshot,
 } from "./this-mac";
 
@@ -302,12 +302,27 @@ export function emailDraftProblem(
     return null;
 }
 
-/** The saves the email card becomes, in the order the daemon needs them.
+/** The save the email card becomes: one change, whichever sections it spans.
  *
  *  The Resend key belongs to the channels' section — one Resend account
- *  carries mail in and out — so it is saved first, and the email section,
- *  which the daemon refuses without that key, second. */
+ *  carries mail in and out — so a new key and the email section that sends
+ *  with it travel together, and the server restarts once for both. Empty
+ *  when nothing changed. */
 export function emailPayloads(
+    snapshot: ThisMacSnapshot,
+    draft: EmailDraft,
+    secrets: Record<string, SecretIntent>,
+): (SectionPayload | SectionsPayload)[] {
+    const parts = emailSections(snapshot, draft, secrets);
+    if (parts.length < 2) return parts;
+    return [{
+        expected_revision: snapshot.operator.config.revision,
+        sections: parts.map((part) => part.section),
+        secrets: Object.assign({}, ...parts.map((part) => part.secrets)),
+    }];
+}
+
+function emailSections(
     snapshot: ThisMacSnapshot,
     draft: EmailDraft,
     secrets: Record<string, SecretIntent>,

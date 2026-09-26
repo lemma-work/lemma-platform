@@ -296,7 +296,7 @@ export function readSharing(payload: unknown): Sharing {
  *  `WORKSPACE_COMMANDS`, granted in `workspace.json`, and caller-checked. */
 export const thisMac = {
     snapshot: async () => readSnapshot(await invoke("local_settings_snapshot")),
-    applySection: (payload: SectionPayload) => invoke("apply_local_settings", { payload }),
+    applySection: (payload: SectionPayload | SectionsPayload) => invoke("apply_local_settings", { payload }),
     sharing: (action: "snapshot" | "preflight" | "enable" | "disable" | "access", payload?: Record<string, unknown>) =>
         invoke<{ cancelled?: boolean; event?: string; sharing?: unknown; preflight?: unknown }>("local_sharing", { action, payload }),
     setStartAtLogin: (enabled: boolean) => invoke<boolean>("set_start_at_login", { enabled }),
@@ -731,9 +731,21 @@ export type Draft = Record<string, string | boolean>;
 /** A secret's pending change: left alone, replaced with a value, or removed. */
 export type SecretIntent = { action: "keep" } | { action: "replace"; value: string } | { action: "remove" };
 
+export interface SectionValue {
+    name: SectionName;
+    value: IntegrationConfig | SurfaceConfig | EmailConfig | OperatorAi;
+}
+
 export interface SectionPayload {
     expected_revision: number;
-    section: { name: SectionName; value: IntegrationConfig | SurfaceConfig | EmailConfig | OperatorAi };
+    section: SectionValue;
+    secrets: Record<string, SecretIntent>;
+}
+
+/** Several sections saved as one change, so the server restarts once. */
+export interface SectionsPayload {
+    expected_revision: number;
+    sections: SectionValue[];
     secrets: Record<string, SecretIntent>;
 }
 

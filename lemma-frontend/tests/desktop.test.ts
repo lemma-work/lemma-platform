@@ -163,9 +163,18 @@ test("the frame is the alias the shell hands back, or a window when it will not"
 
     /* An older shell refuses the command; a broken answer is not a URL. */
     const refusing = async () => { throw new Error("Command app_frame_url not allowed by ACL"); };
-    assert.deepEqual(await resolveAppFrame(app, "alias", refusing), { kind: "window" });
+    const refused = await resolveAppFrame(app, "alias", refusing);
+    assert.equal(refused.kind, "window");
+    assert.match((refused as { reason?: string }).reason ?? "", /not allowed by ACL/, "the reason is said, not swallowed");
     assert.deepEqual(await resolveAppFrame(app, "alias", shell({ url: "javascript:alert(1)" })), { kind: "window" });
     assert.deepEqual(await resolveAppFrame(app, "alias", shell(null)), { kind: "window" });
+});
+
+test("a shell that does not answer in time gets the window, not a blank pane", async () => {
+    const never = () => new Promise<unknown>(() => {});
+    const frame = await resolveAppFrame("http://orders.apps.lemma.localhost:1/", "alias", never, 10);
+    assert.equal(frame.kind, "window");
+    assert.match((frame as { reason?: string }).reason ?? "", /too long/);
 });
 
 test("asking for a frame goes through the shell's app_frame_url", async () => {

@@ -184,56 +184,84 @@ impl OperatorConfigStore {
         let mut request = match update {
             OperatorConfigUpdate::Legacy(request) => *request,
             OperatorConfigUpdate::Section(patch) => {
-                let mut config = self
-                    .config
-                    .lock()
-                    .expect("operator config poisoned")
-                    .clone();
-                config.revision = patch.expected_revision;
-                let prefix = match patch.section {
-                    ConfigSection::Ai(ai) => {
-                        config.ai = ai;
-                        "ai."
-                    }
-                    ConfigSection::Integrations(integrations) => {
-                        config.integrations = integrations;
-                        "integrations."
-                    }
-                    ConfigSection::Surfaces(surfaces) => {
-                        config.surfaces = surfaces;
-                        "surfaces."
-                    }
-                    ConfigSection::Email(email) => {
-                        config.email = email;
-                        "email."
-                    }
-                };
-                let mut secrets = BTreeMap::new();
-                for (name, action) in patch.secrets {
-                    if !name.starts_with(prefix) || !SECRET_NAMES.contains(&name.as_str()) {
-                        return Err(invalid(
-                            "credential does not belong to the selected section",
-                        ));
-                    }
-                    match action {
-                        CredentialAction::Keep => {}
-                        CredentialAction::Replace { value } if value.is_empty() => {
-                            return Err(invalid(
-                                "replacement credential must not be empty; use remove",
-                            ));
-                        }
-                        CredentialAction::Replace { value } => {
-                            secrets.insert(name, Some(value));
-                        }
-                        CredentialAction::Remove => {
-                            secrets.insert(name, None);
-                        }
-                    }
+                let patch = *patch;
+                self.section_request(patch.expected_revision, vec![patch.section], patch.secrets)?
+            }
+            OperatorConfigUpdate::Sections(patch) => {
+                let patch = *patch;
+                if patch.sections.is_empty() {
+                    return Err(invalid("a settings change names at least one section"));
                 }
-                ApplyOperatorConfig { config, secrets }
+                self.section_request(patch.expected_revision, patch.sections, patch.secrets)?
             }
         };
         self.apply_locked(&mut request)
+    }
+
+    /// The whole configuration these sections produce, with each credential
+    /// held to the sections actually being saved.
+    fn section_request(
+        &self,
+        expected_revision: u64,
+        sections: Vec<ConfigSection>,
+        credentials: BTreeMap<String, CredentialAction>,
+    ) -> io::Result<ApplyOperatorConfig> {
+        let mut config = self
+            .config
+            .lock()
+            .expect("operator config poisoned")
+            .clone();
+        config.revision = expected_revision;
+        let mut prefixes = Vec::new();
+        for section in sections {
+            let prefix = match section {
+                ConfigSection::Ai(ai) => {
+                    config.ai = ai;
+                    "ai."
+                }
+                ConfigSection::Integrations(integrations) => {
+                    config.integrations = integrations;
+                    "integrations."
+                }
+                ConfigSection::Surfaces(surfaces) => {
+                    config.surfaces = surfaces;
+                    "surfaces."
+                }
+                ConfigSection::Email(email) => {
+                    config.email = email;
+                    "email."
+                }
+            };
+            if prefixes.contains(&prefix) {
+                return Err(invalid("a section can be saved only once per change"));
+            }
+            prefixes.push(prefix);
+        }
+        let mut secrets = BTreeMap::new();
+        for (name, action) in credentials {
+            if !prefixes.iter().any(|prefix| name.starts_with(prefix))
+                || !SECRET_NAMES.contains(&name.as_str())
+            {
+                return Err(invalid(
+                    "credential does not belong to the selected section",
+                ));
+            }
+            match action {
+                CredentialAction::Keep => {}
+                CredentialAction::Replace { value } if value.is_empty() => {
+                    return Err(invalid(
+                        "replacement credential must not be empty; use remove",
+                    ));
+                }
+                CredentialAction::Replace { value } => {
+                    secrets.insert(name, Some(value));
+                }
+                CredentialAction::Remove => {
+                    secrets.insert(name, None);
+                }
+            }
+        }
+        Ok(ApplyOperatorConfig { config, secrets })
     }
 
     pub(crate) fn saved_provider_key(

@@ -128,6 +128,7 @@
 }
 .app-window__card h3 { margin: 0 0 6px; font-size: 15px; font-weight: 500; }
 .app-window__card p { margin: 0 0 16px; font-size: 13px; line-height: 1.5; color: var(--ink-3); }
+.app-window__card .app-window__reason { margin-top: -8px; font-size: 12px; overflow-wrap: anywhere; }
 .app-window__card .btn { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
 
 /* ── Settings → This Mac ─────────────────────────────────────────────

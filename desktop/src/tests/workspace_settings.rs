@@ -443,6 +443,15 @@ fn the_workspace_writes_the_server_setup_sections_only() {
         assert!(workspace_section_allowed(&json!({"section": {"name": name}})).is_ok());
     }
     assert!(workspace_section_allowed(&json!({"section": {"name": "sharing"}})).is_err());
+    assert!(workspace_section_allowed(
+        &json!({"sections": [{"name": "surfaces"}, {"name": "email"}]})
+    )
+    .is_ok());
+    assert!(workspace_section_allowed(
+        &json!({"sections": [{"name": "email"}, {"name": "sharing"}]})
+    )
+    .is_err());
+    assert!(workspace_section_allowed(&json!({"sections": []})).is_err());
     assert!(workspace_section_allowed(&json!({})).is_err());
 }
 
