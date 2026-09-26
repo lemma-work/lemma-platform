@@ -82,6 +82,8 @@ export interface Interaction {
     /** No tool return yet — the run is still waiting on a person. */
     open: boolean;
     at: string;
+    /** When it was asked, for a request that can run out of time. */
+    askedAtMs?: number;
 }
 
 export type { PlanStepState };
@@ -343,6 +345,7 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                             answers: answered ? resolvedAnswers(answered.tool_result) : {},
                             open: !answered,
                             at: clockOf(message.created_at),
+                            askedAtMs: msOf(message.created_at),
                         },
                     });
                     continue;

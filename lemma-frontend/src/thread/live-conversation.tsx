@@ -445,7 +445,10 @@ export function LiveConversation({
           }
         : null;
 
-    const error = sendError ?? loadError ?? (session.error ? session.error.message : null);
+    /* A failure the stream reported, else the one the run recorded — which is
+       what a reload has, since the stream that said it is gone. */
+    const recorded = state === "failed" ? session.conversation?.last_run_error ?? null : null;
+    const error = sendError ?? loadError ?? (session.error ? session.error.message : recorded);
 
     return (
         <>
@@ -479,7 +482,14 @@ export function LiveConversation({
                 onRetry={() => void session.retryFailedRun()}
                 dockedId={waitingOn?.id}
             />
-            <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
+            <InteractionDock
+                interaction={waitingOn}
+                teammate={pod.teammate.name}
+                onResolve={resolve}
+                /* Not while the status is still unknown, which reads as idle
+                   for a moment after load and would flash "Expired". */
+                runEnded={session.status !== undefined && state !== "running"}
+            />
             <FolderChip folder={folder} />
             <Composer
                 placeholder={"Talk to " + pod.name + "…"}

@@ -29,10 +29,13 @@ export function InteractionDock({
     interaction,
     teammate,
     onResolve,
+    runEnded,
 }: {
     interaction: Interaction | null;
     teammate: string;
     onResolve?: Resolve;
+    /** The run is not going any more; see `InteractionCard`. */
+    runEnded?: boolean;
 }) {
     if (!interaction) return null;
     return (
@@ -46,6 +49,7 @@ export function InteractionDock({
                     interaction={interaction}
                     teammate={teammate}
                     onResolve={onResolve}
+                    runEnded={runEnded}
                     docked
                 />
             </div>

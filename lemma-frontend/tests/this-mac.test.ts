@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
     CREDENTIAL_FORMS, LOCAL_SERVER_KEY, addToWorkspace, alreadyInWorkspace, channelLine, credentialFormForChannel,
     detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, HOST_EXECUTION_CONSEQUENCE,
-    hostExecutionRow, joinPolicyCopy,
+    hostExecutionError, hostExecutionRow, hostExecutionSwitch, joinPolicyCopy,
     oauthFormForConnector, onLocalWorkspaceOrigin, operatorProvider, postgresMajorChangeMessage, readSnapshot,
     sandboxWording, sectionPayloads, sharingBusy, thisMac, thisMacAvailability, thisMacReachable, updateOffer,
     type AppUpdateStatus, type ThisMacSnapshot,
@@ -417,6 +417,30 @@ test("the host-execution switch reflects the Agent Host and is off-limits where 
     assert.equal(hostExecutionRow(null).checked, false);
     assert.notEqual(hostExecutionRow(null).blocked, null);
     assert.notEqual(hostExecutionRow({ host_execution: null }).blocked, null);
+});
+
+test("the host-execution switch waits for this computer's own pairing, and says why", () => {
+    const setting = { enabled: false, available: true };
+    /* No pairing with the Lemma installed here yet: the host would refuse. */
+    const early = hostExecutionSwitch({ host_execution: setting, targets: [] }, { noun: "this Mac" });
+    assert.equal(early.blocked, "Available once this Mac finishes connecting.");
+    /* Only a pairing with some other Lemma: still not the one this is for. */
+    assert.notEqual(hostExecutionSwitch({ host_execution: setting, targets: [{ local: false }] }).blocked, null);
+    /* The local pairing, or an older shell that does not say: usable. */
+    assert.equal(hostExecutionSwitch({ host_execution: setting, targets: [{ local: true }] }).blocked, null);
+    assert.equal(hostExecutionSwitch({ host_execution: setting, targets: [{}] }).blocked, null);
+    /* The shell not answering at all is said as that, not as waiting. */
+    assert.equal(
+        hostExecutionSwitch(null, { error: "control endpoint unavailable" }).blocked,
+        "Lemma\u2019s agent service isn\u2019t responding. Restart Lemma.",
+    );
+    assert.doesNotMatch(hostExecutionSwitch(null).blocked ?? "", /Agent Host/);
+});
+
+test("a refused switch is said in words, not as the host's error", () => {
+    const refusal = new Error("agent-host-operation-failed: this computer is not paired with the Lemma installed on it; host execution is only for that pairing");
+    assert.equal(hostExecutionError(refusal, "this Mac"), "Available once this Mac finishes connecting.");
+    assert.equal(hostExecutionError(new Error("control endpoint unavailable")), "Lemma\u2019s agent service isn\u2019t responding. Restart Lemma.");
 });
 
 test("the Agent Host status carries host execution, and an older shell's does not break it", () => {

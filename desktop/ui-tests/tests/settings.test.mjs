@@ -196,3 +196,55 @@ test('a refused stop puts the button back and says why', async () => {
   assert.equal(dom.element('sharing-disable').disabled, false);
   assert.match(dom.element('toast').textContent, /background service isn't running/);
 });
+
+// The coding-agents card names only controls that exist on this page or in
+// the workspace, in the workspace card's own words.
+test('the coding-agents card says what stopped and never names a missing switch', async () => {
+  await page();
+  const overview = await shared('overview');
+  let said = '';
+  const describe = (state) => {
+    const { status, detail } = overview.describeAgentHost(state);
+    said = `${status}: ${detail}`;
+  };
+
+  describe({ available: true, running: false, restart_circuit_open: true, targets: [] });
+  assert.match(said, /^not running/);
+  assert.match(said, /Press Restart/);
+
+  describe({ available: true, running: false, targets: [] });
+  assert.match(said, /^starting/);
+
+  describe({ available: true, running: true, paired: false, targets: [] });
+  assert.match(said, /^not connected/);
+  assert.match(said, /connects itself/);
+
+  describe({
+    available: true, running: true, paired: true,
+    targets: [{ connection_state: 'OFFLINE', last_error: 'this Lemma needs a newer Agent Host' }],
+  });
+  assert.match(said, /^update needed/);
+
+  describe({ available: false });
+  assert.match(said, /Update Lemma/);
+
+  for (const state of [
+    { available: true, running: false, targets: [] },
+    { available: true, running: true, paired: false, targets: [] },
+    { available: true, running: true, paired: true, targets: [{ connection_state: 'OFFLINE', last_error: 'x' }] },
+  ]) {
+    describe(state);
+    assert.doesNotMatch(said, /Turn it on|Connect this computer from Lemma|Agent Host/);
+  }
+});
+
+test('opening the coding agents in Lemma lands on the settings that manage them', async () => {
+  await page();
+  const actions = await shared('actions');
+  await actions.runDesktopAction(fakeElement({ dataset: { action: 'agent-host-open' } }));
+  const sent = dom.commands.filter(({ command }) => command === 'close_local_settings');
+  assert.equal(sent.length, 1);
+  // This DOM is a local install's, where they are under This Mac.
+  assert.deepEqual(sent[0].args, { section: 'this-mac-agents' });
+  assert.equal(dom.commands.some(({ command }) => command === 'open_app'), false);
+});

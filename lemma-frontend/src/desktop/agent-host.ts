@@ -43,6 +43,11 @@ export interface AgentHostStatus {
      *  whether this computer can confine commands at all (macOS only). Null
      *  from a shell too old to say. */
     host_execution: { enabled: boolean; available: boolean } | null;
+    /** The coding agents (harness keys: `claude-code`, `codex`, …) whose owner
+     *  chose "Use my own skills and settings". Every other agent starts with
+     *  only Lemma's. Null from a shell too old to say, which also cannot
+     *  change it. */
+    own_settings: string[] | null;
 }
 
 /** Narrow the shell's loose JSON to a status, or null if it is not one. */
@@ -60,6 +65,9 @@ export function readStatus(payload: unknown): AgentHostStatus | null {
         last_error: typeof record.last_error === "string" ? record.last_error : null,
         log: typeof record.log === "string" ? record.log : null,
         host_execution: readHostExecution(record.host_execution),
+        own_settings: Array.isArray(record.own_settings)
+            ? record.own_settings.filter((key): key is string => typeof key === "string")
+            : null,
     };
 }
 
@@ -67,6 +75,19 @@ function readHostExecution(raw: unknown): AgentHostStatus["host_execution"] {
     if (!raw || typeof raw !== "object") return null;
     const record = raw as Record<string, unknown>;
     return { enabled: record.enabled === true, available: record.available === true };
+}
+
+/** The "Use my own skills and settings" switch for one agent, from the
+ *  shell's status. `blocked` says why it cannot be changed from here. */
+export function ownSettingsRow(
+    status: AgentHostStatus | null,
+    harness: string,
+): { checked: boolean; blocked: string | null } {
+    if (!status) return { checked: false, blocked: "Waiting for Lemma’s agent service." };
+    if (status.own_settings === null) {
+        return { checked: false, blocked: "Update Lemma to choose this." };
+    }
+    return { checked: status.own_settings.includes(harness), blocked: null };
 }
 
 /** What this page may ask of this computer's Agent Host.
@@ -83,6 +104,8 @@ function readHostExecution(raw: unknown): AgentHostStatus["host_execution"] {
  *  behind any action, which is why callers re-poll after acting. */
 export const agentHost = {
     status: () => invoke("agent_host_status"),
+    /** Also what "Restart" is: a deliberate start forgives the crashes that
+     *  made the supervisor stop trying. */
     start: () => invoke("agent_host_start"),
     /** `url` is only checked by the shell, never trusted: it pairs with the
      *  Lemma it itself navigated to. `reenable` only from a person's click,
@@ -92,8 +115,16 @@ export const agentHost = {
     /** Who is signed in to the workspace on screen; `null` once they signed
      *  out. Anybody else's pairing takes no new work meanwhile. */
     session: (url: string, userId: string | null) => invoke("agent_host_session", { url, userId }),
+    /** Look for installed agents now, and republish them — rather than on
+     *  the host's own quarter-hour cycle. What "Check again" asks for after
+     *  somebody signs in to an agent. */
     refresh: () => invoke("agent_host_refresh"),
     openLog: () => invoke("agent_host_open_log"),
+    /** "Use my own skills and settings" for one agent: its own instructions,
+     *  skills, plugins, hooks and MCP servers as well as Lemma's. Off, it
+     *  starts with Lemma's only. Applies from the agent's next turn. */
+    setOwnSettings: (harness: string, enabled: boolean) =>
+        invoke("agent_host_own_settings", { harness, enabled }),
 };
 
 /* ── one poll for the page ─────────────────────────────────────────── */

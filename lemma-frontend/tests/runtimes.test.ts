@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+    agentFix,
+    agentUpdateCommand,
+    computerStatus,
     agentOptions,
     agentSettingsChanges,
     agentHealth,
@@ -103,6 +106,27 @@ test("an agent wears the catalogue's name, and carries its fix", () => {
     assert.equal(agent?.ready, false);
     assert.equal(agent?.state, "Sign-in needed");
     assert.match(agent?.fix ?? "", /Sign in/);
+});
+
+test("on the computer you are at, a fix names the command and the button", () => {
+    const agent = readLocalAgent({ id: "h1", harness_key: "claude-code", health: "AUTH_REQUIRED" });
+    assert.ok(agent);
+    assert.equal(agent.health, "AUTH_REQUIRED");
+    assert.equal(agentFix(agent, "this Mac"), "Run `claude login` in Terminal, then press Check again.");
+    /* Anywhere else the fix is still over there, and cannot be checked from here. */
+    assert.equal(agentFix(agent, null), agent.fix);
+    assert.doesNotMatch(agentFix(agent, null), /Check again/);
+
+    const old = readLocalAgent({ id: "h2", harness_key: "codex", health: "UNSUPPORTED_VERSION" });
+    assert.ok(old);
+    assert.match(agentFix(old, "this Mac"), new RegExp(agentUpdateCommand("codex").replaceAll(".", "\\.")));
+    const unknown = readLocalAgent({ id: "h3", harness_key: "something", health: "PROBE_FAILED" });
+    assert.ok(unknown);
+    assert.match(agentFix(unknown, "this PC"), /on this PC/);
+});
+
+test("a computer whose app is too old says it needs an update", () => {
+    assert.equal(computerStatus("UPGRADE_REQUIRED"), "Update needed");
 });
 
 test("an unknown health is a state, not a blank", () => {

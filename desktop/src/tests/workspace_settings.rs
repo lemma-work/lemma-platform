@@ -365,6 +365,26 @@ fn replacing_a_credential_is_asked_and_setting_a_first_one_is_not() {
     assert!(asked < applied);
 }
 
+/// The consent is the one place a person learns what these commands can
+/// reach, so it has to say what the Seatbelt profile actually allows: reads
+/// are broad, and only writes are confined.
+#[test]
+fn the_host_execution_consent_says_reads_are_broad_and_writes_are_not() {
+    let consent = host_execution_consent(true).expect("asks");
+    assert!(
+        consent.message.contains("read most files"),
+        "{}",
+        consent.message
+    );
+    assert!(consent.message.contains("SSH keys"), "{}", consent.message);
+    assert!(
+        consent.message.contains("write only"),
+        "{}",
+        consent.message
+    );
+    assert!(!consent.message.contains("to the folders you connect."));
+}
+
 #[test]
 fn turning_host_execution_on_is_asked_and_turning_it_off_is_not() {
     assert!(host_execution_consent(true).is_some());

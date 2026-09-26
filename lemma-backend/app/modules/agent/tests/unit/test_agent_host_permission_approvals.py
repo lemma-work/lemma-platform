@@ -84,6 +84,28 @@ class TestApprovalShape:
 
         assert "args" not in args
 
+    def test_the_marker_carries_what_would_run_and_every_option(self) -> None:
+        """The card shows the gated call's input, and offers "for this
+        conversation" only when an allow_always option exists -- labelled
+        with that option's own name."""
+        args = permission_approval_tool_args(_PAYLOAD, request_id="call-9")
+        marker = args[AGENT_HOST_PERMISSION_KEY]
+
+        assert marker["input"] == {"cmd": "rm -rf build"}
+        assert {
+            "option_id": "always",
+            "kind": "allowalways",
+            "name": "Always allow",
+        } in marker["options"]
+        # Still read back the same way.
+        assert agent_host_permission_request(args) is not None
+
+    def test_a_request_without_input_carries_an_empty_one(self) -> None:
+        payload = {key: value for key, value in _PAYLOAD.items() if key != "input"}
+        args = permission_approval_tool_args(payload, request_id="call-9")
+
+        assert args[AGENT_HOST_PERMISSION_KEY]["input"] == {}
+
     def test_call_id_does_not_collide_with_the_native_tool_call(self) -> None:
         """The ACP request id *is* the native tool call id, which the host has
         already reported as its own tool call. Reusing it would make one

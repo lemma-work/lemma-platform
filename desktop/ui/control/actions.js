@@ -24,9 +24,9 @@ export async function closeLocalSettings() {
   }
 }
 
-async function leaveSettings() {
+async function leaveSettings(section) {
   try {
-    await invoke("close_local_settings");
+    await invoke("close_local_settings", section ? { section } : undefined);
     return true;
   } catch (error) {
     toast(friendlyError(error), true);
@@ -52,12 +52,12 @@ export async function runDesktopAction(button) {
     }
     if (action === "logs") await invoke("open_logs");
     if (action === "devtools") await invoke("open_developer_tools");
-    // Connecting, choosing agents and turning it off live in the workspace, so
-    // a cloud user reaches the same controls. This page keeps only what is
-    // useful when the workspace itself will not load.
+    // Choosing which agents teammates use lives in the workspace, so a cloud
+    // user reaches the same controls: This Mac → Coding agents on a local
+    // install, Models on a hosted one. This page keeps only what is useful
+    // when the workspace itself will not load.
     if (action === "agent-host-open") {
-      if (!await closeLocalSettings()) return;
-      await invoke("open_app");
+      await leaveSettings(LOCAL_MODE ? "this-mac-agents" : "models");
     }
     if (action === "agent-host-restart") await invoke("agent_host_action", { action: "restart" });
     if (action === "agent-host-log") await invoke("open_logs");

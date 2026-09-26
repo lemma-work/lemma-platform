@@ -8,10 +8,11 @@ import { ComputerIcon, DownloadIcon, RefreshIcon, TerminalIcon, WarningIcon } fr
 import { useDesktopBridge } from "./bridge";
 import { openSettings } from "./open-settings";
 import { capitalised, useThisComputer } from "./this-computer";
-import { ThisComputerCard } from "./this-computer-card";
+import { ThisComputerAgents, ThisComputerCard } from "./this-computer-card";
 import { readStatus, useAgentHost } from "./agent-host";
+import { hostExecutionError, hostExecutionSwitch } from "./this-mac";
 import {
-    channelLine, friendlyError, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin,
+    channelLine, friendlyError, healthLine, healthState, onLocalWorkspaceOrigin,
     sandboxWording, updateOffer, sharingBusy, thisMac, thisMacAvailability,
     type ThisMacAvailability, type ThisMacSnapshot,
 } from "./this-mac";
@@ -166,10 +167,13 @@ function CodingAgents() {
     return (
         <div className="thismac">
             {/* The same card the Models page leads with, so this computer
-                reads the same in both places. Adding its agents for
-                teammates to pick is an organization decision and stays on
-                Models. */}
-            <ThisComputerCard />
+                reads the same in both places, with what it found: each
+                agent, its release, and what to type to update it. Adding
+                them for teammates to pick is an organization decision and
+                stays on Models. */}
+            <ThisComputerCard>
+                <ThisComputerAgents />
+            </ThisComputerCard>
             <p className="thismac-foot">
                 Choose which of its agents teammates can use in{" "}
                 <button className="linkish" onClick={() => openSettings("models")}>Models</button>.
@@ -197,6 +201,7 @@ function CodingAgents() {
 /** "Run commands on this Mac". Owner's runs only: the backend keeps every
  *  teammate's run in the VM whatever this says. */
 function HostExecution() {
+    const noun = useThisComputer();
     const host = useAgentHost();
     const [problem, setProblem] = useState<string | null>(null);
     const change = useMutation({
@@ -204,17 +209,17 @@ function HostExecution() {
         /* The shell answers with the host's fresh status; the poll catches up
            with it on its next tick anyway. */
         onSuccess: (answer) => { if (readStatus(answer)) void host.refetch(); },
-        onError: (cause) => setProblem(friendlyError(cause)),
+        onError: (cause) => setProblem(hostExecutionError(cause, noun)),
     });
-    const row = hostExecutionRow(host.status);
+    const row = hostExecutionSwitch(host.status, { error: host.error, noun });
     return (
         <>
-            <SettingRow name="Run commands on this Mac" consequence={row.blocked ?? row.consequence}>
+            <SettingRow name={"Run commands on " + noun} consequence={row.blocked ?? row.consequence}>
                 <input
                     type="checkbox"
                     className="thismac-switch"
                     role="switch"
-                    aria-label="Run commands on this Mac"
+                    aria-label={"Run commands on " + noun}
                     checked={change.isPending ? change.variables === true : row.checked}
                     disabled={row.blocked !== null || change.isPending}
                     title={row.blocked ?? undefined}

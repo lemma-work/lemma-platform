@@ -182,9 +182,8 @@ for as long as the app stayed open. Every optimistic state on this surface owes
 the reader a way to stop being optimistic.
 
 So the two stages on the way up have an end. *Starting* becomes **Not
-running**, with **Restart**, at once when locald reports
-`restart_circuit_open` (the supervisor stopped restarting a sidecar that kept
-crashing; `agent_host_start` forgives that) and after 30 seconds otherwise.
+running**, with **Restart** (`agent_host_start`, which also forgives the
+crashes that made the supervisor stop trying), after 30 seconds.
 *Connecting* becomes **Not connected**, with **Connect again**, after 30
 seconds: the automatic connection is one attempt per page, so a pairing the
 host dropped mid-session is otherwise never retried. "Connect again" is a

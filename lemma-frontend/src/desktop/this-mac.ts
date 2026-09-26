@@ -299,6 +299,18 @@ export interface HostExecutionRow {
     consequence: string;
 }
 
+/** What the shell says when the owner's pairing with this Lemma does not
+ *  exist yet, and the switch was flipped anyway. */
+const NOT_PAIRED_HERE = /not paired with the Lemma installed on it/i;
+
+/** Said while the switch waits for this computer to finish connecting. */
+export function notConnectedYet(noun: string): string {
+    return `Available once ${noun} finishes connecting.`;
+}
+
+/** Said when the shell will not report on the service at all. */
+export const AGENT_SERVICE_SILENT = "Lemma’s agent service isn’t responding. Restart Lemma.";
+
 /** The "Run commands on this Mac" switch, from the Agent Host's status.
  *  Pure, so what it says in each state is tested without a page. */
 export function hostExecutionRow(
@@ -316,6 +328,42 @@ export function hostExecutionRow(
         };
     }
     return { checked: setting.enabled, blocked: null, consequence: HOST_EXECUTION_CONSEQUENCE };
+}
+
+/** The switch as Settings shows it: {@link hostExecutionRow}, held until this
+ *  computer's own pairing exists, and said in a person's words.
+ *
+ *  The switch belongs to this computer's pairing with the Lemma installed on
+ *  it, so it stays off-limits until that pairing exists: flipped earlier, the
+ *  host refused with its own error text and the switch sprang back. A target
+ *  from an older shell does not say whether it is that pairing, and is given
+ *  the benefit of the doubt. `error` is the shell not answering at all. */
+export function hostExecutionSwitch(
+    status: {
+        available?: boolean;
+        host_execution: { enabled: boolean; available: boolean } | null;
+        targets?: readonly { local?: boolean | null }[];
+    } | null,
+    { error = null, noun = "this Mac" }: { error?: string | null; noun?: string } = {},
+): HostExecutionRow {
+    const row = hostExecutionRow(status);
+    if (!status?.host_execution && status?.available !== false) {
+        return { ...row, blocked: error ? AGENT_SERVICE_SILENT : notConnectedYet(noun) };
+    }
+    if (row.blocked) return row;
+    const targets = status?.targets;
+    if (targets && !targets.some((target) => target.local !== false)) {
+        return { ...row, blocked: notConnectedYet(noun) };
+    }
+    return row;
+}
+
+/** A refusal from flipping the switch, in words. */
+export function hostExecutionError(reason: unknown, noun = "this Mac"): string {
+    const message = reason instanceof Error ? reason.message : String(reason ?? "");
+    if (NOT_PAIRED_HERE.test(message)) return notConnectedYet(noun);
+    if (/control endpoint unavailable|is not connected|disconnected|timed out/i.test(message)) return AGENT_SERVICE_SILENT;
+    return friendlyError(reason);
 }
 
 /** Whether This Mac's commands make sense at all right now. */
