@@ -92,10 +92,18 @@ class HostFolder:
 
 
 def workspace_open_params(
-    conversation_id: UUID, folder: HostFolder | None, *, root_hint: str | None
+    conversation_id: UUID,
+    folder: HostFolder | None,
+    *,
+    root_hint: str | None,
+    lemma_cli: str | None = None,
 ) -> dict[str, object]:
     """``workspace.open``'s params (§4). ``date`` is the conversation's own
-    day, not today's, so a first open on another day finds the same folder."""
+    day, not today's, so a first open on another day finds the same folder.
+
+    ``lemma_cli`` is the root of the `lemma` CLI this backend ships beside it,
+    which the Mac puts first on the commands' ``PATH`` if it accepts the
+    folder; absent, commands find whatever `lemma` the owner installed."""
     params: dict[str, object] = {
         "root_hint": root_hint,
         "grants": [],
@@ -104,6 +112,8 @@ def workspace_open_params(
     if folder is not None:
         params["date"] = folder.day
         params["slug"] = folder.slug
+    if lemma_cli:
+        params["lemma_cli"] = lemma_cli
     return params
 
 

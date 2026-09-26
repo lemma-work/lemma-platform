@@ -97,3 +97,17 @@ test("nothing outside src/desktop/bridge.ts reaches the shell directly", async (
     await walk(path.join(FRONTEND, "src"));
     assert.deepEqual(offenders, []);
 });
+
+test("Cancel on the hosted sign-in can reach the shell's way back to the chooser", async () => {
+    assert.ok((WORKSPACE_COMMANDS as readonly string[]).includes("return_to_mode_chooser"));
+    assert.ok((await workspaceGrants()).has("return_to_mode_chooser"));
+    assert.ok((await registered()).has("return_to_mode_chooser"));
+});
+
+test("the disk row's two commands are granted and registered", async () => {
+    for (const command of ["delete_update_backup", "free_up_disk_space"]) {
+        assert.ok((WORKSPACE_COMMANDS as readonly string[]).includes(command));
+        assert.ok((await workspaceGrants()).has(command), command);
+        assert.ok((await registered()).has(command), command);
+    }
+});

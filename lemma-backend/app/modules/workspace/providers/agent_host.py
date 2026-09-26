@@ -173,9 +173,16 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
     storage_kind = ProviderStorageKind.SANDBOX_NATIVE
     resumes_stopped_instances = True
 
-    def __init__(self, transport: HostOpTransport, targets: HostTargets) -> None:
+    def __init__(
+        self,
+        transport: HostOpTransport,
+        targets: HostTargets,
+        *,
+        lemma_cli: str | None = None,
+    ) -> None:
         self._transport = transport
         self._targets = targets
+        self._lemma_cli = lemma_cli
 
     # ------------------------------------------------------------ transport
 
@@ -216,6 +223,7 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
             target.conversation_id,
             folder,
             root_hint=target.root or (folder.root_hint if folder else None),
+            lemma_cli=self._lemma_cli,
         )
         return await self._open(
             sandbox_id, host_id=target.host_id, params=params, deadline_at=deadline_at
@@ -232,7 +240,10 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
     ) -> str:
         """Open a host sandbox on the host a run chose; the root the Mac chose."""
         params = workspace_open_params(
-            conversation_id, folder, root_hint=folder.root_hint
+            conversation_id,
+            folder,
+            root_hint=folder.root_hint,
+            lemma_cli=self._lemma_cli,
         )
         try:
             return await self._open(

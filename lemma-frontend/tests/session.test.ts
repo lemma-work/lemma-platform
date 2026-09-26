@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isForbidden, isUnauthorized, retryTransient, sessionStatus, transientRetryDelay, TRANSIENT_RETRIES } from "../src/session/auth-state.ts";
+import { isForbidden, isUnauthorized, retryTransient, sessionStatus, transientRetryDelay, TRANSIENT_RETRIES, unreachableRetryDelay } from "../src/session/auth-state.ts";
 
 test("only a 401 means the server is saying 'not you'", () => {
     assert.equal(isUnauthorized({ statusCode: 401 }), true);
@@ -95,4 +95,16 @@ test("a query is retried through a server restart, never after a real answer", (
     assert.equal(retryTransient(0, { statusCode: 500 }), false, "a server error is an answer too");
     assert.equal(retryTransient(TRANSIENT_RETRIES, new TypeError("Failed to fetch")), false);
     assert.ok(transientRetryDelay(10) <= 8_000);
+});
+
+test("an API that did not answer is not a signed-out person", () => {
+    // A server restarting under the page used to come back "out", and the page
+    // left for the sign-in portal. Only a 401 means that now.
+    assert.equal(sessionStatus("unreachable", false), "unreachable");
+    assert.equal(sessionStatus("unreachable", true), "sample");
+    assert.equal(sessionStatus("unreachable", false, false), "unconfigured");
+});
+
+test("the unreachable screen looks again quickly, then backs off to thirty seconds", () => {
+    assert.deepEqual([0, 1, 2, 3, 4, 5, 9].map(unreachableRetryDelay), [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
 });

@@ -4,13 +4,17 @@ from typing import Any
 from uuid import UUID
 
 from ..openapi_client.api.agent_runtime import (
+    agent_runtime_default_clear,
+    agent_runtime_default_set,
     agent_runtime_profiles_archive,
     agent_runtime_profiles_create,
     agent_runtime_profiles_get,
     agent_runtime_profiles_list,
     agent_runtime_profiles_restore,
+    agent_runtime_profiles_test,
     agent_runtime_profiles_update,
 )
+from ..openapi_client.models.agent_runtime_config import AgentRuntimeConfig
 from ..openapi_client.models.agent_runtime_profile_detail_response import (
     AgentRuntimeProfileDetailResponse,
 )
@@ -19,6 +23,12 @@ from ..openapi_client.models.agent_runtime_profile_list_response import (
 )
 from ..openapi_client.models.agent_runtime_profile_response import (
     AgentRuntimeProfileResponse,
+)
+from ..openapi_client.models.agent_runtime_profile_test_response import (
+    AgentRuntimeProfileTestResponse,
+)
+from ..openapi_client.models.set_organization_default_runtime_request import (
+    SetOrganizationDefaultRuntimeRequest,
 )
 from ..openapi_client.models.create_anthropic_compatible_runtime_profile_request import (
     CreateAnthropicCompatibleRuntimeProfileRequest,
@@ -125,3 +135,33 @@ class BoundOrgRuntime(BoundResource):
             self._org_uuid(),
             as_uuid(profile_id),
         )
+
+    def test_profile(self, profile_id: str | UUID) -> AgentRuntimeProfileTestResponse:
+        """List a saved provider's models and send its default model one short
+        message. ``ok`` is false with a plain-language ``message`` when the key
+        is rejected or the provider does not answer."""
+        return self._call(
+            agent_runtime_profiles_test,
+            self._org_uuid(),
+            str(profile_id),
+        )
+
+    def set_default(
+        self, profile_id: str | UUID, *, model_name: str | None = None
+    ) -> AgentRuntimeConfig:
+        """Make an organization-wide model provider what every teammate that
+        names no model runs on. Without ``model_name`` it follows the
+        provider's own default model."""
+        body: dict[str, Any] = {"profile_id": str(profile_id)}
+        if model_name is not None:
+            body["model_name"] = model_name
+        return self._call(
+            agent_runtime_default_set,
+            self._org_uuid(),
+            body=SetOrganizationDefaultRuntimeRequest.from_dict(body),
+        )
+
+    def clear_default(self) -> None:
+        """Stop choosing a model for the organization; teammates fall back to
+        the server's model, or the first provider when it has none."""
+        return self._call(agent_runtime_default_clear, self._org_uuid())

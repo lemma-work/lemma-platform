@@ -317,6 +317,7 @@ class WorkspaceSandboxService(
         workload_name: str | None = None,
         scope: list[str] | None = None,
         session_id: str | None = None,
+        conversation_id: UUID | None = None,
     ) -> dict[str, str]:
         from app.modules.identity.contracts.delegated_tokens import (
             mint_delegated_token,
@@ -356,6 +357,11 @@ class WorkspaceSandboxService(
             "LEMMA_POD_ID": str(pod_id) if pod_id is not None else None,
             "LEMMA_ORG_ID": resolved_org_id,
             "LEMMA_WORKSPACE_URL": workspace_url,
+            # The CLI's default for every `lemma conversations ...` command, so
+            # an agent reaching its own conversation need not be told its id.
+            "LEMMA_CONVERSATION_ID": (
+                str(conversation_id) if conversation_id is not None else None
+            ),
         }
         return {k: v for k, v in env_vars.items() if v is not None}
 
@@ -383,6 +389,7 @@ class WorkspaceSandboxService(
         scope: list[str] | None = None,
         env_vars: dict[str, str] | None = None,
         ready_timeout_seconds: float | None = None,
+        conversation_id: UUID | None = None,
     ) -> IWorkspaceSession:
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
         budget = ReadyBudget(ready_timeout_seconds)
@@ -416,6 +423,7 @@ class WorkspaceSandboxService(
                         workload_name=workload_name,
                         scope=scope,
                         session_id=session_id,
+                        conversation_id=conversation_id,
                     ),
                     budget.remaining(),
                 )

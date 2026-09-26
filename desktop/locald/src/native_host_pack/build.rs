@@ -397,6 +397,18 @@ pub(crate) fn build(
     if skills.is_dir() {
         backend_env.insert("LEMMA_SKILLS_ROOT", path_text(skills)?);
     }
+    // Both named only when the pack has them, so a pack from before they
+    // shipped starts exactly as it did: commands use the owner's `lemma`, and
+    // sandboxes keep the copy baked into their image.
+    if bindings.lemma_cli.join("bin").join("lemma").is_file() {
+        backend_env.insert("WORKSPACE_HOST_CLI_ROOT", path_text(&bindings.lemma_cli)?);
+    }
+    if bindings.runtime_bundle.join("manifest.json").is_file() {
+        backend_env.insert(
+            "WORKSPACE_RUNTIME_BUNDLE_DIR",
+            path_text(&bindings.runtime_bundle)?,
+        );
+    }
 
     // What decides whether the one-time setups need to run again.
     //

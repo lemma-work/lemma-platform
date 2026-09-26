@@ -65,6 +65,8 @@ pub(crate) fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
         browser_sdk: backend_dir.join("assets/browser-sdk/lemma-client.js"),
         browser_ui: backend_dir.join("assets/browser-sdk/lemma-ui.js"),
         skills: backend_dir.join("assets/lemma-skills"),
+        lemma_cli: backend_dir.clone(),
+        runtime_bundle: backend_dir.join("assets/runtime-bundle"),
         backend_dir,
         frontend_dir: root.join("frontend"),
         node_env: "production",
@@ -111,6 +113,10 @@ pub(crate) fn source_bindings_with(root: &Path, uv: &Path, node: &Path) -> io::R
         browser_sdk: root.join("lemma-typescript/public/lemma-client.js"),
         browser_ui: root.join("lemma-typescript/public/lemma-ui.js"),
         skills: root.join("lemma-skills"),
+        // A checkout has no packaged CLI; its commands use the owner's own
+        // `lemma`. `make runtime-bundle` writes the bundle here when wanted.
+        lemma_cli: backend_dir.join("dist/lemma-cli"),
+        runtime_bundle: backend_dir.join("dist/runtime-bundle"),
         backend_dir,
         frontend_dir,
         node_env: "development",

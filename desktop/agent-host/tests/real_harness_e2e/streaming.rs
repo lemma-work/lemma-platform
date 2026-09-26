@@ -20,6 +20,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                 AcpRunRequest {
                     adapter: manifest.resolve(&agent).unwrap(),
                     agent_environment: std::collections::BTreeMap::default(),
+                    own_settings: false,
                     run_spec: RunSpec {
                         agent_run_id: run_id,
                         conversation_id: Uuid::new_v4(),

@@ -80,6 +80,10 @@ pub struct Confinement {
     /// the owner's own (`cache_environment`).
     pub cache: PathBuf,
     pub grants: Vec<PathBuf>,
+    /// Lemma's own `lemma` CLI for this workspace's commands: a folder whose
+    /// `bin/` goes first on `PATH`, readable even where Lemma's data is not
+    /// (`lemma_cli_root`).
+    pub lemma_cli: Option<PathBuf>,
 }
 
 impl Confinement {
@@ -114,8 +118,55 @@ impl Confinement {
         for (index, resolved) in resolved_credentials(&self.home).iter().enumerate() {
             define(&format!("RESOLVED_{index}"), resolved);
         }
+        if let Some(cli) = &self.lemma_cli {
+            define("LEMMA_CLI", cli);
+        }
         arguments
     }
+
+    /// `PATH` for this workspace's commands: Lemma's CLI first, then the
+    /// owner's own. First, so the `lemma` a command runs is the one this
+    /// Lemma shipped -- the same release as the server it talks to -- rather
+    /// than whatever version the owner installed themselves, if any.
+    #[must_use]
+    pub fn path_with_cli(&self, owners: Option<&std::ffi::OsStr>) -> Option<OsString> {
+        let cli = self.lemma_cli.as_ref()?.join("bin");
+        let mut entries = vec![cli];
+        if let Some(owners) = owners {
+            entries.extend(std::env::split_paths(owners));
+        }
+        std::env::join_paths(entries).ok()
+    }
+}
+
+/// Where Lemma's own data sits under the owner's home that a CLI root may
+/// be in: the host packs, which hold code and nothing secret. The rest of
+/// that folder -- pairing secrets, the app's database and vault -- stays
+/// denied however a root is named.
+pub const CLI_ROOT_EXCEPTION: &str = "Library/Application Support/Lemma/runtime";
+
+/// The `lemma` CLI root Lemma named for a workspace, if it is one commands
+/// may be given.
+///
+/// Lemma names it -- the server knows which CLI is its own release -- and
+/// this host decides whether to widen what commands can read to it, as it
+/// does for every folder Lemma names. A root is a folder holding `bin/lemma`.
+/// It may not be the home folder or contain it, and it may not sit inside a
+/// credential path the profile denies, except the host packs'
+/// (`CLI_ROOT_EXCEPTION`): allowing a read there would undo the denial.
+#[must_use]
+pub fn lemma_cli_root(raw: &str, home: &Path) -> Option<PathBuf> {
+    let root = std::fs::canonicalize(raw).ok()?;
+    if !root.join("bin/lemma").is_file() || home.starts_with(&root) {
+        return None;
+    }
+    let exception = home.join(CLI_ROOT_EXCEPTION);
+    let denied = CREDENTIAL_PATHS.iter().any(|relative| {
+        let path = home.join(relative);
+        let real = std::fs::canonicalize(&path).unwrap_or(path);
+        root.starts_with(&real)
+    });
+    (!denied || root.starts_with(&exception)).then_some(root)
 }
 
 /// The `.git` of the root and of each grant, where one exists now.
@@ -200,6 +251,7 @@ mod tests {
             grants: (0..10)
                 .map(|index| PathBuf::from(format!("/g{index}")))
                 .collect(),
+            lemma_cli: Some("/cli".into()),
         };
         let arguments = confinement.sandbox_arguments();
         let defines: Vec<_> = arguments
@@ -210,6 +262,8 @@ mod tests {
         assert!(defines.contains(&"ROOT=/r"));
         assert!(defines.contains(&"GRANT_7=/g7"));
         assert!(!defines.iter().any(|define| define.starts_with("GRANT_8")));
+        assert!(defines.contains(&"LEMMA_CLI=/cli"));
+        assert!(PROFILE.contains("(param \"LEMMA_CLI\")"));
         for index in 0..MAX_GRANTS {
             assert!(
                 PROFILE.contains(&format!("(param \"GRANT_{index}\")")),
@@ -251,6 +305,75 @@ mod tests {
         std::fs::create_dir_all(&dotfiles).unwrap();
         std::os::unix::fs::symlink(&dotfiles, home.join(".ssh")).unwrap();
         assert_eq!(resolved_credentials(&home), [dotfiles]);
+    }
+
+    fn cli_root(at: &Path) -> PathBuf {
+        std::fs::create_dir_all(at.join("bin")).unwrap();
+        std::fs::write(at.join("bin/lemma"), "#!/bin/sh\n").unwrap();
+        std::fs::canonicalize(at).unwrap()
+    }
+
+    #[test]
+    fn a_cli_root_is_a_folder_with_bin_lemma_outside_the_owners_secrets() {
+        let directory = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(directory.path()).unwrap();
+        let home = base.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let anywhere = cli_root(&base.join("elsewhere"));
+        assert_eq!(
+            lemma_cli_root(anywhere.to_str().unwrap(), &home),
+            Some(anywhere)
+        );
+
+        // A host pack's, inside Lemma's otherwise denied data.
+        let pack = cli_root(&home.join(CLI_ROOT_EXCEPTION).join("releases/1/backend"));
+        assert_eq!(lemma_cli_root(pack.to_str().unwrap(), &home), Some(pack));
+
+        // Anywhere else in Lemma's data, or in a credential folder, is not
+        // widened to commands whatever it holds.
+        let pairing = cli_root(&home.join("Library/Application Support/Lemma/agent-host"));
+        assert_eq!(lemma_cli_root(pairing.to_str().unwrap(), &home), None);
+        let ssh = cli_root(&home.join(".ssh/tools"));
+        assert_eq!(lemma_cli_root(ssh.to_str().unwrap(), &home), None);
+
+        // Nor the home folder, nor a folder without the CLI in it.
+        cli_root(&home);
+        assert_eq!(lemma_cli_root(home.to_str().unwrap(), &home), None);
+        assert_eq!(lemma_cli_root(base.to_str().unwrap(), &home), None);
+        let empty = base.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(lemma_cli_root(empty.to_str().unwrap(), &home), None);
+        assert_eq!(lemma_cli_root("/does/not/exist", &home), None);
+    }
+
+    // Seatbelt is macOS's; PATH's separator here is the Unix one.
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_goes_first_on_the_owners_path() {
+        let confinement = Confinement {
+            root: "/r".into(),
+            home: "/h".into(),
+            tmp: "/t".into(),
+            user_tmp: "/u".into(),
+            cache: "/c".into(),
+            grants: Vec::new(),
+            lemma_cli: Some("/pack/backend".into()),
+        };
+        assert_eq!(
+            confinement.path_with_cli(Some(std::ffi::OsStr::new("/opt/homebrew/bin:/usr/bin"))),
+            Some(OsString::from(
+                "/pack/backend/bin:/opt/homebrew/bin:/usr/bin"
+            ))
+        );
+        let without = Confinement {
+            lemma_cli: None,
+            ..confinement
+        };
+        assert_eq!(
+            without.path_with_cli(Some(std::ffi::OsStr::new("/usr/bin"))),
+            None
+        );
     }
 
     #[test]

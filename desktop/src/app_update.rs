@@ -148,6 +148,96 @@ pub(crate) fn announce_incomplete_update(app: &AppHandle, message: String) {
 /// may legitimately take longer over.
 pub(crate) const UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Ask this build's feed what it offers, bounded by `UPDATE_CHECK_TIMEOUT`.
+///
+/// Shared by the Settings check and the launch-time one, so both ask the same
+/// feed with the same channel policy (`update_policy::candidate_allowed`, the
+/// plugin's version comparator).
+pub(crate) async fn fetch_offered_update(
+    app: &AppHandle,
+) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    app.updater_builder()
+        .endpoints(parsed_updater_endpoints())
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .timeout(UPDATE_CHECK_TIMEOUT)
+        .build()
+        .map_err(|error| format!("could not check for updates: {error}"))?
+        .check()
+        .await
+        .map_err(|error| format!("could not check for updates: {error}"))
+}
+
+/// How long after launch the background check waits.
+///
+/// Long enough that it never competes with the launch it follows -- a cold
+/// local start is downloading and booting in these seconds -- and short
+/// enough that someone who opens Lemma to do one thing still sees it.
+pub(crate) const LAUNCH_UPDATE_CHECK_DELAY: std::time::Duration =
+    std::time::Duration::from_secs(20);
+
+/// Whether this launch should ask the feed on its own.
+///
+/// Not from Recovery, which exists to start nothing, and not from a build that
+/// cannot update itself -- it would find a version and then refuse to
+/// install it.
+pub(crate) fn launch_update_check_wanted(updates_enabled: bool, recovery_launch: bool) -> bool {
+    updates_enabled && !recovery_launch
+}
+
+/// Look for a newer Lemma once, in the background, after launch.
+///
+/// Until now nothing checked unless someone opened the update panel, and a
+/// cloud user had no update panel they could reach. A hit adds one menu row
+/// (`update_available_label`) in the tray and the Lemma menu that opens the
+/// panel; nothing is downloaded or installed from here. A failure costs a
+/// launch-log line: an offline launch is not an error worth a dialog.
+pub(crate) fn schedule_launch_update_check(app: &AppHandle, recovery_launch: bool) {
+    if !launch_update_check_wanted(updates_enabled(), recovery_launch) {
+        return;
+    }
+    let handle = app.clone();
+    // A plain thread for the wait, so no async worker is parked for it.
+    std::thread::spawn(move || {
+        std::thread::sleep(LAUNCH_UPDATE_CHECK_DELAY);
+        match tauri::async_runtime::block_on(fetch_offered_update(&handle)) {
+            Ok(Some(update)) => announce_available_update(&handle, update.version.clone()),
+            Ok(None) => {}
+            Err(error) => {
+                append_bounded_log(&launch_log_path(), &format!("launch update check: {error}"))
+            }
+        }
+    });
+}
+
+/// Put "Lemma X is available" in the menus.
+///
+/// Rebuilt rather than inserted into, so the one place that builds each menu
+/// stays the one place that decides what is in it; the tray's two live lines
+/// are then rewritten from the state the shell already holds.
+pub(crate) fn announce_available_update(app: &AppHandle, version: String) {
+    append_bounded_log(
+        &launch_log_path(),
+        &format!("launch update check: Lemma {version} is available"),
+    );
+    {
+        let shell: State<Shell> = app.state();
+        *shell.available_update.lock_or_recover() = Some(version);
+    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        refresh_menus_for_connection_mode(&handle);
+        refresh_tray_status(&handle);
+        let status = {
+            let shell: State<Shell> = handle.state();
+            let status = shell.agent_host_status.lock_or_recover().clone();
+            status
+        };
+        if let Some(status) = status {
+            refresh_agent_host_tray(&handle, &status);
+        }
+    });
+}
+
 #[tauri::command]
 pub(crate) async fn check_for_app_update(
     window: Webview,
@@ -168,17 +258,7 @@ pub(crate) async fn check_for_app_update(
     if !updates_enabled() {
         return Ok(status);
     }
-    let update = app
-        .updater_builder()
-        .endpoints(parsed_updater_endpoints())
-        .map_err(|error| format!("could not check for updates: {error}"))?
-        .timeout(UPDATE_CHECK_TIMEOUT)
-        .build()
-        .map_err(|error| format!("could not check for updates: {error}"))?
-        .check()
-        .await
-        .map_err(|error| format!("could not check for updates: {error}"))?;
-    let Some(update) = update else {
+    let Some(update) = fetch_offered_update(&app).await? else {
         return Ok(status);
     };
     status.available_version = Some(update.version.clone());

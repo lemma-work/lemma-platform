@@ -348,3 +348,138 @@ async def test_the_real_binary_runs_the_paired_users_command_on_the_host(
         assert after["stdout"].splitlines() == [str(root.resolve()), "hi"], after
 
         await service.release(workspace.sandbox_id)
+
+
+def _lemma_cli_root(parent: Path) -> Path:
+    """A CLI root laid out as the host pack lays it out, built the same way.
+
+    `install_lemma_cli` is the host-pack builder's own step, run against this
+    interpreter: the launcher it writes finds the Python beside it, so the
+    pack's `backend/python` is this one, linked.
+    """
+    import importlib.util
+    import sys
+    import tempfile
+
+    spec = importlib.util.spec_from_file_location(
+        "build_local_host_pack", _REPOSITORY / "scripts" / "build_local_host_pack.py"
+    )
+    assert spec is not None and spec.loader is not None
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    backend = parent / "local-runtime" / "backend"
+    (backend / "python" / "bin").mkdir(parents=True)
+    interpreter = backend / "python" / "bin" / "python3"
+    interpreter.symlink_to(Path(sys._base_executable).resolve())
+    with tempfile.TemporaryDirectory() as wheels:
+        builder.install_lemma_cli(parent / "local-runtime", interpreter, Path(wheels))
+    return backend
+
+
+@pytest.mark.asyncio
+async def test_lemma_in_a_host_command_is_this_release_acting_as_the_run(
+    scenario: E2EScenario,
+    backend_server: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """`lemma` on the Mac is the CLI Lemma shipped, signed in as the run.
+
+    Two things had to be true and neither was. The Mac had no `lemma` unless
+    its owner installed one, of whatever version; and the identity a command
+    was handed addressed the backend as `host.lemma.internal`, which only the
+    VM's containers resolve. Here the backend names its own CLI in
+    `workspace.open`, the real host puts it first on `PATH` under Seatbelt, and
+    the command's environment carries the run's delegated session with the
+    addresses the Mac reaches -- so `lemma me get` answers as the owner.
+    """
+    from app.modules.workspace.services.host_environment import with_host_addresses
+    from app.modules.workspace.services.workspace_sandbox_service import (
+        WorkspaceSandboxService,
+    )
+
+    cli_root = _lemma_cli_root(tmp_path / "pack")
+    minted = await scenario.owner_client.post(
+        "/me/runtime/agent-host-pairings", json={"display_name": "host lemma cli"}
+    )
+    assert minted.is_success, minted.text
+    base_url = backend_server["host_base_url"]
+
+    async with _running_host(
+        tmp_path, base_url, SecretStr(minted.json()["pairing_code"])
+    ) as (_workspaces, _host):
+        async with httpx.AsyncClient(
+            base_url=base_url, headers=scenario.owner_client.headers, timeout=30
+        ) as client:
+            listed = await client.get("/me/runtime/agent-hosts")
+            assert listed.is_success, listed.text
+            (host,) = AgentHostListResponse.model_validate(listed.json()).items
+        owner_id = host.user_id
+        await eventually(
+            label="host_execution reported by the real host",
+            probe=partial(host_execution_host_id, owner_id),
+            done=lambda found: found == host.id,
+            timeout_seconds=60,
+        )
+
+        routing = HostRoutingProvider(
+            _VmProvider(), build_host_provider(lemma_cli=str(cli_root))
+        )
+        service = SandboxService(
+            provider=routing,
+            uow_factory=SessionUnitOfWorkFactory(async_session_maker),
+        )
+        recorded: dict[UUID, dict] = {}
+
+        async def record(run_id: UUID, value: dict) -> None:
+            recorded[run_id] = value
+
+        async def recall(run_id: UUID) -> dict | None:
+            return recorded.get(run_id)
+
+        facts = HostExecutionFacts(
+            is_desktop=lambda: True,
+            usable_host=host_execution_host_id,
+            open_workspace=partial(open_host_workspace, service=service),
+            recorded=recall,
+            record=record,
+        )
+        mine = _conversation(owner_id)
+        workspace = await choose_host_workspace(
+            conversation=mine, agent_run=_run(mine), user_id=owner_id, facts=facts
+        )
+        assert workspace is not None
+
+        sandboxes = WorkspaceSandboxService()
+        try:
+            identity = await sandboxes.get_env_vars(
+                owner_id,
+                None,
+                session_id=f"shell-{mine.id.hex}",
+                conversation_id=mine.id,
+            )
+        finally:
+            await sandboxes.close()
+        session = HostWorkspaceSession(
+            root=workspace.root,
+            client=LocalSandboxClient(service),
+            sandbox_id=workspace.sandbox_id,
+            owns_client=False,
+            # The Mac reaches this test's backend where the CLI is told to
+            # look for it; the configured address is some other server's.
+            env_vars=with_host_addresses(identity) | {"LEMMA_BASE_URL": base_url},
+        )
+
+        ran = await session.exec_command(
+            cmd=(
+                'command -v lemma && echo "conversation=$LEMMA_CONVERSATION_ID" '
+                "&& lemma me get --output json"
+            ),
+            timeout=120,
+        )
+        assert ran["exit_code"] == 0, ran
+        found, conversation, *answer = ran["stdout"].splitlines()
+        assert Path(found).resolve() == (cli_root / "bin" / "lemma").resolve(), ran
+        assert conversation == f"conversation={mine.id}", ran
+        assert str(owner_id) in "\n".join(answer), ran
+
+        await service.release(workspace.sandbox_id)

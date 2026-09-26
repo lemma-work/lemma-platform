@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
     CREDENTIAL_FORMS, LOCAL_SERVER_KEY, STARTING_PATIENCE_MS, addToWorkspace, healthDetail, stuckStarting, sharingPhaseWords, updateProblem, alreadyInWorkspace, channelLine, credentialFormForChannel,
     detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, HOST_EXECUTION_CONSEQUENCE,
-    hostExecutionRow, joinPolicyCopy,
+    hostExecutionError, hostExecutionRow, hostExecutionSwitch, joinPolicyCopy,
     oauthFormForConnector, onLocalWorkspaceOrigin, operatorProvider, postgresMajorChangeMessage, readSnapshot,
     sandboxWording, sectionPayloads, sharingBusy, thisMac, thisMacAvailability, thisMacReachable, updateOffer,
     type AppUpdateStatus, type ThisMacSnapshot,
@@ -443,6 +443,30 @@ test("the host-execution switch reflects the Agent Host and is off-limits where 
     assert.notEqual(hostExecutionRow({ host_execution: null }).blocked, null);
 });
 
+test("the host-execution switch waits for this computer's own pairing, and says why", () => {
+    const setting = { enabled: false, available: true };
+    /* No pairing with the Lemma installed here yet: the host would refuse. */
+    const early = hostExecutionSwitch({ host_execution: setting, targets: [] }, { noun: "this Mac" });
+    assert.equal(early.blocked, "Available once this Mac finishes connecting.");
+    /* Only a pairing with some other Lemma: still not the one this is for. */
+    assert.notEqual(hostExecutionSwitch({ host_execution: setting, targets: [{ local: false }] }).blocked, null);
+    /* The local pairing, or an older shell that does not say: usable. */
+    assert.equal(hostExecutionSwitch({ host_execution: setting, targets: [{ local: true }] }).blocked, null);
+    assert.equal(hostExecutionSwitch({ host_execution: setting, targets: [{}] }).blocked, null);
+    /* The shell not answering at all is said as that, not as waiting. */
+    assert.equal(
+        hostExecutionSwitch(null, { error: "control endpoint unavailable" }).blocked,
+        "Lemma\u2019s agent service isn\u2019t responding. Restart Lemma.",
+    );
+    assert.doesNotMatch(hostExecutionSwitch(null).blocked ?? "", /Agent Host/);
+});
+
+test("a refused switch is said in words, not as the host's error", () => {
+    const refusal = new Error("agent-host-operation-failed: this computer is not paired with the Lemma installed on it; host execution is only for that pairing");
+    assert.equal(hostExecutionError(refusal, "this Mac"), "Available once this Mac finishes connecting.");
+    assert.equal(hostExecutionError(new Error("control endpoint unavailable")), "Lemma\u2019s agent service isn\u2019t responding. Restart Lemma.");
+});
+
 test("the Agent Host status carries host execution, and an older shell's does not break it", () => {
     const status = readStatus({ available: true, host_execution: { enabled: true, available: true } });
     assert.deepEqual(status?.host_execution, { enabled: true, available: true });
@@ -502,4 +526,27 @@ test("a start that never finishes stops being called one", () => {
 test("a build without the Agent Host says so instead of waiting for it", () => {
     assert.match(hostExecutionRow({ available: false, host_execution: null }).blocked!, /doesn’t include the Agent Host/);
     assert.match(channelLine(null, "unknown"), /couldn’t tell/);
+});
+
+test("startup warnings are read from the snapshot and said with a next step", async () => {
+    const { readStartupWarnings, startupWarningLine } = await import("../src/desktop/this-mac.ts");
+    const snapshot = readSnapshot({
+        warnings: [
+            { code: "update-interrupted", message: "Your last update didn't finish. Install Lemma 0.9.0 to continue — don't reopen the older version.", version: "0.9.0" },
+            { code: "settings-writes-disabled", message: "Quit and reopen Lemma." },
+            { code: "startup-repaired", message: "   " },
+            "not an object",
+        ],
+    });
+    assert.deepEqual(snapshot.warnings?.map((warning) => [warning.code, warning.version]), [
+        ["update-interrupted", "0.9.0"],
+        ["settings-writes-disabled", null],
+    ]);
+    const [update, settings] = snapshot.warnings!;
+    assert.equal(startupWarningLine(update).next, "updates");
+    assert.equal(startupWarningLine(settings).next, "logs");
+    assert.equal(startupWarningLine({ code: "something-new", message: "x", version: null }).next, "logs");
+    // An older shell sends none; the page reads that as nothing to say.
+    assert.deepEqual(readSnapshot({}).warnings, []);
+    assert.deepEqual(readStartupWarnings(null), []);
 });

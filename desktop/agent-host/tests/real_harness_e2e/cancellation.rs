@@ -69,6 +69,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
             AcpRunRequest {
                 adapter: manifest.resolve(&agent).unwrap(),
                 agent_environment: std::collections::BTreeMap::default(),
+                own_settings: false,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id,

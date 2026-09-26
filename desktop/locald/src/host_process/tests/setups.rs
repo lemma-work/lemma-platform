@@ -31,6 +31,36 @@ fn operator_secrets_are_ephemeral_and_backend_scoped() {
         .contains_key("LEMMA_OPENAI_API_KEY"));
 }
 
+#[test]
+fn the_operators_frontend_keys_reach_only_the_frontend() {
+    let root = tempdir().unwrap();
+    let manager = manager_in(
+        &root,
+        manifest(vec![
+            service("frontend", &["backend"]),
+            service("backend", &[]),
+        ]),
+    );
+    let keys = HashMap::from([("GEMINI_API_KEY".to_owned(), "voice-secret".to_owned())]);
+    assert!(manager.set_frontend_environment(keys.clone()));
+    assert!(
+        !manager.set_frontend_environment(keys),
+        "unchanged is not a change"
+    );
+    assert_eq!(
+        manager.process_spec_for_spawn("frontend").unwrap().env["GEMINI_API_KEY"],
+        "voice-secret"
+    );
+    assert!(!manager
+        .process_spec_for_spawn("backend")
+        .unwrap()
+        .env
+        .contains_key("GEMINI_API_KEY"));
+    assert!(!manager
+        .redact_excerpt("key voice-secret".into())
+        .contains("voice-secret"));
+}
+
 #[cfg(unix)]
 #[test]
 fn migration_setup_receives_the_same_dynamic_backend_environment() {

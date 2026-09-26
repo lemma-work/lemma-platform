@@ -11,7 +11,7 @@ import { openPodApp } from "./pod-apps";
  *  alias cannot be had -- an older app shell -- the app's own window is
  *  top-level and signs in normally, so this offers that, from a click, since
  *  opening a window is the click's to do. */
-export function AppWindowPanel({ url, hidden }: { url: string; hidden?: boolean }) {
+export function AppWindowPanel({ url, hidden, reason }: { url: string; hidden?: boolean; reason?: string }) {
     return (
         <div className="app-window" hidden={hidden}>
             <section className="app-window__card">
@@ -25,6 +25,7 @@ export function AppWindowPanel({ url, hidden }: { url: string; hidden?: boolean 
                     It couldn’t be shown signed in beside the conversation. In a window of its own it
                     opens with your session.
                 </p>
+                {reason && <p className="app-window__reason">{reason}</p>}
                 <button className="btn btn--primary" onClick={() => openPodApp(url)}>
                     <ExternalIcon size={15} /> Open app
                 </button>

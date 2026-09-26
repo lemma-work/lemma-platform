@@ -61,6 +61,10 @@ impl Daemon {
                 self.start_local_data_reset(request, client.clone());
                 return true;
             }
+            "disk.cleanup" => {
+                self.start_disk_cleanup(request, client.clone());
+                return true;
+            }
             "control.snapshot" => {
                 match self.control_snapshot(id.as_ref()) {
                     Ok(event) => self.send_direct(client, event),
@@ -175,7 +179,8 @@ impl Daemon {
             | "agent-host.unpair"
             | "agent-host.refresh"
             | "agent-host.session"
-            | "agent-host.host-execution" => {
+            | "agent-host.host-execution"
+            | "agent-host.own-settings" => {
                 self.start_agent_host_operation(command, request.clone(), client.clone());
                 return true;
             }

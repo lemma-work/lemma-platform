@@ -2,6 +2,7 @@
 """Deterministic ACP v1 agent used by the Rust integration suite."""
 
 import json
+import os
 import pathlib
 import sys
 
@@ -37,6 +38,18 @@ for raw_line in sys.stdin:
     method = message.get("method")
     request_id = message.get("id")
     if method == "initialize":
+        # What the host set up for this agent beyond ACP, so a test can see
+        # the switches a real adapter would read (see `acp::session_options`).
+        record(
+            {
+                "environment": {
+                    name: value
+                    for name, value in os.environ.items()
+                    if name in {"CODEX_CONFIG", "PATH"}
+                    or name.startswith(("OPENCODE_", "CLAUDE_CODE_"))
+                }
+            }
+        )
         result(
             request_id,
             {

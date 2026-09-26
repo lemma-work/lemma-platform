@@ -60,6 +60,7 @@ _NAME_TO_MODULE = {
     'AgentRuntimeProfileResponse': 'agent_runtime_profile_response',
     'AgentRuntimeProfileResponseConfig': 'agent_runtime_profile_response_config',
     'AgentRuntimeProfileResponseMetadata': 'agent_runtime_profile_response_metadata',
+    'AgentRuntimeProfileTestResponse': 'agent_runtime_profile_test_response',
     'AgentSummaryResponse': 'agent_summary_response',
     'AgentSummaryResponseMetadataType0': 'agent_summary_response_metadata_type_0',
     'AgentSurfaceListResponse': 'agent_surface_list_response',
@@ -407,6 +408,7 @@ _NAME_TO_MODULE = {
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
+    'SetOrganizationDefaultRuntimeRequest': 'set_organization_default_runtime_request',
     'SignInOutcomeResponse': 'sign_in_outcome_response',
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
@@ -594,6 +596,7 @@ if TYPE_CHECKING:
     from .agent_runtime_profile_response import AgentRuntimeProfileResponse
     from .agent_runtime_profile_response_config import AgentRuntimeProfileResponseConfig
     from .agent_runtime_profile_response_metadata import AgentRuntimeProfileResponseMetadata
+    from .agent_runtime_profile_test_response import AgentRuntimeProfileTestResponse
     from .agent_summary_response import AgentSummaryResponse
     from .agent_summary_response_metadata_type_0 import AgentSummaryResponseMetadataType0
     from .agent_surface_list_response import AgentSurfaceListResponse
@@ -941,6 +944,7 @@ if TYPE_CHECKING:
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
     from .set_default_surface_request import SetDefaultSurfaceRequest
+    from .set_organization_default_runtime_request import SetOrganizationDefaultRuntimeRequest
     from .sign_in_outcome_response import SignInOutcomeResponse
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
@@ -1141,6 +1145,7 @@ __all__ = [
     'AgentRuntimeProfileResponse',
     'AgentRuntimeProfileResponseConfig',
     'AgentRuntimeProfileResponseMetadata',
+    'AgentRuntimeProfileTestResponse',
     'AgentSummaryResponse',
     'AgentSummaryResponseMetadataType0',
     'AgentSurfaceListResponse',
@@ -1488,6 +1493,7 @@ __all__ = [
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
     'SetDefaultSurfaceRequest',
+    'SetOrganizationDefaultRuntimeRequest',
     'SignInOutcomeResponse',
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',

@@ -159,6 +159,23 @@ def check_derived(pack: Path) -> None:
     print(f"  assets   {len(CONTRACT['derived'])} derived paths present and non-empty")
 
 
+def check_lemma_cli(pack: Path) -> None:
+    """The `lemma` host commands run answers, from the packed interpreter.
+
+    Run rather than looked at, like the rest: the launcher finds the packed
+    Python by its own path and the CLI's packages in `backend/cli`, and either
+    being wrong is a `lemma` that fails in every host command.
+    """
+    launcher = pack / "backend" / "bin" / "lemma"
+    if sys.platform == "win32":
+        # A shell script: host execution, its only caller, is macOS only.
+        return
+    version = check_output(launcher, "--version")
+    if not version.startswith("lemma "):
+        raise SystemExit(f"the packed lemma CLI answered {version!r} to --version")
+    print(f"  cli      {version.splitlines()[0]} at {launcher.relative_to(pack)}")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(sys.argv[0]).name} <pack-root>")
@@ -170,6 +187,7 @@ def main() -> int:
     check_python(pack)
     check_node(pack)
     check_derived(pack)
+    check_lemma_cli(pack)
     print("Host pack is startable.")
     return 0
 

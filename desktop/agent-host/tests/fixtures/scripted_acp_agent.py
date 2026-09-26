@@ -55,6 +55,18 @@ def record(direction, message):
         )
 
 
+def session_environment():
+    """What the host set up for this agent beyond ACP: the switches a real
+    adapter reads (`acp::session_options`) and the run's Lemma identity."""
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name in {"CODEX_CONFIG", "PATH"}
+        or name.startswith(("OPENCODE_", "CLAUDE_CODE_", "LEMMA_"))
+        and name != "LEMMA_TOKEN"
+    }
+
+
 def emit(message):
     record("agent->client", message)
     sys.stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
@@ -451,6 +463,7 @@ def main():
             if MODE == "cwd":
                 os.chdir(message["params"]["cwd"])
             mcp_servers = (message.get("params") or {}).get("mcpServers") or []
+            record("environment", session_environment())
             result(request_id, {"sessionId": SESSION_ID, "configOptions": []})
         elif method == "session/prompt":
             stop_reason = "end_turn"

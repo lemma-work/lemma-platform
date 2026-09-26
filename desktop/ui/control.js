@@ -27,11 +27,47 @@ import {
 // workspace's own Settings, under This Mac, where the rest of Lemma's settings
 // already were; the menu opens them there whenever the local workspace is up.
 const titles = {
-  computer: ["This computer", "Installed agents and the connection to your workspace."],
+  computer: ["This computer", LOCAL_MODE
+    ? "Installed agents and the connection to your workspace."
+    : "Installed agents, the connection to your workspace, and this app's version."],
   overview: ["Overview", "Health, what is exposed, and this app's version."],
   recovery: ["Recovery", "Repair a broken installation or explicitly erase local Lemma and set up again."],
   diagnostics: ["Diagnostics", "Local paths, canonical origins, logs, and non-destructive repair."],
 };
+
+/* Where a button or a menu item can send this window: a page, or a place on
+ * one. `updates` is the update panel, which is on Overview locally and on
+ * This computer in cloud mode (moved there below) -- Check for Updates…
+ * opens it, and it checks again on the way in. `sharing` is the Return to
+ * This computer button; `services` is Overview's health list. */
+function goTo(target) {
+  if (target === "updates") {
+    setPage(LOCAL_MODE ? "overview" : "computer");
+    reveal($("app-update-panel"));
+    loadAppUpdate();
+    return;
+  }
+  if (target === "sharing") {
+    setPage("overview");
+    const stop = $("sharing-disable");
+    reveal(stop.hidden ? $("overview-exposure") : stop);
+    return;
+  }
+  if (target === "services") {
+    setPage("overview");
+    reveal($("overview-services"));
+    return;
+  }
+  setPage(target);
+}
+
+function reveal(element) {
+  if (!element) return;
+  element.scrollIntoView({ block: "center", behavior: "instant" });
+  if (typeof element.focus === "function" && element.tagName === "BUTTON" && !element.disabled) {
+    element.focus({ preventScroll: true });
+  }
+}
 
 function setPage(page) {
   if (!titles[page]) return;
@@ -61,6 +97,16 @@ function setPage(page) {
 
 function configureInteractionHandlers() {
   document.querySelectorAll('[data-action="reset-local-data"]').forEach((button) => { button.disabled = !LOCAL_MODE; });
+  // Cloud mode has no local services to start or restart.
+  document.querySelectorAll('[data-action="start"], [data-action="restart"]').forEach((button) => {
+    button.disabled = !LOCAL_MODE;
+    if (!LOCAL_MODE) button.title = "Available when using Local Lemma";
+  });
+  if (!LOCAL_MODE) {
+    // The update panel lives on Overview, which cloud mode cannot open, and
+    // This Mac -- the workspace's other update control -- is local-only too.
+    document.querySelector('.page[data-page="computer"]').appendChild($("app-update-panel"));
+  }
   document.querySelectorAll(".nav-item").forEach((button) => {
     if (!LOCAL_MODE && LOCAL_PAGES.has(button.dataset.page)) {
       button.disabled = true;
@@ -95,7 +141,7 @@ function configureInteractionHandlers() {
     button.addEventListener("click", () => copyText($(button.dataset.copyTarget).textContent));
   });
   $("attention-action").addEventListener("click", () => {
-    setPage($("attention-action").dataset.page || "overview");
+    goTo($("attention-action").dataset.page || "overview");
   });
   $("sharing-disable").addEventListener("click", disableSharing);
 }
@@ -115,10 +161,12 @@ wireLogControls();
 window.addEventListener("pagehide", stopLogPolling);
 document.addEventListener("click", (event) => {
   const row = event.target.closest("[data-summary-page]");
-  if (row?.dataset.summaryPage) setPage(row.dataset.summaryPage);
+  if (row?.dataset.summaryPage) goTo(row.dataset.summaryPage);
+  const jump = event.target.closest("[data-goto]");
+  if (jump?.dataset.goto) goTo(jump.dataset.goto);
 });
 listen("lemma:control-page", (page) => {
-  if (typeof page === "string") setPage(page);
+  if (typeof page === "string") goTo(page);
 });
 listen("lemma:locald-event", handleLocaldEvent);
 listen("lemma:locald-disconnected", () => {
@@ -140,7 +188,12 @@ if (IS_WINDOWS) {
     if (spoken !== node.nodeValue) node.nodeValue = spoken;
   }
 }
-setPage(titles[window.__LEMMA_CONTROL_PAGE__] ? window.__LEMMA_CONTROL_PAGE__ : "overview");
+const firstPage = window.__LEMMA_CONTROL_PAGE__;
 requestSnapshot();
 loadRuntimeInfo();
-loadAppUpdate();
+if (firstPage === "updates") {
+  goTo("updates");
+} else {
+  setPage(titles[firstPage] ? firstPage : "overview");
+  loadAppUpdate();
+}

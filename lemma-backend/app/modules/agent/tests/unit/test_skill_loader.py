@@ -276,6 +276,46 @@ async def test_load_skill_appends_local_workspace_override(
     assert "run CLI examples through `lemma_exec_command`" in result.content
 
 
+@pytest.mark.parametrize(
+    ("in_process", "native", "on_host", "names", "never"),
+    [
+        # A coding agent over MCP whose commands run in the sandbox.
+        (False, False, False, "`lemma_exec_command`", "`exec_command`, which"),
+        # A coding agent on the Mac with host execution on: Lemma withheld its
+        # command tools, so the skill must not send it to them.
+        (False, True, False, "`lemma_browser`", "through `lemma_exec_command`"),
+        # The in-process harness, whose tool is `exec_command`.
+        (True, False, False, "through `exec_command`", "lemma_exec_command"),
+        # The in-process harness whose commands run on the Mac.
+        (True, False, True, "the `browser` tool", "lemma_exec_command"),
+    ],
+)
+def test_the_skill_override_names_the_tools_this_run_has(
+    in_process: bool, native: bool, on_host: bool, names: str, never: str
+) -> None:
+    from app.modules.workspace.contracts.host_execution import HostWorkspace
+
+    deps = BaseAgentContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        supports_pause_signal=in_process,
+        host_runs_native_commands=native,
+        host_workspace=(
+            HostWorkspace(sandbox_id=uuid4(), root="/Users/me/lemma/c/x")
+            if on_host
+            else None
+        ),
+    )
+
+    override = skills_adapter.skill_runtime_override(deps)
+
+    assert override in skills_adapter.SKILL_RUNTIME_OVERRIDES
+    assert skills_adapter.LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER in override
+    assert names in override
+    assert never not in override
+
+
 @pytest.mark.asyncio
 async def test_skill_download_releases_uow_before_storage_read():
     order: list[str] = []

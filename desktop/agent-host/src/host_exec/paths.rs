@@ -161,6 +161,11 @@ pub struct OpenParams {
     /// Further folders the owner granted, writable beside the root.
     #[serde(default)]
     pub grants: Vec<String>,
+    /// The root of the `lemma` CLI Lemma ships for this workspace's commands:
+    /// a folder whose `bin/lemma` is its release of the CLI. Admitted only
+    /// through `seatbelt::lemma_cli_root`.
+    #[serde(default)]
+    pub lemma_cli: Option<String>,
 }
 
 /// The default root: `<root base>/c/<yyyy-mm-dd>/<slug>`, the same folder an

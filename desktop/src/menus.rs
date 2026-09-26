@@ -141,6 +141,14 @@ pub(crate) fn handle_menu_action(app: &AppHandle, id: &str) {
         "diagnostics" => {
             let _ = show_control_center_page(&app, Some("diagnostics"));
         }
+        // Both open the update panel in Local settings, which re-checks and
+        // installs through `install_app_update` -- so the native consent that
+        // command asks for is still the only way an update is installed. The
+        // panel is there in cloud mode too, which is the point: This Mac, the
+        // other place updates live, is local-only.
+        "check-updates" | "install-update" => {
+            let _ = show_control_center_page(&app, Some("updates"));
+        }
         "recovery" => {
             let _ = show_control_center_page(&app, Some("recovery"));
         }
@@ -200,6 +208,11 @@ pub(crate) fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>>
         Some("CmdOrCtrl+,"),
     )?;
     let connection = MenuItem::with_id(app, "mode", "Connection…", true, None::<&str>)?;
+    let available = available_update(app);
+    let update_items = lemma_menu_update_items(available.as_deref())
+        .into_iter()
+        .map(|(id, label)| MenuItem::with_id(app, id, label, true, None::<&str>))
+        .collect::<tauri::Result<Vec<_>>>()?;
     let recovery = MenuItem::with_id(app, "recovery", "Recovery…", true, None::<&str>)?;
 
     // Services / Hide / Hide Others / Show All are AppKit application-menu
@@ -225,6 +238,11 @@ pub(crate) fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>>
     // that is worth one sentence first, so the app has to own ⌘Q.
     let quit = MenuItem::with_id(app, "quit", "Quit Lemma", true, Some("CmdOrCtrl+Q"))?;
     lemma_items.push(&about);
+    lemma_items.extend(
+        update_items
+            .iter()
+            .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>),
+    );
     lemma_items.push(&lemma_separator);
     lemma_items.push(&settings);
     lemma_items.push(&recovery);
@@ -350,6 +368,18 @@ pub(crate) fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>
     // Troubleshoot; everything standard moved into the app menu.
     let status_item =
         MenuItem::with_id(app, "tray-state", "Lemma: checking…", false, None::<&str>)?;
+    // Only when there is one: a permanent "no updates" row is noise.
+    let update_item = available_update(app)
+        .map(|version| {
+            MenuItem::with_id(
+                app,
+                "install-update",
+                update_available_label(&version),
+                true,
+                None::<&str>,
+            )
+        })
+        .transpose()?;
     let open_item = MenuItem::with_id(app, "open", "Open Lemma", true, None::<&str>)?;
     let login_item = MenuItem::with_id(app, "login", "Log In…", true, None::<&str>)?;
     let control_item = MenuItem::with_id(app, "control", "Desktop settings…", true, None::<&str>)?;
@@ -417,22 +447,30 @@ pub(crate) fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>
         ],
     )?;
 
-    let menu = Menu::with_items(
-        app,
-        &[
-            &status_item,
-            &PredefinedMenuItem::separator(app)?,
-            &open_item,
-            &login_item,
-            &control_item,
-            &PredefinedMenuItem::separator(app)?,
-            &agent_host_state_item,
-            &PredefinedMenuItem::separator(app)?,
-            &troubleshoot,
-            &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?,
-        ],
-    )?;
+    let separators = [
+        PredefinedMenuItem::separator(app)?,
+        PredefinedMenuItem::separator(app)?,
+        PredefinedMenuItem::separator(app)?,
+        PredefinedMenuItem::separator(app)?,
+    ];
+    let quit_item = MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?;
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![&status_item];
+    if let Some(item) = update_item.as_ref() {
+        items.push(item);
+    }
+    items.extend([
+        &separators[0] as &dyn tauri::menu::IsMenuItem<tauri::Wry>,
+        &open_item,
+        &login_item,
+        &control_item,
+        &separators[1],
+        &agent_host_state_item,
+        &separators[2],
+        &troubleshoot,
+        &separators[3],
+        &quit_item,
+    ]);
+    let menu = Menu::with_items(app, &items)?;
 
     Ok(menu)
 }
@@ -462,4 +500,32 @@ pub(crate) fn refresh_tray_status(app: &AppHandle) {
     if let Some(item) = item {
         let _ = item.set_text(label);
     }
+}
+
+/// The newer Lemma the launch-time check found, if any.
+pub(crate) fn available_update(app: &AppHandle) -> Option<String> {
+    let shell: State<Shell> = app.state();
+    let version = shell.available_update.lock_or_recover().clone();
+    version
+}
+
+/// How the menus name an update that is waiting.
+///
+/// "Install…" rather than "Install": choosing it opens the update panel, and
+/// installing still asks natively first.
+pub(crate) fn update_available_label(version: &str) -> String {
+    format!("Lemma {version} is available \u{2014} Install\u{2026}")
+}
+
+/// The update rows under About in the Lemma menu, in order.
+///
+/// "Check for Updates…" always, where macOS apps keep it, because a cloud
+/// user had no update control anywhere: This Mac is local-only and Local
+/// settings kept its update panel on a local-only page.
+pub(crate) fn lemma_menu_update_items(available: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut items = vec![("check-updates", "Check for Updates\u{2026}".to_owned())];
+    if let Some(version) = available {
+        items.push(("install-update", update_available_label(version)));
+    }
+    items
 }

@@ -7,4 +7,5 @@ import type { AgentRuntimeProfileResponse } from './AgentRuntimeProfileResponse.
 export type AgentRuntimeProfileListResponse = {
     default_runtime: AgentRuntimeConfig;
     items: Array<AgentRuntimeProfileResponse>;
+    organization_default_runtime?: (AgentRuntimeConfig | null);
 };

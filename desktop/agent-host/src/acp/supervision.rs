@@ -228,6 +228,7 @@ pub(crate) fn run_environment(mcp: &serde_json::Value) -> BTreeMap<String, Strin
 pub(crate) fn build_agent(
     adapter: &ResolvedAdapter,
     extra_environment: BTreeMap<String, String>,
+    session_environment: BTreeMap<String, String>,
 ) -> AcpAgent {
     let mut environment = adapter.environment();
     // Adapter wiring wins: `PATH` and the upstream-binary variable are how the
@@ -236,6 +237,10 @@ pub(crate) fn build_agent(
     for (name, value) in extra_environment {
         environment.entry(name).or_insert(value);
     }
+    // Except over this host's own session options, which are computed from
+    // the adapter's wiring rather than instead of it: a `CODEX_CONFIG` merged
+    // into the pinned one, a `PATH` with Lemma's CLI ahead of the adapter's.
+    environment.extend(session_environment);
     let config = AcpAgentConfig::new(&adapter.command)
         .args(adapter.args())
         .envs(environment);

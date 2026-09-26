@@ -155,6 +155,10 @@ impl Daemon {
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                 ),
+                "agent-host.own-settings" => daemon.agent_host.set_own_settings(
+                    &text("harness"),
+                    request.get("enabled").and_then(Value::as_bool) == Some(true),
+                ),
                 _ => daemon.agent_host.refresh(),
             };
             let outcome = result.map(|()| daemon.agent_host.detailed_status());

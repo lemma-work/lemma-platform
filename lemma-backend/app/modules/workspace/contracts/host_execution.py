@@ -16,6 +16,11 @@ from app.modules.workspace.domain.host_execution import (
     host_sandbox_id,
     is_host_sandbox_id,
 )
+from app.modules.workspace.services.host_environment import (
+    host_cli_root,
+    host_reachable_addresses,
+    with_host_addresses,
+)
 
 
 async def open_host_workspace(
@@ -48,7 +53,10 @@ async def open_host_workspace(
 __all__ = [
     "HostFolder",
     "HostWorkspace",
+    "host_cli_root",
+    "host_reachable_addresses",
     "host_sandbox_id",
     "is_host_sandbox_id",
     "open_host_workspace",
+    "with_host_addresses",
 ]

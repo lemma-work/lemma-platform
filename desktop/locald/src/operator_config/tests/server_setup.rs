@@ -381,3 +381,65 @@ fn a_config_written_before_server_setup_still_reads() {
     assert_eq!(snapshot["config"]["email"]["smtp_port"], json!(587));
     assert_eq!(snapshot["config"]["ai"]["fast_model"], "");
 }
+
+#[test]
+fn a_resend_key_and_the_email_section_save_as_one_change() {
+    let vault = Arc::new(MemoryVault::default());
+    let (_root, store) = store_with(vault.clone(), Default::default(), Default::default());
+    let snapshot = store.snapshot().unwrap();
+    let revision = snapshot["config"]["revision"].as_u64().unwrap();
+    let saved = store
+        .update(
+            serde_json::from_value(json!({
+                "expected_revision": revision,
+                "sections": [
+                    {"name": "surfaces", "value": snapshot["config"]["surfaces"]},
+                    {"name": "email", "value": email("resend")},
+                ],
+                "secrets": {"surfaces.resend_api_key": {"action": "replace", "value": "re_1"}},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    // One write, one revision: one backend restart.
+    assert_eq!(saved["config"]["revision"].as_u64(), Some(revision + 1));
+    assert_eq!(saved["readiness"]["email"], "ready");
+
+    // A credential still has to belong to a section being saved.
+    let refused = store.update(
+        serde_json::from_value(json!({
+            "expected_revision": revision + 1,
+            "sections": [{"name": "email", "value": email("resend")}],
+            "secrets": {"integrations.deepgram_api_key": {"action": "replace", "value": "d"}},
+        }))
+        .unwrap(),
+    );
+    assert!(refused.is_err());
+    let empty = store.update(
+        serde_json::from_value(json!({"expected_revision": revision + 1, "sections": []})).unwrap(),
+    );
+    assert!(empty.is_err());
+}
+
+#[test]
+fn the_voice_call_keys_go_to_the_frontend_and_never_the_backend() {
+    let (_root, store) = store_with(Default::default(), Default::default(), Default::default());
+    assert!(store.frontend_environment().unwrap().is_empty());
+    let integrations = store.snapshot().unwrap()["config"]["integrations"].clone();
+    section(
+        &store,
+        "integrations",
+        integrations,
+        json!({
+            "integrations.gemini_api_key": {"action": "replace", "value": "g-1"},
+            "integrations.typesafe_api_key": {"action": "replace", "value": "t-1"},
+        }),
+    )
+    .unwrap();
+    let frontend = store.frontend_environment().unwrap();
+    assert_eq!(frontend["GEMINI_API_KEY"], "g-1");
+    assert_eq!(frontend["TYPESAFE_API_KEY"], "t-1");
+    let backend = store.backend_environment().unwrap();
+    assert!(!backend.contains_key("GEMINI_API_KEY"));
+    assert!(!backend.contains_key("TYPESAFE_API_KEY"));
+}

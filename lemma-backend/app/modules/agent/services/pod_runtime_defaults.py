@@ -29,24 +29,28 @@ async def default_agent_runtime_for_pod(
     """The pod's configured default runtime, or the organization's, or the
     system one.
 
-    The organization step exists for a deployment with no model of its own --
-    Desktop, or any self-host set up through Settings -> Models. Adding a
-    provider there has to be enough for a teammate to answer; before this, a
-    pod nobody had pinned went straight to the absent system model and every
-    message failed with "no model is set up" beside a provider that was.
+    The organization's chosen model (Settings -> Models, "Make default") wins
+    over the system model: an owner picked it for every teammate. Without one,
+    a deployment with no model of its own -- Desktop, or any self-host set up
+    through Settings -> Models -- falls to its first organization provider.
+    Adding a provider there has to be enough for a teammate to answer; before
+    that step, a pod nobody had pinned went straight to the absent system model
+    and every message failed with "no model is set up" beside a provider that
+    was.
     """
     config = await pod_config(uow, pod_id)
     runtime = PodConfig.from_raw(config).resolved_default_runtime()
     if runtime is not None:
         return runtime
-    # Read through the module so a test can arrange "no system model" without
-    # reaching into this one.
-    if not runtime_system_profiles.system_profile_configured():
-        organization_id = await pod_organization_id(uow, pod_id)
-        if organization_id is not None:
-            organization_runtime = await organization_default_runtime(
-                uow, organization_id=organization_id
-            )
-            if organization_runtime is not None:
-                return organization_runtime
+    organization_id = await pod_organization_id(uow, pod_id)
+    if organization_id is not None:
+        organization_runtime = await organization_default_runtime(
+            uow,
+            organization_id=organization_id,
+            # Read through the module so a test can arrange "no system model"
+            # without reaching into this one.
+            server_has_model=runtime_system_profiles.system_profile_configured(),
+        )
+        if organization_runtime is not None:
+            return organization_runtime
     return AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID)

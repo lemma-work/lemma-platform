@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readSnapshot, type ThisMacSnapshot } from "../src/desktop/this-mac.ts";
+import { readSnapshot, type SectionPayload, type ThisMacSnapshot } from "../src/desktop/this-mac.ts";
 import {
     AI_PRESETS, CAPABILITIES, aiDraftFrom, aiDraftProblem, aiSectionPayload, capabilityStatus, checklistDismissed,
     dismissChecklist, emailDraftFrom, emailDraftProblem, emailPayloads, needsKey, needsSetup, presetFor, probeKey,
@@ -134,16 +134,17 @@ test("the AI save carries the whole profile, and the key only when one was typed
 
 /* ── email ─────────────────────────────────────────────────────────── */
 
-test("a Resend key is saved with the channels before the email section that needs it", () => {
+test("a Resend key and the email section that needs it are one change", () => {
     const base = snapshot();
     const draft = { ...emailDraftFrom(base.operator.config.email), provider: "resend" as const, fromEmail: " lemma@example.com " };
     const secrets = { "surfaces.resend_api_key": { action: "replace" as const, value: "re_1" } };
     assert.equal(emailDraftProblem(base, draft, secrets), null);
     const payloads = emailPayloads(base, draft, secrets);
-    assert.deepEqual(payloads.map((one) => one.section.name), ["surfaces", "email"]);
-    assert.deepEqual(payloads[0].secrets, { "surfaces.resend_api_key": { action: "replace", value: "re_1" } });
-    assert.equal((payloads[1].section.value as { from_email: string }).from_email, "lemma@example.com");
-    assert.deepEqual(payloads[1].secrets, {});
+    assert.equal(payloads.length, 1, "one save, one restart");
+    const [change] = payloads as { sections: { name: string; value: { from_email?: string } }[]; secrets: unknown }[];
+    assert.deepEqual(change.sections.map((one) => one.name), ["surfaces", "email"]);
+    assert.deepEqual(change.secrets, { "surfaces.resend_api_key": { action: "replace", value: "re_1" } });
+    assert.equal(change.sections[1].value.from_email, "lemma@example.com");
 });
 
 test("an unchanged email draft saves nothing, and an incomplete one says why", () => {
@@ -157,7 +158,7 @@ test("an unchanged email draft saves nothing, and an incomplete one says why", (
     assert.equal(emailDraftProblem(base, { ...smtp, smtpHost: "smtp.example.com", smtpUser: "a" },
         { "email.smtp_password": { action: "replace", value: "p" } }), null);
     const [payload] = emailPayloads(base, { ...smtp, smtpHost: "smtp.example.com", smtpUser: "a" },
-        { "email.smtp_password": { action: "replace", value: "p" } });
+        { "email.smtp_password": { action: "replace", value: "p" } }) as SectionPayload[];
     assert.equal(payload.section.name, "email");
     assert.deepEqual(payload.secrets, { "email.smtp_password": { action: "replace", value: "p" } });
     assert.equal((payload.section.value as { smtp_port: number }).smtp_port, 587);

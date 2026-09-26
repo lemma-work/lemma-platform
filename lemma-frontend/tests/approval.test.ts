@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+    HOST_PERMISSION_WINDOW_MS,
+    hostPermissionExpired,
     approvalDetails,
     interactionHeading,
     askQuestions,
@@ -124,4 +126,45 @@ test("a heading the agent wrote survives both states", () => {
 test("a nameless approval still says approval, and never leaves a blank where a name goes", () => {
     assert.equal(interactionHeading("approval", "", "Blogger", false), "Blogger needs your approval");
     assert.equal(interactionHeading("approval", "", "  ", false), "Your teammate needs your approval");
+});
+
+/* A coding agent's permission request, as the backend writes it. */
+function hostRequest(options: { option_id: string; kind: string; name: string }[]) {
+    return {
+        title: "Run ls -la",
+        reason: "This request controls the local agent's access on this computer.",
+        tool_name: "exec_command",
+        agent_host_permission: { request_id: "r1", options, input: { cmd: "ls -la" } },
+    };
+}
+
+test("a coding agent is offered 'for this conversation' only when it can keep it", () => {
+    const once = approvalDetails(hostRequest([{ option_id: "a", kind: "allow_once", name: "Allow" }]));
+    assert.equal(once.hostPermission, true);
+    assert.equal(once.canApproveForSession, false);
+    /* The generic host message is not the request; what it would run is. */
+    assert.doesNotMatch(once.request, /controls the local agent/);
+    assert.deepEqual(once.params, [{ name: "Cmd", value: "ls -la" }]);
+    assert.equal(once.title, "Run ls -la");
+
+    const always = approvalDetails(hostRequest([
+        { option_id: "a", kind: "allow_once", name: "Allow" },
+        { option_id: "b", kind: "allow_always", name: "Always allow ls" },
+    ]));
+    assert.equal(always.canApproveForSession, true);
+    assert.equal(always.sessionLabel, "Always allow ls");
+
+    /* Lemma's own approvals keep offering it. */
+    assert.equal(approvalDetails({ tool_name: "files_delete", args: {} }).canApproveForSession, true);
+});
+
+test("a coding agent's request expires with its window or its run", () => {
+    const details = approvalDetails(hostRequest([]));
+    const asked = Date.parse("2026-09-15T12:00:00Z");
+    assert.equal(hostPermissionExpired(details, { askedAtMs: asked, nowMs: asked + 60_000, runEnded: false }), false);
+    assert.equal(hostPermissionExpired(details, { askedAtMs: asked, nowMs: asked + HOST_PERMISSION_WINDOW_MS, runEnded: false }), true);
+    assert.equal(hostPermissionExpired(details, { askedAtMs: asked, nowMs: asked, runEnded: true }), true);
+    /* An ordinary approval ends its run on purpose, and waits for as long as it takes. */
+    const lemma = approvalDetails({ tool_name: "files_delete", args: {} });
+    assert.equal(hostPermissionExpired(lemma, { askedAtMs: asked, nowMs: asked + 10 * HOST_PERMISSION_WINDOW_MS, runEnded: true }), false);
 });

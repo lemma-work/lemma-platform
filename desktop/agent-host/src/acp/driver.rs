@@ -12,7 +12,9 @@ use super::{
     plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names, session_to_resume,
     steering_advertised, tool_call_id,
 };
+use super::{lemma_cli_bin, session_options};
 use crate::normalize::{Dialect, Normalizer, RunContext};
+use crate::protocol::RunSpec;
 
 /// One run's normalizer, shared by the update and permission handlers. Both
 /// run on the ACP receive loop in order, so the lock is never contended; it
@@ -31,7 +33,11 @@ impl AgentDriver for AcpDriver {
     ) -> anyhow::Result<AcpProbeOutcome> {
         std::fs::create_dir_all(&scratch_directory)?;
         // A probe asks a binary its version; it gets no credential.
-        let agent = build_agent(&adapter, std::collections::BTreeMap::default());
+        let agent = build_agent(
+            &adapter,
+            std::collections::BTreeMap::default(),
+            std::collections::BTreeMap::default(),
+        );
         let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
         let stderr = capture_stderr(stderr);
         let outcome = agent_client_protocol::Client
@@ -84,7 +90,18 @@ impl AgentDriver for AcpDriver {
         callbacks: Arc<dyn AcpCallbacks>,
     ) -> anyhow::Result<AcpRunOutcome> {
         std::fs::create_dir_all(&request.scratch_directory)?;
-        let agent = build_agent(&request.adapter, request.agent_environment.clone());
+        let session_options = session_options(
+            &request.adapter.spec.key,
+            &request.adapter.environment(),
+            &request.run_spec,
+            request.own_settings,
+            lemma_cli_bin(&request.run_spec).as_deref(),
+        );
+        let agent = build_agent(
+            &request.adapter,
+            request.agent_environment.clone(),
+            session_options.environment.clone(),
+        );
         let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
         let stderr = capture_stderr(stderr);
         let AcpRunRequest {
@@ -102,6 +119,16 @@ impl AgentDriver for AcpDriver {
             ..
         } = request;
         let resume_session_id = session_to_resume(&run_spec, can_load_session);
+        // Instructions given in the session's `_meta` are not repeated as a
+        // `<system>` block opening the prompt.
+        let prompt_spec = if session_options.system_prompt_in_meta {
+            RunSpec {
+                system_prompt: String::new(),
+                ..run_spec.clone()
+            }
+        } else {
+            run_spec.clone()
+        };
         let normalizer: SharedNormalizer = Arc::new(std::sync::Mutex::new(Normalizer::new(
             Dialect::for_harness(&adapter.spec.key),
             RunContext::from_mcp(&run_spec.mcp),
@@ -180,6 +207,7 @@ impl AgentDriver for AcpDriver {
                     resume_session_id,
                     scratch_directory,
                     mcp_servers,
+                    session_options.meta,
                 )
                 .await?;
                 let options = effective_options(
@@ -206,7 +234,7 @@ impl AgentDriver for AcpDriver {
                 prompt_turn(
                     &connection,
                     session.session_id,
-                    prompt_blocks(&run_spec, session.origin),
+                    prompt_blocks(&prompt_spec, session.origin),
                     &mut cancel,
                     cancel_grace,
                     steering,

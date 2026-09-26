@@ -1,6 +1,7 @@
 //! The host pack's guards, grouped the way the code they cover is grouped.
 
 mod domain;
+mod host_cli;
 mod layout;
 mod manifest;
 mod paths;

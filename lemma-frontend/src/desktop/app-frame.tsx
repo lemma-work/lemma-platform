@@ -28,7 +28,7 @@ export function AppFrameView({
     onFrameLoad: (view: Window | null) => void;
 }) {
     const frame = useAppFrame(url);
-    if (frame.kind === "window") return <AppWindowPanel url={url} hidden={hidden} />;
+    if (frame.kind === "window") return <AppWindowPanel url={url} hidden={hidden} reason={frame.reason} />;
     /* No frame yet: the shell answers in milliseconds, and a frame on the
        app's own address first would load it signed out and then swap. Said,
        rather than a blank pane — milliseconds on a warm machine is seconds on

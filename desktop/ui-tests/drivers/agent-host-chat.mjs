@@ -130,9 +130,15 @@ try {
     await page.getByText('前 café 👩🏽‍💻', { exact: true }).waitFor();
     await page.screenshot({ path: path.join(config.artifactDirectory, 'partial.png'), fullPage: true });
     if (config.action === 'crash') {
-      // lemma-frontend states the failure and offers a retry; it does not
-      // print the host's own error text into the transcript.
-      await page.getByText('That run failed.', { exact: true }).waitFor();
+      // lemma-frontend states the failure in its own words and offers a
+      // retry; it does not print the host's own error text into the
+      // transcript. Which sentence is `transcript-state`'s to choose.
+      const failed = page.locator('.failed');
+      await failed.waitFor();
+      const said = (await failed.innerText()).trim();
+      if (!said || /Agent Host|exited with|Process exited|FAILED/.test(said)) {
+        throw new Error(`the failure was not said plainly: ${JSON.stringify(said)}`);
+      }
       answer = '前 café 👩🏽‍💻';
     } else {
       await page.getByRole('button', { name: STOP, exact: true }).waitFor();

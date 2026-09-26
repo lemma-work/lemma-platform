@@ -1,7 +1,9 @@
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, SendIcon } from "@/ui/icons";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { TRANSCRIPT_ROW_ATTRIBUTE, useTranscriptScroll } from "./use-transcript-scroll";
-import { transcriptState } from "./transcript-state";
+import { runFailure, transcriptState } from "./transcript-state";
+import { openSettings } from "@/desktop/open-settings";
+import { thisMacReachable } from "@/desktop/this-mac";
 import { ConversationLoading } from "./conversation-loading";
 import { Prose } from "./markdown";
 import { ClampedProse } from "./clamped-prose";
@@ -131,6 +133,7 @@ export function Transcript({
     loadingEarlier,
     loading = false,
     onReload,
+    reloadLabel = "Retry",
     podId,
     conversationId,
     onOpenApp,
@@ -157,6 +160,9 @@ export function Transcript({
     loadingEarlier?: boolean;
     loading?: boolean;
     onReload?: () => void;
+    /** What the reload control says: "Retry" for a load that failed, or what
+     *  the caller is actually offering. */
+    reloadLabel?: string;
     podId: string;
     conversationId?: string | null;
     onOpenApp?: (name: string) => void;
@@ -326,6 +332,7 @@ export function Transcript({
                                                         interaction={item.interaction}
                                                         teammate={teammate.name}
                                                         onResolve={onResolve}
+                                                        runEnded={!loading && state !== "running"}
                                                     />
                                                 </div>
                                             );
@@ -366,23 +373,37 @@ export function Transcript({
                     </div>
                 )}
 
-                {state === "failed" && !onReload && (
-                    <div className="failed">
-                        <span>{noModel ? noModelSentence(teammate.name) : error ?? "That run failed."}</span>
-                        {noModel ? <AddModelAction /> : modelsAction && <OpenModelsAction />}
-                        {onRetry && !noModel && (
-                            <button className="btn" onClick={onRetry}>
-                                Try again
-                            </button>
-                        )}
-                    </div>
-                )}
+                {state === "failed" && !onReload && (() => {
+                    const failure = runFailure(error);
+                    return (
+                        <div className="failed">
+                            <span>{noModel ? noModelSentence(teammate.name) : failure.text}</span>
+                            {noModel ? <AddModelAction /> : modelsAction && <OpenModelsAction />}
+                            {onRetry && !noModel && (
+                                <button className="btn" onClick={onRetry}>
+                                    Try again
+                                </button>
+                            )}
+                            {/* Where the computer and its agents are managed:
+                                This Mac on a local install's own window, the
+                                Models page anywhere else. */}
+                            {!noModel && failure.codingAgents && (
+                                <button
+                                    className="linkish"
+                                    onClick={() => openSettings(thisMacReachable() ? "this-mac-agents" : "models")}
+                                >
+                                    Coding agents settings
+                                </button>
+                            )}
+                        </div>
+                    );
+                })()}
 
                 {error && (state !== "failed" || onReload) && (
                     <div className="conversation-error" role="alert">
                         <p>{noModel ? noModelSentence(teammate.name) : error}</p>
                         {noModel ? <AddModelAction /> : modelsAction && <OpenModelsAction />}
-                        {onReload && <button className="earlier" onClick={onReload} disabled={loading}>Retry</button>}
+                        {onReload && <button className="earlier" onClick={onReload} disabled={loading}>{reloadLabel}</button>}
                     </div>
                 )}
             </div>

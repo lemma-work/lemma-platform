@@ -118,6 +118,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
             AcpRunRequest {
                 adapter,
                 agent_environment: std::collections::BTreeMap::default(),
+                own_settings: false,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id: Uuid::new_v4(),
@@ -180,6 +181,7 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
         let request = AcpRunRequest {
             adapter,
             agent_environment: std::collections::BTreeMap::default(),
+            own_settings: false,
             run_spec: RunSpec {
                 agent_run_id: Uuid::new_v4(),
                 conversation_id: Uuid::new_v4(),
@@ -270,6 +272,7 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
             AcpRunRequest {
                 adapter,
                 agent_environment: std::collections::BTreeMap::default(),
+                own_settings: false,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id: Uuid::new_v4(),

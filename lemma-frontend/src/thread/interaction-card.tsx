@@ -1,6 +1,13 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckIcon, ChevronDownIcon, DenyIcon, QuestionIcon, ShieldIcon } from "@/ui/icons";
-import { decisionLabel, interactionHeading, type ApprovalDecision, type AskQuestion } from "./approval";
+import {
+    HOST_PERMISSION_WINDOW_MS,
+    decisionLabel,
+    hostPermissionExpired,
+    interactionHeading,
+    type ApprovalDecision,
+    type AskQuestion,
+} from "./approval";
 import type { Interaction } from "./turns";
 
 /** The card a run stops at.
@@ -59,6 +66,30 @@ function useDecision(id: string, onResolve?: Resolve) {
     );
 
     return { deciding, submitted, error, decide };
+}
+
+/** What an expired request says instead of offering buttons nobody is
+ *  listening to any more. */
+export const EXPIRED_NOTE = "Expired — the agent continued without it.";
+
+/** The clock, for as long as a coding agent's request is waiting: re-read
+ *  once, at the moment it runs out, so the card stops offering an answer at
+ *  the same moment the agent stops waiting for one. */
+function useNowUntil(deadline: number | undefined): number {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        if (deadline === undefined) return;
+        const left = deadline - Date.now();
+        if (left <= 0) return;
+        /* Capped: a timer longer than about 24 days fires at once. */
+        const timer = setTimeout(() => setNow(Date.now()), Math.min(left + 250, 2 ** 31 - 1));
+        return () => clearTimeout(timer);
+    }, [deadline]);
+    return now;
+}
+
+function clockAt(ms: number): string {
+    return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /** What the server is doing on our behalf once a decision is recorded. */
@@ -298,6 +329,7 @@ export function InteractionCard({
     teammate,
     onResolve,
     docked,
+    runEnded,
 }: {
     interaction: Interaction;
     /** Who is asking. Only reached when the call named itself nothing, which
@@ -309,10 +341,25 @@ export function InteractionCard({
      *  Only a styling hook — the card is the same card, which is the reason
      *  the docked one and the record it becomes cannot drift apart. */
     docked?: boolean;
+    /** The run that asked is over. A coding agent's request waits inside its
+     *  run, so once the run has ended nobody is left to hear the answer. */
+    runEnded?: boolean;
 }) {
     const { deciding, submitted, error, decide } = useDecision(interaction.id, onResolve);
     const question = interaction.kind === "question";
     const questions = useMemo(() => interaction.questions, [interaction.questions]);
+    const deadline = interaction.details.hostPermission && interaction.askedAtMs !== undefined
+        ? interaction.askedAtMs + HOST_PERMISSION_WINDOW_MS
+        : undefined;
+    const now = useNowUntil(interaction.open ? deadline : undefined);
+    /* An unanswered coding-agent request whose agent stopped waiting. Said
+       as what it is: approving it now would read as accepted and change
+       nothing. */
+    const expired = interaction.open && !submitted && hostPermissionExpired(interaction.details, {
+        askedAtMs: interaction.askedAtMs,
+        nowMs: now,
+        runEnded: Boolean(runEnded),
+    });
 
     /* Resolved is whichever came first: the tool return landing, or our own
        click. Both are true answers — the second just knows sooner. */
@@ -337,7 +384,9 @@ export function InteractionCard({
                     reading "needs an answer" is the same sentence twice. Once
                     it is settled the chip is carrying the decision, which the
                     heading is not, so it comes back. */}
-                {(settled || interaction.details.title) && (
+                {expired ? (
+                    <span className="pill pill--done">expired</span>
+                ) : (settled || interaction.details.title) && (
                     <span className={"pill " + (settled ? "pill--done" : "pill--wait")}>
                         {settled
                             ? decisionLabel(settled, question ? "question" : "approval")
@@ -386,7 +435,7 @@ export function InteractionCard({
         <div
             className="approval"
             data-kind={question ? "question" : "approval"}
-            data-state={settled ? (denied ? "denied" : "done") : "open"}
+            data-state={expired ? "expired" : settled ? (denied ? "denied" : "done") : "open"}
             data-docked={docked ? "" : undefined}
         >
             <div className="approval__top">{header}</div>
@@ -396,7 +445,13 @@ export function InteractionCard({
                 <Questions interaction={interaction} questions={questions} onResolve={onResolve} />
             ) : (
                 <>
-                    {interaction.open && !submitted && (
+                    {expired && <p className="approval__after">{EXPIRED_NOTE}</p>}
+                    {interaction.open && !submitted && !expired && deadline !== undefined && (
+                        <p className="approval__after">
+                            Answer by {clockAt(deadline)}. After that the agent goes on without it.
+                        </p>
+                    )}
+                    {interaction.open && !submitted && !expired && (
                         <div className="approval__acts">
                             <button
                                 className="btn btn--primary"
@@ -411,7 +466,9 @@ export function InteractionCard({
                                     disabled={!!deciding}
                                     onClick={() => void decide("APPROVE_FOR_SESSION")}
                                 >
-                                    {deciding === "APPROVE_FOR_SESSION" ? "Approving…" : "Approve for this conversation"}
+                                    {deciding === "APPROVE_FOR_SESSION"
+                                        ? "Approving…"
+                                        : interaction.details.sessionLabel || "Approve for this conversation"}
                                 </button>
                             )}
                             <button

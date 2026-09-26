@@ -237,6 +237,9 @@ impl HostProcessManager {
                     .clone(),
             );
         }
+        if id == "frontend" {
+            spec.env.extend(self.frontend_environment());
+        }
         spec.env.extend(self.service_environment(id));
         let generation = self
             .runtime_generation

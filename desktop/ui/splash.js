@@ -20,6 +20,7 @@ import { deriveScreen, diagnosticSourceForState } from "./screen-state.mjs";
       getState: () => invoke("get_state"),
       recoveryOptions: () => invoke("local_recovery_options"),
       openRecovery: () => invoke("open_control_center", { page: "recovery" }),
+      openControlPage: (page) => invoke("open_control_center", { page }),
       resetLocalData: () => invoke("reset_local_data"),
       resetFullReinstall: () => invoke("reset_full_reinstall"),
       onLog: (cb) => { tauri.event.listen("lemma:log", (e) => cb(e.payload)); },
@@ -253,8 +254,42 @@ function scheduleReadyOpen() {
     }
   }, 650);
 }
+/* Startup warnings, in the same words Local settings uses for them. The
+ * sentence is the daemon's, which knows the versions involved; this adds a
+ * title and the one place to go next. */
+const STARTUP_WARNINGS = {
+  "update-interrupted": { title: "Your last update didn't finish", action: "Check for updates", page: "updates" },
+  "update-record-unreadable": { title: "Lemma couldn't read an update in progress", action: "Check for updates", page: "updates" },
+  "settings-writes-disabled": { title: "Settings changes are turned off", action: "Open diagnostics", page: "diagnostics" },
+};
+const REPAIRED_ON_START = { title: "Lemma repaired something while starting", action: "Open diagnostics", page: "diagnostics" };
+const startupWarningsEl = document.getElementById("startup-warnings");
+function renderStartupWarnings(warnings) {
+  const list = Array.isArray(warnings) ? warnings.filter((w) => w && typeof w.message === "string" && w.message.trim()) : [];
+  startupWarningsEl.hidden = list.length === 0;
+  startupWarningsEl.replaceChildren(...list.map((warning) => {
+    const copy = STARTUP_WARNINGS[warning.code] || REPAIRED_ON_START;
+    const box = document.createElement("div");
+    box.className = "startup-warning";
+    box.dataset.warningCode = String(warning.code || "");
+    const title = document.createElement("strong");
+    title.textContent = copy.title;
+    const message = document.createElement("p");
+    message.textContent = warning.message;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = copy.action;
+    button.addEventListener("click", () => {
+      Promise.resolve(window.lemmaDesktop.openControlPage?.(copy.page)).catch((error) => appendLog(`ERROR ${String(error)}`));
+    });
+    box.append(title, message, button);
+    return box;
+  }));
+}
+
 function renderState(s) {
   if (!s) return;
+  renderStartupWarnings(s.warnings);
   if (openIntent === "quit") {
     clearTimeout(readyOpenTimer);
     stopWhispers();

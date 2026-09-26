@@ -113,3 +113,21 @@ fn the_pairing_code_never_reaches_the_argument_list() {
     assert_eq!(stdin.trim(), "s3cret-code");
     assert!(!error.to_string().contains("s3cret-code"), "{error}");
 }
+
+#[test]
+fn the_agents_on_their_own_settings_are_read_from_the_hosts_config_and_default_to_none() {
+    let home = tempdir().unwrap();
+    let config = home.path().join("agent-host/config.json");
+    assert!(crate::agent_host::pairing::own_settings(&config).is_empty());
+    write(
+        &config,
+        r#"{"targets": [], "own_settings": ["claude-code"]}"#,
+    );
+    assert_eq!(
+        crate::agent_host::pairing::own_settings(&config),
+        ["claude-code"]
+    );
+    // Something this build cannot read is none, not a failed status.
+    write(&config, r#"{"targets": [], "own_settings": "claude-code"}"#);
+    assert!(crate::agent_host::pairing::own_settings(&config).is_empty());
+}

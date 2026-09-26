@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     source,
+    agentFix,
     agentLogo,
     agentSettingsChanges,
     stillLooking,
@@ -11,18 +12,22 @@ import {
     type Computer,
     type LocalAgent,
     type Runtime,
+    type RuntimeTest,
 } from "@/data";
 import { downloadUrl } from "@/session/client";
 import { Modal } from "@/shell/modal";
 import { useIsDesktop } from "@/desktop/bridge";
-import { ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
+import { CheckAgainButton, OwnSettingsSwitch, ThisComputerCard, useThisHostId } from "@/desktop/this-computer-card";
+import { useThisComputer } from "@/desktop/this-computer";
 import { ThisMacModelSuggestions } from "@/desktop/this-mac-models";
 import { LOCAL_SERVERS, LOCAL_SERVER_KEY, detectLocalServers, friendlyError, thisMac } from "@/desktop/this-mac";
 import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import {
     asksAboutImages,
+    canBeOrganizationDefault,
     chosenVisionModels,
     discoveryRequest,
+    firstProviderOffer,
     isLocalRoute,
     keyToSend,
     localRouteAnswering,
@@ -117,16 +122,20 @@ function Row({
     tone,
     action,
     quiet,
+    result,
 }: {
     mark: React.ReactNode;
     name: string;
     detail?: string;
     tag?: string;
-    note?: string;
+    note?: React.ReactNode;
     state: string;
     tone: "ok" | "warn" | "muted";
     action?: React.ReactNode;
     quiet?: boolean;
+    /** What the last thing asked of this row found — a Test, or a failed
+     *  "Make default" — said under it until the row is asked again. */
+    result?: { ok: boolean; message: string } | null;
 }) {
     return (
         <li className={"mrow" + (quiet ? " mrow--quiet" : "")}>
@@ -138,6 +147,11 @@ function Row({
                     {tag && <span className="pill">{tag}</span>}
                 </span>
                 {note && <span className="mrow__note">{note}</span>}
+                {result && (
+                    <span role="status" className={"mrow__note" + (result.ok ? "" : " reachrow__error")}>
+                        {result.message}
+                    </span>
+                )}
             </span>
             {action}
             <span className={"mrow__state mrow__state--" + tone}>
@@ -146,6 +160,14 @@ function Row({
             </span>
         </li>
     );
+}
+
+/** A fix names the command to type between backticks; it is drawn as code,
+ *  so it reads as something to type rather than as punctuation. */
+function withCode(text: string): React.ReactNode {
+    const parts = text.split("`");
+    if (parts.length < 3) return text;
+    return parts.map((part, index) => (index % 2 === 1 ? <code key={index}>{part}</code> : part));
 }
 
 function modelCount(count: number): string {
@@ -159,6 +181,7 @@ function RuntimeRow({
     orgId,
     onChanged,
     answering = null,
+    isDefault = false,
 }: {
     runtime: Runtime;
     orgId: string;
@@ -166,8 +189,32 @@ function RuntimeRow({
     /** For a model server on this computer: whether it answered just now.
      *  `null` when that is not a question this row can ask. */
     answering?: boolean | null;
+    /** Whether this is what every teammate that names no model runs on. */
+    isDefault?: boolean;
 }) {
     const [confirming, setConfirming] = useState(false);
+    const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+    const check = useMutation({
+        mutationFn: () => source.testRuntime(orgId, runtime.id),
+        onMutate: () => setResult(null),
+        onSuccess: (found: RuntimeTest) => setResult({
+            ok: found.ok,
+            message: found.ok && found.models
+                ? found.message + " It lists " + modelCount(found.models.length) + "."
+                : found.message,
+        }),
+        onError: (problem) => setResult({ ok: false, message: saidAbout(problem, "The test could not be run.") }),
+    });
+    /* Following the key's own default model, not pinning today's: when the
+       provider renames or drops it, teammates move with the key. */
+    const makeDefault = useMutation({
+        mutationFn: () => source.setOrganizationDefault(orgId, { runtimeId: runtime.id, model: "" }),
+        onMutate: () => setResult(null),
+        onSuccess: onChanged,
+        onError: (problem) => setResult({ ok: false, message: saidAbout(problem, "That could not be made the default.") }),
+    });
+    const testable = runtime.kind === "key" && runtime.scope !== "system" && !runtime.archived;
+    const canBeDefault = canBeOrganizationDefault(runtime) && !isDefault;
     const archive = useMutation({
         mutationFn: () => source.archiveRuntime(orgId, runtime.id),
         onSuccess: () => { setConfirming(false); onChanged(); },
@@ -191,13 +238,14 @@ function RuntimeRow({
                almost everything lands, so labelling it would put an
                identical chip on every row and crowd out the one that says
                something: this one is yours alone. */
-            tag={runtime.scope === "personal" ? "yours" : undefined}
+            tag={isDefault ? "Default" : runtime.scope === "personal" ? "yours" : undefined}
             note={!runtime.archived && answering === false
                 ? "Nothing is answering at this address. Start the model server on this computer, then check again."
                 : undefined}
             state={runtime.archived ? "Retired" : runtime.trouble || (answering === false ? "Not answering" : "Available")}
             tone={runtime.archived ? "muted" : runtime.trouble || answering === false ? "warn" : "ok"}
             quiet={runtime.archived}
+            result={result}
             action={
                 runtime.scope === "system" ? undefined : runtime.archived ? (
                     <button className="linkish" disabled={restore.isPending} onClick={() => restore.mutate()}>
@@ -211,7 +259,19 @@ function RuntimeRow({
                         <button className="linkish" onClick={() => setConfirming(false)}>Keep</button>
                     </span>
                 ) : (
-                    <button className="linkish mrow__quiet" onClick={() => setConfirming(true)}>Retire</button>
+                    <span className="mrow__confirm">
+                        {testable && (
+                            <button className="linkish" disabled={check.isPending} onClick={() => check.mutate()}>
+                                {check.isPending ? "Testing…" : "Test"}
+                            </button>
+                        )}
+                        {canBeDefault && (
+                            <button className="linkish" disabled={makeDefault.isPending} onClick={() => makeDefault.mutate()}>
+                                {makeDefault.isPending ? "Saving…" : "Make default"}
+                            </button>
+                        )}
+                        <button className="linkish mrow__quiet" onClick={() => setConfirming(true)}>Retire</button>
+                    </span>
                 )
             }
         />
@@ -225,12 +285,16 @@ function RuntimeRow({
 function AgentRow({
     agent,
     computer,
+    here,
     saved,
     orgId,
     onChanged,
 }: {
     agent: LocalAgent;
     computer: Computer;
+    /** What to call the computer when it is the one this app runs on — "this
+     *  Mac" — and null for any other. */
+    here: string | null;
     saved: Runtime | null;
     orgId: string;
     onChanged: () => void;
@@ -276,7 +340,15 @@ function AgentRow({
                 /* Said only when the computer itself is reachable. When it is
                    not, its own heading already said so, and repeating it under
                    every agent is the same sentence three times. */
-                note={computer.online && !agent.ready ? agent.fix : undefined}
+                note={computer.online && !agent.ready
+                    ? withCode(agentFix(agent, here))
+                    /* The switch acts on this computer's Agent Host, so it is
+                       drawn only beside this computer's own agents -- here as
+                       well as under This Mac, where people add and manage
+                       them. */
+                    : here
+                        ? <OwnSettingsSwitch harness={agent.harness} name={agent.name} />
+                        : undefined}
                 state={state}
                 tone={tone}
                 quiet={!computer.online}
@@ -534,10 +606,18 @@ export function ModelsSection({ orgId }: { orgId: string }) {
     const queryClient = useQueryClient();
     const [showRetired, setShowRetired] = useState(false);
     const [addingKey, setAddingKey] = useState(false);
+    /* The list as it stood when a key was just added, kept until the
+       refreshed list arrives, so the page can tell whether that key was the
+       first thing able to answer. */
+    const [addedTo, setAddedTo] = useState<Runtime[] | null>(null);
 
     const runtimes = useQuery({
         queryKey: ["runtimes", orgId],
         queryFn: () => source.listRuntimes(orgId),
+    });
+    const chosen = useQuery({
+        queryKey: ["organization-default", orgId],
+        queryFn: () => source.organizationDefault(orgId),
     });
     const computers = useQuery({
         queryKey: ["computers"],
@@ -560,6 +640,7 @@ export function ModelsSection({ orgId }: { orgId: string }) {
 
     const refresh = () => {
         void queryClient.invalidateQueries({ queryKey: ["runtimes", orgId] });
+        void queryClient.invalidateQueries({ queryKey: ["organization-default", orgId] });
         void queryClient.invalidateQueries({ queryKey: ["computers"] });
         void queryClient.invalidateQueries({ queryKey: ["this-mac-model-servers"] });
     };
@@ -582,6 +663,20 @@ export function ModelsSection({ orgId }: { orgId: string }) {
     const retired = loose.filter((runtime) => runtime.archived).length;
     const rows = loose.filter((runtime) => showRetired || !runtime.archived);
 
+    /* Asked only once the chosen default is known: "nobody has chosen" read
+       off a pending query would offer to replace a choice already made. */
+    const offer = addedTo && chosen.isSuccess && !runtimes.isFetching
+        ? firstProviderOffer(addedTo, all, chosen.data)
+        : null;
+    /* Anything else done to the list afterwards answers the offer too:
+       without this, retiring the default later would bring it back. */
+    const changed = () => { setAddedTo(null); refresh(); };
+    const added = () => { setAddedTo(all); refresh(); };
+    const useOffer = useMutation({
+        mutationFn: (runtime: Runtime) => source.setOrganizationDefault(orgId, { runtimeId: runtime.id, model: "" }),
+        onSuccess: changed,
+    });
+
     const available = all.filter((runtime) => !runtime.archived && !runtime.trouble).length;
     const troubled = all.filter((runtime) => !runtime.archived && runtime.trouble).length;
     const reading = runtimes.isPending || computers.isPending;
@@ -589,37 +684,55 @@ export function ModelsSection({ orgId }: { orgId: string }) {
     /* Inside the desktop app, the computer this app runs on leads the list with
        its own live status, and is not drawn a second time below. */
     const desktop = useIsDesktop();
+    const noun = useThisComputer();
     const thisHostId = useThisHostId();
     const mine = machines.find((computer) => computer.id === thisHostId) ?? null;
     const others = machines.filter((computer) => computer !== mine);
 
-    /* One computer's agents, drawn the same way wherever the computer is. */
-    const agentsOf = (computer: Computer) => (
-        stillLooking(computer) ? (
-            <p className="mgroup__empty">
-                <LoadingIndicator label="Finding coding agents" />
-            </p>
-        ) : computer.agents.length === 0 ? (
-            <p className="mgroup__empty">
-                {computer.online
-                    ? "No coding agents found. Install Claude Code, Codex, Cursor or OpenCode there and it shows up here."
-                    : "Nothing published. It reports what it finds when it is next awake."}
-            </p>
-        ) : (
-            <ul className="mlist">
-                {computer.agents.map((agent) => (
-                    <AgentRow
-                        key={agent.id}
-                        agent={agent}
-                        computer={computer}
-                        saved={savedByAgent.get(agent.id) ?? null}
-                        orgId={orgId}
-                        onChanged={refresh}
-                    />
-                ))}
-            </ul>
-        )
-    );
+    /* One computer's agents, drawn the same way wherever the computer is.
+       Only this one can be told to look again, and only it is somewhere the
+       reader can type a command right now, so only it says so. */
+    const agentsOf = (computer: Computer) => {
+        const here = computer === mine ? noun : null;
+        if (stillLooking(computer)) {
+            return (
+                <p className="mgroup__empty">
+                    <LoadingIndicator label="Finding coding agents" />
+                </p>
+            );
+        }
+        if (computer.agents.length === 0) {
+            return (
+                <div className="mgroup__empty">
+                    {!computer.online
+                        ? "Nothing published. It reports what it finds when it is next awake."
+                        : here
+                            ? <>No coding agents found. Install Claude Code, Codex, Cursor or OpenCode on {here}, then press Check again. <CheckAgainButton /></>
+                            : "No coding agents found. Install Claude Code, Codex, Cursor or OpenCode on that computer and it shows up here."}
+                </div>
+            );
+        }
+        return (
+            <>
+                <ul className="mlist">
+                    {computer.agents.map((agent) => (
+                        <AgentRow
+                            key={agent.id}
+                            agent={agent}
+                            computer={computer}
+                            here={here}
+                            saved={savedByAgent.get(agent.id) ?? null}
+                            orgId={orgId}
+                            onChanged={refresh}
+                        />
+                    ))}
+                </ul>
+                {here && computer.online && computer.agents.some((agent) => !agent.ready) && (
+                    <div className="mgroup__empty"><CheckAgainButton /></div>
+                )}
+            </>
+        );
+    };
 
     return (
         <div className="section">
@@ -666,6 +779,32 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                         </div>
                     )}
 
+                    {offer && (
+                        /* The first key is what makes this organization able
+                           to answer at all; saying so once, right after it
+                           lands, beats leaving every teammate on a guess. */
+                        <div className="getapp" role="status">
+                            <span className="getapp__mark"><KeyIcon size={18} /></span>
+                            <span className="getapp__body">
+                                <b>Use {offer.name} for all teammates?</b>
+                                <span>
+                                    Teammates that don&rsquo;t name a model will run on it. You can change this on any key.
+                                </span>
+                                {useOffer.isError && (
+                                    <span className="reachrow__error">
+                                        {saidAbout(useOffer.error, "That could not be made the default.")}
+                                    </span>
+                                )}
+                            </span>
+                            <span className="mrow__confirm">
+                                <button className="btn" disabled={useOffer.isPending} onClick={() => useOffer.mutate(offer)}>
+                                    {useOffer.isPending ? "Saving…" : "Use it"}
+                                </button>
+                                <button className="linkish" onClick={() => setAddedTo(null)}>Not now</button>
+                            </span>
+                        </div>
+                    )}
+
                     {rows.length > 0 && (
                         <ul className="mlist">
                             {rows.map((runtime) => (
@@ -673,7 +812,8 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                                     key={runtime.id}
                                     runtime={runtime}
                                     orgId={orgId}
-                                    onChanged={refresh}
+                                    onChanged={changed}
+                                    isDefault={chosen.data?.runtimeId === runtime.id}
                                     answering={onThisMac && localServers.isSuccess ? localRouteAnswering(runtime.baseUrl, localServers.data) : null}
                                 />
                             ))}
@@ -684,7 +824,7 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                         on this computer and the provider it was set up with,
                         each one click from being picked here. Draws nothing
                         anywhere else. */}
-                    <ThisMacModelSuggestions orgId={orgId} runtimes={all} onAdded={refresh} />
+                    <ThisMacModelSuggestions orgId={orgId} runtimes={all} onAdded={added} />
 
                     {desktop && (
                         <ThisComputerCard release={mine?.release}>
@@ -767,7 +907,13 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                 )}
             </div>
 
-            {addingKey && <AddKey orgId={orgId} onClose={() => setAddingKey(false)} onAdded={refresh} />}
+            {addingKey && (
+                <AddKey
+                    orgId={orgId}
+                    onClose={() => setAddingKey(false)}
+                    onAdded={added}
+                />
+            )}
         </div>
     );
 }

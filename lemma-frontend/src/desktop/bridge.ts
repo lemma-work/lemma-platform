@@ -57,6 +57,13 @@ export const WORKSPACE_COMMANDS = [
     "agent_host_session",
     "agent_host_refresh",
     "agent_host_open_log",
+    /* Whether a coding agent here also loads its owner's own skills and
+       settings. About the agents on this computer, so granted with the
+       Agent Host commands, hosted workspaces included. */
+    "agent_host_own_settings",
+    /* Local settings, at a page. What "Check for updates" opens where
+       Settings → This Mac does not exist: a hosted workspace in the app. */
+    "open_control_center",
     "sandbox_image_status",
     "conversation_folder",
     "bind_conversation_folder",
@@ -83,6 +90,13 @@ export const WORKSPACE_COMMANDS = [
     "diagnostic_logs",
     "discover_provider_models",
     "test_server_setup",
+    /* Cancel on the hosted sign-in: back to the app's Cloud-or-Local chooser.
+       The shell refuses it from anywhere but that page, in hosted mode. */
+    "return_to_mode_chooser",
+    /* This Mac → Overview's disk row. Deleting the pre-update backup is
+       asked natively by the shell first. */
+    "delete_update_backup",
+    "free_up_disk_space",
 ] as const;
 
 export type WorkspaceCommand = (typeof WORKSPACE_COMMANDS)[number];

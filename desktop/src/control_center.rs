@@ -16,13 +16,20 @@ pub(crate) fn control_navigation_allowed(url: &tauri::Url) -> bool {
 /// settings -- the AI provider, sharing, integrations, channels, runtime and
 /// updates -- are still accepted as names, because an older frontend pack or
 /// harness can ask for them, and land on Overview rather than on an error.
+///
+/// `updates` is a destination of its own again: the update panel, wherever
+/// this mode shows it (Overview locally, This computer in cloud mode, which
+/// has no Overview). It is what Check for Updates… opens.
 pub(crate) fn control_center_page(page: Option<&str>) -> Result<String, String> {
     let page = match page.unwrap_or("overview") {
         "ai" | "sharing" | "integrations" | "connectors" | "channels" | "surfaces" | "runtime"
-        | "services" | "updates" => "overview",
+        | "services" => "overview",
         page => page,
     };
-    if !matches!(page, "overview" | "computer" | "recovery" | "diagnostics") {
+    if !matches!(
+        page,
+        "overview" | "computer" | "recovery" | "diagnostics" | "updates"
+    ) {
         return Err(format!("unknown Local settings page: {page}"));
     }
     Ok(page.to_owned())

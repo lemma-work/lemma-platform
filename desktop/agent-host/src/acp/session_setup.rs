@@ -47,11 +47,16 @@ pub(crate) async fn open_session(
     resume: Option<String>,
     scratch_directory: PathBuf,
     mcp_servers: Vec<McpServer>,
+    meta: Option<serde_json::Map<String, Value>>,
 ) -> Result<OpenedSession, AcpError> {
     let mut lost_session = None;
     if let Some(existing) = resume {
+        // The same `_meta` as a new session: an adapter reads it on either
+        // (see `session_options`), and a resumed session is given its
+        // instructions and settings afresh by the process this run started.
         let load = LoadSessionRequest::new(existing.clone(), scratch_directory.clone())
-            .mcp_servers(mcp_servers.clone());
+            .mcp_servers(mcp_servers.clone())
+            .meta(meta.clone());
         match before_prompt_deadline("session/load", connection.send_request(load).block_task())
             .await
         {
@@ -88,7 +93,11 @@ pub(crate) async fn open_session(
     let session = before_prompt_deadline(
         "session/new",
         connection
-            .send_request(NewSessionRequest::new(scratch_directory).mcp_servers(mcp_servers))
+            .send_request(
+                NewSessionRequest::new(scratch_directory)
+                    .mcp_servers(mcp_servers)
+                    .meta(meta),
+            )
             .block_task(),
     )
     .await?;

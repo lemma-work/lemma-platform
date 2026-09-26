@@ -20,6 +20,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `file.list` | GET | `/pods/{pod_id}/datastore/files` | List Files |
 | `file.markdown.attach` | PUT | `/pods/{pod_id}/datastore/files/by-path/markdown` | Attach Document Markdown |
 | `file.markdown.detach` | DELETE | `/pods/{pod_id}/datastore/files/by-path/markdown` | Detach Document Markdown |
+| `file.retry_processing` | POST | `/pods/{pod_id}/datastore/files/by-path/retry-processing` | Retry File Processing |
 | `file.search` | POST | `/pods/{pod_id}/datastore/files/search` | Search Files |
 | `file.signed_url` | POST | `/pods/{pod_id}/datastore/files/signed-url` | Create a public, hit-capped signed URL for a file |
 | `file.signed_url.list` | GET | `/pods/{pod_id}/datastore/files/signed-urls` | List this pod's public signed URLs |

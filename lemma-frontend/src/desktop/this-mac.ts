@@ -1,4 +1,5 @@
 import { desktopBridgeAvailable, invoke } from "./bridge";
+import { readDiskUsage, type DiskUsage } from "./disk-space";
 
 /** This computer's own settings, as Settings → This Mac reads and writes them.
  *
@@ -152,7 +153,12 @@ export interface ThisMacSnapshot {
     sharing: Sharing | null;
     sandbox_images: { state: string; detail: string } | null;
     paths: { locald: string; logs: string } | null;
+    /** What Lemma takes on this disk; null from a shell that predates it. */
+    disk_usage: DiskUsage | null;
     app: { version: string; channel: string; updates_supported: boolean; start_at_login: boolean; repair_available: boolean };
+    /** What the background service's start found that someone has to act
+     *  on. Optional so a hand-built snapshot need not name it. */
+    warnings?: StartupWarning[];
 }
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -237,6 +243,8 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
         sharing,
         sandbox_images: raw.sandbox_images ? { state: text(images.state, "unknown"), detail: text(images.detail) } : null,
         paths: raw.paths ? { locald: text(paths.locald), logs: text(paths.logs) } : null,
+        disk_usage: readDiskUsage(raw.disk_usage),
+        warnings: readStartupWarnings(raw.warnings),
         app: {
             version: text(app.version),
             channel: text(app.channel, "dev"),
@@ -245,6 +253,33 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
             repair_available: flag(app.repair_available),
         },
     };
+}
+
+/** One of the background service's startup warnings. `code` is what the page
+ *  switches on; `message` is the daemon's sentence, already written for a
+ *  person and naming the versions involved. */
+export interface StartupWarning {
+    code: string;
+    message: string;
+    version: string | null;
+}
+
+export function readStartupWarnings(value: unknown): StartupWarning[] {
+    return (Array.isArray(value) ? value : []).flatMap((one) => {
+        const warning = record(one);
+        const message = text(warning.message).trim();
+        return message ? [{ code: text(warning.code), message, version: text(warning.version) || null }] : [];
+    });
+}
+
+/** What Overview calls a warning, and where its next step is. */
+export function startupWarningLine(warning: StartupWarning): { title: string; next: "updates" | "logs" } {
+    switch (warning.code) {
+        case "update-interrupted": return { title: "Your last update didn’t finish.", next: "updates" };
+        case "update-record-unreadable": return { title: "Lemma couldn’t read an update in progress.", next: "updates" };
+        case "settings-writes-disabled": return { title: "Settings changes are turned off.", next: "logs" };
+        default: return { title: "Lemma repaired something while starting.", next: "logs" };
+    }
 }
 
 export function readSharing(payload: unknown): Sharing {
@@ -296,7 +331,7 @@ export function readSharing(payload: unknown): Sharing {
  *  `WORKSPACE_COMMANDS`, granted in `workspace.json`, and caller-checked. */
 export const thisMac = {
     snapshot: async () => readSnapshot(await invoke("local_settings_snapshot")),
-    applySection: (payload: SectionPayload) => invoke("apply_local_settings", { payload }),
+    applySection: (payload: SectionPayload | SectionsPayload) => invoke("apply_local_settings", { payload }),
     sharing: (action: "snapshot" | "preflight" | "enable" | "disable" | "access", payload?: Record<string, unknown>) =>
         invoke<{ cancelled?: boolean; event?: string; sharing?: unknown; preflight?: unknown }>("local_sharing", { action, payload }),
     setStartAtLogin: (enabled: boolean) => invoke<boolean>("set_start_at_login", { enabled }),
@@ -315,6 +350,9 @@ export const thisMac = {
     discoverModels: (payload: Record<string, unknown>) => invoke<unknown>("discover_provider_models", { payload }),
     /** Server setup's Test: one read-only request, made by the daemon with the
      *  typed credential or the stored one. */
+    /** Both ask natively before the backup goes; `cancelled` when declined. */
+    deleteUpdateBackup: () => invoke<unknown>("delete_update_backup"),
+    freeUpSpace: () => invoke<unknown>("free_up_disk_space"),
     testSetup: (payload: SetupTestPayload) => invoke<{ detail?: unknown; models?: unknown }>("test_server_setup", { payload }),
 };
 
@@ -323,7 +361,7 @@ export type SetupTestPayload =
     | { service: "ai"; ai: Record<string, unknown>; api_key?: string }
     | { service: SetupService; credential?: string; from_email?: string };
 
-export type SetupService = "composio" | "telegram" | "slack" | "deepgram" | "brave" | "resend";
+export type SetupService = "composio" | "telegram" | "slack" | "deepgram" | "brave" | "resend" | "gemini";
 
 /* ── run commands on this Mac ──────────────────────────────────────── */
 
@@ -336,6 +374,18 @@ export interface HostExecutionRow {
     blocked: string | null;
     consequence: string;
 }
+
+/** What the shell says when the owner's pairing with this Lemma does not
+ *  exist yet, and the switch was flipped anyway. */
+const NOT_PAIRED_HERE = /not paired with the Lemma installed on it/i;
+
+/** Said while the switch waits for this computer to finish connecting. */
+export function notConnectedYet(noun: string): string {
+    return `Available once ${noun} finishes connecting.`;
+}
+
+/** Said when the shell will not report on the service at all. */
+export const AGENT_SERVICE_SILENT = "Lemma’s agent service isn’t responding. Restart Lemma.";
 
 /** The "Run commands on this Mac" switch, from the Agent Host's status.
  *  Pure, so what it says in each state is tested without a page. */
@@ -359,6 +409,42 @@ export function hostExecutionRow(
         };
     }
     return { checked: setting.enabled, blocked: null, consequence: HOST_EXECUTION_CONSEQUENCE };
+}
+
+/** The switch as Settings shows it: {@link hostExecutionRow}, held until this
+ *  computer's own pairing exists, and said in a person's words.
+ *
+ *  The switch belongs to this computer's pairing with the Lemma installed on
+ *  it, so it stays off-limits until that pairing exists: flipped earlier, the
+ *  host refused with its own error text and the switch sprang back. A target
+ *  from an older shell does not say whether it is that pairing, and is given
+ *  the benefit of the doubt. `error` is the shell not answering at all. */
+export function hostExecutionSwitch(
+    status: {
+        available?: boolean;
+        host_execution: { enabled: boolean; available: boolean } | null;
+        targets?: readonly { local?: boolean | null }[];
+    } | null,
+    { error = null, noun = "this Mac" }: { error?: string | null; noun?: string } = {},
+): HostExecutionRow {
+    const row = hostExecutionRow(status);
+    if (!status?.host_execution && status?.available !== false) {
+        return { ...row, blocked: error ? AGENT_SERVICE_SILENT : notConnectedYet(noun) };
+    }
+    if (row.blocked) return row;
+    const targets = status?.targets;
+    if (targets && !targets.some((target) => target.local !== false)) {
+        return { ...row, blocked: notConnectedYet(noun) };
+    }
+    return row;
+}
+
+/** A refusal from flipping the switch, in words. */
+export function hostExecutionError(reason: unknown, noun = "this Mac"): string {
+    const message = reason instanceof Error ? reason.message : String(reason ?? "");
+    if (NOT_PAIRED_HERE.test(message)) return notConnectedYet(noun);
+    if (/control endpoint unavailable|is not connected|disconnected|timed out/i.test(message)) return AGENT_SERVICE_SILENT;
+    return friendlyError(reason);
 }
 
 /** Whether This Mac's commands make sense at all right now. */
@@ -602,7 +688,7 @@ export function updateProblem(reason: unknown): { text: string; neutral: boolean
 /* ── server setup: credential forms ────────────────────────────────── */
 
 export type CredentialForm =
-    | "composio" | "google" | "github" | "microsoft" | "slack-app" | "deepgram" | "brave"
+    | "composio" | "google" | "github" | "microsoft" | "slack-app" | "deepgram" | "voice-calls" | "brave"
     | "slack" | "telegram" | "teams" | "whatsapp" | "resend";
 
 /** Where a form sits on Server setup. */
@@ -683,6 +769,11 @@ export const CREDENTIAL_FORMS: CredentialFormSpec[] = [
         fields: [{ key: "integrations.deepgram_api_key", label: "API key", secret: true }],
         hint: { steps: "Sign up at Deepgram and create an API key in the console. New accounts come with free credit.", url: "https://console.deepgram.com", label: "Open Deepgram console" },
         test: { service: "deepgram", field: "integrations.deepgram_api_key" } },
+    { form: "voice-calls", group: "voice", title: "Voice calls", use: "Lets people talk to teammates live, in a call. Needs both keys.",
+        fields: [{ key: "integrations.gemini_api_key", label: "Gemini API key (the voice)", secret: true },
+            { key: "integrations.typesafe_api_key", label: "TypeSafe API key (routes what is said to the right teammate)", secret: true }],
+        hint: { steps: "Create a Gemini API key in Google AI Studio, and a TypeSafe key for call routing. Saving restarts Lemma’s workspace server, which is the one that carries calls.", url: "https://aistudio.google.com/apikey", label: "Open Google AI Studio" },
+        test: { service: "gemini", field: "integrations.gemini_api_key" } },
     { form: "brave", group: "search", title: "Brave Search", use: "Better, fresher web results than the built-in search. Optional.",
         fields: [{ key: "integrations.brave_search_api_key", label: "API key", secret: true }],
         hint: { steps: "Subscribe to the Brave Search API (there is a free plan) and copy the key from the dashboard.", url: "https://api-dashboard.search.brave.com", label: "Open Brave Search API" },
@@ -731,9 +822,21 @@ export type Draft = Record<string, string | boolean>;
 /** A secret's pending change: left alone, replaced with a value, or removed. */
 export type SecretIntent = { action: "keep" } | { action: "replace"; value: string } | { action: "remove" };
 
+export interface SectionValue {
+    name: SectionName;
+    value: IntegrationConfig | SurfaceConfig | EmailConfig | OperatorAi;
+}
+
 export interface SectionPayload {
     expected_revision: number;
-    section: { name: SectionName; value: IntegrationConfig | SurfaceConfig | EmailConfig | OperatorAi };
+    section: SectionValue;
+    secrets: Record<string, SecretIntent>;
+}
+
+/** Several sections saved as one change, so the server restarts once. */
+export interface SectionsPayload {
+    expected_revision: number;
+    sections: SectionValue[];
     secrets: Record<string, SecretIntent>;
 }
 

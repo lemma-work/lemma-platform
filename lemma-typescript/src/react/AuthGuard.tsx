@@ -82,7 +82,7 @@ export function AuthGuard({
   unauthenticatedFallback,
   accessRequestFallback,
 }: AuthGuardProps) {
-  const { isLoading, isAuthenticated, user: authUser, redirectToAuth } = useAuth(client);
+  const { isLoading, isAuthenticated, isUnreachable, user: authUser, redirectToAuth } = useAuth(client);
   const podAccess = usePodAccess({
     client,
     enabled: isAuthenticated && Boolean(client.podId),
@@ -133,7 +133,9 @@ export function AuthGuard({
     && (podAccess.status === "idle" || podAccess.status === "checking")
     && !isPendingRefresh;
 
-  if (isLoading || isCheckingAccess) {
+  // Unreachable waits like loading: `useAuth` retries once the API answers,
+  // and a sign-in screen would be a wrong answer to a server restarting.
+  if (isLoading || isUnreachable || isCheckingAccess) {
     const context: AuthGuardLoadingContext = { app };
     return loadingFallback !== undefined
       ? <>{renderFallback(loadingFallback, context)}</>

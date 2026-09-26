@@ -19,6 +19,7 @@ mod control_center;
 mod conversation_folders;
 mod cookie_migration;
 mod diagnostics;
+mod disk_space;
 mod ipc_read;
 mod local_recovery;
 mod locald_client;

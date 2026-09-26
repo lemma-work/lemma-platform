@@ -35,6 +35,7 @@ const COMMANDS: &[&str] = &[
     "agent_host_session",
     "agent_host_refresh",
     "agent_host_open_log",
+    "agent_host_own_settings",
     "discover_provider_models",
     "configure_ai_provider",
     "app_frame_url",
@@ -57,6 +58,9 @@ const COMMANDS: &[&str] = &[
     "set_start_at_login",
     "set_host_execution",
     "test_server_setup",
+    "delete_update_backup",
+    "free_up_disk_space",
+    "return_to_mode_chooser",
 ];
 
 fn main() {

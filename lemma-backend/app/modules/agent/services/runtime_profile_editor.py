@@ -17,6 +17,10 @@ from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_model,
     validate_agent_host_selections,
 )
+from app.modules.agent.domain.organization_default import (
+    is_marked_default,
+    without_default_mark,
+)
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
@@ -477,6 +481,11 @@ class AgentRuntimeProfileEditor:
         assert self._service.repository is not None
         if profile.status is status:
             return profile
+        if status is not RuntimeProfileStatus.ACTIVE and is_marked_default(profile):
+            # An archived profile is no longer what teammates run on. Dropping
+            # the mark in the same transaction means restoring it later does
+            # not silently make it the default again.
+            await self._service.repository.update(without_default_mark(profile))
         updated = await self._service.repository.set_status(
             profile_id=profile_id,
             organization_id=organization_id,

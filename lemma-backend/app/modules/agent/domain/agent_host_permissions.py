@@ -129,12 +129,16 @@ def permission_approval_tool_args(
     )
     tool_name = tool_name or _first_string(tool, "name") or "native tool"
     reason = _first_string(payload, "message", "reason")
+    # What the agent would run, for the card to show under the marker rather
+    # than as ``args``: shown to the person deciding, never executed by Lemma.
+    tool_input = payload.get("input")
     return {
         "title": title,
         "reason": reason,
         "tool_name": tool_name,
         AGENT_HOST_PERMISSION_KEY: {
             "request_id": request_id,
+            "input": tool_input if isinstance(tool_input, dict) else {},
             "options": [
                 {
                     "option_id": option.option_id,

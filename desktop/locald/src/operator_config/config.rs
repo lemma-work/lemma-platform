@@ -123,6 +123,7 @@ pub struct ApplyOperatorConfig {
 #[serde(untagged)]
 pub enum OperatorConfigUpdate {
     Section(Box<SectionUpdate>),
+    Sections(Box<SectionsUpdate>),
     Legacy(Box<ApplyOperatorConfig>),
 }
 
@@ -131,6 +132,18 @@ pub enum OperatorConfigUpdate {
 pub struct SectionUpdate {
     pub expected_revision: u64,
     pub section: ConfigSection,
+    #[serde(default)]
+    pub secrets: BTreeMap<String, CredentialAction>,
+}
+
+/// Several sections in one save, so one change a person makes -- a Resend
+/// key, which is the channels' section, and the email section that sends
+/// with it -- restarts the backend once, not once per section.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SectionsUpdate {
+    pub expected_revision: u64,
+    pub sections: Vec<ConfigSection>,
     #[serde(default)]
     pub secrets: BTreeMap<String, CredentialAction>,
 }

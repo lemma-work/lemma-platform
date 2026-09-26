@@ -17,6 +17,7 @@ from uuid import UUID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.workspace.services.host_environment import host_cli_root
 from app.modules.workspace.domain.host_execution import (
     HostFolder,
     HostTarget,
@@ -130,8 +131,12 @@ class SqlHostTargets:
         return await host_folder_for(conversation_id)
 
 
-def build_host_provider() -> AgentHostSandboxProvider:
-    return AgentHostSandboxProvider(LinkTransport(), SqlHostTargets())
+def build_host_provider(*, lemma_cli: str | None = None) -> AgentHostSandboxProvider:
+    return AgentHostSandboxProvider(
+        LinkTransport(),
+        SqlHostTargets(),
+        lemma_cli=lemma_cli or host_cli_root(),
+    )
 
 
 def host_provider_of(service) -> AgentHostSandboxProvider | None:

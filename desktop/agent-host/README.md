@@ -236,6 +236,21 @@ lemma-agent-host disconnect --target my-workspace
 If a target is permanently unreachable, `--force-local` removes only the local
 state. The remote device must then be revoked from Lemma separately.
 
+## What each agent loads
+
+Each run starts its agent with the agent's own instructions, skills, plugins,
+hooks and MCP servers left out, where the agent has a switch for that, so that
+what it is told and can use is Lemma's (`src/acp/session_options.rs`;
+`docs/architecture/agent-host.md`, "What a coding agent loads", has the table).
+Per agent, the person can put their own back:
+
+```bash
+lemma-agent-host own-settings enable claude-code    # load ~/.claude as in a terminal
+lemma-agent-host own-settings disable claude-code   # Lemma's only (the default)
+```
+
+The setting is `own_settings` in `config.json`, read by each run as it starts.
+
 ## Host execution
 
 On macOS the host can also run the paired user's Lemma agent commands on this
@@ -260,7 +275,9 @@ within five seconds and reports it on its next `control` frame. Lemma sends
 `/usr/bin/sandbox-exec` with the profile in `resources/host-sandbox.sb`
 (compiled into the binary) -- and relays each op to it over stdio. The
 exec-server's environment is the owner's login shell's (`$SHELL -lic`, cached in
-`host-environment.json` in the data directory) with credentials removed. See
+`host-environment.json` in the data directory) with credentials removed, and
+with the `bin/` of the `lemma` CLI Lemma named in `workspace.open` first on
+`PATH` when the host accepts that folder. See
 `docs/architecture/desktop-host-execution.md` for the ops, the path policy and
 the profile.
 

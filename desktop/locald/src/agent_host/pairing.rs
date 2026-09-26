@@ -108,6 +108,36 @@ impl AgentHostSupervisor {
         self.invalidate_details();
         Ok(())
     }
+
+    /// Whether one coding agent loads the person's own skills and settings as
+    /// well as Lemma's. Each run reads it as it starts, so the next turn
+    /// follows it without a restart.
+    pub fn set_own_settings(&self, harness: &str, enabled: bool) -> io::Result<()> {
+        if harness.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "name the coding agent this setting is for",
+            ));
+        }
+        self.run_cli(&[
+            "own-settings",
+            if enabled { "enable" } else { "disable" },
+            harness,
+        ])?;
+        self.invalidate_details();
+        Ok(())
+    }
+}
+
+/// The coding agents whose person chose their own skills and settings,
+/// straight from the host's config. Absent means none, the host's default.
+pub(crate) fn own_settings(config_path: &Path) -> Vec<String> {
+    std::fs::read_to_string(config_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|config| config.get("own_settings").cloned())
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default()
 }
 
 /// The owner's host-execution setting, straight from the host's config.

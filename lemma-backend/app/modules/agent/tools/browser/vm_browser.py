@@ -45,7 +45,7 @@ class BrowserCommandRequest(BaseModel):
         description=(
             "The `agent-browser` arguments, as on its command line: "
             "`open https://example.com`, `snapshot -i`, `click @e3`, "
-            "`screenshot /tmp/page.png`."
+            "`screenshot /home/user/shots/page.png`."
         )
     )
     comment: Optional[str] = Field(default=None, description=TOOL_COMMENT_DESC)
@@ -103,10 +103,12 @@ async def browser(
     That browser runs in Lemma's VM, not on this Mac, and this is the only way
     to reach it from here: one `agent-browser` command per call, e.g.
     `open https://localhost:3000`, `snapshot -i`, `click @e2`,
-    `fill @e5 "text"`, `screenshot /tmp/shot.png`. Load the `browser` skill for
-    the full command set. A screenshot is saved in the VM; look at it with
-    `view_image(workspace_file_path=...)`. The VM reaches this Mac's
-    `localhost`, so a dev server you started here opens at the same URL.
+    `fill @e5 "text"`, `screenshot /home/user/shots/shot.png`. Load the
+    `browser` skill for the full command set. A screenshot is saved in the VM:
+    give it an absolute path under `/home/user/` -- there is no shell here to
+    expand `$PWD`, and `view_image` reads any other path from this Mac -- then
+    look at it with `view_image(workspace_file_path=...)`. The VM reaches this
+    Mac's `localhost`, so a dev server you started here opens at the same URL.
 
     Not a shell: only `agent-browser` runs, and pipes or `&&` are passed to it
     as arguments.

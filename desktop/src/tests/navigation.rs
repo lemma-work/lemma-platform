@@ -64,6 +64,13 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
                 | "allow-telemetry-status"
                 | "allow-set-telemetry-enabled"
                 | "allow-diagnostic-logs"
+                // Cancel on the hosted sign-in; refuses anywhere else
+                // (`mode_chooser_return_allowed`).
+                | "allow-return-to-mode-chooser"
+                // This Mac's disk row; the backup is deleted only after a
+                // native question (`disk_space.rs`).
+                | "allow-delete-update-backup"
+                | "allow-free-up-disk-space"
         ) || permission.starts_with("allow-agent-host-")
     }));
     // Destructive, or the operator's whole configuration at once: these stay
@@ -704,4 +711,65 @@ fn a_release_build_opens_no_inspector_unless_asked() {
     let source = include_str!("../windowing.rs").replace("\r\n", "\n");
     assert!(!source.contains(".devtools(true)"));
     assert!(source.contains("main_frame_leaves_app(payload.url()"));
+}
+
+/// Cancel on the hosted sign-in goes back to the chooser, and only from there.
+#[test]
+fn only_the_hosted_sign_in_page_can_return_to_the_mode_chooser() {
+    let hosted = "https://lemma.work";
+    let page = |raw: &str| tauri::Url::parse(raw).unwrap();
+    for allowed in [
+        "https://lemma.work/auth",
+        "https://lemma.work/auth/",
+        "https://lemma.work/auth/signup?x=1",
+    ] {
+        assert!(
+            mode_chooser_return_allowed("main", "hosted", &page(allowed), hosted).is_ok(),
+            "{allowed}"
+        );
+    }
+    // The workspace itself, the browser's half of the handoff, and anything
+    // that merely looks like the sign-in path on another origin.
+    for refused in [
+        "https://lemma.work/",
+        "https://lemma.work/t/pod",
+        "https://lemma.work/authx",
+        "https://lemma.work/auth/desktop",
+        "https://lemma.work/auth/desktop/x",
+        "https://evil.example/auth",
+        "http://lemma.work/auth",
+        "https://lemma.work:8443/auth",
+    ] {
+        assert!(
+            mode_chooser_return_allowed("main", "hosted", &page(refused), hosted).is_err(),
+            "{refused}"
+        );
+    }
+    // The right page in the wrong window, or in a local or undecided app.
+    let sign_in = page("https://lemma.work/auth");
+    assert!(mode_chooser_return_allowed("pod-app", "hosted", &sign_in, hosted).is_err());
+    assert!(mode_chooser_return_allowed("control", "hosted", &sign_in, hosted).is_err());
+    assert!(mode_chooser_return_allowed("main", "local", &sign_in, hosted).is_err());
+    assert!(mode_chooser_return_allowed("main", "undecided", &sign_in, hosted).is_err());
+}
+
+#[test]
+fn returning_to_the_chooser_is_granted_to_the_workspace_and_registered() {
+    let capability = include_str!("../../capabilities/workspace.json").replace("\r\n", "\n");
+    assert!(capability.contains("\"allow-return-to-mode-chooser\""));
+    // Not to the bundled pages: the splash already is the chooser.
+    assert!(!granted("main").contains(&"allow-return-to-mode-chooser".to_owned()));
+    assert!(!granted("control").contains(&"allow-return-to-mode-chooser".to_owned()));
+    let app = include_str!("../app.rs").replace("\r\n", "\n");
+    assert!(app.contains("connection::return_to_mode_chooser"));
+    let build = include_str!("../../build.rs").replace("\r\n", "\n");
+    assert!(build.contains("\"return_to_mode_chooser\""));
+    // The check runs before anything is written.
+    let connection = include_str!("../connection.rs").replace("\r\n", "\n");
+    let body = function_body(&connection, "pub(crate) async fn return_to_mode_chooser(");
+    let checked = body
+        .find("mode_chooser_return_allowed(")
+        .expect("it checks the caller");
+    let acted = body.find("return_to_mode_chooser_impl").expect("it acts");
+    assert!(checked < acted);
 }

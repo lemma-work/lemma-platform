@@ -23,6 +23,14 @@
 .library-row:hover .library-row-actions,.library-row:focus-within .library-row-actions{opacity:1}
 .library-row-actions button{font-size:12px;color:var(--ink-3);padding:6px 9px;border-radius:7px;background:var(--paper);border:1px solid var(--line-2)}
 .library-row-actions button:hover{color:var(--ink);border-color:var(--ink-3)}
+/* A file's reading, said only when it is not simply done. A failed row keeps
+   its Why?/Retry visible: the failure is the thing to act on, not a verb to
+   discover by hovering. The reason opens under the row, full width. */
+.library-reading--reading{color:var(--ink-3)}
+.library-reading--failed{color:var(--bad)}
+.library-row--failed{flex-wrap:wrap}
+.library-row--failed .library-row-actions{opacity:1;top:37px}
+.library-row-why{flex-basis:100%;margin:0;padding:10px 12px 14px 62px;border-bottom:1px solid var(--line);color:var(--ink-2);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
 /* Named, and in front of the row it is about, so there is no question which
    thing the confirmation belongs to. */
 .library-confirm{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 12px;background:var(--paper);border:1px solid var(--bad);border-radius:8px;font-size:13px}
@@ -32,6 +40,7 @@
   .library-heading{flex-wrap:wrap}
   .library-row-actions{opacity:1;position:static;transform:none;align-items:center}
   .library-confirm{position:static;flex-wrap:wrap}
+  .library-row-why{padding-left:8px}
 }
 
 /* `.library-view button` resets every button in here to bare text, and it

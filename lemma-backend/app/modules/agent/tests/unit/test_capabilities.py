@@ -172,6 +172,20 @@ def test_showing_your_work_is_taught_on_both_paths():
     assert "display_resource" in remote.read_text()
 
 
+def test_the_workspace_contract_follows_the_machine_the_commands_run_on():
+    """A run whose `exec_command` is on the user's Mac is told about the Mac."""
+    from app.modules.agent.capabilities.assembler import _instructions_for
+    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+        workspace_cli_toolset,
+    )
+
+    vm = _instructions_for(workspace_cli_toolset)
+    mac = _instructions_for(workspace_cli_toolset, host_execution=True)
+    assert vm is not None and mac is not None
+    assert "whole home directory persists" in vm[1]()
+    assert "on the user's own Mac" in mac[1]()
+
+
 def test_the_memory_contract_is_taught_on_both_paths():
     """Memory is the one capability with no toolset to hang its fragment on.
 

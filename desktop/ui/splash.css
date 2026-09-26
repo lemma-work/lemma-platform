@@ -722,3 +722,10 @@ pre.log {
     scroll-behavior: auto !important;
   }
 }
+
+/* Startup warnings: said plainly, above the fold, and never while choosing. */
+.startup-warnings { display: grid; gap: 10px; max-width: 520px; margin: 22px auto 0; text-align: left; }
+.startup-warning { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--hairline)); border-radius: 10px; background: color-mix(in srgb, var(--gold) 9%, var(--canvas)); color: var(--ink); font-size: 0.84rem; line-height: 1.45; }
+.startup-warning p { margin: 4px 0 8px; color: var(--ink-soft); }
+.scene.choosing .startup-warnings,
+.scene.welcoming .startup-warnings { display: none; }

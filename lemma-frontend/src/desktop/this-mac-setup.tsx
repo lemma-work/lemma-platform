@@ -11,7 +11,7 @@ import { useThisComputer } from "./this-computer";
 import {
     CREDENTIAL_FORMS, detectLocalServers, formConfigured, formFromFocus, friendlyError, meaningfulIntent,
     sectionPayloads, stored, thisMac,
-    type CredentialFormSpec, type Draft, type SectionPayload, type SecretIntent, type SetupGroup, type ThisMacSnapshot,
+    type CredentialFormSpec, type Draft, type SectionPayload, type SectionsPayload, type SecretIntent, type SetupGroup, type ThisMacSnapshot,
 } from "./this-mac";
 import {
     AI_PRESETS, CAPABILITIES, EMAIL_HINTS, aiDraftFrom, aiDraftProblem, aiProfile, aiSectionPayload, capabilityStatus,
@@ -119,7 +119,7 @@ function SecretField({ id, label, name, snapshot, intent, onChange }: {
 /** Save each section in order, each against the revision the one before it
  *  left: the daemon refuses a stale revision rather than overwrite. `null`
  *  when a native confirmation was declined. */
-async function applyInOrder(payloads: SectionPayload[], revision: number): Promise<number | null> {
+async function applyInOrder(payloads: (SectionPayload | SectionsPayload)[], revision: number): Promise<number | null> {
     let current = revision;
     for (const payload of payloads) {
         const answer = await thisMac.applySection({ ...payload, expected_revision: current }) as { cancelled?: boolean; config?: { revision?: number } };

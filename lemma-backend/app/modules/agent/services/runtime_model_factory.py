@@ -327,6 +327,22 @@ def _unmetered_model_from_runtime_profile(
     return None
 
 
+def connection_check_model(
+    *,
+    runtime_profile: Mapping[str, object],
+    runtime_credentials: Mapping[str, object] | None,
+) -> Model | None:
+    """The model a Models-page connection test sends its one message to.
+
+    Unmetered on purpose: a 16-token "are you there" that an admin asked for is
+    not a teammate's usage, and metering needs a run to attribute it to.
+    """
+    return _unmetered_model_from_runtime_profile(
+        runtime_profile=runtime_profile,
+        runtime_credentials=runtime_credentials,
+    )
+
+
 def pydantic_ai_model_from_runtime_profile(
     *,
     runtime_profile: Mapping[str, object] | None,
