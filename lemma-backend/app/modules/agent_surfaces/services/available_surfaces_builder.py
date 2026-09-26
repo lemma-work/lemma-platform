@@ -249,7 +249,7 @@ async def build_available_surfaces(
     read_connector: ReadConnector,
     pod_id: UUID | None = None,
     surface_repository: SurfaceInstallationRepositoryPort | None = None,
-    has_public_link: Callable[[], bool] = public_https_api_url_available,
+    has_public_link: Callable[[], bool] | None = None,
 ) -> AvailableSurfacesResponse:
     """The connectable-surface catalog: one row per registry platform.
 
@@ -259,7 +259,9 @@ async def build_available_surfaces(
     the deployment's answer to "can a webhook reach us", a seam so the rows
     that depend on it can be asserted without a deployment."""
     surfaces: list[AvailableSurface] = []
-    public_link = has_public_link()
+    # Resolved here rather than as the default, so a test patching the
+    # module-level check still reaches it.
+    public_link = (has_public_link or public_https_api_url_available)()
     for platform, binding in SURFACE_CONNECTOR_BINDINGS.items():
         connect, available, title, description, icon = await _connect_descriptor(
             read_connector, binding.connector_id
