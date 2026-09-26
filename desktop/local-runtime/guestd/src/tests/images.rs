@@ -264,9 +264,9 @@ fn unrecoverable_image_cache_persists_a_health_gated_reset_marker() {
 /// `sandbox.ensure` began another transfer of the gigabyte the previous one
 /// was still fetching.
 ///
-/// The claim is a `flock`, which excludes across open descriptions whether or
-/// not they belong to the same process -- so holding one here is the same
-/// obstacle a second guestd meets.
+/// The claim is a record lock, which excludes other processes, behind a table
+/// of the claims this process holds, which excludes its other threads -- so
+/// holding one here is the same obstacle a second guestd meets.
 #[test]
 fn a_download_already_under_way_is_joined_rather_than_started_again() {
     let root = tempdir().unwrap();
@@ -293,13 +293,11 @@ fn a_download_already_under_way_is_joined_rather_than_started_again() {
     );
 
     drop(held);
-    // Immediately, with nothing in between. Releasing a `flock` is closing a
-    // descriptor, and the kernel does not make that visible to the next attempt
-    // instantly -- measured at 489 microseconds, under the contention of a
-    // parallel test run. `claim_pull` allows for it; without that this line
-    // fails roughly once in eight runs at `--test-threads=8`, and a guest that
-    // had just finished a download would tell the next caller it was still
-    // going.
+    // Immediately, with nothing in between. This once failed about one run in
+    // eight at `--test-threads=8`, blamed on the kernel being slow to publish
+    // a released `flock`. It was a sibling test's `fork` copying the claim's
+    // descriptor into a child that had not reached `exec` yet; see
+    // `a_child_forked_during_a_download_does_not_keep_its_claim`.
     service.pull_image(image).expect("the claim was released");
     assert_eq!(service.engine.commands.lock().unwrap()[0][0], "pull");
 }
@@ -321,6 +319,175 @@ fn one_download_does_not_hold_up_a_different_image() {
     assert_ne!(
         claim_name("ghcr.io/lemma/workspace@sha256:abc"),
         claim_name("ghcr.io/lemma/function@sha256:abc"),
+    );
+}
+
+/// An engine that does what the rest of the guest does at any moment: fork.
+///
+/// Every pull forks a child that is still alive when the pull returns, the
+/// way a `nerdctl`, `ctr` or `curl` started by another thread of guestd can
+/// be between its `fork` and its `exec` when a download finishes. The child
+/// has a copy of every descriptor the process had open, the pull's claim
+/// among them.
+struct ForksDuringPull {
+    pulls: std::sync::atomic::AtomicUsize,
+    children: Mutex<Vec<libc::pid_t>>,
+}
+
+impl Engine for ForksDuringPull {
+    fn run(&self, arguments: &[String]) -> Result<Output, String> {
+        assert_eq!(arguments[0], "pull");
+        self.pulls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // SAFETY: the child calls only async-signal-safe functions and never
+        // returns into Rust.
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            unsafe {
+                libc::sleep(30);
+                libc::_exit(0);
+            }
+        }
+        assert!(child > 0, "fork failed");
+        self.children.lock().unwrap().push(child);
+        Ok(output(false, ""))
+    }
+}
+
+impl Drop for ForksDuringPull {
+    fn drop(&mut self) {
+        for child in self.children.lock().unwrap().drain(..) {
+            end_process(child);
+        }
+    }
+}
+
+/// A failed download is retried by starting it again, not by being told it
+/// is still running.
+///
+/// The interleaving that failed
+/// `image_repair_and_failed_download_retries_leave_health_responsive` on CI:
+/// a pull fails, a fork elsewhere in the process happened while it held its
+/// claim, and the retry finds the claim still held -- by the child, which has
+/// the claim's descriptor until it reaches `exec`. With a `flock` the retry
+/// reported `Busy` and started nothing; the warm-up answered "still
+/// downloading" for a download nobody was doing. Here the child lives for the
+/// whole test, so this fails every time the claim can be inherited, rather
+/// than once in a few hundred runs.
+#[test]
+fn a_child_forked_during_a_download_does_not_keep_its_claim() {
+    let root = tempdir().unwrap();
+    let claims = root.path().join("pulls");
+    let image = "ghcr.io/lemma/workspace@sha256:forked";
+    let engine = ForksDuringPull {
+        pulls: std::sync::atomic::AtomicUsize::new(0),
+        children: Mutex::new(Vec::new()),
+    };
+
+    assert!(matches!(
+        pull_with(&engine, &claims, image),
+        Err(PullFailure::Failed(_))
+    ));
+    match pull_with(&engine, &claims, image) {
+        Err(PullFailure::Failed(_)) => {}
+        Err(PullFailure::Busy) => panic!(
+            "the retry was told the image is still downloading, but the only \
+             holder of its claim is a child forked during the failed pull"
+        ),
+        Ok(()) => panic!("the engine fails every pull"),
+    }
+    assert_eq!(
+        engine.pulls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the retry must start a download of its own"
+    );
+    assert!(
+        claim_pull(&claims, image).unwrap().is_some(),
+        "nobody is downloading, so the claim is free"
+    );
+}
+
+/// Take the claim file's record lock from a separate process, and keep it
+/// until the returned process is ended. The flag is whether it got the lock.
+fn lock_from_another_process(path: &std::path::Path) -> (libc::pid_t, bool) {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: all-zero is a valid `flock`; the fields that matter are set.
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_WRLCK as libc::c_short;
+    lock.l_whence = libc::SEEK_SET as libc::c_short;
+    let mut pipe = [0; 2];
+    // SAFETY: `pipe` has room for the two descriptors.
+    assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+    // SAFETY: everything the child needs is allocated before the fork, and it
+    // calls only async-signal-safe functions and never returns into Rust.
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        unsafe {
+            let fd = libc::open(
+                path.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT,
+                0o600 as libc::c_uint,
+            );
+            let locked = u8::from(fd >= 0 && libc::fcntl(fd, libc::F_SETLK, &lock) == 0);
+            libc::write(pipe[1], std::ptr::addr_of!(locked).cast(), 1);
+            libc::sleep(30);
+            libc::_exit(0);
+        }
+    }
+    assert!(child > 0, "fork failed");
+    let mut locked = 0u8;
+    // SAFETY: both descriptors are this test's; `locked` is one byte.
+    unsafe {
+        libc::close(pipe[1]);
+        assert_eq!(
+            libc::read(pipe[0], std::ptr::addr_of_mut!(locked).cast(), 1),
+            1
+        );
+        libc::close(pipe[0]);
+    }
+    (child, locked == 1)
+}
+
+fn end_process(child: libc::pid_t) {
+    // SAFETY: `child` is a process this test forked and has not reaped.
+    unsafe {
+        libc::kill(child, libc::SIGKILL);
+        libc::waitpid(child, std::ptr::null_mut(), 0);
+    }
+}
+
+/// The claim still excludes other processes -- the reason it is on disk.
+///
+/// Both ways round, because the threads of one process are excluded by a
+/// table rather than by the lock: a second guestd is refused while this one
+/// downloads, even after another attempt here was refused too (a refused
+/// attempt must not open the file, since any close drops a record lock), and
+/// this one is refused while a second guestd downloads, until it ends.
+#[test]
+fn a_claim_excludes_another_process_both_ways() {
+    let root = tempdir().unwrap();
+    let claims = root.path().join("pulls");
+    let image = "ghcr.io/lemma/workspace@sha256:elsewhere";
+    let path = claims.join(claim_name(image));
+
+    let held = claim_pull(&claims, image).unwrap().expect("free at first");
+    assert!(claim_pull(&claims, image).unwrap().is_none());
+    let (child, locked) = lock_from_another_process(&path);
+    end_process(child);
+    assert!(
+        !locked,
+        "another process took a claim this one holds, after a refused attempt"
+    );
+    drop(held);
+
+    let (child, locked) = lock_from_another_process(&path);
+    assert!(locked, "the released claim was free to another process");
+    let refused = claim_pull(&claims, image).unwrap().is_none();
+    end_process(child);
+    assert!(refused, "this process took a claim another process holds");
+    assert!(
+        claim_pull(&claims, image).unwrap().is_some(),
+        "a claim is free once the process holding it has ended"
     );
 }
 
