@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.api.schemas import (
     AvailableSurfacesResponse,
     SurfaceConnectDescriptor,
     SurfaceSystemClaim,
+    SurfaceUnavailableReason,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -43,6 +44,10 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 )
 from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
     WhatsAppNumberRepository,
+)
+from app.modules.agent_surfaces.platforms.common import (
+    public_https_api_url_available,
+    receives_without_public_link,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     system_credential_claim_applies,
@@ -214,18 +219,47 @@ def _email_domain(
     return surface_settings.resend_inbound_domain or None
 
 
+def unavailable_reason(
+    platform: SurfacePlatform,
+    *,
+    public_link: bool,
+    inbound_domain: bool,
+    pulls: bool,
+) -> SurfaceUnavailableReason | None:
+    """What stops any surface of this platform being created here, if anything.
+
+    Mirrors the two refusals on the write path, condition for condition:
+    ``create_surface_on_minted_address`` needs an inbound domain before it can
+    mint an address, whether the key is Lemma's or the person's own, and
+    ``_validate_runtime_supported`` needs a public link unless a pull receiver
+    runs for the platform (``pulls``). A catalog that disagreed would offer a
+    Connect button that could only fail -- and on the credential path, fail
+    after an account had already been made. Pure, so the rule is asserted
+    without a deployment.
+    """
+    if platform is SurfacePlatform.RESEND and not inbound_domain:
+        return SurfaceUnavailableReason.NEEDS_EMAIL_DOMAIN
+    if not public_link and not pulls:
+        return SurfaceUnavailableReason.NEEDS_PUBLIC_LINK
+    return None
+
+
 async def build_available_surfaces(
     *,
     read_connector: ReadConnector,
     pod_id: UUID | None = None,
     surface_repository: SurfaceInstallationRepositoryPort | None = None,
+    has_public_link: Callable[[], bool] = public_https_api_url_available,
 ) -> AvailableSurfacesResponse:
     """The connectable-surface catalog: one row per registry platform.
 
     ``pod_id``/``surface_repository`` are optional so the catalog stays usable as
     a pure registry join; supply both to also resolve each platform's
-    system-identity claim for the pod's organization."""
+    system-identity claim for the pod's organization. ``has_public_link`` is
+    the deployment's answer to "can a webhook reach us", a seam so the rows
+    that depend on it can be asserted without a deployment."""
     surfaces: list[AvailableSurface] = []
+    public_link = has_public_link()
     for platform, binding in SURFACE_CONNECTOR_BINDINGS.items():
         connect, available, title, description, icon = await _connect_descriptor(
             read_connector, binding.connector_id
@@ -250,6 +284,12 @@ async def build_available_surfaces(
                 ),
                 managed_setup_available=_managed_setup_available(platform),
                 email_domain=_email_domain(platform, modes=modes),
+                unavailable_reason=unavailable_reason(
+                    platform,
+                    public_link=public_link,
+                    inbound_domain=bool(surface_settings.resend_inbound_domain),
+                    pulls=receives_without_public_link(platform),
+                ),
             )
         )
     return AvailableSurfacesResponse(surfaces=surfaces)

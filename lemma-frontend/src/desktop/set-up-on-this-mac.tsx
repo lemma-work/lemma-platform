@@ -18,14 +18,26 @@ import { useThisMacAvailability } from "./this-mac-settings";
  *  Only in the app's own window on this installation's loopback origin, and only
  *  while that form is actually empty: a link to set up something already set
  *  up sends people to check work that was done. */
-export function SetUpOnThisMac({ form, compact = false }: { form: CredentialForm | null; compact?: boolean }) {
+export function SetUpOnThisMac({ form, compact = false, lead, force = false }: {
+    form: CredentialForm | null;
+    compact?: boolean;
+    /** The caller knows the channel is not ready — the server said so — so
+     *  show the way in even though some field of the form is already filled.
+     *  "Any field set" is what hides it otherwise, and a half-filled form then
+     *  showed neither a working channel nor a way to finish it. */
+    force?: boolean;
+    /** A sentence to say first, drawn only when the button is — so a screen
+     *  never explains a setup that is already done. `{machine}` in it becomes
+     *  the computer's name. */
+    lead?: string;
+}) {
     const noun = useThisComputer();
     const availability = useThisMacAvailability();
     const shown = availability === "shown" && form !== null;
     /* Shares the Settings pane's cache, so opening it after this is free. */
     const snapshot = useQuery({ queryKey: ["this-mac"], queryFn: () => thisMac.snapshot(), enabled: shown, staleTime: 30_000, retry: 0 });
-    if (!shown || !snapshot.data || formConfigured(snapshot.data, form)) return null;
-    return (
+    if (!shown || !snapshot.data || (!force && formConfigured(snapshot.data, form))) return null;
+    const button = (
         <button
             type="button"
             className={compact ? "linkish thismac-setup" : "btn thismac-setup"}
@@ -33,6 +45,13 @@ export function SetUpOnThisMac({ form, compact = false }: { form: CredentialForm
         >
             <KeyIcon size={13} /> Set up on {noun}
         </button>
+    );
+    if (!lead) return button;
+    return (
+        <>
+            <p>{lead.replace("{machine}", noun)}</p>
+            {button}
+        </>
     );
 }
 

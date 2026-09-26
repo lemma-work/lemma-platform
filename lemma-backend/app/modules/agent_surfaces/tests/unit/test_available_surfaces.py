@@ -420,3 +420,56 @@ async def test_a_pool_that_cannot_be_read_keeps_the_claim_rule(monkeypatch):
     )
 
     assert _by_platform(resp)[SurfacePlatform.WHATSAPP].system_claim.available is False
+
+
+NEEDS_LINK = mod.SurfaceUnavailableReason.NEEDS_PUBLIC_LINK
+
+
+def test_webhook_only_platforms_say_they_need_a_public_link():
+    """WhatsApp and Teams were offered on Desktop and failed on the save, with a
+    message naming environment variables. The catalog now says so first."""
+    for platform in (SurfacePlatform.WHATSAPP, SurfacePlatform.TEAMS):
+        reason = mod.unavailable_reason(
+            platform, public_link=False, inbound_domain=True, pulls=False
+        )
+        assert reason is NEEDS_LINK
+
+
+def test_pull_platforms_need_a_link_only_while_their_receiver_is_off():
+    for platform in (SurfacePlatform.TELEGRAM, SurfacePlatform.SLACK):
+        assert (
+            mod.unavailable_reason(
+                platform, public_link=False, inbound_domain=True, pulls=True
+            )
+            is None
+        )
+        assert (
+            mod.unavailable_reason(
+                platform, public_link=False, inbound_domain=True, pulls=False
+            )
+            is NEEDS_LINK
+        )
+
+
+def test_email_without_an_inbound_domain_is_unavailable():
+    """The domain is checked before the link: with no domain there is no address
+    to give out, and turning on sharing would not change that."""
+    assert (
+        mod.unavailable_reason(
+            SurfacePlatform.RESEND, public_link=True, inbound_domain=False, pulls=True
+        )
+        is mod.SurfaceUnavailableReason.NEEDS_EMAIL_DOMAIN
+    )
+
+
+async def test_the_catalog_carries_the_reason_and_a_public_link_clears_it():
+    no_link = await build_available_surfaces(
+        read_connector=_catalog(), has_public_link=lambda: False
+    )
+    assert (
+        _by_platform(no_link)[SurfacePlatform.WHATSAPP].unavailable_reason is NEEDS_LINK
+    )
+    linked = await build_available_surfaces(
+        read_connector=_catalog(), has_public_link=lambda: True
+    )
+    assert _by_platform(linked)[SurfacePlatform.WHATSAPP].unavailable_reason is None

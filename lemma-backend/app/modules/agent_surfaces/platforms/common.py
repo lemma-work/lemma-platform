@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
+from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
@@ -75,6 +76,26 @@ def public_https_api_url_available() -> bool:
     parsed = urlparse(settings.api_url.rstrip("/"))
     hostname = parsed.hostname or ""
     return parsed.scheme == "https" and hostname.lower() not in _LOCAL_WEBHOOK_HOSTS
+
+
+def receives_without_public_link(platform: SurfacePlatform) -> bool:
+    """True when this runtime can receive on ``platform`` with no public URL.
+
+    Telegram polling, Slack Socket Mode and Resend polling each pull events
+    rather than waiting for a webhook, so a desktop or LAN runtime can run those
+    surfaces. Everything else -- WhatsApp and Teams always -- needs somewhere on
+    the internet for the platform to deliver to.
+
+    Shared by the write path's refusal and the catalog, so the catalog never
+    offers what the write path will refuse.
+    """
+    if platform is SurfacePlatform.TELEGRAM:
+        return surface_settings.enable_telegram_polling_mode
+    if platform is SurfacePlatform.SLACK:
+        return surface_settings.enable_slack_socket_mode
+    if platform is SurfacePlatform.RESEND:
+        return surface_settings.enable_resend_polling_mode
+    return False
 
 
 def platform_webhook_url(platform: SurfacePlatform) -> str | None:

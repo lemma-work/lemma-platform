@@ -1,4 +1,4 @@
-import type { AgentSurfaceResponse, SurfaceSetupResponse, SurfacePlatformSetupGuide, AvailableSurfaceChannelsResponse, SurfaceUpdateRequest } from "lemma-sdk";
+import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, SurfaceUpdateRequest } from "lemma-sdk";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
@@ -397,7 +397,6 @@ export interface PodSource {
     listConnectable(podId: string): Promise<Connectable[]>;
     getSurface(podId: string, name: string): Promise<AgentSurfaceResponse>;
     surfaceSetup(podId: string, name: string): Promise<SurfaceSetupResponse>;
-    surfaceGuide(podId: string, platform: string): Promise<SurfacePlatformSetupGuide>;
     surfaceChannels(podId: string, name: string): Promise<AvailableSurfaceChannelsResponse>;
     updateSurface(podId: string, name: string, patch: SurfaceUpdateRequest): Promise<void>;
     createSurfaceAccount(orgId: string, entry: Connectable, credentials: Record<string, unknown>): Promise<string>;

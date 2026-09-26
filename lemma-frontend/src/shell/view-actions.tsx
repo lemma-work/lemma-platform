@@ -8,6 +8,16 @@ import { ShareDialog } from "@/thread/share-dialog";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
 import type { ResourceKind } from "@/thread/resource-conversation";
 import { copyText } from "@/desktop/clipboard";
+import { isDesktop } from "@/desktop/bridge";
+import { useAppFrame } from "@/desktop/pod-apps";
+
+/** Reload, only where there is a frame to reload. Where the app opens in a
+ *  window of its own there is none, and the button did nothing. Its own
+ *  component so the frame is read only for app tabs. */
+function AppReload({ url, onReload }: { url: string; onReload: () => void }) {
+    if (useAppFrame(url).kind !== "frame") return null;
+    return <button onClick={onReload} title="Reload app"><RefreshIcon size={17}/><span>Reload</span></button>;
+}
 
 /** What the tab in front of you is, as a thing that can carry a conversation.
  *
@@ -75,8 +85,10 @@ export function ViewActions({ tab, podId, teammate, onNew, onHistory, onComputer
     let primary;
     let secondary;
     if (tab?.kind === "app") {
-        primary = <a href={tab.url} target="_blank" rel="noreferrer" title="Open app in new tab"><ExternalIcon size={17}/><span>Open</span></a>;
-        secondary = <button onClick={onReload} title="Reload app"><RefreshIcon size={17}/><span>Reload</span></button>;
+        /* In the desktop app a new window for a published app is routed to
+           an app window of its own, not a browser tab — so it says that. */
+        primary = <a href={tab.url} target="_blank" rel="noreferrer" title={isDesktop() ? "Open in its own window" : "Open app in new tab"}><ExternalIcon size={17}/><span>Open</span></a>;
+        secondary = <AppReload url={tab.url} onReload={onReload} />;
     } else if (tab?.kind === "file") {
         primary = <button disabled={!file.data || downloading} onClick={() => void download()} title="Download document"><DownloadIcon size={17}/><span>{downloading ? "Downloading…" : "Download"}</span></button>;
         secondary = <><button disabled={!file.data} onClick={() => setSharing(true)} title="Share this document"><LinkIcon size={17}/><span>Share</span></button><button disabled={!file.data?.appUrl} onClick={() => void copy()} title="Copy document link"><CopyIcon size={17}/><span>Copy link</span></button>{file.data?.appUrl && <a href={file.data.appUrl} target="_blank" rel="noreferrer" title="Open original document"><ExternalIcon size={17}/><span>Open original</span></a>}</>;

@@ -334,9 +334,12 @@ async def create_surface_on_minted_address(
     # surface authenticating with its own key into a refusal — something the
     # domain-only fallback this replaced never did.
     if not surface_settings.resend_inbound_domain:
+        # Said in the product's terms, because this is the API response: the
+        # setting behind it is RESEND_INBOUND_DOMAIN, which is the operator's
+        # word, not the person's who clicked "connect email".
         raise AgentSurfaceValidationError(
-            "Email is not configured for this deployment: set "
-            "RESEND_INBOUND_DOMAIN to a verified catch-all domain."
+            "Email isn't set up on this server yet: it needs an inbound domain "
+            "to give addresses out on."
         )
 
     if name is None:

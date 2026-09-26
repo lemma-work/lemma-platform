@@ -447,6 +447,7 @@ _NAME_TO_MODULE = {
     'SurfaceSlackConfigResponse': 'surface_slack_config_response',
     'SurfaceSystemClaim': 'surface_system_claim',
     'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
+    'SurfaceUnavailableReason': 'surface_unavailable_reason',
     'SurfaceUpdateRequest': 'surface_update_request',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
@@ -980,6 +981,7 @@ if TYPE_CHECKING:
     from .surface_slack_config_response import SurfaceSlackConfigResponse
     from .surface_system_claim import SurfaceSystemClaim
     from .surface_telegram_config_input import SurfaceTelegramConfigInput
+    from .surface_unavailable_reason import SurfaceUnavailableReason
     from .surface_update_request import SurfaceUpdateRequest
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
@@ -1526,6 +1528,7 @@ __all__ = [
     'SurfaceSlackConfigResponse',
     'SurfaceSystemClaim',
     'SurfaceTelegramConfigInput',
+    'SurfaceUnavailableReason',
     'SurfaceUpdateRequest',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',

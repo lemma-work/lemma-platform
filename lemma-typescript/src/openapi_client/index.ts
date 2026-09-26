@@ -350,6 +350,7 @@ export type { SurfaceSlackConfigInput } from './models/SurfaceSlackConfigInput.j
 export type { SurfaceSlackConfigResponse } from './models/SurfaceSlackConfigResponse.js';
 export type { SurfaceSystemClaim } from './models/SurfaceSystemClaim.js';
 export type { SurfaceTelegramConfigInput } from './models/SurfaceTelegramConfigInput.js';
+export { SurfaceUnavailableReason } from './models/SurfaceUnavailableReason.js';
 export type { SurfaceUpdateRequest } from './models/SurfaceUpdateRequest.js';
 export type { TableDetailResponse } from './models/TableDetailResponse.js';
 export type { TableListResponse } from './models/TableListResponse.js';

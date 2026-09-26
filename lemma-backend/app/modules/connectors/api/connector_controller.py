@@ -143,4 +143,5 @@ async def get_connector(
     return ConnectorDetailResponseSchema(
         **ConnectorResponseSchema.model_validate(connector).model_dump(),
         operations={operation.name: operation for operation in operations},
+        oauth_redirect_uri=connector_service.redirect_uri_builder.build(),
     )

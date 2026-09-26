@@ -557,7 +557,6 @@ export const liveSource: PodSource = {
 
     async getSurface(podId, name) { return lemma(podId).podSurfaces.get(podId, name); },
     async surfaceSetup(podId, name) { return lemma(podId).podSurfaces.setup(podId, name); },
-    async surfaceGuide(podId, platform) { return lemma(podId).podSurfaces.setupGuide(podId, platform); },
     async surfaceChannels(podId, name) { return lemma(podId).podSurfaces.channels(podId, name); },
     async updateSurface(podId, name, patch) { await lemma(podId).podSurfaces.update(podId, name, patch); },
     async createSurfaceAccount(orgId, entry, credentials) {
@@ -878,7 +877,10 @@ export const liveSource: PodSource = {
                 const entry = (await client.connectors.get(connectorId)) as CatalogEntry;
                 const kind = primaryKind(entry);
                 if (!canInstallWithDefaults(kind)) {
-                    throw new Error(entry.title + " needs setting up by an organization admin before anybody can connect it.");
+                    /* Said as what is missing. "An organization admin" is
+                       the person reading on a local install, and the reach
+                       sheet offers the form beside this. */
+                    throw new Error(entry.title + " has no sign-in app here yet. One has to be added under Connectors before anybody can connect it.");
                 }
                 const made = await client.connectors.authConfigs.create(orgId, {
                     connector_id: connectorId,

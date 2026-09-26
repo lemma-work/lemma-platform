@@ -131,3 +131,20 @@ export function unsentInvitation(invite: InvitationForInviter): { to: string; li
             " wasn't emailed. Share this link with them instead.",
     };
 }
+
+/** Whether an invitation link only opens on this computer.
+ *
+ *  The link is built from the server's own address, and on Lemma Desktop that
+ *  is a loopback one until sharing is turned on — so a link copied then and
+ *  sent to somebody opens nothing on their machine. Read from the link rather
+ *  than from the sharing state, because the link is what they will be sent. */
+export function linkOnlyOpensHere(link: string | null | undefined): boolean {
+    if (!link) return false;
+    let host: string;
+    try {
+        host = new URL(link).hostname.toLowerCase();
+    } catch {
+        return false;
+    }
+    return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+}

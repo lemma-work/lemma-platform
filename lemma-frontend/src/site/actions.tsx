@@ -293,9 +293,13 @@ function Install({ action, owner, repo, source }: ActionProps) {
                               ? "Continue with teammate"
                               : "Preview installation"}
                     </button>
+                    {/* A remix hands the app to a teammate in a
+                        conversation; there is no installation plan on that
+                        path, so promising one was wrong there. */}
                     <p>
-                        Review the installation plan before applying any
-                        resources.
+                        {action === "remix"
+                            ? "The teammate picks it up in a new conversation, where you can steer the remix."
+                            : "Review the installation plan before applying any resources."}
                     </p>
                 </>
             ) : (

@@ -10,9 +10,10 @@ import { copyText } from "@/desktop/clipboard";
 import { openSettings } from "@/desktop/open-settings";
 import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
+import { isLocalDeployment } from "@/site/config";
 import {
     ROLES, alreadyKnown, canManage, canSetJoinPolicy, canSetRole, inviteProblem, isLastOwner,
-    memberEmail, memberName, roleLabel, unsentInvitation, type Member, type Role,
+    linkOnlyOpensHere, memberEmail, memberName, roleLabel, unsentInvitation, type Member, type Role,
 } from "./membership";
 import { WhoCanJoinOrg } from "./who-can-join-org";
 
@@ -62,6 +63,23 @@ function CopyLink({ link, label = "Copy link" }: { link: string; label?: string 
     );
 }
 
+/** Beside a link that only opens on this computer: why sending it would do
+ *  nothing yet, and the switch that fixes it. On a local install only — a
+ *  hosted workspace never builds such a link. */
+function OnlyOpensHere({ link, machine, canOpenSharing }: { link: string | null | undefined; machine: string; canOpenSharing: boolean }) {
+    if (!isLocalDeployment() || !linkOnlyOpensHere(link)) return null;
+    return (
+        <p className="invite__hint">
+            People on other devices can’t open this link until you turn on Sharing on {machine}.{" "}
+            {canOpenSharing && (
+                <button type="button" className="linkish" onClick={() => openSettings("this-mac-sharing")}>
+                    Open Sharing
+                </button>
+            )}
+        </p>
+    );
+}
+
 export function PeopleSection({ orgId }: { orgId: string }) {
     const queryClient = useQueryClient();
     const [email, setEmail] = useState("");
@@ -70,7 +88,8 @@ export function PeopleSection({ orgId }: { orgId: string }) {
     const [unsent, setUnsent] = useState<ReturnType<typeof unsentInvitation>>(null);
     /* On Lemma Desktop the person reading is the one who can set email up. */
     const thisMac = useThisMacAvailability();
-    const machine = capitalised(useThisComputer());
+    const noun = useThisComputer();
+    const machine = capitalised(noun);
     /* Organization membership is not part of the sample source — there is no
        organization behind it to have members — so there is nothing to ask. */
     const enabled = source.label !== "sample";
@@ -214,6 +233,7 @@ export function PeopleSection({ orgId }: { orgId: string }) {
                                     <CopyLink link={unsent.link} />
                                 </div>
                             )}
+                            <OnlyOpensHere link={unsent.link} machine={noun} canOpenSharing={thisMac === "shown"} />
                             {thisMac === "shown" && (
                                 <button type="button" className="linkish thismac-setup" onClick={() => openSettings("this-mac-setup", "email")}>
                                     <KeyIcon size={13} /> Set up email in {machine} → Server setup
@@ -296,11 +316,15 @@ export function PeopleSection({ orgId }: { orgId: string }) {
                                 <div className="person__who">
                                     <strong>{item.email ?? "—"}</strong>
                                     {item.expires_at && <small>expires {String(item.expires_at).slice(0, 10)}</small>}
+                                    {manage && item.emailed === false && (
+                                        <OnlyOpensHere link={item.accept_url} machine={noun} canOpenSharing={thisMac === "shown"} />
+                                    )}
                                 </div>
                                 {/* Where nobody was emailed, the link is the
                                     invitation; it stays reachable after the
                                     notice above has gone. */}
                                 {manage && item.emailed === false && item.accept_url && <CopyLink link={item.accept_url} />}
+
                                 <span className="person__role person__role--fixed">{roleLabel(item.role)}</span>
                                 {!manage && <span className="person__gap" aria-hidden="true" />}
                                 {manage && (

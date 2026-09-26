@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircleIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { CheckCircleIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { useOAuthRedirectUri } from "@/data/oauth-redirect";
+import { copyText } from "./clipboard";
 import { openExternal } from "./open-external";
 import { openSettings } from "./open-settings";
 import { useThisComputer } from "./this-computer";
@@ -409,6 +411,25 @@ function Email({ snapshot }: { snapshot: ThisMacSnapshot }) {
 
 /* ── a credential form ─────────────────────────────────────────────── */
 
+/** The redirect URL an OAuth app must allow, exactly as the backend builds
+ *  it -- a copy assembled here once had a path the backend does not serve,
+ *  and every sign-in through such an app failed. */
+function RedirectUri() {
+    const uri = useOAuthRedirectUri();
+    const [copied, setCopied] = useState<Said>(null);
+    if (!uri) return <p className="thismac-said">Reading the redirect URL this app must allow…</p>;
+    return (
+        <p className="thismac-said">
+            Redirect URL the app must allow: <code>{uri}</code>{" "}
+            <button type="button" className="linkish" onClick={() => void copyText(uri).then(
+                () => setCopied({ text: "Copied." }),
+                () => setCopied({ text: "Couldn’t copy. Select the address and copy it.", bad: true }),
+            )}><CopyIcon size={12} /> Copy</button>
+            {copied && <span className={copied.bad ? "thismac-said--bad" : undefined} role={copied.bad ? "alert" : "status"}> {copied.text}</span>}
+        </p>
+    );
+}
+
 /** Unsaved edits, kept for as long as this page is open. Memory only, never
  *  storage — some of it is credentials — so a reload forgets it. */
 const drafts = new Map<string, { draft: Draft; secrets: Record<string, SecretIntent> }>();
@@ -515,11 +536,7 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
                             </div>
                         );
                     })}
-                    {spec.redirect && snapshot.state.api_url && (
-                        <p className="thismac-said">
-                            Redirect URL for the app: <code>{snapshot.state.api_url.replace(/\/$/, "")}/api/v1/connectors/oauth/callback</code>
-                        </p>
-                    )}
+                    {spec.redirect && <RedirectUri />}
                     <div className="modal__acts">
                         {unsaved && (
                             <button type="button" className="linkish" onClick={() => {

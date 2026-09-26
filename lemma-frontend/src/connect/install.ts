@@ -288,3 +288,11 @@ export function urlRefusal(message: string): string | null {
     return "That address was refused: it has to be reachable from the internet, "
         + "not a private or loopback address.";
 }
+
+/** Whether a failure is the backend saying this connector has no OAuth app to
+ *  sign in through — the case with a fix on a local install, where the app is
+ *  the machine's to add. Matched on the backend's wording in
+ *  `auth_install_resolver.py`. */
+export function oauthAppMissing(message: string | null | undefined): boolean {
+    return /needs an OAuth app/i.test(message ?? "");
+}

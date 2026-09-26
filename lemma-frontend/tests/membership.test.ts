@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-    alreadyKnown, canManage, canSetRole, inviteProblem, isLastOwner,
+    alreadyKnown, canManage, canSetRole, inviteProblem, isLastOwner, linkOnlyOpensHere,
     memberEmail, memberName, roleLabel, unsentInvitation, type Member,
 } from "../src/org/membership.ts";
 
@@ -99,4 +99,15 @@ test("an emailed invitation, or one from a server that never said, needs no noti
     // An older server omits the field: not known to have failed, so not said to have.
     assert.equal(unsentInvitation({ email: "sam@example.com" }), null);
     assert.equal(unsentInvitation({ email: "sam@example.com", emailed: null }), null);
+});
+
+test("a link on this computer's own address is one nobody else can open", () => {
+    assert.equal(linkOnlyOpensHere("http://app.lemma.localhost:8712/invitations/abc"), true);
+    assert.equal(linkOnlyOpensHere("http://127.0.0.1:3100/invitations/abc"), true);
+    assert.equal(linkOnlyOpensHere("http://localhost/invitations/abc"), true);
+    // Once sharing is on the server builds links on the shared address.
+    assert.equal(linkOnlyOpensHere("https://lemma.example.com/invitations/abc"), false);
+    assert.equal(linkOnlyOpensHere("http://192.168.1.20:8712/invitations/abc"), false);
+    assert.equal(linkOnlyOpensHere("not a url"), false);
+    assert.equal(linkOnlyOpensHere(null), false);
 });

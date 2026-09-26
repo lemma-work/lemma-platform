@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { blurbOf, byEffort, readConnectable, type Connectable } from "../src/data/connectable.ts";
+import { blurbOf, byEffort, createThenBind, needsSharing, readConnectable, unavailableNote, type Connectable } from "../src/data/connectable.ts";
 
 /** The catalog decides what a person is told BEFORE they click, which is the
  *  whole point of reading it — the old strip drew five identical grey icons and
@@ -118,4 +118,68 @@ test("an unknown platform keeps the catalog's own words", () => {
     // Developer copy beats a blank line for something this app has never met.
     const entry = read({ platform: "MATRIX", description: "Matrix homeserver bridge.", supported_credential_modes: ["CUSTOM"] });
     assert.equal(blurbOf(entry), "Matrix homeserver bridge.");
+});
+
+test("a reason from the server beats every route, the one-click one included", () => {
+    // WhatsApp on Desktop: the shared number is configured and free, and the
+    // save still fails, because nothing on the internet can deliver to it.
+    const entry = read({
+        platform: "WHATSAPP",
+        title: "WhatsApp",
+        supported_credential_modes: ["CUSTOM", "SYSTEM"],
+        system_claim: { available: true },
+        connector_available: true,
+        unavailable_reason: "NEEDS_PUBLIC_LINK",
+    });
+    assert.equal(entry.effort, "unavailable");
+    assert.equal(needsSharing(entry), true);
+    assert.equal(unavailableNote(entry, "this Mac"), "Needs a public link — turn on Sharing › Public on this Mac first.");
+    assert.equal(unavailableNote(entry, null), "Needs a public link to this server first.");
+});
+
+test("email with no inbound domain says what is missing, and where", () => {
+    const entry = read({ platform: "RESEND", connector_available: true, unavailable_reason: "NEEDS_EMAIL_DOMAIN" });
+    assert.equal(entry.effort, "unavailable");
+    assert.equal(needsSharing(entry), false);
+    assert.equal(unavailableNote(entry, "this PC"), "Email needs a Resend key and an inbound domain on this PC.");
+});
+
+test("a platform that can pull is sent to its bot, not to sharing", () => {
+    const entry = read({ platform: "TELEGRAM", title: "Telegram", connector_available: true, unavailable_reason: "NEEDS_PUBLIC_LINK" });
+    assert.equal(needsSharing(entry), false);
+    assert.equal(unavailableNote(entry, "this Mac"), "Telegram needs its bot set up on this Mac first.");
+});
+
+test("an unknown reason is ignored rather than guessed at", () => {
+    const entry = read({ platform: "SLACK", connector_available: true, unavailable_reason: "SOMETHING_NEW" });
+    assert.equal(entry.unavailableReason, undefined);
+    assert.equal(entry.effort, "account");
+    assert.equal(unavailableNote(entry, "this Mac"), null);
+});
+
+test("a refused bind takes the account it just made with it", async () => {
+    const undone: string[] = [];
+    await assert.rejects(
+        createThenBind(
+            async () => "acct-1",
+            async () => { throw new Error("Email isn’t set up on this server yet."); },
+            async (id) => { undone.push(id); },
+        ),
+        /isn’t set up/,
+    );
+    assert.deepEqual(undone, ["acct-1"]);
+});
+
+test("the refusal is what is reported, even when the undo fails too", async () => {
+    await assert.rejects(
+        createThenBind(async () => "a", async () => { throw new Error("refused"); }, async () => { throw new Error("gone"); }),
+        /refused/,
+    );
+});
+
+test("a bind that works keeps its account", async () => {
+    let undone = false;
+    const bound = await createThenBind(async () => "a", async (id) => "bound " + id, async () => { undone = true; });
+    assert.equal(bound, "bound a");
+    assert.equal(undone, false);
 });

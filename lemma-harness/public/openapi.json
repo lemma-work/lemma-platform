@@ -2868,6 +2868,16 @@
               }
             ],
             "title": "Title"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceUnavailableReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3399,6 +3409,18 @@
             },
             "title": "Kinds",
             "type": "array"
+          },
+          "oauth_redirect_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The redirect URI an OAuth app registered for this deployment must allow -- the callback every sign-in returns to. The same for every connector; published here because this is what a person reads while registering their own app, and a hand-built copy of it is how a wrong path reached users as redirect_uri_mismatch.",
+            "title": "Oauth Redirect Uri"
           },
           "operations": {
             "additionalProperties": {
@@ -14342,6 +14364,15 @@
         },
         "title": "SurfaceTelegramConfigInput",
         "type": "object"
+      },
+      "SurfaceUnavailableReason": {
+        "description": "Why a platform cannot be connected on this server right now.\n\nPublished so a setup screen can say what to do instead of offering a\nConnect button whose only outcome is a refusal. Each value names the thing\nthat is missing, not the setting that supplies it: the setting is the\noperator's word, and on Desktop the person reading is the operator but\nconfigures it through a form, not an environment variable.",
+        "enum": [
+          "NEEDS_PUBLIC_LINK",
+          "NEEDS_EMAIL_DOMAIN"
+        ],
+        "title": "SurfaceUnavailableReason",
+        "type": "string"
       },
       "SurfaceUpdateRequest": {
         "additionalProperties": false,
