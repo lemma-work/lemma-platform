@@ -102,6 +102,41 @@ fn independent_services_are_stopped_at_the_same_time() {
     );
 }
 
+/// Quit leaves nothing behind: each service's whole process group goes, the
+/// grandchildren a server forks included, not only the process locald started.
+#[cfg(unix)]
+#[test]
+fn a_parallel_stop_takes_every_services_whole_tree() {
+    // A leader with a child of its own, as `node` or `uvicorn` workers are.
+    let forks_a_child = vec!["/bin/sh".into(), "-c".into(), "/bin/sleep 30 & wait".into()];
+    let mut backend = service("backend", &[]);
+    backend.command = forks_a_child.clone();
+    let mut frontend = service("frontend", &[]);
+    frontend.command = forks_a_child;
+    let root = tempdir().unwrap();
+    let mut value = manifest(vec![backend, frontend]);
+    value.setup[0].command = vec!["/usr/bin/true".into()];
+    let manager = manager_in(&root, value);
+    manager.start_all().unwrap();
+    let groups: Vec<i32> = manager
+        .status()
+        .iter()
+        .filter_map(|process| process.pid)
+        .map(|pid| i32::try_from(pid).unwrap())
+        .collect();
+    assert_eq!(groups.len(), 2);
+
+    manager.stop_all_timed().0.unwrap();
+
+    for group in groups {
+        assert_ne!(
+            unsafe { libc::kill(-group, 0) },
+            0,
+            "process group {group} outlived the stop"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_stop_request_interrupts_an_inflight_service_health_wait() {
