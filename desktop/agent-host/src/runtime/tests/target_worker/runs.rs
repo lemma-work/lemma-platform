@@ -103,6 +103,62 @@ async fn a_refresh_for_a_superseded_lease_is_ignored() {
     );
 }
 
+fn steer_command(run_id: Uuid, lease_epoch: u32) -> Command {
+    Command {
+        command_id: Uuid::new_v4(),
+        kind: CommandKind::SteerRun,
+        created_at: Utc::now(),
+        expires_at: Utc::now() + chrono::Duration::minutes(1),
+        run_id: Some(run_id),
+        lease_epoch: Some(lease_epoch),
+        payload: serde_json::json!({
+            "message_id": "message-1",
+            "prompt": [{"type": "text", "text": "Also check the tests."}],
+        }),
+    }
+}
+
+/// A `STEER_RUN` is handed to the running turn, which is what sends it.
+#[tokio::test]
+async fn a_steer_reaches_the_turn_it_was_sent_to() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let inbox = harness
+        .worker
+        .track_steerable_run(run_id, tokio::spawn(std::future::pending()));
+
+    harness
+        .worker
+        .handle_command(&steer_command(run_id, 1))
+        .unwrap();
+
+    let steer = inbox.take().unwrap().try_recv().unwrap();
+    assert_eq!(steer.message_id, "message-1");
+}
+
+/// A steer for a dispatch that has been superseded is not for this turn, and
+/// one for a run that already ended has no turn to join. Neither is an error:
+/// Lemma's follow-up turn carries the message.
+#[tokio::test]
+async fn a_steer_with_no_turn_to_join_is_dropped_quietly() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let inbox = harness
+        .worker
+        .track_steerable_run(run_id, tokio::spawn(std::future::pending()));
+
+    harness
+        .worker
+        .handle_command(&steer_command(run_id, 9))
+        .unwrap();
+    harness
+        .worker
+        .handle_command(&steer_command(Uuid::new_v4(), 1))
+        .unwrap();
+
+    assert!(inbox.take().unwrap().try_recv().is_err());
+}
+
 /// Every terminal path in `spawn_run` wakes the poll that reports it.
 ///
 /// `poll_target` snapshots the control batch when it builds the request, so a

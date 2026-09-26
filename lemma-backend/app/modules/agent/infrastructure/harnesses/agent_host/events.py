@@ -195,6 +195,7 @@ class AgentHostEventNormalizer:
                 AgentHostEventType.RUN_STATE
                 | AgentHostEventType.SESSION_UPDATE
                 | AgentHostEventType.CONFIG_UPDATE
+                | AgentHostEventType.STEER_RESULT
             ):
                 return [
                     *self._drain_tokens(),

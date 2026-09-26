@@ -4,7 +4,7 @@ use super::{
     AcpRunRequest, ActiveRun, Arc, AtomicBool, CANCEL_GRACE, Checkpoint, ConfigOption, Duration,
     EnvVariable, EventType, JournalCallbacks, JsonMap, McpServer, McpServerStdio, Ordering,
     OwnedSemaphorePermit, OwnedTask, PERMISSION_DECISION_TIMEOUT, ResolvedAdapter, RunSpec,
-    RunState, StreamSegments, TargetWorker, Utc, Value, adapter_failure_message,
+    RunState, SteerInbox, StreamSegments, TargetWorker, Utc, Value, adapter_failure_message,
     authentication_hint, host_directory_instructions, prepare_run_directory,
     publish_generated_images, redact_error, terminal_failure, terminal_failure_detail, watch,
 };
@@ -34,6 +34,7 @@ impl TargetWorker {
         // can name the agent rather than describing it as an internal error.
         let adapter_name = adapter.spec.display_name.clone();
         let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (steer_tx, steer_inbox) = SteerInbox::channel();
         let handle = tokio::spawn(async move {
             let _permit = permit;
             let lease_epoch = journal
@@ -146,6 +147,7 @@ impl TargetWorker {
                 permission_timeout: PERMISSION_DECISION_TIMEOUT,
                 cancel: cancel_rx,
                 cancel_grace: CANCEL_GRACE,
+                steer: steer_inbox,
             };
             let outcome =
                 tokio::time::timeout(remaining, driver.run(request, callbacks.clone())).await;
@@ -269,6 +271,7 @@ impl TargetWorker {
                 cancel: cancel_tx,
                 kill_at: None,
                 credential,
+                steer: steer_tx,
             },
         );
     }

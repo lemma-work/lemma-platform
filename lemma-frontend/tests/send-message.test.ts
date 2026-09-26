@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sendToConversation } from "../src/thread/send-message.ts";
+import { sendToConversation, steerConversation } from "../src/thread/send-message.ts";
+import { withoutSent } from "../src/thread/queued.ts";
 
 test("creates and selects the conversation before sending, without waiting for the stream to end", async () => {
     const events: string[] = [];
@@ -94,4 +95,68 @@ test("the pod's later id lands on a session that already holds it", async () => 
 
     assert.equal(streamAborted, false, "the first message was cancelled by its own conversation id");
     assert.equal(held, made.id);
+});
+
+test("a steer whose attachment fails to upload says so and keeps the draft", async () => {
+    const reported: string[] = [];
+    const appended: string[] = [];
+    let cleared = false;
+    await assert.rejects(
+        steerConversation("look at this", "c1", {
+            putFiles: async () => { throw new Error("report.pdf is too large"); },
+            append: async (_id, content) => { appended.push(content); },
+            clearAttachments: () => { cleared = true; },
+            restoreAttachments: () => undefined,
+            report: message => { reported.push(message); },
+        }),
+        /too large/,
+    );
+    assert.deepEqual(reported, ["report.pdf is too large"]);
+    assert.deepEqual(appended, [], "nothing is sent without its files");
+    assert.equal(cleared, false, "the chips stay for a retry");
+});
+
+test("a steer whose append fails hands the uploaded files back and says why", async () => {
+    const reported: string[] = [];
+    let restored: string[] = [];
+    await assert.rejects(
+        steerConversation("and this", "c1", {
+            putFiles: async (_id, text) => ({ content: text + "\n[report.pdf]", settled: ["report.pdf"] }),
+            append: async () => { throw "offline"; },
+            clearAttachments: () => undefined,
+            restoreAttachments: settled => { restored = settled; },
+            report: message => { reported.push(message); },
+        }),
+    );
+    assert.deepEqual(restored, ["report.pdf"]);
+    assert.deepEqual(reported, ["That did not send."]);
+});
+
+test("a steer that goes appends what the upload produced", async () => {
+    const appended: string[] = [];
+    await steerConversation("see attached", "c1", {
+        putFiles: async (_id, text) => ({ content: text + "\n[a.png]", settled: [] }),
+        append: async (id, content) => { appended.push(id + ":" + content); },
+        clearAttachments: () => undefined,
+        restoreAttachments: () => undefined,
+        report: () => assert.fail("nothing to report"),
+    });
+    assert.deepEqual(appended, ["c1:see attached\n[a.png]"]);
+});
+
+test("a steer clears only the files it sent, not one attached while it uploaded", async () => {
+    type Chip = { key: string };
+    let held: Chip[] = [{ key: "a" }];
+    await steerConversation<Chip>("with a file", "c1", {
+        putFiles: async (_id, text) => {
+            /* Attached while this upload was in flight: the next message's. */
+            held = [...held, { key: "b" }];
+            return { content: text, settled: [{ key: "a" }] };
+        },
+        append: async () => undefined,
+        clearAttachments: sent => { held = withoutSent(held, sent); },
+        restoreAttachments: () => undefined,
+        report: () => assert.fail("nothing to report"),
+    });
+    assert.deepEqual(held, [{ key: "b" }]);
 });

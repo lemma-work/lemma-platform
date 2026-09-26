@@ -46,6 +46,7 @@
     "session_update",
     "config_update",
     "permission_request",
+    "steer_result",
     "terminal"
   ],
   "text_extraction": [
@@ -209,7 +210,8 @@
       "START_RUN",
       "CANCEL_RUN",
       "RESOLVE_PERMISSION",
-      "REFRESH_CREDENTIAL"
+      "REFRESH_CREDENTIAL",
+      "STEER_RUN"
     ],
     "tool_source": [
       "native",

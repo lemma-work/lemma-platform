@@ -103,6 +103,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                 permission_timeout: Duration::ZERO,
                 cancel: cancel_rx,
                 cancel_grace: Duration::from_secs(30),
+                steer: lemma_agent_host::acp::SteerInbox::default(),
             },
             Arc::clone(&callbacks) as Arc<dyn AcpCallbacks>,
         )

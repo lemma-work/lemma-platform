@@ -8,17 +8,20 @@ harness drives whatever comes back. They share only the run id.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSpec
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.domain.queued_messages import is_queued
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
@@ -40,6 +43,9 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
     credential_bounded_timeout,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
+    supports_steering,
 )
 from app.modules.agent.infrastructure.harnesses.remote_payload import (
     mcp_payload,
@@ -147,13 +153,125 @@ async def enqueue_run[DepsT: AgentContext](
         )
         harness_id = harness.id
         host_id = harness.host_id
+        steerable = supports_steering(harness.capabilities)
         harness_key = harness.harness_key
         config_revision = harness.config_revision
         # Set only on a run started to answer a pausing tool call. Read from
         # the run rather than passed in, because the run row is where the
         # resume recorded it and a second copy could only ever disagree.
         run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+        # Messages that joined this run before it was dispatched are carried in
+        # the prompt below, so they are this run's to answer and must not also
+        # be sent as steers. Only noted here: they are claimed in the one
+        # transaction that admits the run (`claim_exactly`), so neither a
+        # failed dispatch nor a crash can leave them claimed by a run that
+        # never went out.
+        carried = frozenset(
+            message.id
+            for message in messages
+            if message.agent_run_id == agent_run_id and is_queued(message.metadata)
+        )
+    admission = _Admission(
+        resume_session_id=resume_session_id,
+        harness_id=harness_id,
+        host_id=host_id,
+        steerable=steerable,
+        harness_key=harness_key,
+        config_revision=config_revision,
+        resumed_tool_call_id=_resumed_tool_call_id(run),
+    )
+    # The prompt is built with no transaction open, so the person can withdraw
+    # a carried message while it is being built. The admission then finds it
+    # gone, and the prompt is built again without it. Each retry only ever
+    # loses messages, so a few are plenty; past that, something is wrong.
+    for _attempt in range(_ADMISSION_ATTEMPTS):
+        try:
+            return await _admit(
+                uow_factory=uow_factory,
+                event_timeout_seconds=event_timeout_seconds,
+                agent=agent,
+                conversation=conversation,
+                messages=messages,
+                ctx=ctx,
+                options=options,
+                agent_run_id=agent_run_id,
+                run_config=run_config,
+                admission=admission,
+                carried=carried,
+            )
+        except CarriedChanged as changed:
+            carried = carried - changed.lost
+            messages = [
+                message for message in messages if message.id not in changed.lost
+            ]
+    raise RuntimeError(
+        "the messages this turn carries kept changing while it was dispatched"
+    )
 
+
+_ADMISSION_ATTEMPTS = 3
+
+
+class CarriedChanged(Exception):
+    """Carried messages were withdrawn or taken while the prompt was built."""
+
+    def __init__(self, lost: frozenset[UUID]) -> None:
+        super().__init__(f"{len(lost)} carried message(s) are no longer queued")
+        self.lost = lost
+
+
+async def claim_exactly(
+    uow: SqlAlchemyUnitOfWork, *, agent_run_id: UUID, carried: frozenset[UUID]
+) -> None:
+    """Claim every message the prompt carries, or raise and claim none.
+
+    The ``UPDATE`` locks the rows it claims until the caller's transaction
+    ends, so a withdraw racing it either lands first -- and the claim comes back
+    short -- or waits and then finds the message claimed. Short means the
+    prompt carries something the person took back, so this raises
+    `CarriedChanged` and the caller's transaction, admission and all, rolls
+    back.
+    """
+    if not carried:
+        return
+    claimed = await ConversationRepository(uow).claim_queued_user_messages(
+        agent_run_id, message_ids=sorted(carried)
+    )
+    lost = carried - frozenset(message.id for message in claimed)
+    if lost:
+        raise CarriedChanged(lost)
+
+
+@dataclass(frozen=True, slots=True)
+class _Admission:
+    """What the first read settled, which the rest of dispatch has to honour."""
+
+    resume_session_id: str | None
+    harness_id: UUID
+    host_id: UUID
+    steerable: bool
+    harness_key: str
+    config_revision: str
+    resumed_tool_call_id: str | None
+
+
+async def _admit[DepsT: AgentContext](
+    *,
+    uow_factory: UnitOfWorkFactory,
+    event_timeout_seconds: float,
+    agent: Agent,
+    conversation: Conversation,
+    messages: Sequence[Message],
+    ctx: DepsT,
+    options: HarnessOptions[DepsT],
+    agent_run_id: UUID,
+    run_config: AgentHostRunConfig,
+    admission: _Admission,
+    carried: frozenset[UUID],
+) -> DispatchedRun:
+    resume_session_id = admission.resume_session_id
+    harness_id = admission.harness_id
+    host_id = admission.host_id
     payload = run_start_payload(
         agent=agent,
         conversation=conversation,
@@ -164,7 +282,7 @@ async def enqueue_run[DepsT: AgentContext](
             host_execution=bool(getattr(ctx, "host_runs_native_commands", False))
         ),
         carries_history=resume_session_id is None,
-        resumed_tool_call_id=_resumed_tool_call_id(run),
+        resumed_tool_call_id=admission.resumed_tool_call_id,
     )
     prompt = json_object(payload.get("prompt"))
     mcp = await mcp_payload(
@@ -214,11 +332,14 @@ async def enqueue_run[DepsT: AgentContext](
         agent_run_id=agent_run_id,
     )
     async with uow_factory() as uow:
+        # First, so a claim that comes back short rolls back before anything
+        # else is written; see `claim_exactly`.
+        await claim_exactly(uow, agent_run_id=agent_run_id, carried=carried)
         run_spec = AgentHostRunSpec(
             agent_run_id=agent_run_id,
             conversation_id=conversation.id,
             harness_id=harness_id,
-            profile_revision=config_revision,
+            profile_revision=admission.config_revision,
             model_name=run_config.model_name,
             config_selections=run_config.config_selections,
             system_prompt=system_prompt,
@@ -255,8 +376,9 @@ async def enqueue_run[DepsT: AgentContext](
         await uow.commit()
     await poke_host(host_id)
     return DispatchedRun(
-        harness_key=harness_key,
+        harness_key=admission.harness_key,
         event_timeout_seconds=timeout_seconds,
         credential_bounded=credential_bounded,
         credential_expires_at=token_expires_at(mcp),
+        steerable=admission.steerable,
     )

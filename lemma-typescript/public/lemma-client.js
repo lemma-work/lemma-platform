@@ -11623,6 +11623,19 @@ var LemmaClient = (() => {
         }
       );
     }
+    /**
+     * Take back a message sent while a run was working, before the agent has seen
+     * it. Rejects with a 409 once a run has read it, or once it is on its way to
+     * an Agent Host turn.
+     */
+    withdrawMessage(conversationId, messageId, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "DELETE",
+        `/pods/${podId}/conversations/${conversationId}/messages/${messageId}`,
+        { signal: options.signal }
+      );
+    }
     retryFailedRun(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request(
