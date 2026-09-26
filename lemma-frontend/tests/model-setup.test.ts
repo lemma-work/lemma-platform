@@ -97,7 +97,11 @@ test("a reopened failed conversation reads its reason and retry rule off the rec
     assert.equal(shown.retryable, false, "the same run would fail the same way");
 
     const refused = runFailure("failed", null, { last_run_error: "It broke.", last_run_retryable: false });
-    assert.deepEqual(refused, { message: "It broke.", noModel: false, retryable: false });
+    /* Not a sentence written for people: kept off the transcript, which then
+       says "That run failed." as it does live. The retry rule still holds. */
+    assert.deepEqual(refused, { message: null, noModel: false, retryable: false });
+    const provider = runFailure("failed", null, { last_run_error: "OpenAI rejected this model's API key (HTTP 401). Check the key in Settings → Models." });
+    assert.match(provider.message ?? "", /Settings → Models/);
     assert.equal(runFailure("failed", null, {}).retryable, true, "a record without the field keeps the button");
 });
 

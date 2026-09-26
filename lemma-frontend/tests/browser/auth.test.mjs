@@ -82,6 +82,9 @@ async function fixture(t, { signedIn = false, verified = false } = {}) {
             return json({ status: 'complete' }, 200, headers());
         }
         if (path === '/auth/altcha/challenge') return json({ enabled: false });
+        /* The deployment under test has both providers configured, so their
+           buttons are drawn (`login-methods.ts` asks this before drawing). */
+        if (path === '/st/auth/loginmethods') return json({ status: 'OK', thirdParty: { enabled: true, providers: [{ id: 'google', name: 'Google' }, { id: 'active-directory', name: 'Microsoft' }] } });
         if (path === '/st/auth/authorisationurl') return json({ status: 'OK', urlWithQueryParams: origin + '/fake-provider?provider=' + url.searchParams.get('thirdPartyId') });
         if (path === '/st/auth/signup' || path === '/st/auth/signin' || path === '/st/auth/signinup') {
             state.signedIn = true;
