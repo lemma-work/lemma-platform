@@ -345,11 +345,9 @@ mod tests {
                 .iter()
                 .any(|path| std::path::Path::new(path).ends_with(".codex/skills/browser/SKILL.md"))
         );
-        assert!(
-            disabled
-                .iter()
-                .any(|path| std::path::Path::new(path).ends_with(".agents/skills/lemma-builder/SKILL.md"))
-        );
+        assert!(disabled.iter().any(|path| {
+            std::path::Path::new(path).ends_with(".agents/skills/lemma-builder/SKILL.md")
+        }));
         assert!(!disabled.iter().any(|path| path.contains(".system")));
     }
 
