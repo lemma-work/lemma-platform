@@ -18,6 +18,7 @@
 
 import Session from "supertokens-web-js/recipe/session/index.js";
 import { ensureCookieSessionSupport } from "./supertokens.js";
+import { isUnreachableStatus, probeReachable, refreshFailureKind } from "./reachability.js";
 
 export interface UserInfo {
   id: string;
@@ -26,7 +27,12 @@ export interface UserInfo {
   [key: string]: unknown;
 }
 
-export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
+/**
+ * `unreachable` is the API not answering -- a network failure, or a 5xx from a
+ * server that is restarting -- which says nothing about the session. Only a
+ * 401 is `unauthenticated`, and only that should send anyone to sign in.
+ */
+export type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "unreachable";
 
 export interface AuthState {
   status: AuthStatus;
@@ -693,10 +699,55 @@ export class AuthManager {
     return Session.doesSessionExist();
   }
 
+  /**
+   * Whether the API answers at all -- its liveness probe, not a session check.
+   * What a retry after `unreachable` should wait on, so that an outage does
+   * not spend the refresh breaker's budget and trip it into a sign-out.
+   */
+  isReachable(): Promise<boolean> {
+    return probeReachable(this.apiUrl);
+  }
+
+  /**
+   * The local session, with the reason when there is none.
+   *
+   * `doesSessionExist()` folds every failed refresh into "no": a 401, a server
+   * that did not answer, and SuperTokens' duplicate-cookie answer -- a 200
+   * with no `front-token`, which the SDK throws on without saving anything.
+   * One direct refresh tells them apart. It also is the retry the duplicate
+   * answer needs: the server cleared the stray copy on that response, so this
+   * refresh carries one cookie and succeeds. Where the SDK already knows there
+   * is no session (the update marker without a front token) it answers
+   * without touching the network.
+   */
+  private async localSession(): Promise<"exists" | "absent" | "unreachable"> {
+    try {
+      if (await Session.doesSessionExist()) return "exists";
+    } catch (error) {
+      return refreshFailureKind(error);
+    }
+    try {
+      if (await Session.attemptRefreshingSession()) return "exists";
+    } catch (error) {
+      if (refreshFailureKind(error) === "unreachable") return "unreachable";
+    }
+    try {
+      return (await this.recoverOwnOriginSession()) ? "exists" : "absent";
+    } catch (error) {
+      return refreshFailureKind(error);
+    }
+  }
+
   private async performAuthCheck(revision: number): Promise<AuthState> {
     const unauthenticated = (): AuthState => revision === this.authRevision
       ? this.applyUnauthenticatedState()
       : this.state;
+    const unreachable = (): AuthState => {
+      if (revision !== this.authRevision) return this.state;
+      const next: AuthState = { status: "unreachable", user: null };
+      this.setState(next);
+      return next;
+    };
     this.setState({ status: "loading", user: null });
 
     // Cookie mode: short-circuit when no session exists locally instead of
@@ -709,13 +760,9 @@ export class AuthManager {
     // returns false when there's nothing to refresh, ending the loop at the source.
     if (!this.injectedToken && typeof window !== "undefined") {
       ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
-      try {
-        if (!(await Session.doesSessionExist()) && !(await this.recoverOwnOriginSession())) {
-          return unauthenticated();
-        }
-      } catch {
-        return unauthenticated();
-      }
+      const local = await this.localSession();
+      if (local === "unreachable") return unreachable();
+      if (local === "absent") return unauthenticated();
     }
 
     if (revision !== this.authRevision) return this.state;
@@ -731,8 +778,14 @@ export class AuthManager {
         return unauthenticated();
       }
 
+      // A server restarting or a gateway with nothing behind it: no answer
+      // about the session at all, so not a reason to sign anyone out.
+      if (isUnreachableStatus(response.status)) {
+        return unreachable();
+      }
+
       if (!response.ok) {
-        // For non-401 errors on /users/me, treat as unauthenticated (conservative)
+        // For other non-401 errors on /users/me, treat as unauthenticated (conservative)
         return unauthenticated();
       }
 
@@ -741,8 +794,9 @@ export class AuthManager {
       const next: AuthState = { status: "authenticated", user };
       this.setState(next);
       return next;
-    } catch {
-      return unauthenticated();
+    } catch (error) {
+      // The request never got an answer, or the refresh it triggered did not.
+      return refreshFailureKind(error) === "unreachable" ? unreachable() : unauthenticated();
     }
   }
 

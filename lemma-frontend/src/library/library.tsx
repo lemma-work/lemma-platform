@@ -5,6 +5,7 @@ import { FileIcon, FolderIcon, TableIcon, BackIcon, SearchIcon, ChevronRightIcon
 import { fileLocations, inLocation, parentFolder, type FileLocation } from "./file-locations";
 import { Modal } from "@/shell/modal";
 import { ConfirmDelete, useLibraryWrites } from "./library-writes";
+import { fileReading } from "./file-status";
 import { RecordEditor } from "./record-editor";
 import { cellText, idOf, rowLabel, withRow, withUpdatedRow, withoutRow, type Row, type RowPages } from "./record-cache";
 import { lemma } from "@/session/client";
@@ -52,6 +53,8 @@ export function Library({ podId, onFile, onTable }: { podId: string; onFile: (pa
     const [newFolder, setNewFolder] = useState<string | null>(null);
     const [renaming, setRenaming] = useState<{ path: string; draft: string } | null>(null);
     const [deleting, setDeleting] = useState<LibraryItem | null>(null);
+    /* The reason a file could not be read, for the one row that asked. */
+    const [why, setWhy] = useState<{ path: string; text: string | null } | null>(null);
     const writable = filter !== "tables";
     const files = useInfiniteQuery({ queryKey: ["library", podId, "files", directory], initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => source.listLibrary(podId, "files", directory, pageParam), getNextPageParam: page => page.next || undefined, staleTime: 60_000, enabled: filter !== "tables" });
     const tables = useInfiniteQuery({ queryKey: ["library", podId, "tables"], initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => source.listLibrary(podId, "tables", "/", pageParam), getNextPageParam: page => page.next || undefined, staleTime: 60_000, enabled: filter === "tables" });
@@ -83,7 +86,7 @@ export function Library({ podId, onFile, onTable }: { podId: string; onFile: (pa
             one big button, which is tidier and cannot hold the others: a button
             inside a button is invalid markup and the browser unnests it, which
             is how "rename" ends up opening the file. */}
-        <div className="library-list">{items.map(item => <div className="library-row" key={item.kind + item.id}>
+        <div className="library-list">{items.map(item => { const reading = item.kind === "file" ? fileReading(item.status) : null; return <div className={"library-row" + (reading?.state === "failed" ? " library-row--failed" : "")} key={item.kind + item.id}>
             {renaming?.path === item.path ? <form className="library-rename" onSubmit={async e => {
                 e.preventDefault();
                 if (await writes.rename(item, renaming.draft)) setRenaming(null);
@@ -94,15 +97,20 @@ export function Library({ podId, onFile, onTable }: { podId: string; onFile: (pa
                 <button className="btn" type="button" onClick={() => { setRenaming(null); writes.clearProblem(); }}>Cancel</button>
             </form> : <>
                 <button className="library-item" onClick={() => { if (item.kind === "folder") { setDirectory(item.path); setSearch(""); } else if (item.kind === "table") onTable(item.path); else onFile(item.path); }}>
-                    <span className="library-item-icon">{item.kind === "table" ? <TableIcon size={21}/> : item.kind === "folder" ? <FolderIcon size={21}/> : <FileIcon size={21}/>}</span><span className="library-item-name"><strong>{item.kind === "table" ? readableName(item.name) : item.name}</strong><small>{item.kind === "folder" ? (location === "skills" ? "Skill · open instructions and resources" : "Folder") : item.detail}</small></span><span className="library-item-date">{new Date(item.updated).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span><ChevronRightIcon size={16}/>
+                    <span className="library-item-icon">{item.kind === "table" ? <TableIcon size={21}/> : item.kind === "folder" ? <FolderIcon size={21}/> : <FileIcon size={21}/>}</span><span className="library-item-name"><strong>{item.kind === "table" ? readableName(item.name) : item.name}</strong><small>{item.kind === "folder" ? (location === "skills" ? "Skill · open instructions and resources" : "Folder") : item.detail}{reading && <> · <span className={"library-reading library-reading--" + reading.state}>{reading.label}</span></>}</small></span><span className="library-item-date">{new Date(item.updated).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span><ChevronRightIcon size={16}/>
                 </button>
                 {writable && <span className="library-row-actions">
+                    {reading?.state === "failed" && <>
+                        <button aria-expanded={why?.path === item.path} title={"Why " + item.name + " could not be read"} onClick={async () => { if (why?.path === item.path) { setWhy(null); return; } setWhy({ path: item.path, text: null }); const text = await writes.explain(item); setWhy(was => was?.path === item.path ? { path: item.path, text } : was); }}>Why?</button>
+                        <button title={"Read " + item.name + " again"} aria-label={"Retry reading " + item.name} disabled={writes.busy === item.path} onClick={() => { setWhy(null); void writes.retry(item); }}>Retry</button>
+                    </>}
                     <button title={"Rename " + item.name} aria-label={"Rename " + item.name} onClick={() => { setRenaming({ path: item.path, draft: item.name }); writes.clearProblem(); }}>Rename</button>
                     <button title={"Delete " + item.name} aria-label={"Delete " + item.name} onClick={() => { setDeleting(item); writes.clearProblem(); }}>Delete</button>
                 </span>}
             </>}
             {deleting?.path === item.path && <ConfirmDelete item={item} onCancel={() => setDeleting(null)} onConfirm={() => { setDeleting(null); void writes.remove(item); }}/>}
-        </div>)}</div>
+            {why?.path === item.path && reading?.state === "failed" && <p className="library-row-why" role="status">{why.text ?? "Checking…"}</p>}
+        </div>; })}</div>
         {!items.length && shownQueries.every(q => !q.isPending && !q.isError) && <p className="library-empty">{search ? "No matching loaded items. Try another search or load more." : "No visible items here."}</p>}
         <footer className="library-footer"><span>{items.length} items loaded · folders first, then recently updated</span>{shownQueries.map((q,i) => q.hasNextPage && <button key={i} disabled={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>Load more {q === files ? "files" : "tables"}</button>)}</footer>
     </section>;

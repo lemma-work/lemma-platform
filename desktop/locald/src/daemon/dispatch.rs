@@ -61,6 +61,10 @@ impl Daemon {
                 self.start_local_data_reset(request, client.clone());
                 return true;
             }
+            "disk.cleanup" => {
+                self.start_disk_cleanup(request, client.clone());
+                return true;
+            }
             "control.snapshot" => {
                 match self.control_snapshot(id.as_ref()) {
                     Ok(event) => self.send_direct(client, event),

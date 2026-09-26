@@ -19,7 +19,12 @@ import { openExternal } from "./open-external";
 export type AppFrame =
     | { kind: "pending" }
     | { kind: "frame"; src: string }
-    | { kind: "window" };
+    | { kind: "window"; reason?: string };
+
+/** How long the shell may take to name a frame before the window is offered
+ *  instead. It answers in milliseconds normally; a pane left blank for longer
+ *  reads as broken. */
+export const FRAME_ANSWER_TIMEOUT_MS = 4_000;
 
 /** What to show for `url`, given how this page frames apps.
  *
@@ -31,15 +36,23 @@ export async function resolveAppFrame(
     url: string,
     mode: AppFrameMode,
     ask: (url: string) => Promise<unknown>,
+    timeoutMs: number = FRAME_ANSWER_TIMEOUT_MS,
 ): Promise<AppFrame> {
     if (mode === "direct") return { kind: "frame", src: url };
     if (mode === "window") return { kind: "window" };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"late">((resolve) => { timer = setTimeout(() => resolve("late"), timeoutMs); });
     try {
-        const answer = await ask(url);
+        const answer = await Promise.race([ask(url), late]);
+        if (answer === "late") return { kind: "window", reason: "Lemma took too long to prepare it here." };
         const src = (answer as { url?: unknown } | null)?.url;
         if (typeof src === "string" && /^https?:\/\//.test(src)) return { kind: "frame", src };
-    } catch {
-        /* Falls through to the window. */
+    } catch (problem) {
+        /* The window always works; the reason is said beside it. */
+        const said = problem instanceof Error ? problem.message : String(problem ?? "");
+        return { kind: "window", reason: said ? "Lemma couldn’t prepare it here: " + said.replace(/^Error:\s*/, "") : undefined };
+    } finally {
+        clearTimeout(timer);
     }
     return { kind: "window" };
 }

@@ -353,3 +353,43 @@ async def test_dispatch_defers_the_batch_while_the_extractor_is_down():
         )
     finally:
         reset_kreuzberg_circuit()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_defers_the_batch_while_the_search_model_cannot_load():
+    """A released document is PENDING again at once; the dispatcher must not
+    re-claim it every pass while the local model cannot be downloaded."""
+    import time
+
+    from app.core.embeddings.local_embedder import (
+        FastEmbedLocalEmbedder,
+        LocalModelReadiness,
+    )
+    from app.modules.datastore.composition import (
+        DatastoreComposition,
+        install_datastore_composition,
+    )
+    from app.modules.datastore.infrastructure.kreuzberg_circuit import (
+        reset_kreuzberg_circuit,
+    )
+
+    reset_kreuzberg_circuit()
+    embedder = FastEmbedLocalEmbedder(dimension=3)
+    embedder._readiness = LocalModelReadiness(
+        "failed", failed_at=time.monotonic(), error_type="ConnectionError"
+    )
+    previous = install_datastore_composition(
+        DatastoreComposition(embedder_provider=lambda: embedder)
+    )
+    repo = _dispatch_repo([_file(uuid4())])
+    queue = AsyncMock()
+    queue.enqueue.return_value = True
+    service = DatastoreFileRecoveryService(
+        file_repository=repo, reindex_queue=queue, uow=AsyncMock()
+    )
+    try:
+        await service.dispatch_pending_files(per_pod_limit=5, global_limit=10)
+    finally:
+        install_datastore_composition(previous)
+
+    assert queue.enqueue.await_args.kwargs["defer_until"] is not None

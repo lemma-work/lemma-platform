@@ -21,6 +21,7 @@ import {
     readLocalAgent,
     readRuntime,
     type Computer,
+    type Choice,
     type LocalAgent,
     type Runtime,
 } from "./runtimes";
@@ -1400,6 +1401,9 @@ const CONNECTABLE: unknown[] = [
    be judged: a built-in, a bought key, a coding agent that works, one that
    is signed out, and a laptop that is asleep. A single happy row would
    have made the ledger look like a list of one. */
+/* The organization's chosen model; nobody has picked one in the sample. */
+let ORG_DEFAULT: Choice | null = null;
+
 let RUNTIMES: unknown[] = [
     {
         id: "system:lemma", name: "Lemma", kind: "MODEL_PROVIDER", scope: "SYSTEM", status: "ACTIVE",
@@ -2164,7 +2168,22 @@ export const fixtureSource: PodSource = {
     },
     async defaultRuntime() {
         await wait(60);
-        return { runtimeId: "system:lemma", model: "" };
+        return ORG_DEFAULT ?? { runtimeId: "system:lemma", model: "" };
+    },
+    async organizationDefault() {
+        await wait(60);
+        return ORG_DEFAULT;
+    },
+    async setOrganizationDefault(_orgId: string, choice) {
+        await wait(300);
+        ORG_DEFAULT = choice;
+    },
+    async testRuntime(_orgId: string, runtimeId: string) {
+        await wait(700);
+        const found = RUNTIMES.map(readRuntime).find((entry) => entry?.id === runtimeId);
+        return found
+            ? { ok: true, message: found.name + " answered using " + found.defaultModel + ".", models: found.models.map((model) => model.name) }
+            : { ok: false, message: "That provider is gone.", models: null };
     },
     async listComputers() {
         await wait(140);
@@ -2220,6 +2239,8 @@ export const fixtureSource: PodSource = {
     },
     async archiveRuntime(_orgId: string, runtimeId: string) {
         await wait(300);
+        /* Retiring the chosen key un-chooses it, as the backend does. */
+        if (ORG_DEFAULT?.runtimeId === runtimeId) ORG_DEFAULT = null;
         RUNTIMES = RUNTIMES.map((raw) =>
             (raw as { id?: string }).id === runtimeId ? { ...(raw as object), status: "DISABLED" } : raw);
     },

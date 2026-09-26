@@ -10,6 +10,7 @@ mod engine;
 mod firewall_model;
 mod host_gateway_firewall;
 mod host_loopback;
+mod image_prune;
 mod images;
 mod inspect;
 mod limits;

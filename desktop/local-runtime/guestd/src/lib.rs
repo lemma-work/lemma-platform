@@ -25,6 +25,8 @@ mod diagnostics;
 mod engine;
 mod health;
 mod host_control;
+// Giving disk back to the host: unused images, and trimming the data disk.
+mod image_prune;
 // Served only on Linux, by the resident guest; the relay is tested everywhere.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod host_loopback;
@@ -57,6 +59,9 @@ pub(crate) use host_loopback::{
     host_loopback_directory, prepare_relay_directory, HOST_LOOPBACK_MOUNT,
 };
 pub(crate) use image_check::*;
+// Only the tests name its items; the service reaches it through methods.
+#[cfg(test)]
+pub(crate) use image_prune::*;
 pub(crate) use images::*;
 pub(crate) use network::*;
 pub use protocol::{handle_reader, GuestError, GuestRequest, GuestResponse};

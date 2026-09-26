@@ -32,6 +32,7 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     clearTestingToken();
     vi.restoreAllMocks();
     doesSessionExist.mockReset();
+    vi.mocked(Session.attemptRefreshingSession).mockReset();
     resetOwnOriginRecoveryForTests();
     document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   });
@@ -79,6 +80,63 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     auth.markUnauthenticated();
     expect((await auth.checkAuth()).status).toBe("unauthenticated");
     expect(doesSessionExist).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries the refresh once after the duplicate-cookie answer, and is signed in", async () => {
+    // SuperTokens answers a request carrying two copies of a session cookie
+    // with a 200 and no front-token; the SDK throws on that and
+    // `doesSessionExist()` says "no". The server cleared the stray on that
+    // response, so the one direct refresh that follows succeeds.
+    doesSessionExist.mockResolvedValue(false);
+    vi.mocked(Session.attemptRefreshingSession).mockResolvedValueOnce(true);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "u1", email: "a@b.c" }), { status: 200 }),
+    );
+
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    const state = await auth.checkAuth();
+
+    expect(state.status).toBe("authenticated");
+    expect(Session.attemptRefreshingSession).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][0]).toBe("https://api.x.test/users/me");
+  });
+
+  it("a refresh the server could not answer is unreachable, not signed out", async () => {
+    doesSessionExist.mockResolvedValue(false);
+    vi.mocked(Session.attemptRefreshingSession).mockRejectedValueOnce(new Response(null, { status: 502 }));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    expect((await auth.checkAuth()).status).toBe("unreachable");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("a refresh that failed in transport is unreachable", async () => {
+    doesSessionExist.mockResolvedValue(false);
+    vi.mocked(Session.attemptRefreshingSession).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    expect((await auth.checkAuth()).status).toBe("unreachable");
+  });
+
+  it("a refresh the server refused is still signed out", async () => {
+    doesSessionExist.mockResolvedValue(false);
+    vi.mocked(Session.attemptRefreshingSession).mockRejectedValueOnce(new Response(null, { status: 401 }));
+
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    expect((await auth.checkAuth()).status).toBe("unauthenticated");
+  });
+
+  it.each([
+    ["a 503 from /users/me", () => Promise.resolve(new Response(null, { status: 503 })), "unreachable"],
+    ["/users/me failing in transport", () => Promise.reject(new TypeError("Failed to fetch")), "unreachable"],
+    ["a 401 from /users/me", () => Promise.resolve(new Response(null, { status: 401 })), "unauthenticated"],
+  ] as const)("%s is %s", async (_label, answer, expected) => {
+    doesSessionExist.mockResolvedValue(true);
+    vi.spyOn(globalThis, "fetch").mockImplementation(answer);
+
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    expect((await auth.checkAuth()).status).toBe(expected);
   });
 
   it("calls /users/me when a local session exists", async () => {

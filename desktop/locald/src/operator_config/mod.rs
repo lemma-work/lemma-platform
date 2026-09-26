@@ -22,10 +22,12 @@ pub(crate) use lemma_private_file::{
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
 
-pub(crate) const SECRET_NAMES: [&str; 21] = [
+pub(crate) const SECRET_NAMES: [&str; 23] = [
     "ai.api_key",
     "integrations.deepgram_api_key",
     "integrations.brave_search_api_key",
+    "integrations.gemini_api_key",
+    "integrations.typesafe_api_key",
     "integrations.composio_api_key",
     "integrations.composio_webhook_secret",
     "integrations.google_client_secret",

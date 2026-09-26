@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     const host = request.headers.get("host") ?? url.host;
     const expectedOrigin = `${url.protocol}//${host}`;
     if (request.headers.get("origin") !== expectedOrigin) return Response.json({ error: "Invalid origin" }, { status: 403 });
-    if (!process.env.TYPESAFE_API_KEY) return Response.json({ error: "Set TYPESAFE_API_KEY on the server to enable call routing." }, { status: 503 });
+    if (!process.env.TYPESAFE_API_KEY) return Response.json({ error: "Call routing isn’t set up on this server." }, { status: 503 });
     if (pending >= 8) return Response.json({ error: "Router busy" }, { status: 429 });
     pending++;
     try {

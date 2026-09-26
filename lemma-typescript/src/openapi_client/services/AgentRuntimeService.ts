@@ -2,12 +2,15 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AgentRuntimeConfig } from '../models/AgentRuntimeConfig.js';
 import type { AgentRuntimeProfileDetailResponse } from '../models/AgentRuntimeProfileDetailResponse.js';
 import type { AgentRuntimeProfileListResponse } from '../models/AgentRuntimeProfileListResponse.js';
 import type { AgentRuntimeProfileResponse } from '../models/AgentRuntimeProfileResponse.js';
+import type { AgentRuntimeProfileTestResponse } from '../models/AgentRuntimeProfileTestResponse.js';
 import type { CreateAgentHostRuntimeProfileRequest } from '../models/CreateAgentHostRuntimeProfileRequest.js';
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from '../models/CreateAnthropicCompatibleRuntimeProfileRequest.js';
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from '../models/CreateOpenAICompatibleRuntimeProfileRequest.js';
+import type { SetOrganizationDefaultRuntimeRequest } from '../models/SetOrganizationDefaultRuntimeRequest.js';
 import type { UpdateAgentHostRuntimeProfileRequest } from '../models/UpdateAgentHostRuntimeProfileRequest.js';
 import type { UpdateAnthropicCompatibleRuntimeProfileRequest } from '../models/UpdateAnthropicCompatibleRuntimeProfileRequest.js';
 import type { UpdateOpenAICompatibleRuntimeProfileRequest } from '../models/UpdateOpenAICompatibleRuntimeProfileRequest.js';
@@ -15,6 +18,50 @@ import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class AgentRuntimeService {
+    /**
+     * Clear the Organization's Default Model
+     * @param organizationId
+     * @returns void
+     * @throws ApiError
+     */
+    public static agentRuntimeDefaultClear(
+        organizationId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/organizations/{organization_id}/agent-runtime/default',
+            path: {
+                'organization_id': organizationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Set the Organization's Default Model
+     * @param organizationId
+     * @param requestBody
+     * @returns AgentRuntimeConfig Successful Response
+     * @throws ApiError
+     */
+    public static agentRuntimeDefaultSet(
+        organizationId: string,
+        requestBody: SetOrganizationDefaultRuntimeRequest,
+    ): CancelablePromise<AgentRuntimeConfig> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/organizations/{organization_id}/agent-runtime/default',
+            path: {
+                'organization_id': organizationId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
     /**
      * List Available Agent Runtime Profiles
      * @param organizationId
@@ -151,6 +198,29 @@ export class AgentRuntimeService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore',
+            path: {
+                'organization_id': organizationId,
+                'profile_id': profileId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Test a Saved Model Provider
+     * @param organizationId
+     * @param profileId
+     * @returns AgentRuntimeProfileTestResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentRuntimeProfilesTest(
+        organizationId: string,
+        profileId: string,
+    ): CancelablePromise<AgentRuntimeProfileTestResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/test',
             path: {
                 'organization_id': organizationId,
                 'profile_id': profileId,

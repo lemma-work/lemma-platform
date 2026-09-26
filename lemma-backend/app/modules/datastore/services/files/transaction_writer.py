@@ -362,6 +362,32 @@ class FileTransactionWriter:
         entity.mark_content_updated(requester_user_id)
         return await self.file_repository.update(entity)
 
+    async def retry_processing(
+        self,
+        pod_id: UUID,
+        path: str,
+        requester_user_id: UUID,
+        ctx: Context | None = None,
+    ) -> DatastoreFileEntity:
+        """Put a failed document back in the processing queue.
+
+        Needs write permission: it costs the pod extraction and embedding work,
+        which is what an edit costs too. A file that did not fail is returned
+        unchanged rather than refused, so a double click is harmless.
+        """
+        entity = await self.reader.get_file_by_path(
+            pod_id, path, requester_user_id, ctx=ctx
+        )
+        await self.authorizer.require_file_write_permission(
+            file_entity=entity,
+            requester_user_id=requester_user_id,
+            message="Only pod editors and admins can retry shared pod files",
+            ctx=ctx,
+        )
+        if not entity.mark_retry_requested(requester_user_id):
+            return entity
+        return await self.file_repository.update(entity)
+
     async def _ensure_directory_path(
         self,
         pod_id: UUID,

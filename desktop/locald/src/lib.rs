@@ -2,6 +2,8 @@ pub mod agent_host;
 pub mod app_alias;
 pub mod config_operations;
 pub mod daemon;
+// When Lemma gives disk back: backups, images, trimmed blocks.
+mod disk_hygiene;
 pub mod host_process;
 pub mod instance_lock;
 mod lifecycle;

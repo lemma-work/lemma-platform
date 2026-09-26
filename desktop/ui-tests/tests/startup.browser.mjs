@@ -473,3 +473,23 @@ test('progress numbers are shown without being announced', async t => {
   );
   await page.getByText('Downloading services', { exact: false }).waitFor();
 });
+
+// An update that stopped mid-migration used to reach only the daemon's log.
+// The splash is the first screen after launch, so it says it there, with the
+// one place to go next.
+test('a startup warning from the background service is said on the splash', async t => {
+  const page = await splash(t);
+  const message = "Your last update didn't finish. Install Lemma 0.9.0 to continue — don't reopen the older version.";
+  await push(page, { ...RUNNING, warnings: [{ code: 'update-interrupted', message, version: '0.9.0' }] });
+  const warning = page.locator('#startup-warnings [data-warning-code="update-interrupted"]');
+  await warning.waitFor();
+  assert.match(await warning.textContent(), /Your last update didn't finish/);
+  assert.match(await warning.textContent(), /Install Lemma 0\.9\.0/);
+  await warning.getByRole('button', { name: 'Check for updates' }).click();
+  await page.waitForFunction(() => window.__fixture.calls.some(
+    call => call.command === 'open_control_center' && call.args?.page === 'updates',
+  ));
+
+  await push(page, { ...RUNNING, warnings: [] });
+  await page.locator('#startup-warnings').waitFor({ state: 'hidden' });
+});

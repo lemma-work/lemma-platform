@@ -2,7 +2,7 @@ import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChanne
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
-import type { Choice, Computer, Runtime } from "./runtimes";
+import type { Choice, Computer, Runtime, RuntimeTest } from "./runtimes";
 import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
 import type { ScheduleDraft, ScheduleRun, StandingJob, TargetChoice } from "@/schedule/schedules";
 
@@ -178,7 +178,9 @@ export interface Pod {
 
 /** Conversation is a tab like any other. It is always first, and it is the
  *  only one that carries a composer. */
-export interface LibraryItem { id: string; name: string; kind: "file" | "folder" | "table"; path: string; updated: string; detail: string }
+/** `status` is the datastore's processing status for a file (PENDING,
+ *  PROCESSING, COMPLETED, FAILED, …); absent for tables and sample rows. */
+export interface LibraryItem { id: string; name: string; kind: "file" | "folder" | "table"; path: string; updated: string; detail: string; status?: string }
 export interface ResourcePage<T> { items: T[]; next?: string | null }
 
 /** A link that works without a Lemma account.
@@ -411,6 +413,14 @@ export interface PodSource {
     /** What this organization would run on if nobody chose — the catalog's
      *  own default, so "inherit" can say what it inherits. */
     defaultRuntime(orgId: string): Promise<Choice | null>;
+    /** The model an owner chose for every teammate that names none, or
+     *  `null` when nobody has. Only an organization-wide key can be it. */
+    organizationDefault(orgId: string): Promise<Choice | null>;
+    /** Choose it, or with `null` stop choosing. Owners and editors only. */
+    setOrganizationDefault(orgId: string, choice: Choice | null): Promise<void>;
+    /** Ask a saved provider for its models and send its default model one
+     *  short message. */
+    testRuntime(orgId: string, runtimeId: string): Promise<RuntimeTest>;
     /** The computers this person has paired, each with the coding agents it
      *  found on itself. Pairing happens in the Lemma desktop app; this app
      *  reads what that produced. */

@@ -50,6 +50,8 @@ async function settings(t, mode = 'local', daemonOffline = false) {
       // The daemon's channel, with whatever a test wants to put on it.
       emit(event) { emit(event); },
       disconnect() { listeners['lemma:locald-disconnected']?.({ payload: null }); },
+      // What the menu sends when it opens a page on an already-open window.
+      openPage(page) { listeners['lemma:control-page']?.({ payload: page }); },
     };
     if (mode !== 'local') {
       fixture.snapshot.services = null;
@@ -122,9 +124,91 @@ test('a disconnect is said on the page and the next snapshot clears it', async (
   await page.evaluate(() => window.__fixture.disconnect());
   assert.equal(await page.locator('#state-pill').textContent(), 'Disconnected');
   assert.equal(await page.locator('#snapshot-unavailable').isVisible(), true);
+  // Not the last snapshot's "Healthy" and "running": nothing is answering.
+  assert.equal(await page.locator('#metric-app').textContent(), 'Not answering');
+  assert.match(await page.locator('#overview-attention').textContent(), /background service isn't answering/);
+  assert.doesNotMatch(await page.locator('#overview-services').textContent(), /running/);
   await page.evaluate(() => window.__fixture.refresh());
   assert.equal(await page.locator('#snapshot-unavailable').isVisible(), false);
   assert.equal(await page.locator('#metric-app').textContent(), 'Healthy');
+  assert.match(await page.locator('#overview-services').textContent(), /running/);
+});
+
+// A cloud user had no update control at all: This Mac is local-only and this
+// page kept its update panel on Overview, which cloud mode cannot open.
+test('cloud mode shows the update panel on This computer, and Check for Updates opens it', async (t) => {
+  const page = await settings(t, 'hosted');
+  const panel = page.locator('#app-update-panel');
+  assert.equal(await panel.isVisible(), true);
+  assert.equal(await panel.evaluate(node => node.closest('.page').dataset.page), 'computer');
+  const checks = () => page.evaluate(() => window.__fixture.calls.filter(call => call.command === 'check_for_app_update').length);
+  const before = await checks();
+  await page.getByRole('button', { name: 'Recovery' }).click();
+  await page.evaluate(() => window.__fixture.openPage('updates'));
+  assert.equal(await page.locator('#page-title').textContent(), 'This computer');
+  assert.equal(await panel.isVisible(), true);
+  assert.equal(await checks(), before + 1, 'opening it checks again');
+  // Nothing to start or restart in cloud mode.
+  await page.getByRole('button', { name: 'Recovery' }).click();
+  assert.equal(await page.getByRole('button', { name: 'Restart application' }).isDisabled(), true);
+});
+
+test('locally, Check for Updates lands on the panel on Overview', async (t) => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: /^Recovery/ }).click();
+  await page.evaluate(() => window.__fixture.openPage('updates'));
+  assert.equal(await page.locator('#page-title').textContent(), 'Overview');
+  assert.equal(await page.locator('#app-update-panel').evaluate(node => node.closest('.page').dataset.page), 'overview');
+});
+
+// An update that stopped mid-migration was written to a log nobody reads.
+test('startup warnings are said above the page with a way to act on them', async (t) => {
+  const page = await settings(t, 'hosted');
+  await page.evaluate(() => {
+    window.__fixture.snapshot.warnings = [{
+      code: 'update-interrupted',
+      message: "Your last update didn't finish. Install Lemma 0.9.0 to continue — don't reopen the older version.",
+      version: '0.9.0',
+    }];
+    window.__fixture.refresh();
+  });
+  const warning = page.locator('#startup-warnings [data-warning-code="update-interrupted"]');
+  await warning.waitFor();
+  assert.match(await warning.textContent(), /Your last update didn't finish/);
+  assert.match(await warning.textContent(), /Install Lemma 0\.9\.0/);
+  await page.getByRole('button', { name: /^Recovery/ }).click();
+  assert.equal(await warning.isVisible(), true, 'on every page, not only Overview');
+  await warning.getByRole('button', { name: 'Check for updates' }).click();
+  assert.equal(await page.locator('#page-title').textContent(), 'This computer');
+
+  await page.evaluate(() => { window.__fixture.snapshot.warnings = []; window.__fixture.refresh(); });
+  await page.locator('#startup-warnings').waitFor({ state: 'hidden' });
+});
+
+test('Review on a sharing problem goes to the control that turns sharing off', async (t) => {
+  const page = await settings(t);
+  await page.evaluate(() => {
+    window.__fixture.snapshot.sharing = { mode: 'public', phase: 'error', last_error: 'The tunnel stopped.' };
+    window.__fixture.refresh();
+  });
+  await page.getByRole('button', { name: /^Recovery/ }).click();
+  await page.getByRole('button', { name: /^Overview/ }).click();
+  await page.locator('#overview-attention [data-summary-page="sharing"]').click();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'sharing-disable');
+});
+
+test('services that need attention say what the buttons do, and Recovery can restart', async (t) => {
+  const page = await settings(t);
+  await page.evaluate(() => {
+    window.__fixture.snapshot.services = [{ id: 'backend', running: false }];
+    window.__fixture.refresh();
+  });
+  assert.match(await page.locator('#overview-attention').textContent(), /Start missing services/);
+  assert.equal(await page.getByRole('button', { name: 'Reconcile' }).count(), 0);
+  await page.getByRole('button', { name: /^Recovery/ }).click();
+  await page.locator('.page[data-page="recovery"]').getByRole('button', { name: 'Restart application' }).click();
+  const commands = await page.evaluate(() => window.__fixture.calls.map(call => call.command));
+  assert.equal(commands.includes('restart'), true);
 });
 
 // Provider drafts, saving one section at a time, model discovery, a save that

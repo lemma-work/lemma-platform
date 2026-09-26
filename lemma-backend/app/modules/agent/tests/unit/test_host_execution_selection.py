@@ -476,6 +476,16 @@ def test_both_browser_sections_send_the_agent_to_lemmas_browser_skill(
     assert "starts the browser itself" in runtime
 
 
+def test_the_host_execution_runtime_names_the_shipped_lemma_cli():
+    """On the Mac, the host puts this release's `lemma` first on the agent's
+    PATH (`WORKSPACE_HOST_CLI_ROOT`). The prompt says it is there and is the
+    one to use, rather than leaving the agent to find or install another."""
+    runtime = " ".join(load_agent_host_runtime_prompt(host_execution=True).split())
+
+    assert "`lemma` on your `PATH` is Lemma's own CLI" in runtime
+    assert "Do not install or upgrade another `lemma`" in runtime
+
+
 # ------------------------------------------------------ recorded on the run
 
 

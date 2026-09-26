@@ -8,6 +8,7 @@ use std::fs::File;
 mod agent_host;
 mod config;
 mod diagnostics;
+mod disk_space;
 mod locald;
 mod locald_writer;
 mod misc;

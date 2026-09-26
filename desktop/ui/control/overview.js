@@ -13,8 +13,70 @@ import {
 } from "./core.js";
 import { exposureCopy, modeLabel, renderSharingControls } from "./sharing.js";
 
+/* What each startup warning is called, and where its next step is.
+ *
+ * The daemon writes the sentence (it knows the versions); this page adds a
+ * title and a button, and says it above every page -- a cloud user has no
+ * Overview, and an update that stopped mid-migration matters more than
+ * whichever page they opened.
+ */
+const STARTUP_WARNINGS = {
+  "update-interrupted": { title: "Your last update didn't finish", action: "Check for updates", target: "updates" },
+  "update-record-unreadable": { title: "Lemma couldn't read an update in progress", action: "Check for updates", target: "updates" },
+  "settings-writes-disabled": { title: "Settings changes are turned off", action: "Open Diagnostics", target: "diagnostics" },
+};
+const REPAIRED = { title: "Lemma repaired something while starting", action: "Open Diagnostics", target: "diagnostics" };
+
+export function startupWarningCopy(warning) {
+  return STARTUP_WARNINGS[warning?.code] || REPAIRED;
+}
+
+export function readStartupWarnings(snapshot) {
+  const warnings = Array.isArray(snapshot?.warnings) ? snapshot.warnings : [];
+  return warnings.filter((warning) => warning && typeof warning.message === "string" && warning.message.trim());
+}
+
+export function renderStartupWarnings(warnings) {
+  const holder = $("startup-warnings");
+  if (!holder) return;
+  holder.hidden = warnings.length === 0;
+  holder.innerHTML = warnings.map((warning) => {
+    const copy = startupWarningCopy(warning);
+    return `<div class="warning-box" role="alert" data-warning-code="${escapeHtml(warning.code)}">`
+      + `<strong>${escapeHtml(copy.title)}</strong><p>${escapeHtml(warning.message)}</p>`
+      + `<div class="button-row"><button class="btn compact" type="button" data-goto="${escapeHtml(copy.target)}">${escapeHtml(copy.action)}</button></div>`
+      + "</div>";
+  }).join("");
+}
+
+/* The background service stopped answering.
+ *
+ * The last snapshot is still in memory, and drawing it -- "Healthy", every
+ * service "running" -- while nothing is answering told someone who opened this
+ * page because Lemma was broken that it was fine. Said instead, and replaced
+ * by the next snapshot that arrives.
+ */
+const NOT_ANSWERING = "Lemma's background service isn't answering";
+export function renderDisconnected() {
+  $("metric-app").textContent = "Not answering";
+  $("metric-app-detail").textContent = "Health below is unknown until it answers again.";
+  setDot("overview", "bad");
+  $("attention-banner").hidden = true;
+  $("overview-attention").innerHTML = summaryHtml(
+    NOT_ANSWERING,
+    "Nothing on this page is current. Try again, or restart Lemma from Recovery.",
+    "Review",
+    "recovery",
+  );
+  $("overview-services").innerHTML = `<p class="hint">${escapeHtml(NOT_ANSWERING)}, so the state of Lemma's services is unknown.</p>`;
+  $("agent-host-status").innerHTML = serviceHtml("Lemma Agent Host", `${NOT_ANSWERING}, so this is unknown.`, "unknown", "");
+}
+
 export function render() {
   if (!store.snapshot) return;
+  const warnings = readStartupWarnings(store.snapshot);
+  renderStartupWarnings(warnings);
+  $("metric-app-detail").textContent = "Backend, frontend, and private dependencies.";
   const services = store.snapshot.services || [];
   const appReady = Boolean(store.snapshot.state?.ready) && services.length > 0 && services.every((service) => service.running);
   const runtimeReady = Boolean(store.snapshot.managed_runtime);
@@ -40,8 +102,14 @@ export function render() {
   }
 
   const attention = [];
-  if (!appReady) attention.push({ title: "Application services need attention", copy: "Reconcile or restart them below, or open Recovery.", page: "recovery" });
-  if (sharing.last_error) attention.push({ title: "Sharing needs attention", copy: sharing.last_error, page: "overview" });
+  for (const warning of warnings) {
+    const copy = startupWarningCopy(warning);
+    attention.push({ title: copy.title, copy: warning.message, page: copy.target });
+  }
+  if (!appReady) attention.push({ title: "Application services need attention", copy: "Use Start missing services below, restart the application, or open Recovery.", page: "services" });
+  // "sharing" is not a page: it goes to the Return to This computer button,
+  // which is the one sharing action this window has.
+  if (sharing.last_error) attention.push({ title: "Sharing needs attention", copy: sharing.last_error, page: "sharing" });
   const banner = $("attention-banner");
   banner.hidden = attention.length === 0;
   if (attention.length) {

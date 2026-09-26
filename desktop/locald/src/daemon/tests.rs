@@ -149,6 +149,21 @@ fn an_interrupted_update_is_reported_when_the_daemon_next_starts() {
         healed.contains("0.8.0"),
         "the interrupted update must reach the operator: {healed}"
     );
+
+    // And reaches the screens, not only the log: the shell reads it from the
+    // handshake. (`control.snapshot` carries the same field, but building one
+    // here needs the OS credential store.)
+    let hello = daemon.hello_event();
+    let warning = &hello["warnings"][0];
+    assert_eq!(warning["code"], "update-interrupted", "{hello}");
+    assert_eq!(warning["version"], "0.8.0");
+    assert!(
+        warning["message"]
+            .as_str()
+            .unwrap()
+            .contains("don't reopen"),
+        "{warning}"
+    );
 }
 
 /// And an ordinary install says nothing, so the report means something when
@@ -161,6 +176,7 @@ fn an_installation_with_no_update_history_starts_quietly() {
         "a healthy install must not mention updates: {:?}",
         daemon.healed
     );
+    assert_eq!(daemon.hello_event()["warnings"], json!([]));
 }
 
 /// A client that holds its socket open and stops reading must not be

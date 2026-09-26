@@ -2,7 +2,7 @@
 
 import { $, friendlyError, invoke, nextId, store, toast } from "./core.js";
 import { loadRuntimeInfo } from "./updates.js";
-import { render, renderAgentHost } from "./overview.js";
+import { render, renderAgentHost, renderDisconnected } from "./overview.js";
 
 /* The page that exists to explain a problem must not be the page that gives up.
  *
@@ -67,7 +67,9 @@ export function showSnapshotUnavailable(reason) {
   if (detail) detail.textContent = friendlyError(reason);
   $("state-pill").textContent = "Disconnected";
   $("state-pill").className = "state-pill bad";
-  $("metric-app").textContent = "Unavailable";
+  // Not the last snapshot's health: that is what was true before it stopped
+  // answering, and reading "Healthy" here is the one wrong answer.
+  renderDisconnected();
 }
 
 function clearSnapshotUnavailable() {
@@ -140,7 +142,8 @@ export function handleLocaldEvent(event) {
     toast(event.sharing?.mode === "this_computer" ? "Sharing stopped. Lemma is private to this computer." : "Sharing is active.");
     requestSnapshot();
   }
-  if (event.event === "agent-host.status" && event.agent_host && store.snapshot) {
+  if (event.event === "agent-host.status" && event.agent_host && store.snapshot
+      && $("snapshot-unavailable")?.hidden !== false) {
     store.snapshot.agent_host = event.agent_host;
     renderAgentHost(store.snapshot.agent_host);
   }

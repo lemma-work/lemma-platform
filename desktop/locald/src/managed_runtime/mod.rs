@@ -29,6 +29,8 @@ use crate::tcp_forwarder::TcpForwarder;
 
 mod bootstrap;
 mod clock;
+// Pruning images and trimming the data disk, on locald's request.
+mod disk;
 // The loopback relay runs on macOS only, so off it nothing starts one and the
 // policy it would be handed goes unread. See `crate::loopback_relay`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]

@@ -17,6 +17,9 @@ from app.core.config import settings
 from app.core.exposure import exposure_settings, local_relaxations_allowed
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
+from app.modules.agent.infrastructure.transport_errors import (
+    local_model_server_name,
+)
 from app.modules.agent.services.context_budget import (
     catalog_metadata_for,
 )
@@ -55,6 +58,22 @@ class ProviderKeyRejectedError(ValueError):
     commonest mistake when adding a provider, and treating it as an empty list
     saved a profile that read "Available" and then failed every run.
     """
+
+
+class ProviderUnreachableError(ValueError):
+    """Nothing answered at the provider's address: refused, or timed out.
+
+    ``local_server_name`` is set when the address was this computer, where the
+    likely fix is "start the model server" rather than "check the URL".
+    """
+
+    def __init__(self, local_server_name: str | None) -> None:
+        super().__init__(local_server_name or "unreachable")
+        self.local_server_name = local_server_name
+
+
+class ProviderListingError(ValueError):
+    """The provider answered, but not with a model list it would share."""
 
 
 def key_rejected_message(provider_name: str) -> str:
@@ -145,14 +164,38 @@ async def _discover_openai_compatible_models(
     api_key: str | None,
     headers: dict[str, str],
 ) -> list[DiscoveredModel]:
+    return await _discover_models(
+        _openai_listing_request(base_url=base_url, api_key=api_key, headers=headers)
+    )
+
+
+async def list_openai_compatible_models(
+    *,
+    base_url: str,
+    api_key: str | None,
+    headers: dict[str, str],
+) -> list[DiscoveredModel]:
+    """`_discover_openai_compatible_models`, saying why when it gets nothing."""
+    return await _list_models(
+        _openai_listing_request(base_url=base_url, api_key=api_key, headers=headers)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ListingRequest:
+    """Where a provider lists its models, and what to send."""
+
+    url: str
+    headers: dict[str, str]
+
+
+def _openai_listing_request(
+    *, base_url: str, api_key: str | None, headers: dict[str, str]
+) -> _ListingRequest:
     request_headers = dict(headers)
     if api_key:
         request_headers.setdefault("Authorization", f"Bearer {api_key}")
-    return await _discover_models(
-        url=_join_url(base_url, "models"),
-        headers=request_headers,
-        parser=_parse_openai_compatible_models,
-    )
+    return _ListingRequest(url=_join_url(base_url, "models"), headers=request_headers)
 
 
 async def _discover_anthropic_compatible_models(
@@ -161,15 +204,33 @@ async def _discover_anthropic_compatible_models(
     api_key: str,
     headers: dict[str, str],
 ) -> list[DiscoveredModel]:
-    request_headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        **headers,
-    }
     return await _discover_models(
+        _anthropic_listing_request(base_url=base_url, api_key=api_key, headers=headers)
+    )
+
+
+async def list_anthropic_compatible_models(
+    *,
+    base_url: str,
+    api_key: str,
+    headers: dict[str, str],
+) -> list[DiscoveredModel]:
+    """`_discover_anthropic_compatible_models`, saying why when it gets nothing."""
+    return await _list_models(
+        _anthropic_listing_request(base_url=base_url, api_key=api_key, headers=headers)
+    )
+
+
+def _anthropic_listing_request(
+    *, base_url: str, api_key: str, headers: dict[str, str]
+) -> _ListingRequest:
+    return _ListingRequest(
         url=_anthropic_models_url(base_url),
-        headers=request_headers,
-        parser=_parse_openai_compatible_models,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            **headers,
+        },
     )
 
 
@@ -301,28 +362,46 @@ async def _validate_public_base_url(url: str) -> None:
             raise ValueError(_PUBLIC_URL_ERROR)
 
 
-async def _discover_models(
-    *,
-    url: str,
-    headers: dict[str, str],
-    parser,
-) -> list[DiscoveredModel]:
-    await _validate_public_base_url(url)
+async def _discover_models(request: _ListingRequest) -> list[DiscoveredModel]:
+    """The provider's models, or none when it could not be asked.
+
+    Creating a profile tolerates an empty answer -- the caller may type model
+    names instead -- so only a rejected key and an unsafe URL propagate.
+    """
+    try:
+        return await _list_models(request)
+    except ProviderUnreachableError, ProviderListingError:
+        # Not an error at this layer: the create form falls back to the names
+        # the person typed, and says so when there are none.
+        return []
+
+
+async def _list_models(request: _ListingRequest) -> list[DiscoveredModel]:
+    """The provider's models, raising a typed reason when there are none to read.
+
+    Raises `ProviderKeyRejectedError` for 401/403, `ProviderUnreachableError`
+    when nothing answered, `ProviderListingError` for any other answer that is
+    not a model list, and ``ValueError`` for a URL the SSRF guard refuses.
+    """
+    await _validate_public_base_url(request.url)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(url, headers=headers)
+            response = await client.get(request.url, headers=request.headers)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (401, 403):
             raise ProviderKeyRejectedError(str(exc.response.status_code)) from exc
-        return []
-    except httpx.HTTPError:
-        return []
+        raise ProviderListingError(str(exc.response.status_code)) from exc
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        raise ProviderUnreachableError(local_model_server_name(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise ProviderListingError(type(exc).__name__) from exc
     try:
         payload = response.json()
-    except ValueError:
-        return []
-    return parser(payload)
+    except ValueError as exc:
+        raise ProviderListingError("not JSON") from exc
+    # Anthropic's listing has the same `data: [{id}]` shape as OpenAI's.
+    return _parse_openai_compatible_models(payload)
 
 
 def _parse_openai_compatible_models(payload: object) -> list[DiscoveredModel]:

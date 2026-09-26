@@ -13,7 +13,7 @@ import { askTheApi, type Person } from "./who";
 import { PORTAL_PATH } from "@/auth/config";
 import { MISSING_API_URL } from "./origins";
 import { source } from "@/data";
-import { sessionStatus, doorFor, type SessionStatus } from "./auth-state";
+import { sessionStatus, doorFor, unreachableRetryDelay, type SessionStatus } from "./auth-state";
 import { LemmaLogo } from "@/ui/icons";
 import { signedOutOfThisComputer } from "@/desktop/auto-connect";
 
@@ -41,6 +41,11 @@ export interface Session {
     signIn: () => void;
     /** End it everywhere: the server, this browser, and this tab's memory. */
     signOut: () => Promise<void>;
+    /** Ask about the session again, after the API did not answer. */
+    retry: () => void;
+    /** Whether the API answers at all -- its liveness probe, not a session
+     *  check, so waiting on it cannot spend the refresh budget. */
+    reachable: () => Promise<boolean>;
 }
 
 /** The SDK's `useAuth`, with an off switch.
@@ -118,11 +123,21 @@ export function useSession(): Session {
         window.location.assign("/");
     }, [client, cache]);
 
+    const retry = useCallback(() => {
+        if (client) void client.auth.checkAuth().catch(() => undefined);
+    }, [client]);
+    const reachable = useCallback(
+        async () => (client ? client.auth.isReachable() : false),
+        [client],
+    );
+
     return {
         status: sessionStatus(auth.status, sample, configured),
         user: auth.user as Session["user"],
         signIn,
         signOut,
+        retry,
+        reachable,
     };
 }
 
@@ -145,6 +160,46 @@ function ToThePortal({ signIn }: { signIn: () => void }) {
         <Screen>
             <p className="screen__mark"><LemmaLogo /></p>
             <p role="status">Taking you to sign in…</p>
+        </Screen>
+    );
+}
+
+/** The API did not answer, which is not the same as not knowing you.
+ *
+ *  Before this, a server restarting under the page -- saving Server setup does
+ *  it -- came back as "signed out", and the page left for the sign-in portal.
+ *  Now only a 401 does that. Here the page waits: it asks the API's liveness
+ *  probe on a backoff and checks the session again the moment it answers, and
+ *  "Try again" does that at once. The probe, not the session check, is what
+ *  repeats: every session check can cost a refresh, and a page that spent
+ *  them on an outage would trip the refresh breaker and sign itself out. */
+function UnreachableScreen({ retry, reachable }: { retry: () => void; reachable: () => Promise<boolean> }) {
+    const [attempt, setAttempt] = useState(0);
+    useEffect(() => {
+        let cancelled = false;
+        const timer = setTimeout(async () => {
+            if (cancelled) return;
+            if (await reachable()) {
+                if (!cancelled) retry();
+                return;
+            }
+            if (!cancelled) setAttempt(was => was + 1);
+        }, unreachableRetryDelay(attempt));
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [attempt, reachable, retry]);
+    return (
+        <Screen>
+            <p className="screen__mark"><LemmaLogo /></p>
+            <h2>Can’t reach Lemma right now</h2>
+            <p role="status">Retrying…</p>
+            <div className="screen__actions">
+                <button className="btn btn--primary" onClick={retry}>
+                    Try again
+                </button>
+            </div>
         </Screen>
     );
 }
@@ -250,6 +305,10 @@ export function SessionGate({ children }: { children: ReactNode }) {
         return (
             <PageLoading label="Checking your session" />
         );
+    }
+
+    if (session.status === "unreachable") {
+        return <UnreachableScreen retry={session.retry} reachable={session.reachable} />;
     }
 
     if (session.status === "out") {

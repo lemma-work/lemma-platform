@@ -59,6 +59,10 @@ impl Daemon {
             }),
             "sharing": self.sharing.as_ref().map(|sharing| sharing.snapshot(true)),
             "agent_host": self.agent_host.detailed_status(),
+            // Settings opens long after `hello`; see `Daemon::warnings`.
+            "warnings": &self.warnings,
+            // This Mac's disk-usage row; see `disk_ops`.
+            "disk_usage": self.disk_usage_snapshot(),
             "paths": {
                 "locald": &self.paths.root,
                 "logs": self.paths.root.join("logs"),

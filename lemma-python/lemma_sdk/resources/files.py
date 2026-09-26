@@ -19,6 +19,7 @@ from ..openapi_client.api.files import (
     file_list,
     file_markdown_attach,
     file_markdown_detach,
+    file_retry_processing,
     file_search,
     file_signed_url,
     file_signed_url_list,
@@ -430,6 +431,13 @@ class PodFiles(BoundResource):
     def detach_markdown(self, path: str) -> FileDetailResponse:
         """Drop user-provided markdown so the document reverts to extraction."""
         return self._call(file_markdown_detach, self._pod_uuid(), path=path)
+
+    def retry_processing(self, path: str) -> FileDetailResponse:
+        """Queue a document whose processing failed to be read again.
+
+        A file that did not fail is returned unchanged.
+        """
+        return self._call(file_retry_processing, self._pod_uuid(), path=path)
 
     def download_to(self, path: str, local_path: str | Path) -> Path:
         """Save the pod file to ``local_path``, a chunk at a time."""

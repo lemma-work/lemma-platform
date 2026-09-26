@@ -139,7 +139,16 @@ pub(crate) fn workspace_settings_view(snapshot: &Value) -> Value {
         },
         "sharing": snapshot.get("sharing").cloned().unwrap_or(Value::Null),
         "sandbox_images": snapshot.get("sandbox_images").cloned().unwrap_or(Value::Null),
+        // Narrowed the same way the splash's copy is, so a field the daemon
+        // adds to a warning does not reach the page by default.
+        "warnings": daemon_warnings(snapshot.get("warnings").unwrap_or(&Value::Null)),
         "paths": snapshot.get("paths").cloned().unwrap_or(Value::Null),
+        // Narrowed to the figures the disk row shows; releases are added by
+        // `local_settings_snapshot_impl`, which knows where they live.
+        "disk_usage": disk_space::disk_usage_view(
+            snapshot.get("disk_usage").unwrap_or(&Value::Null),
+            Value::Null,
+        ),
     })
 }
 
@@ -152,11 +161,34 @@ pub(crate) fn workspace_settings_view(snapshot: &Value) -> Value {
 /// other section. Sharing, tunnels and the runtime are not sections and are
 /// never written from here.
 pub(crate) fn workspace_section_allowed(payload: &Value) -> Result<(), String> {
-    match payload.pointer("/section/name").and_then(Value::as_str) {
-        Some("integrations" | "surfaces" | "ai" | "email") => Ok(()),
-        Some(other) => Err(format!("the {other} section is not changed from here")),
-        None => Err("a settings change names its section".into()),
+    let names = section_names(payload);
+    if names.is_empty() {
+        return Err("a settings change names its section".into());
     }
+    for name in names {
+        match name {
+            Some("integrations" | "surfaces" | "ai" | "email") => {}
+            Some(other) => return Err(format!("the {other} section is not changed from here")),
+            None => return Err("a settings change names its section".into()),
+        }
+    }
+    Ok(())
+}
+
+/// The sections a change carries: one under `section`, or several under
+/// `sections` so a change that spans two restarts the backend once.
+fn sections_of(payload: &Value) -> Vec<&Value> {
+    match payload.get("sections").and_then(Value::as_array) {
+        Some(sections) => sections.iter().collect(),
+        None => payload.get("section").into_iter().collect(),
+    }
+}
+
+fn section_names(payload: &Value) -> Vec<Option<&str>> {
+    sections_of(payload)
+        .into_iter()
+        .map(|section| section.get("name").and_then(Value::as_str))
+        .collect()
 }
 
 /// A question the person at this Mac answers natively before a change is made.
@@ -370,9 +402,10 @@ pub(crate) fn consented_sharing_request(
 /// through the question that matters.
 pub(crate) fn credential_replacements(operator: &Value, payload: &Value) -> Vec<String> {
     let mut replaced = Vec::new();
-    let Some(section) = payload.pointer("/section/name").and_then(Value::as_str) else {
+    let sections = sections_of(payload);
+    if sections.is_empty() {
         return replaced;
-    };
+    }
     let label = |key: &str| key.rsplit('.').next().unwrap_or(key).replace('_', " ");
     if let Some(secrets) = payload.get("secrets").and_then(Value::as_object) {
         for (key, intent) in secrets {
@@ -387,13 +420,19 @@ pub(crate) fn credential_replacements(operator: &Value, payload: &Value) -> Vec<
             }
         }
     }
-    let values = matches!(section, "integrations" | "surfaces")
-        .then(|| payload.pointer("/section/value").and_then(Value::as_object))
-        .flatten();
-    if let Some(values) = values {
+    for section in sections {
+        let Some(name) = section.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        if !matches!(name, "integrations" | "surfaces") {
+            continue;
+        }
+        let Some(values) = section.get("value").and_then(Value::as_object) else {
+            continue;
+        };
         let current = operator
             .pointer("/config")
-            .and_then(|config| config.get(section));
+            .and_then(|config| config.get(name));
         for (key, next) in values {
             let Some(before) = current
                 .and_then(|current| current.get(key))
@@ -459,6 +498,10 @@ fn local_settings_snapshot_impl(app: AppHandle) -> Result<Value, String> {
         Duration::from_secs(15),
     )?;
     let mut view = workspace_settings_view(&snapshot);
+    view["disk_usage"]["runtime_releases"] = disk_space::runtime_releases_usage(
+        &runtime_install_root(),
+        &disk_space::retained_release_roots(&read_config()),
+    );
     view["app"] = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "channel": release_channel(),

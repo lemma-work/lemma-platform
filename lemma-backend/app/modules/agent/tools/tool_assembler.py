@@ -7,14 +7,14 @@ see the exact same tools for a given (agent, conversation).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic_ai.toolsets import AbstractToolset
 from app.modules.agent.tools.context import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.toolset_selection import (
@@ -50,6 +50,20 @@ async def load_agent_grant_summary(
 HostExecutionMode = Literal["native", "sandbox"]
 
 
+def notification_toolset() -> AbstractToolset[ConversationContext]:
+    """The tools that answer an open notification or a workflow's form.
+
+    Wrapped the way the capability wraps them: the transitions they call
+    refuse by raising -- answering something already answered, or a form
+    by free text -- and that has to reach the agent as an error it can read,
+    not end its run.
+    """
+    from app.modules.agent.tools.graceful_toolset import GracefulToolset
+    from app.modules.agent.tools.messaging.respond import respond_toolset
+
+    return cast(AbstractToolset[ConversationContext], GracefulToolset(respond_toolset))
+
+
 def _for_host_execution(
     toolsets: list[AbstractToolset[ConversationContext]],
     mode: HostExecutionMode,
@@ -78,8 +92,17 @@ class RunToolAssembler:
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
         host_execution: HostExecutionMode | None = None,
+        include_notification_tools: bool = False,
+        harness_kind: HarnessKind | None = None,
     ) -> list[AbstractToolset[ConversationContext]]:
         """Every tool this (agent, conversation) can reach.
+
+        ``include_notification_tools`` adds ``respond_to_notification`` and
+        ``submit_workflow_form`` for a run whose harness reaches tools only
+        through this list -- an Agent Host run over MCP. The in-process harness
+        gets them from its open-notifications capability instead, so it leaves
+        this off rather than see them twice. ``harness_kind`` decides it for
+        the runner: any harness but the in-process one is served over MCP.
 
         ``host_execution`` is set on a run whose commands execute on the
         user's Mac (docs/architecture/desktop-host-execution.md §7):
@@ -113,6 +136,10 @@ class RunToolAssembler:
             )
             if host_execution is not None:
                 toolsets = _for_host_execution(toolsets, host_execution)
+            if harness_kind is not None and harness_kind != HarnessKind.LEMMA:
+                include_notification_tools = True
+            if include_notification_tools and conversation is not None:
+                toolsets = [*toolsets, notification_toolset()]
             span.set_attribute("lemma.toolsets", len(toolsets))
             return toolsets
 

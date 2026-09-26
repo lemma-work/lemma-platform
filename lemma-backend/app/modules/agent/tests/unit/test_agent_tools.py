@@ -15,6 +15,7 @@ from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
+    HarnessKind,
     AgentToolset,
     ConnectorAccessConfig,
     ConnectorMode,
@@ -2519,3 +2520,66 @@ async def test_ask_user_option_icons_ride_along_without_touching_the_pause():
     assert excinfo.value.kind == "ask_user"
     assert request.questions[0].options[0].icon == "🔐"
     assert request.questions[0].options[1].icon == "🔑"
+
+
+@pytest.mark.asyncio
+async def test_an_agent_host_run_is_served_the_notification_tools():
+    """An Agent Host run reaches its tools only through this list, so the
+    tools that answer a notification or a workflow form have to be in it; the
+    in-process harness gets them from its capability and must not see them
+    twice."""
+    agent = Agent(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="replier",
+        instruction="Answer what is owed.",
+        toolsets=[AgentToolset.USER_INTERACTION],
+    )
+    conversation = Conversation(
+        pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id
+    )
+
+    async def tool_names(**flags: bool) -> set[str]:
+        toolsets = await RunToolAssembler(object()).assemble(
+            agent=agent, conversation=conversation, **flags
+        )
+        names: set[str] = set()
+        for toolset in toolsets:
+            tools = getattr(toolset, "tools", None)
+            if tools is None and hasattr(toolset, "wrapped"):
+                tools = getattr(toolset.wrapped, "tools", None)
+            names.update(tools or {})
+        return names
+
+    remote = await tool_names(include_notification_tools=True)
+    assert {"respond_to_notification", "submit_workflow_form"} <= remote
+    in_process = await tool_names()
+    assert "respond_to_notification" not in in_process
+
+
+@pytest.mark.asyncio
+async def test_the_runner_decides_by_harness_which_runs_get_the_notification_tools():
+    agent = Agent(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="replier",
+        instruction="Answer what is owed.",
+        toolsets=[AgentToolset.USER_INTERACTION],
+    )
+    conversation = Conversation(
+        pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id
+    )
+
+    async def has_respond(harness_kind: HarnessKind) -> bool:
+        toolsets = await RunToolAssembler(object()).assemble(
+            agent=agent, conversation=conversation, harness_kind=harness_kind
+        )
+        return any(
+            "respond_to_notification"
+            in (getattr(getattr(t, "wrapped", t), "tools", None) or {})
+            for t in toolsets
+        )
+
+    assert await has_respond(HarnessKind.LEMMA) is False
+    remote = [kind for kind in HarnessKind if kind != HarnessKind.LEMMA]
+    assert remote and all([await has_respond(kind) for kind in remote])

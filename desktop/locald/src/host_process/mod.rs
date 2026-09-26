@@ -83,6 +83,10 @@ pub struct HostProcessManager {
     by_id: HashMap<String, HostProcessSpec>,
     state: Mutex<ProcessState>,
     backend_environment: Mutex<HashMap<String, String>>,
+    /// What the operator configuration adds to the frontend's environment:
+    /// the keys its own server routes use (voice calls), which never reach
+    /// the backend.
+    frontend_environment: Mutex<HashMap<String, String>>,
     service_environment: Mutex<HashMap<String, HashMap<String, String>>>,
     desired_running: AtomicBool,
     health_ready: AtomicBool,
@@ -218,6 +222,7 @@ impl HostProcessManager {
             by_id,
             state: Mutex::new(ProcessState::default()),
             backend_environment: Mutex::new(HashMap::new()),
+            frontend_environment: Mutex::new(HashMap::new()),
             service_environment: Mutex::new(HashMap::new()),
             desired_running: AtomicBool::new(false),
             health_ready: AtomicBool::new(false),
