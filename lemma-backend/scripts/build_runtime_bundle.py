@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import configparser
 import hashlib
 import json
 import shutil
@@ -201,39 +202,62 @@ def _copy_runtime_sources(site_packages: Path, backend_root: Path) -> None:
 _PROVENANCE_FILES = ("direct_url.json", "uv_cache.json")
 
 
-def _relocate_scripts(site_packages: Path, payload: Path) -> None:
-    """Lift the console scripts out of site-packages, to the payload root.
+#: Where ``uv pip install --target`` puts console scripts inside the target:
+#: ``bin`` on Unix, ``Scripts`` on Windows.
+_INSTALLER_SCRIPT_DIRS = ("bin", "Scripts")
 
-    ``uv pip install --target`` writes them to ``<target>/bin``, which here puts
-    a ``bin`` directory *inside* site-packages -- importable, which it is not,
-    and a confusing place to look for ``lemma``. Moving it up gives the layout
-    the installed overlay actually presents: ``current/site-packages`` for
-    imports and ``current/bin`` for scripts.
+
+def _write_console_scripts(site_packages: Path, payload: Path) -> None:
+    """Write the sandbox's console scripts from the wheels' entry points.
+
+    Written here rather than taken from ``uv pip install --target``, which
+    generates scripts for the machine running the build: a shebang naming the
+    build's interpreter, and on Windows ``.exe`` launchers. Neither runs in a
+    Linux sandbox, and either would make the bundle's identity depend on where
+    it was built. The body is the one ``uv`` emits on Unix, so a bundle built
+    anywhere is byte-identical.
+
+    They go to ``<payload>/bin``, beside ``site-packages`` rather than inside
+    it: ``current/site-packages`` for imports and ``current/bin`` for scripts,
+    the layout the installed overlay presents.
     """
-    nested = site_packages / "bin"
-    if not nested.is_dir():
-        raise SystemExit(f"the staged bundle has no console scripts at {nested}")
-    nested.rename(payload / "bin")
-
-
-def _retarget_console_scripts(payload: Path) -> None:
-    """Point every console script at the sandbox's interpreter.
-
-    Rewritten rather than regenerated because the body ``uv`` emits is already
-    correct -- it imports the entry point and calls it. Only the first line is
-    wrong, and it is wrong in a way that both breaks the script and leaks the
-    build machine into the bundle's identity.
-    """
+    for name in _INSTALLER_SCRIPT_DIRS:
+        shutil.rmtree(site_packages / name, ignore_errors=True)
     scripts = payload / "bin"
-    for script in sorted(scripts.iterdir()):
-        if not script.is_file():
+    scripts.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for entry_points in sorted(site_packages.glob("*.dist-info/entry_points.txt")):
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.optionxform = str  # type: ignore[assignment,method-assign]
+        parser.read(entry_points, encoding="utf-8")
+        if not parser.has_section("console_scripts"):
             continue
-        lines = script.read_text(encoding="utf-8").splitlines(keepends=True)
-        if not lines or not lines[0].startswith("#!"):
-            raise SystemExit(f"{script} has no shebang to retarget")
-        lines[0] = f"#!{SANDBOX_PYTHON}\n"
-        script.write_text("".join(lines), encoding="utf-8")
-        script.chmod(0o755)
+        for name, target in sorted(parser.items("console_scripts")):
+            module, _, attribute = target.partition(":")
+            if not module or not attribute:
+                raise SystemExit(
+                    f"{entry_points}: malformed entry point {name} = {target}"
+                )
+            imported = attribute.strip().split(".", 1)[0]
+            script = scripts / name
+            script.write_text(
+                f"#!{SANDBOX_PYTHON}\n"
+                "# -*- coding: utf-8 -*-\n"
+                "import sys\n"
+                f"from {module.strip()} import {imported}\n"
+                'if __name__ == "__main__":\n'
+                '    if sys.argv[0].endswith("-script.pyw"):\n'
+                "        sys.argv[0] = sys.argv[0][:-11]\n"
+                '    elif sys.argv[0].endswith(".exe"):\n'
+                "        sys.argv[0] = sys.argv[0][:-4]\n"
+                f"    sys.exit({attribute.strip()}())\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            script.chmod(0o755)
+            written += 1
+    if not written:
+        raise SystemExit(f"no console scripts found in {site_packages}")
 
 
 def _record_hash(path: Path) -> tuple[str, int]:
@@ -247,8 +271,8 @@ def _normalise_dist_info(site_packages: Path) -> None:
     """Drop per-build bookkeeping, then reseal ``RECORD`` against what is left.
 
     Two things have to happen together. The provenance files vary per build, so
-    they go. And ``_retarget_console_scripts`` has already rewritten a script
-    that ``RECORD`` carries a hash for, so every surviving entry is recomputed
+    they go. And the console scripts ``RECORD`` lists were replaced by
+    ``_write_console_scripts``, so every surviving entry is recomputed
     from disk rather than trusted -- otherwise the bundle would ship a manifest
     that quietly disagreed with its own contents.
     """
@@ -385,8 +409,7 @@ def build(
         site_packages = scratch / "payload" / "site-packages"
         _unpack(wheels, site_packages)
         _copy_runtime_sources(site_packages, backend_root)
-        _relocate_scripts(site_packages, scratch / "payload")
-        _retarget_console_scripts(scratch / "payload")
+        _write_console_scripts(site_packages, scratch / "payload")
         _normalise_dist_info(site_packages)
         _prune(site_packages)
         _verify_payload(site_packages)
