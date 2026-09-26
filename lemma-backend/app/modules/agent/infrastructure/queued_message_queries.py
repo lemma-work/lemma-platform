@@ -161,24 +161,3 @@ class QueuedMessageRepository:
             .execution_options(synchronize_session=False)
         )
         return deleted.scalar_one_or_none() is not None
-
-    async def release_claims(
-        self, agent_run_id: UUID, *, message_ids: list[UUID]
-    ) -> None:
-        """Hand back messages a run claimed and then never sent.
-
-        Only this run's claim is removed, so a message some other party has
-        since taken is left alone.
-        """
-        await self.session.execute(
-            update(MessageModel)
-            .where(
-                MessageModel.id.in_(message_ids),
-                MessageModel.message_metadata[STEERED_INTO_RUN].astext
-                == str(agent_run_id),
-            )
-            .values(
-                message_metadata=MessageModel.message_metadata.op("-")(STEERED_INTO_RUN)
-            )
-            .execution_options(synchronize_session=False)
-        )

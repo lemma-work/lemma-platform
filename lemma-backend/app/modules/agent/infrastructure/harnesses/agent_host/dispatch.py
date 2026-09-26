@@ -30,9 +30,6 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.queued_message_queries import (
-    QueuedMessageRepository,
-)
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.agent_host import session_memory
 from app.modules.agent.infrastructure.agent_host.repository_common import (
@@ -165,87 +162,84 @@ async def enqueue_run[DepsT: AgentContext](
         run = await ConversationRepository(uow).get_agent_run(agent_run_id)
         # Messages that joined this run before it was dispatched are carried in
         # the prompt below, so they are this run's to answer and must not also
-        # be sent as steers. Claimed before the prompt is built, and the prompt
-        # is built from what the claim returned: one the person withdrew in
-        # between is not claimed, so it is not sent. Claimed by id, because one
-        # that arrived after `messages` was loaded is not in the prompt and
-        # steering is how it gets there.
-        carried = await claim_carried(uow, messages, agent_run_id=agent_run_id)
-    messages = carried.messages
-    admitted = False
-    try:
-        dispatched = await _admit(
-            uow_factory=uow_factory,
-            event_timeout_seconds=event_timeout_seconds,
-            agent=agent,
-            conversation=conversation,
-            messages=messages,
-            ctx=ctx,
-            options=options,
-            agent_run_id=agent_run_id,
-            run_config=run_config,
-            admission=_Admission(
-                resume_session_id=resume_session_id,
-                harness_id=harness_id,
-                host_id=host_id,
-                steerable=steerable,
-                harness_key=harness_key,
-                config_revision=config_revision,
-                resumed_tool_call_id=_resumed_tool_call_id(run),
-            ),
+        # be sent as steers. Only noted here: they are claimed in the one
+        # transaction that admits the run (`claim_exactly`), so neither a
+        # failed dispatch nor a crash can leave them claimed by a run that
+        # never went out.
+        carried = frozenset(
+            message.id
+            for message in messages
+            if message.agent_run_id == agent_run_id and is_queued(message.metadata)
         )
-        admitted = True
-        return dispatched
-    finally:
-        # The run never went out, so the claim is not this run's to keep: the
-        # messages go back to being queued, for the follow-up turn -- or to be
-        # withdrawn, which a claim would refuse. A `finally` rather than an
-        # `except`, because this is cleanup and the failure is not ours to
-        # judge.
-        if not admitted and carried.claimed:
-            async with uow_factory() as uow:
-                await QueuedMessageRepository(uow).release_claims(
-                    agent_run_id, message_ids=sorted(carried.claimed)
-                )
-                await uow.commit()
+    admission = _Admission(
+        resume_session_id=resume_session_id,
+        harness_id=harness_id,
+        host_id=host_id,
+        steerable=steerable,
+        harness_key=harness_key,
+        config_revision=config_revision,
+        resumed_tool_call_id=_resumed_tool_call_id(run),
+    )
+    # The prompt is built with no transaction open, so the person can withdraw
+    # a carried message while it is being built. The admission then finds it
+    # gone, and the prompt is built again without it. Each retry only ever
+    # loses messages, so a few are plenty; past that, something is wrong.
+    for _attempt in range(_ADMISSION_ATTEMPTS):
+        try:
+            return await _admit(
+                uow_factory=uow_factory,
+                event_timeout_seconds=event_timeout_seconds,
+                agent=agent,
+                conversation=conversation,
+                messages=messages,
+                ctx=ctx,
+                options=options,
+                agent_run_id=agent_run_id,
+                run_config=run_config,
+                admission=admission,
+                carried=carried,
+            )
+        except CarriedChanged as changed:
+            carried = carried - changed.lost
+            messages = [
+                message for message in messages if message.id not in changed.lost
+            ]
+    raise RuntimeError(
+        "the messages this turn carries kept changing while it was dispatched"
+    )
 
 
-@dataclass(frozen=True, slots=True)
-class Carried:
-    """The messages a dispatch sends, and which queued ones it claimed."""
-
-    messages: list[Message]
-    claimed: frozenset[UUID]
+_ADMISSION_ATTEMPTS = 3
 
 
-async def claim_carried(
-    uow: SqlAlchemyUnitOfWork, messages: Sequence[Message], *, agent_run_id: UUID
-) -> Carried:
-    """Claim the queued messages this run was loaded with, and drop the rest.
+class CarriedChanged(Exception):
+    """Carried messages were withdrawn or taken while the prompt was built."""
 
-    A queued message the claim did not return was withdrawn -- or taken by
-    someone else -- after ``messages`` was read, so it must not go out in this
-    prompt.
+    def __init__(self, lost: frozenset[UUID]) -> None:
+        super().__init__(f"{len(lost)} carried message(s) are no longer queued")
+        self.lost = lost
+
+
+async def claim_exactly(
+    uow: SqlAlchemyUnitOfWork, *, agent_run_id: UUID, carried: frozenset[UUID]
+) -> None:
+    """Claim every message the prompt carries, or raise and claim none.
+
+    The ``UPDATE`` locks the rows it claims until the caller's transaction
+    ends, so a withdraw racing it either lands first -- and the claim comes back
+    short -- or waits and then finds the message claimed. Short means the
+    prompt carries something the person took back, so this raises
+    `CarriedChanged` and the caller's transaction, admission and all, rolls
+    back.
     """
-    offered = [
-        message.id
-        for message in messages
-        if message.agent_run_id == agent_run_id and is_queued(message.metadata)
-    ]
-    if not offered:
-        return Carried(messages=list(messages), claimed=frozenset())
-    claimed = frozenset(
-        message.id
-        for message in await ConversationRepository(uow).claim_queued_user_messages(
-            agent_run_id, message_ids=offered
-        )
+    if not carried:
+        return
+    claimed = await ConversationRepository(uow).claim_queued_user_messages(
+        agent_run_id, message_ids=sorted(carried)
     )
-    await uow.commit()
-    lost = set(offered) - claimed
-    return Carried(
-        messages=[message for message in messages if message.id not in lost],
-        claimed=claimed,
-    )
+    lost = carried - frozenset(message.id for message in claimed)
+    if lost:
+        raise CarriedChanged(lost)
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,6 +267,7 @@ async def _admit[DepsT: AgentContext](
     agent_run_id: UUID,
     run_config: AgentHostRunConfig,
     admission: _Admission,
+    carried: frozenset[UUID],
 ) -> DispatchedRun:
     resume_session_id = admission.resume_session_id
     harness_id = admission.harness_id
@@ -337,6 +332,9 @@ async def _admit[DepsT: AgentContext](
         agent_run_id=agent_run_id,
     )
     async with uow_factory() as uow:
+        # First, so a claim that comes back short rolls back before anything
+        # else is written; see `claim_exactly`.
+        await claim_exactly(uow, agent_run_id=agent_run_id, carried=carried)
         run_spec = AgentHostRunSpec(
             agent_run_id=agent_run_id,
             conversation_id=conversation.id,
