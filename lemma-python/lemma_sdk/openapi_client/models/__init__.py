@@ -178,6 +178,8 @@ _NAME_TO_MODULE = {
     'DirectoryTreeResponse': 'directory_tree_response',
     'DisplaySizeRequest': 'display_size_request',
     'DisplaySizeResponse': 'display_size_response',
+    'EmailDeliveryStatusResponse': 'email_delivery_status_response',
+    'EmailDeliveryTestResponse': 'email_delivery_test_response',
     'EndNode': 'end_node',
     'EndNodeConfig': 'end_node_config',
     'EndNodePositionType0': 'end_node_position_type_0',
@@ -709,6 +711,8 @@ if TYPE_CHECKING:
     from .directory_tree_response import DirectoryTreeResponse
     from .display_size_request import DisplaySizeRequest
     from .display_size_response import DisplaySizeResponse
+    from .email_delivery_status_response import EmailDeliveryStatusResponse
+    from .email_delivery_test_response import EmailDeliveryTestResponse
     from .end_node import EndNode
     from .end_node_config import EndNodeConfig
     from .end_node_position_type_0 import EndNodePositionType0
@@ -1253,6 +1257,8 @@ __all__ = [
     'DirectoryTreeResponse',
     'DisplaySizeRequest',
     'DisplaySizeResponse',
+    'EmailDeliveryStatusResponse',
+    'EmailDeliveryTestResponse',
     'EndNode',
     'EndNodeConfig',
     'EndNodePositionType0',

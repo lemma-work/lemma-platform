@@ -423,6 +423,11 @@ export interface PodSource {
         baseUrl: string;
         apiKey: string;
         models: string[];
+        /** The models on an OpenAI-compatible route that read images. Its
+         *  `/models` list rarely says, and without this the backend treats
+         *  every one as text-only. Ignored for Anthropic, whose models all
+         *  do. */
+        visionModels?: string[];
     }): Promise<void>;
     /** Make a coding agent on a paired computer pickable. Bound to the live
      *  harness, so the computer has to be awake and the agent ready. */

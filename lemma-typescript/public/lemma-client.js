@@ -16829,6 +16829,33 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Get Email Delivery Status
+     * Whether this local installation can send email. Local installations only; 404 elsewhere.
+     * @returns EmailDeliveryStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static userEmailDeliveryGet() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/users/me/email-delivery"
+      });
+    }
+    /**
+     * Send A Test Email
+     * Send a short test email to the signed-in user's own address with this installation's email settings. Local installations only; 404 elsewhere.
+     * @returns EmailDeliveryTestResponse Successful Response
+     * @throws ApiError
+     */
+    static userEmailDeliveryTest() {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/users/me/email-delivery/test",
+        errors: {
+          429: `Too many test emails; see Retry-After`
+        }
+      });
+    }
+    /**
      * Ensure The Current User Has A Workspace
      * Select an eligible organization and idempotently ensure the current user has a private pod and assistant.
      * @param requestBody
@@ -16888,6 +16915,15 @@ var LemmaClient = (() => {
     }
     ensureFirstWorkspace(payload = {}) {
       return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));
+    }
+    /** Whether this local installation can send email. 404 on a server. */
+    emailDelivery() {
+      return this.client.request(() => UsersService.userEmailDeliveryGet());
+    }
+    /** Send a test email to the signed-in user's own address. Local installations
+     *  only; answers `{ ok, message }`, where `message` is fit to show. */
+    sendTestEmail() {
+      return this.client.request(() => UsersService.userEmailDeliveryTest());
     }
     getProfile() {
       return this.client.request(() => UsersService.userProfileGet());

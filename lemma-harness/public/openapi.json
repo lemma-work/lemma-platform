@@ -4648,6 +4648,13 @@
             "default": "OPENAI_COMPATIBLE",
             "title": "Source",
             "type": "string"
+          },
+          "vision_model_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Vision Model Names",
+            "type": "array"
           }
         },
         "required": [
@@ -5377,6 +5384,40 @@
           }
         },
         "title": "DisplaySizeResponse",
+        "type": "object"
+      },
+      "EmailDeliveryStatusResponse": {
+        "properties": {
+          "configured": {
+            "description": "Whether mail sent from this server can reach an inbox. False while no provider is set up, and while mail is written to a local spool (EMAIL_TRANSPORT=filesystem) instead of being sent.",
+            "title": "Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "title": "EmailDeliveryStatusResponse",
+        "type": "object"
+      },
+      "EmailDeliveryTestResponse": {
+        "properties": {
+          "message": {
+            "description": "What happened, in words to show the person: where the email went, or what to change. Never the provider's own error.",
+            "title": "Message",
+            "type": "string"
+          },
+          "ok": {
+            "description": "Whether the test email was handed to the provider",
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "title": "EmailDeliveryTestResponse",
         "type": "object"
       },
       "EndNode": {
@@ -10079,6 +10120,18 @@
       "OrganizationInvitationResponse": {
         "description": "Organization invitation response schema.",
         "properties": {
+          "accept_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The link the invitee opens to accept, as the invitation email carries it. Returned to the organization's owners and editors, so an invitation can be handed over another way when email is not set up here.",
+            "title": "Accept Url"
+          },
           "accepted_at": {
             "anyOf": [
               {
@@ -10100,6 +10153,18 @@
             "format": "email",
             "title": "Email",
             "type": "string"
+          },
+          "emailed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this server emails invitations. False means email is not set up here: the invitation exists, but nobody was sent it, so share `accept_url` with the invitee yourself.",
+            "title": "Emailed"
           },
           "expires_at": {
             "format": "date-time",
@@ -36056,6 +36121,77 @@
           "resource": "user.current",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/users/me/email-delivery": {
+      "get": {
+        "description": "Whether this local installation can send email. Local installations only; 404 elsewhere.",
+        "operationId": "user.email_delivery.get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDeliveryStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Email Delivery Status",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "user.email_delivery",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/users/me/email-delivery/test": {
+      "post": {
+        "description": "Send a short test email to the signed-in user's own address with this installation's email settings. Local installations only; 404 elsewhere.",
+        "operationId": "user.email_delivery.test",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDeliveryTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many test emails; see Retry-After"
+          }
+        },
+        "summary": "Send A Test Email",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "user.email_delivery"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "user.email_delivery",
+          "result": "entity",
+          "verb": "test"
         }
       }
     },

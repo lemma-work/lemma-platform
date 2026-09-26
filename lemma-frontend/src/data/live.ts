@@ -650,7 +650,7 @@ export const liveSource: PodSource = {
             orgId,
             key.protocol === "anthropic"
                 ? { ...shared, base_url: key.baseUrl || null }
-                : { ...shared, base_url: key.baseUrl },
+                : { ...shared, base_url: key.baseUrl, vision_model_names: key.visionModels ?? [] },
         );
     },
 

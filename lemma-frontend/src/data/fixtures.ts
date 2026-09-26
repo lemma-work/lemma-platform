@@ -2186,7 +2186,12 @@ export const fixtureSource: PodSource = {
             id: "org:key-" + (RUNTIMES.length + 1),
             name: key.name, kind: "MODEL_PROVIDER", scope: "ORGANIZATION", status: "ACTIVE",
             default_model_name: key.models[0] ?? null,
-            model_catalog: key.models.map((name) => ({ name })),
+            model_catalog: key.models.map((name) => ({
+                name,
+                capabilities: key.protocol === "anthropic" || key.visionModels?.includes(name)
+                    ? ["TEXT", "TOOLS", "VISION"]
+                    : ["TEXT", "TOOLS"],
+            })),
         }];
     },
     async addLocalAgent(_orgId: string, harnessId: string, agent) {

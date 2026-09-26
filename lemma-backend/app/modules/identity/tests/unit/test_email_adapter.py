@@ -28,6 +28,7 @@ async def test_email_adapter_refuses_policy_rejected_recipient(monkeypatch):
     )
 
     sent = await adapter._send(
+        kind="test",
         to_email="inactive@example.com",
         subject="Subject",
         html_content="Body",

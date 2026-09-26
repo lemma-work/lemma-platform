@@ -117,15 +117,23 @@ not a reservation, so two signups racing on an empty database could both get
 in. On Desktop that race cannot happen: the app and API listen on loopback
 only, sharing is the only way anybody else reaches them, and onboarding creates
 the first account before sharing can be turned on. People who already have an
-account sign in regardless of the mode. A refusal reaches the auth screen as a
+account sign in regardless of the mode, and a sign-up for an address that
+already has a password is told so -- SuperTokens' own
+`EMAIL_ALREADY_EXISTS_ERROR`, which the auth screen shows as "You already have
+an account" with a Sign in button -- before the mode is consulted. That says no
+more than the email-code screen already does, which answers any address that
+has a password with a password field. A refusal reaches the auth screen as a
 sentence, not a status: *"This Lemma is invite-only. Ask someone already on it
 for an invitation."* (`SIGNUP_INVITE_ONLY`), or *"This Lemma is not accepting
 new accounts."* (`SIGNUP_CLOSED`).
 
-Defaults: `open` for hosted and self-hosted deployments (the behaviour before
-the setting existed), `invite_only` for Desktop. Sharing carries its own
-preference, **Who can join** (`who_can_join` in `sharing.json`: `invite_only` by
-default, or `open`). It is part of the control snapshot, it can be changed while
+Defaults: `open` whenever `SIGNUP_MODE` is unset, Desktop included. Desktop
+leaves it unset while sharing is off -- only the person at this Mac can reach
+the sign-up page then, so there is nobody to keep out, and a second local
+account (a work and a personal one, say) needs no invitation. The mode matters
+once somebody else can reach the page, so only the sharing overlay sets it,
+from sharing's own preference, **Who can join** (`who_can_join` in
+`sharing.json`: `invite_only` by default, or `open`). It is part of the control snapshot, it can be changed while
 sharing is live (`sharing.access`, which restarts only the backend), and the
 Public confirmation and LAN warning on the Sharing page describe whichever is
 in force.
