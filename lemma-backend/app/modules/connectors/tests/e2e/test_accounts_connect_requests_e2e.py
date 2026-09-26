@@ -8,6 +8,7 @@ from httpx import AsyncClient
 from starlette import status
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.core.config import settings
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.account import Account
@@ -752,6 +753,11 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
         GOOGLE_AUTHORIZATION_URL
     )
     assert "system_oauth" not in capability
+    # The callback an own app must allow, exactly as the sign-in builds it --
+    # the UI shows this rather than assembling a path of its own.
+    assert response.json()["oauth_redirect_uri"] == (
+        settings.api_url.rstrip("/") + "/connectors/connect-requests/oauth/callback"
+    )
 
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "system-google-client-id")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "system-google-client-secret")

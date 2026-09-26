@@ -31,6 +31,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 
 from app.modules.agent.config import agent_settings
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -52,6 +53,14 @@ from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
+)
+from app.modules.agent.services.runtime_system_profiles import (
+    is_model_not_configured,
+    model_not_configured_error,
+)
+from app.modules.agent.services.workspace_model_fallback import (
+    WorkspaceRuntimeResolver,
+    resolve_workspace_runtime,
 )
 from app.modules.usage.contracts.execution import UsageExecutionContext
 from app.modules.usage.contracts.metering import metering_execution
@@ -167,6 +176,7 @@ class ConversationTitleGenerator:
         runtime_profiles: Callable[[], AgentRuntimeProfileService] | None = None,
         model_for_profile: Callable[..., Model] | None = None,
         llm_agent: Callable[..., PydanticAIAgent[None, str]] | None = None,
+        workspace_runtime: WorkspaceRuntimeResolver | None = None,
     ) -> None:
         # `None` rather than the real callable as a default, deliberately. A
         # default argument is evaluated once, when this module is imported, so
@@ -179,6 +189,7 @@ class ConversationTitleGenerator:
         self._runtime_profiles = runtime_profiles
         self._model_for_profile = model_for_profile
         self._llm_agent = llm_agent
+        self._workspace_runtime = workspace_runtime
 
     async def generate(
         self,
@@ -190,7 +201,7 @@ class ConversationTitleGenerator:
         reply_text: str | None,
     ) -> str | None:
         resolved = await self._resolve_runtime(
-            organization_id=organization_id, user_id=user_id
+            organization_id=organization_id, user_id=user_id, pod_id=pod_id
         )
         runtime_profile = resolved.public_snapshot()
         model = (
@@ -219,6 +230,33 @@ class ConversationTitleGenerator:
         return _sanitize_title(str(result.output))
 
     async def _resolve_runtime(
+        self,
+        *,
+        organization_id: UUID | None,
+        user_id: UUID,
+        pod_id: UUID,
+    ) -> ResolvedAgentRuntime:
+        try:
+            return await self._resolve_system_runtime(
+                organization_id=organization_id, user_id=user_id
+            )
+        except DomainError as error:
+            if not is_model_not_configured(error):
+                raise
+        # No system model at all: title on the model this pod already runs on,
+        # rather than failing every title on a deployment set up through
+        # Organization -> Models. `None` falls through to the same error.
+        resolved = await (self._workspace_runtime or resolve_workspace_runtime)(
+            organization_id=organization_id,
+            user_id=user_id,
+            model_name=agent_settings.conversation_title_model,
+            pod_id=pod_id,
+        )
+        if resolved is None:
+            raise model_not_configured_error()
+        return resolved
+
+    async def _resolve_system_runtime(
         self,
         *,
         organization_id: UUID | None,

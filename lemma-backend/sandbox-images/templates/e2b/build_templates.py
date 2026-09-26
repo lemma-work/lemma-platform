@@ -230,6 +230,11 @@ def workspace_template():
             mode=0o755,
         )
         .copy(
+            "lemma-backend/sandbox-images/scripts/start-browser.sh",
+            "/usr/local/bin/start-browser",
+            mode=0o755,
+        )
+        .copy(
             "lemma-backend/sandbox-images/scripts/start-browser-relay.sh",
             "/usr/local/bin/start-browser-relay",
             mode=0o755,

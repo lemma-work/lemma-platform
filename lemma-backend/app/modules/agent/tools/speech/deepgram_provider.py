@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 
+from app.core.config import reveal_secret
 from app.modules.agent.config import agent_settings
 from app.modules.agent.tools.speech.provider import (
     SpeechProvider,
@@ -65,7 +66,7 @@ class DeepgramSpeechProvider(SpeechProvider):
     name = SpeechProviderName.DEEPGRAM
 
     def __init__(self, api_key: str | None = None) -> None:
-        self._api_key = api_key or agent_settings.deepgram_api_key
+        self._api_key = api_key or reveal_secret(agent_settings.deepgram_api_key)
 
     def is_available(self) -> bool:
         return bool(self._api_key)

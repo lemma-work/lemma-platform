@@ -183,6 +183,7 @@ pub(crate) async fn one_turn(
             permission_timeout: Duration::ZERO,
             cancel: lemma_agent_host::acp::never_cancelled(),
             cancel_grace: Duration::from_secs(5),
+            steer: lemma_agent_host::acp::SteerInbox::default(),
         },
         callbacks.clone(),
     )

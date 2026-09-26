@@ -1349,6 +1349,7 @@ desktop-agent-host-e2e:
 	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
 	@cd lemma-backend && uv run pytest \
 		app/modules/agent/tests/e2e/test_agent_host_process_e2e.py \
+		app/modules/agent/tests/e2e/test_agent_host_steer_e2e.py \
 		app/modules/agent/tests/e2e/test_host_execution_binary_e2e.py \
 		app/modules/agent/tests/e2e/test_agent_host_chaos_e2e.py \
 		-m 'not agent_host_browser' --no-showlocals

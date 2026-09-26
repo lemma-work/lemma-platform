@@ -7,7 +7,7 @@ from collections.abc import Mapping
 import base64
 import binascii
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -28,6 +28,7 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.domain.queued_messages import STEERED_INTO_RUN
 from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
@@ -127,6 +128,7 @@ def run_start_payload(
                 messages,
                 carries_history=carries_history,
                 resumed_tool_call_id=resumed_tool_call_id,
+                agent_run_id=agent_run_id,
             ),
             ctx=ctx,
             runtime_instructions=runtime_instructions,
@@ -147,6 +149,8 @@ async def mcp_payload[DepsT: AgentContext](
     options: HarnessOptions[DepsT],
     prompt: str | None = None,
     extra_tool_names: Sequence[str] = (),
+    workspace_service: WorkspaceSandboxService | None = None,
+    cli_root: Callable[[], str | None] = host_cli_root,
 ) -> JsonObject:
     """Build what the host's MCP bridge needs to relay the agent's Lemma tools.
 
@@ -163,7 +167,7 @@ async def mcp_payload[DepsT: AgentContext](
     returning 401, which the agent experiences as its tools quietly vanishing.
     Publishing the real expiry lets the dispatcher bound the run by it instead.
     """
-    workspace_service = WorkspaceSandboxService()
+    workspace_service = workspace_service or WorkspaceSandboxService()
     try:
         workspace_env = await workspace_service.get_env_vars(
             user_id=ctx.user_id,
@@ -201,7 +205,7 @@ async def mcp_payload[DepsT: AgentContext](
     }
     # This release's own `lemma`, for an agent on the same Mac as this backend:
     # the host puts its `bin/` first on the agent's PATH if it accepts it.
-    cli = host_cli_root()
+    cli = cli_root()
     if cli is not None:
         payload["lemma_cli"] = cli
     return payload
@@ -318,6 +322,7 @@ def _turn_messages(
     *,
     carries_history: bool,
     resumed_tool_call_id: str | None = None,
+    agent_run_id: UUID | None = None,
 ) -> list[Message]:
     """The messages this prompt has to carry.
 
@@ -340,10 +345,29 @@ def _turn_messages(
     start of. This costs nothing in the usual case, because a resumable harness
     only lacks a stored session on a conversation's first turn, where there is
     no history to send.
+
+    And a turn answers every message that is its own, not only the newest: the
+    one that started it, any that arrived before it was dispatched, and -- for
+    a follow-up turn -- everything the person said while the previous turn was
+    working, which the follow-up claims (``steered_into_run``). "The latest
+    user message" alone answered the last of three and dropped the other two on
+    a session that had never seen them.
     """
     ordered = sorted(messages, key=lambda item: item.sequence)
     if carries_history:
         return ordered
+    if agent_run_id is not None:
+        answering = [
+            message
+            for message in ordered
+            if message.role == MessageRole.USER
+            and (
+                message.agent_run_id == agent_run_id
+                or (message.metadata or {}).get(STEERED_INTO_RUN) == str(agent_run_id)
+            )
+        ]
+        if answering:
+            return answering
     if resumed_tool_call_id is not None:
         resumed = [
             message
@@ -435,6 +459,16 @@ def _user_turn_text(message: Message) -> str:
     if isinstance(attachments, list) and attachments:
         body += f"\n\nAttachments: {json.dumps(to_json_value(attachments))}"
     return body
+
+
+def steer_prompt(message: Message) -> list[JsonObject]:
+    """A message sent mid-turn, as the ACP content a ``STEER_RUN`` carries.
+
+    The same text a turn that started with this message would have carried, so
+    a steered message reads to the agent exactly as a prompted one does --
+    sender, quoted reply, attachments and all.
+    """
+    return [{"type": "text", "text": _user_turn_text(message)}]
 
 
 def _history_tool_result(result: object) -> str:

@@ -125,6 +125,9 @@ export interface RawMessage {
     tool_result?: unknown;
     tool_call_id?: string | null;
     sequence?: number;
+    /** The run it belongs to. A message sent mid-run belongs to that run even
+     *  when a later one delivers it; see `queued.ts`. */
+    agent_run_id?: string | null;
     created_at?: string;
     /** `tool_source`, `tool_title`, `parent_call_id` and the rest of what the
      *  Agent Host says about a call. */

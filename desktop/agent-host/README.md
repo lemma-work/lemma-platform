@@ -79,6 +79,18 @@ Three properties this depends on:
 Profile configuration and the model are re-applied to a resumed session exactly
 as to a new one, so editing a profile still takes effect on the next turn.
 
+### Messages sent while a turn is running
+
+ACP's `session/prompt` is one request per turn and v1 cannot add to it. The
+Claude Code and Codex adapters both implement the `_session/steering` extension,
+advertised in `initialize`'s `_meta`; the probe publishes it as the harness
+capability `steering`, and Lemma sends `STEER_RUN` only to a harness that has
+it. The run's driver sends each steer once its prompt is out and reports a
+`steer_result` event saying whether the adapter `injected` it. Anything short of
+that -- an adapter without steering, a turn that ended first -- is reported as
+undelivered, and Lemma's follow-up turn carries the message instead. See
+[agent-host-events.md](../../docs/architecture/agent-host-events.md#steering).
+
 ## Certified integrations
 
 The built-in adapter pack is pinned in
@@ -445,13 +457,18 @@ synthetic ACP v1 exchanges, consumed by the same ACP SDK as installed providers.
 They do not replace backend endpoints or the chat UI with mocks. The streaming
 fixtures are also shared with the Rust process-level regressions.
 
-A version-1 scenario has `steps` and an optional `stopReason`. Each step has one
-action:
+A version-1 scenario has `steps`, an optional `stopReason`, and an optional
+`steering: true` that makes the agent advertise `_session/steering` in
+`initialize` the way the pinned Claude Code and Codex adapters do. Each step has
+one action:
 
 - `send`: an actual ACP JSON-RPC notification or permission request.
 - `await_permission`: wait for a response by request `id`, then replay the
   `selected[optionId]` or `cancelled` steps. Unknown responses fail the test.
 - `await_cancel`: require the host's `session/cancel` notification.
+- `await_steer`: wait for a `_session/steering` request and answer it with the
+  step's `outcome` (`injected` by default, or `startedNewTurn`); an injected
+  steer is echoed as agent text after the step's `echo` prefix.
 - `await_release`: wait until the test client has observed live output and
   creates the traffic log's sibling `.release` file.
 - `exit`: simulate a provider process failure with the given exit code.

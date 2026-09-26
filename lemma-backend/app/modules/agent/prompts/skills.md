@@ -14,5 +14,6 @@ Load `lemma-builder` before designing or changing pod resource definitions.
 - `lemma-artifact-author`: documents, spreadsheets, decks, PDFs, HTML.
 - `lemma-evals`: agent and workflow evaluations.
 - `lemma-skill-creator`: pod-owned skills.
-- `browser`: the workspace browser the person sees, driven with `agent-browser`.
+- `browser`: the workspace browser the person sees, driven with `agent-browser`;
+  `agent-browser open <url>` starts it.
 - `liteparse-documents`: documents outside the pod or missing conversion.

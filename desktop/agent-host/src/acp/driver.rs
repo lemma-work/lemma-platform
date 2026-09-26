@@ -5,12 +5,12 @@ use super::{
     AlwaysAllowOffer, Arc, AtomicBool, AtomicU64, ConnectionTo, EventType, InitializeRequest, Map,
     McpServer, NewSessionRequest, Ordering, PathBuf, PermissionGate, ProtocolVersion,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResolvedAdapter,
-    SelectedPermissionOutcome, SessionNotification, SupervisedAgent, Value, allow_once,
-    always_allow_offer, async_trait, before_prompt_deadline, build_agent, capture_stderr,
-    configure_session, convert_config_option, effective_options, internal, invalid,
+    SelectedPermissionOutcome, SessionNotification, SupervisedAgent, TurnSteering, Value,
+    allow_once, always_allow_offer, async_trait, before_prompt_deadline, build_agent,
+    capture_stderr, configure_session, convert_config_option, effective_options, internal, invalid,
     is_scoped_mcp_tool_approval, open_session, outcome_for_decision, permission_payload,
     plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names, session_to_resume,
-    tool_call_id,
+    steering_advertised, tool_call_id,
 };
 use super::{lemma_cli_bin, session_options};
 use crate::normalize::{Dialect, Normalizer, RunContext};
@@ -51,6 +51,7 @@ impl AgentDriver for AcpDriver {
                         .block_task(),
                 )
                 .await?;
+                let steering = steering_advertised(initialization.meta.as_ref());
                 let session = connection
                     .send_request(NewSessionRequest::new(scratch_directory))
                     .block_task()
@@ -69,6 +70,7 @@ impl AgentDriver for AcpDriver {
                     config_options,
                     capabilities,
                     auth_methods,
+                    steering,
                 })
             })
             .await
@@ -113,6 +115,7 @@ impl AgentDriver for AcpDriver {
             permission_timeout,
             mut cancel,
             cancel_grace,
+            steer,
             ..
         } = request;
         let resume_session_id = session_to_resume(&run_spec, can_load_session);
@@ -186,13 +189,18 @@ impl AgentDriver for AcpDriver {
                 agent_client_protocol::on_receive_request!(),
             )
             .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
-                before_prompt_deadline(
+                let initialization = before_prompt_deadline(
                     "initialize",
                     connection
                         .send_request(InitializeRequest::new(ProtocolVersion::V1))
                         .block_task(),
                 )
                 .await?;
+                let steering = TurnSteering::new(
+                    steering_advertised(initialization.meta.as_ref()),
+                    steer.take(),
+                    callbacks.as_ref(),
+                );
                 let mcp_servers: Vec<McpServer> = mcp_server.into_iter().collect();
                 let mut session = open_session(
                     &connection,
@@ -229,6 +237,7 @@ impl AgentDriver for AcpDriver {
                     prompt_blocks(&prompt_spec, session.origin),
                     &mut cancel,
                     cancel_grace,
+                    steering,
                 )
                 .await
             })

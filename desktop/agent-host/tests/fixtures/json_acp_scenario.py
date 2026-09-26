@@ -49,6 +49,36 @@ def run_scenario(path, emit, receive, release):
                 if action["await_cancel"] is not True:
                     raise ValueError("await_cancel must be true")
                 await_message({"method": "session/cancel"})
+            elif "await_steer" in action:
+                # A `_session/steering` request, answered with the outcome the
+                # step names; an injected one is echoed so a test can see the
+                # message reached the turn it was aimed at.
+                gate = action["await_steer"]
+                request = await_message({"method": "_session/steering"})
+                outcome = gate.get("outcome", "injected")
+                emit({"jsonrpc": "2.0", "id": request["id"], "result": {"outcome": outcome}})
+                if outcome == "injected":
+                    text = "".join(
+                        block.get("text", "")
+                        for block in (request.get("params") or {}).get("prompt") or []
+                        if isinstance(block, dict)
+                    )
+                    emit(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "session/update",
+                            "params": {
+                                "sessionId": request["params"]["sessionId"],
+                                "update": {
+                                    "sessionUpdate": "agent_message_chunk",
+                                    "content": {
+                                        "type": "text",
+                                        "text": gate.get("echo", "STEERED:") + text,
+                                    },
+                                },
+                            },
+                        }
+                    )
             elif "await_release" in action:
                 if action["await_release"] is not True:
                     raise ValueError("await_release must be true")

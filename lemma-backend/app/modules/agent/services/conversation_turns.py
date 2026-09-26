@@ -229,22 +229,28 @@ class TurnCoordinator:
         """The backstop for messages no run ever read.
 
         Normally nothing reaches here. A message sent while a run is in flight is
-        steered into that run by `PendingUserMessagesCapability`, which claims it
-        and hands it to the model -- so by the time the run ends there is nothing
-        left owing. Two cases still get past that, and both leave a person
-        waiting on an answer that will otherwise never come:
+        steered into that run -- by `PendingUserMessagesCapability` in process,
+        and by a `STEER_RUN` for an Agent Host harness that advertises ACP
+        steering -- and whoever delivers it claims it, so by the time the run
+        ends there is nothing left owing. Three cases still get past that, and
+        each leaves a person waiting on an answer that will otherwise never
+        come:
 
-        - **A run with no capabilities.** Only the in-process LEMMA harness is
-          built out of them; an Agent Host run has no `ctx.enqueue` to steer.
+        - **An Agent Host harness that cannot steer.** ACP gives a running
+          `session/prompt` no way to take more input, so the message waits for
+          the turn to end and this run delivers it.
+        - **A steer that did not land**, because the turn ended first.
         - **A run that died before draining**, so the messages are still
           unclaimed.
 
-        Returns the new run's id and the live UI frames the caller owes the
-        conversation, or None when there is nothing to answer. The frames come
-        back rather than going out from here because publishing is a Redis round
-        trip and this still holds a pooled connection -- and unlike `start`,
-        whose caller commits again later and drains `after_commit`, the caller
-        here is a worker job with no second commit to hang them on.
+        Returns the new run's id and the messages whose live UI frames the
+        caller owes the conversation -- superseded pause returns, and the queued
+        messages this run just claimed -- or None when there is nothing to
+        answer. The frames come back rather than going out from here because
+        publishing is a Redis round trip and this still holds a pooled
+        connection -- and unlike `start`, whose caller commits again later and
+        drains `after_commit`, the caller here is a worker job with no second
+        commit to hang them on.
 
         This cannot recur: the queued messages belong to ``completed_run_id``,
         never to the run started here, so the run started here has an empty
@@ -305,6 +311,13 @@ class TurnCoordinator:
                 "queued_behind_agent_run_id": str(completed_run_id),
             },
         )
+        # Claimed by the run that will answer them, in the same transaction
+        # that creates it. That is what tells an Agent Host dispatch which
+        # messages its prompt has to carry -- all of them, not only the newest
+        # -- and what tells the person's client they are no longer waiting.
+        claimed = await self.conversation_repository.claim_queued_user_messages(
+            completed_run_id, into_run_id=followup_run.id
+        )
         self.uow.collect_events(
             [
                 AgentRunStartedEvent(
@@ -319,7 +332,7 @@ class TurnCoordinator:
             ]
         )
         await self.uow.commit()
-        return followup_run.id, superseded_returns
+        return followup_run.id, [*superseded_returns, *claimed]
 
     async def stop_conversation(
         self,

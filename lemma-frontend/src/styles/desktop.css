@@ -254,10 +254,55 @@
 }
 
 .thismac-setup { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Server setup: one capability per card, closed until asked for, except the
+   one that still needs setting up. */
+.setup-card { border-bottom: 1px solid var(--line); }
+.setup-card > summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    padding: 14px 0;
+    cursor: pointer;
+    list-style: none;
+}
+.setup-card > summary::-webkit-details-marker { display: none; }
+.setup-card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.setup-card__body { padding: 0 0 18px 14px; border-left: 2px solid var(--line); margin-left: 2px; }
+.setup-card__body > .thismac-form:last-child { border-bottom: 0; }
+.setup-form fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.setup-form .field select {
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    padding: 8px 10px;
+    max-width: 100%;
+}
+.setup-form__acts { display: flex; flex-wrap: wrap; gap: 10px; }
+.setup-form__acts .btn { display: inline-flex; align-items: center; gap: 6px; }
+.setup-hint { margin-top: 0; }
+.setup-hint .linkish { display: inline-flex; align-items: center; gap: 4px; }
+.setup-advanced { margin-top: 26px; }
+.setup-card .btn:disabled, .thismac-form .btn:disabled { opacity: .45; }
+
+/* Beside Server setup in Settings, while something required is missing. */
+.settings-nav__dot { width: 7px; height: 7px; margin-left: auto; border-radius: 999px; background: var(--wait); flex: none; }
+
+/* The first-run checklist. */
+.setup-checklist { display: flex; flex-direction: column; gap: 2px; }
+.setup-checklist__row { display: flex; align-items: center; gap: 10px 14px; padding: 12px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.setup-checklist__row .thismac-row__text { flex: 1 1 240px; }
+.setup-checklist__acts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 .thismac-operator__key { margin: 8px 0 0; }
 
 @media (max-width: 620px) {
     .thismac-row { flex-wrap: wrap; }
     .thismac-row__control { justify-content: flex-start; }
     .thismac-row__control .btn, .thismac-form summary { min-height: 44px; }
+    .setup-card__body { padding-left: 10px; }
+    .setup-form .btn, .setup-checklist .btn { min-height: 44px; }
 }

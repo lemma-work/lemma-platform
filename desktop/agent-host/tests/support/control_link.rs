@@ -466,6 +466,24 @@ fn owed_commands(state: &ControlState, offer_start: bool) -> Vec<Value> {
             }));
         }
     }
+    let steer_after = state.steer_after.lock().unwrap().clone();
+    if let Some((marker, message_id, text)) = steer_after {
+        let seen = assistant_text_of(&state.events.lock().unwrap()).contains(&marker);
+        if seen && !state.steer_sent.swap(true, Ordering::SeqCst) {
+            commands.push(json!({
+                "command_id": Uuid::new_v4(),
+                "kind": "STEER_RUN",
+                "created_at": Utc::now(),
+                "expires_at": Utc::now() + chrono::Duration::minutes(2),
+                "run_id": state.run_id,
+                "lease_epoch": 1,
+                "payload": {
+                    "message_id": message_id,
+                    "prompt": [{"type": "text", "text": text}],
+                },
+            }));
+        }
+    }
     // Answer every parked request, not just the first: a real agent asks again
     // for each tool it wants, and a control plane that answered once would
     // leave the second request to time out.

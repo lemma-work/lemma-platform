@@ -49,17 +49,15 @@ def _gate(store: _Store, **settings: object) -> SignupGate:
     return SignupGate(settings=IdentitySettings(**settings), store=store)
 
 
-def test_signup_mode_defaults_to_open_on_a_server_and_invite_only_on_desktop() -> None:
+def test_unset_signup_mode_is_open_on_a_server_and_on_desktop() -> None:
+    """Desktop sets SIGNUP_MODE only while shared; unshared, nobody else can reach it."""
     assert IdentitySettings().effective_signup_mode() == "open"
-    assert (
-        IdentitySettings(deployment_kind="desktop").effective_signup_mode()
-        == "invite_only"
-    )
+    assert IdentitySettings(deployment_kind="desktop").effective_signup_mode() == "open"
     assert (
         IdentitySettings(
-            deployment_kind="desktop", signup_mode="open"
+            deployment_kind="desktop", signup_mode="invite_only"
         ).effective_signup_mode()
-        == "open"
+        == "invite_only"
     )
 
 
@@ -98,7 +96,7 @@ async def test_once_anybody_has_an_account_the_mode_applies() -> None:
 @pytest.mark.asyncio
 async def test_invite_only_admits_an_invited_address_and_refuses_the_rest() -> None:
     store = _Store(invited={"guest@example.com"})
-    gate = _gate(store, deployment_kind="desktop")
+    gate = _gate(store, deployment_kind="desktop", signup_mode="invite_only")
 
     assert await gate.admit("guest@example.com") is Admission.INVITED
     with pytest.raises(SignupNotAllowedError) as refused:
@@ -143,7 +141,7 @@ async def test_an_unproven_address_must_present_its_invitation() -> None:
         invited={"guest@example.com"},
         invitation_ids={"guest@example.com": INVITATION},
     )
-    gate = _gate(store, deployment_kind="desktop")
+    gate = _gate(store, deployment_kind="desktop", signup_mode="invite_only")
 
     for presented in (None, "", "not-a-uuid", "00000000-0000-0000-0000-000000000000"):
         with pytest.raises(SignupNotAllowedError) as refused:
@@ -169,6 +167,6 @@ async def test_an_unproven_address_must_present_its_invitation() -> None:
 async def test_a_proven_address_is_admitted_by_its_invitation_alone() -> None:
     """A provider or a code already vouched for the address."""
     store = _Store(invited={"guest@example.com"})
-    gate = _gate(store, deployment_kind="desktop")
+    gate = _gate(store, deployment_kind="desktop", signup_mode="invite_only")
 
     assert await gate.admit("guest@example.com", email_proven=True) is Admission.INVITED

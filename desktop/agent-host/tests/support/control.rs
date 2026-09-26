@@ -109,6 +109,10 @@ pub(crate) struct ControlState {
     /// replacement Lemma MCP configuration.
     pub(crate) refresh_after: Arc<Mutex<Option<(String, Value)>>>,
     pub(crate) refresh_sent: Arc<AtomicBool>,
+    /// Streamed text that, once seen, makes the next offer steer the run with
+    /// `(message_id, text)`.
+    pub(crate) steer_after: Arc<Mutex<Option<(String, String, String)>>>,
+    pub(crate) steer_sent: Arc<AtomicBool>,
     /// Request ids already answered, so a decision is sent exactly once.
     pub(crate) answered: Arc<Mutex<std::collections::HashSet<String>>>,
     /// The run as it stood the instant each decision was sent.
@@ -208,6 +212,8 @@ impl ControlPlane {
             cancel_sent: Arc::new(AtomicBool::new(false)),
             refresh_after: Arc::new(Mutex::new(None)),
             refresh_sent: Arc::new(AtomicBool::new(false)),
+            steer_after: Arc::new(Mutex::new(None)),
+            steer_sent: Arc::new(AtomicBool::new(false)),
             answered: Arc::new(Mutex::new(std::collections::HashSet::new())),
             decisions: Arc::new(Mutex::new(Vec::new())),
             events: Arc::new(Mutex::new(Vec::new())),
@@ -329,6 +335,24 @@ impl ControlPlane {
     /// If the mutex is poisoned.
     pub fn refresh_credential_when_text_contains(&self, marker: &str, mcp: Value) {
         *self.state.refresh_after.lock().unwrap() = Some((marker.to_owned(), mcp));
+    }
+
+    /// Send the run a `STEER_RUN` carrying `text` once `marker` is streamed.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    pub fn steer_when_text_contains(&self, marker: &str, message_id: &str, text: &str) {
+        *self.state.steer_after.lock().unwrap() =
+            Some((marker.to_owned(), message_id.to_owned(), text.to_owned()));
+    }
+
+    /// Every `steer_result` the host reported.
+    #[must_use]
+    pub fn steer_results(&self) -> Vec<Event> {
+        self.events()
+            .into_iter()
+            .filter(|event| event.event_type == EventType::SteerResult)
+            .collect()
     }
 
     /// # Panics

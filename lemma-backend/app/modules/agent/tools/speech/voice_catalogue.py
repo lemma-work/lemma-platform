@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import httpx
 from redis.exceptions import RedisError
 
+from app.core.config import reveal_secret
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
@@ -135,7 +136,7 @@ async def load_voices(
     only way to cover the degraded paths below without reaching into this
     module to replace a name inside it.
     """
-    key = api_key or agent_settings.deepgram_api_key
+    key = api_key or reveal_secret(agent_settings.deepgram_api_key)
     if not key:
         return ()
 

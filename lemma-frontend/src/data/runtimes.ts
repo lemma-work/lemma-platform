@@ -200,7 +200,7 @@ const HEALTH: Record<string, { state: string; fix: string }> = {
         state: "Could not start",
         fix: "That computer could not start it. Check the Lemma app's log there.",
     },
-    DISABLED: { state: "Disabled", fix: "Turned off in the Lemma app on that computer." },
+    DISABLED: { state: "Turned off", fix: "Turned off in the Lemma app on that computer. Turn it back on there." },
 };
 
 export function agentHealth(health: string): { state: string; fix: string; ready: boolean } {
@@ -302,9 +302,14 @@ export function runtimeTrouble(harnessId: string, availability: string): string 
             return "Computer offline";
         case "NOT_INSTALLED":
             return "Not installed";
+        /* The backend says UNAVAILABLE for two things: the computer was
+           removed, or the agent on it is not ready (starting, misconfigured,
+           turned off). Both mean "fix it on that computer", so that is what
+           it says. */
         case "UNAVAILABLE":
+            return "Not ready on its computer";
         case "UNAVAILABLE_FOR_YOU":
-            return "Unavailable";
+            return "Not shared with you";
         default:
             return "";
     }

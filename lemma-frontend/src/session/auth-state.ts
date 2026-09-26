@@ -61,6 +61,30 @@ export function isMissing(error: unknown): boolean {
     return candidate.statusCode === 404 || candidate.name === "NotFoundError";
 }
 
+/** Whether a failed query is worth asking again on its own.
+ *
+ *  A local server restarts under the page -- saving Server setup does it --
+ *  and every query that happened to be in flight then fails with no answer
+ *  at all or a 502/503 from the gateway. With no retry those latched as
+ *  errors until the page was reloaded. An answer the server actually gave
+ *  (any 4xx) is kept: asking again gets the same one. A few tries with
+ *  backoff covers a restart and gives up on an outage.
+ */
+export const TRANSIENT_RETRIES = 4;
+
+export function retryTransient(failureCount: number, error: unknown): boolean {
+    if (failureCount >= TRANSIENT_RETRIES) return false;
+    if (!error || typeof error !== "object") return false;
+    const status = (error as { statusCode?: unknown; status?: unknown }).statusCode ?? (error as { status?: unknown }).status;
+    if (typeof status === "number") return status === 502 || status === 503 || status === 504;
+    /* No status: the request never got an answer -- a fetch that failed. */
+    return error instanceof TypeError || (error as { name?: unknown }).name === "TypeError";
+}
+
+export function transientRetryDelay(attempt: number): number {
+    return Math.min(1_000 * 2 ** attempt, 8_000);
+}
+
 /** The SDK's three answers, plus the two this app adds.
  *
  *  `sample` wins over all of them. Sample mode has no backend to be

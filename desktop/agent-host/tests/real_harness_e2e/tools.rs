@@ -56,6 +56,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
             permission_timeout: Duration::ZERO,
             cancel: lemma_agent_host::acp::never_cancelled(),
             cancel_grace: Duration::from_secs(5),
+            steer: lemma_agent_host::acp::SteerInbox::default(),
         },
         callbacks,
     );

@@ -291,6 +291,35 @@ export class AgentConversationsService {
         });
     }
     /**
+     * Withdraw Queued Conversation Message
+     * Take back a message sent while a run was working, before the agent has seen it. Only a message still queued can be withdrawn: one that a run has read, or that is already on its way to an Agent Host turn, is answered 409.
+     * @param podId
+     * @param conversationId
+     * @param messageId
+     * @returns void
+     * @throws ApiError
+     */
+    public static agentConversationMessageWithdraw(
+        podId: string,
+        conversationId: string,
+        messageId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+                'message_id': messageId,
+            },
+            errors: {
+                404: `Conversation was not found or is not visible`,
+                409: `The message is no longer queued`,
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Retry Failed Pod Conversation Run
      * Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or system activity. Attach to the returned run with the conversation stream endpoint.
      * @param podId

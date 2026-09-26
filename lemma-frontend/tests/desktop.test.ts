@@ -294,9 +294,20 @@ function target(overrides: Partial<AgentHostTarget> = {}): AgentHostTarget {
 function status(overrides: Partial<AgentHostStatus> = {}): AgentHostStatus {
     return {
         available: true, running: true, desired_running: true, paired: true,
-        targets: [target()], uptime_seconds: 10, last_error: null, log: null, ...overrides,
+        targets: [target()], uptime_seconds: 10, last_error: null, log: null, restart_circuit_open: false,
+        host_execution: null, ...overrides,
     };
 }
+
+test("a host locald stopped restarting says so, and offers a restart rather than waiting", () => {
+    const stuck = status({ running: false, restart_circuit_open: true, last_error: "it kept stopping" });
+    const described = describeThisComputer(stuck, null, WORKSPACE, null, "this Mac");
+    assert.equal(described.label, "Stopped working");
+    assert.equal(described.detail, "it kept stopping");
+    assert.equal(described.action, "restart");
+    assert.equal(readStatus({ available: true, restart_circuit_open: true })?.restart_circuit_open, true);
+    assert.equal(describeThisComputer(status(), null, WORKSPACE, null).action === "restart", false);
+});
 
 test("the shell's loose JSON is narrowed, or refused", () => {
     assert.equal(readStatus(null), null);

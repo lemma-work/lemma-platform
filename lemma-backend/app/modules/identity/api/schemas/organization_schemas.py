@@ -98,6 +98,39 @@ class OrganizationInvitationResponse(BaseSchema):
     revoked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    accept_url: str | None = Field(
+        default=None,
+        description=(
+            "The link the invitee opens to accept, as the invitation email "
+            "carries it. Returned to the organization's owners and editors, so "
+            "an invitation can be handed over another way when email is not "
+            "set up here."
+        ),
+    )
+    emailed: bool | None = Field(
+        default=None,
+        description=(
+            "Whether this server emails invitations. False means email is not "
+            "set up here: the invitation exists, but nobody was sent it, so "
+            "share `accept_url` with the invitee yourself."
+        ),
+    )
+
+    @classmethod
+    def for_inviter(
+        cls, invitation: object, accept_url: str, emailed: bool
+    ) -> "OrganizationInvitationResponse":
+        """An invitation as its organization's owners and editors see it: with its link.
+
+        The email is sent later, by the worker, so `emailed` is whether this
+        server can send one at all rather than whether it arrived. Where it
+        cannot -- a Lemma Desktop nobody has set email up on -- the link is the
+        only way the invitee will ever hear of it.
+        """
+        response = cls.model_validate(invitation)
+        response.accept_url = accept_url
+        response.emailed = emailed
+        return response
 
 
 class UpdateMemberRoleRequest(BaseSchema):

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isForbidden, isUnauthorized, sessionStatus } from "../src/session/auth-state.ts";
+import { isForbidden, isUnauthorized, retryTransient, sessionStatus, transientRetryDelay, TRANSIENT_RETRIES } from "../src/session/auth-state.ts";
 
 test("only a 401 means the server is saying 'not you'", () => {
     assert.equal(isUnauthorized({ statusCode: 401 }), true);
@@ -84,4 +84,15 @@ test("a permission boundary is not a missing session", () => {
     assert.equal(isUnauthorized({ statusCode: 403 }), false);
     assert.equal(isForbidden(null), false);
     assert.equal(isForbidden("403"), false);
+});
+
+test("a query is retried through a server restart, never after a real answer", () => {
+    assert.equal(retryTransient(0, new TypeError("Failed to fetch")), true);
+    assert.equal(retryTransient(0, { statusCode: 503 }), true);
+    assert.equal(retryTransient(0, { status: 502 }), true);
+    assert.equal(retryTransient(0, { statusCode: 401 }), false);
+    assert.equal(retryTransient(0, { statusCode: 404 }), false);
+    assert.equal(retryTransient(0, { statusCode: 500 }), false, "a server error is an answer too");
+    assert.equal(retryTransient(TRANSIENT_RETRIES, new TypeError("Failed to fetch")), false);
+    assert.ok(transientRetryDelay(10) <= 8_000);
 });

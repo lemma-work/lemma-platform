@@ -10,6 +10,7 @@ export const SETTINGS: readonly SettingsSection[] = [
     "org-usage",
     "team-billing",
     "this-mac",
+    "this-mac-setup",
     "this-mac-agents",
     "this-mac-sharing",
     "this-mac-updates",

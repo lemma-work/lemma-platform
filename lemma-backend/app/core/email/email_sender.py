@@ -8,7 +8,7 @@ from email.mime.multipart import MIMEMultipart
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from datetime import datetime, timezone
 
 from app.core.config import reveal_secret, settings
@@ -248,3 +248,32 @@ class EmailSender:
             if raise_on_failure:
                 raise EmailDeliveryError("SMTP delivery failed") from exc
             return False
+
+
+EmailDeliveryState = Literal["sending", "spool", "not_configured"]
+
+
+def email_delivery_state() -> EmailDeliveryState:
+    """Where mail sent from here goes.
+
+    ``sending``: to a provider, and on to an inbox. ``spool``: the filesystem
+    transport, which "sends" successfully into a local directory for tests and
+    the dev stack to read -- nobody receives it. ``not_configured``: nowhere;
+    `from_settings` refuses.
+
+    Not `settings.is_email_configured()`, which answers only for credentials:
+    a half-configured Resend (a key, no sender) passes that check and still
+    fails here.
+    """
+    if settings.email_transport == "filesystem":
+        return "spool"
+    try:
+        EmailSender.from_settings()
+    except EmailNotConfiguredError:
+        return "not_configured"
+    return "sending"
+
+
+def email_delivery_configured() -> bool:
+    """Whether mail sent from here can reach somebody's inbox."""
+    return email_delivery_state() == "sending"

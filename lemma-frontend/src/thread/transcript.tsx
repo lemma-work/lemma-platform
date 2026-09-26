@@ -15,6 +15,8 @@ import { ToolCardView } from "./tool-card-view";
 import { InteractionCard, type Resolve } from "./interaction-card";
 import { liveNote, spanOf, type Note, type Streaming, type Turn } from "./turns";
 import type { Persona } from "@/data";
+import { AddModelAction, OpenModelsAction } from "./add-model-action";
+import { noModelSentence } from "./model-setup";
 
 
 /** The turn's work, as one line.
@@ -139,6 +141,8 @@ export function Transcript({
     onEarlier,
     onResolve,
     onRetry,
+    noModel = false,
+    modelsAction = false,
     dockedId,
 }: {
     turns: Turn[];
@@ -165,6 +169,12 @@ export function Transcript({
     onEarlier?: () => void | boolean | Promise<void | boolean>;
     onResolve?: Resolve;
     onRetry?: () => void;
+    /** The failure is "this teammate has no model". Said in the teammate's
+     *  name with the one action that fixes it, and without "Try again",
+     *  which would fail the same way. */
+    noModel?: boolean;
+    /** The error's fix is in Settings → Models; draws the way there. */
+    modelsAction?: boolean;
     /** The pause `InteractionDock` is holding above the composer. It is drawn
      *  there instead of here, so here it is skipped — the alternative is the
      *  same live card twice, with two sets of buttons and one of them scrolled
@@ -363,8 +373,9 @@ export function Transcript({
                     const failure = runFailure(error);
                     return (
                         <div className="failed">
-                            <span>{failure.text}</span>
-                            {onRetry && (
+                            <span>{noModel ? noModelSentence(teammate.name) : failure.text}</span>
+                            {noModel ? <AddModelAction /> : modelsAction && <OpenModelsAction />}
+                            {onRetry && !noModel && (
                                 <button className="btn" onClick={onRetry}>
                                     Try again
                                 </button>
@@ -372,7 +383,7 @@ export function Transcript({
                             {/* Where the computer and its agents are managed:
                                 This Mac on a local install's own window, the
                                 Models page anywhere else. */}
-                            {failure.codingAgents && (
+                            {!noModel && failure.codingAgents && (
                                 <button
                                     className="linkish"
                                     onClick={() => openSettings(thisMacReachable() ? "this-mac-agents" : "models")}
@@ -386,7 +397,8 @@ export function Transcript({
 
                 {error && (state !== "failed" || onReload) && (
                     <div className="conversation-error" role="alert">
-                        <p>{error}</p>
+                        <p>{noModel ? noModelSentence(teammate.name) : error}</p>
+                        {noModel ? <AddModelAction /> : modelsAction && <OpenModelsAction />}
                         {onReload && <button className="earlier" onClick={onReload} disabled={loading}>Retry</button>}
                     </div>
                 )}

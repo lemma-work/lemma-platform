@@ -82,6 +82,7 @@ def _load_model_registry() -> None:
         importlib.import_module(module_name)
 
 
+from app.core.config import reveal_secret
 from app.core.config import settings
 from app.modules.connectors.config import connector_settings
 from app.core.infrastructure.db.session import async_session_maker
@@ -1504,7 +1505,9 @@ async def _sync_composio_catalog(
     page_size: int,
     max_composio_apps: int,
 ) -> tuple[int, int, int]:
-    api_key = connector_settings.composio_api_key or os.getenv("COMPOSIO_API_KEY")
+    api_key = reveal_secret(connector_settings.composio_api_key) or os.getenv(
+        "COMPOSIO_API_KEY"
+    )
     if not api_key:
         logger.debug("connector_catalog.composio.disabled")
         return 0, 0, 0
@@ -1940,7 +1943,9 @@ async def _sync_composio_catalog_batched(
     max_composio_apps: int,
     dry_run: bool,
 ) -> tuple[int, int, int]:
-    api_key = connector_settings.composio_api_key or os.getenv("COMPOSIO_API_KEY")
+    api_key = reveal_secret(connector_settings.composio_api_key) or os.getenv(
+        "COMPOSIO_API_KEY"
+    )
     if not api_key:
         logger.debug("connector_catalog.composio.disabled")
         return 0, 0, 0

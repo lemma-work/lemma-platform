@@ -381,7 +381,6 @@ async def test_lemma_in_a_host_command_is_this_release_acting_as_the_run(
     scenario: E2EScenario,
     backend_server: dict[str, str],
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`lemma` on the Mac is the CLI Lemma shipped, signed in as the run.
 
@@ -393,7 +392,6 @@ async def test_lemma_in_a_host_command_is_this_release_acting_as_the_run(
     the command's environment carries the run's delegated session with the
     addresses the Mac reaches -- so `lemma me get` answers as the owner.
     """
-    from app.core.config import settings
     from app.modules.workspace.services.host_environment import with_host_addresses
     from app.modules.workspace.services.workspace_sandbox_service import (
         WorkspaceSandboxService,
@@ -451,9 +449,6 @@ async def test_lemma_in_a_host_command_is_this_release_acting_as_the_run(
         )
         assert workspace is not None
 
-        # The Mac reaches this backend where the CLI is told to look for it.
-        monkeypatch.setattr(settings, "api_url", base_url)
-        monkeypatch.setattr(settings, "cli_api_url", None)
         sandboxes = WorkspaceSandboxService()
         try:
             identity = await sandboxes.get_env_vars(
@@ -469,7 +464,9 @@ async def test_lemma_in_a_host_command_is_this_release_acting_as_the_run(
             client=LocalSandboxClient(service),
             sandbox_id=workspace.sandbox_id,
             owns_client=False,
-            env_vars=with_host_addresses(identity),
+            # The Mac reaches this test's backend where the CLI is told to
+            # look for it; the configured address is some other server's.
+            env_vars=with_host_addresses(identity) | {"LEMMA_BASE_URL": base_url},
         )
 
         ran = await session.exec_command(

@@ -19,6 +19,7 @@ pub mod port_reservation;
 pub mod protocol;
 pub mod provider_probe;
 pub mod reset;
+mod setup_probe;
 pub mod sharing;
 pub mod state;
 mod tcp_forwarder;

@@ -62,6 +62,10 @@ class OrganizationService:
     def _build_invitation_accept_url(self, invitation_id: UUID) -> str:
         return f"{self.invitation_accept_base_url}/invitations/{invitation_id}/accept"
 
+    def invitation_accept_url(self, invitation_id: UUID) -> str:
+        """The link an invitation email carries, for handing over by other means."""
+        return self._build_invitation_accept_url(invitation_id)
+
     async def _mark_invitation_expired_if_needed(
         self, invitation: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:

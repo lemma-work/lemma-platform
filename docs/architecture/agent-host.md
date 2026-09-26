@@ -235,8 +235,8 @@ through a capability naming its URL. `capabilities/workspace.json` grants
 the conversation-folder commands, `discover_provider_models` and
 `configure_ai_provider` — and, for Settings → This Mac, the commands that
 change this computer's own settings: `local_settings_snapshot`,
-`apply_local_settings`, `local_sharing`, `set_start_at_login`, `set_host_execution`,
-`repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
+`apply_local_settings`, `test_server_setup`, `local_sharing`, `set_start_at_login`,
+`set_host_execution`, `repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
 `check_for_app_update`, `install_app_update`, `telemetry_status` and
 `set_telemetry_enabled`. Nothing destructive is granted: resetting data,
 reinstalling and restarting into recovery stay in Local settings.
@@ -582,6 +582,14 @@ guarantee:
   never stalls the runs still working. A wait whose run has ended is answered
   `TERMINAL_RUN`, not held for its full half hour. The bridge no longer polls
   every 2 seconds.
+- **Steering.** A message the person sends while a run is working reaches a
+  harness that published the `steering` capability as a `STEER_RUN` command,
+  fenced on the run's lease epoch like every run command. The run's turn sends
+  it to the agent with ACP's `_session/steering` extension and reports a
+  `steer_result` event; see
+  [Steering](agent-host-events.md#steering). Nothing about it is required for
+  correctness: a lost command or result leaves the message queued in Lemma, and
+  the follow-up turn delivers it when the current one ends.
 - **The host's MCP relay** (`mcp_relay.rs`) is a loopback port every account
   on the Mac can reach, so a connection must present the relay token on its
   first line within 5 seconds and in at most 64 KiB, later lines are bounded

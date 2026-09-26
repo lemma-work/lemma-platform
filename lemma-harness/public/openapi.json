@@ -2868,6 +2868,16 @@
               }
             ],
             "title": "Title"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceUnavailableReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3399,6 +3409,18 @@
             },
             "title": "Kinds",
             "type": "array"
+          },
+          "oauth_redirect_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The redirect URI an OAuth app registered for this deployment must allow -- the callback every sign-in returns to. The same for every connector; published here because this is what a person reads while registering their own app, and a hand-built copy of it is how a wrong path reached users as redirect_uri_mismatch.",
+            "title": "Oauth Redirect Uri"
           },
           "operations": {
             "additionalProperties": {
@@ -4648,6 +4670,13 @@
             "default": "OPENAI_COMPATIBLE",
             "title": "Source",
             "type": "string"
+          },
+          "vision_model_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Vision Model Names",
+            "type": "array"
           }
         },
         "required": [
@@ -5377,6 +5406,40 @@
           }
         },
         "title": "DisplaySizeResponse",
+        "type": "object"
+      },
+      "EmailDeliveryStatusResponse": {
+        "properties": {
+          "configured": {
+            "description": "Whether mail sent from this server can reach an inbox. False while no provider is set up, and while mail is written to a local spool (EMAIL_TRANSPORT=filesystem) instead of being sent.",
+            "title": "Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "title": "EmailDeliveryStatusResponse",
+        "type": "object"
+      },
+      "EmailDeliveryTestResponse": {
+        "properties": {
+          "message": {
+            "description": "What happened, in words to show the person: where the email went, or what to change. Never the provider's own error.",
+            "title": "Message",
+            "type": "string"
+          },
+          "ok": {
+            "description": "Whether the test email was handed to the provider",
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "title": "EmailDeliveryTestResponse",
         "type": "object"
       },
       "EndNode": {
@@ -10079,6 +10142,18 @@
       "OrganizationInvitationResponse": {
         "description": "Organization invitation response schema.",
         "properties": {
+          "accept_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The link the invitee opens to accept, as the invitation email carries it. Returned to the organization's owners and editors, so an invitation can be handed over another way when email is not set up here.",
+            "title": "Accept Url"
+          },
           "accepted_at": {
             "anyOf": [
               {
@@ -10100,6 +10175,18 @@
             "format": "email",
             "title": "Email",
             "type": "string"
+          },
+          "emailed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether this server emails invitations. False means email is not set up here: the invitation exists, but nobody was sent it, so share `accept_url` with the invitee yourself.",
+            "title": "Emailed"
           },
           "expires_at": {
             "format": "date-time",
@@ -14277,6 +14364,15 @@
         },
         "title": "SurfaceTelegramConfigInput",
         "type": "object"
+      },
+      "SurfaceUnavailableReason": {
+        "description": "Why a platform cannot be connected on this server right now.\n\nPublished so a setup screen can say what to do instead of offering a\nConnect button whose only outcome is a refusal. Each value names the thing\nthat is missing, not the setting that supplies it: the setting is the\noperator's word, and on Desktop the person reading is the operator but\nconfigures it through a form, not an environment variable.",
+        "enum": [
+          "NEEDS_PUBLIC_LINK",
+          "NEEDS_EMAIL_DOMAIN"
+        ],
+        "title": "SurfaceUnavailableReason",
+        "type": "string"
       },
       "SurfaceUpdateRequest": {
         "additionalProperties": false,
@@ -25351,6 +25447,93 @@
         }
       }
     },
+    "/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}": {
+      "delete": {
+        "description": "Take back a message sent while a run was working, before the agent has seen it. Only a message still queued can be withdrawn: one that a run has read, or that is already on its way to an Agent Host turn, is answered 409.",
+        "operationId": "agent.conversation.message.withdraw",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conversation was not found or is not visible"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The message is no longer queued"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Queued Conversation Message",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.conversation.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.conversation.message",
+          "result": "void",
+          "verb": "withdraw"
+        }
+      }
+    },
     "/pods/{pod_id}/conversations/{conversation_id}/retry": {
       "post": {
         "description": "Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or system activity. Attach to the returned run with the conversation stream endpoint.",
@@ -36056,6 +36239,77 @@
           "resource": "user.current",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/users/me/email-delivery": {
+      "get": {
+        "description": "Whether this local installation can send email. Local installations only; 404 elsewhere.",
+        "operationId": "user.email_delivery.get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDeliveryStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Email Delivery Status",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "user.email_delivery",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/users/me/email-delivery/test": {
+      "post": {
+        "description": "Send a short test email to the signed-in user's own address with this installation's email settings. Local installations only; 404 elsewhere.",
+        "operationId": "user.email_delivery.test",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDeliveryTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many test emails; see Retry-After"
+          }
+        },
+        "summary": "Send A Test Email",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "user.email_delivery"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "user.email_delivery",
+          "result": "entity",
+          "verb": "test"
         }
       }
     },

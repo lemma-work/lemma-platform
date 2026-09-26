@@ -83,6 +83,7 @@ fn request(
         adapter,
         agent_environment: BTreeMap::default(),
         own_settings,
+        steer: lemma_agent_host::acp::SteerInbox::default(),
         run_spec: RunSpec {
             agent_run_id: Uuid::new_v4(),
             conversation_id: Uuid::new_v4(),
@@ -291,6 +292,7 @@ async fn opencode_is_started_with_its_own_skills_left_out() {
 
 /// Lemma's own `lemma`, when the run names one this Mac accepts, is the one
 /// the agent's shell finds first.
+#[cfg(unix)]
 #[tokio::test]
 async fn lemmas_cli_goes_first_on_the_agents_path() {
     use std::os::unix::fs::PermissionsExt;

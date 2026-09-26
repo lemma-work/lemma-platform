@@ -11,6 +11,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_message_append,
     agent_conversation_message_list,
     agent_conversation_message_send,
+    agent_conversation_message_withdraw,
     agent_conversation_retry,
     agent_conversation_stream,
     agent_conversation_stop,
@@ -172,6 +173,19 @@ class PodConversations(BoundResource):
             as_uuid(conversation_id),
             body=compact({"content": content, "metadata": metadata}),
             body_model=SendMessageRequest,
+        )
+
+    def withdraw(self, conversation_id: str, message_id: str) -> None:
+        """Take back a message the agent has not seen yet.
+
+        Only a message sent while a run was working, and only until something
+        delivers it; the API answers 409 once a run has read it.
+        """
+        self._call(
+            agent_conversation_message_withdraw,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
+            as_uuid(message_id),
         )
 
     def send_stream(

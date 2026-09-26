@@ -9564,6 +9564,7 @@ var LemmaClient = (() => {
   function hasHeader(headers, name) {
     return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
   }
+  var ownOriginRecoveryTried = false;
   var AuthManager = class {
     /**
      * @param token A credential to present as `Authorization: Bearer`. Supplying
@@ -9795,13 +9796,39 @@ var LemmaClient = (() => {
       this.authCheckPromise = checking;
       return checking;
     }
+    /**
+     * One refresh for an app that calls the API through its own origin.
+     *
+     * The session is shared between hosts by the HttpOnly cookies, but the
+     * markers the browser SDK reads (`sFrontToken`, `st-last-access-token-update`)
+     * are host-only on purpose, so a pod app keeps its own copy. If that copy is
+     * half-cleared -- the update marker left behind with no front token, as a
+     * failed refresh leaves it -- `doesSessionExist()` answers "no" without ever
+     * asking, and the app sends a signed-in person to sign in forever. Drop the
+     * stale marker on this host and ask once: the refresh carries the shared
+     * cookie and returns this origin's own front token. Once per page, so a
+     * genuinely signed-out app cannot storm the endpoint.
+     */
+    async recoverOwnOriginSession() {
+      if (ownOriginRecoveryTried || typeof document === "undefined") return false;
+      ownOriginRecoveryTried = true;
+      try {
+        if (new URL(this.apiUrl, window.location.href).origin !== window.location.origin) {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+      document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+      return import_session2.default.doesSessionExist();
+    }
     async performAuthCheck(revision) {
       const unauthenticated = () => revision === this.authRevision ? this.applyUnauthenticatedState() : this.state;
       this.setState({ status: "loading", user: null });
       if (!this.injectedToken && typeof window !== "undefined") {
         ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
         try {
-          if (!await import_session2.default.doesSessionExist()) {
+          if (!await import_session2.default.doesSessionExist() && !await this.recoverOwnOriginSession()) {
             return unauthenticated();
           }
         } catch {
@@ -11594,6 +11621,19 @@ var LemmaClient = (() => {
           body: payload,
           signal: options.signal
         }
+      );
+    }
+    /**
+     * Take back a message sent while a run was working, before the agent has seen
+     * it. Rejects with a 409 once a run has read it, or once it is on its way to
+     * an Agent Host turn.
+     */
+    withdrawMessage(conversationId, messageId, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "DELETE",
+        `/pods/${podId}/conversations/${conversationId}/messages/${messageId}`,
+        { signal: options.signal }
       );
     }
     retryFailedRun(conversationId, options = {}) {
@@ -16829,6 +16869,33 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Get Email Delivery Status
+     * Whether this local installation can send email. Local installations only; 404 elsewhere.
+     * @returns EmailDeliveryStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static userEmailDeliveryGet() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/users/me/email-delivery"
+      });
+    }
+    /**
+     * Send A Test Email
+     * Send a short test email to the signed-in user's own address with this installation's email settings. Local installations only; 404 elsewhere.
+     * @returns EmailDeliveryTestResponse Successful Response
+     * @throws ApiError
+     */
+    static userEmailDeliveryTest() {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/users/me/email-delivery/test",
+        errors: {
+          429: `Too many test emails; see Retry-After`
+        }
+      });
+    }
+    /**
      * Ensure The Current User Has A Workspace
      * Select an eligible organization and idempotently ensure the current user has a private pod and assistant.
      * @param requestBody
@@ -16888,6 +16955,15 @@ var LemmaClient = (() => {
     }
     ensureFirstWorkspace(payload = {}) {
       return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));
+    }
+    /** Whether this local installation can send email. 404 on a server. */
+    emailDelivery() {
+      return this.client.request(() => UsersService.userEmailDeliveryGet());
+    }
+    /** Send a test email to the signed-in user's own address. Local installations
+     *  only; answers `{ ok, message }`, where `message` is fit to show. */
+    sendTestEmail() {
+      return this.client.request(() => UsersService.userEmailDeliveryTest());
     }
     getProfile() {
       return this.client.request(() => UsersService.userProfileGet());

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
+from app.core.config import reveal_secret
 from app.modules.agent_surfaces.config import SurfaceSettings
 
 pytestmark = pytest.mark.unit
@@ -104,4 +106,32 @@ def test_surface_settings_reads_legacy_env_var(monkeypatch, field, env, default)
     else:
         raw, expected = "sentinel", "sentinel"
     monkeypatch.setenv(env, raw)
-    assert getattr(SurfaceSettings(), field) == expected
+    # Tokens and signing secrets are SecretStr so a traceback or repr cannot
+    # print them; compare what they hold.
+    assert reveal_secret(getattr(SurfaceSettings(), field)) == expected
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "microsoft_bot_app_password",
+        "slack_signing_secret",
+        "slack_app_token",
+        "whatsapp_access_token",
+        "whatsapp_verify_token",
+        "whatsapp_app_secret",
+        "telegram_bot_token",
+        "telegram_webhook_secret",
+        "telegram_manager_bot_token",
+        "telegram_manager_webhook_secret",
+    ],
+)
+def test_surface_secrets_never_print(monkeypatch, field):
+    _clear(monkeypatch)
+    env = next(env for name, env, _default in EXPECTED if name == field)
+    monkeypatch.setenv(env, "do-not-print-me")
+
+    loaded = SurfaceSettings()
+
+    assert isinstance(getattr(loaded, field), SecretStr)
+    assert "do-not-print-me" not in repr(loaded)

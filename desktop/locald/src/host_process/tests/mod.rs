@@ -100,6 +100,7 @@ pub(super) fn setup(id: &str) -> HostSetupSpec {
         idle_timeout_seconds: None,
         optional: false,
         stamp: None,
+        stamp_env: Vec::new(),
     }
 }
 

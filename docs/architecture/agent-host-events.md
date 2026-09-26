@@ -56,6 +56,7 @@ de-duplication are described in [agent-host.md](agent-host.md#the-link).
 | `session_update` | none | `title`, `mode`, `commands`, `context` | `STATUS` |
 | `config_update` | none | `kind` plus detail | `STATUS` |
 | `permission_request` | request id | [permission](#permission-requests) | `request_approval` call |
+| `steer_result` | Lemma message id | [steering](#steering) | marks the message delivered (no message) |
 | `terminal` | none | `state`, `error`, `supersedes_stream` | run end |
 
 Removed in this version, because each one was a place where the backend had to
@@ -321,6 +322,36 @@ A request that gates one of Lemma's own MCP tools never reaches Lemma. The host
 answers it itself, because Lemma already authorizes those tools on every
 call. Request ids and call ids are shortened the same way (see
 `shorten_object_id`), so a long id cannot make the two stop matching.
+
+## Steering
+
+What a person types while a turn is running. ACP v1 has no method for adding
+input to a `session/prompt` in flight, but both pinned adapters implement the
+same extension for it, and the host uses it where it exists:
+
+| Adapter | Advertises | `_session/steering` answers |
+|---|---|---|
+| Claude Code (`claude-agent-acp` 0.62) | `initialize` → `_meta.steering.supported: true` | `injected` (pushed onto the SDK's streaming input at priority `now`), or `startedNewTurn` when no turn was in flight |
+| Codex (`codex-acp` 1.1) | the same | `injected` (Codex `turn/steer`), or `startedNewTurn` when the turn had just ended |
+| OpenCode (native ACP, 1.18) | nothing | never sent |
+
+The host publishes the advertisement as the harness capability `steering`, and
+Lemma sends `STEER_RUN` (`message_id`, `prompt`) only to a harness that has it
+-- which is also what keeps the command away from a host too old to parse it.
+The run's driver sends each steer once its own prompt is out, and reports one
+`steer_result` per message, ordered in the run's stream where it landed:
+
+```json
+{ "delivered": true, "detail": null }
+```
+
+Only `injected` is `delivered: true`. Everything else is `false` with a reason:
+`unsupported` (the run's adapter did not advertise it after all), `turn_ended`
+(the turn finished before the steer reached it, or the adapter answered
+`startedNewTurn` -- a turn of the adapter's own that no Lemma run is reading, so
+the host cancels it), or the adapter's error. An undelivered message is still
+queued in Lemma, and the follow-up turn that starts when this one ends delivers
+it; so does every message for a harness that cannot steer.
 
 ## Golden transcripts
 

@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 import { Modal } from "@/shell/modal";
 import { LoadingIndicator } from "@/ui/loading";
-import { ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { CopyIcon, ExternalIcon, KeyIcon, RefreshIcon } from "@/ui/icons";
+import { copyText } from "@/desktop/clipboard";
+import { openSettings } from "@/desktop/open-settings";
+import { useThisComputer } from "@/desktop/this-computer";
+import { oauthFormForConnector } from "@/desktop/this-mac";
+import { useThisMacAvailability } from "@/desktop/this-mac-settings";
+import { useOAuthRedirectUri } from "@/data/oauth-redirect";
 import {
     useConnector, useCreateAccount, useCreateInstall, useConnectorRefresh, useDeleteInstall, useRotateCredentials,
 } from "./queries";
@@ -9,8 +15,41 @@ import { Fields } from "./fields";
 import { blank, fields, payload, problems, type Values } from "./schema";
 import {
     canBringOwnApp, canInstallWithDefaults, connectorProblem, connectRoute, connectSchema, freshInstallName, installSchema, kindFor,
-    kindNamed, needsOwnApp, type CatalogEntry, type Install,
+    kindNamed, needsOwnApp, oauthAppMissing, type CatalogEntry, type Install,
 } from "./install";
+
+/** The redirect URI the app being registered must allow, copyable. It is the
+ *  one value on the provider's form nobody can guess, and without it the first
+ *  sign-in fails with `redirect_uri_mismatch`. The backend's own, never built
+ *  here — see `useOAuthRedirectUri`. */
+function RedirectUri({ connectorId }: { connectorId: string }) {
+    const uri = useOAuthRedirectUri(connectorId);
+    const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+    if (!uri) return null;
+    return (
+        <div className="connect-lead">
+            Add this redirect URL to the app: <code>{uri}</code>{" "}
+            <button
+                type="button"
+                className="linkish"
+                onClick={() => copyText(uri).then(() => setState("copied"), () => setState("failed"))}
+            >
+                <CopyIcon size={12} /> {state === "copied" ? "Copied" : state === "failed" ? "Couldn't copy — select it" : "Copy"}
+            </button>
+        </div>
+    );
+}
+
+/** On a local install the connector's OAuth app can be this computer's,
+ *  shared by everyone here, rather than one organization's. Offered beside the
+ *  organization's own where a form for it exists; nowhere else. */
+function useMachineApp(connectorId: string): { machine: string; open: () => void } | null {
+    const machine = useThisComputer();
+    const shown = useThisMacAvailability() === "shown";
+    const form = oauthFormForConnector(connectorId);
+    if (!shown || !form) return null;
+    return { machine, open: () => openSettings("this-mac-setup", form) };
+}
 
 /** Connecting an account, by whichever of the two routes this one is on.
  *
@@ -102,6 +141,13 @@ export function ConnectDialog({
     /* An organization's own OAuth app, or merely details an install needs:
        the same form, and not the same thing to say about it. */
     const signsIn = kind?.auth_scheme === "OAUTH2";
+
+    const machineApp = useMachineApp(connector.id);
+    /* The backend's "needs an OAuth app" has a fix right here on a local
+       install, so it is said with that fix rather than passed through. */
+    const shownAuthorizeFailure = authorizeFailure && machineApp && oauthAppMissing(authorizeFailure)
+        ? connector.title + " needs an OAuth app. Set it up on " + machineApp.machine + ", or register your own app."
+        : authorizeFailure;
 
     const fail = (problem: unknown) => {
         setFailure(connectorProblem(problem, "Couldn’t connect this account."));
@@ -196,13 +242,24 @@ export function ConnectDialog({
                                 : "Authorisation will run against your app rather than Lemma's."}
                     </p>
                 )}
+                {showingApp && signsIn && <RedirectUri connectorId={connector.id} />}
+                {showingApp && signsIn && machineApp && (
+                    <button type="button" className="linkish thismac-setup" onClick={machineApp.open}>
+                        <KeyIcon size={13} /> Or set it up once for {machineApp.machine} →
+                    </button>
+                )}
 
                 {!showingApp && route === "redirect" && list.length === 0 ? (
                     <>
                         <p className="connect-lead">
                             This one signs in through {connector.title}. You will come back here once it is done.
                         </p>
-                        {authorizeFailure && <p className="library-problem" role="alert">{authorizeFailure}</p>}
+                        {shownAuthorizeFailure && <p className="library-problem" role="alert">{shownAuthorizeFailure}</p>}
+                        {shownAuthorizeFailure !== authorizeFailure && machineApp && (
+                            <button type="button" className="linkish thismac-setup" onClick={machineApp.open}>
+                                <KeyIcon size={13} /> Set up on {machineApp.machine}
+                            </button>
+                        )}
                         <div className="record-form__actions">
                             <button className="btn btn--primary" disabled={busy} onClick={() => onAuthorize(against?.id ?? null)}>
                                 {authorizing
@@ -247,7 +304,7 @@ export function ConnectDialog({
                         )}
                         <Fields list={list} values={ready} problems={shown} disabled={busy}
                             onChange={(name, value) => setValues({ ...ready, [name]: value })} />
-                        {(failure ?? authorizeFailure) && <p className="library-problem" role="alert">{failure ?? authorizeFailure}</p>}
+                        {(failure ?? shownAuthorizeFailure) && <p className="library-problem" role="alert">{failure ?? shownAuthorizeFailure}</p>}
                         <div className="record-form__actions">
                             <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
                                 {busy ? <LoadingIndicator inline label="Connecting" /> : showingApp ? "Save and authorise"

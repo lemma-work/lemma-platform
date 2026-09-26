@@ -1,7 +1,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
-    CREDENTIAL_FORMS, LOCAL_SERVER_KEY, addToWorkspace, alreadyInWorkspace, channelLine, credentialFormForChannel,
+    CREDENTIAL_FORMS, LOCAL_SERVER_KEY, STARTING_PATIENCE_MS, addToWorkspace, healthDetail, stuckStarting, sharingPhaseWords, updateProblem, alreadyInWorkspace, channelLine, credentialFormForChannel,
     detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, HOST_EXECUTION_CONSEQUENCE,
     hostExecutionError, hostExecutionRow, hostExecutionSwitch, joinPolicyCopy,
     oauthFormForConnector, onLocalWorkspaceOrigin, operatorProvider, postgresMajorChangeMessage, readSnapshot,
@@ -286,15 +286,31 @@ test("a secret typed and cleared is kept; removing one is its own act", () => {
     assert.deepEqual(removal.secrets, { "surfaces.telegram_bot_token": { action: "remove" } });
 });
 
-test("the Slack form writes the connector app and the bot to their own sections", () => {
-    const payloads = sectionPayloads(snapshot(), "slack", { slack_client_id: "123.456", slack_socket_mode: true }, {
+test("Slack's connector app and its bot are separate forms, each in its own section", () => {
+    const [app] = sectionPayloads(snapshot(), "slack-app", { slack_client_id: "123.456" }, {
         "integrations.slack_client_secret": { action: "replace", value: "a" },
-        "surfaces.slack_bot_token": { action: "replace", value: "xoxb" },
     });
-    assert.deepEqual(payloads.map((one) => one.section.name), ["integrations", "surfaces"]);
-    assert.deepEqual(Object.keys(payloads[0].secrets), ["integrations.slack_client_secret"]);
-    assert.deepEqual(Object.keys(payloads[1].secrets), ["surfaces.slack_bot_token"]);
-    assert.equal((payloads[1].section.value as { slack_socket_mode: boolean }).slack_socket_mode, true);
+    assert.equal(app.section.name, "integrations");
+    assert.deepEqual(Object.keys(app.secrets), ["integrations.slack_client_secret"]);
+    const [bot] = sectionPayloads(snapshot(), "slack", {}, {
+        "surfaces.slack_app_token": { action: "replace", value: "xapp" },
+    });
+    assert.equal(bot.section.name, "surfaces");
+    assert.deepEqual(Object.keys(bot.secrets), ["surfaces.slack_app_token"]);
+});
+
+test("Composio is on exactly while it has a key", () => {
+    const [saving] = sectionPayloads(snapshot(), "composio", {}, {
+        "integrations.composio_api_key": { action: "replace", value: "ck" },
+    });
+    assert.equal((saving.section.value as { composio_enabled: boolean }).composio_enabled, true);
+    const withKey = snapshot({
+        operator: { config: { revision: 4, integrations: { composio_enabled: true } }, secrets: { "integrations.composio_api_key": true } },
+    });
+    const [removing] = sectionPayloads(withKey, "composio", {}, { "integrations.composio_api_key": { action: "remove" } });
+    assert.equal((removing.section.value as { composio_enabled: boolean }).composio_enabled, false);
+    // Nothing typed on a stored key: nothing changes.
+    assert.deepEqual(sectionPayloads(withKey, "composio", {}, {}), []);
 });
 
 test("every form's fields are ones the daemon's sections actually have", () => {
@@ -318,6 +334,8 @@ test("connectors and channels map to the form that sets them up here", () => {
     assert.equal(oauthFormForConnector("github"), "github");
     assert.equal(oauthFormForConnector("outlook"), "microsoft");
     assert.equal(oauthFormForConnector("notion"), null);
+    assert.equal(oauthFormForConnector("slack"), "slack-app");
+    assert.equal(oauthFormForConnector("microsoft_teams"), "teams");
     assert.equal(credentialFormForChannel("SLACK"), "slack");
     assert.equal(credentialFormForChannel("resend"), "resend");
     assert.equal(credentialFormForChannel("EMAIL"), "resend");
@@ -327,11 +345,12 @@ test("connectors and channels map to the form that sets them up here", () => {
 test("opening Settings from a link carries the form to open, and only a plain word", () => {
     const at = (detail: unknown) => ({ detail }) as unknown as Event;
     assert.equal(requestedSection(at({ section: "this-mac-advanced", focus: "google" })), "this-mac-advanced");
+    assert.equal(requestedSection(at({ section: "this-mac-setup", focus: "ai" })), "this-mac-setup");
     assert.equal(requestedFocus(at({ section: "this-mac-advanced", focus: "google" })), "google");
     assert.equal(requestedFocus(at({ section: "this-mac-advanced", focus: "<img src=x>" })), null);
     assert.equal(requestedFocus(at({ section: "models" })), null);
     // The sections the menu asks for are ones Settings knows.
-    for (const section of ["this-mac", "this-mac-sharing", "models"]) assert.equal(requestedSection(at({ section })), section);
+    for (const section of ["this-mac", "this-mac-setup", "this-mac-sharing", "models"]) assert.equal(requestedSection(at({ section })), section);
 });
 
 /* ── models ────────────────────────────────────────────────────────── */
@@ -368,9 +387,11 @@ test("nothing already in the organization is suggested again", () => {
 test("the provider set on this computer is offered with its models, and a key only where it needs one", () => {
     assert.equal(operatorProvider(snapshot()), null);
     const local = operatorProvider(snapshot({
-        operator: { config: { revision: 1, ai: { protocol: "openai_compat", base_url: "http://127.0.0.1:11434/v1", default_model: "qwen3", models: ["llama3.2", "qwen3"] } }, secrets: {} },
+        operator: { config: { revision: 1, ai: { protocol: "openai_compat", base_url: "http://127.0.0.1:11434/v1", default_model: "qwen3", models: ["llama3.2", "qwen3"], vision_models: ["llama3.2"] } }, secrets: {} },
     }));
-    assert.deepEqual(local, { protocol: "openai", name: "Ollama", baseUrl: "http://127.0.0.1:11434/v1", models: ["qwen3", "llama3.2"], needsKey: false });
+    assert.deepEqual(local, {
+        protocol: "openai", name: "Ollama", baseUrl: "http://127.0.0.1:11434/v1", models: ["qwen3", "llama3.2"], visionModels: ["llama3.2"], needsKey: false,
+    });
     const keyed = operatorProvider(snapshot({
         operator: { config: { revision: 1, ai: { protocol: "anthropic_compat", base_url: "https://api.anthropic.com", default_model: "claude-x", models: [] } }, secrets: { "ai.api_key": true } },
     }));
@@ -382,9 +403,12 @@ test("the provider set on this computer is offered with its models, and a key on
 test("adding it to the workspace creates the provider and leaves this computer's fallback alone", async () => {
     const added: unknown[] = [];
     const add = async (key: unknown) => { added.push(key); };
-    const local = { protocol: "openai" as const, name: "Ollama", baseUrl: "http://127.0.0.1:11434/v1", models: ["qwen3"], needsKey: false };
+    const local = { protocol: "openai" as const, name: "Ollama", baseUrl: "http://127.0.0.1:11434/v1", models: ["qwen3", "llava"], visionModels: ["llava"], needsKey: false };
     await addToWorkspace(local, "", add);
-    assert.deepEqual(added, [{ protocol: "openai", name: "Ollama", baseUrl: "http://127.0.0.1:11434/v1", apiKey: LOCAL_SERVER_KEY, models: ["qwen3"] }]);
+    // The models that read images go with it, rather than arriving text-only.
+    assert.deepEqual(added, [{
+        protocol: "openai", name: "Ollama", baseUrl: "http://127.0.0.1:11434/v1", apiKey: LOCAL_SERVER_KEY, models: ["qwen3", "llava"], visionModels: ["llava"],
+    }]);
 
     // A keyed provider cannot be moved without its key, which the page never
     // learns: it is asked for, and nothing is created until it is given.
@@ -459,4 +483,47 @@ test("turning host execution on sends one boolean to one shell command", async (
         { command: "set_host_execution", args: { enabled: true } },
         { command: "set_host_execution", args: { enabled: false } },
     ]);
+});
+
+/* ── overview and updates, in words ───────────────────────────────── */
+
+test("needs attention says what stopped", () => {
+    const stopped = snapshot({ services: [{ id: "backend", running: false, circuit_open: true }, { id: "frontend", running: true }] });
+    assert.match(healthDetail(stopped)!, /server kept stopping/);
+    const failed = snapshot({ state: { ready: false, running: false, last_error: "the VM would not boot" } });
+    assert.equal(healthDetail(failed), "the VM would not boot");
+    assert.equal(healthDetail(snapshot()), null);
+});
+
+test("an update that cannot be installed yet is not announced as available", () => {
+    const blocked: AppUpdateStatus = {
+        channel: "stable", currentVersion: "0.8.0", updatesSupported: true, availableVersion: "0.9.0",
+        dataCompatibility: "postgres-major-change", installedPostgresMajor: 16, candidatePostgresMajor: 17,
+    };
+    assert.doesNotMatch(healthLine(snapshot(), blocked), /available/);
+    assert.match(healthLine(snapshot(), { ...blocked, dataCompatibility: "same" }), /0\.9\.0 available/);
+});
+
+test("a declined install is a choice, and a failed check is the network's", () => {
+    assert.deepEqual(updateProblem(new Error("The update was not installed.")), { text: "Not installed. Lemma is still on this version.", neutral: true });
+    assert.equal(updateProblem(new Error("could not download the update: dns error")).neutral, false);
+    assert.match(updateProblem(new Error("could not download the update: dns error")).text, /update server/);
+});
+
+test("sharing phases are said in words, never as keys", () => {
+    assert.equal(sharingPhaseWords("starting_tunnel"), "Opening the public link");
+    assert.equal(sharingPhaseWords("something_new"), "Working");
+});
+
+test("a start that never finishes stops being called one", () => {
+    const starting = snapshot({ state: { ready: false, running: true }, services: [{ id: "backend", running: false }, { id: "frontend", running: true }] });
+    assert.equal(stuckStarting(starting, null, 0), null);
+    assert.equal(stuckStarting(starting, 0, STARTING_PATIENCE_MS - 1), null);
+    assert.match(stuckStarting(starting, 0, STARTING_PATIENCE_MS)!, /server isn’t running yet/);
+    assert.equal(stuckStarting(snapshot(), 0, STARTING_PATIENCE_MS * 2), null, "running is not starting");
+});
+
+test("a build without the Agent Host says so instead of waiting for it", () => {
+    assert.match(hostExecutionRow({ available: false, host_execution: null }).blocked!, /doesn’t include the Agent Host/);
+    assert.match(channelLine(null, "unknown"), /couldn’t tell/);
 });

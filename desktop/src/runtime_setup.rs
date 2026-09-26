@@ -552,9 +552,9 @@ pub(crate) async fn repair_runtime(window: Webview, app: AppHandle) -> Result<bo
                 app.clone(),
                 "Verify and repair Lemma?".into(),
                 format!(
-                    "Lemma stops for a moment while it checks its signed runtime files on \
-                     {THIS_COMPUTER} and replaces any that are damaged. Your pods, files and \
-                     accounts are not touched."
+                    "Lemma downloads its signed runtime again (this needs internet), \
+                     replaces the copy on {THIS_COMPUTER}, and restarts. Running agents stop \
+                     while it does. Your pods, files and accounts are not touched."
                 ),
                 "Verify & repair".into(),
             )?

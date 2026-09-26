@@ -84,6 +84,21 @@ export interface OperatorAi {
     vision_models: string[];
     allow_private_network: boolean;
     last_validated_at_unix_ms: number | null;
+    /** Reads images for teammates whose own model cannot. Empty: none chosen. */
+    image_model: string;
+    /** Titles and summaries. Empty: the default model does them. */
+    fast_model: string;
+}
+
+export type EmailProvider = "none" | "resend" | "smtp";
+
+export interface EmailConfig {
+    provider: EmailProvider;
+    from_email: string;
+    smtp_host: string;
+    smtp_port: number;
+    smtp_user: string;
+    smtp_use_tls: boolean;
 }
 
 export type SharingMode = "this_computer" | "local_network" | "public";
@@ -130,14 +145,14 @@ export interface ThisMacSnapshot {
     state: { ready: boolean; running: boolean; status: string; last_error: string | null; url: string; api_url: string };
     services: { id: string; running: boolean; circuit_open?: boolean }[];
     operator: {
-        config: { revision: number; ai: OperatorAi; integrations: IntegrationConfig; surfaces: SurfaceConfig };
+        config: { revision: number; ai: OperatorAi; integrations: IntegrationConfig; surfaces: SurfaceConfig; email: EmailConfig };
         secrets: Record<string, boolean>;
         readiness: Record<string, string>;
     };
     sharing: Sharing | null;
     sandbox_images: { state: string; detail: string } | null;
     paths: { locald: string; logs: string } | null;
-    app: { version: string; channel: string; updates_supported: boolean; start_at_login: boolean };
+    app: { version: string; channel: string; updates_supported: boolean; start_at_login: boolean; repair_available: boolean };
 }
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -157,6 +172,8 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
     const ai = record(config.ai);
     const integrations = record(config.integrations);
     const surfaces = record(config.surfaces);
+    const email = record(config.email);
+    const provider = text(email.provider, "none");
     const app = record(raw.app);
     const sharing = raw.sharing && typeof raw.sharing === "object" ? readSharing(raw.sharing) : null;
     const images = record(raw.sandbox_images);
@@ -186,6 +203,8 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
                     vision_models: strings(ai.vision_models),
                     allow_private_network: flag(ai.allow_private_network),
                     last_validated_at_unix_ms: typeof ai.last_validated_at_unix_ms === "number" ? ai.last_validated_at_unix_ms : null,
+                    image_model: text(ai.image_model),
+                    fast_model: text(ai.fast_model),
                 },
                 integrations: {
                     composio_enabled: flag(integrations.composio_enabled),
@@ -203,6 +222,14 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
                     whatsapp_waba_id: text(surfaces.whatsapp_waba_id),
                     resend_inbound_domain: text(surfaces.resend_inbound_domain),
                 },
+                email: {
+                    provider: provider === "resend" || provider === "smtp" ? provider : "none",
+                    from_email: text(email.from_email),
+                    smtp_host: text(email.smtp_host),
+                    smtp_port: typeof email.smtp_port === "number" && email.smtp_port > 0 ? email.smtp_port : 587,
+                    smtp_user: text(email.smtp_user),
+                    smtp_use_tls: email.smtp_use_tls !== false,
+                },
             },
             secrets: Object.fromEntries(Object.entries(record(operator.secrets)).map(([key, value]) => [key, value === true])),
             readiness: Object.fromEntries(Object.entries(record(operator.readiness)).map(([key, value]) => [key, text(value)])),
@@ -215,6 +242,7 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
             channel: text(app.channel, "dev"),
             updates_supported: flag(app.updates_supported),
             start_at_login: flag(app.start_at_login),
+            repair_available: flag(app.repair_available),
         },
     };
 }
@@ -285,7 +313,17 @@ export const thisMac = {
     diagnosticLogs: (source: string | null, cursor: string | null) =>
         invoke<{ entries?: string; nextCursor?: string | null; sources?: { id: string; label: string }[] }>("diagnostic_logs", { source, cursor }),
     discoverModels: (payload: Record<string, unknown>) => invoke<unknown>("discover_provider_models", { payload }),
+    /** Server setup's Test: one read-only request, made by the daemon with the
+     *  typed credential or the stored one. */
+    testSetup: (payload: SetupTestPayload) => invoke<{ detail?: unknown; models?: unknown }>("test_server_setup", { payload }),
 };
+
+/** What a Test sends. `ai` tests a provider draft; every other service one key. */
+export type SetupTestPayload =
+    | { service: "ai"; ai: Record<string, unknown>; api_key?: string }
+    | { service: SetupService; credential?: string; from_email?: string };
+
+export type SetupService = "composio" | "telegram" | "slack" | "deepgram" | "brave" | "resend";
 
 /* ── run commands on this Mac ──────────────────────────────────────── */
 
@@ -314,8 +352,13 @@ export const AGENT_SERVICE_SILENT = "Lemma’s agent service isn’t responding.
 /** The "Run commands on this Mac" switch, from the Agent Host's status.
  *  Pure, so what it says in each state is tested without a page. */
 export function hostExecutionRow(
-    status: { host_execution: { enabled: boolean; available: boolean } | null } | null,
+    status: { available?: boolean; host_execution: { enabled: boolean; available: boolean } | null } | null,
 ): HostExecutionRow {
+    /* A build without the Agent Host will never answer, so waiting for it
+       would be a stage nobody can leave. */
+    if (status?.available === false) {
+        return { checked: false, blocked: "This build of Lemma doesn’t include the Agent Host.", consequence: HOST_EXECUTION_CONSEQUENCE };
+    }
     const setting = status?.host_execution ?? null;
     if (!setting) {
         return { checked: false, blocked: "Waiting for this computer’s Agent Host…", consequence: HOST_EXECUTION_CONSEQUENCE };
@@ -393,6 +436,35 @@ export function healthState(snapshot: ThisMacSnapshot): "running" | "starting" |
     return snapshot.state.running ? "starting" : "stopped";
 }
 
+/** How long a start may take before Overview stops calling it one. A cold
+ *  start migrates and warms models, so this is generous; past it, "Starting"
+ *  would be a stage nobody can leave. */
+export const STARTING_PATIENCE_MS = 3 * 60_000;
+
+/** The services still not running after a start has had its time, or null
+ *  while it is within it (or not starting at all). */
+export function stuckStarting(snapshot: ThisMacSnapshot, startingSinceMs: number | null, nowMs: number): string | null {
+    if (healthState(snapshot) !== "starting" || startingSinceMs === null) return null;
+    if (nowMs - startingSinceMs < STARTING_PATIENCE_MS) return null;
+    const down = snapshot.services.filter((service) => !service.running).map((service) => SERVICE_NAMES[service.id] ?? service.id);
+    return down.length
+        ? `Lemma’s ${down.join(" and ")} ${down.length === 1 ? "isn’t" : "aren’t"} running yet, and should be by now.`
+        : "Lemma is taking longer than it should to start.";
+}
+
+/** What is wrong, when Overview says "Needs attention": the stack's own
+ *  error, or which service stopped. Null when there is nothing to say. */
+export function healthDetail(snapshot: ThisMacSnapshot): string | null {
+    if (healthState(snapshot) !== "attention") return null;
+    if (snapshot.state.last_error) return snapshot.state.last_error;
+    const stopped = snapshot.services.filter((service) => service.circuit_open).map((service) => SERVICE_NAMES[service.id] ?? service.id);
+    return stopped.length
+        ? `Lemma’s ${stopped.join(" and ")} kept stopping, so Lemma stopped restarting ${stopped.length === 1 ? "it" : "them"}.`
+        : null;
+}
+
+const SERVICE_NAMES: Record<string, string> = { backend: "server", frontend: "workspace" };
+
 const HEALTH_WORDS = { running: "Running", starting: "Starting", attention: "Needs attention", stopped: "Stopped" } as const;
 
 /** One line: "Running · v0.8.0 · up to date". The update part only when
@@ -405,7 +477,10 @@ export function healthLine(snapshot: ThisMacSnapshot, update: AppUpdateStatus | 
         const channel = snapshot.app.channel && snapshot.app.channel !== "stable" ? " " + snapshot.app.channel : "";
         parts.push("v" + version + channel);
     }
-    if (update?.updatesSupported) parts.push(update.availableVersion ? update.availableVersion + " available" : "up to date");
+    /* Not "available" for an update that cannot be installed yet: Updates
+       says why, and the one line here should not promise it. */
+    const blocked = update?.dataCompatibility === "postgres-major-change";
+    if (update?.updatesSupported && !blocked) parts.push(update.availableVersion ? update.availableVersion + " available" : "up to date");
     return parts.join(" · ");
 }
 
@@ -463,6 +538,18 @@ export function joinPolicyCopy(whoCanJoin: WhoCanJoin, mode: SharingMode): strin
         : "Once shared, only people you invite can create an account.";
 }
 
+/** A sharing transition's phase, in words. */
+export function sharingPhaseWords(phase: string): string {
+    const words: Record<string, string> = {
+        preflight: "Checking",
+        gateway: "Starting the gateway",
+        provisioning_dns: "Setting up the address",
+        starting_tunnel: "Opening the public link",
+        restarting: "Restarting Lemma",
+    };
+    return words[phase] ?? "Working";
+}
+
 /** Whether a transition is under way, from any of the three places that say so. */
 export function sharingBusy(sharing: Sharing | null): boolean {
     if (!sharing) return false;
@@ -517,8 +604,8 @@ export function postgresMajorChangeMessage(update: AppUpdateStatus): string {
     const from = update.installedPostgresMajor;
     const to = update.candidatePostgresMajor;
     const change = from && to ? `from Postgres ${from} to Postgres ${to}` : "to a different Postgres version";
-    return `This update moves Lemma's database ${change}, which Lemma can't migrate automatically yet. `
-        + "Nothing was changed: your current version, pods, files and accounts are as they were.";
+    return `Lemma ${update.availableVersion ?? "’s next version"} moves its database ${change}, which it can’t do automatically yet, `
+        + "so it isn’t offered here. Keep using this version; your pods, files and accounts are safe.";
 }
 
 export function updateOffer(update: AppUpdateStatus | null): { blocked: string | null; cost: string } {
@@ -540,16 +627,36 @@ export function updateOffer(update: AppUpdateStatus | null): { blocked: string |
  *  toggle that would have to install a different app to mean anything. */
 export function channelLine(update: AppUpdateStatus | null, channel: string): string {
     const current = update?.channel || channel;
+    if (current === "unknown") return "Lemma couldn’t tell which channel this build is on.";
     if (current === "nightly") return "Nightly builds don’t update themselves. Newer ones are on the releases page.";
     if (current === "stable") return "Stable releases. Nightly builds are a separate download from the releases page.";
     return "A development build, which doesn’t update itself.";
 }
 
-/* ── advanced: developer credentials ──────────────────────────────── */
+/** Where newer builds are, for a build that cannot fetch them itself. */
+export const RELEASES_PAGE = "https://github.com/lemma-work/lemma-platform/releases";
+
+/** An update check or install that did not happen, in words: a declined
+ *  install is a choice, not an error, and a failed check is the network's. */
+export function updateProblem(reason: unknown): { text: string; neutral: boolean } {
+    const message = reason instanceof Error ? reason.message : String(reason ?? "");
+    if (/was not installed/i.test(message)) return { text: "Not installed. Lemma is still on this version.", neutral: true };
+    if (/could not download|network|timed out|connect|dns|resolve|fetch/i.test(message)) {
+        return { text: "Couldn’t reach the update server. Check your connection and try again.", neutral: false };
+    }
+    return { text: friendlyError(reason), neutral: false };
+}
+
+/* ── server setup: credential forms ────────────────────────────────── */
 
 export type CredentialForm =
-    | "composio" | "google" | "github" | "microsoft" | "deepgram"
+    | "composio" | "google" | "github" | "microsoft" | "slack-app" | "deepgram" | "brave"
     | "slack" | "telegram" | "teams" | "whatsapp" | "resend";
+
+/** Where a form sits on Server setup. */
+export type SetupGroup = "connectors" | "channels" | "voice" | "search";
+
+export type SectionName = "integrations" | "surfaces" | "email" | "ai";
 
 export interface CredentialField {
     key: string;
@@ -562,66 +669,97 @@ export interface CredentialField {
 
 export interface CredentialFormSpec {
     form: CredentialForm;
-    section: "integrations" | "surfaces";
+    group: SetupGroup;
     title: string;
     /** The one line of consequence. */
     use: string;
     fields: CredentialField[];
     /** Needs a public link for its callbacks to arrive. */
     needsPublicLink?: boolean;
+    /** How to get the credentials, with where to go. */
+    hint: { steps: string; url: string; label: string };
+    /** The Test button, and the secret whose typed value it tests. */
+    test?: { service: SetupService; field: string };
+    /** Shows the OAuth redirect URL the app must allow. */
+    redirect?: boolean;
 }
 
 /** The forms, in the order people need them. Field keys are the daemon's:
- *  `section.field` for plain values, and the vault name for secrets. */
+ *  the plain field name for values, and the vault name for secrets. */
 export const CREDENTIAL_FORMS: CredentialFormSpec[] = [
-    { form: "google", section: "integrations", title: "Google", use: "Lets people here connect Gmail, Calendar and Drive.",
-        fields: [{ key: "google_client_id", label: "Client ID" }, { key: "integrations.google_client_secret", label: "Client secret", secret: true }] },
-    { form: "github", section: "integrations", title: "GitHub", use: "Lets people here connect repositories, issues and pull requests.",
-        fields: [{ key: "github_client_id", label: "Client ID" }, { key: "integrations.github_client_secret", label: "Client secret", secret: true }] },
-    { form: "microsoft", section: "integrations", title: "Microsoft", use: "Lets people here connect Outlook, OneDrive and other Microsoft accounts.",
-        fields: [{ key: "microsoft_client_id", label: "Client ID" }, { key: "integrations.microsoft_client_secret", label: "Client secret", secret: true }] },
-    { form: "composio", section: "integrations", title: "Composio", use: "Adds Composio’s connector catalog.",
-        fields: [{ key: "composio_enabled", label: "Use Composio connectors", kind: "toggle" },
-            { key: "integrations.composio_api_key", label: "API key", secret: true },
-            { key: "integrations.composio_webhook_secret", label: "Webhook secret", secret: true }] },
-    { form: "deepgram", section: "integrations", title: "Deepgram", use: "Lets teammates speak and listen, and read voice notes.",
-        fields: [{ key: "integrations.deepgram_api_key", label: "API key", secret: true }] },
-    { form: "slack", section: "surfaces", title: "Slack", use: "The connector app lets each person connect their own Slack; the bot is the one account that answers as Lemma.",
-        fields: [{ key: "slack_client_id", label: "Connector client ID" },
-            { key: "integrations.slack_client_secret", label: "Connector client secret", secret: true },
-            { key: "slack_socket_mode", label: "Answer in Slack without a public link", kind: "toggle" },
-            { key: "surfaces.slack_app_token", label: "App token", secret: true },
-            { key: "surfaces.slack_bot_token", label: "Bot token", secret: true },
-            { key: "surfaces.slack_signing_secret", label: "Signing secret", secret: true }] },
-    { form: "telegram", section: "surfaces", title: "Telegram", use: "Lets teammates answer in Telegram, without a public link.",
-        fields: [{ key: "telegram_polling", label: "Receive Telegram messages", kind: "toggle" },
-            { key: "surfaces.telegram_bot_token", label: "Bot token", secret: true },
-            { key: "surfaces.telegram_webhook_secret", label: "Webhook secret", secret: true }] },
-    { form: "teams", section: "surfaces", title: "Microsoft Teams", use: "Lets teammates answer in Teams.", needsPublicLink: true,
-        fields: [{ key: "teams_app_id", label: "Bot app ID" }, { key: "teams_tenant_id", label: "Tenant ID" },
-            { key: "surfaces.teams_app_password", label: "App password", secret: true }] },
-    { form: "whatsapp", section: "surfaces", title: "WhatsApp Business", use: "Lets teammates answer on WhatsApp.", needsPublicLink: true,
+    { form: "composio", group: "connectors", title: "Composio", use: "Adds hundreds of ready-made connectors — Notion, Linear, HubSpot and more — without an OAuth app of your own.",
+        fields: [{ key: "integrations.composio_api_key", label: "API key", secret: true },
+            { key: "integrations.composio_webhook_secret", label: "Webhook secret (optional)", secret: true }],
+        hint: { steps: "Sign in to Composio, open Settings → API keys and create a key. Saving it adds Composio’s connectors to the catalog.", url: "https://platform.composio.dev", label: "Open Composio" },
+        test: { service: "composio", field: "integrations.composio_api_key" } },
+    { form: "google", group: "connectors", title: "Google", use: "Lets people here connect Gmail, Calendar and Drive.", redirect: true,
+        fields: [{ key: "google_client_id", label: "Client ID" }, { key: "integrations.google_client_secret", label: "Client secret", secret: true }],
+        hint: { steps: "In Google Cloud Console, create an OAuth client of type Web application, add the redirect URL below, and enable the Gmail, Calendar and Drive APIs.", url: "https://console.cloud.google.com/apis/credentials", label: "Open Google Cloud Console" } },
+    { form: "microsoft", group: "connectors", title: "Microsoft", use: "Lets people here connect Outlook, OneDrive and other Microsoft accounts.", redirect: true,
+        fields: [{ key: "microsoft_client_id", label: "Client ID" }, { key: "integrations.microsoft_client_secret", label: "Client secret", secret: true }],
+        hint: { steps: "In Microsoft Entra, register an app with the redirect URL below as a Web platform, then create a client secret under Certificates & secrets.", url: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade", label: "Open app registrations" } },
+    { form: "github", group: "connectors", title: "GitHub", use: "Lets people here connect repositories, issues and pull requests.", redirect: true,
+        fields: [{ key: "github_client_id", label: "Client ID" }, { key: "integrations.github_client_secret", label: "Client secret", secret: true }],
+        hint: { steps: "In GitHub, Settings → Developer settings → OAuth Apps → New OAuth App. Use the redirect URL below as the callback, then generate a client secret.", url: "https://github.com/settings/developers", label: "Open GitHub developer settings" } },
+    { form: "slack-app", group: "connectors", title: "Slack connector", use: "Lets each person connect their own Slack account to read and post as themselves.", redirect: true,
+        fields: [{ key: "slack_client_id", label: "Client ID" }, { key: "integrations.slack_client_secret", label: "Client secret", secret: true }],
+        hint: { steps: "At api.slack.com/apps, create an app, add the redirect URL below under OAuth & Permissions, and copy the client ID and secret from Basic Information.", url: "https://api.slack.com/apps", label: "Open Slack apps" } },
+    { form: "telegram", group: "channels", title: "Telegram", use: "Lets teammates answer in Telegram. Works without a public link.",
+        fields: [{ key: "surfaces.telegram_bot_token", label: "Bot token", secret: true }],
+        hint: { steps: "Message @BotFather in Telegram, send /newbot, and paste the token it gives you.", url: "https://t.me/BotFather", label: "Open BotFather" },
+        test: { service: "telegram", field: "surfaces.telegram_bot_token" } },
+    { form: "slack", group: "channels", title: "Slack bot", use: "Lets teammates answer in Slack. Works without a public link, through Socket Mode.",
+        fields: [{ key: "surfaces.slack_app_token", label: "App-level token (xapp-…)", secret: true },
+            { key: "surfaces.slack_signing_secret", label: "Signing secret (only with Public sharing)", secret: true }],
+        hint: { steps: "Uses the Slack connector app above: set that up first, then at api.slack.com/apps turn on Socket Mode for the same app, which creates the app-level token (scope connections:write). Install the bot from a pod’s Reach settings.", url: "https://api.slack.com/apps", label: "Open Slack apps" },
+        test: { service: "slack", field: "surfaces.slack_app_token" } },
+    { form: "resend", group: "channels", title: "Email in", use: "Lets teammates receive and answer email at their own address.",
+        fields: [{ key: "resend_inbound_domain", label: "Inbound domain" },
+            { key: "surfaces.resend_signing_secret", label: "Webhook signing secret (only with Public sharing)", secret: true }],
+        hint: { steps: "Uses the Resend key from Email above. In Resend, add a receiving domain and point its MX record at Resend; Lemma collects the mail itself, so no webhook is needed unless Lemma is shared publicly.", url: "https://resend.com/domains", label: "Open Resend domains" } },
+    { form: "whatsapp", group: "channels", title: "WhatsApp Business", use: "Lets teammates answer on WhatsApp.", needsPublicLink: true,
         fields: [{ key: "whatsapp_phone_number_id", label: "Phone number ID" }, { key: "whatsapp_waba_id", label: "Business account ID" },
             { key: "surfaces.whatsapp_access_token", label: "Access token", secret: true },
             { key: "surfaces.whatsapp_verify_token", label: "Verify token", secret: true },
-            { key: "surfaces.whatsapp_app_secret", label: "App secret", secret: true }] },
-    { form: "resend", section: "surfaces", title: "Email · Resend", use: "Lets teammates receive and answer email.", needsPublicLink: true,
-        fields: [{ key: "resend_inbound_domain", label: "Inbound domain" },
-            { key: "surfaces.resend_api_key", label: "API key", secret: true },
-            { key: "surfaces.resend_signing_secret", label: "Signing secret", secret: true }] },
+            { key: "surfaces.whatsapp_app_secret", label: "App secret", secret: true }],
+        hint: { steps: "Needs Public sharing: Meta delivers messages to a webhook on the internet. In Meta for Developers, add WhatsApp to an app and copy the IDs and a permanent access token.", url: "https://developers.facebook.com/apps", label: "Open Meta for Developers" } },
+    { form: "teams", group: "channels", title: "Microsoft Teams", use: "Lets teammates answer in Teams.", needsPublicLink: true,
+        fields: [{ key: "teams_app_id", label: "Bot app ID" }, { key: "teams_tenant_id", label: "Tenant ID" },
+            { key: "surfaces.teams_app_password", label: "App password", secret: true }],
+        hint: { steps: "Needs Public sharing: Teams delivers messages to a webhook on the internet. Create an Azure Bot, and copy its app ID, tenant and a client secret.", url: "https://portal.azure.com/#create/Microsoft.AzureBot", label: "Create an Azure Bot" } },
+    { form: "deepgram", group: "voice", title: "Deepgram", use: "Turns teammates’ replies into voice notes, and voice notes they are sent into text.",
+        fields: [{ key: "integrations.deepgram_api_key", label: "API key", secret: true }],
+        hint: { steps: "Sign up at Deepgram and create an API key in the console. New accounts come with free credit.", url: "https://console.deepgram.com", label: "Open Deepgram console" },
+        test: { service: "deepgram", field: "integrations.deepgram_api_key" } },
+    { form: "brave", group: "search", title: "Brave Search", use: "Better, fresher web results than the built-in search. Optional.",
+        fields: [{ key: "integrations.brave_search_api_key", label: "API key", secret: true }],
+        hint: { steps: "Subscribe to the Brave Search API (there is a free plan) and copy the key from the dashboard.", url: "https://api-dashboard.search.brave.com", label: "Open Brave Search API" },
+        test: { service: "brave", field: "integrations.brave_search_api_key" } },
 ];
 
 export function formSpec(form: CredentialForm): CredentialFormSpec {
     return CREDENTIAL_FORMS.find((one) => one.form === form)!;
 }
 
-/** Plain values live in one of the two sections, whichever holds the key.
- *  The Slack form spans both: the connector app is an integration, the bot
- *  a surface. */
-function sectionHolding(config: ThisMacSnapshot["operator"]["config"], key: string): "integrations" | "surfaces" | null {
+/** Old focus names still land somewhere: a "Set up on this Mac" link from an
+ *  older page, or a menu that asks for a form by its former name. */
+export function formFromFocus(focus: string | null): CredentialForm | null {
+    if (!focus) return null;
+    return CREDENTIAL_FORMS.some((one) => one.form === focus) ? (focus as CredentialForm) : null;
+}
+
+type PlainSection = "integrations" | "surfaces";
+
+/** Plain values live in one of the two sections, whichever holds the key. */
+function sectionHolding(config: ThisMacSnapshot["operator"]["config"], key: string): PlainSection | null {
     if (key in config.integrations) return "integrations";
     if (key in config.surfaces) return "surfaces";
     return null;
+}
+
+/** Whether a secret is stored under a vault name. */
+export function stored(snapshot: ThisMacSnapshot, key: string): boolean {
+    return snapshot.operator.secrets[key] === true;
 }
 
 /** Whether a form holds anything the owner has set. "Anything", not
@@ -630,7 +768,7 @@ function sectionHolding(config: ThisMacSnapshot["operator"]["config"], key: stri
 export function formConfigured(snapshot: ThisMacSnapshot, form: CredentialForm): boolean {
     const config = snapshot.operator.config;
     return formSpec(form).fields.some((field) => {
-        if (field.secret) return snapshot.operator.secrets[field.key] === true;
+        if (field.secret) return stored(snapshot, field.key);
         const section = sectionHolding(config, field.key);
         const value = section ? (config[section] as unknown as Record<string, unknown>)[field.key] : undefined;
         return typeof value === "boolean" ? value : typeof value === "string" && value.trim() !== "";
@@ -643,8 +781,15 @@ export type SecretIntent = { action: "keep" } | { action: "replace"; value: stri
 
 export interface SectionPayload {
     expected_revision: number;
-    section: { name: "integrations" | "surfaces"; value: IntegrationConfig | SurfaceConfig };
+    section: { name: SectionName; value: IntegrationConfig | SurfaceConfig | EmailConfig | OperatorAi };
     secrets: Record<string, SecretIntent>;
+}
+
+/** The secret changes that mean something: a typed value, or a removal. */
+export function meaningfulIntent(intent: SecretIntent | undefined): SecretIntent | null {
+    if (!intent || intent.action === "keep") return null;
+    if (intent.action === "replace") return intent.value.trim() ? { action: "replace", value: intent.value.trim() } : null;
+    return intent;
 }
 
 /** The `config.apply` requests one form's draft becomes.
@@ -665,14 +810,14 @@ export function sectionPayloads(
         integrations: { ...config.integrations } as unknown as Record<string, unknown>,
         surfaces: { ...config.surfaces } as unknown as Record<string, unknown>,
     };
-    const touched = new Set<"integrations" | "surfaces">();
-    const secretsBySection: Record<"integrations" | "surfaces", Record<string, SecretIntent>> = { integrations: {}, surfaces: {} };
+    const touched = new Set<PlainSection>();
+    const secretsBySection: Record<PlainSection, Record<string, SecretIntent>> = { integrations: {}, surfaces: {} };
     for (const field of formSpec(form).fields) {
         if (field.secret) {
-            const section = field.key.split(".")[0] as "integrations" | "surfaces";
-            const intent = secrets[field.key];
-            if (intent && intent.action !== "keep" && !(intent.action === "replace" && !intent.value.trim())) {
-                secretsBySection[section][field.key] = intent.action === "replace" ? { action: "replace", value: intent.value.trim() } : intent;
+            const section = field.key.split(".")[0] as PlainSection;
+            const intent = meaningfulIntent(secrets[field.key]);
+            if (intent) {
+                secretsBySection[section][field.key] = intent;
                 touched.add(section);
             }
             continue;
@@ -687,8 +832,16 @@ export function sectionPayloads(
             touched.add(section);
         }
     }
-    /* Integrations first: the Slack form's connector app is useful on its
-       own, and the bot's surface is the one more likely to be refused. */
+    /* Composio is on exactly while it has a key: the key is the whole of
+       setting it up, and a separate switch was one more thing to forget. */
+    if (form === "composio") {
+        const intent = meaningfulIntent(secrets["integrations.composio_api_key"]);
+        const enabled = intent ? intent.action === "replace" : stored(snapshot, "integrations.composio_api_key");
+        if (values.integrations.composio_enabled !== enabled) {
+            values.integrations.composio_enabled = enabled;
+            touched.add("integrations");
+        }
+    }
     return (["integrations", "surfaces"] as const)
         .filter((section) => touched.has(section))
         .map((section) => ({
@@ -708,8 +861,10 @@ export function oauthFormForConnector(connectorId: string): CredentialForm | nul
     const id = connectorId.toLowerCase();
     if (id === "gmail" || id.startsWith("google")) return "google";
     if (id === "github") return "github";
+    /* Teams answers as the Teams bot, not through the Microsoft OAuth app. */
+    if (id === "microsoft_teams" || id === "teams") return "teams";
     if (id.startsWith("microsoft") || id.startsWith("outlook") || id === "onedrive" || id === "sharepoint") return "microsoft";
-    if (id === "slack") return "slack";
+    if (id === "slack") return "slack-app";
     return null;
 }
 
@@ -786,6 +941,9 @@ export interface ProviderDraft {
     name: string;
     baseUrl: string;
     models: string[];
+    /** The models this install says read images, so the organization's copy
+     *  can offer them for images too. */
+    visionModels: string[];
     /** Null when this provider needs no key (a loopback server). */
     needsKey: boolean;
 }
@@ -808,6 +966,7 @@ export function operatorProvider(snapshot: ThisMacSnapshot): ProviderDraft | nul
         name: server?.name ?? hostName(ai.base_url),
         baseUrl: ai.base_url,
         models,
+        visionModels: ai.vision_models.filter((model) => models.includes(model)),
         needsKey: !LOOPBACK.test(ai.base_url),
     };
 }
@@ -839,11 +998,11 @@ export function alreadyInWorkspace(baseUrl: string, runtimes: { baseUrl?: string
 export async function addToWorkspace(
     draft: ProviderDraft,
     apiKey: string,
-    add: (key: { protocol: "openai" | "anthropic"; name: string; baseUrl: string; apiKey: string; models: string[] }) => Promise<void>,
+    add: (key: { protocol: "openai" | "anthropic"; name: string; baseUrl: string; apiKey: string; models: string[]; visionModels?: string[] }) => Promise<void>,
 ): Promise<void> {
     const key = draft.needsKey ? apiKey.trim() : LOCAL_SERVER_KEY;
     if (!key) throw new Error("Enter the API key for " + draft.name + ". Lemma cannot read back the one stored on this computer.");
-    await add({ protocol: draft.protocol, name: draft.name, baseUrl: draft.baseUrl, apiKey: key, models: draft.models });
+    await add({ protocol: draft.protocol, name: draft.name, baseUrl: draft.baseUrl, apiKey: key, models: draft.models, visionModels: draft.visionModels });
 }
 
 /* ── errors ────────────────────────────────────────────────────────── */

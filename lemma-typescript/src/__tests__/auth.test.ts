@@ -2,7 +2,13 @@ import Session from "supertokens-web-js/recipe/session/index.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ensureCookieSessionSupport } from "../supertokens.js";
-import { AuthManager, clearTestingToken, resolveSafeRedirectUri, setTestingToken } from "../auth.js";
+import {
+  AuthManager,
+  clearTestingToken,
+  resetOwnOriginRecoveryForTests,
+  resolveSafeRedirectUri,
+  setTestingToken,
+} from "../auth.js";
 
 const siteOrigin = "https://app.lemma.work";
 
@@ -26,6 +32,8 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     clearTestingToken();
     vi.restoreAllMocks();
     doesSessionExist.mockReset();
+    resetOwnOriginRecoveryForTests();
+    document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   });
 
   it("short-circuits to unauthenticated without hitting the network when no local session exists", async () => {
@@ -38,6 +46,39 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     expect(state.status).toBe("unauthenticated");
     expect(doesSessionExist).toHaveBeenCalledTimes(1);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("an app on its own origin drops a stale update marker and asks once before giving up", async () => {
+    // A failed refresh leaves `st-last-access-token-update` behind with no
+    // front token, and the SDK then answers "no session" without asking.
+    document.cookie = "st-last-access-token-update=1700000000000; path=/";
+    const seen: string[] = [];
+    doesSessionExist
+      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => {
+        seen.push(document.cookie);
+        return true;
+      });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "u1", email: "a@x.test" }), { status: 200 }),
+    );
+
+    const auth = new AuthManager("/_lemma", "https://auth.x.test");
+    const state = await auth.checkAuth();
+
+    expect(state.status).toBe("authenticated");
+    expect(doesSessionExist).toHaveBeenCalledTimes(2);
+    expect(seen[0]).not.toContain("st-last-access-token-update");
+  });
+
+  it("the recovery is tried once per page, so a signed-out app cannot storm refresh", async () => {
+    doesSessionExist.mockResolvedValue(false);
+    const auth = new AuthManager("/_lemma", "https://auth.x.test");
+
+    expect((await auth.checkAuth()).status).toBe("unauthenticated");
+    auth.markUnauthenticated();
+    expect((await auth.checkAuth()).status).toBe("unauthenticated");
+    expect(doesSessionExist).toHaveBeenCalledTimes(3);
   });
 
   it("calls /users/me when a local session exists", async () => {

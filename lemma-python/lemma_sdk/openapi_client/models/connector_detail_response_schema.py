@@ -32,6 +32,10 @@ class ConnectorDetailResponseSchema:
         is_active (bool):
         updated_at (datetime.datetime):
         kinds (list[ConnectorKindResponseSchema] | Unset):
+        oauth_redirect_uri (None | str | Unset): The redirect URI an OAuth app registered for this deployment must allow
+            -- the callback every sign-in returns to. The same for every connector; published here because this is what a
+            person reads while registering their own app, and a hand-built copy of it is how a wrong path reached users as
+            redirect_uri_mismatch.
         operations (ConnectorDetailResponseSchemaOperations | Unset):
         title (None | str | Unset):
     """
@@ -43,6 +47,7 @@ class ConnectorDetailResponseSchema:
     is_active: bool
     updated_at: datetime.datetime
     kinds: list[ConnectorKindResponseSchema] | Unset = UNSET
+    oauth_redirect_uri: None | str | Unset = UNSET
     operations: ConnectorDetailResponseSchemaOperations | Unset = UNSET
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -69,6 +74,12 @@ class ConnectorDetailResponseSchema:
                 kinds_item = kinds_item_data.to_dict()
                 kinds.append(kinds_item)
 
+        oauth_redirect_uri: None | str | Unset
+        if isinstance(self.oauth_redirect_uri, Unset):
+            oauth_redirect_uri = UNSET
+        else:
+            oauth_redirect_uri = self.oauth_redirect_uri
+
         operations: dict[str, Any] | Unset = UNSET
         if not isinstance(self.operations, Unset):
             operations = self.operations.to_dict()
@@ -93,6 +104,8 @@ class ConnectorDetailResponseSchema:
         )
         if kinds is not UNSET:
             field_dict["kinds"] = kinds
+        if oauth_redirect_uri is not UNSET:
+            field_dict["oauth_redirect_uri"] = oauth_redirect_uri
         if operations is not UNSET:
             field_dict["operations"] = operations
         if title is not UNSET:
@@ -139,6 +152,17 @@ class ConnectorDetailResponseSchema:
 
                 kinds.append(kinds_item)
 
+        def _parse_oauth_redirect_uri(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        oauth_redirect_uri = _parse_oauth_redirect_uri(
+            d.pop("oauth_redirect_uri", UNSET)
+        )
+
         _operations = d.pop("operations", UNSET)
         operations: ConnectorDetailResponseSchemaOperations | Unset
         if isinstance(_operations, Unset):
@@ -163,6 +187,7 @@ class ConnectorDetailResponseSchema:
             is_active=is_active,
             updated_at=updated_at,
             kinds=kinds,
+            oauth_redirect_uri=oauth_redirect_uri,
             operations=operations,
             title=title,
         )

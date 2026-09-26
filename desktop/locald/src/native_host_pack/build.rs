@@ -349,8 +349,12 @@ pub(crate) fn build(
             "LOCAL_AGENT_RUNTIME_CONFIG_PATH",
             path_text(&state.join("agent-runtime.json"))?,
         ),
-        ("EMAIL_TRANSPORT", "filesystem".to_owned()),
-        ("EMAIL_OUTPUT_DIR", path_text(&state.join("emails"))?),
+        // SMTP with no server named is "email is not set up", which the
+        // backend says as such: invitations offer their link, and a password
+        // reset or sign-in code is refused with a sentence instead of written
+        // to a spool nobody reads. Server setup's Email card fills in the
+        // server (`email_environment`).
+        ("EMAIL_TRANSPORT", "smtp".to_owned()),
         ("AUTH_EMAIL_VERIFICATION_REQUIRED", "false".to_owned()),
         (
             "AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED",
@@ -414,9 +418,6 @@ pub(crate) fn build(
     // on the next start, which is why that is part of the catalog's stamp
     // rather than the release alone.
     let migrations_fingerprint = migrations_fingerprint(&bindings.backend_dir);
-    let backend_env_has_composio_key = backend_env
-        .get("COMPOSIO_API_KEY")
-        .is_some_and(|value| !value.trim().is_empty());
 
     let frontend_env = BTreeMap::from([
         ("NODE_ENV", bindings.node_env.to_owned()),
@@ -545,14 +546,13 @@ pub(crate) fn build(
                 "max_attempts": 1,
                 "retry_backoff_seconds": 0,
                 "optional": true,
-                // The pack, plus whether a Composio key is present. The second
-                // half preserves the behaviour the comment above describes: a
-                // user who adds a key later gets the Composio apps on the very
-                // next start, because adding one changes this stamp.
-                "stamp": setup_stamp(&[
-                    &release_version,
-                    if backend_env_has_composio_key { "composio" } else { "native-only" },
-                ]),
+                // The pack, plus the Composio key the import actually runs
+                // with. The key comes from the operator configuration, applied
+                // over this environment at run time, so it is named here and
+                // read there (`stamp_env`): saving, changing or removing one
+                // changes the stamp, and the next run imports again.
+                "stamp": setup_stamp(&[&release_version]),
+                "stamp_env": ["COMPOSIO_API_KEY"],
             },
         ],
         "services": [

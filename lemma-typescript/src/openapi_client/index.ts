@@ -121,6 +121,8 @@ export type { DirectoryTreeNode } from './models/DirectoryTreeNode.js';
 export type { DirectoryTreeResponse } from './models/DirectoryTreeResponse.js';
 export type { DisplaySizeRequest } from './models/DisplaySizeRequest.js';
 export type { DisplaySizeResponse } from './models/DisplaySizeResponse.js';
+export type { EmailDeliveryStatusResponse } from './models/EmailDeliveryStatusResponse.js';
+export type { EmailDeliveryTestResponse } from './models/EmailDeliveryTestResponse.js';
 export type { EndNode } from './models/EndNode.js';
 export type { EndNodeConfig } from './models/EndNodeConfig.js';
 export type { EndNodeResponse } from './models/EndNodeResponse.js';
@@ -348,6 +350,7 @@ export type { SurfaceSlackConfigInput } from './models/SurfaceSlackConfigInput.j
 export type { SurfaceSlackConfigResponse } from './models/SurfaceSlackConfigResponse.js';
 export type { SurfaceSystemClaim } from './models/SurfaceSystemClaim.js';
 export type { SurfaceTelegramConfigInput } from './models/SurfaceTelegramConfigInput.js';
+export { SurfaceUnavailableReason } from './models/SurfaceUnavailableReason.js';
 export type { SurfaceUpdateRequest } from './models/SurfaceUpdateRequest.js';
 export type { TableDetailResponse } from './models/TableDetailResponse.js';
 export type { TableListResponse } from './models/TableListResponse.js';

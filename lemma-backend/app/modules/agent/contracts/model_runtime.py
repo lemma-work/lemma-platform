@@ -35,14 +35,12 @@ from uuid import UUID, uuid4
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     usage_limits_for,
 )
-from app.modules.agent.services.runtime_profile_service import (
-    DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-    AgentRuntimeProfileService,
+from app.modules.agent.services.workspace_model_fallback import (
+    resolve_system_or_workspace_runtime,
 )
 
 
@@ -63,6 +61,7 @@ async def resolve_system_runtime(
     usage_limits: UsageLimits,
     user_id: UUID | None = None,
     organization_id: UUID | None = None,
+    pod_id: UUID | None = None,
 ) -> SystemModelRuntime:
     """The system model, ready to run under `usage_limits`.
 
@@ -70,11 +69,16 @@ async def resolve_system_runtime(
     on nobody's behalf may omit them -- the default system profile is
     code-defined and belongs to no user -- and gets the same profile a
     per-user resolution would find when the workspace has not overridden it.
+
+    A deployment without a system model falls back to the workspace's own (see
+    `workspace_model_fallback`), which needs the organization -- and the pod,
+    when there is one, so its chosen default wins. Without an organization that
+    case raises `model_not_configured`, as it always did.
     """
-    resolved = await AgentRuntimeProfileService().resolve(
-        runtime=AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID),
+    resolved = await resolve_system_or_workspace_runtime(
         organization_id=organization_id,
         user_id=user_id or uuid4(),
+        pod_id=pod_id,
     )
     runtime_profile = resolved.public_snapshot()
     model = require_pydantic_ai_model_from_runtime_profile(

@@ -14,6 +14,7 @@ from urllib.parse import quote
 import aiohttp
 from redis.exceptions import RedisError
 
+from app.core.config import reveal_secret
 from app.modules.agent_surfaces.config import surface_settings
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
@@ -88,7 +89,7 @@ async def get_bot_token() -> str | None:
 
 async def _get_token(tenant_id: str, scope: str) -> str | None:
     app_id = surface_settings.microsoft_bot_app_id
-    app_password = surface_settings.microsoft_bot_app_password
+    app_password = reveal_secret(surface_settings.microsoft_bot_app_password)
     if not app_id or not app_password:
         logger.debug(
             "agent_surfaces.client.teams_token_acquisition_skipped_microsoft.diagnostic"

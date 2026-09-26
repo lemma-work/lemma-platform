@@ -195,6 +195,17 @@ export function describeThisComputer(
             action: "update",
         };
     }
+    /* Before anything about the connection: a host that keeps exiting is
+       not "starting", however long the page waits. */
+    if (status.restart_circuit_open) {
+        return {
+            label: "Stopped working",
+            detail: status.last_error ?? `The Agent Host on ${noun} kept stopping. Restart it, or open its log to see why.`,
+            tone: "warn",
+            retry: false,
+            action: "restart",
+        };
+    }
     const target = selectWorkspaceTarget(status.targets, workspaceUrl, userId);
     if (!target) {
         /* Nothing retries on its own — one attempt per page, so a machine that

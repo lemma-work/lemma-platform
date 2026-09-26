@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import uuid7
+from typing import cast
+from uuid import UUID, uuid7
 
 import pytest
 from pydantic_ai.tools import RunContext
@@ -121,13 +122,14 @@ def _user_prompt(
     carries_history: bool,
     messages: list[Message] | None = None,
     resumed_tool_call_id: str | None = None,
+    agent_run_id: UUID | None = None,
 ) -> str:
     payload = run_start_payload(
         agent=_agent(),
         conversation=_conversation(),
         messages=_transcript() if messages is None else messages,
         ctx=_ctx(),
-        agent_run_id=uuid7(),
+        agent_run_id=agent_run_id or uuid7(),
         runtime_instructions="",
         carries_history=carries_history,
         resumed_tool_call_id=resumed_tool_call_id,
@@ -193,6 +195,72 @@ class TestWakingUp:
         )
 
         assert "Friday." in prompt
+
+
+def _in_run(
+    sequence: int,
+    role: str,
+    text: str,
+    run_id: UUID,
+    metadata: dict[str, object] | None = None,
+) -> Message:
+    message = _message(sequence, role, text)
+    message.agent_run_id = run_id
+    message.metadata = metadata or {}
+    return message
+
+
+class TestQueuedMessages:
+    """A turn answers every message that is its own, not only the newest."""
+
+    async def test_a_followup_carries_everything_said_while_the_last_turn_worked(
+        self,
+    ):
+        """Three messages typed during a turn, and the follow-up answering them.
+
+        "The latest user message" answered the last of the three, and the agent
+        -- whose session never saw the other two -- had no idea they existed.
+        """
+        working, followup = uuid7(), uuid7()
+        queued = {"during_active_run": True, "steered_into_run": str(followup)}
+        messages = [
+            _in_run(1, MessageRole.USER, "Refactor the parser.", working),
+            _in_run(2, MessageRole.USER, "Keep the old API.", working, queued),
+            _in_run(3, MessageRole.USER, "And add tests.", working, queued),
+            _in_run(4, MessageRole.ASSISTANT, "Parser refactored.", working),
+        ]
+
+        prompt = _user_prompt(
+            carries_history=False, messages=messages, agent_run_id=followup
+        )
+
+        assert "Keep the old API." in prompt
+        assert "And add tests." in prompt
+        assert prompt.index("Keep the old API.") < prompt.index("And add tests.")
+        # The session already has the turn those were queued behind.
+        assert "Refactor the parser." not in prompt
+        assert "Parser refactored." not in prompt
+
+    async def test_a_message_that_joined_before_dispatch_goes_with_the_first(self):
+        """Two quick bubbles: the second joined the run before it went out."""
+        run = uuid7()
+        messages = [
+            _in_run(1, MessageRole.USER, "Here is the log:", run),
+            _in_run(
+                2,
+                MessageRole.USER,
+                "why does it fail?",
+                run,
+                {"during_active_run": True},
+            ),
+        ]
+
+        prompt = _user_prompt(
+            carries_history=False, messages=messages, agent_run_id=run
+        )
+
+        assert "Here is the log:" in prompt
+        assert "why does it fail?" in prompt
 
 
 class TestCredentials:
@@ -642,33 +710,39 @@ class TestReplayedHistory:
 class TestTheAgentsOwnCli:
     """What a coding agent on the Mac is told about `lemma`."""
 
-    async def _payload(self, monkeypatch: pytest.MonkeyPatch, cli: str | None):
+    async def _payload(self, cli: str | None):
         from app.modules.agent.infrastructure.harnesses.remote_payload import (
             mcp_payload,
         )
-        from app.modules.workspace.config import workspace_settings
+        from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 
-        async def mint(**_: object) -> str:
-            return "a-delegated-session"
+        class Workspace:
+            """The sandbox environment, without the pod row it is read from."""
 
-        monkeypatch.setattr(
-            "app.modules.identity.contracts.delegated_tokens.mint_delegated_token",
-            mint,
-        )
-        monkeypatch.setattr(workspace_settings, "host_cli_root", cli)
+            async def get_env_vars(self, **kwargs: object) -> dict[str, str]:
+                return {
+                    "LEMMA_TOKEN": "a-delegated-session",
+                    "LEMMA_CONVERSATION_ID": str(kwargs["conversation_id"]),
+                }
+
+            async def close(self) -> None:
+                return None
+
         conversation_id = uuid7()
         return conversation_id, await mcp_payload(
             agent_run_id=uuid7(),
             conversation_id=conversation_id,
             ctx=_ctx(),
             options=HarnessOptions(model_name="gpt-5.1", toolsets=[]),
+            workspace_service=cast(WorkspaceSandboxService, Workspace()),
+            cli_root=lambda: cli,
         )
 
     async def test_the_cli_this_release_ships_is_named_and_the_conversation_given(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
     ) -> None:
         conversation_id, payload = await self._payload(
-            monkeypatch, "/Lemma/runtime/releases/1/local-runtime/backend"
+            "/Lemma/runtime/releases/1/local-runtime/backend"
         )
 
         assert payload["lemma_cli"] == "/Lemma/runtime/releases/1/local-runtime/backend"
@@ -676,9 +750,7 @@ class TestTheAgentsOwnCli:
         assert isinstance(environment, dict)
         assert environment["LEMMA_CONVERSATION_ID"] == str(conversation_id)
 
-    async def test_without_one_nothing_is_named(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _, payload = await self._payload(monkeypatch, None)
+    async def test_without_one_nothing_is_named(self) -> None:
+        _, payload = await self._payload(None)
 
         assert "lemma_cli" not in payload

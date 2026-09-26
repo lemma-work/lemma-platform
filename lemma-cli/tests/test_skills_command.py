@@ -337,3 +337,99 @@ def test_uninstall_removes_symlinked_skill(tmp_path):
     # Only the link is removed; the target is untouched.
     assert not (dest / "lemma-user").exists()
     assert (real_skill / "SKILL.md").read_text() == "stale"
+
+
+# --------------------------------------------------------------------------- #
+# Codex's legacy ~/.codex/skills                                               #
+# --------------------------------------------------------------------------- #
+# Codex reads ~/.codex/skills as well as ~/.agents/skills, so an old Lemma copy
+# there is loaded beside the fresh one under the same name.
+
+
+@pytest.fixture
+def home(monkeypatch):
+    """The throwaway home the autouse conftest fixture already points HOME at."""
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    return Path.home()
+
+
+def _legacy_copy(home: Path, name: str, description: str) -> Path:
+    legacy = home / ".codex" / "skills" / name
+    legacy.mkdir(parents=True)
+    (legacy / "SKILL.md").write_text(
+        f'---\nname: {name}\ndescription: "{description}"\n---\n\nRun start-browser.\n'
+    )
+    return legacy
+
+
+def _stale_backups(home: Path) -> list[Path]:
+    backups = home / ".codex" / "lemma-stale-skills"
+    return sorted(backups.iterdir()) if backups.is_dir() else []
+
+
+def test_codex_install_moves_a_stale_lemma_copy_aside(tmp_path, home):
+    legacy = _legacy_copy(home, "browser", "Operate a browser in a Lemma workspace.")
+
+    result = _invoke(["skills", "install", "--target", "codex", "browser"], tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert not legacy.exists()
+    [backup] = _stale_backups(home)
+    assert backup.name.startswith("browser.")
+    assert "Run start-browser." in (backup / "SKILL.md").read_text()
+    assert "Moved stale Lemma skill" in result.stderr
+    assert (home / ".agents" / "skills" / "browser" / ".lemma-skill").is_file()
+
+
+def test_a_marked_copy_is_lemmas_whatever_its_frontmatter_says(tmp_path, home):
+    legacy = _legacy_copy(home, "lemma-user", "Hand-edited.")
+    (legacy / ".lemma-skill").write_text("")
+
+    result = _invoke(["skills", "install", "--target", "codex", "lemma-user"], tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert not legacy.exists()
+    assert len(_stale_backups(home)) == 1
+
+
+def test_the_users_own_skill_of_the_same_name_is_left_alone(tmp_path, home):
+    legacy = _legacy_copy(home, "browser", "My own browser helper.")
+
+    result = _invoke(["skills", "install", "--target", "codex", "browser"], tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert (legacy / "SKILL.md").is_file()
+    assert _stale_backups(home) == []
+
+
+def test_other_targets_do_not_touch_codex_skills(tmp_path, home):
+    legacy = _legacy_copy(home, "browser", "Operate a browser in a Lemma workspace.")
+
+    result = _invoke(["skills", "install", "--target", "claude", "browser"], tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert legacy.is_dir()
+
+
+def test_dry_run_reports_the_move_without_making_it(tmp_path, home):
+    legacy = _legacy_copy(home, "browser", "Operate a browser in a Lemma workspace.")
+
+    result = _invoke(
+        ["skills", "install", "--target", "codex", "browser", "--dry-run"], tmp_path
+    )
+
+    assert result.exit_code == 0, result.output
+    assert legacy.is_dir()
+    assert "Would move stale Lemma skill" in result.stderr
+
+
+def test_the_install_marker_does_not_make_a_reinstall_look_changed(tmp_path):
+    dest = tmp_path / "dest"
+    _invoke(["skills", "install", "--dir", str(dest), "lemma-user"], tmp_path)
+    assert (dest / "lemma-user" / ".lemma-skill").is_file()
+
+    result = _invoke(
+        ["--json", "skills", "install", "--dir", str(dest), "lemma-user"], tmp_path
+    )
+
+    assert json.loads(result.output)["items"][0]["action"] == "unchanged"

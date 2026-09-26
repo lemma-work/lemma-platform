@@ -55,6 +55,7 @@ import { CallBar } from "@/call/call-bar";
 import { isLandingPreview, previewTabForStep } from "@/marketing/preview-mode";
 import { DesktopNotices } from "@/desktop/desktop-notices";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
+import { useVoiceConfigured } from "@/call/voice-config";
 import { AppFrameView } from "@/desktop/app-frame";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
@@ -363,6 +364,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         void openCall();
     }, [pod, openCall]);
     const endCall = useCallback(() => { closeCall(); setCallPod(null); }, [closeCall]);
+    /* Offered only once the install says it can place one. Nothing to link
+       to otherwise: calls run on the web app's own voice gateway, which no
+       settings page configures. */
+    const voiceReady = useVoiceConfigured() === true;
 
     const podTabs = useQuery({
         queryKey: ["tabs", pod?.id],
@@ -756,7 +761,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
             )}
             {/* The desktop app's background work: connecting this computer and
                 the sandbox download. Renders nothing in a browser. */}
-            {!preview && <DesktopNotices />}
+            {!preview && <DesktopNotices orgId={activeOrgId} />}
             {mobileOpen && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
             <aside className="side" id="app-sidebar" aria-label="Workspace navigation">
                 <div className="side__brand"><LemmaLogo compact={collapsed && !mobileOpen} /><button className="icon-button sidebar-toggle" title={collapsed ? "Expand sidebar (⌘\\)" : "Collapse sidebar (⌘\\)"} aria-label={mobileOpen ? "Close navigation" : collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} aria-controls="app-sidebar" onClick={() => { if (mobileOpen) setMobileOpen(false); else { setSidebarHidden(false); setCollapsed(v => !v); } }}><SidebarIcon size={19} /></button></div>
@@ -1104,7 +1109,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                                 onOpenApp={(name) => pickTab("app:" + name)}
                                                 onOpenFile={openFile}
                                                 onOpenTable={openTable}
-                                                onVoice={startCall}
+                                                onVoice={voiceReady ? startCall : undefined}
                                                 callError={huddle.error}
                                                 callRefresh={callConversationId === openConversationId ? `${huddle.active}:${huddle.thinking}:${huddle.expanded}` : ""}
                                             />
