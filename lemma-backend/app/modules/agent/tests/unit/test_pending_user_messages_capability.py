@@ -124,3 +124,17 @@ async def test_nothing_claimed_announces_nothing() -> None:
     await capability.before_node_run(_Ctx(), node=object())
 
     capability._announce.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_announcement_does_not_lose_the_claimed_messages() -> None:
+    """The claim committed; only the live frame failed. The turn keeps them."""
+    node = object()
+    capability, _claim = _capability([_message("one more thing")])
+    capability._announce = AsyncMock(side_effect=TypeError("not serializable"))  # type: ignore[method-assign]
+    ctx = _Ctx()
+
+    returned = await capability.before_node_run(ctx, node=node)
+
+    assert returned is node
+    assert len(ctx.enqueued) == 1

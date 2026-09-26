@@ -80,7 +80,18 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
 
         for message in messages:
             ctx.enqueue(user_prompt_text(message))
-        await self._announce(messages)
+        # The claim is committed and the prompts are in the run: the frame only
+        # tells the client. Failing it must not cost the turn the messages it
+        # just took -- a reload reads the same claim. Publishing already
+        # swallows transport errors; what is left is building the frame.
+        try:
+            await self._announce(messages)
+        except TypeError, ValueError:
+            logger.warning(
+                "agent.pending_user_messages.announce_failed.degraded",
+                agent_run_id=self._agent_run_id,
+                exc_info=True,
+            )
         logger.info(
             "agent.pending_user_messages.steered_into_run.observed",
             agent_run_id=self._agent_run_id,

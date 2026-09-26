@@ -342,10 +342,15 @@ export function LiveConversation({
         [client, pod.id, putFiles, session, loadMessages],
     );
 
+    /* A take-back already on its way. A second click would send a second
+       DELETE, whose 409 -- the first one already removed it -- read as the
+       teammate having the message. */
+    const withdrawing = useRef<Set<string>>(new Set());
     const withdraw = useCallback(
         async (messageId: string) => {
             const id = session.conversationId;
-            if (!id) return;
+            if (!id || withdrawing.current.has(messageId)) return;
+            withdrawing.current.add(messageId);
             setSendError(null);
             try {
                 await client.conversations.withdrawMessage(id, messageId, { pod_id: pod.id });
@@ -356,6 +361,8 @@ export function LiveConversation({
                    it where it now belongs. */
                 if (mounted.current) setSendError(pod.teammate.name + " already has that message.");
                 void loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
+            } finally {
+                withdrawing.current.delete(messageId);
             }
         },
         [client, pod.id, pod.teammate.name, session.conversationId, loadMessages],

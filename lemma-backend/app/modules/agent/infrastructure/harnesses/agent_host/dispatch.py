@@ -160,18 +160,15 @@ async def enqueue_run[DepsT: AgentContext](
         run = await ConversationRepository(uow).get_agent_run(agent_run_id)
         # Messages that joined this run before it was dispatched are already in
         # the prompt below, so they are this run's to answer and must not also
-        # be sent as steers. Claimed by id: one that arrives after `messages`
-        # was loaded is not in the prompt, and steering is how it gets there.
+        # be sent as steers. Claimed by id, and only in the transaction that
+        # admits the run: one that arrives after `messages` was loaded is not in
+        # the prompt, and a dispatch that fails must leave these queued for the
+        # follow-up turn rather than claimed by a run that never went out.
         carried = [
             message.id
             for message in messages
             if message.agent_run_id == agent_run_id and is_queued(message.metadata)
         ]
-        if carried:
-            await ConversationRepository(uow).claim_queued_user_messages(
-                agent_run_id, message_ids=carried
-            )
-            await uow.commit()
 
     payload = run_start_payload(
         agent=agent,
@@ -261,6 +258,10 @@ async def enqueue_run[DepsT: AgentContext](
             encrypted_mcp_payload=encrypted_mcp,
             command_ttl_seconds=run_config.wait_timeout_seconds,
         )
+        if carried:
+            await ConversationRepository(uow).claim_queued_user_messages(
+                agent_run_id, message_ids=carried
+            )
         # A promise, committed with the command it belongs to. It becomes a
         # record only when the host reports that it prompted, so a run that
         # dies on the way out does not leave these instructions marked

@@ -25433,7 +25433,7 @@
           "kind": "mutation",
           "paginates": false,
           "resource": "agent.conversation.message",
-          "result": "entity",
+          "result": "void",
           "verb": "withdraw"
         }
       }
