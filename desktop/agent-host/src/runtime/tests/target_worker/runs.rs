@@ -169,7 +169,7 @@ async fn a_steer_with_no_turn_to_join_is_dropped_quietly() {
 /// Asserted on the source: the property is "every one of them", and reaching
 /// each from a test needs a different half-broken start command.
 #[test]
-fn every_terminal_path_wakes_the_poll_that_reports_it() {
+fn every_terminal_path_wakes_the_link_that_reports_it() {
     let source = include_str!("../../run.rs").replace("\r\n", "\n");
     let mut silent = Vec::new();
     for (offset, _) in source.match_indices("terminal_failure(") {

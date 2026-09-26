@@ -90,7 +90,7 @@ async def _resolved(value):
 
 @pytest.mark.asyncio
 async def test_a_finished_conversation_gets_a_fresh_turn(service):
-    """The main path, and the one that makes `snooze` unnecessary here.
+    """The main path, and the one that makes `wait_for` unnecessary here.
 
     The agent sent its messages and stopped. Nothing is suspended, so there is
     no pause to resolve — the replies are simply the next input.
@@ -118,7 +118,7 @@ async def test_a_finished_conversation_gets_a_fresh_turn(service):
 async def test_a_sleeping_conversation_has_its_pause_resolved_instead(service):
     """Not a message posted past the sleep.
 
-    `turns.start` would auto-deny the pending `snooze` call and start a run, and
+    `turns.start` would auto-deny the pending `wait_for` call and start a run, and
     the wait row it left behind would still be ACTIVE — due to fire later and
     try to resume a call that already has a return.
     """

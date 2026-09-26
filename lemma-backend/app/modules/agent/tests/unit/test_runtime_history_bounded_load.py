@@ -267,7 +267,7 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
 
     Eliding an old run keeps its first and last message. That is fine until the
     first message is an assistant tool call, which is the normal shape for a run
-    with no user message -- an approval resume and a snooze wake both create a
+    with no user message -- an approval resume and a wait wake both create a
     run and go straight into a tool. The call's return is elided away, the
     history builder finds it unpaired, and synthesizes:
 

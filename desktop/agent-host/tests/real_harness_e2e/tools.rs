@@ -387,7 +387,7 @@ async fn a_real_agent_waits_inside_its_turn_for_a_parked_tool() {
 /// about what the agent was waiting for.
 #[tokio::test]
 #[ignore = "requires authenticated local agents and spends real provider quota"]
-async fn a_real_agent_wakes_and_carries_on_where_it_slept() {
+async fn a_real_agent_wakes_and_carries_on_where_it_waited() {
     let paths = HostPaths::under(agent_host_data_directory());
     let manifest = AdapterManifest::builtin()
         .unwrap()
@@ -402,14 +402,14 @@ async fn a_real_agent_wakes_and_carries_on_where_it_slept() {
             &agent,
             conversation_id,
             "You are waiting for the Fenwick deployment to finish. It is not \
-             ready yet, so you called the snooze tool to sleep. Reply with \
-             only: sleeping.",
+             ready yet, so you called the wait_for tool with seconds=600 to \
+             wait before checking again. Reply with only: waiting.",
             None,
         )
         .await;
 
         // Exactly the shape `_render_history` produces for the return the wake
-        // writes, prompted into the session the agent slept in. Deliberately
+        // writes, prompted into the session the agent waited in. Deliberately
         // says nothing about the subject: everything the agent knows about what
         // it was doing has to come from the session it is resuming.
         let (resumed_session_id, answer) = one_turn(
@@ -417,23 +417,23 @@ async fn a_real_agent_wakes_and_carries_on_where_it_slept() {
             &workspace,
             &agent,
             conversation_id,
-            "TOOL:\nTool result snooze(lemma-mcp-1):\n{\n  \"success\": true,\n  \
-             \"woke_because\": \"TIMER\",\n  \"slept_seconds\": 600,\n  \
-             \"note_to_self\": \"name what you were waiting for, in one \
-             sentence\",\n  \"message\": \"Your time elapsed. That is all this \
-             means - check whatever you were waiting for before acting as \
-             though it happened.\"\n}",
+            "TOOL:\nTool result wait_for(lemma-mcp-1):\n{\n  \"success\": true,\n  \
+             \"error\": null,\n  \"message\": \"Your time elapsed. That is all \
+             this means - check whatever you were waiting for before acting as \
+             though it happened.\",\n  \"woke_because\": \"TIMER\",\n  \
+             \"waited_seconds\": 600,\n  \"note_to_self\": \"name what you \
+             were waiting for, in one sentence\",\n  \"exit_code\": null\n}",
             Some(session_id.clone()),
         )
         .await;
 
         assert_eq!(
             resumed_session_id, session_id,
-            "{agent} woke in a different session than the one it slept in"
+            "{agent} woke in a different session than the one it waited in"
         );
         assert!(
             answer.to_lowercase().contains("fenwick"),
-            "{agent} did not carry on from where it slept; it answered {answer:?}"
+            "{agent} did not carry on from where it waited; it answered {answer:?}"
         );
         println!("{agent}: LEMMA_REAL_WAKE_OK -> {answer:?}");
     }
