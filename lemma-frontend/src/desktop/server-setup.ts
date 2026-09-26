@@ -40,7 +40,7 @@ export const CAPABILITIES: CapabilitySpec[] = [
     { id: "channels", title: "Channels", required: false,
         unlocks: "Lets teammates answer in Telegram, Slack, email, WhatsApp and Teams." },
     { id: "voice", title: "Voice", required: false,
-        unlocks: "Lets teammates speak and listen on calls, and read voice notes." },
+        unlocks: "Lets teammates reply with voice notes and read the ones they are sent." },
     { id: "search", title: "Web search", required: false,
         unlocks: "Lets teammates look things up on the web." },
 ];
@@ -340,6 +340,17 @@ export function emailPayloads(
         });
     }
     return payloads;
+}
+
+/** Whether nothing anywhere can think: this server has no model, and the
+ *  organization has no provider key either. `undefined` while either is
+ *  still being read, which is not the same as "none". */
+export function noModelAnywhere(
+    snapshot: ThisMacSnapshot | null | undefined,
+    runtimes: { kind: string; archived: boolean }[] | undefined,
+): boolean {
+    if (!snapshot || runtimes === undefined) return false;
+    return !aiReady(snapshot) && !runtimes.some((runtime) => runtime.kind === "key" && !runtime.archived);
 }
 
 /* ── the first-run checklist ───────────────────────────────────────── */

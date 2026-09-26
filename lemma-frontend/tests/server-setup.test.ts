@@ -192,3 +192,14 @@ test("a failed test reads as a sentence", () => {
     assert.equal(testFailure(new Error("Error: telegram rejected the key.")), "Telegram rejected the key.");
     assert.equal(testFailure(""), "The test didn’t work.");
 });
+
+test("the no-model notice waits for both answers, and a provider key anywhere silences it", async () => {
+    const { noModelAnywhere } = await import("../src/desktop/server-setup.ts");
+    const none = snapshot();
+    assert.equal(noModelAnywhere(none, undefined), false, "still reading the organization's list");
+    assert.equal(noModelAnywhere(none, []), true);
+    assert.equal(noModelAnywhere(none, [{ kind: "agent", archived: false }]), true, "a coding agent is not a model");
+    assert.equal(noModelAnywhere(none, [{ kind: "key", archived: true }]), true, "a retired key is not one either");
+    assert.equal(noModelAnywhere(none, [{ kind: "key", archived: false }]), false);
+    assert.equal(noModelAnywhere(snapshot({ readiness: { ai: "ready" } }), []), false);
+});

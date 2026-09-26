@@ -1,7 +1,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
-    CREDENTIAL_FORMS, LOCAL_SERVER_KEY, addToWorkspace, healthDetail, sharingPhaseWords, updateProblem, alreadyInWorkspace, channelLine, credentialFormForChannel,
+    CREDENTIAL_FORMS, LOCAL_SERVER_KEY, STARTING_PATIENCE_MS, addToWorkspace, healthDetail, stuckStarting, sharingPhaseWords, updateProblem, alreadyInWorkspace, channelLine, credentialFormForChannel,
     detectLocalServers, enablePayload, formConfigured, friendlyError, healthLine, HOST_EXECUTION_CONSEQUENCE,
     hostExecutionRow, joinPolicyCopy,
     oauthFormForConnector, onLocalWorkspaceOrigin, operatorProvider, postgresMajorChangeMessage, readSnapshot,
@@ -489,4 +489,17 @@ test("a declined install is a choice, and a failed check is the network's", () =
 test("sharing phases are said in words, never as keys", () => {
     assert.equal(sharingPhaseWords("starting_tunnel"), "Opening the public link");
     assert.equal(sharingPhaseWords("something_new"), "Working");
+});
+
+test("a start that never finishes stops being called one", () => {
+    const starting = snapshot({ state: { ready: false, running: true }, services: [{ id: "backend", running: false }, { id: "frontend", running: true }] });
+    assert.equal(stuckStarting(starting, null, 0), null);
+    assert.equal(stuckStarting(starting, 0, STARTING_PATIENCE_MS - 1), null);
+    assert.match(stuckStarting(starting, 0, STARTING_PATIENCE_MS)!, /server isn’t running yet/);
+    assert.equal(stuckStarting(snapshot(), 0, STARTING_PATIENCE_MS * 2), null, "running is not starting");
+});
+
+test("a build without the Agent Host says so instead of waiting for it", () => {
+    assert.match(hostExecutionRow({ available: false, host_execution: null }).blocked!, /doesn’t include the Agent Host/);
+    assert.match(channelLine(null, "unknown"), /couldn’t tell/);
 });

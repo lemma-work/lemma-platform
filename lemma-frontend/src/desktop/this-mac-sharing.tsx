@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CopyIcon, PeopleIcon } from "@/ui/icons";
+import { CopyIcon, PeopleIcon, WarningIcon } from "@/ui/icons";
 import { copyText } from "./clipboard";
 import { openSettings } from "./open-settings";
 import { useThisComputer } from "./this-computer";
@@ -25,6 +25,8 @@ import { SettingRow, useThisMacSnapshot } from "./this-mac-settings";
  *  happens rather than after. */
 
 const MODES: SharingMode[] = ["this_computer", "local_network", "public"];
+
+const NOT_READY = "Available once Lemma has finished starting.";
 
 export function ThisMacSharing() {
     const noun = useThisComputer();
@@ -156,6 +158,11 @@ export function ThisMacSharing() {
                 />
             )}
             {sharing.last_error && <p className="thismac-said thismac-said--bad" role="alert">{sharing.last_error}</p>}
+            {/* The daemon's own cautions about the address in use -- said,
+                not parsed and dropped. */}
+            {active !== "this_computer" && sharing.warnings.map((warning) => (
+                <p className="thismac-said" key={warning}><WarningIcon size={12} /> {warning}</p>
+            ))}
             {busy && active === "this_computer" && !act.isPending && (
                 <p className="thismac-said" role="status">{sharingPhaseWords(sharing.phase)}…</p>
             )}
@@ -169,7 +176,7 @@ export function ThisMacSharing() {
                         </select>
                     </SettingRow>
                     <div className="modal__acts thismac-acts">
-                        <button className="btn btn--primary" disabled={busy || !stackReady} onClick={() => enable("lan")}>Share on this network</button>
+                        <button className="btn btn--primary" disabled={busy || !stackReady} title={!stackReady ? NOT_READY : undefined} onClick={() => enable("lan")}>Share on this network</button>
                     </div>
                 </>
             )}
@@ -219,7 +226,7 @@ export function ThisMacSharing() {
                     )}
                     <p className="thismac-said">{sharing.apps_limitation}</p>
                     <div className="modal__acts thismac-acts">
-                        <button className="btn btn--primary" disabled={busy || !stackReady || !providerReady} onClick={() => enable("public")}>
+                        <button className="btn btn--primary" disabled={busy || !stackReady || !providerReady} title={!stackReady ? NOT_READY : undefined} onClick={() => enable("public")}>
                             Create public link…
                         </button>
                     </div>

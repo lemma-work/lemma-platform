@@ -120,7 +120,7 @@ what it needs.
 | **Email** | Invitations, password resets and sign-in codes by email | A Resend API key and sender address, or an SMTP server |
 | **Connectors** | Gmail, GitHub, Slack, Notion and the rest | A Composio key, and/or your own Google, Microsoft, GitHub or Slack OAuth app |
 | **Channels** | Answering in Telegram, Slack, email, WhatsApp and Teams | A bot token, Slack app-level token or inbound domain |
-| **Voice** | Calls and voice notes | A Deepgram key |
+| **Voice** | Voice notes, spoken and read | A Deepgram key |
 | **Web search** | Looking things up | Nothing (DuckDuckGo); optionally a Brave Search key |
 
 Until an AI model is set up, agents answer with *Set up an AI model in This

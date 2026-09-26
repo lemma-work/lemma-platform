@@ -340,8 +340,13 @@ export interface HostExecutionRow {
 /** The "Run commands on this Mac" switch, from the Agent Host's status.
  *  Pure, so what it says in each state is tested without a page. */
 export function hostExecutionRow(
-    status: { host_execution: { enabled: boolean; available: boolean } | null } | null,
+    status: { available?: boolean; host_execution: { enabled: boolean; available: boolean } | null } | null,
 ): HostExecutionRow {
+    /* A build without the Agent Host will never answer, so waiting for it
+       would be a stage nobody can leave. */
+    if (status?.available === false) {
+        return { checked: false, blocked: "This build of Lemma doesn’t include the Agent Host.", consequence: HOST_EXECUTION_CONSEQUENCE };
+    }
     const setting = status?.host_execution ?? null;
     if (!setting) {
         return { checked: false, blocked: "Waiting for this computer’s Agent Host…", consequence: HOST_EXECUTION_CONSEQUENCE };
@@ -381,6 +386,22 @@ export function healthState(snapshot: ThisMacSnapshot): "running" | "starting" |
     if (services.some((service) => service.circuit_open)) return "attention";
     if (snapshot.state.ready && services.length > 0 && services.every((service) => service.running)) return "running";
     return snapshot.state.running ? "starting" : "stopped";
+}
+
+/** How long a start may take before Overview stops calling it one. A cold
+ *  start migrates and warms models, so this is generous; past it, "Starting"
+ *  would be a stage nobody can leave. */
+export const STARTING_PATIENCE_MS = 3 * 60_000;
+
+/** The services still not running after a start has had its time, or null
+ *  while it is within it (or not starting at all). */
+export function stuckStarting(snapshot: ThisMacSnapshot, startingSinceMs: number | null, nowMs: number): string | null {
+    if (healthState(snapshot) !== "starting" || startingSinceMs === null) return null;
+    if (nowMs - startingSinceMs < STARTING_PATIENCE_MS) return null;
+    const down = snapshot.services.filter((service) => !service.running).map((service) => SERVICE_NAMES[service.id] ?? service.id);
+    return down.length
+        ? `Lemma’s ${down.join(" and ")} ${down.length === 1 ? "isn’t" : "aren’t"} running yet, and should be by now.`
+        : "Lemma is taking longer than it should to start.";
 }
 
 /** What is wrong, when Overview says "Needs attention": the stack's own
@@ -558,6 +579,7 @@ export function updateOffer(update: AppUpdateStatus | null): { blocked: string |
  *  toggle that would have to install a different app to mean anything. */
 export function channelLine(update: AppUpdateStatus | null, channel: string): string {
     const current = update?.channel || channel;
+    if (current === "unknown") return "Lemma couldn’t tell which channel this build is on.";
     if (current === "nightly") return "Nightly builds don’t update themselves. Newer ones are on the releases page.";
     if (current === "stable") return "Stable releases. Nightly builds are a separate download from the releases page.";
     return "A development build, which doesn’t update itself.";
@@ -657,7 +679,7 @@ export const CREDENTIAL_FORMS: CredentialFormSpec[] = [
         fields: [{ key: "teams_app_id", label: "Bot app ID" }, { key: "teams_tenant_id", label: "Tenant ID" },
             { key: "surfaces.teams_app_password", label: "App password", secret: true }],
         hint: { steps: "Needs Public sharing: Teams delivers messages to a webhook on the internet. Create an Azure Bot, and copy its app ID, tenant and a client secret.", url: "https://portal.azure.com/#create/Microsoft.AzureBot", label: "Create an Azure Bot" } },
-    { form: "deepgram", group: "voice", title: "Deepgram", use: "Lets teammates speak and listen, and read voice notes.",
+    { form: "deepgram", group: "voice", title: "Deepgram", use: "Turns teammates’ replies into voice notes, and voice notes they are sent into text.",
         fields: [{ key: "integrations.deepgram_api_key", label: "API key", secret: true }],
         hint: { steps: "Sign up at Deepgram and create an API key in the console. New accounts come with free credit.", url: "https://console.deepgram.com", label: "Open Deepgram console" },
         test: { service: "deepgram", field: "integrations.deepgram_api_key" } },

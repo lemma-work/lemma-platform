@@ -12,7 +12,7 @@ import { capitalised, useThisComputer } from "./this-computer";
 import { ThisComputerCard } from "./this-computer-card";
 import { readStatus, useAgentHost } from "./agent-host";
 import {
-    RELEASES_PAGE, channelLine, friendlyError, healthDetail, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin, updateProblem,
+    RELEASES_PAGE, channelLine, friendlyError, healthDetail, stuckStarting, healthLine, healthState, hostExecutionRow, onLocalWorkspaceOrigin, updateProblem,
     sandboxWording, updateOffer, sharingBusy, thisMac, thisMacAvailability,
     type ThisMacAvailability, type ThisMacSnapshot,
 } from "./this-mac";
@@ -110,6 +110,7 @@ function Overview() {
         onError: (problem) => setSaid(friendlyError(problem)),
     });
     const logs = useMutation({ mutationFn: () => thisMac.openLogs(), onError: (problem) => setSaid(friendlyError(problem)) });
+    const startingSince = useStartingSince(snapshot.data ?? null);
 
     return (
         <Loading snapshot={snapshot}>
@@ -121,6 +122,11 @@ function Overview() {
                             <i aria-hidden="true" />
                             {healthLine(data, update.data ?? null)}
                         </p>
+                        {stuckStarting(data, startingSince, Date.now()) && (
+                            <p className="thismac-said thismac-said--bad" role="alert">
+                                {stuckStarting(data, startingSince, Date.now())} Open the logs to see why, or quit and reopen Lemma.
+                            </p>
+                        )}
                         {healthDetail(data) && (
                             <p className="thismac-said thismac-said--bad" role="alert">
                                 {healthDetail(data)} Quit and reopen Lemma to restart it, or use Lemma → Recovery… in the menu bar.
@@ -170,6 +176,18 @@ export function setupSummary(snapshot: ThisMacSnapshot): string {
     if (needsSetup(snapshot).length) return "Needs an AI model before teammates can work.";
     const ready = CAPABILITIES.filter((one) => capabilityStatus(snapshot, one.id).state === "ready").length;
     return `AI model ready · ${ready} of ${CAPABILITIES.length} capabilities set up.`;
+}
+
+/** When this page first saw the stack starting, cleared once it is not.
+ *  The snapshot refetches on its own, so the page re-renders past the
+ *  patience window without a timer of its own. */
+function useStartingSince(snapshot: ThisMacSnapshot | null): number | null {
+    const [since, setSince] = useState<number | null>(null);
+    const starting = snapshot ? healthState(snapshot) === "starting" : false;
+    useEffect(() => {
+        setSince((was) => (starting ? was ?? Date.now() : null));
+    }, [starting]);
+    return since;
 }
 
 /* ── coding agents ─────────────────────────────────────────────────── */
@@ -267,7 +285,7 @@ function Updates() {
     });
     const status = update.data ?? null;
     const offer = updateOffer(status);
-    const channel = snapshot.data?.app.channel ?? status?.channel ?? "dev";
+    const channel = snapshot.data?.app.channel ?? status?.channel ?? "unknown";
     return (
         <div className="thismac">
             <SettingRow
