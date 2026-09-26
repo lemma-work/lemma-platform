@@ -16,7 +16,8 @@ import {
     type ThisMacAvailability, type ThisMacSnapshot,
 } from "./this-mac";
 import { ThisMacSharing } from "./this-mac-sharing";
-import { ThisMacAdvanced } from "./this-mac-advanced";
+import { ThisMacServerSetup } from "./this-mac-setup";
+import { needsSetup, capabilityStatus, CAPABILITIES } from "./server-setup";
 
 /** Settings → This Mac: the settings a person changes about their own
  *  computer, in the same Settings as everything else.
@@ -31,10 +32,10 @@ import { ThisMacAdvanced } from "./this-mac-advanced";
  *  (`workspace_settings.rs`); the gate here is so nobody is shown a machine's
  *  settings they cannot use. */
 
-export type ThisMacSection = "this-mac" | "this-mac-agents" | "this-mac-sharing" | "this-mac-updates" | "this-mac-advanced";
+export type ThisMacSection = "this-mac" | "this-mac-setup" | "this-mac-agents" | "this-mac-sharing" | "this-mac-updates" | "this-mac-advanced";
 
 export const THIS_MAC_SECTIONS: readonly ThisMacSection[] = [
-    "this-mac", "this-mac-agents", "this-mac-sharing", "this-mac-updates", "this-mac-advanced",
+    "this-mac", "this-mac-setup", "this-mac-agents", "this-mac-sharing", "this-mac-updates", "this-mac-advanced",
 ];
 
 export function isThisMacSection(section: string): section is ThisMacSection {
@@ -138,6 +139,11 @@ function Overview() {
                         <SettingRow name="Logs" consequence="What Lemma wrote while it ran, for when something needs explaining.">
                             <button className="linkish" onClick={() => { setSaid(null); logs.mutate(); }}><TerminalIcon size={13} /> Open logs</button>
                         </SettingRow>
+                        <SettingRow name="Server setup" consequence={setupSummary(data)}>
+                            <button className="btn" onClick={() => openSettings("this-mac-setup")}>
+                                {needsSetup(data).length ? "Set up" : "Open"}
+                            </button>
+                        </SettingRow>
                         {said && <p className="thismac-said" role="status">{said}</p>}
                         <p className="thismac-foot">
                             Erasing data and restarting into Recovery stay in the menu bar: Lemma → Recovery…
@@ -147,6 +153,13 @@ function Overview() {
             }}
         </Loading>
     );
+}
+
+/** One line for Overview: what is still needed, or how much is set up. */
+export function setupSummary(snapshot: ThisMacSnapshot): string {
+    if (needsSetup(snapshot).length) return "Needs an AI model before teammates can work.";
+    const ready = CAPABILITIES.filter((one) => capabilityStatus(snapshot, one.id).state === "ready").length;
+    return `AI model ready · ${ready} of ${CAPABILITIES.length} capabilities set up.`;
 }
 
 /* ── coding agents ─────────────────────────────────────────────────── */
@@ -298,7 +311,10 @@ export function ThisMacPane({ section, focus }: { section: ThisMacSection; focus
     if (section === "this-mac-agents") return <CodingAgents />;
     if (section === "this-mac-sharing") return <ThisMacSharing />;
     if (section === "this-mac-updates") return <Updates />;
-    if (section === "this-mac-advanced") return <ThisMacAdvanced focus={focus ?? null} />;
+    if (section === "this-mac-setup") return <ThisMacServerSetup focus={focus ?? null} />;
+    /* Advanced's diagnostics are the last part of Server setup now, and
+       its credentials are Server setup's cards; old links land there. */
+    if (section === "this-mac-advanced") return <ThisMacServerSetup focus={focus ?? "advanced"} />;
     return <Overview />;
 }
 

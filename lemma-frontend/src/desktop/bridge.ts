@@ -82,6 +82,7 @@ export const WORKSPACE_COMMANDS = [
     "set_telemetry_enabled",
     "diagnostic_logs",
     "discover_provider_models",
+    "test_server_setup",
 ] as const;
 
 export type WorkspaceCommand = (typeof WORKSPACE_COMMANDS)[number];

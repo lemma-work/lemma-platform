@@ -5,16 +5,25 @@ import { CheckCircleIcon, CloseIcon, WarningIcon } from "@/ui/icons";
 import { LoadingIndicator } from "@/ui/loading";
 import { useAutoConnectThisComputer } from "./auto-connect";
 import { useSandboxImageNotice } from "./sandbox-images";
+import { SetupChecklist } from "./setup-checklist";
 
 /** Everything the desktop app does behind the workspace, mounted once in the
  *  authenticated shell and silent in a browser.
  *
- *  Two things run here. This computer connects itself to the workspace on
+ *  The first-run Server setup checklist, once per local install. And two
+ *  things behind it. This computer connects itself to the workspace on
  *  screen (`auto-connect.ts`), which reports on the Models page rather than
  *  here — nobody asked for it, so it must not interrupt. And the sandbox image
  *  download, which somebody did ask for, gets one quiet notice in the corner:
  *  a progress line while it runs, and a dismissable ending. */
 export function DesktopNotices() {
+    return <>
+        <SetupChecklist />
+        <SandboxNotice />
+    </>;
+}
+
+function SandboxNotice() {
     useAutoConnectThisComputer();
     const { notice, dismiss } = useSandboxImageNotice();
     if (notice.kind === "none") return null;

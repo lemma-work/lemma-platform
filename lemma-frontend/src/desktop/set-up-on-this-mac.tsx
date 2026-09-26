@@ -29,9 +29,29 @@ export function SetUpOnThisMac({ form, compact = false }: { form: CredentialForm
         <button
             type="button"
             className={compact ? "linkish thismac-setup" : "btn thismac-setup"}
-            onClick={() => openSettings("this-mac-advanced", form)}
+            onClick={() => openSettings("this-mac-setup", form)}
         >
             <KeyIcon size={13} /> Set up on {noun}
+        </button>
+    );
+}
+
+/** "Set up an AI model on this Mac", beside a failure that no model explains.
+ *
+ *  Same rule as above: only where This Mac is shown, so a browser or a shared
+ *  address never learns the machine has settings. Opens Server setup at the
+ *  AI model card. */
+export function SetUpAiModelLink({ compact = true, label }: { compact?: boolean; label?: string }) {
+    const noun = useThisComputer();
+    const availability = useThisMacAvailability();
+    if (availability !== "shown") return null;
+    return (
+        <button
+            type="button"
+            className={compact ? "linkish thismac-setup" : "btn thismac-setup"}
+            onClick={() => openSettings("this-mac-setup", "ai")}
+        >
+            <KeyIcon size={13} /> {label ?? `Set up an AI model on ${noun}`}
         </button>
     );
 }
