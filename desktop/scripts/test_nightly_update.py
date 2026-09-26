@@ -95,6 +95,33 @@ class NightlyUpdateTests(unittest.TestCase):
                 entry["signature"], Path(str(self.payload) + ".sig").read_text()
             )
 
+    def test_the_feed_itemises_runtime_archives_only_when_every_one_has_a_digest(
+        self,
+    ) -> None:
+        self.complete()
+        self.assertNotIn("runtime_artifacts", self.feed()["lemma"])
+
+        manifest = json.loads(self.manifest.read_text())
+        for kind, digit in (("host_packs", "a"), ("guest_runtimes", "b")):
+            for entry in manifest[kind].values():
+                entry["sha256"] = digit * 64
+        self.manifest.write_text(json.dumps(manifest))
+        self.complete()
+        windows = self.feed()["lemma"]["platforms"]["windows-x86_64"]
+        self.assertEqual(
+            windows["runtime_artifacts"],
+            {
+                "host": {"sha256": "a" * 64, "size": 101},
+                "guest": {"sha256": "b" * 64, "size": 201},
+            },
+        )
+
+        manifest["guest_runtimes"]["windows-x86_64"]["sha256"] = "not a digest"
+        self.manifest.write_text(json.dumps(manifest))
+        self.prepare("windows-x86_64")
+        windows = self.feed()["lemma"]["platforms"]["windows-x86_64"]
+        self.assertNotIn("runtime_artifacts", windows)
+
     def test_one_platform_cannot_replace_the_complete_feed(self) -> None:
         self.prepare("darwin-aarch64")
         with self.assertRaises(FileNotFoundError):
