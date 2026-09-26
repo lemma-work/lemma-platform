@@ -35,9 +35,6 @@ from app.modules.agent.services.organization_default_service import (
     OrganizationDefaultNotFoundError,
     OrganizationDefaultService,
 )
-from app.modules.agent.services.runtime_provider_check import (
-    check_saved_provider_connection,
-)
 
 router = APIRouter(tags=["agent_runtime"])
 
@@ -137,6 +134,12 @@ async def check_runtime_profile_connection(
         # Two provider round trips, one of them a model call that can take
         # seconds on a cold local server; nothing is written afterwards.
         async with connection_released(uow.session):
+            # Imported here: it builds provider clients, whose import graph is the
+            # whole of openai's, and only this one endpoint needs it.
+            from app.modules.agent.services.runtime_provider_check import (
+                check_saved_provider_connection,
+            )
+
             result = await check_saved_provider_connection(resolved)
     except ValueError as exc:
         raise HTTPException(

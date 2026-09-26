@@ -52,8 +52,6 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
-from supertokens_python.exceptions import GeneralError
-from supertokens_python.recipe.session.recipe import SessionRecipe
 
 from app.core.config import settings
 from app.modules.identity.config import identity_settings
@@ -225,6 +223,12 @@ def _clears(cookie_value: str, header: str) -> bool:
 
 def live_shape_from_supertokens() -> LiveCookieShape | None:
     """The shape SuperTokens is configured to write, or None before it is."""
+    # Imported here: the middleware is installed on every app, and the
+    # session recipe's import graph is large enough to count against the
+    # import budget for a check that only runs on a duplicate cookie.
+    from supertokens_python.exceptions import GeneralError
+    from supertokens_python.recipe.session.recipe import SessionRecipe
+
     try:
         config = SessionRecipe.get_instance().config
     except GeneralError:
