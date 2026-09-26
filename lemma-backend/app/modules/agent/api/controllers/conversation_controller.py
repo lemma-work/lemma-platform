@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
-from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.dependencies import (
     PodContextDep,
     assert_pod_membership,
@@ -33,6 +32,10 @@ from app.modules.agent.api.controllers.shared import (
     conversation_channel,
     iter_subscription,
     with_keepalive,
+)
+from app.modules.agent.api.controllers.conversation_page_token import (
+    encode_conversation_page_token,
+    parse_conversation_page_token,
 )
 from app.modules.agent.api.dependencies import (
     ConversationServiceDep,
@@ -147,7 +150,8 @@ async def create_conversation(
         "pass a name to list conversations for a specific pod agent. Child "
         "(sub-agent) conversations are omitted by default; pass parent_id to "
         "list the children of a specific conversation instead. Archived "
-        "conversations are omitted; pass archived=true for the archive."
+        "conversations are omitted; pass archived=true for the archive. "
+        "Ordered by last_activity_at, most recent first."
     ),
 )
 async def list_conversations(
@@ -174,13 +178,15 @@ async def list_conversations(
         ),
         parent_id=parent_id,
         archived=archived,
-        cursor=parse_uuid_page_token(page_token),
+        cursor=parse_conversation_page_token(page_token),
         limit=limit,
     )
     return ConversationListResponse(
         items=[ConversationResponse.model_validate(item) for item in conversations],
         limit=limit,
-        next_page_token=str(next_cursor) if next_cursor else None,
+        next_page_token=(
+            encode_conversation_page_token(next_cursor) if next_cursor else None
+        ),
     )
 
 

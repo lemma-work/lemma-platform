@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, TypeVar
 
@@ -454,6 +455,19 @@ class ConversationAgentScope(str, Enum):
     ALL = "ALL"
     POD_DEFAULT = "POD_DEFAULT"
     NAMED = "NAMED"
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationListCursor:
+    """Where the next page of the history list starts: after this row.
+
+    The list is ordered by `(last_activity_at, id)` descending, so the cursor
+    is both -- activity alone is not unique, and `id` alone is no longer the
+    order.
+    """
+
+    last_activity_at: datetime
+    id: UUID
 
 
 @dataclass(frozen=True, slots=True)

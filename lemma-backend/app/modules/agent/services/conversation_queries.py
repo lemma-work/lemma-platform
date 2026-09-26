@@ -24,6 +24,7 @@ from app.modules.agent.domain.ports import (
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationAgentSelection,
+    ConversationListCursor,
     ConversationStatus,
     ConversationType,
 )
@@ -60,9 +61,9 @@ class ConversationQueries:
         metadata_filters: dict[str, object] | None = None,
         parent_id: UUID | None = None,
         archived: bool = False,
-        cursor: UUID | None = None,
+        cursor: ConversationListCursor | None = None,
         limit: int = 20,
-    ) -> tuple[list[Conversation], UUID | None]:
+    ) -> tuple[list[Conversation], ConversationListCursor | None]:
         expected_agent_id = await resolve_expected_agent_id(
             self.agent_repository,
             pod_id=pod_id,

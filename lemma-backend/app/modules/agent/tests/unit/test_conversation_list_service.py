@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -7,6 +8,7 @@ from sqlalchemy.dialects import postgresql
 from app.modules.agent.domain.value_objects import (
     ConversationAgentScope,
     ConversationAgentSelection,
+    ConversationListCursor,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 import app.modules.agent.services.conversation_queries as queries
@@ -131,9 +133,9 @@ async def test_repository_applies_agent_selection_to_roots_and_children(
     if selection.scope is ConversationAgentScope.ALL:
         assert "coalesce(agent_conversations.agent_id" not in where_sql
         return
-    # The COALESCE is not incidental: `ix_agent_conv_user_pod_agent_roots_v2` is
-    # defined on exactly this expression, so a query that stops spelling it the
-    # same way silently stops using the index.
+    # The COALESCE is not incidental: `ix_agent_conv_user_pod_agent_roots_activity`
+    # is defined on exactly this expression, so a query that stops spelling it
+    # the same way silently stops using the index.
     assert "coalesce(agent_conversations.agent_id" in where_sql
     # The assistant is selected by the pod's own id -- its row's id is the pod's
     # -- and a conversation written before that row existed still matches,
@@ -144,3 +146,31 @@ async def test_repository_applies_agent_selection_to_roots_and_children(
         else str(selection.value)
     )
     assert expected_agent_id in where_sql
+
+
+@pytest.mark.asyncio
+async def test_repository_pages_by_last_activity_then_id() -> None:
+    uow = _Uow()
+    repository = ConversationRepository(uow)
+
+    await repository.list_conversations(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        agent_selection=ConversationAgentSelection.all(),
+        cursor=ConversationListCursor(
+            last_activity_at=datetime(2026, 9, 25, tzinfo=timezone.utc), id=uuid4()
+        ),
+    )
+
+    statement = uow.session.statement
+    where_sql = str(statement.whereclause.compile(dialect=postgresql.dialect()))
+    # A row comparison, not two separate inequalities: it is the form the
+    # `*_activity` indexes answer as one range, and the one that never skips
+    # the rows tied on activity.
+    assert (
+        "(agent_conversations.last_activity_at, agent_conversations.id) <" in where_sql
+    )
+    assert [str(clause) for clause in statement._order_by_clauses] == [
+        "agent_conversations.last_activity_at DESC",
+        "agent_conversations.id DESC",
+    ]

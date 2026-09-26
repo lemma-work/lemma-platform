@@ -172,6 +172,8 @@ class ConversationResponse(BaseModel):
     output: JsonValue | None = None
     metadata: JsonObject | None = None
     is_archived: bool = False
+    #: When a message was last added; the history list is ordered by it.
+    last_activity_at: datetime | None = None
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
     last_run_error_code: str | None = None

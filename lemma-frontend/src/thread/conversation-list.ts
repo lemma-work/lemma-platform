@@ -1,4 +1,4 @@
-import type { ConversationRef } from "@/data";
+import type { ConversationPage, ConversationRef } from "@/data";
 
 /** Edits to the cached list of a teammate's conversations.
  *
@@ -84,4 +84,54 @@ export function applyArchived(
  */
 export function unbound(list: ConversationRef[] | undefined): ConversationRef[] {
     return (list ?? []).filter((entry) => !entry.boundTo);
+}
+
+/** Where the all-conversations pane keeps its pages. Under the short list's
+ *  key, so invalidating `["conversations", podId]` reaches both. */
+export function allConversationsKey(podId: string) {
+    return ["conversations", podId, "all"] as const;
+}
+
+type ListPatch = (list: ConversationRef[] | undefined) => ConversationRef[] | undefined;
+
+/** Just the two calls this needs, so it can be tested without a QueryClient. */
+interface ConversationCache {
+    getQueryData<T>(key: readonly unknown[]): T | undefined;
+    setQueryData<T>(key: readonly unknown[], value: T | undefined): unknown;
+}
+
+interface Pages {
+    pages: ConversationPage[];
+    pageParams: unknown[];
+}
+
+/** Apply one patch to the short list and to every page the all-conversations
+ *  pane has loaded.
+ *
+ *  Two caches because they are two queries: the sidebar's first page and the
+ *  pane's pages. A rename made in the pane that only patched the first would
+ *  show the old title in the very row that was just renamed.
+ *
+ *  No undo. A snapshot taken now is stale by the time a request fails — a page
+ *  may have loaded, another rename may have landed — and restoring it would
+ *  drop both. A caller whose request fails invalidates `["conversations",
+ *  podId]` instead, which reaches both queries and asks the server.
+ */
+export function patchConversationLists(cache: ConversationCache, podId: string, patch: ListPatch): void {
+    const shortKey = ["conversations", podId];
+    const allKey = allConversationsKey(podId);
+    const short = cache.getQueryData<ConversationRef[]>(shortKey);
+    const all = cache.getQueryData<Pages>(allKey);
+
+    if (short) cache.setQueryData(shortKey, patch(short));
+    if (all) {
+        let changed = false;
+        const pages = all.pages.map((page) => {
+            const items = patch(page.items) ?? page.items;
+            if (items === page.items) return page;
+            changed = true;
+            return { ...page, items };
+        });
+        if (changed) cache.setQueryData<Pages>(allKey, { ...all, pages });
+    }
 }

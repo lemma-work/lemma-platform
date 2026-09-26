@@ -134,7 +134,8 @@ def sync_detailed(
     the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
     name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
     default; pass parent_id to list the children of a specific conversation instead. Archived
-    conversations are omitted; pass archived=true for the archive.
+    conversations are omitted; pass archived=true for the archive. Ordered by last_activity_at, most
+    recent first.
 
     Args:
         pod_id (UUID):
@@ -190,7 +191,8 @@ def sync(
     the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
     name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
     default; pass parent_id to list the children of a specific conversation instead. Archived
-    conversations are omitted; pass archived=true for the archive.
+    conversations are omitted; pass archived=true for the archive. Ordered by last_activity_at, most
+    recent first.
 
     Args:
         pod_id (UUID):
@@ -241,7 +243,8 @@ async def asyncio_detailed(
     the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
     name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
     default; pass parent_id to list the children of a specific conversation instead. Archived
-    conversations are omitted; pass archived=true for the archive.
+    conversations are omitted; pass archived=true for the archive. Ordered by last_activity_at, most
+    recent first.
 
     Args:
         pod_id (UUID):
@@ -295,7 +298,8 @@ async def asyncio(
     the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
     name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
     default; pass parent_id to list the children of a specific conversation instead. Archived
-    conversations are omitted; pass archived=true for the archive.
+    conversations are omitted; pass archived=true for the archive. Ordered by last_activity_at, most
+    recent first.
 
     Args:
         pod_id (UUID):
