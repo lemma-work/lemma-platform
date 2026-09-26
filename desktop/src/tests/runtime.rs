@@ -133,6 +133,7 @@ fn only_a_known_postgres_major_change_refuses_an_update() {
     let eighteen = LemmaUpdateMetadata {
         postgres_major: Some(18),
         runtime_download_bytes: Some(531_000_000),
+        ..Default::default()
     };
     assert_eq!(eighteen.compatibility_with(Some(18)), "compatible");
     assert_eq!(
@@ -219,6 +220,35 @@ fn update_metadata_uses_the_selected_platform_and_never_another_platforms_fallba
         lemma_update_metadata_for(&feed, "missing-target").postgres_major,
         None
     );
+}
+
+/// An itemised feed is read only whole: a sum over half the archives would
+/// be announced as the whole download.
+#[test]
+fn update_metadata_reads_runtime_artifacts_all_or_nothing() {
+    let entry = |sha: &str| json!({"sha256": sha.repeat(64), "size": 5});
+    let whole = lemma_update_metadata_for(
+        &json!({"lemma": {"runtime_download_bytes": 10, "runtime_artifacts": {
+            "host": entry("a"), "guest": entry("b")
+        }}}),
+        "darwin-aarch64",
+    );
+    assert_eq!(whole.runtime_artifacts.len(), 2);
+    let nowhere = std::path::Path::new("/nonexistent/lemma-runtime");
+    assert_eq!(whole.runtime_bytes_to_download(nowhere), Some(10));
+
+    for partial in [
+        json!({"host": entry("a")}),
+        json!({"host": entry("a"), "guest": {"sha256": "short", "size": 5}}),
+        json!({"host": entry("a"), "guest": {"sha256": "b".repeat(64)}}),
+    ] {
+        let metadata = lemma_update_metadata_for(
+            &json!({"lemma": {"runtime_download_bytes": 10, "runtime_artifacts": partial}}),
+            "darwin-aarch64",
+        );
+        assert!(metadata.runtime_artifacts.is_empty());
+        assert_eq!(metadata.runtime_bytes_to_download(nowhere), Some(10));
+    }
 }
 
 /// The updater is never reachable from a remote origin.

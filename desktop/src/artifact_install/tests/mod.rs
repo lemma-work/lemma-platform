@@ -11,6 +11,7 @@ mod install;
 mod installed;
 mod layout;
 mod manifest;
+mod reuse;
 
 pub(super) fn write_zip(path: &Path, entries: &[(&str, &[u8], u32)]) {
     let mut writer = zip::ZipWriter::new(File::create(path).unwrap());

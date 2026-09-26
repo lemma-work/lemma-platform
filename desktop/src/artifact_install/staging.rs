@@ -1,7 +1,8 @@
 //! Turning a release manifest into an installed runtime.
 //!
 //! One staging directory per attempt, promoted into place only once every
-//! artifact has been downloaded, verified and expanded.
+//! artifact has been verified and expanded -- downloaded, or copied from an
+//! installed release that holds the same archive's contents (see `reuse`).
 
 use super::*;
 
@@ -97,54 +98,17 @@ pub(crate) fn stage_from_manifest(
         destination
     };
 
-    let download_total = host
-        .size
-        .checked_add(guest.size)
-        .ok_or_else(|| invalid("combined artifact size overflow"))?;
-    let expanded_total = host
-        .expanded_size
-        .checked_add(guest.expanded_size)
-        .ok_or_else(|| invalid("combined expanded artifact size overflow"))?;
-    let required_space = installation_space_required(download_total, expanded_total)?;
-    preflight_free_space(install_root, required_space)?;
-    let downloads = install_root.join("downloads").join(&manifest.version);
-    fs::create_dir_all(&downloads)?;
-    let client = download_client()?;
-    let host_archive = download_artifact(
-        &client,
-        host,
-        &downloads.join("host-pack.zip"),
-        "Downloading application runtime",
-        ProgressSpan {
-            completed_before: 0,
-            total: download_total,
-        },
-        manifest_path.parent().unwrap_or_else(|| Path::new(".")),
-        allow_local_artifacts,
-        progress,
+    // The release's own limits, on the whole of it, whatever ends up reused.
+    installation_space_required(
+        host.size
+            .checked_add(guest.size)
+            .ok_or_else(|| invalid("combined artifact size overflow"))?,
+        host.expanded_size
+            .checked_add(guest.expanded_size)
+            .ok_or_else(|| invalid("combined expanded artifact size overflow"))?,
     )?;
-    let guest_archive = download_artifact(
-        &client,
-        guest,
-        &downloads.join("guest-runtime.zip"),
-        "Downloading private runtime",
-        ProgressSpan {
-            completed_before: host.size,
-            total: download_total,
-        },
-        manifest_path.parent().unwrap_or_else(|| Path::new(".")),
-        allow_local_artifacts,
-        progress,
-    )?;
-
-    progress(InstallProgress {
-        stage: "verify",
-        component: "runtime",
-        label: "Verifying and installing runtime",
-        current: download_total,
-        total: download_total,
-        bytes: true,
-    });
+    let expanded_total = host.expanded_size + guest.expanded_size;
+    let resource_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     // Before this one is created, so an install that was killed cannot leave
     // its expanded runtime on the disk for ever. See `prune_abandoned_staging`:
     // the retired-release prune skips hidden entries on purpose and can never
@@ -158,33 +122,111 @@ pub(crate) fn stage_from_manifest(
         started_at
     ));
     fs::create_dir_all(&staging)?;
+    let mut downloaded_archives = Vec::new();
     let install_result: io::Result<()> = (|| {
-        extract_archive(
-            &host_archive,
-            &staging,
-            host.expanded_size,
-            "host-extract",
-            "host",
-            "Installing application runtime",
-            ProgressSpan {
-                completed_before: 0,
-                total: expanded_total,
-            },
-            progress,
+        // Reused first, so the downloads below -- and the progress that
+        // reports them -- are only the archives that are really fetched. A
+        // repair reuses nothing: it exists to replace what is on this disk.
+        let mut reused: HashMap<&'static str, String> = HashMap::new();
+        if reuse_existing {
+            for (component, artifact) in [(Component::Host, host), (Component::Guest, guest)] {
+                if let Some(digest) =
+                    reuse_installed_component(install_root, component, artifact, &staging, progress)
+                {
+                    reused.insert(component.name(), digest);
+                }
+            }
+        }
+        let fetch_host = !reused.contains_key(Component::Host.name());
+        let fetch_guest = !reused.contains_key(Component::Guest.name());
+        let download_total =
+            if fetch_host { host.size } else { 0 } + if fetch_guest { guest.size } else { 0 };
+        let expanded_remaining = if fetch_host { host.expanded_size } else { 0 }
+            + if fetch_guest { guest.expanded_size } else { 0 };
+        preflight_free_space(
+            install_root,
+            installation_space_required(download_total, expanded_remaining)?,
         )?;
-        extract_archive(
-            &guest_archive,
-            &staging.join("managed-runtime"),
-            guest.expanded_size,
-            "guest-extract",
-            "guest",
-            "Installing private runtime",
-            ProgressSpan {
-                completed_before: host.expanded_size,
-                total: expanded_total,
-            },
-            progress,
-        )?;
+        let downloads = install_root.join("downloads").join(&manifest.version);
+        fs::create_dir_all(&downloads)?;
+        let client = download_client()?;
+        let host_archive = if fetch_host {
+            let archive = download_artifact(
+                &client,
+                host,
+                &downloads.join("host-pack.zip"),
+                "Downloading application runtime",
+                ProgressSpan {
+                    completed_before: 0,
+                    total: download_total,
+                },
+                resource_root,
+                allow_local_artifacts,
+                progress,
+            )?;
+            downloaded_archives.push(archive.clone());
+            Some(archive)
+        } else {
+            None
+        };
+        let guest_archive = if fetch_guest {
+            let archive = download_artifact(
+                &client,
+                guest,
+                &downloads.join("guest-runtime.zip"),
+                "Downloading private runtime",
+                ProgressSpan {
+                    completed_before: if fetch_host { host.size } else { 0 },
+                    total: download_total,
+                },
+                resource_root,
+                allow_local_artifacts,
+                progress,
+            )?;
+            downloaded_archives.push(archive.clone());
+            Some(archive)
+        } else {
+            None
+        };
+
+        progress(InstallProgress {
+            stage: "verify",
+            component: "runtime",
+            label: "Verifying and installing runtime",
+            current: download_total,
+            total: download_total,
+            bytes: true,
+        });
+        if let Some(archive) = &host_archive {
+            extract_archive(
+                archive,
+                &staging,
+                host.expanded_size,
+                "host-extract",
+                "host",
+                "Installing application runtime",
+                ProgressSpan {
+                    completed_before: 0,
+                    total: expanded_total,
+                },
+                progress,
+            )?;
+        }
+        if let Some(archive) = &guest_archive {
+            extract_archive(
+                archive,
+                &staging.join(Component::Guest.tree()),
+                guest.expanded_size,
+                "guest-extract",
+                "guest",
+                "Installing private runtime",
+                ProgressSpan {
+                    completed_before: host.expanded_size,
+                    total: expanded_total,
+                },
+                progress,
+            )?;
+        }
         progress(InstallProgress {
             stage: "validate",
             component: "runtime",
@@ -196,6 +238,7 @@ pub(crate) fn stage_from_manifest(
         let staged = installed_runtime(&staging, &manifest.version);
         validate_installed(&staged)?;
         write_installed_artifacts(&staging, &identity)?;
+        record_installed_contents(&staging, host, guest, &reused)?;
         fs::create_dir_all(
             destination
                 .parent()
@@ -216,8 +259,9 @@ pub(crate) fn stage_from_manifest(
         let _ = fs::remove_dir_all(&staging);
     }
     install_result?;
-    let _ = fs::remove_file(host_archive);
-    let _ = fs::remove_file(guest_archive);
+    for archive in downloaded_archives {
+        let _ = fs::remove_file(archive);
+    }
 
     let installed = installed_runtime(&destination, &manifest.version);
     validate_installed(&installed)?;
