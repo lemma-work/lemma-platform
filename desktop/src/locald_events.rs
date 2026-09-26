@@ -191,12 +191,16 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
             }
         }
         "ready" => {
-            if !ui.ready {
-                launch_trace("daemon reported ready");
+            if !ui.ready_recorded {
+                ui.ready_recorded = true;
                 // How long this launch took to become usable, and whether it
                 // had to install anything to get there. The first of those is
                 // the number the whole runtime install exists to keep small,
                 // and nothing was measuring it outside a developer's console.
+                // Returned, not written: this function is a fold, and the
+                // trace it used to append from here was written by every test
+                // that folded a `ready` -- two at a time, into the user's own
+                // launch log, interleaved on one line.
                 outcome.became_ready = Some(ReadyReached {
                     cached: !ui.installed_this_launch,
                     duration_ms: u64::try_from(
@@ -352,6 +356,7 @@ fn perform_event_side_effects(outcome: &mut EventOutcome) {
         duration_ms,
     }) = outcome.became_ready.take()
     {
+        launch_trace("daemon reported ready");
         telemetry::note(telemetry::InstallEvent::RuntimeReady {
             cached,
             duration_ms,
