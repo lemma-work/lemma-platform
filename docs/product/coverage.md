@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 243 | 260 |
+| OpenAPI operations | 243 | 262 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run

@@ -9,6 +9,7 @@ import { CloseIcon, KeyIcon } from "@/ui/icons";
 import { copyText } from "@/desktop/clipboard";
 import { openSettings } from "@/desktop/open-settings";
 import { useThisMacAvailability } from "@/desktop/this-mac-settings";
+import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import {
     ROLES, alreadyKnown, canManage, canSetJoinPolicy, canSetRole, inviteProblem, isLastOwner,
     memberEmail, memberName, roleLabel, unsentInvitation, type Member, type Role,
@@ -69,6 +70,7 @@ export function PeopleSection({ orgId }: { orgId: string }) {
     const [unsent, setUnsent] = useState<ReturnType<typeof unsentInvitation>>(null);
     /* On Lemma Desktop the person reading is the one who can set email up. */
     const thisMac = useThisMacAvailability();
+    const machine = capitalised(useThisComputer());
     /* Organization membership is not part of the sample source — there is no
        organization behind it to have members — so there is nothing to ask. */
     const enabled = source.label !== "sample";
@@ -214,7 +216,7 @@ export function PeopleSection({ orgId }: { orgId: string }) {
                             )}
                             {thisMac === "shown" && (
                                 <button type="button" className="linkish thismac-setup" onClick={() => openSettings("this-mac-setup", "email")}>
-                                    <KeyIcon size={13} /> Set up email in This Mac → Server setup
+                                    <KeyIcon size={13} /> Set up email in {machine} → Server setup
                                 </button>
                             )}
                         </div>
