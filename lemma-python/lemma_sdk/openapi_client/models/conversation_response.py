@@ -30,6 +30,7 @@ class ConversationResponse:
     Attributes:
         created_at (datetime.datetime):
         id (UUID):
+        last_activity_at (datetime.datetime):
         pod_cwd (str): The conversation's working directory in pod files. Anything a person attaches here is what the
             agent finds by a bare filename, because this is the directory its pod tools resolve against.
         pod_id (UUID):
@@ -58,6 +59,7 @@ class ConversationResponse:
 
     created_at: datetime.datetime
     id: UUID
+    last_activity_at: datetime.datetime
     pod_cwd: str
     pod_id: UUID
     updated_at: datetime.datetime
@@ -91,6 +93,8 @@ class ConversationResponse:
         created_at = self.created_at.isoformat()
 
         id = str(self.id)
+
+        last_activity_at = self.last_activity_at.isoformat()
 
         pod_cwd = self.pod_cwd
 
@@ -216,6 +220,7 @@ class ConversationResponse:
             {
                 "created_at": created_at,
                 "id": id,
+                "last_activity_at": last_activity_at,
                 "pod_cwd": pod_cwd,
                 "pod_id": pod_id,
                 "updated_at": updated_at,
@@ -271,6 +276,8 @@ class ConversationResponse:
         created_at = isoparse(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
+
+        last_activity_at = isoparse(d.pop("last_activity_at"))
 
         pod_cwd = d.pop("pod_cwd")
 
@@ -496,6 +503,7 @@ class ConversationResponse:
         conversation_response = cls(
             created_at=created_at,
             id=id,
+            last_activity_at=last_activity_at,
             pod_cwd=pod_cwd,
             pod_id=pod_id,
             updated_at=updated_at,

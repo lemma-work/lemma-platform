@@ -74,6 +74,20 @@ describe("ConversationsNamespace.list", () => {
     );
   });
 
+  it("passes a title search and a page token through listDefault", async () => {
+    const { conversations, request } = setup();
+
+    await conversations.listDefault({ search: "launch", page_token: "next" });
+
+    expect(request).toHaveBeenCalledWith(
+      "GET",
+      "/pods/pod-1/conversations",
+      expect.objectContaining({
+        params: expect.objectContaining({ search: "launch", page_token: "next" }),
+      }),
+    );
+  });
+
   it("starts a failed-run retry and returns the run identity", async () => {
     const { conversations, request } = setup();
 

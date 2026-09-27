@@ -29,6 +29,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunFinishResult,
     AgentRunStatus,
     ConversationAgentSelection,
+    ConversationListCursor,
     ConversationStatus,
     ConversationType,
     HarnessKind,
@@ -168,9 +169,14 @@ class ConversationRepository(Protocol):
         metadata_filters: JsonObject | None = None,
         parent_id: UUID | None = None,
         archived: bool = False,
-        cursor: UUID | None = None,
+        search: str | None = None,
+        cursor: ConversationListCursor | None = None,
         limit: int = 20,
-    ) -> tuple[list[Conversation], UUID | None]: ...
+    ) -> tuple[list[Conversation], ConversationListCursor | None]: ...
+
+    async def cursor_after(
+        self, *, conversation_id: UUID, user_id: UUID, pod_id: UUID
+    ) -> ConversationListCursor | None: ...
 
     async def list_children(
         self,
