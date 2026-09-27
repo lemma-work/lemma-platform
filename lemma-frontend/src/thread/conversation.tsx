@@ -111,7 +111,7 @@ export function ConversationPane({
                 error={error ?? (conversation.isError ? "Could not read this conversation." : null)}
                 loading={conversation.isPending && conversationId !== NEW_CONVERSATION}
                 onReload={conversation.isError ? () => void conversation.refetch() : undefined}
-                emptyTitle={conversationId === NEW_CONVERSATION ? "New conversation" : "Nothing said in here yet"}
+                emptyTitle={conversationId === NEW_CONVERSATION ? "What should " + pod.teammate.name + " work on?" : "Nothing said in here yet"}
                 podId={pod.id}
                 /* The live pane hands this down and this one did not, which
                    meant every card keyed to a conversation — a paused sign-in
@@ -130,7 +130,7 @@ export function ConversationPane({
                 onOpenApp={onOpenApp}
                 onOpenFile={onOpenFile}
                 onOpenTable={onOpenTable}
-                emptyBody={pod.teammate.name + " is ready. Send a message to start."}
+                emptyBody="Send a message to start a new conversation."
             />
             <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
             <Composer

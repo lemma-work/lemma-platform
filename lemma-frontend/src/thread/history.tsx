@@ -146,8 +146,10 @@ export function History({
             {more && (
                 <button className="history__more" onClick={onSeeAll}>
                     {/* No count: this list is the first page, so any number
-                        here would be a floor dressed up as a total. */}
-                    All conversations <ArrowRightIcon size={15} />
+                        here would be a floor dressed up as a total. Named
+                        for where it goes, the History tab, rather than a
+                        third name for the same list. */}
+                    See all in History <ArrowRightIcon size={15} />
                 </button>
             )}
         </aside>

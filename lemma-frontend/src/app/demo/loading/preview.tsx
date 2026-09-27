@@ -23,7 +23,7 @@ export function LoadingPreview() {
                 </nav>
             </header>
             {state === "workspace" ? <div style={{ flex: 1, minHeight: 0 }}><WorkspaceLoading embedded /></div> : <>
-                <Transcript turns={state === "ready" ? turns : []} teammate={{ name: "Kit", initials: "K", iconUrl: null }} streaming={null} state="idle" error={state === "error" ? "Could not load this conversation. Please try again." : null} loading={state === "loading"} emptyTitle="New conversation" emptyBody="Kit is ready. Send a message to start." podId="preview" onReload={state === "error" ? () => setState("loading") : undefined} />
+                <Transcript turns={state === "ready" ? turns : []} teammate={{ name: "Kit", initials: "K", iconUrl: null }} streaming={null} state="idle" error={state === "error" ? "Could not load this conversation. Please try again." : null} loading={state === "loading"} emptyTitle="What should Kit work on?" emptyBody="Send a message to start a new conversation." podId="preview" onReload={state === "error" ? () => setState("loading") : undefined} />
                 <Composer placeholder="Talk to Kit…" busy={state !== "empty" && state !== "ready"} canStop={false} onSend={() => {}} />
             </>}
         </main>

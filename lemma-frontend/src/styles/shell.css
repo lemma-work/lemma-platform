@@ -740,6 +740,12 @@
     padding: 56px 0 0;
     max-width: 46ch;
 }
+/* An empty thread starts where its first message will land: at the bottom,
+   on the composer's left edge. Floated 56px below the tabs it read as a stray
+   heading in the corner of an empty page, unrelated to the box you type in. */
+.pane__inner:has(> .quiet) { min-height: 100%; display: flex; flex-direction: column; }
+.pane__inner > .quiet { margin-top: auto; padding: 0 0 12px; }
+.quiet > .mark { margin-bottom: 6px; }
 .quiet h2 {
     margin: 0;
     font-size: var(--t-lead);
@@ -5360,12 +5366,19 @@ a.reach { text-decoration: none; }
 .copy-section { position: relative; }
 .copy-control { display: inline-flex; }
 .message-text { width: fit-content; max-width: 100%; min-width: 0; }
-.message-text, .msg--you { position: relative; }
-.message-actions { position: absolute; right: 6px; bottom: -12px; z-index: 1; display: flex; opacity: 0; pointer-events: none; }
+.message-text, .msg--you .msg__body { position: relative; }
+/* Never straddling an edge. Half on, half off the bubble read as a control
+   that had slipped. Yours sits beside the bubble, in the empty side of the
+   row; the teammate's sits inside its card's corner, where every section's
+   copy button already is. */
+.message-actions { position: absolute; z-index: 1; display: flex; opacity: 0; pointer-events: none; }
+.message-text > .message-actions { top: 6px; right: 6px; }
+.msg--you .message-actions { right: calc(100% + 6px); bottom: 2px; }
 .message-text:hover > .message-actions,
 .message-text:focus-within > .message-actions,
-.msg--you:hover > .message-actions,
-.msg--you:focus-within > .message-actions { opacity: 1; pointer-events: auto; }
+.msg--you:hover .message-actions,
+.msg--you:focus-within .message-actions { opacity: 1; pointer-events: auto; }
+.message-text > .message-actions .copy-control__button { background: var(--chrome); }
 .message-actions .copy-control__button { width: 28px; height: 28px; background: var(--paper); color: var(--ink-3); }
 .message-actions .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
 .copy-control__button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: var(--paper); color: var(--ink-2); cursor: pointer; }
@@ -5496,3 +5509,71 @@ a.reach { text-decoration: none; }
     box-shadow: var(--depth-raise);
     font-size: 13px;
 }
+
+/* Keep each view in the same DOM position when it changes sides, preserving
+   editors, iframe sessions and conversation drafts. */
+.body--dual > [data-side="left"] { right: calc(100% - var(--split-position, 52%)); }
+.body--dual > [data-side="right"] {
+    left: var(--split-position, 52%);
+    top: 44px;
+}
+.body--dual > .split { grid-template-columns: minmax(0, 1fr); }
+.body--dual > .split > .history { display: none; }
+.right-pane-toolbar {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: var(--split-position, 52%);
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+}
+.right-pane-toolbar > span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--t-ui);
+}
+.right-pane-toolbar .icon-button { width: 44px; height: 44px; }
+@media (max-width: 767px) {
+    .body--dual > [data-side="left"] { right: 0; bottom: 50%; }
+    .body--dual > [data-side="right"] { left: 0; top: calc(50% + 44px); border-left: 0; }
+    .right-pane-toolbar { left: 0; top: 50%; border-left: 0; border-top: 1px solid var(--line-2); }
+}
+
+.pane-divider {
+    position: absolute;
+    inset-block: 0;
+    left: var(--split-position, 52%);
+    width: 10px;
+    transform: translateX(-50%);
+    z-index: 6;
+    cursor: col-resize;
+    touch-action: none;
+}
+.pane-divider::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: 5px;
+    width: 1px;
+    background: var(--line-2);
+}
+.pane-divider:hover::after,
+.pane-divider:focus-visible::after,
+.pane-divider--dragging::after { background: var(--accent); }
+.pane-resize-shield { position: absolute; inset: 0; z-index: 5; cursor: col-resize; }
+@media (max-width: 767px) {
+    .pane-divider, .pane-resize-shield { display: none; }
+}
+
+/* The separator itself is the focus indicator; outlining its hit area draws
+   two extra rails on either side of the actual boundary. */
+.pane-divider[tabindex]:focus-visible { outline: none; box-shadow: none; }
+.file-tab-pane { background: var(--paper); }
