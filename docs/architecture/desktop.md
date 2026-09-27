@@ -63,27 +63,64 @@ identified by path, and those paths change every launch.
 Installation:
 
 1. Validate manifest schema, release, target, source, digest, and sizes.
-2. Reserve space for the compressed downloads, expanded sizes, and 4 GiB of
-   working headroom before extraction.
-3. Reuse a verified archive or resume its `.part` file with a strict
+2. Reuse what an installed release already has (see
+   [Reusing an installed component](#reusing-an-installed-component)): copy a
+   component whose archive digest matches into the staging directory and hash
+   the copy. Only components that did not verify are downloaded.
+3. Reserve space for the archives still to download, their expanded sizes,
+   and 4 GiB of working headroom before extraction. The 6 GiB compressed and
+   8 GiB expanded limits apply to the whole release whatever is reused.
+4. Reuse a verified archive or resume its `.part` file with a strict
    `Content-Range`. A connection that drops, or is silent for 60 seconds
    (the header wait and every body read), is resumed automatically up to five
    times with backoff; a digest, range or client error is not retried.
-4. Hash the existing prefix and new bytes as they transfer.
-5. Reject redirects outside HTTPS, wrong status/size/digest, archive overlap,
+   Download progress counts only the archives actually fetched.
+5. Hash the existing prefix and new bytes as they transfer.
+6. Reject redirects outside HTTPS, wrong status/size/digest, archive overlap,
    path escape, duplicate entries, symlinks, and unsafe expansion.
-6. Extract into `.release-pid-time.staging`; create sparse holes for zero-filled
+7. Extract into `.release-pid-time.staging`; create sparse holes for zero-filled
    raw-disk chunks.
-7. Validate host/guest release markers and write artifact identity.
-8. Sync the completed stage and parent directory, then atomically rename into
+8. Validate host/guest release markers, write artifact identity, and record
+   each component's contents (below).
+9. Sync the completed stage and parent directory, then atomically rename into
    a directory identified by the release and artifact digests. A same-version
    rebuild or repair gets its own directory; existing runtime trees stay in place.
-9. Keep valid downloads across retry; delete archives only after staging succeeds.
-10. Stop the previous runtime only after the candidate has been fully staged,
+10. Keep valid downloads across retry; delete archives only after staging succeeds.
+11. Stop the previous runtime only after the candidate has been fully staged,
     then save the candidate binding. Retain previous releases; staging does not
     establish database compatibility or health and never authorizes pruning.
 
 No file inside the archive is individually fsynced.
+
+### Reusing an installed component
+
+A release is two archives that change at different rates: the host pack
+carries the app and changes every release, the guest runtime is a Linux image
+that changes rarely. Beside `.lemma-runtime-artifacts.json` (the archive
+digests the release was installed from), each release records
+`.lemma-runtime-contents.json`: per component, the archive digest and a digest
+of the tree it expanded to (`local-runtime/` for the host pack,
+`managed-runtime/` for the guest) -- every path, kind, file size, SHA-256 and,
+on Unix, permission bits.
+
+When the manifest names an archive whose digest and size an installed release
+records for the same target, the installer copies that release's tree into
+staging (`clonefile` on APFS, a real copy elsewhere, so the releases never
+share a file) and hashes the copy. A digest that matches the record is as
+trusted as a verified download; anything else -- a changed file, an extra one,
+a link, a copy that fails -- discards the copy, says why in the install log,
+and downloads the archive as if nothing had been installed. Repair
+(`reinstall_from_manifest`) reuses nothing. A release installed before these
+records existed has none, so an update from it downloads everything, as
+before. Because a copy is independent, `prune_retired_releases` and rollback to
+`previousRuntime` are unaffected.
+
+The update dialog's runtime size comes from the feed. Feeds carry each
+archive's digest and size (`lemma.runtime_artifacts`) beside the whole-release
+`runtime_download_bytes`; an app that can read them subtracts every archive an
+installed release records, so the figure is what will be downloaded. It reads
+records only -- the install still hashes -- and an app from before this reads
+the whole-release figure.
 
 ## 3. Immutable guest and persistent data
 
@@ -1076,11 +1113,33 @@ current workspace opens its own Settings instead.
 
 - builds digest-pinned OCI images;
 - builds/prunes host packs;
-- builds/shrinks guest runtimes;
+- builds/shrinks guest runtimes, or republishes one (below);
+- writes both runtime archives deterministically -- sorted entries, fixed
+  timestamps, normalised modes -- so an unchanged tree archives to the same
+  bytes;
 - writes archive sidecars and size breakdown;
 - enforces 6 GiB compressed and 8 GiB expanded gates;
 - publishes runtime assets for a release;
 - on manual non-publish dispatch, builds the compressed PR test DMG.
+
+The guest runtime's tree is not reproducible (packages are installed at build
+time, `mkfs.ext4` writes a fresh UUID, the initramfs carries timestamps), so a
+rebuild of unchanged inputs used to publish new bytes and every installed app
+downloaded them. `scripts/runtime_artifacts.py fingerprint` hashes what decides
+the guest's content before building it: the build script, the image
+definition and overlay, the boot preparer, the archive writer, the built
+`lemma-guestd`, the target, and the month, which stands for the unpinned Ubuntu
+package archive and caps how stale the guest's packages get. The manifest
+records it as `input_fingerprints.guest_runtimes.<target>` -- at the top level,
+because installed apps refuse unknown fields in artifact entries. When the
+newest published release with the same fingerprint is found, its archive is
+downloaded, checked against the SHA-256 its own manifest recorded, and
+republished in this release. It is copied rather than linked so pruning an
+older nightly never breaks a newer one. The `rebuild_guest_runtime` dispatch
+input forces a build.
+
+The host pack is not fingerprinted: its `release.json` names the version and
+the digests of images built in the same run, so it differs every release.
 
 `release-desktop.yml`:
 

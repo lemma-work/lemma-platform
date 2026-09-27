@@ -177,25 +177,68 @@ mod tests {
         })
     }
 
+    /// Steps that each wait, up to a deadline, for all of them to have
+    /// started. Only steps that run at the same time can all see that; run in
+    /// turn, the first gives up. A proof of overlap that does not depend on
+    /// how busy the machine is.
+    #[derive(Default)]
+    struct Rendezvous {
+        arrived: Mutex<usize>,
+        all_here: std::sync::Condvar,
+    }
+
+    impl Rendezvous {
+        fn meet(&self, expected: usize) -> bool {
+            let mut arrived = self.arrived.lock().unwrap();
+            *arrived += 1;
+            self.all_here.notify_all();
+            let (arrived, waited) = self
+                .all_here
+                .wait_timeout_while(arrived, Duration::from_secs(10), |count| *count < expected)
+                .unwrap();
+            !waited.timed_out() || *arrived >= expected
+        }
+    }
+
+    fn meeting<'a>(
+        name: &'static str,
+        trace: &'a Trace,
+        rendezvous: &'a Rendezvous,
+        met: &'a Mutex<Vec<&'static str>>,
+    ) -> Step<'a> {
+        Step::new(name, move || {
+            trace.note(format!("start {name}"));
+            if rendezvous.meet(2) {
+                met.lock().unwrap().push(name);
+            }
+            trace.note(format!("end {name}"));
+            Ok(())
+        })
+    }
+
     /// Steps in a tier overlap; tiers do not.
     #[test]
     fn a_tier_runs_together_and_waits_for_the_one_before_it() {
         let trace = Trace::default();
-        let started = Instant::now();
+        let rendezvous = Rendezvous::default();
+        let met = Mutex::new(Vec::new());
         let outcomes = run_tiers(
             vec![
-                vec![pausing("agent-host", &trace), pausing("sharing", &trace)],
+                vec![
+                    meeting("agent-host", &trace, &rendezvous, &met),
+                    meeting("sharing", &trace, &rendezvous, &met),
+                ],
                 vec![pausing("host-processes", &trace)],
             ],
             &|_| {},
         );
-        let elapsed = started.elapsed();
 
-        // Two tiers of one pause each, not three pauses.
-        assert!(elapsed >= PAUSE * 2, "{elapsed:?}");
-        assert!(
-            elapsed < PAUSE * 3,
-            "the first tier ran its steps in turn: {elapsed:?}"
+        let mut met = met.into_inner().unwrap();
+        met.sort_unstable();
+        assert_eq!(
+            met,
+            ["agent-host", "sharing"],
+            "the first tier ran its steps in turn"
         );
         let entries = trace.entries();
         let position = |entry: &str| entries.iter().position(|seen| seen == entry).unwrap();
@@ -212,7 +255,7 @@ mod tests {
             ["agent-host", "sharing", "host-processes"],
             "outcomes come back in plan order, whatever order they finished in"
         );
-        assert!(outcomes.iter().all(|outcome| outcome.duration >= PAUSE));
+        assert!(outcomes[2].duration >= PAUSE);
     }
 
     /// A failure is reported and the rest of the stop still happens.

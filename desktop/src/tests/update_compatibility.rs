@@ -88,6 +88,7 @@ fn an_installation_that_recorded_nothing_can_still_be_found_compatible() {
     let feed = LemmaUpdateMetadata {
         postgres_major: Some(18),
         runtime_download_bytes: Some(698_614_170),
+        ..Default::default()
     };
     assert_eq!(feed.compatibility_with(installed), "compatible");
     assert!(

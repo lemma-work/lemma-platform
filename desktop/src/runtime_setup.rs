@@ -137,6 +137,7 @@ pub(crate) fn ensure_runtime_artifacts_inner(
                 .checked_div(progress.total)
                 .unwrap_or(0);
             let percent = match progress.stage {
+                "host-reuse" | "guest-reuse" => 2,
                 "download" => 2 + fraction.saturating_mul(44) / 1000,
                 "verify" => 47,
                 "host-extract" | "guest-extract" => 49 + fraction.saturating_mul(39) / 1000,
@@ -223,6 +224,7 @@ pub(crate) fn ensure_runtime_artifacts_inner(
 /// database.
 fn install_step(stage: &str) -> Option<&'static str> {
     match stage {
+        "host-reuse" | "guest-reuse" => Some("reuse"),
         "download" => Some("download"),
         "verify" => Some("verify"),
         "host-extract" => Some("host-extract"),
