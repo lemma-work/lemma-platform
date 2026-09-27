@@ -43,7 +43,7 @@ export function sandboxImageNotice(previous: SandboxImageState | null, next: San
         return {
             kind: "downloading",
             title: "Preparing the workspace sandbox",
-            description: next.detail || "Downloading the image teammates run their work in.",
+            description: next.detail || "Downloading the image work runs in.",
         };
     }
     /* Both endings are only worth reporting to someone who saw the beginning. */
@@ -52,7 +52,7 @@ export function sandboxImageNotice(previous: SandboxImageState | null, next: San
         return {
             kind: "ready",
             title: "Workspace sandbox ready",
-            description: `Teammates can run code, shells and browsers on ${thisComputer()}.`,
+            description: `Code, shells and browsers can now run on ${thisComputer()}.`,
         };
     }
     if (next.state === "failed") {

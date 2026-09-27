@@ -63,18 +63,18 @@ export function whereabouts(origin: string, page: string | null): Whereabouts {
 export function outcomeSay(signedIn: boolean, working: boolean): { headline: string; note: string } {
     if (!signedIn) {
         return {
-            headline: "Told the teammate",
+            headline: "Not signed in",
             note: "It knows you could not sign in, and will not wait. You can close this.",
         };
     }
     if (working) {
         return {
             headline: "Signed in",
-            note: "The teammate is carrying on. The browser keeps the session, so you will not be asked again.",
+            note: "It is carrying on. The browser keeps the session, so you will not be asked again.",
         };
     }
     return {
         headline: "Signed in",
-        note: "The teammate is carrying on, but the site was still showing a login form just now — so you may be asked again.",
+        note: "It is carrying on, but the site was still showing a login form just now — so you may be asked again.",
     };
 }

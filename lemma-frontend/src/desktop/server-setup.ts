@@ -33,17 +33,17 @@ export interface CapabilitySpec {
 
 export const CAPABILITIES: CapabilitySpec[] = [
     { id: "ai", title: "AI model", required: true,
-        unlocks: "Teammates think, write and use tools with it. Also names conversations, summarises long ones and reads images." },
+        unlocks: "Thinks, writes and uses tools. Also names conversations, summarises long ones and reads images." },
     { id: "email", title: "Email", required: false,
         unlocks: "Sends invitations, password resets and sign-in codes. Without it, share invitation links yourself." },
     { id: "connectors", title: "Connectors", required: false,
-        unlocks: "Lets people connect Gmail, GitHub, Slack, Notion and more, so teammates can work in them." },
+        unlocks: "Lets people connect Gmail, GitHub, Slack, Notion and more, so work can happen in them." },
     { id: "channels", title: "Channels", required: false,
-        unlocks: "Lets teammates answer in Telegram, Slack, email, WhatsApp and Teams." },
+        unlocks: "Answer in Telegram, Slack, email, WhatsApp and Teams." },
     { id: "voice", title: "Voice", required: false,
-        unlocks: "Lets teammates reply with voice notes, read the ones they are sent, and take live calls." },
+        unlocks: "Reply with voice notes, read incoming ones, and take live calls." },
     { id: "search", title: "Web search", required: false,
-        unlocks: "Lets teammates look things up on the web." },
+        unlocks: "Look things up on the web." },
 ];
 
 export function capabilitySpec(id: Capability): CapabilitySpec {
@@ -211,7 +211,7 @@ export function aiDraftProblem(draft: AiDraft, key: SecretIntent | undefined, ke
     if (needsKey(draft.baseUrl) && !keyStored && typed?.action !== "replace") return "Enter an API key for this provider.";
     if (typed?.action === "remove" && needsKey(draft.baseUrl)) return "This provider needs a key. Enter a new one rather than removing it.";
     if (!draft.models.length) return "List the provider’s models, then choose one.";
-    if (!draft.defaultModel || !draft.models.includes(draft.defaultModel)) return "Choose the model teammates use.";
+    if (!draft.defaultModel || !draft.models.includes(draft.defaultModel)) return "Choose the default model.";
     return null;
 }
 

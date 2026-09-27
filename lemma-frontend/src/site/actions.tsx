@@ -298,7 +298,7 @@ function Install({ action, owner, repo, source }: ActionProps) {
                         path, so promising one was wrong there. */}
                     <p>
                         {action === "remix"
-                            ? "The teammate picks it up in a new conversation, where you can steer the remix."
+                            ? "It picks up the remix in a new conversation, where you can steer it."
                             : "Review the installation plan before applying any resources."}
                     </p>
                 </>

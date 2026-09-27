@@ -695,7 +695,7 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
 
             {accounts.isSuccess && connectors.isSuccess && accounts.data.length > 0 && (
                 <p className="connectors__note">
-                    <CheckCircleIcon size={13} /> A teammate can answer on any of these. Removing one stops
+                    <CheckCircleIcon size={13} /> Answer on any of these. Removing one stops
                     everything pinned to it.
                 </p>
             )}

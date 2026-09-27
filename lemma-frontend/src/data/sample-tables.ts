@@ -40,7 +40,7 @@ const SCRIPTS = [
     "Three questions, one answer. What did the agent do, why did it do that, what did it cost. Every tool we looked at answers the first one and hides the other two. Build the whole piece around the third — nobody expects a cost line and everybody wants one.",
     "Start with the failure. The screen recording where it picks the wrong table and confidently writes a summary of nothing. Let it run twelve seconds, uncut, no music. Then the title card. Then how we fixed it. People trust a product that shows the bad take first.",
     "Counter-programming: everyone is posting benchmark tables this month. Post a video of one person doing one real task end to end, in real time, with the mistakes left in. Length is the point. Twenty minutes, no cuts, no narration over the thinking parts.",
-    "The teammate metaphor, argued properly. Not \"it's like a coworker\" as a slogan — actually walk through what changes when the thing has a name, a profile and a badge. Ends on the badge printing. That shot does more work than the script does.",
+    "The hire metaphor, argued properly. Not \"it's like a coworker\" as a slogan — actually walk through what changes when the thing has a name, a profile and a badge. Ends on the badge printing. That shot does more work than the script does.",
 ];
 
 const HOOKS = [
@@ -206,8 +206,8 @@ SAMPLE_TABLES.push({
     columns: columns("id", "title", "shipped_at", "kind", "owner"),
     rows: () => [
         ["The badge is an object, and it behaves like one", 2, "feature", "Aditi"],
-        ["Lem is the teammate, not one of the agents under it", 4, "rename", "Rohan"],
-        ["A teammate is issued a badge", 4, "feature", "Aditi"],
+        ["Lem is the one you talk to, not one of the agents under it", 4, "rename", "Rohan"],
+        ["Every hire is issued a badge", 4, "feature", "Aditi"],
         ["The landing page keeps its own route", 9, "fix", "Priya"],
         ["Agents belong on the profile", 11, "feature", "Rohan"],
         ["Dark mode on the share pages", 18, "fix", "Aditi"],

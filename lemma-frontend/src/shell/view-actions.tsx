@@ -72,7 +72,7 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
         secondary = <>
             {/* Not on the History tab itself, where it would open what is open. */}
             {tab?.kind !== "history" && <button className="view-actions__icon" onClick={onHistory} title="History" aria-label="History"><HistoryIcon size={17}/><span>History</span></button>}
-            {!sample && <button className="view-actions__icon" onClick={onComputer} title="The computer this teammate works on" aria-label="Computer"><ComputerIcon size={17}/><span>Computer</span></button>}
+            {!sample && <button className="view-actions__icon" onClick={onComputer} title="The computer it works on" aria-label="Computer"><ComputerIcon size={17}/><span>Computer</span></button>}
         </>;
     }
 

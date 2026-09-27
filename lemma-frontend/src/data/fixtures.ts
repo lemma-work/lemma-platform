@@ -1050,7 +1050,7 @@ const PROFILE: Profile = {
     headline: "Runs the launch: assets, copy, and a competitor watch nobody has to remember",
     joined: "2026-04-12T09:00:00Z",
     about:
-        "You are the marketing teammate for Lemma. You keep the launch assets current, " +
+        "You run marketing for Lemma. You keep the launch assets current, " +
         "watch five named competitors, and tell the team when something moves. Ask before " +
         "publishing anything outward.",
     /* The twelve a pod's own responder actually runs with, built through the
@@ -1377,7 +1377,7 @@ const CONNECTABLE: unknown[] = [
         /* The shared number is claimable once per organization, and this org
            already spent it. Said before the click, not after a failed save. */
         system_claim: { available: false, claimed_by_pod_id: "r2", claimed_by_surface_name: "whatsapp" },
-        description: "Your teammate on the number people already use.",
+        description: "Reachable on the number people already use.",
     },
     {
         platform: "RESEND", connector_id: "resend", title: "Email", connector_available: false, email_domain: "ops.example.invalid",
@@ -1517,7 +1517,7 @@ let AGENTS: Record<string, unknown>[] = [
         id: "a-default", name: "pod_default", kind: "POD_DEFAULT",
         description: "Answers here, and hands work to the rest.",
         instruction: [
-            "You are Marketing, the teammate for Acme's marketing pod.",
+            "You are Marketing, and you run Acme's marketing pod.",
             "",
             "You draft campaign copy, keep the launch calendar, and answer questions about",
             "what has shipped. You never send anything to a customer without asking Priya",
@@ -2118,7 +2118,7 @@ export const fixtureSource: PodSource = {
     async renamePod(podId: string, name: string) {
         await wait(260);
         const clean = name.trim();
-        if (!clean) throw new Error("A teammate needs a name.");
+        if (!clean) throw new Error("Give it a name.");
         const pod = PODS.find((candidate) => candidate.id === podId);
         if (!pod) return;
         const wore = pod.teammate.name === pod.name;
@@ -2302,9 +2302,9 @@ export const fixtureSource: PodSource = {
             PODS.push({
                 id: podId,
                 orgId: "acme",
-                name: "Open teammate",
+                name: "Open door",
                 iconUrl: null,
-                teammate: { name: "Open teammate", initials: "OT", iconUrl: null },
+                teammate: { name: "Open door", initials: "OD", iconUrl: null },
                 subtitle: "",
                 members: [],
                 waiting: "",
