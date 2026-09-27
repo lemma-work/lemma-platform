@@ -5,7 +5,7 @@ import { useState } from "react";
 import { lemma } from "@/session/client";
 import { source, NEW_CONVERSATION } from "@/data";
 import type { Pod } from "@/data";
-import { applyArchived, patchConversationLists, unbound } from "./conversation-list";
+import { applyArchived, patchConversationLists, refreshConversationLists, unbound } from "./conversation-list";
 
 import { ConversationTitle } from "./conversation-title";
 
@@ -64,7 +64,7 @@ export function History({
                 await lemma(pod.id).conversations.update(id, { is_archived: true }, { pod_id: pod.id });
             }
         } catch {
-            void cache.invalidateQueries({ queryKey: ["conversations", pod.id] });
+            void refreshConversationLists(cache, pod.id);
         } finally {
             setArchiving(null);
         }

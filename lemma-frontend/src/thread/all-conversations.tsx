@@ -1,6 +1,6 @@
 import { LoadingRows } from "@/ui/loading";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Pod } from "@/data";
 import { ConversationTitle } from "./conversation-title";
@@ -12,7 +12,15 @@ import { allConversationsKey } from "./conversation-list";
  *
  *  A page at a time, most recently active first. The next page loads when the
  *  "More" button scrolls into view, and the button is still a button for
- *  anyone who gets there without scrolling. */
+ *  anyone who gets there without scrolling.
+ *
+ *  The filter is a search on the server, not over the loaded pages: filtering
+ *  what had loaded left the "More" button in view whenever little matched, and
+ *  the pane then paged through the whole history to fill the screen. */
+/** Long enough that a word is typed rather than sent a letter at a time;
+ *  the same pause the global search uses. */
+const SEARCH_DEBOUNCE_MS = 180;
+
 export function AllConversations({
     pod,
     conversationId,
@@ -23,19 +31,29 @@ export function AllConversations({
     onPick: (id: string) => void;
 }) {
     const [filter, setFilter] = useState("");
+    /* What the server is asked for: the filter once typing pauses, so a word
+       is one request rather than one per letter. */
+    const [search, setSearch] = useState("");
+    useEffect(() => {
+        const timer = window.setTimeout(() => setSearch(filter.trim()), SEARCH_DEBOUNCE_MS);
+        return () => window.clearTimeout(timer);
+    }, [filter]);
+
     const history = useInfiniteQuery({
-        queryKey: allConversationsKey(pod.id),
-        queryFn: ({ pageParam }) => source.listConversationsPage(pod.id, pageParam),
+        queryKey: allConversationsKey(pod.id, search),
+        queryFn: ({ pageParam }) => source.listConversationsPage(pod.id, pageParam, search || undefined),
         initialPageParam: null as string | null,
         getNextPageParam: (last) => last.next,
+        /* The last results stay up while the next search runs, rather than the
+           list blinking to a loading state between words. */
+        placeholderData: keepPreviousData,
     });
-    const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = history;
+    const { isFetchingNextPage, isFetchNextPageError, fetchNextPage } = history;
+    /* Not while the previous search's rows are standing in: their "next" is a
+       page of a different search. */
+    const hasNextPage = history.hasNextPage && !history.isPlaceholderData;
 
-    const entries = useMemo(() => {
-        const all = history.data?.pages.flatMap((page) => page.items) ?? [];
-        const needle = filter.trim().toLowerCase();
-        return needle ? all.filter((entry) => entry.title.toLowerCase().includes(needle)) : all;
-    }, [history.data, filter]);
+    const entries = useMemo(() => history.data?.pages.flatMap((page) => page.items) ?? [], [history.data]);
 
     const more = useRef<HTMLButtonElement>(null);
     useEffect(() => {
@@ -50,14 +68,7 @@ export function AllConversations({
         return () => observer.disconnect();
     }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
-    /* The filter reads the pages that have loaded, not the server. Saying
-       "nothing matches" while older pages are still unread would be a claim
-       about conversations it has not looked at. */
-    const emptyText = filter
-        ? hasNextPage
-            ? "Nothing matches in the conversations loaded so far."
-            : "Nothing matches that."
-        : "No conversations yet.";
+    const emptyText = search ? "Nothing matches that." : "No conversations yet.";
 
     return (
         <div className="pane">
@@ -74,7 +85,9 @@ export function AllConversations({
 
                 {history.isPending && <LoadingRows label="Loading history" rows={5} />}
                 {history.isError && <p className="empty-row">Couldn’t load conversation history.</p>}
-                {history.isSuccess && entries.length === 0 && <p className="empty-row">{emptyText}</p>}
+                {history.isSuccess && !history.isPlaceholderData && entries.length === 0 && (
+                    <p className="empty-row">{emptyText}</p>
+                )}
 
                 <div className="all__list">
                     {entries.map((entry) => (

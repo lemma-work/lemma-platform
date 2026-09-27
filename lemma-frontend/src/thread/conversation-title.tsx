@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { EditIcon } from "@/ui/icons";
 import { lemma } from "@/session/client";
 import { source } from "@/data";
-import { applyTitle, patchConversationLists, titleToSend, titleToShow } from "./conversation-list";
+import { applyTitle, patchConversationLists, refreshConversationLists, titleToSend, titleToShow } from "./conversation-list";
 
 /** Inline renaming beside a conversation in the history sidebar. */
 export function ConversationTitle({
@@ -59,7 +59,7 @@ export function ConversationTitle({
                 await lemma(podId).conversations.update(conversationId!, { title: next }, { pod_id: podId });
             }
         } catch {
-            void cache.invalidateQueries({ queryKey: ["conversations", podId] });
+            void refreshConversationLists(cache, podId);
             setFailed(true);
         } finally {
             setSaving(false);

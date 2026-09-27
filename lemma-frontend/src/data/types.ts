@@ -566,8 +566,10 @@ export interface PodSource {
     widgetEmbedUrl(podId: string, conversationId: string, toolCallId: string): Promise<string>;
     /** The first page — what the sidebar, the rail and search want. */
     listConversations(podId: string): Promise<ConversationRef[]>;
-    /** Any page, for the one place that shows every conversation. */
-    listConversationsPage(podId: string, cursor?: string | null): Promise<ConversationPage>;
+    /** Any page, for the one place that shows every conversation. `search`
+     *  keeps titles containing it (case-insensitive), matched by the server so
+     *  it reaches conversations no page has loaded yet. */
+    listConversationsPage(podId: string, cursor?: string | null, search?: string): Promise<ConversationPage>;
     /** The call threads hanging off one conversation.
      *
      *  A call runs in a conversation of its own, parented to whatever was

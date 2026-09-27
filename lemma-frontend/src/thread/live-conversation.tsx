@@ -8,7 +8,7 @@ import type { Pod } from "@/data";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { InteractionDock } from "./interaction-dock";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
-import { applyTitle, patchConversationLists } from "./conversation-list";
+import { applyTitle, patchConversationLists, refreshConversationLists } from "./conversation-list";
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
@@ -479,7 +479,7 @@ export function LiveConversation({
                     onCreated: made => {
                         createdHere.current = made.id;
                         onCreated?.(made.id);
-                        void queryClient.invalidateQueries({ queryKey: ["conversations", pod.id] });
+                        void refreshConversationLists(queryClient, pod.id);
                     },
                     send: async (content, id, knownConversation) => {
                         const { content: said, settled } = await putFiles(id, content, knownConversation as { pod_cwd?: string } | undefined);
@@ -510,7 +510,7 @@ export function LiveConversation({
                         }
                     },
                 });
-                void queryClient.invalidateQueries({ queryKey: ["conversations", pod.id] });
+                void refreshConversationLists(queryClient, pod.id);
             } catch (problem) {
                 if (mounted.current) {
                     setSendError(saidAboutSending(problem, "That did not send."));

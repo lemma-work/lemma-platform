@@ -1093,11 +1093,12 @@ export const liveSource: PodSource = {
         return (await liveSource.listConversationsPage(podId)).items;
     },
 
-    async listConversationsPage(podId: string, cursor?: string | null): Promise<ConversationPage> {
+    async listConversationsPage(podId: string, cursor?: string | null, search?: string): Promise<ConversationPage> {
         const listed = await lemma(podId).conversations.listDefault({
             pod_id: podId,
             limit: CONVERSATION_PAGE_SIZE,
             page_token: cursor ?? undefined,
+            search: search || undefined,
         });
         return {
             items: (listed.items ?? []).map((c) => {

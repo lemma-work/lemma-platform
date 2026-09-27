@@ -86,17 +86,22 @@ export function unbound(list: ConversationRef[] | undefined): ConversationRef[] 
     return (list ?? []).filter((entry) => !entry.boundTo);
 }
 
-/** Where the all-conversations pane keeps its pages. Under the short list's
- *  key, so invalidating `["conversations", podId]` reaches both. */
-export function allConversationsKey(podId: string) {
-    return ["conversations", podId, "all"] as const;
+/** Where the all-conversations pane keeps its pages: one query per search,
+ *  all under `["conversations", podId, "all"]`, which is itself under the
+ *  short list's key — so invalidating `["conversations", podId]` reaches
+ *  every one of them. */
+export function allConversationsKey(podId: string, search?: string) {
+    return search === undefined
+        ? (["conversations", podId, "all"] as const)
+        : (["conversations", podId, "all", search] as const);
 }
 
 type ListPatch = (list: ConversationRef[] | undefined) => ConversationRef[] | undefined;
 
-/** Just the two calls this needs, so it can be tested without a QueryClient. */
-interface ConversationCache {
+/** Just the calls this needs, so it can be tested without a QueryClient. */
+export interface ConversationCache {
     getQueryData<T>(key: readonly unknown[]): T | undefined;
+    getQueriesData<T>(filters: { queryKey: readonly unknown[] }): Array<[readonly unknown[], T | undefined]>;
     setQueryData<T>(key: readonly unknown[], value: T | undefined): unknown;
 }
 
@@ -105,26 +110,25 @@ interface Pages {
     pageParams: unknown[];
 }
 
-/** Apply one patch to the short list and to every page the all-conversations
- *  pane has loaded.
+/** Apply one patch to the short list and to every page of every view the
+ *  all-conversations pane has loaded (one per search typed into it).
  *
- *  Two caches because they are two queries: the sidebar's first page and the
- *  pane's pages. A rename made in the pane that only patched the first would
- *  show the old title in the very row that was just renamed.
+ *  Separate caches because they are separate queries: the sidebar's first
+ *  page and the pane's pages. A rename made in the pane that only patched the
+ *  first would show the old title in the very row that was just renamed.
  *
  *  No undo. A snapshot taken now is stale by the time a request fails — a page
  *  may have loaded, another rename may have landed — and restoring it would
- *  drop both. A caller whose request fails invalidates `["conversations",
- *  podId]` instead, which reaches both queries and asks the server.
+ *  drop both. A caller whose request fails calls `refreshConversationLists`
+ *  instead, which asks the server.
  */
 export function patchConversationLists(cache: ConversationCache, podId: string, patch: ListPatch): void {
     const shortKey = ["conversations", podId];
-    const allKey = allConversationsKey(podId);
     const short = cache.getQueryData<ConversationRef[]>(shortKey);
-    const all = cache.getQueryData<Pages>(allKey);
-
     if (short) cache.setQueryData(shortKey, patch(short));
-    if (all) {
+
+    for (const [key, all] of cache.getQueriesData<Pages>({ queryKey: allConversationsKey(podId) })) {
+        if (!all) continue;
         let changed = false;
         const pages = all.pages.map((page) => {
             const items = patch(page.items) ?? page.items;
@@ -132,6 +136,27 @@ export function patchConversationLists(cache: ConversationCache, podId: string, 
             changed = true;
             return { ...page, items };
         });
-        if (changed) cache.setQueryData<Pages>(allKey, { ...all, pages });
+        if (changed) cache.setQueryData<Pages>(key, { ...all, pages });
     }
+}
+
+/** Ask the server for the conversation lists again — the page 1 of each.
+ *
+ *  An infinite query refetches every page it holds, one after another, and a
+ *  send is followed by one of these: someone twenty pages deep would pay
+ *  twenty requests per message. So each loaded view is cut back to its first
+ *  page before the invalidation. Nobody is looking at page twenty when they
+ *  send (the pane is another tab), and after a failed rename or archive the
+ *  first page is the honest place to start again.
+ */
+export function refreshConversationLists(
+    cache: ConversationCache & { invalidateQueries(filters: { queryKey: readonly unknown[] }): Promise<unknown> },
+    podId: string,
+): Promise<unknown> {
+    for (const [key, all] of cache.getQueriesData<Pages>({ queryKey: allConversationsKey(podId) })) {
+        if (all && all.pages.length > 1) {
+            cache.setQueryData<Pages>(key, { pages: all.pages.slice(0, 1), pageParams: all.pageParams.slice(0, 1) });
+        }
+    }
+    return cache.invalidateQueries({ queryKey: ["conversations", podId] });
 }

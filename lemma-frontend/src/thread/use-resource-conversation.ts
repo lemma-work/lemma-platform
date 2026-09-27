@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
+import { refreshConversationLists } from "./conversation-list";
 import {
     findQuery,
     RESOURCE_KEY,
@@ -57,7 +58,7 @@ export function useResourceConversation(podId: string) {
                    one does not belong in that cache — but the panel also shows
                    whichever conversation is open, and it reads that list to
                    name it. Refreshing keeps the two from disagreeing. */
-                void cache.invalidateQueries({ queryKey: ["conversations", podId] });
+                void refreshConversationLists(cache, podId);
                 return made.id;
             } catch (failure) {
                 setProblem(

@@ -113,6 +113,20 @@ export function useSearch(podId: string | null, pods: Pod[], query: string): Sea
 
     const serverQuery = settled.length >= MIN_SERVER_QUERY ? settled : "";
 
+    /* The cached list above is one page — the most recent conversations. The
+       server searches every title, so an old conversation is findable too. */
+    const olderConversations = useQuery({
+        queryKey: ["search", podId, "conversations", serverQuery],
+        queryFn: async () => {
+            const found = await source.listConversationsPage(podId as string, null, serverQuery);
+            return found.items.map((entry): Candidate => ({
+                kind: "conversation", id: entry.id, title: entry.title, subtitle: entry.at, payload: entry,
+            }));
+        },
+        enabled: enabled && Boolean(serverQuery),
+        staleTime: 30_000,
+    });
+
     const docs = useQuery({
         queryKey: ["search", podId, "docs", serverQuery],
         queryFn: async () => {
@@ -199,18 +213,22 @@ export function useSearch(podId: string | null, pods: Pod[], query: string): Sea
         staleTime: 30_000,
     });
 
-    const hits = useMemo(
-        () => rank([...local, ...(docs.data ?? []), ...(records.data ?? [])], query),
-        [local, docs.data, records.data, query],
-    );
+    const hits = useMemo(() => {
+        /* A recent conversation is in both the cached page and the server's
+           answer; it is one result, not two. */
+        const seen = new Set(local.filter((c) => c.kind === "conversation").map((c) => c.id));
+        const older = (olderConversations.data ?? []).filter((c) => !seen.has(c.id));
+        return rank([...local, ...older, ...(docs.data ?? []), ...(records.data ?? [])], query);
+    }, [local, olderConversations.data, docs.data, records.data, query]);
 
     const failed = catalogueNames.filter((_, index) => catalogue[index].isError);
+    if (olderConversations.isError) failed.push("conversations");
     if (docs.isError) failed.push("documents");
     if (records.isError) failed.push("records");
 
     return {
         hits,
-        isSearching: Boolean(serverQuery) && (docs.isFetching || records.isFetching || settled !== query.trim()),
+        isSearching: Boolean(serverQuery) && (olderConversations.isFetching || docs.isFetching || records.isFetching || settled !== query.trim()),
         failed,
         skippedTables: columns.data?.skipped ?? 0,
     };

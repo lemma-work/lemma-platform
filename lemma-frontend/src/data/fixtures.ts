@@ -2473,8 +2473,9 @@ export const fixtureSource: PodSource = {
         return (await fixtureSource.listConversationsPage("fixture")).items;
     },
     /* Two pages, so the all-conversations pane has a "More" to press in the one
-       mode that can be looked at without a session. */
-    async listConversationsPage(_podId, cursor) {
+       mode that can be looked at without a session. Searched the way the
+       server searches: titles containing it, then paged. */
+    async listConversationsPage(_podId, cursor, search) {
         await wait(40);
         const all = [
             { id: "fixture", title: "Monday launch", at: "10:14", kind: "CHAT" },
@@ -2486,7 +2487,9 @@ export const fixtureSource: PodSource = {
             { id: "c7", title: "Pricing page copy", at: "Sat 18 Jul", kind: "CHAT" },
             { id: "c8", title: "hey", at: "Fri 17 Jul", kind: "CHAT" },
         ];
-        return cursor === "2" ? { items: all.slice(6), next: null } : { items: all.slice(0, 6), next: "2" };
+        const needle = search?.toLowerCase();
+        const found = needle ? all.filter((entry) => entry.title.toLowerCase().includes(needle)) : all;
+        return cursor === "2" ? { items: found.slice(6), next: null } : { items: found.slice(0, 6), next: found.length > 6 ? "2" : null };
     },
 
     /* The sample source has no calls in it — a call needs a live session, and
