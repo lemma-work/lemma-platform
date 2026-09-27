@@ -2,6 +2,8 @@ import { askApi, lemma } from "@/session/client";
 import { RESOURCE_KEY } from "@/thread/resource-conversation";
 import { NEW_CONVERSATION } from "./types";
 import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
+import { listStamp } from "./stamp";
+import { readableName } from "@/library/reading";
 import {
     agentChanges,
     agentRows,
@@ -78,12 +80,6 @@ type Listish = { items?: unknown[] } | unknown[];
 
 function itemsOf(value: Listish): unknown[] {
     return Array.isArray(value) ? value : (value.items ?? []);
-}
-
-function clock(iso?: string | null): string {
-    if (!iso) return "";
-    const date = new Date(iso);
-    return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function dayOf(iso?: string | null): string {
@@ -507,7 +503,7 @@ export const liveSource: PodSource = {
                 tabs.push({
                     id: "app:" + app.name,
                     kind: "app",
-                    label: app.name.replace(/[-_]/g, " "),
+                    label: readableName(app.name),
                     url: app.url,
                     status: app.status ?? "",
                 });
@@ -1111,7 +1107,7 @@ export const liveSource: PodSource = {
                 return {
                     id: row.id,
                     title: (row.title ?? "").trim() || "Untitled",
-                    at: dayOf(at) === "Today" ? clock(at) : dayOf(at),
+                    at: listStamp(at),
                     kind: row.type ?? "CHAT",
                     boundTo: typeof bound === "string" ? bound : null,
                 };
@@ -1129,7 +1125,7 @@ export const liveSource: PodSource = {
             return {
                 id: row.id,
                 title: (row.title ?? "").trim() || "Call",
-                at: dayOf(row.updated_at) === "Today" ? clock(row.updated_at) : dayOf(row.updated_at),
+                at: listStamp(row.updated_at),
                 kind: row.type ?? "CHAT",
             };
         });

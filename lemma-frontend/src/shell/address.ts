@@ -162,7 +162,7 @@ function tailOf(address: Address): string[] {
  *  rather than inventing an app frame pointed at nothing.
  */
 export function tabFromId(tabId: string): Tab | null {
-    if (tabId === "history") return { id: "history", kind: "history", label: "All conversations" };
+    if (tabId === "history") return { id: "history", kind: "history", label: "History" };
     if (tabId === "computer") return { id: "computer", kind: "computer", label: "Computer" };
 
     if (tabId.startsWith("table:")) {

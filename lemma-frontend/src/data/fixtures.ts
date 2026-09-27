@@ -2479,12 +2479,12 @@ export const fixtureSource: PodSource = {
         await wait(40);
         const all = [
             { id: "fixture", title: "Monday launch", at: "10:14", kind: "CHAT" },
-            { id: "c2", title: "Long report preview and channel layout review", at: "Fri 11 Sept", kind: "TASK" },
+            { id: "c2", title: "Long report preview and channel layout review", at: "11 Sept", kind: "TASK" },
             { id: "c3", title: "Design partner shortlist", at: "Thu", kind: "CHAT" },
             { id: "c4", title: "Q1 vendor totals", at: "Wed", kind: "CHAT" },
             { id: "c5", title: "Tracker refresh", at: "Tue", kind: "TASK" },
             { id: "c6", title: "Blog outline", at: "Mon", kind: "CHAT" },
-            { id: "c7", title: "Pricing page copy", at: "Sat 18 Jul", kind: "CHAT" },
+            { id: "c7", title: "Pricing page copy", at: "18 Jul", kind: "CHAT" },
             { id: "c8", title: "hey", at: "Fri 17 Jul", kind: "CHAT" },
         ];
         const needle = search?.toLowerCase();

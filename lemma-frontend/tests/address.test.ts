@@ -118,7 +118,7 @@ test("a tab kind this build cannot spell leaves the URL at the teammate", () => 
 /** The five tabs a link can open before anything has loaded. */
 
 test("a table, a file, a row, the history and the computer rebuild from the URL alone", () => {
-    assert.deepEqual(tabFromId("history"), { id: "history", kind: "history", label: "All conversations" });
+    assert.deepEqual(tabFromId("history"), { id: "history", kind: "history", label: "History" });
     assert.deepEqual(tabFromId("computer"), { id: "computer", kind: "computer", label: "Computer" });
     assert.deepEqual(tabFromId("table:invoices"), {
         id: "table:invoices", kind: "table", label: "Invoices", name: "invoices",

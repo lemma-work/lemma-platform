@@ -8,6 +8,10 @@ import path from "node:path";
  * and tracing a second copy of the dependency graph into `.next/standalone`
  * would only make that image bigger. `scripts/complete-standalone.mjs` adds
  * what Next's tracer cannot see: the custom server and its gateways. */
+// The linked SDK has development peers of its own. Its hooks must resolve the
+// same context module as the workspace's QueryClientProvider.
+const queryPackage = path.resolve(process.cwd(), "node_modules/@tanstack/react-query");
+
 const standalone = process.env.LEMMA_STANDALONE === "1";
 
 const config: NextConfig = {
@@ -55,7 +59,14 @@ const config: NextConfig = {
     ];
   },
   transpilePackages: ["lemma-sdk"],
-  turbopack: { root: path.resolve(process.cwd(), "..") },
+  turbopack: {
+    root: path.resolve(process.cwd(), ".."),
+    resolveAlias: { "@tanstack/react-query": "./node_modules/@tanstack/react-query" },
+  },
+  webpack(config) {
+    config.resolve.alias = { ...config.resolve.alias, "@tanstack/react-query": queryPackage };
+    return config;
+  },
   async headers() {
     return [
       {
