@@ -470,7 +470,7 @@
     color: var(--ink-2);
     background: var(--chrome);
 }
-/* The ones every teammate has. `USER_INTERACTION`, `TODO` and `SNOOZE` are in
+/* The ones every teammate has. `USER_INTERACTION`, `TODO` and `WAIT` are in
    the fixed set the platform gives every pod's own responder and describe how
    any agent behaves in a conversation rather than what this one can reach —
    so they are still said, and said last, and said quietly. Hollow rather than

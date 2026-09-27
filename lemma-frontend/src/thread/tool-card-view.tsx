@@ -31,6 +31,7 @@ import { useConversationDirectory, useFileBody } from "@/computer/queries";
 import { clockOf } from "./turns";
 import {
     restLength,
+    waitEnding,
     type BrowserStep,
     type ConnectorRun,
     type FileChange,
@@ -38,11 +39,11 @@ import {
     type FileSearch,
     type ImageLook,
     type SignInAsk,
-    type SnoozeWait,
     type SourceList,
     type SubTask,
     type TerminalRun,
     type ToolCard,
+    type WaitFor,
 } from "./tool-cards";
 
 /** The tools this app reads instead of summarising.
@@ -822,37 +823,41 @@ function ConnectorCard({ run }: { run: ConnectorRun }) {
     );
 }
 
-/* ── a run that is deliberately asleep ───────────────────────────────── */
+/* ── a run that is deliberately waiting ──────────────────────────────── */
 
-const WOKE: Record<string, string> = {
-    TIMER: "the time elapsed",
-    ANSWERED: "everyone replied",
-    CANCELLED: "the wait was cancelled",
-};
+/** While waiting: when it is due back, or what it is waiting on. */
+function waitingStatus(wait: WaitFor): string {
+    if (wait.on === "process") return "until the command finishes";
+    if (wait.on === "subagent") return "until the sub-agent finishes";
+    if (wait.wakeAtMs !== undefined) return "back at " + clockOf(new Date(wait.wakeAtMs).toISOString());
+    return wait.seconds === undefined ? "waiting" : "back in " + restLength(wait.seconds);
+}
 
-function SnoozeCard({ wait }: { wait: SnoozeWait }) {
-    /* A sleeping run and a finished one otherwise look the same, which is the
-       whole reason this card exists. The status says which, and when it is
-       due back — derived from the call's own clock, because nothing on the
-       wire carries a wake time. */
-    const back =
-        wait.wakeAtMs === undefined
-            ? "back in " + restLength(wait.seconds)
-            : "back at " + clockOf(new Date(wait.wakeAtMs).toISOString());
-    const status = wait.sleeping ? back : WOKE[wait.wokeBecause] ?? "awake";
+function WaitCard({ wait }: { wait: WaitFor }) {
+    /* A waiting run and a finished one otherwise look the same, which is the
+       whole reason this card exists. The status says which: while waiting,
+       when it is due back or what it is waiting on; afterwards, why it woke. */
+    const status = wait.waiting ? waitingStatus(wait) : waitEnding(wait);
+    const meta =
+        wait.waiting && wait.on === "time" && wait.seconds !== undefined
+            ? "waiting " + restLength(wait.seconds)
+            : undefined;
+    const waited = wait.waitedSeconds === undefined ? "" : restLength(wait.waitedSeconds);
 
     return (
         <section className="toolcard toolcard--rest">
             <Head
                 icon={<ClockIcon size={14} />}
                 what={wait.reason}
-                meta={wait.sleeping ? "waiting " + restLength(wait.seconds) : undefined}
+                meta={meta}
                 status={status}
-                tone={wait.sleeping ? "wait" : undefined}
+                tone={wait.error ? "bad" : wait.waiting ? "wait" : undefined}
             />
-            {wait.note && (
+            {(wait.error || waited || wait.note) && (
                 <div className="toolcard__body">
-                    <p className="toolcard__note">Next: {wait.note}</p>
+                    {wait.error && <p className="toolcard__note" data-tone="bad">{wait.error}</p>}
+                    {waited && <p className="toolcard__where">waited {waited}</p>}
+                    {wait.note && <p className="toolcard__note">Next: {wait.note}</p>}
                 </div>
             )}
         </section>
@@ -961,8 +966,8 @@ export function ToolCardView({
             return <SourcesCard list={card} />;
         case "connector":
             return <ConnectorCard run={card} />;
-        case "snooze":
-            return <SnoozeCard wait={card} />;
+        case "wait":
+            return <WaitCard wait={card} />;
         case "image":
             return <ImageCard look={card} podId={podId} conversationId={conversationId} />;
         case "file-read":

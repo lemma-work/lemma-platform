@@ -128,6 +128,32 @@ def test_console_scripts_name_the_sandbox_interpreter(payload: Path) -> None:
         assert shebang == f"#!{build_runtime_bundle.SANDBOX_PYTHON}"
 
 
+def test_a_windows_build_writes_the_same_unix_scripts(
+    payload: Path, tmp_path: Path
+) -> None:
+    """The Windows host pack builds this bundle too, for a Linux sandbox.
+
+    ``uv pip install --target`` writes scripts for the machine running it --
+    ``.exe`` launchers on Windows -- so the scripts are written from the
+    wheels' entry points instead, and must come out as a Unix build's do.
+    """
+    site_packages = tmp_path / "payload" / "site-packages"
+    dist_info = site_packages / "lemma_terminal-0.0.0.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "entry_points.txt").write_text(
+        "[console_scripts]\nlemma = lemma_cli.cli:main\n", encoding="utf-8"
+    )
+    installer_scripts = site_packages / "Scripts"
+    installer_scripts.mkdir()
+    (installer_scripts / "lemma.exe").write_bytes(b"MZ\x90\x00\xba launcher")
+
+    build_runtime_bundle._write_console_scripts(site_packages, tmp_path / "payload")
+
+    assert not installer_scripts.exists()
+    written = tmp_path / "payload" / "bin" / "lemma"
+    assert written.read_bytes() == (payload / "bin" / "lemma").read_bytes()
+
+
 def test_no_file_in_the_bundle_names_the_machine_that_built_it(payload: Path) -> None:
     """The build directory must not survive anywhere in the payload.
 

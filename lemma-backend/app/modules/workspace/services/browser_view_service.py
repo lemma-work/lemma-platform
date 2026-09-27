@@ -242,8 +242,9 @@ class BrowserViewService:
         need carrying from one browser to another.
 
         `ensure_browser` is called either way, `origin` or not: it is what
-        starts Xvfb, Chrome, and -- through `start-browser.sh` -- the VNC
-        pair, none of which a mere port-forward through `deliver_token`
+        starts Xvfb, Chrome and the VNC pair -- through
+        `lemma-ensure-display`, or `start-browser` in an image without it --
+        none of which a mere port-forward through `deliver_token`
         brings up on its own. Skipping it for a plain watch/drive with no
         site to steer to was the first version of this method, and it left
         VNC connecting to a display nothing was running yet -- the browser

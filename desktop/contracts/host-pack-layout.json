@@ -3,7 +3,7 @@
     "Where things live inside a host pack, asserted from both sides.",
     "",
     "`scripts/build_local_host_pack.py` writes this layout and",
-    "`desktop/locald/src/native_host_pack.rs` reads it. Neither had any idea",
+    "`desktop/locald/src/native_host_pack/` reads it. Neither had any idea",
     "what the other did. The producer's only tests assert `npm_executable`;",
     "the consumer hard-codes a dozen paths and, when one is missing, fails at",
     "the point a user is watching a progress bar -- with `NotFound` and the",

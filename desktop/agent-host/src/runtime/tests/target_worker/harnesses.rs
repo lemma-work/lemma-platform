@@ -117,12 +117,11 @@ fn start_command(harness_id: Uuid, run_id: Uuid, revision: &str) -> Command {
 /// The race that rejected a run for naming the *newest* harness revision.
 ///
 /// A publish reaches the loop through a channel and only changes
-/// `self.harnesses` when something drains it. Draining used to happen at
-/// the top of an iteration and nowhere else, while commands are handled in
-/// the same iteration that polled them — so a publish that landed during
-/// the poll sat unread, and `handle_start` judged the command against the
-/// revision this host held *before* it. Lemma mints against the revision it
-/// was just told, which is exactly the one still in the channel.
+/// `self.harnesses` when something drains it. A command can arrive while a
+/// publish is still in the channel, and judged before the drain it is judged
+/// against the revision this host held *before* that publish. Lemma mints
+/// against the revision it was just told, which is exactly the one still in
+/// the channel.
 ///
 /// Observed as: `commanded=565b1f22 published=ec0f5482`, two seconds after
 /// `published probed harnesses ... claude-code@565b1f22`.
@@ -135,8 +134,8 @@ async fn a_publish_still_in_the_channel_is_applied_before_a_command_is_judged() 
         probes: HashMap::new(),
         retry_soon: false,
     });
-    // Published, but not yet drained — the state the host is in for as
-    // long as a poll is being held open.
+    // Published, but not yet drained — the state the host is in between
+    // a publish landing and the loop's next drain.
     harness
         .worker
         .probed

@@ -221,7 +221,7 @@ export const HIRES: Hire[] = [
         ],
         skills: [
             { id: "WORKSPACE_CLI", label: "Works a computer", blurb: "A shell, a filesystem and a browser of its own" },
-            { id: "SNOOZE", label: "Patience", blurb: "Puts work down and picks it up on time" },
+            { id: "WAIT", label: "Patience", blurb: "Puts work down and picks it up on time" },
             { id: "TODO", label: "Keeps a plan", blurb: "Knows what it owes tonight" },
         ],
         permits: ["functions.run", "files.write"],

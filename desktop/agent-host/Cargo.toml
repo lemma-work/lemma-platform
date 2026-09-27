@@ -70,8 +70,8 @@ assert_cmd = "2"
 axum = { version = "0.8", features = ["ws"] }
 predicates = "3"
 tempfile = { workspace = true }
-# Tests only. `start_paused` lets the scheduling tests assert what the loop does
-# across a 25-second held poll without taking 25 seconds to say it.
+# Tests only. `start_paused` lets the ACP setup-deadline tests run a request
+# that never answers out to its timeout without waiting that long in real time.
 tokio = { version = "1", features = ["test-util"] }
 tower = "0.5"
 

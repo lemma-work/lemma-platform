@@ -285,7 +285,7 @@ const CONVERSATION: Conversation = {
            at them. Every shape here is the backend's own — `stdout`/`stderr`
            and `exit_code` from `ExecCommandResult`, `results` from
            `WebSearchResponse`, `{ result }` from a connector, `woke_because`
-           from `SnoozeResponse`.
+           from `WaitForResponse`.
 
            A stack of them in one turn is not padding. It is the case that
            actually breaks: seven cards between two things the teammate said,
@@ -778,9 +778,9 @@ const CONVERSATION: Conversation = {
             kind: "TOOL_CALL",
             sequence: 4.7,
             created_at: new Date().toISOString(),
-            tool_name: "snooze",
+            tool_name: "wait_for",
             tool_args: { reason: "waiting for the nightly tracker refresh", seconds: 600, note_to_self: "Re-read the plan table and diff it." },
-            tool_call_id: "call_snooze",
+            tool_call_id: "call_wait_for",
         },
         {
             id: "t7r",
@@ -788,11 +788,11 @@ const CONVERSATION: Conversation = {
             kind: "TOOL_RETURN",
             sequence: 4.71,
             created_at: new Date().toISOString(),
-            tool_call_id: "call_snooze",
+            tool_call_id: "call_wait_for",
             tool_result: {
                 success: true,
                 woke_because: "TIMER",
-                slept_seconds: 600,
+                waited_seconds: 600,
                 note_to_self: "Re-read the plan table and diff it.",
                 message: "Your time elapsed.",
             },

@@ -126,14 +126,14 @@ pub(crate) fn navigate_app_window(app: &AppHandle, url: &str) -> Result<(), Stri
     open_app_window(app, url)
 }
 
-/// Where the Dock icon should take somebody when every window is closed.
+/// Where bringing Lemma back should take somebody when no window is left.
 ///
-/// Separate from the arm that uses it because that arm needs a Tauri runtime
-/// and this is the part with cases in it. Splash is the fallback on purpose:
-/// while the stack is still coming up, or after it failed, the splash is where
-/// the state and the actions are, and a workspace URL that is not serving yet
-/// would open on an error page instead.
-#[cfg(target_os = "macos")]
+/// The Dock icon on macOS, and on every platform a second launch or the tray
+/// icon. Separate from the arm that uses it because that arm needs a Tauri
+/// runtime and this is the part with cases in it. Splash is the fallback on
+/// purpose: while the stack is still coming up, or after it failed, the splash
+/// is where the state and the actions are, and a workspace URL that is not
+/// serving yet would open on an error page instead.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReopenTarget {
     Hosted,
@@ -141,7 +141,6 @@ pub(crate) enum ReopenTarget {
     Splash,
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn reopen_target(mode: &str, ready: bool, error: bool, url: &str) -> ReopenTarget {
     match mode {
         // Nothing local has to be ready for hosted to be reachable.

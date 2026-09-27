@@ -104,14 +104,14 @@ def _ctx() -> BaseAgentContext:
 
 
 def _woke_up(sequence: int, tool_call_id: str) -> Message:
-    """The return the wake synthesizes for the snooze it resolved."""
+    """The return the wake synthesizes for the wait it resolved."""
     return Message(
         id=uuid7(),
         conversation_id=CONVERSATION_ID,
         sequence=sequence,
         role=MessageRole.TOOL,
         kind=MessageKind.TOOL_RETURN,
-        tool_name="snooze",
+        tool_name="wait_for",
         tool_call_id=tool_call_id,
         tool_result={"woke_because": "TIMER", "note_to_self": "check the build"},
     )

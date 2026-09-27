@@ -857,7 +857,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         .scalars()
         .all()
     )
-    assert len(runs) == 2, "the rejected snooze held the real one's wake shut"
+    assert len(runs) == 2, "the rejected wait held the real one's wake shut"
 
     # And closing the rejected one did not also close the real one: the return
     # under the sleeping call has to be the wake, not the acknowledgement the

@@ -136,7 +136,7 @@ fn an_unreachable_agent_is_not_described_as_a_slow_one() {
 #[test]
 fn an_adapter_is_resolved_once_and_then_served_from_cache() {
     // Resolving hashes the whole npm package and execs the agent binary to
-    // read its version. Paying that per run put ~5s on the poll loop before
+    // read its version. Paying that per run put ~5s on the worker loop before
     // every message, which was most of the latency users saw.
     let manifest = AdapterManifest::builtin().unwrap();
     let key = manifest.adapters[0].key.clone();
@@ -157,7 +157,7 @@ fn an_adapter_is_resolved_once_and_then_served_from_cache() {
     assert_eq!(first.command, second.command);
     assert_eq!(first.upstream_version, second.upstream_version);
 
-    // Clones share the cache: the poll loop, the probe task and each run
+    // Clones share the cache: the worker loop, the probe task and each run
     // task all hold their own clone of the manifest.
     let cloned = manifest.clone();
     assert_eq!(cloned.resolved.lock().unwrap().len(), 1);

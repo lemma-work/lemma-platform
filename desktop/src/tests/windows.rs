@@ -438,7 +438,7 @@ fn every_page_that_ships_on_windows_renames_the_machine() {
 /// one gesture whose whole purpose is bringing it back -- and the arm that
 /// handles it only ever showed a window that already existed. This is the
 /// part of the fix with cases in it; the arm itself needs a Tauri runtime.
-#[cfg(target_os = "macos")]
+/// Every platform now: a second launch and the tray icon reach it too.
 #[test]
 fn reopening_with_every_window_closed_goes_somewhere() {
     assert_eq!(

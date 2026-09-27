@@ -335,9 +335,9 @@ def run_mcp_refresh_turn(mcp_servers):
         #
         # The cue used to come first, and the loop's sleep came *after* each
         # call — so the first call went out with no delay behind it and the test
-        # was asserting that a whole refresh round trip (control plane, poll,
+        # was asserting that a whole refresh round trip (control plane, link,
         # journal, bridge re-read) loses a race against one local JSON-RPC
-        # request. It usually did. Anything that made the poll loop tighter
+        # request. It usually did. Anything that made the worker loop tighter
         # tipped it, and the failure read as the bridge picking up a credential
         # too early rather than as the test having assumed an ordering nothing
         # enforced.

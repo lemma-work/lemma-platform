@@ -10,7 +10,7 @@ import { openSettings } from "./open-settings";
 import { useThisComputer } from "./this-computer";
 import {
     CREDENTIAL_FORMS, detectLocalServers, formConfigured, formFromFocus, friendlyError, meaningfulIntent,
-    sectionPayloads, stored, thisMac,
+    asOneChange, sectionPayloads, stored, thisMac,
     type CredentialFormSpec, type Draft, type SectionPayload, type SectionsPayload, type SecretIntent, type SetupGroup, type ThisMacSnapshot,
 } from "./this-mac";
 import {
@@ -116,17 +116,20 @@ function SecretField({ id, label, name, snapshot, intent, onChange }: {
     );
 }
 
-/** Save each section in order, each against the revision the one before it
- *  left: the daemon refuses a stale revision rather than overwrite. `null`
- *  when a native confirmation was declined. */
-async function applyInOrder(payloads: (SectionPayload | SectionsPayload)[], revision: number): Promise<number | null> {
-    let current = revision;
-    for (const payload of payloads) {
-        const answer = await thisMac.applySection({ ...payload, expected_revision: current }) as { cancelled?: boolean; config?: { revision?: number } };
-        if (answer?.cancelled) return null;
-        current = answer?.config?.revision ?? current + 1;
-    }
-    return payloads.length;
+/** Save one form's change: a single `config.apply`, so the server restarts
+ *  once however many sections it spans. `null` when a native confirmation was
+ *  declined; otherwise how many changes were saved (0 or 1). */
+async function applyChange(payloads: (SectionPayload | SectionsPayload)[], revision: number): Promise<number | null> {
+    const [change] = payloads;
+    if (!change) return 0;
+    const answer = await thisMac.applySection({ ...change, expected_revision: revision }) as { cancelled?: boolean };
+    return answer?.cancelled ? null : 1;
+}
+
+/** The array `applyChange` takes, from a form's section changes. */
+function oneChange(parts: SectionPayload[]): (SectionPayload | SectionsPayload)[] {
+    const change = asOneChange(parts);
+    return change ? [change] : [];
 }
 
 function savedLine(count: number | null): Said {
@@ -182,7 +185,7 @@ function AiModel({ snapshot }: { snapshot: ThisMacSnapshot }) {
         onError: (problem) => setSaid({ text: testFailure(problem), bad: true }),
     });
     const save = useMutation({
-        mutationFn: () => applyInOrder([aiSectionPayload(snapshot, draft, key)], snapshot.operator.config.revision),
+        mutationFn: () => applyChange([aiSectionPayload(snapshot, draft, key)], snapshot.operator.config.revision),
         onSuccess: (count) => {
             if (count !== null) { aiDraftMemory = null; setKeyState(undefined); }
             setSaid(savedLine(count));
@@ -318,7 +321,7 @@ function Email({ snapshot }: { snapshot: ThisMacSnapshot }) {
     const problem = emailDraftProblem(snapshot, draft, secrets);
 
     const save = useMutation({
-        mutationFn: () => applyInOrder(payloads, snapshot.operator.config.revision),
+        mutationFn: () => applyChange(payloads, snapshot.operator.config.revision),
         onSuccess: (count) => {
             if (count !== null) { emailDraftMemory = null; setSecretsState({}); }
             setSaid(savedLine(count));
@@ -463,7 +466,7 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
     }, [open]);
 
     const save = useMutation({
-        mutationFn: () => applyInOrder(sectionPayloads(snapshot, spec.form, draft, secrets), config.revision),
+        mutationFn: () => applyChange(oneChange(sectionPayloads(snapshot, spec.form, draft, secrets)), config.revision),
         onSuccess: (count) => {
             if (count !== null) {
                 drafts.delete(spec.form);

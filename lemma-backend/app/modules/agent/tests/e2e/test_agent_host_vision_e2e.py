@@ -88,8 +88,8 @@ async def _profile_for_a_host_that(db_session, scenario, *, reports_images: bool
         config_options=[_CLAUDE_CODE_MODEL_OPTION],
     )
     # A paired host is only "accepting new runs" while its heartbeat is fresh,
-    # and the heartbeat rides on the 25s long poll -- which a test cannot sit
-    # through. Stamping it is the same thing that poll does, without the wait.
+    # and the heartbeat is the link's `control` frame, sent every 20s by a host
+    # this test does not run. Stamping it is what that frame does.
     await db_session.execute(
         update(AgentHostModel)
         .where(AgentHostModel.id == machine["host_id"])

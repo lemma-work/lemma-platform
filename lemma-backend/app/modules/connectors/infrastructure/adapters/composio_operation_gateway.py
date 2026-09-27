@@ -205,11 +205,11 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             # dispatcher has its own Composio ceiling of 90s — both fire long
             # before this does, so their behaviour is unchanged.
             #
-            # What this covers is the caller that does not go through either:
-            # `agent_surfaces/platforms/composio_email.py` constructs this
-            # gateway and calls `execute_operation` directly, and that path was
-            # unbounded — an unresponsive provider held the caller for as long
-            # as the socket stayed open, with nothing to end the wait.
+            # What this covers is a caller that goes through neither. In the
+            # application only `bounded_composio_gateway.py` constructs this
+            # gateway, so none does today; one that called `execute_operation`
+            # directly would otherwise be unbounded — an unresponsive provider
+            # would hold it for as long as the socket stayed open.
             #
             # Be clear about what the timeout does and does not do, because it
             # is easy to read more into it. It bounds the *caller*, and it

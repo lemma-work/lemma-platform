@@ -142,7 +142,7 @@ DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
 DEV_SANDBOX_BACKEND_URL := http://host.lemma.internal:$(DEV_BACKEND_PORT)
 DEV_SANDBOX_FRONTEND_URL := http://host.lemma.internal:$(DEV_FRONTEND_PORT)
 DEV_WORKSPACE_RUNTIME_CREDENTIAL_KEY ?= dev-workspace-runtime-credential-key-0001
-DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?
+DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+)(:\d+)?
 DEV_LOG_LEVEL         ?= DEBUG
 DEV_JSON_LOGS_ENABLED ?= true
 # DEV_LOG_LEVEL is DEBUG so you can read the application's own story. SQLAlchemy

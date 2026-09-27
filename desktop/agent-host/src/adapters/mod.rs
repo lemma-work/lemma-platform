@@ -39,8 +39,8 @@ const BUILTIN_MANIFEST: &str = include_str!("../../agent-adapters.lock.json");
 /// Appended to the reason a harness failed for something that may not fail twice.
 ///
 /// Carried in the text because that is the only field surviving the trip from
-/// `resolve` through a `HarnessSnapshot` to the poll loop that decides when to
-/// try again. It is stripped before the reason is stored, so nobody reads it.
+/// `resolve` through a `HarnessSnapshot` to the worker loop that decides when
+/// to try again. It is stripped before the reason is stored, so nobody reads it.
 const TRANSIENT_MARKER: &str = " [transient]";
 const SNAPSHOT_TTL: ChronoDuration = ChronoDuration::hours(24);
 
@@ -57,7 +57,7 @@ pub struct AdapterManifest {
     /// Resolving is expensive and was being paid on every use: it hashes the
     /// whole npm package for the integrity check and execs the agent binary to
     /// read its version. Measured at 21.7s for four adapters, and `handle_start`
-    /// paid a share of it on the poll loop before *every* run — which is where
+    /// paid a share of it on the worker loop before *every* run — which is where
     /// most of the per-message latency came from.
     ///
     /// Verifying once per process is the deliberate trade: an adapter swapped

@@ -2,6 +2,41 @@
 
 use super::*;
 
+/// The order services stop in: each tier once nothing still running needs it.
+///
+/// A service is stopped only after every service that declares it a dependency,
+/// and everything in a tier is independent of the rest of that tier. Within a
+/// tier the order is the reverse of the start order, which is also the order
+/// the outcomes are reported in.
+pub(crate) fn stop_tiers(
+    ordered_ids: &[String],
+    specs: &HashMap<String, HostProcessSpec>,
+) -> Vec<Vec<String>> {
+    let mut remaining: Vec<String> = ordered_ids.iter().rev().cloned().collect();
+    let mut tiers = Vec::new();
+    while !remaining.is_empty() {
+        let needed = |id: &String| {
+            remaining.iter().any(|other| {
+                specs
+                    .get(other)
+                    .is_some_and(|spec| spec.dependencies.contains(id))
+            })
+        };
+        let (mut tier, rest): (Vec<String>, Vec<String>) =
+            remaining.iter().cloned().partition(|id| !needed(id));
+        // A cycle cannot pass manifest validation; if one ever did, stopping
+        // everything at once still beats never stopping it.
+        if tier.is_empty() {
+            tier = rest;
+            remaining = Vec::new();
+        } else {
+            remaining = rest;
+        }
+        tiers.push(tier);
+    }
+    tiers
+}
+
 impl HostProcessManager {
     pub fn start_all(&self) -> io::Result<()> {
         self.start_all_with_progress(|_| {})
@@ -144,9 +179,10 @@ impl HostProcessManager {
         // This used to spawn a service, wait for it to pass its full health
         // gate, and only then spawn the next — which put the frontend's entire
         // boot after the backend's, for about 2.7s of a 20s cold start that it
-        // never needed to wait for. `next start` serves a prebuilt app and does
-        // not call the backend to come up; its health check reads a static file
-        // it serves itself.
+        // never needed to wait for. The frontend is `node frontend-launcher.mjs`
+        // over the prebuilt standalone `server.mjs`, and does not call the
+        // backend to come up; its health check reads a static file it serves
+        // itself.
         //
         // Spawning in `ordered_ids` order still honours declared dependencies,
         // and honours them exactly as the supervision loop does: it requires a
@@ -261,14 +297,55 @@ impl HostProcessManager {
     }
 
     pub fn stop_all(&self) -> io::Result<()> {
+        self.stop_all_timed().0
+    }
+
+    /// `stop_all`, with how long each service took to stop.
+    ///
+    /// Services that nothing still running depends on are stopped together:
+    /// each is given up to its own grace period, so stopping them in turn made
+    /// a quit wait the sum of those periods rather than the longest.
+    pub fn stop_all_timed(&self) -> (io::Result<()>, Vec<(String, Duration)>) {
         self.request_stop();
         let _reconcile = self.reconcile_lock.lock().expect("reconcile lock poisoned");
         let mut first_error = None;
-        for id in self.ordered_ids.iter().rev() {
-            if let Err(error) = self.stop_process(id) {
-                first_error.get_or_insert(error);
+        let mut timings = Vec::new();
+        for tier in stop_tiers(&self.ordered_ids, &self.by_id) {
+            let results: Vec<(String, Duration, io::Result<()>)> = thread::scope(|scope| {
+                let workers: Vec<_> = tier
+                    .iter()
+                    .map(|id| {
+                        scope.spawn(move || {
+                            let started = Instant::now();
+                            let result = self.stop_process(id);
+                            (id.clone(), started.elapsed(), result)
+                        })
+                    })
+                    .collect();
+                tier.iter()
+                    .zip(workers)
+                    .map(|(id, worker)| {
+                        worker.join().unwrap_or_else(|_| {
+                            (
+                                id.clone(),
+                                Duration::ZERO,
+                                Err(io::Error::other(format!("stopping {id} panicked"))),
+                            )
+                        })
+                    })
+                    .collect()
+            });
+            for (id, duration, result) in results {
+                if let Err(error) = result {
+                    first_error.get_or_insert(error);
+                }
+                timings.push((id, duration));
             }
         }
+        (self.finish_stop(first_error), timings)
+    }
+
+    fn finish_stop(&self, first_error: Option<io::Error>) -> io::Result<()> {
         // Re-taking the ports is a courtesy to the next start, not part of
         // stopping, and it routinely cannot be done. A service that has served
         // even one connection leaves TIME_WAIT entries on its port, and a

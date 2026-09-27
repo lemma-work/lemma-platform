@@ -164,8 +164,8 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
     conversation = _conversation()
     closed: list[str] = []
 
-    async def _cancel_snooze(*, conversation):
-        closed.append("snooze")
+    async def _cancel_wait(*, conversation):
+        closed.append("wait")
 
     async def _deny_pauses(*, conversation, user_id):
         closed.append("pauses")
@@ -185,7 +185,7 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         turns, "validate_conversation_access", lambda loaded, **_kwargs: loaded
     )
     monkeypatch.setattr(turns, "require_agent_action", AsyncMock())
-    monkeypatch.setattr(coordinator, "_cancel_active_wait", _cancel_snooze)
+    monkeypatch.setattr(coordinator, "_cancel_active_wait", _cancel_wait)
     monkeypatch.setattr(coordinator, "_deny_unresolved_pauses", _deny_pauses)
 
     result = await coordinator.stop_conversation(
@@ -194,7 +194,7 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         pod_id=conversation.pod_id,
     )
 
-    assert closed == ["snooze", "pauses"]
+    assert closed == ["wait", "pauses"]
     assert result is conversation
     turns.require_agent_action.assert_awaited_once()
     assert (

@@ -86,6 +86,10 @@ impl<E: Engine + 'static> GuestService<E> {
         // total is kept under its old name: the host records it.
         result["stopped_sandboxes"] = json!(stopped.sandboxes);
         result["stopped_core"] = json!(stopped.core);
+        result["stop_ms"] = json!({
+            "sandboxes": stopped.sandboxes_ms,
+            "core": stopped.core_ms,
+        });
         // What the guest believes it may spend. The host's request budget has
         // to exceed it, and the two are compiled into different binaries, so
         // saying it here is the only way a mismatch shows up in a log rather

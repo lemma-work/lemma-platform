@@ -277,6 +277,61 @@ Only one daemon runs per installation root: `lemma-locald serve` takes an
 exclusive lock on `<root>/locald.lock` before it reclaims anything, so a second
 daemon exits without touching the first one's services.
 
+### 4.1 Shutdown, closing and quitting
+
+**Close is not quit.** On every platform, closing the workspace window hides
+it: the tray (Windows notification area, macOS menu bar), the daemon and the
+stack keep running, and on macOS the app also leaves the Dock. A pod app's
+window closes normally. Lemma comes back from the tray's Open Lemma, the Dock
+icon (macOS), a second launch (handed to the running process by the
+single-instance plugin, which reopens a window if none is left), or on Windows
+a left click on the tray icon; the tray menu is on the right button there and
+on any click on macOS. "Open Lemma at login" only launches the app; it adds no
+background agent of its own.
+
+**Quit is quit.** ⌘Q, the app menu's and the tray's Quit Lemma, Dock → Quit
+and any other OS terminate all take one path (`request_quit`): confirm if
+something would be lost, send `shutdown-daemon`, and exit once the daemon has
+stopped. Nothing is left: locald stops the Agent Host's process tree, each
+host service's process group (Windows: its stdin is closed, then
+`taskkill /T /F` after the grace, and the Job Object takes anything left when
+locald exits), and the guest; it then exits itself, and the shell waits for
+its control endpoint to disappear, forcing a verified identity if it does not.
+
+**The stop runs in tiers** (`locald/src/daemon/shutdown.rs`). Steps in a tier
+run at once; a tier starts when the previous one has finished:
+
+| Tier | Steps | Why here |
+|---|---|---|
+| 1 | `operations`: an in-flight start, stop, reset or config operation reaches its next checkpoint | Instant when nothing is running; only then is the "safe stopping point" wait announced. A running migration finishes |
+| 2 | `agent-host` and `sharing` | The Agent Host reports its runs' final states to the backend, so it goes first |
+| 3 | `host-processes`: backend and frontend together (`host.<id>` each) | Each service has a 5s grace before SIGKILL; stopped one after another they cost the sum |
+| 4 | `runtime` (`runtime.workers`, `runtime.guest-services`, `runtime.power-off`) and, on a developer stack, `supervisor` | After the backend, whose last writes go to the database |
+
+Inside the guest (`system.shutdown`), sandboxes stop first (1s grace each),
+then every core container at once, one engine call each: Postgres with its
+image's `SIGINT` (fast shutdown, clean, no recovery on the next start) and
+Redis with `SIGTERM` (a `SHUTDOWN` that fsyncs the append-only file and saves
+per its save points), both with 15s grace; SuperTokens, which keeps nothing
+and never answers `SIGTERM`, with 1s. The guest then powers off; the host
+polls the VM's exit, and signals it only after 20s. On Windows the
+distribution is terminated with `wsl --terminate` instead.
+
+Every finished step is broadcast as a `shutdown.step` event (`step`,
+`duration_ms`, `ok`, `error`, `detail` -- the guest's own per-phase times for
+`runtime.guest-services`) and written to `locald.log`, followed by one
+`shutdown took …ms: …` summary; the final `state stopped` event carries the
+total `duration_ms`. Both land in `events.jsonl`. A failed step does not skip
+the rest; the daemon exits non-zero and the next start reclaims what is left
+by identity.
+
+**Resume** is for one case: a new shell process in front of a stack that is
+still serving, because the shell exited without stopping locald (a crash, a
+force quit). The launch probes the recorded workspace's backend and frontend
+for the generation it recorded and opens it directly on a match. A launch
+after a quit or an update always misses, by design -- both stop the stack --
+and `launch.log` names the reason for every miss.
+
 ## 5. Host process contract
 
 The host-pack manifest requires exactly:
@@ -756,7 +811,7 @@ say `http://app.lemma.localhost:*`, which would also match every alias port.
 | `repair_runtime` | control, workspace | settings | From the workspace it asks natively first |
 | `check_for_app_update`, `install_app_update` | control, workspace | settings | Install asks natively and pins the version shown; once installed the app restarts without asking again, because the stack is already stopped and the bundle replaced |
 | `telemetry_status`, `set_telemetry_enabled` | control, workspace | settings | |
-| `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Onboarding and the Models suggestions |
+| `discover_provider_models`, `configure_ai_provider` | workspace | agent host | Provider model discovery for the Models suggestions and lemma-harness onboarding; `configure_ai_provider` serves only lemma-harness, since the lemma-frontend workspace writes `ai` through `apply_local_settings` |
 | `agent_host_*`, `sandbox_image_status`, conversation folders | workspace | agent host (folders also local mode) | See [Agent Host](agent-host.md#the-privilege-boundary) |
 | `app_frame_url` | workspace | local workspace | The address to frame a pod app at: its locald alias on macOS, its own URL elsewhere. Refuses anything but this install's own apps; see §6.2 |
 | `open_control_center` | main, workspace | page name validated | |

@@ -14,7 +14,7 @@
  *
  *  The return shapes are the backend's, in `app/modules/agent/tools/`:
  *  `browser/models.py`, `workspace_cli/models.py`, `web/models.py`,
- *  `connectors/pydantic_adapter.py` and `snooze/models.py`. A local coding
+ *  `connectors/pydantic_adapter.py` and `waiting/models.py`. A local coding
  *  agent's calls arrive through the Agent Host already in the canonical
  *  vocabulary of `docs/architecture/agent-host-events.md` ("Canonical tools"),
  *  which is where the file, search and sub-agent cards read their shapes. */
@@ -27,7 +27,7 @@ export type ToolCard =
     | TerminalRun
     | SourceList
     | ConnectorRun
-    | SnoozeWait
+    | WaitFor
     | ImageLook
     | FileRead
     | FileChange
@@ -292,22 +292,35 @@ export interface ConnectorRun {
     summary: string;
 }
 
-/** A `snooze`: the run put itself to sleep. */
-export interface SnoozeWait {
-    kind: "snooze";
+/** A `wait_for`: the run put itself down until a length of time passed, a
+ *  sandbox process ended, or a sub-agent run finished. */
+export interface WaitFor {
+    kind: "wait";
     /** What it is waiting for, in the agent's words. */
     reason: string;
-    seconds: number;
+    /** Which of the three it named. */
+    on: "time" | "process" | "subagent";
+    /** The gap asked for, on a `time` wait. */
+    seconds?: number;
+    /** The give-up limit asked for, on a `process` or `subagent` wait. */
+    maxSeconds?: number;
     /** Handed back to the agent on wake. */
     note: string;
-    /** No return yet — it is still asleep. */
-    sleeping: boolean;
-    /** `TIMER`, `ANSWERED` or `CANCELLED`. */
+    /** Still waiting: no return yet, or only the "Waiting." a remote harness
+     *  is answered with before its turn ends. */
+    waiting: boolean;
+    /** `WaitForResponse.woke_because`: `TIMER`, `TARGET_FINISHED`,
+     *  `TARGET_GONE`, `DEADLINE`, `ANSWERED` or `CANCELLED`. Empty while
+     *  waiting or when the call was refused. */
     wokeBecause: string;
-    sleptSeconds?: number;
-    /** When it is due back. Derived from the call's own timestamp and
-     *  `seconds`, because no field on either side of the wire carries a wake
-     *  time. */
+    waitedSeconds?: number;
+    /** The waited-on process's exit code, when there was one. */
+    exitCode?: number;
+    /** Why the call was refused, e.g. a gap under 30 seconds. */
+    error: string;
+    /** When a `time` wait is due back. Derived from the call's own timestamp
+     *  and `seconds`, because no field on either side of the wire carries a
+     *  wake time. */
     wakeAtMs?: number;
 }
 
@@ -714,24 +727,55 @@ function connectorCard(args: unknown, result: unknown, answered: boolean): Conne
     };
 }
 
-function snoozeCard(args: unknown, result: unknown, answered: boolean, atMs?: number): SnoozeWait | null {
+function waitCard(args: unknown, result: unknown, answered: boolean, atMs?: number): WaitFor | null {
     const record = asRecord(args);
-    const seconds = asNumber(record.seconds);
     const reason = asString(record.reason);
-    /* Both are required by the request model, so a call missing either is not
-       a snooze this app can describe. */
-    if (seconds === undefined || !reason) return null;
+    /* `reason` is the one required field; without it there is nothing to
+       say about what the run is waiting for. */
+    if (!reason) return null;
+    const on = asString(record.process_id) ? "process" : asString(record.subagent_run_id) ? "subagent" : "time";
+    const seconds = on === "time" ? asNumber(record.seconds) : undefined;
 
+    const error = answered ? asString(resultField(result, "error")) : "";
+    const wokeBecause = answered && !error ? asString(resultField(result, "woke_because")) : "";
     return {
-        kind: "snooze",
+        kind: "wait",
         reason,
+        on,
         seconds,
+        maxSeconds: on === "time" ? undefined : asNumber(record.max_seconds),
         note: asString(record.note_to_self) || asString(resultField(result, "note_to_self")),
-        sleeping: !answered,
-        wokeBecause: answered ? asString(resultField(result, "woke_because")) : "",
-        sleptSeconds: answered ? asNumber(resultField(result, "slept_seconds")) : undefined,
-        wakeAtMs: atMs === undefined ? undefined : atMs + seconds * 1000,
+        waiting: !error && !wokeBecause,
+        wokeBecause,
+        waitedSeconds: wokeBecause ? asNumber(resultField(result, "waited_seconds")) : undefined,
+        exitCode: wokeBecause ? asNumber(resultField(result, "exit_code")) : undefined,
+        error,
+        wakeAtMs: atMs === undefined || seconds === undefined ? undefined : atMs + seconds * 1000,
     };
+}
+
+/** Why a wait ended, in plain words. Empty while it is still waiting. */
+export function waitEnding(wait: WaitFor): string {
+    if (wait.error) return "could not wait";
+    const thing = wait.on === "process" ? "the command" : wait.on === "subagent" ? "the sub-agent" : "it";
+    switch (wait.wokeBecause) {
+        case "":
+            return "";
+        case "TIMER":
+            return "the time was up";
+        case "TARGET_FINISHED":
+            return wait.exitCode === undefined ? thing + " finished" : thing + " finished with exit code " + wait.exitCode;
+        case "TARGET_GONE":
+            return "lost track of " + thing;
+        case "DEADLINE":
+            return "gave up waiting";
+        case "ANSWERED":
+            return "everyone replied";
+        case "CANCELLED":
+            return "the wait was cancelled";
+        default:
+            return "stopped waiting";
+    }
 }
 
 /* ── a picture the teammate stopped to look at ───────────────────────── */
@@ -1224,7 +1268,7 @@ export function parseToolCard({
     /** Whether a TOOL_RETURN landed at all. Distinct from `result` being
      *  empty: a tool can return `{}` and be finished. */
     answered: boolean;
-    /** The call's own timestamp, which is the only clock a snooze has. */
+    /** The call's own timestamp, which is the only clock a wait has. */
     atMs?: number;
     /** The call message's metadata. It says whose tool this is
      *  (`tool_source`), which is what keeps somebody's MCP `web_search` off
@@ -1256,8 +1300,8 @@ export function parseToolCard({
             return sourcesCard("web_fetch", args, result, answered);
         case "run_connector_operation":
             return connectorCard(args, result, answered);
-        case "snooze":
-            return snoozeCard(args, result, answered, atMs);
+        case "wait_for":
+            return waitCard(args, result, answered, atMs);
         case "read_file":
             return readCard(args, result, answered);
         case "write_file":

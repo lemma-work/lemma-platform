@@ -118,8 +118,8 @@ fn command_ack_is_cleared_but_active_checkpoint_remains_a_heartbeat() {
 fn the_provider_session_rides_every_checkpoint_not_just_the_one_that_opened_it() {
     // A run has one pending-checkpoint slot, so the RUNNING that follows the
     // first streamed token overwrites the detail written a moment earlier -
-    // and the first token lands well inside a single poll. Putting the id on
-    // the checkpoint that happened to be current lost it every time.
+    // and the first token lands well before the next control frame. Putting
+    // the id on the checkpoint that happened to be current lost it every time.
     let (_directory, journal, target, command, spec) = fixture();
     journal
         .accept_start(target, &command, &spec, "codex", "1.0")

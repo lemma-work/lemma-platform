@@ -159,7 +159,7 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         description: 'Listen and speak on voice surfaces.',
         icon: Volume2,
     },
-    SNOOZE: {
+    WAIT: {
         label: 'Sleep and resume',
         description: 'Pause mid-task for a while, then pick up where it left off.',
         icon: Timer,

@@ -55,10 +55,11 @@ export function runFailure(
     const failed = state === "failed";
     const fromRecord = failed && !streamError ? record : null;
     /* The record keeps whatever ended the run, including text from an Agent
-       Host or a provider that was never written to be read. Only the
-       sentences written for people come back after a reload: the missing
-       model, and the provider refusals that send the reader to Models.
-       Anything else stays "That run failed.", as it did on the stream. */
+       Host or a provider that was never written to be read. This brings
+       back only the sentences written for people: the missing model, and
+       the provider refusals that send the reader to Models. A coding
+       agent's failure is added by `live-conversation.tsx`, worded through
+       `transcript-state`. */
     const stored = fromRecord?.last_run_error ?? null;
     const readable = stored && (needsAiModel(fromRecord) || pointsAtModels(stored)) ? stored : null;
     const message = streamError?.message ?? readable;

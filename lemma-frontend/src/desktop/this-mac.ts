@@ -365,8 +365,10 @@ export type SetupService = "composio" | "telegram" | "slack" | "deepgram" | "bra
 
 /* ── run commands on this Mac ──────────────────────────────────────── */
 
-export const HOST_EXECUTION_CONSEQUENCE =
-    "Commands run on your Mac inside a sandbox: they can read most files, write only to the conversation folder and caches, and use your gh/git logins. Teammates’ runs stay in the VM.";
+/** What turning the switch on means, for the computer it is on. */
+export function hostExecutionConsequence(noun = "this Mac"): string {
+    return `Commands run on ${noun} inside a sandbox: they can read most files, write only to the conversation folder and caches, and use your gh/git logins. Teammates’ runs stay in the VM.`;
+}
 
 export interface HostExecutionRow {
     checked: boolean;
@@ -391,24 +393,26 @@ export const AGENT_SERVICE_SILENT = "Lemma’s agent service isn’t responding.
  *  Pure, so what it says in each state is tested without a page. */
 export function hostExecutionRow(
     status: { available?: boolean; host_execution: { enabled: boolean; available: boolean } | null } | null,
+    noun = "this Mac",
 ): HostExecutionRow {
+    const consequence = hostExecutionConsequence(noun);
     /* A build without the Agent Host will never answer, so waiting for it
        would be a stage nobody can leave. */
     if (status?.available === false) {
-        return { checked: false, blocked: "This build of Lemma doesn’t include the Agent Host.", consequence: HOST_EXECUTION_CONSEQUENCE };
+        return { checked: false, blocked: "This build of Lemma doesn’t include the Agent Host.", consequence };
     }
     const setting = status?.host_execution ?? null;
     if (!setting) {
-        return { checked: false, blocked: "Waiting for this computer’s Agent Host…", consequence: HOST_EXECUTION_CONSEQUENCE };
+        return { checked: false, blocked: "Waiting for this computer’s Agent Host…", consequence };
     }
     if (!setting.available) {
         return {
             checked: false,
             blocked: "Only available on macOS, which can confine commands in a sandbox. Commands run in the VM.",
-            consequence: HOST_EXECUTION_CONSEQUENCE,
+            consequence,
         };
     }
-    return { checked: setting.enabled, blocked: null, consequence: HOST_EXECUTION_CONSEQUENCE };
+    return { checked: setting.enabled, blocked: null, consequence };
 }
 
 /** The switch as Settings shows it: {@link hostExecutionRow}, held until this
@@ -427,7 +431,7 @@ export function hostExecutionSwitch(
     } | null,
     { error = null, noun = "this Mac" }: { error?: string | null; noun?: string } = {},
 ): HostExecutionRow {
-    const row = hostExecutionRow(status);
+    const row = hostExecutionRow(status, noun);
     if (!status?.host_execution && status?.available !== false) {
         return { ...row, blocked: error ? AGENT_SERVICE_SILENT : notConnectedYet(noun) };
     }
@@ -904,6 +908,20 @@ export function sectionPayloads(
             section: { name: section, value: values[section] as unknown as IntegrationConfig & SurfaceConfig },
             secrets: secretsBySection[section],
         }));
+}
+
+/** A form's section changes as the one `config.apply` they become.
+ *
+ *  However many sections a save spans, it is one change: the daemon checks
+ *  one revision and restarts the server once. Empty when nothing changed. */
+export function asOneChange(parts: SectionPayload[]): SectionPayload | SectionsPayload | null {
+    if (parts.length === 0) return null;
+    if (parts.length === 1) return parts[0];
+    return {
+        expected_revision: parts[0].expected_revision,
+        sections: parts.map((part) => part.section),
+        secrets: Object.assign({}, ...parts.map((part) => part.secrets)),
+    };
 }
 
 /* ── point of need ─────────────────────────────────────────────────── */

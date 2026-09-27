@@ -429,10 +429,11 @@ impl HostConfig {
             "installation ID is empty"
         );
         anyhow::ensure!(self.max_runs > 0, "max_runs must be positive");
-        // The backend caps capacity at 128 and rejects a poll that claims more,
-        // so a larger number here does not buy concurrency -- it makes every
-        // poll 422 and leaves the host reporting itself offline for ever, with
-        // nothing on screen naming the config field that did it.
+        // The backend caps capacity at 128. A `hello` frame that claims more
+        // fails validation and the backend closes the link as a protocol
+        // violation, so a larger number here does not buy concurrency -- every
+        // reconnect is refused the same way and the host stays offline for
+        // ever, with nothing on screen naming the config field that did it.
         anyhow::ensure!(
             self.max_runs <= MAX_SUPPORTED_RUNS,
             "max_runs must be at most {MAX_SUPPORTED_RUNS}; Lemma refuses a larger claim"
@@ -640,9 +641,9 @@ mod tests {
     }
 
     /// Claiming more capacity than the backend accepts is not ambitious, it is
-    /// fatal: every poll 422s on the capacity field and the host reports itself
-    /// offline for ever, with nothing on screen naming the config value that
-    /// caused it. Refusing at load says which field, once.
+    /// fatal: the backend closes every link whose `hello` carries it, and the
+    /// host stays offline for ever, with nothing on screen naming the config
+    /// value that caused it. Refusing at load says which field, once.
     #[test]
     fn rejects_a_capacity_the_backend_would_refuse_on_every_poll() {
         let config = |max_runs| HostConfig {

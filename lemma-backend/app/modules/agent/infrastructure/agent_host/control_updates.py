@@ -366,8 +366,7 @@ async def _apply_checkpoint(
     The lease alone cannot answer that: a terminal run re-reporting the
     terminal state it already holds returns its lease and changes nothing,
     and a still-RUNNING run re-reporting RUNNING is the heartbeat rather
-    than news. Both extend the lease; neither is a reason to cut a long
-    poll short.
+    than news. Both extend the lease; neither counts as a change.
     """
     timestamp = now or utcnow()
     lease = await session.get(

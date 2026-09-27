@@ -263,8 +263,8 @@ impl TargetWorker {
                 }
             }
             // However this run ended - success, failure, deadline - its
-            // terminal checkpoint is upstream-bound and must not wait for the
-            // current long poll either.
+            // terminal checkpoint is upstream-bound: wake event delivery and
+            // the link's control frame so it goes now.
             events_ready.notify_one();
             Ok(())
         });
