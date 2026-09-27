@@ -151,7 +151,8 @@ async def create_conversation(
         "(sub-agent) conversations are omitted by default; pass parent_id to "
         "list the children of a specific conversation instead. Archived "
         "conversations are omitted; pass archived=true for the archive. "
-        "Ordered by last_activity_at, most recent first."
+        "Pass search to keep only conversations whose title contains it "
+        "(case-insensitive). Ordered by last_activity_at, most recent first."
     ),
 )
 async def list_conversations(
@@ -164,6 +165,7 @@ async def list_conversations(
     conversation_type: ConversationType | None = Query(default=None, alias="type"),
     parent_id: UUID | None = Query(default=None),
     archived: bool = Query(default=False),
+    search: str | None = Query(default=None, min_length=1, max_length=200),
     page_token: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
@@ -178,6 +180,7 @@ async def list_conversations(
         ),
         parent_id=parent_id,
         archived=archived,
+        search=search,
         cursor=parse_conversation_page_token(page_token),
         limit=limit,
     )

@@ -174,6 +174,8 @@ export class ConversationsNamespace {
     // The archive is a separate list, not a tail on this one: omit for the
     // history, pass true for what has been put away.
     archived?: boolean | null;
+    // Titles containing this, case-insensitively; paged like the rest.
+    search?: string | null;
     limit?: number;
     page_token?: string | null;
   } = {}): Promise<ConversationListResponse> {
@@ -186,6 +188,7 @@ export class ConversationsNamespace {
         parent_id: options.parent_id,
         type: options.type,
         archived: options.archived,
+        search: options.search,
         limit: options.limit ?? 20,
         page_token: options.page_token,
       },
@@ -206,6 +209,7 @@ export class ConversationsNamespace {
   listDefault(
     options: {
       pod_id?: string | null;
+      search?: string | null;
       limit?: number;
       page_token?: string | null;
     } = {},

@@ -700,8 +700,6 @@ def test_conversation_page_token_round_trips_both_sort_keys() -> None:
 @pytest.mark.parametrize(
     "page_token",
     [
-        # What the endpoint handed out while it was ordered by id alone.
-        str(uuid4()),
         "not base64 at all!",
         # Well-formed, but a naive timestamp is no position in a tz-aware order.
         encode_conversation_page_token(
@@ -719,3 +717,11 @@ def test_conversation_page_token_rejects_what_it_did_not_mint(page_token) -> Non
 @pytest.mark.parametrize("page_token", [None, ""])
 def test_an_absent_or_empty_page_token_is_the_first_page(page_token) -> None:
     assert parse_conversation_page_token(page_token) is None
+
+
+def test_a_bare_conversation_id_comes_back_as_that_id() -> None:
+    # What the endpoint handed out while it was ordered by id alone. The
+    # service turns it into a position; the parser only has to recognise it.
+    legacy = uuid4()
+
+    assert parse_conversation_page_token(str(legacy)) == legacy

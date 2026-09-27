@@ -15,6 +15,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
+from app.core.domain.errors import BadRequestError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.ports import (
@@ -61,9 +62,12 @@ class ConversationQueries:
         metadata_filters: dict[str, object] | None = None,
         parent_id: UUID | None = None,
         archived: bool = False,
-        cursor: ConversationListCursor | None = None,
+        search: str | None = None,
+        cursor: ConversationListCursor | UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[Conversation], ConversationListCursor | None]:
+        """`cursor` may be a bare conversation id: a page token from before
+        the list was ordered by activity. It continues after that row."""
         expected_agent_id = await resolve_expected_agent_id(
             self.agent_repository,
             pod_id=pod_id,
@@ -76,6 +80,12 @@ class ConversationQueries:
             agent_id=expected_agent_id,
             action=Permissions.AGENT_READ,
         )
+        if isinstance(cursor, UUID):
+            cursor = await self.conversation_repository.cursor_after(
+                conversation_id=cursor, user_id=user_id, pod_id=pod_id
+            )
+            if cursor is None:
+                raise BadRequestError("Invalid page_token")
         return await self.conversation_repository.list_conversations(
             user_id=user_id,
             pod_id=pod_id,
@@ -85,6 +95,7 @@ class ConversationQueries:
             metadata_filters=metadata_filters,
             parent_id=parent_id,
             archived=archived,
+            search=search,
             cursor=cursor,
             limit=limit,
         )

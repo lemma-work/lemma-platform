@@ -127,9 +127,10 @@ class ConversationModel(UUIDAuditBase):
     is_archived: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
-    #: When somebody last said something here; the history list's order.
-    #: Stamped only by `append_message` -- not `updated_at`, which a rename or
-    #: a status change also moves.
+    #: When something outside the agent last happened here -- a person wrote,
+    #: a notification landed, a run started or finished; the history list's
+    #: order. The rule is `repositories/conversation_activity`. Not
+    #: `updated_at`, which a rename or a status repair also moves.
     last_activity_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

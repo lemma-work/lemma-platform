@@ -11679,6 +11679,7 @@ var LemmaClient = (() => {
           parent_id: options.parent_id,
           type: options.type,
           archived: options.archived,
+          search: options.search,
           limit: (_a = options.limit) != null ? _a : 20,
           page_token: options.page_token
         }

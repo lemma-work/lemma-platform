@@ -26,7 +26,6 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunFinishResult,
     AgentRunStatus,
-    ConversationAgentScope,
     ConversationAgentSelection,
     ConversationListCursor,
     ConversationStatus,
@@ -47,12 +46,15 @@ from app.modules.agent.infrastructure.conversation_origin_store import (
 from app.modules.agent.infrastructure.conversation_run_queries import (
     ConversationRunQueriesMixin,
 )
-from app.modules.agent.infrastructure.repository_status import (
-    conversation_status_values_for_db as _conversation_status_values_for_db,
+
+
+from app.modules.agent.infrastructure.repositories.conversation_activity import (
+    is_activity,
+    touch_activity as _touch_activity,
 )
-
-
 from app.modules.agent.infrastructure.repositories.conversation_list_page import (
+    cursor_after,
+    list_statement,
     page_by_activity,
 )
 from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
@@ -276,49 +278,32 @@ class ConversationRepository(
         metadata_filters: JsonObject | None = None,
         parent_id: UUID | None = None,
         archived: bool = False,
+        search: str | None = None,
         cursor: ConversationListCursor | None = None,
         limit: int = 20,
     ) -> tuple[list[ConversationEntity], ConversationListCursor | None]:
-        # One list or the other, never both: the archive is a place you go, not
-        # a tail on the end of the history. Equality rather than "not archived"
-        # so the same query serves both without a second code path.
-        stmt = select(ConversationModel).where(
-            ConversationModel.user_id == user_id,
-            ConversationModel.pod_id == pod_id,
-            ConversationModel.is_archived.is_(archived),
+        stmt = list_statement(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_selection=agent_selection,
+            status=status,
+            conversation_type=conversation_type,
+            metadata_filters=metadata_filters,
+            parent_id=parent_id,
+            archived=archived,
+            search=search,
         )
-        # Default: root conversations only. With parent_id: that conversation's
-        # children (sub-agent conversations).
-        if parent_id is None:
-            stmt = stmt.where(ConversationModel.parent_id.is_(None))
-        else:
-            stmt = stmt.where(ConversationModel.parent_id == parent_id)
-        if agent_selection.scope is not ConversationAgentScope.ALL:
-            # The assistant is named by the pod's own id, and a conversation
-            # written before it had a row still names it by naming nobody. The
-            # COALESCE covers both, and `ix_agent_conv_user_pod_agent_roots_activity`
-            # is defined on exactly this expression -- change one and the index
-            # stops being used, silently.
-            selected_agent_id = pod_id
-            if agent_selection.scope is ConversationAgentScope.NAMED:
-                selected_agent_id = agent_selection.named_value
-            agent_scope_id = func.coalesce(
-                ConversationModel.agent_id, ConversationModel.pod_id
-            )
-            stmt = stmt.where(agent_scope_id == selected_agent_id)
-        if status is not None:
-            stmt = stmt.where(
-                ConversationModel.status.in_(_conversation_status_values_for_db(status))
-            )
-        if conversation_type is not None:
-            stmt = stmt.where(
-                ConversationModel.conversation_type == conversation_type.value
-            )
-        if metadata_filters:
-            stmt = stmt.where(
-                ConversationModel.conversation_metadata.op("@>")(metadata_filters)
-            )
         return await page_by_activity(self.session, stmt, cursor=cursor, limit=limit)
+
+    async def cursor_after(
+        self, *, conversation_id: UUID, user_id: UUID, pod_id: UUID
+    ) -> ConversationListCursor | None:
+        return await cursor_after(
+            self.session,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            pod_id=pod_id,
+        )
 
     async def lock_conversation(self, conversation_id: UUID) -> None:
         await self.session.execute(
@@ -395,6 +380,7 @@ class ConversationRepository(
             conversation_id=conversation_id,
             status=ConversationStatus.RUNNING,
             output_data=None,
+            touch_activity=True,
         )
         await self.session.flush()
         return model.to_entity()
@@ -421,10 +407,10 @@ class ConversationRepository(
         # module goes through this method, so this is the one place it belongs.
         if conversation.is_archived:
             conversation.is_archived = False
-        # Same lock, same reason: this is what orders the history list, and every
-        # message -- a person's, the agent's, a tool's -- is somebody working in
-        # the conversation.
-        conversation.last_activity_at = datetime.now(timezone.utc)
+        # Same lock: a person's message or a notification moves the history
+        # list. The agent's own messages do not (`conversation_activity`).
+        if is_activity(draft):
+            _touch_activity(conversation)
         sequence_result = await self.session.execute(
             select(func.coalesce(func.max(MessageModel.sequence), -1)).where(
                 MessageModel.conversation_id == conversation_id
@@ -542,6 +528,7 @@ class ConversationRepository(
             conversation_id=model.conversation_id,
             status=resolved_conversation_status,
             output_data=output_data,
+            touch_activity=True,
         )
         if next_status in TERMINAL_AGENT_RUN_STATUSES:
             model.finished_at = datetime.now(timezone.utc)
@@ -575,10 +562,15 @@ class ConversationRepository(
         conversation_id: UUID,
         status: ConversationStatus,
         output_data: JsonValue | None = None,
+        touch_activity: bool = False,
     ) -> None:
         conversation = await self.session.get(ConversationModel, conversation_id)
         if conversation is None:
             return
         conversation.status = status.value
+        # A run starting (every wake starts one) or ending is activity; a
+        # cancelled wait or a repaired status is not. Same UPDATE either way.
+        if touch_activity:
+            _touch_activity(conversation)
         if output_data is not None or status == ConversationStatus.RUNNING:
             conversation.output_data = output_data

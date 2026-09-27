@@ -30,6 +30,7 @@ class ConversationResponse:
     Attributes:
         created_at (datetime.datetime):
         id (UUID):
+        last_activity_at (datetime.datetime):
         pod_cwd (str): The conversation's working directory in pod files. Anything a person attaches here is what the
             agent finds by a bare filename, because this is the directory its pod tools resolve against.
         pod_id (UUID):
@@ -41,7 +42,6 @@ class ConversationResponse:
         agent_runtime (AgentRuntimeConfig | None | Unset):
         instructions (None | str | Unset):
         is_archived (bool | Unset):  Default: False.
-        last_activity_at (datetime.datetime | None | Unset):
         last_run_error (None | str | Unset):
         last_run_error_code (None | str | Unset):
         last_run_error_reason (None | str | Unset):
@@ -59,6 +59,7 @@ class ConversationResponse:
 
     created_at: datetime.datetime
     id: UUID
+    last_activity_at: datetime.datetime
     pod_cwd: str
     pod_id: UUID
     updated_at: datetime.datetime
@@ -68,7 +69,6 @@ class ConversationResponse:
     agent_runtime: AgentRuntimeConfig | None | Unset = UNSET
     instructions: None | str | Unset = UNSET
     is_archived: bool | Unset = False
-    last_activity_at: datetime.datetime | None | Unset = UNSET
     last_run_error: None | str | Unset = UNSET
     last_run_error_code: None | str | Unset = UNSET
     last_run_error_reason: None | str | Unset = UNSET
@@ -93,6 +93,8 @@ class ConversationResponse:
         created_at = self.created_at.isoformat()
 
         id = str(self.id)
+
+        last_activity_at = self.last_activity_at.isoformat()
 
         pod_cwd = self.pod_cwd
 
@@ -127,14 +129,6 @@ class ConversationResponse:
             instructions = self.instructions
 
         is_archived = self.is_archived
-
-        last_activity_at: None | str | Unset
-        if isinstance(self.last_activity_at, Unset):
-            last_activity_at = UNSET
-        elif isinstance(self.last_activity_at, datetime.datetime):
-            last_activity_at = self.last_activity_at.isoformat()
-        else:
-            last_activity_at = self.last_activity_at
 
         last_run_error: None | str | Unset
         if isinstance(self.last_run_error, Unset):
@@ -226,6 +220,7 @@ class ConversationResponse:
             {
                 "created_at": created_at,
                 "id": id,
+                "last_activity_at": last_activity_at,
                 "pod_cwd": pod_cwd,
                 "pod_id": pod_id,
                 "updated_at": updated_at,
@@ -241,8 +236,6 @@ class ConversationResponse:
             field_dict["instructions"] = instructions
         if is_archived is not UNSET:
             field_dict["is_archived"] = is_archived
-        if last_activity_at is not UNSET:
-            field_dict["last_activity_at"] = last_activity_at
         if last_run_error is not UNSET:
             field_dict["last_run_error"] = last_run_error
         if last_run_error_code is not UNSET:
@@ -283,6 +276,8 @@ class ConversationResponse:
         created_at = isoparse(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
+
+        last_activity_at = isoparse(d.pop("last_activity_at"))
 
         pod_cwd = d.pop("pod_cwd")
 
@@ -338,23 +333,6 @@ class ConversationResponse:
         instructions = _parse_instructions(d.pop("instructions", UNSET))
 
         is_archived = d.pop("is_archived", UNSET)
-
-        def _parse_last_activity_at(data: object) -> datetime.datetime | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                last_activity_at_type_0 = isoparse(data)
-
-                return last_activity_at_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(datetime.datetime | None | Unset, data)
-
-        last_activity_at = _parse_last_activity_at(d.pop("last_activity_at", UNSET))
 
         def _parse_last_run_error(data: object) -> None | str | Unset:
             if data is None:
@@ -525,6 +503,7 @@ class ConversationResponse:
         conversation_response = cls(
             created_at=created_at,
             id=id,
+            last_activity_at=last_activity_at,
             pod_cwd=pod_cwd,
             pod_id=pod_id,
             updated_at=updated_at,
@@ -534,7 +513,6 @@ class ConversationResponse:
             agent_runtime=agent_runtime,
             instructions=instructions,
             is_archived=is_archived,
-            last_activity_at=last_activity_at,
             last_run_error=last_run_error,
             last_run_error_code=last_run_error_code,
             last_run_error_reason=last_run_error_reason,
