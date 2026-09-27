@@ -277,8 +277,18 @@ def reuse_published_guest(
         return None
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent) as scratch:
-        download(found.tag, output.name, Path(scratch))
+        try:
+            download(found.tag, output.name, Path(scratch))
+        except (subprocess.CalledProcessError, OSError) as error:
+            print(
+                f"{found.tag}/{output.name} could not be downloaded ({error}); building instead",
+                file=sys.stderr,
+            )
+            return None
         fetched = Path(scratch) / output.name
+        if not fetched.is_file():
+            print(f"{found.tag}/{output.name} was not downloaded; building instead", file=sys.stderr)
+            return None
         if fetched.stat().st_size != found.size or _sha256_file(fetched) != found.sha256:
             print(
                 f"{found.tag}/{output.name} does not match its manifest; building instead",

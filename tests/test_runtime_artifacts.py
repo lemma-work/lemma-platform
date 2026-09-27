@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import subprocess
 import time
 import zipfile
 from pathlib import Path
@@ -258,6 +259,32 @@ def test_a_published_archive_is_used_only_if_it_matches_its_manifest(tmp_path: P
         is None
     )
     assert fetched == ["desktop-nightly-1", "desktop-nightly-1"], "no match, no download"
+
+
+def test_a_failed_or_empty_download_builds_instead(tmp_path: Path) -> None:
+    """Every way the download can fail is "build instead", never a traceback."""
+    good = manifest("1" * 64, sha256="a" * 64, size=1)
+    output = tmp_path / "out/lemma-guest-runtime-macos-aarch64.zip"
+
+    def refused(tag: str, name: str, directory: Path) -> None:
+        raise subprocess.CalledProcessError(1, ["gh", "release", "download", tag])
+
+    def unreadable(tag: str, name: str, directory: Path) -> None:
+        raise OSError("disk full")
+
+    def nothing(tag: str, name: str, directory: Path) -> None:
+        return None
+
+    for download in (refused, unreadable, nothing):
+        tag = reuse_published_guest(
+            target="macos-aarch64",
+            fingerprint="1" * 64,
+            output=output,
+            manifests=[("desktop-nightly-1", good)],
+            download=download,
+        )
+        assert tag is None, download.__name__
+        assert not output.exists()
 
 
 def test_the_manifest_records_the_fingerprint_where_installed_apps_do_not_look() -> None:
