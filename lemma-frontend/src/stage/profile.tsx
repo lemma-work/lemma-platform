@@ -527,7 +527,9 @@ export interface Subject {
     members: Member[];
     /** Omitted for a candidate: nobody has talked to them yet, and a zero
      *  there reads as a dead product rather than as an empty one. */
-    stats?: { talks: number; people: number };
+    /** `talksMore`: there are more conversations than `talks` counts. The
+     *  count is one page of the list, not a total, and says so ("25+"). */
+    stats?: { talks: number; talksMore: boolean; people: number };
     issued?: boolean;
     /** The hero's primary control, and the chips beside it. */
     action: ReactNode;
@@ -782,7 +784,8 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         <div className="hero__body">
                             {stats && (
                                 <p className="hero__stats">
-                                    <b>{stats.talks}</b> {stats.talks === 1 ? "conversation" : "conversations"} ·{" "}
+                                    <b>{stats.talks}{stats.talksMore && "+"}</b>{" "}
+                                    {stats.talks === 1 && !stats.talksMore ? "conversation" : "conversations"} ·{" "}
                                     <b>{stats.people}</b> {stats.people === 1 ? "person" : "people"} with access
                                 </p>
                             )}
@@ -1065,12 +1068,14 @@ export function ProfilePane({
         },
     });
 
-    /* Both of these are already on screen elsewhere in this pod, so they
-       come from the same cache rather than being fetched twice. */
+    /* Surfaces are already on screen elsewhere in this pod, so they come from
+       the same cache. Conversations are a page of their own: the count needs
+       to know whether there is a next page, which the sidebar's list drops.
+       Under `["conversations", pod.id]`, so a refresh of the lists reaches it. */
     const surfaces = useSurfaces(pod.id);
     const conversations = useQuery({
-        queryKey: ["conversations", pod.id],
-        queryFn: () => source.listConversations(pod.id),
+        queryKey: ["conversations", pod.id, "first"],
+        queryFn: () => source.listConversationsPage(pod.id),
         staleTime: 60_000,
     });
 
@@ -1106,7 +1111,9 @@ export function ProfilePane({
                 onRetryProfile: () => { void profile.refetch(); },
                 reach,
                 members: pod.members,
-                stats: conversations.isSuccess ? { talks: conversations.data.length, people: pod.members.length } : undefined,
+                stats: conversations.isSuccess
+                    ? { talks: conversations.data.items.length, talksMore: conversations.data.next !== null, people: pod.members.length }
+                    : undefined,
                 onOpenProject: onOpenTab,
                 onDiscussAgent,
                 action: (

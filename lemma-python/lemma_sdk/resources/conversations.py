@@ -50,12 +50,13 @@ class PodConversations(BoundResource):
         parent_id: str | None = None,
         type: ConversationType | str | None = None,
         status: ConversationStatus | str | None = None,
+        search: str | None = None,
         limit: int = 20,
     ) -> ConversationListResponse:
         # Root conversations only by default; pass parent_id to fetch a
         # conversation's children (sub-agents or conversations pinned under a
         # PROJECT). `type` filters by CHAT / TASK / PROJECT and composes with
-        # parent_id.
+        # parent_id. `search` keeps titles containing it, case-insensitively.
         return self._call(
             agent_conversation_list,
             self._pod_uuid(),
@@ -63,6 +64,7 @@ class PodConversations(BoundResource):
             parent_id=as_uuid(parent_id) if parent_id is not None else UNSET,
             type_=type if type is not None else UNSET,
             status=status if status is not None else UNSET,
+            search=search if search is not None else UNSET,
             limit=limit,
         )
 
@@ -72,6 +74,7 @@ class PodConversations(BoundResource):
         parent_id: str | None = None,
         type: ConversationType | str | None = None,
         status: ConversationStatus | str | None = None,
+        search: str | None = None,
         limit: int = 20,
     ) -> ConversationListResponse:
         return self.list(
@@ -79,6 +82,7 @@ class PodConversations(BoundResource):
             parent_id=parent_id,
             type=type,
             status=status,
+            search=search,
             limit=limit,
         )
 

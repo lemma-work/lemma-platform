@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyArchived, applyTitle, titleToSend, titleToShow, unbound, UNTITLED } from "../src/thread/conversation-list.ts";
+import { allConversationsKey, applyArchived, applyTitle, patchConversationLists, refreshConversationLists, titleToSend, titleToShow, unbound, UNTITLED } from "../src/thread/conversation-list.ts";
 import type { ConversationRef } from "../src/data/types.ts";
 
 function list(): ConversationRef[] {
@@ -90,4 +90,92 @@ test("the test is the binding, not the type", () => {
 test("nothing listed is nothing filtered", () => {
     assert.deepEqual(unbound(undefined), []);
     assert.deepEqual(unbound([]), []);
+});
+
+/** The QueryClient calls the helpers use, over a plain map. A prefix match is
+ *  what `getQueriesData` and `invalidateQueries` do with a `queryKey`. */
+function fakeCache(seed: Record<string, unknown>) {
+    const store = new Map(Object.entries(seed));
+    const invalidated: unknown[][] = [];
+    const under = (prefix: readonly unknown[]) =>
+        [...store.keys()]
+            .map((raw) => JSON.parse(raw) as unknown[])
+            .filter((key) => prefix.every((part, i) => key[i] === part));
+    return {
+        store,
+        invalidated,
+        getQueryData<T>(key: readonly unknown[]) {
+            return store.get(JSON.stringify(key)) as T | undefined;
+        },
+        getQueriesData<T>({ queryKey }: { queryKey: readonly unknown[] }) {
+            return under(queryKey).map((key) => [key, store.get(JSON.stringify(key)) as T | undefined] as [unknown[], T | undefined]);
+        },
+        setQueryData<T>(key: readonly unknown[], value: T | undefined) {
+            store.set(JSON.stringify(key), value);
+        },
+        async invalidateQueries({ queryKey }: { queryKey: readonly unknown[] }) {
+            invalidated.push([...queryKey]);
+        },
+    };
+}
+
+type Pages = { pages: { items: ConversationRef[]; next: string | null }[]; pageParams: unknown[] };
+
+function twoPages(): Pages {
+    return {
+        pages: [
+            { items: list(), next: "2" },
+            { items: [{ id: "d", title: "Old one", at: "Mon", kind: "CHAT" }], next: null },
+        ],
+        pageParams: [null, "2"],
+    };
+}
+
+test("a patch reaches the short list and every page of every search", () => {
+    // The pane's pages are their own queries, one per search. A rename made in
+    // a searched view that only patched the sidebar's list would leave the old
+    // title in the row just renamed.
+    const short = list();
+    const all = twoPages();
+    const searched = { pages: [{ items: [{ id: "d", title: "Old one", at: "Mon", kind: "CHAT" }], next: null }], pageParams: [null] };
+    const cache = fakeCache({
+        [JSON.stringify(["conversations", "pod"])]: short,
+        [JSON.stringify(allConversationsKey("pod", ""))]: all,
+        [JSON.stringify(allConversationsKey("pod", "old"))]: searched,
+    });
+
+    patchConversationLists(cache, "pod", (entries) => applyTitle(entries, "d", "Renamed"));
+
+    const patched = cache.getQueryData<Pages>(allConversationsKey("pod", ""))!;
+    assert.equal(patched.pages[0], all.pages[0], "an untouched page keeps its identity");
+    assert.equal(patched.pages[1].items[0].title, "Renamed");
+    assert.equal(cache.getQueryData<Pages>(allConversationsKey("pod", "old"))!.pages[0].items[0].title, "Renamed");
+    assert.equal(cache.getQueryData(["conversations", "pod"]), short);
+});
+
+test("patching with nothing cached writes nothing", () => {
+    const cache = fakeCache({});
+
+    patchConversationLists(cache, "pod", (entries) => applyArchived(entries, "a"));
+
+    assert.equal(cache.store.size, 0);
+});
+
+test("a refresh cuts every loaded view back to its first page, then asks the server", async () => {
+    // An infinite query refetches every page it holds; twenty pages deep would
+    // be twenty requests after every message sent.
+    const all = twoPages();
+    const cache = fakeCache({
+        [JSON.stringify(["conversations", "pod"])]: list(),
+        [JSON.stringify(allConversationsKey("pod", ""))]: all,
+        [JSON.stringify(allConversationsKey("other-pod", ""))]: twoPages(),
+    });
+
+    await refreshConversationLists(cache, "pod");
+
+    const trimmed = cache.getQueryData<Pages>(allConversationsKey("pod", ""))!;
+    assert.deepEqual(trimmed.pages, [all.pages[0]]);
+    assert.deepEqual(trimmed.pageParams, [null]);
+    assert.equal(cache.getQueryData<Pages>(allConversationsKey("other-pod", ""))!.pages.length, 2, "another pod is left alone");
+    assert.deepEqual(cache.invalidated, [["conversations", "pod"]]);
 });

@@ -1,15 +1,23 @@
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from app.core.authorization.current import (
+    reset_current_context,
+    set_current_context,
+)
+from app.core.domain.errors import BadRequestError
 from app.modules.agent.domain.value_objects import (
     ConversationAgentScope,
     ConversationAgentSelection,
+    ConversationListCursor,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 import app.modules.agent.services.conversation_queries as queries
+from app.modules.test_support.authz import allow_all_context
 
 
 class _ConversationRepository:
@@ -131,9 +139,9 @@ async def test_repository_applies_agent_selection_to_roots_and_children(
     if selection.scope is ConversationAgentScope.ALL:
         assert "coalesce(agent_conversations.agent_id" not in where_sql
         return
-    # The COALESCE is not incidental: `ix_agent_conv_user_pod_agent_roots_v2` is
-    # defined on exactly this expression, so a query that stops spelling it the
-    # same way silently stops using the index.
+    # The COALESCE is not incidental: `ix_agent_conv_user_pod_agent_roots_activity`
+    # is defined on exactly this expression, so a query that stops spelling it
+    # the same way silently stops using the index.
     assert "coalesce(agent_conversations.agent_id" in where_sql
     # The assistant is selected by the pod's own id -- its row's id is the pod's
     # -- and a conversation written before that row existed still matches,
@@ -144,3 +152,114 @@ async def test_repository_applies_agent_selection_to_roots_and_children(
         else str(selection.value)
     )
     assert expected_agent_id in where_sql
+
+
+@pytest.mark.asyncio
+async def test_repository_pages_by_last_activity_then_id() -> None:
+    uow = _Uow()
+    repository = ConversationRepository(uow)
+
+    await repository.list_conversations(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        agent_selection=ConversationAgentSelection.all(),
+        cursor=ConversationListCursor(
+            last_activity_at=datetime(2026, 9, 25, tzinfo=timezone.utc), id=uuid4()
+        ),
+    )
+
+    statement = uow.session.statement
+    where_sql = str(statement.whereclause.compile(dialect=postgresql.dialect()))
+    # A row comparison, not two separate inequalities: it is the form the
+    # `*_activity` indexes answer as one range, and the one that never skips
+    # the rows tied on activity.
+    assert (
+        "(agent_conversations.last_activity_at, agent_conversations.id) <" in where_sql
+    )
+    assert [str(clause) for clause in statement._order_by_clauses] == [
+        "agent_conversations.last_activity_at DESC",
+        "agent_conversations.id DESC",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_is_a_literal_case_insensitive_title_filter() -> None:
+    uow = _Uow()
+    repository = ConversationRepository(uow)
+
+    await repository.list_conversations(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        agent_selection=ConversationAgentSelection.all(),
+        search="50%_off!",
+    )
+
+    compiled = uow.session.statement.whereclause.compile(dialect=postgresql.dialect())
+    assert "agent_conversations.title ILIKE" in str(compiled)
+    # Escaped: a `%` or `_` somebody types is a character, not a wildcard.
+    assert "%50!%!_off!!%" in compiled.params.values()
+
+
+class _LegacyCursorRepository(_ConversationRepository):
+    def __init__(self, found: ConversationListCursor | None) -> None:
+        super().__init__()
+        self.found = found
+        self.looked_up = None
+
+    async def cursor_after(self, **kwargs):
+        self.looked_up = kwargs
+        return self.found
+
+
+@pytest.fixture
+def allowed():
+    """A caller the authorizer lets through, installed the way a request is."""
+    token = set_current_context(allow_all_context())
+    yield
+    reset_current_context(token)
+
+
+def _legacy_service(repository):
+    # Across the whole pod: no agent name, so nothing to resolve.
+    return queries.ConversationQueries(None, repository, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("allowed")
+async def test_a_bare_id_page_token_continues_after_that_row() -> None:
+    position = ConversationListCursor(
+        last_activity_at=datetime(2026, 9, 25, tzinfo=timezone.utc), id=uuid4()
+    )
+    repository = _LegacyCursorRepository(found=position)
+    user_id, pod_id = uuid4(), uuid4()
+
+    await _legacy_service(repository).list_conversations(
+        pod_id=pod_id,
+        agent_selection=ConversationAgentSelection.all(),
+        user_id=user_id,
+        cursor=position.id,
+    )
+
+    # Scoped to the caller: a token is no way to learn about other people's rows.
+    assert repository.looked_up == {
+        "conversation_id": position.id,
+        "user_id": user_id,
+        "pod_id": pod_id,
+    }
+    assert repository.kwargs["cursor"] == position
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("allowed")
+async def test_a_bare_id_nobody_can_find_is_a_bad_page_token() -> None:
+    repository = _LegacyCursorRepository(found=None)
+
+    with pytest.raises(BadRequestError):
+        await _legacy_service(repository).list_conversations(
+            pod_id=uuid4(),
+            agent_selection=ConversationAgentSelection.all(),
+            user_id=uuid4(),
+            cursor=uuid4(),
+        )
+
+    assert repository.kwargs is None

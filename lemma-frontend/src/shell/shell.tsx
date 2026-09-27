@@ -44,6 +44,7 @@ import { LiveConversation } from "@/thread/live-conversation";
 import { ProfilePane } from "@/stage/profile";
 import { History } from "@/thread/history";
 import { AllConversations } from "@/thread/all-conversations";
+import { refreshConversationLists } from "@/thread/conversation-list";
 import { ComputerView } from "@/computer/computer-view";
 import { FileView } from "@/thread/file-view";
 import { acknowledge, readComposeRequest, registerFrame } from "@/thread/compose-bridge";
@@ -355,7 +356,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         if (!openConversationId || openConversationId === NEW_CONVERSATION) {
             setConversationId(callConversationId);
         }
-        void queryClient.invalidateQueries({ queryKey: ["conversations", callIn.id] });
+        void refreshConversationLists(queryClient, callIn.id);
     }, [callConversationId, queryClient, pod?.id, callIn.id, openConversationId]);
 
     const { start: openCall, end: closeCall } = huddle;

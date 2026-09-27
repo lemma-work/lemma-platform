@@ -65,6 +65,11 @@ export const previewSource: PodSource = {
         ] satisfies Tab[];
     },
     async listConversations(id) { return [{ id: id + "-today", title: teammateFor(id).ask, at: "Today", kind: "CHAT" }]; },
+    async listConversationsPage(id, _cursor, search) {
+        const items = await previewSource.listConversations(id);
+        const needle = search?.toLowerCase();
+        return { items: needle ? items.filter((item) => item.title.toLowerCase().includes(needle)) : items, next: null };
+    },
     async getConversation(id) {
         const person = teammateFor(id);
         return { id: id + "-today", title: person.ask, status: "COMPLETED", messages: [
