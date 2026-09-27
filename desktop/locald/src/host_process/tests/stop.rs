@@ -128,12 +128,18 @@ fn a_parallel_stop_takes_every_services_whole_tree() {
 
     manager.stop_all_timed().0.unwrap();
 
+    // A killed grandchild is reparented to init, which reaps it when it gets
+    // to it; until then the group still answers `kill(-group, 0)` as a zombie.
+    // A group still there seconds later is one the stop did not kill.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     for group in groups {
-        assert_ne!(
-            unsafe { libc::kill(-group, 0) },
-            0,
-            "process group {group} outlived the stop"
-        );
+        while unsafe { libc::kill(-group, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "process group {group} outlived the stop"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
