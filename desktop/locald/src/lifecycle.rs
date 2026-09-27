@@ -47,6 +47,13 @@ impl Lifecycle {
         Finish(self)
     }
 
+    /// Whether an operation holds the lifecycle right now -- the thing a
+    /// shutdown's `wait_idle` would wait for. Unlike `busy`, a closing
+    /// lifecycle with nothing in flight is not in use.
+    pub fn in_use(&self) -> bool {
+        self.state.lock().expect("lifecycle lock poisoned").active
+    }
+
     pub fn busy(&self) -> bool {
         let state = self.state.lock().expect("lifecycle lock poisoned");
         state.active || state.closing

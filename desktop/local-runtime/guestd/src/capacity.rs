@@ -30,10 +30,26 @@ pub(crate) const SANDBOX_STOP_GRACE_SECONDS: u32 = 1;
 ///
 /// Postgres's `SIGINT` is a fast shutdown: roll back what is open, checkpoint,
 /// exit. Ordinarily well under a second here; the case this covers is a
-/// checkpoint that has to write out a full container's worth of buffers. Redis
-/// is quick and SuperTokens keeps nothing of its own, so the number is
+/// checkpoint that has to write out a full container's worth of buffers.
+/// Redis's `SIGTERM` is a `SHUTDOWN` that fsyncs the append-only file and
+/// writes the snapshot its save points ask for, and is as quick. The number is
 /// Postgres's.
 pub(crate) const CORE_STOP_GRACE_SECONDS: u32 = 15;
+
+/// The core containers that keep nothing of their own, by name.
+///
+/// SuperTokens stores every session and user in Postgres. And it never answers
+/// `SIGTERM`: PID 1 in its image is the `supertokens` CLI, which starts the
+/// real server as a second JVM and waits on it, and its shutdown hook only
+/// joins that wait -- the signal never reaches the server. Every stop spent the
+/// whole data-service grace on it, fifteen seconds of every quit, and ended in
+/// the SIGKILL it could have had at once.
+// Not named `..._CORE_CONTAINERS`: the runtime manager's budget test finds
+// the core list's declaration in this file by its text.
+pub(crate) const STATELESS_SERVICES: [&str; 1] = ["lemma-core-supertokens"];
+
+/// How long a stateless core container is given: it has nothing to flush.
+pub(crate) const STATELESS_STOP_GRACE_SECONDS: u32 = 1;
 
 /// The core containers' OOM preference: far below any sandbox's.
 pub(crate) const CORE_OOM_SCORE_ADJ: i32 = -900;
@@ -65,13 +81,16 @@ pub(crate) fn admit_disk(free_bytes: Option<u64>) -> Result<(), GuestError> {
     }
 }
 
-/// The data services, in no particular order -- the stop is one engine call.
+/// The data services, in no particular order -- each is stopped on its own.
 pub(crate) const CORE_CONTAINERS: [&str; 3] = ["supertokens", "redis", "postgres"];
 
 /// The longest a guest stop can take before the engine has killed everything.
 ///
-/// `nerdctl stop` works through its arguments one at a time, so this is the sum
-/// rather than the maximum. The host's `system.shutdown` budget must exceed it:
+/// A sum, and deliberately a bound rather than a forecast. The stops now run
+/// side by side -- one `nerdctl stop` per container, so the core costs its
+/// slowest member rather than all three -- but an engine is free to serialise
+/// them underneath, and a budget that assumed it would not is the kind that
+/// cuts a database off. The host's `system.shutdown` budget must exceed it:
 /// a budget below this terminates the guest while a database is still
 /// checkpointing, which is the failure this arithmetic exists to prevent.
 /// Computed from `MAX_SANDBOX_CEILING`, not from the default. An installation
@@ -96,6 +115,10 @@ const _: () = assert!(
     "a data service must not be given less grace than a scratch workload",
 );
 const _: () = assert!(
+    STATELESS_STOP_GRACE_SECONDS <= CORE_STOP_GRACE_SECONDS,
+    "a service with nothing to flush must not hold a stop longer than a database",
+);
+const _: () = assert!(
     MAX_SANDBOX_CEILING >= DEFAULT_MAX_SANDBOXES,
     "the ceiling cannot sit below the default, or the default is unreachable",
 );
@@ -112,12 +135,36 @@ const _: () = assert!(
 pub(crate) struct StoppedContainers {
     pub(crate) sandboxes: usize,
     pub(crate) core: usize,
+    /// How long each phase took, so a slow stop names what it waited on.
+    pub(crate) sandboxes_ms: u64,
+    pub(crate) core_ms: u64,
 }
 
 impl StoppedContainers {
     pub(crate) fn total(self) -> usize {
         self.sandboxes + self.core
     }
+}
+
+/// Each running core container with the grace it gets.
+///
+/// Stateless only when the engine named it so; everything else -- the
+/// databases, and anything unrecognised -- keeps the data-service grace.
+pub(crate) fn core_stop_plan(core: &[String], stateless: &[String]) -> Vec<(String, u32)> {
+    core.iter()
+        .map(|id| {
+            let grace = if stateless.contains(id) {
+                STATELESS_STOP_GRACE_SECONDS
+            } else {
+                CORE_STOP_GRACE_SECONDS
+            };
+            (id.clone(), grace)
+        })
+        .collect()
+}
+
+pub(crate) fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The ids `ps --quiet` printed, refusing anything that is not one.
@@ -358,24 +405,96 @@ impl<E: Engine + 'static> GuestService<E> {
             .cloned()
             .collect();
 
+        let stateless = if core.is_empty() {
+            Vec::new()
+        } else {
+            self.running_stateless_core_ids()
+        };
+
         // Sandboxes before the data services, so nothing is still working
-        // while the database it might be working through is going away.
-        self.stop_containers(&sandboxes, SANDBOX_STOP_GRACE_SECONDS)?;
-        self.stop_containers(&core, CORE_STOP_GRACE_SECONDS)?;
+        // while the database it might be working through is going away. Within
+        // each phase every container is stopped at once: one `nerdctl stop`
+        // over several ids works through them in turn, so the phase cost the
+        // sum of its members' graces instead of the slowest one's.
+        let started = Instant::now();
+        let sandbox_stops: Vec<(String, u32)> = sandboxes
+            .iter()
+            .map(|id| (id.clone(), SANDBOX_STOP_GRACE_SECONDS))
+            .collect();
+        self.stop_concurrently(&sandbox_stops)?;
+        let sandboxes_ms = elapsed_ms(started);
+
+        let started = Instant::now();
+        self.stop_concurrently(&core_stop_plan(&core, &stateless))?;
         Ok(StoppedContainers {
             sandboxes: sandboxes.len(),
             core: core.len(),
+            sandboxes_ms,
+            core_ms: elapsed_ms(started),
         })
     }
 
-    fn stop_containers(&self, ids: &[String], grace_seconds: u32) -> Result<(), GuestError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let mut arguments = vec!["stop".into(), "--time".into(), grace_seconds.to_string()];
-        arguments.extend(ids.iter().cloned());
-        self.run_checked(&arguments)?;
+    /// Stop each container with its own grace, all at once, and wait for every one.
+    ///
+    /// The first failure is reported, but only after the rest have been asked:
+    /// giving up part-way would leave a database running under a guest that is
+    /// about to power off.
+    fn stop_concurrently(&self, stops: &[(String, u32)]) -> Result<(), GuestError> {
+        let results: Vec<Result<String, GuestError>> = thread::scope(|scope| {
+            let workers: Vec<_> = stops
+                .iter()
+                .map(|(id, grace)| {
+                    scope.spawn(move || {
+                        self.run_checked(&[
+                            "stop".into(),
+                            "--time".into(),
+                            grace.to_string(),
+                            id.clone(),
+                        ])
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| {
+                    worker
+                        .join()
+                        .unwrap_or_else(|_| Err(GuestError::engine("a container stop panicked")))
+                })
+                .collect()
+        });
+        results
+            .into_iter()
+            .find(Result::is_err)
+            .unwrap_or(Ok(String::new()))?;
         Ok(())
+    }
+
+    /// The running core containers that keep nothing of their own.
+    ///
+    /// Asked by name, and allowed to fail: an engine that cannot answer leaves
+    /// every core container on the longer grace, which is slower and safe.
+    fn running_stateless_core_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        for name in STATELESS_SERVICES {
+            let answer = self
+                .run_checked(&[
+                    "ps".into(),
+                    "--quiet".into(),
+                    "--filter".into(),
+                    format!("name=^{name}$"),
+                ])
+                .and_then(|output| parse_container_ids(&output));
+            match answer {
+                Ok(found) => ids.extend(found),
+                Err(error) => eprintln!(
+                    "lemma-guestd: could not find {name} to stop it briefly; \
+                     it gets the data-service grace instead: {}",
+                    error.message
+                ),
+            }
+        }
+        ids
     }
 
     fn running_container_ids(&self) -> Result<Vec<String>, GuestError> {

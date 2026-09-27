@@ -44,11 +44,28 @@ pub(crate) fn runtime_install_root() -> PathBuf {
 }
 
 pub(crate) fn install_log_path() -> PathBuf {
-    runtime_install_root().join("install.log")
+    shell_log_dir().join("install.log")
 }
 
 pub(crate) fn launch_log_path() -> PathBuf {
-    runtime_install_root().join("launch.log")
+    shell_log_dir().join("launch.log")
+}
+
+/// Where the shell's own logs go.
+///
+/// Not the user's under test. The shell's tests run its real code paths, in
+/// parallel, and anything on them that logged went into the installed app's
+/// launch log -- which is where every doubled "daemon reported ready" in it
+/// came from: two tests, not two launches.
+fn shell_log_dir() -> PathBuf {
+    #[cfg(test)]
+    {
+        std::env::temp_dir().join(format!("lemma-desktop-tests-{}", std::process::id()))
+    }
+    #[cfg(not(test))]
+    {
+        runtime_install_root()
+    }
 }
 
 /// Where the daemon's own stderr goes.
@@ -163,7 +180,12 @@ pub(crate) fn append_bounded_log(path: &std::path::Path, message: &str) {
         .unwrap_or_default()
         .as_millis();
     let clean = message.replace(['\r', '\n'], " ");
-    let _ = writeln!(file, "{timestamp} {clean}");
+    // One `write` per line. `writeln!` on an unbuffered file is a write per
+    // formatted piece -- the timestamp, the message, the newline -- and two
+    // writers appending at once interleaved those pieces into lines like
+    // `17904032898721790403289872 0ms ...`. A single append-mode write of a
+    // short line lands whole.
+    let _ = file.write_all(format!("{timestamp} {clean}\n").as_bytes());
 }
 
 pub(crate) fn locald_socket_name(root: &std::path::Path) -> Result<Name<'_>, String> {

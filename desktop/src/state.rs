@@ -75,6 +75,13 @@ pub(crate) struct UiState {
     /// wildly different times, and a number that mixes them says nothing.
     #[serde(skip)]
     pub(crate) installed_this_launch: bool,
+    /// Whether this launch's time-to-ready has been recorded.
+    ///
+    /// Its own flag rather than `!ready`: the daemon says `state ready` just
+    /// before it says `ready`, so by the time `ready` arrived the launch
+    /// already looked ready and its time was never recorded at all.
+    #[serde(skip)]
+    pub(crate) ready_recorded: bool,
 }
 
 /// What a broken installation can still be offered.

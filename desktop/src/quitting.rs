@@ -439,6 +439,16 @@ pub(crate) fn request_desktop_release() -> Result<(), String> {
     }
 }
 
+/// Whether closing this window hides Lemma rather than closing anything.
+///
+/// The same on every platform: closing the workspace window hides it and
+/// leaves the tray icon, the daemon and the stack running -- on Windows as in
+/// the macOS menu bar -- and only Quit stops them. A pod app's window is an
+/// ordinary window and closes.
+pub(crate) fn close_hides_to_tray(window_label: &str) -> bool {
+    window_label == "main"
+}
+
 /// What an `ExitRequested` should do, from the three facts that decide it.
 ///
 /// Its own function because the arm that used to hold it ended in two branches

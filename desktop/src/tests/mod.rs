@@ -9,6 +9,7 @@ mod agent_host;
 mod config;
 mod diagnostics;
 mod disk_space;
+mod launch_and_resume;
 mod locald;
 mod locald_writer;
 mod misc;
