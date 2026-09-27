@@ -1957,10 +1957,13 @@ button svg, a svg { flex-shrink:0; }
     .conversation-loading .loading-shape, .loading-rows .loading-shape, .loading-indicator > span { animation: none; opacity: .65; }
 }
 
-/* Chat gutters stay compact even when the adjacent resource narrows the pane. */
+/* Chat gutters go compact only when a resource shares the pane and narrows
+   it. Applied always, they put the transcript and composer 16px in while the
+   header and tabs above sat on the full gutter — two left edges, one above the
+   other, with the header looking pushed right by nothing. */
 @media (min-width: 768px) {
-    .convo-host { --gutter: 16px; }
-    .convo-host .pane__inner { padding-inline: 16px; }
-    .convo-host .composer { padding-inline: 0; }
-    .convo-host .composer__row { padding-inline: 16px; }
+    .body--dual .convo-host { --gutter: 16px; }
+    .body--dual .convo-host .pane__inner { padding-inline: 16px; }
+    .body--dual .convo-host .composer { padding-inline: 0; }
+    .body--dual .convo-host .composer__row { padding-inline: 16px; }
 }

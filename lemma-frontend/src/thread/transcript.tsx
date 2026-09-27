@@ -233,6 +233,7 @@ export function Transcript({
 
                 {display === "empty" && (
                     <div className="quiet">
+                        <Mark seed={podId} name={teammate.name} icon={teammate.iconUrl} size={44} greeting={1} />
                         <h2>{emptyTitle}</h2>
                         <p>{emptyBody}</p>
                     </div>

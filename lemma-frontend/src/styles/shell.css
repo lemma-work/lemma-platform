@@ -740,6 +740,12 @@
     padding: 56px 0 0;
     max-width: 46ch;
 }
+/* An empty thread starts where its first message will land: at the bottom,
+   on the composer's left edge. Floated 56px below the tabs it read as a stray
+   heading in the corner of an empty page, unrelated to the box you type in. */
+.pane__inner:has(> .quiet) { min-height: 100%; display: flex; flex-direction: column; }
+.pane__inner > .quiet { margin-top: auto; padding: 0 0 12px; }
+.quiet > .mark { margin-bottom: 6px; }
 .quiet h2 {
     margin: 0;
     font-size: var(--t-lead);
