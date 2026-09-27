@@ -21,6 +21,8 @@ fn a_sandbox_is_stopped_briefly_and_the_data_services_last() {
             output(true, "aabbccddeeff\n001122334455\n"),
             // ps --quiet --filter label=...: the sandboxes among them
             output(true, "aabbccddeeff\n"),
+            // ps --quiet --filter name=...: no stateless service running
+            output(true, ""),
             // the two stops
             output(true, ""),
             output(true, ""),
@@ -85,6 +87,10 @@ fn a_container_the_label_does_not_claim_is_given_the_longer_grace() {
             // One of them is a sandbox. The other two are not, whatever they
             // are, and both get the core grace.
             output(true, "aabbccddeeff\n"),
+            // Neither is SuperTokens.
+            output(true, ""),
+            // One stop for the sandbox, then one per core container.
+            output(true, ""),
             output(true, ""),
             output(true, ""),
         ]),
@@ -104,9 +110,19 @@ fn a_container_the_label_does_not_claim_is_given_the_longer_grace() {
         .iter()
         .filter(|command| command.first().map(String::as_str) == Some("stop"))
         .collect();
-    assert_eq!(stops[1][2], CORE_STOP_GRACE_SECONDS.to_string());
-    assert!(stops[1].contains(&"001122334455".to_owned()));
-    assert!(stops[1].contains(&"feedfacecafe".to_owned()));
+    let mut core_stops: Vec<(String, String)> = stops[1..]
+        .iter()
+        .map(|command| (command[2].clone(), command[3].clone()))
+        .collect();
+    core_stops.sort();
+    let core_grace = CORE_STOP_GRACE_SECONDS.to_string();
+    assert_eq!(
+        core_stops,
+        [
+            (core_grace.clone(), "001122334455".to_owned()),
+            (core_grace, "feedfacecafe".to_owned()),
+        ]
+    );
 }
 
 /// Nothing running is nothing to stop, and no engine call to make.

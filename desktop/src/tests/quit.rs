@@ -288,10 +288,9 @@ mod locald_events {
     /// Only the first `ready` of a launch is its time-to-ready.
     #[test]
     fn a_second_ready_does_not_record_time_to_ready_again() {
-        let mut ui = UiState {
-            ready: true,
-            ..UiState::default()
-        };
+        let mut ui = UiState::default();
+        let first = apply_locald_event(&mut ui, "ready", &json!({"url": APP, "api_url": API}));
+        assert!(first.became_ready.is_some());
         let outcome = apply_locald_event(&mut ui, "ready", &json!({"url": APP, "api_url": API}));
         assert!(outcome.became_ready.is_none());
     }
