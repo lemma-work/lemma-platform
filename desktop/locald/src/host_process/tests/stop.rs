@@ -69,20 +69,36 @@ fn services_stop_after_their_dependents_and_independent_ones_together() {
 #[test]
 fn independent_services_are_stopped_at_the_same_time() {
     // Takes about a second to honour SIGTERM, as a real server draining does.
-    let slow_to_stop = vec![
-        "/bin/sh".into(),
-        "-c".into(),
-        "trap 'sleep 1; exit 0' TERM; while :; do sleep 0.1; done".into(),
-    ];
-    let mut backend = service("backend", &[]);
-    backend.command = slow_to_stop.clone();
-    let mut frontend = service("frontend", &[]);
-    frontend.command = slow_to_stop;
+    // Each one says when its trap is set: a SIGTERM that arrives before then
+    // kills the shell at once, which is a test that measured nothing.
     let root = tempdir().unwrap();
+    let armed = |id: &str| root.path().join(format!("{id}.armed"));
+    let slow_to_stop = |id: &str| {
+        vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!(
+                "trap 'sleep 1; exit 0' TERM; : > '{}'; while :; do sleep 0.1; done",
+                armed(id).display()
+            ),
+        ]
+    };
+    let mut backend = service("backend", &[]);
+    backend.command = slow_to_stop("backend");
+    let mut frontend = service("frontend", &[]);
+    frontend.command = slow_to_stop("frontend");
     let mut value = manifest(vec![backend, frontend]);
     value.setup[0].command = vec!["/usr/bin/true".into()];
     let manager = manager_in(&root, value);
     manager.start_all().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !(armed("backend").is_file() && armed("frontend").is_file()) {
+        assert!(
+            Instant::now() < deadline,
+            "the services never set their traps"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     let started = Instant::now();
     let (result, timings) = manager.stop_all_timed();
