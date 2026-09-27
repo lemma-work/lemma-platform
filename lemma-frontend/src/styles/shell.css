@@ -2297,6 +2297,34 @@
     font-size: 13px;
     color: var(--ink-3);
 }
+/* The address bar is the dialog's first thing: an address or a name, the
+   role it grants, and the one button whose word says which of add or invite
+   will happen. */
+.addpeople__bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.addpeople__email {
+    flex: 1 1 200px;
+    min-width: 0;
+    font: inherit;
+    font-size: var(--t-ui);
+    padding: 8px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    color: var(--ink);
+}
+.addpeople__email:focus { outline: none; border-color: var(--accent); }
+.addpeople__bar .btn:disabled { opacity: .45; cursor: default; }
+.addpeople__bar .addpeople__role { padding: 8px 9px; border-radius: var(--r-md); font-size: var(--t-ui); }
+@media (max-width: 560px) { .addpeople__bar { flex-wrap: wrap; } }
+.addpeople__hint { margin: 7px 0 0; font-size: var(--t-meta); color: var(--ink-3); }
+.addpeople__hint[data-bad="true"] { color: var(--bad); }
+.addpeople__unsent { display: grid; gap: 6px; margin-top: 8px; }
+.addpeople--modal .addpeople__list { margin-top: 12px; }
+.addpeople__row--pending { color: var(--ink-3); cursor: default; }
 .quiet__detail {
     font-family: var(--mono);
     font-size: 11px;
