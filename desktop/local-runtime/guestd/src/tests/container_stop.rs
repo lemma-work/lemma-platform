@@ -118,15 +118,34 @@ fn the_stop_plan_shortens_only_what_was_named() {
 
 const SLOW_STOP: Duration = Duration::from_millis(300);
 
-/// Every `stop` takes a while; everything else answers at once.
-struct SlowStopEngine;
+/// Every `stop` waits, up to a deadline, until all three have been asked;
+/// everything else answers at once. Only stops issued side by side can all
+/// see the others arrive -- one after another, the first gives up -- so the
+/// overlap is proven without depending on how busy the machine is.
+#[derive(Default)]
+struct RendezvousStopEngine {
+    arrived: Mutex<usize>,
+    all_here: std::sync::Condvar,
+    met: Mutex<usize>,
+}
 
-impl Engine for SlowStopEngine {
+impl Engine for RendezvousStopEngine {
     fn run(&self, arguments: &[String]) -> Result<Output, String> {
         let answer = match (arguments[0].as_str(), arguments.len()) {
             // `ps --quiet`: three core containers, none of them a sandbox.
             ("ps", 2) => "aaaa11112222\nbbbb33334444\ncccc55556666\n",
             ("stop", _) => {
+                let mut arrived = self.arrived.lock().unwrap();
+                *arrived += 1;
+                self.all_here.notify_all();
+                let (arrived, _) = self
+                    .all_here
+                    .wait_timeout_while(arrived, Duration::from_secs(10), |count| *count < 3)
+                    .unwrap();
+                if *arrived >= 3 {
+                    *self.met.lock().unwrap() += 1;
+                }
+                drop(arrived);
                 std::thread::sleep(SLOW_STOP);
                 ""
             }
@@ -143,21 +162,30 @@ impl Engine for SlowStopEngine {
 #[test]
 fn the_core_containers_are_stopped_at_the_same_time() {
     let root = tempdir().unwrap();
-    let service = service_over(SlowStopEngine, root.path());
+    let engine = std::sync::Arc::new(RendezvousStopEngine::default());
+    let service = service_over(SharedEngine(std::sync::Arc::clone(&engine)), root.path());
 
-    let started = Instant::now();
     let stopped = service.stop_all_containers().unwrap();
-    let elapsed = started.elapsed();
 
     assert_eq!(stopped.core, 3);
-    assert!(
-        elapsed < SLOW_STOP * 2,
-        "the core stops ran one after another: {elapsed:?}"
+    assert_eq!(
+        *engine.met.lock().unwrap(),
+        3,
+        "the core stops ran one after another"
     );
     assert!(
         stopped.core_ms >= u64::try_from(SLOW_STOP.as_millis()).unwrap(),
         "the reported core time is the time actually spent"
     );
+}
+
+/// An engine the test keeps a handle on, to read what it saw afterwards.
+struct SharedEngine<E>(std::sync::Arc<E>);
+
+impl<E: Engine> Engine for SharedEngine<E> {
+    fn run(&self, arguments: &[String]) -> Result<Output, String> {
+        self.0.run(arguments)
+    }
 }
 
 /// A failed stop is reported, but only after every other container was asked.

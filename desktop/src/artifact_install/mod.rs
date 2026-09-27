@@ -31,6 +31,7 @@ mod extract;
 mod host_target;
 mod installed;
 mod manifest;
+mod reuse;
 mod staging;
 
 pub(crate) use disk_space::*;
@@ -39,6 +40,7 @@ pub(crate) use extract::*;
 pub(crate) use host_target::*;
 pub(crate) use installed::*;
 pub(crate) use manifest::*;
+pub(crate) use reuse::*;
 pub(crate) use staging::*;
 
 #[cfg(test)]

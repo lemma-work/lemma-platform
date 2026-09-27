@@ -33,6 +33,11 @@ on:
         required: false
         default: false
         type: boolean
+      rebuild_guest_runtime:
+        description: "Build the guest runtimes even when a published one has the same input fingerprint."
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -410,12 +415,62 @@ jobs:
       - name: Build guest control daemon
         run: cargo build --manifest-path desktop/Cargo.toml -p lemma-guestd --release
 
+      # The guest runtime changes far less often than the app, and a rebuild
+      # of unchanged inputs is not byte-identical (package installs, mkfs,
+      # initramfs), so rebuilding it every release made every installed Lemma
+      # download it again. The fingerprint covers what decides its content --
+      # see scripts/runtime_artifacts.py -- and the month stands for the
+      # unpinned Ubuntu package archive, so the guest's packages refresh at
+      # least monthly.
+      - name: Fingerprint the guest runtime's inputs
+        id: fingerprint
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          fingerprint="$(python3 scripts/runtime_artifacts.py fingerprint \
+            --target "${TARGET}" \
+            --guestd desktop/target/release/lemma-guestd \
+            --package-epoch "$(date -u +%Y-%m)")"
+          echo "fingerprint=${fingerprint}" >> "$GITHUB_OUTPUT"
+          echo "${TARGET} guest input fingerprint: ${fingerprint}"
+
+      # Republished, not referenced: the manifest points at this release's own
+      # copy, so deleting or pruning an older nightly can never break a newer
+      # one, and the DMG jobs keep downloading everything from one tag. The
+      # archive is checked against the SHA-256 its own manifest recorded. Any
+      # failure here -- nothing matching, a mismatch, gh itself -- builds.
+      - name: Reuse the published guest runtime built from the same inputs
+        id: reuse
+        if: ${{ !inputs.rebuild_guest_runtime }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ matrix.target }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+        run: |
+          set -uo pipefail
+          archive="guest-runtime-out/lemma-guest-runtime-${TARGET}.zip"
+          if python3 scripts/runtime_artifacts.py reuse \
+              --target "${TARGET}" --fingerprint "${FINGERPRINT}" --output "${archive}" \
+            && python3 scripts/runtime_artifacts.py guest-sidecar \
+              --archive "${archive}" --fingerprint "${FINGERPRINT}"; then
+            echo "reused=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f "${archive}" "${archive}.json"
+            echo "reused=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Assemble private guest artifact
+        if: steps.reuse.outputs.reused != 'true'
         shell: bash
         run: |
           bash scripts/build_local_guest_runtime.sh \
             --target "${{ matrix.target }}" \
             --guestd desktop/target/release/lemma-guestd \
+            --fingerprint "${{ steps.fingerprint.outputs.fingerprint }}" \
             --output "guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip"
 
       - name: Upload managed guest runtime
@@ -791,6 +846,7 @@ jobs:
               }
 
           guest_runtimes = {}
+          guest_fingerprints = {}
           for path in sorted(Path("guest-runtimes").glob("lemma-guest-runtime-*.zip")):
               target = path.stem.removeprefix("lemma-guest-runtime-")
               platform, architecture = {
@@ -802,6 +858,7 @@ jobs:
               metadata = json.loads(path.with_suffix(path.suffix + ".json").read_text())
               if metadata["sha256"] != digest or metadata["size"] != path.stat().st_size:
                   raise SystemExit(f"{path.name} metadata mismatch")
+              guest_fingerprints[target] = metadata["input_fingerprint"]
               guest_runtimes[target] = {
                   "url": (
                       f"https://github.com/{repository}/releases/download/"
@@ -851,6 +908,12 @@ jobs:
               },
               "host_packs": host_packs,
               "guest_runtimes": guest_runtimes,
+              # What each guest was built from, so the next release can
+              # republish this one's archive instead of rebuilding it (see
+              # scripts/runtime_artifacts.py). Top level, and additive: the
+              # artifact entries are read strictly by installed apps, the
+              # manifest's top level is not.
+              "input_fingerprints": {"guest_runtimes": guest_fingerprints},
           }
           Path("lemma-local.json").write_text(json.dumps(manifest, indent=2) + "\n")
           for host_target, guest_target in (

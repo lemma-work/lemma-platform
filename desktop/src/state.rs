@@ -320,10 +320,31 @@ pub(crate) struct AppUpdateStatus {
 #[derive(Default)]
 pub(crate) struct LemmaUpdateMetadata {
     pub(crate) postgres_major: Option<u64>,
+    /// Both runtime archives together: what an installation with nothing to
+    /// reuse downloads, and all a feed from before `runtime_artifacts` says.
     pub(crate) runtime_download_bytes: Option<u64>,
+    /// Each archive's digest and size, so this machine can leave out the ones
+    /// it already has. Empty when the feed does not carry them.
+    pub(crate) runtime_artifacts: Vec<(artifact_install::Component, String, u64)>,
 }
 
 impl LemmaUpdateMetadata {
+    /// What the update's first launch will actually download here.
+    ///
+    /// Counted from the archives the installed releases cannot supply, so an
+    /// update whose guest runtime did not change is announced at the size of
+    /// its host pack. Falls back to the feed's whole-release figure when the
+    /// feed does not itemise.
+    pub(crate) fn runtime_bytes_to_download(&self, install_root: &Path) -> Option<u64> {
+        if self.runtime_artifacts.is_empty() {
+            return self.runtime_download_bytes;
+        }
+        Some(artifact_install::bytes_to_download(
+            install_root,
+            &self.runtime_artifacts,
+        ))
+    }
+
     /// Whether this update leaves the installation's data usable.
     ///
     /// Everything Lemma keeps is a Postgres data directory and a folder of

@@ -26,7 +26,30 @@ pub(crate) fn lemma_update_metadata_for(raw: &Value, target: &str) -> LemmaUpdat
     LemmaUpdateMetadata {
         postgres_major: block.get("postgres_major").and_then(Value::as_u64),
         runtime_download_bytes: block.get("runtime_download_bytes").and_then(Value::as_u64),
+        runtime_artifacts: runtime_artifacts(block).unwrap_or_default(),
     }
+}
+
+/// The feed's `runtime_artifacts`: `{"host": {"sha256", "size"}, "guest": …}`.
+///
+/// All or nothing. One malformed or missing entry would make a partial sum
+/// look like the whole download, so anything short of both valid entries is
+/// read as absent and the whole-release figure stands.
+fn runtime_artifacts(block: &Value) -> Option<Vec<(artifact_install::Component, String, u64)>> {
+    let artifacts = block.get("runtime_artifacts")?;
+    [
+        artifact_install::Component::Host,
+        artifact_install::Component::Guest,
+    ]
+    .into_iter()
+    .map(|component| {
+        let entry = artifacts.get(component.name())?;
+        let sha256 = entry.get("sha256")?.as_str()?;
+        let size = entry.get("size")?.as_u64()?;
+        artifact_install::valid_recorded_digest(sha256)
+            .then(|| (component, sha256.to_owned(), size))
+    })
+    .collect()
 }
 
 /// Where an in-flight update records what it was aiming at.
@@ -265,7 +288,12 @@ pub(crate) async fn check_for_app_update(
     // The feed's own `lemma` block. The updater ignores unknown top-level keys
     // and hands back the parsed document, so this costs no extra request.
     let metadata = lemma_update_metadata(&update.raw_json);
-    status.runtime_download_bytes = metadata.runtime_download_bytes;
+    // Nothing to download reads as not knowing rather than as "about 0 B":
+    // both pages word an unknown size generically, and a zero only happens
+    // when the host pack is unchanged too, which a release almost never is.
+    status.runtime_download_bytes = metadata
+        .runtime_bytes_to_download(&runtime_install_root())
+        .filter(|bytes| *bytes > 0);
     // No Windows exception: its data lives in a separate holder distribution,
     // and replacing the runtime already refuses to run until that holder says
     // it has the data (`refuse_replacement_without_holder`) -- a check at the
@@ -415,9 +443,11 @@ pub(crate) async fn install_app_update(
     // Said before, not after: the workspace is unusable from the moment the
     // stack stops until the new runtime has downloaded on the next launch,
     // and that is a cost somebody deciding *when* to update needs to know.
-    let runtime_download = match lemma_update_metadata(&update.raw_json).runtime_download_bytes {
-        Some(bytes) => format!(" (about {} MB)", bytes.div_ceil(1024 * 1024)),
-        None => String::new(),
+    let runtime_download = match lemma_update_metadata(&update.raw_json)
+        .runtime_bytes_to_download(&runtime_install_root())
+    {
+        Some(bytes) if bytes > 0 => format!(" (about {} MB)", bytes.div_ceil(1024 * 1024)),
+        _ => String::new(),
     };
     // Stopping locald stops the Agent Host with it, so a coding agent mid-run
     // is cut off. Read from the status the shell already holds rather than
