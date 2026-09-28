@@ -99,9 +99,14 @@ def is_browser_private(path: str) -> bool:
     return path == BROWSER_PROFILE_ROOT or path.startswith(f"{BROWSER_PROFILE_ROOT}/")
 
 
+#: Where the backend installs the runtime overlay: Lemma's own sandbox code,
+#: newer than the copy the image bakes. Outside the home on purpose -- platform
+#: code, not the user's files.
+RUNTIME_OVERLAY_ROOT = "/opt/lemma-runtime"
+
 #: Where the runtime overlay puts its commands. Named through ``current``, so
 #: an upgrade is the installer's symlink flip and nothing here moves.
-RUNTIME_OVERLAY_BIN = "/opt/lemma-runtime/current/bin"
+RUNTIME_OVERLAY_BIN = f"{RUNTIME_OVERLAY_ROOT}/current/bin"
 
 #: A shell prefix putting the overlay's commands first for the rest of one
 #: command line. For the commands the backend sends: a sandbox created from an
@@ -134,6 +139,7 @@ __all__ = [
     "IMAGE_BIN",
     "OVERLAY_FIRST_ON_PATH",
     "RUNTIME_OVERLAY_BIN",
+    "RUNTIME_OVERLAY_ROOT",
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",
     "is_browser_private",

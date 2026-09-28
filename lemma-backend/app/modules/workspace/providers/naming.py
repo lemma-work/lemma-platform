@@ -52,6 +52,23 @@ def volume_name(sandbox_id: UUID, storage_generation: int) -> str:
     return f"{_PREFIX}-vol-{sandbox_id.hex}-{storage_generation}"
 
 
+def runtime_volume_name(workspace_volume: str) -> str:
+    """The volume holding a workspace's runtime overlay, named after its disk.
+
+    Kept in a volume so it survives the container being replaced, which is
+    whenever the sandbox's image or profile changes; in the container layer it
+    went with every replacement, and the sandbox ran the image's older copy of
+    Lemma's code until the next session reinstalled it.
+
+    Derived from the workspace volume rather than the sandbox, so a new disk
+    starts with no overlay and the two are destroyed together. Created
+    implicitly by the bind and deliberately unlabelled: `find_volume` adopts
+    the first labelled volume it finds for a sandbox, and this must never be
+    mistaken for the user's disk.
+    """
+    return f"{workspace_volume}-runtime"
+
+
 def parse_volume_name(name: str) -> tuple[UUID, int] | None:
     """Recover ``(sandbox_id, storage_generation)`` from a volume name.
 

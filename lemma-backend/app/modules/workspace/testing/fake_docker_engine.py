@@ -39,6 +39,8 @@ class FakeContainer:
     #: on the runtime -- and the browser relay's 4850, which the whole VNC
     #: pane and every saved login hang off, had no covering test on any fabric.
     published: dict[str, int] = field(default_factory=dict)
+    #: What create was asked to mount, as Docker's `Binds` strings.
+    binds: tuple[str, ...] = ()
 
 
 @dataclass
@@ -111,6 +113,7 @@ class FakeDockerEngine:
                 port: 34567 + offset
                 for offset, port in enumerate(sorted(request.host_config.port_bindings))
             },
+            binds=tuple(request.host_config.binds),
         )
         return DockerContainerCreateResponse.model_validate(
             {"Id": container_id, "Warnings": []}

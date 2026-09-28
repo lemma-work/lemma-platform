@@ -49,6 +49,7 @@ from app.modules.workspace.providers.base import (
     ProviderRejected,
 )
 from sandbox_runtime import runtime_install
+from sandbox_runtime.paths import RUNTIME_OVERLAY_ROOT
 from sandbox_runtime.errors import SandboxError
 from sandbox_runtime.protocol import (
     ProcessOutputSnapshot,
@@ -61,7 +62,7 @@ logger = get_logger(__name__)
 #: Where the overlay lives. Outside `/workspace` on purpose: this is platform
 #: code, not the user's, and putting it in their project root would put it in
 #: their file tree, in their exports, and within reach of an agent's `rm`.
-RUNTIME_ROOT = "/opt/lemma-runtime"
+RUNTIME_ROOT = RUNTIME_OVERLAY_ROOT
 
 #: Staging paths. `/tmp` because they are consumed once and must not survive --
 #: the installer deletes them itself, and a pause would otherwise carry a
@@ -128,12 +129,22 @@ def install_command(
     `/opt` rather than somewhere under the home, deliberately. It is where
     add-on software belongs, it keeps what the platform installed out of the
     directory listing the user browses, and it keeps the disk-copy set that a
-    later migration works from as "the user's files" -- an overlay installed
-    `--no-deps` against one base image has no business being carried onto
-    another. The cost is that on Docker and `lemma_local`, where `/opt` is the
-    container layer, replacing a container discards it and the next ensure
-    reinstalls: about 650ms, once, on the fabric where a container is cheap. On
-    E2B, where the sandbox is the disk, it simply persists.
+    later migration works from as "the user's files".
+
+    It persists on every fabric. On E2B the sandbox is the disk. On Docker and
+    `lemma_local` it is its own mount beside the home -- a volume named after
+    the workspace volume, and a directory beside the home on Desktop's guest --
+    so a replaced container starts with the overlay already installed, and the
+    stamp this probes says so. Without the mount the container layer took it,
+    and the next ensure paid a reinstall. It goes when the sandbox's storage
+    does. A replacement on a newer image keeps the overlay until the version
+    moves; the overlay carries only Lemma's code, and the image's third-party
+    closure moves only with a lockfile that the bundle is built against too.
+
+    The workspace server is the one process that imports its code at container
+    start, so a newer overlay installed mid-session reaches it at the next start
+    rather than at once. Not restarted here: its token is single-use and it is
+    the container's only process under `tini`.
     """
     return (
         "sudo -n true 2>/dev/null && SUDO='sudo -n' || SUDO=''; "
@@ -228,15 +239,16 @@ class WorkspaceRuntimeBundleMixin:
     ) -> tuple[int, UUID, str, int, int] | None:
         """Identity for "the overlay is installed", which belongs to the sandbox.
 
-        Unlike a directory, the overlay does not live on a disk that outlives
-        its container: it is written into the sandbox's own filesystem, which on
-        Docker and `lemma_local` is the container layer. So the *epoch* has to be
-        here. `allocation_id` is the logical sandbox and does not move when a
-        container is replaced -- and a replacement that adopts the same volume
-        keeps its files and its storage generation while losing `/opt`
-        entirely. Keyed without the epoch, that sandbox reported the overlay
-        installed and ran the image's older copy, which is the one outcome this
-        whole mechanism exists to make impossible.
+        The overlay has its own mount now, which survives a replaced container,
+        but a container created before that mount existed kept it in its own
+        layer -- so the *epoch* still has to be here. `allocation_id` is the
+        logical sandbox and does not move when a container is replaced, and a
+        replacement without the mount keeps its files and its storage
+        generation while losing `/opt` entirely. Keyed without the epoch, that
+        sandbox reported the overlay installed and ran the image's older copy,
+        which is the one outcome this whole mechanism exists to make
+        impossible. With the mount, the re-probe finds the stamp and installs
+        nothing.
 
         Conservative in the only direction that is safe: a re-probe costs one
         command, a wrong "already installed" costs a sandbox running code we
