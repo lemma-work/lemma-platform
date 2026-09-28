@@ -513,8 +513,10 @@ def test_a_target_is_vetted_before_any_scenario_can_write():
     unhooking it: a `world` that no longer waits on `target`, or a `target` that
     no longer asks.
     """
-    conftest = SUITE / "conftest.py"
-    tree = ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest))
+    # The fixtures live in the plugin, so a suite built on this one gets the
+    # same vetting by naming it.
+    plugin = SUITE / "harness" / "plugin.py"
+    tree = ast.parse(plugin.read_text(encoding="utf-8"), filename=str(plugin))
     functions = {
         node.name: node
         for node in ast.walk(tree)
@@ -522,7 +524,7 @@ def test_a_target_is_vetted_before_any_scenario_can_write():
     }
 
     assert "target" in functions, (
-        "conftest has no `target` fixture, so nothing asks the deployment what "
+        "harness/plugin.py has no `target` fixture, so nothing asks the deployment what "
         "it is or whether this run may write to it"
     )
     vets = any(
@@ -853,7 +855,7 @@ def test_a_fixture_never_asserts_on_something_a_deployment_lacks():
         f"these assert on something only a booted stack has: {offenders}. A "
         f"deployment run has no proxy and no stand-ins, so this has to skip "
         f"with a reason rather than error. See the `egress` fixture in "
-        f"conftest.py for the shape."
+        f"harness/plugin.py for the shape."
     )
 
 

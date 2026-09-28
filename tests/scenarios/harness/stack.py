@@ -36,8 +36,10 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from harness.credentials import load_deployment_env
 from harness import egress as egress_proxy
@@ -146,6 +148,64 @@ class StackError(RuntimeError):
     """The system under test could not be started."""
 
 
+@dataclass
+class Sidecar:
+    """A process a stack starts beside the backend — a stand-in for a provider.
+
+    Started before migrations and the backend, so the backend can be pointed at
+    it; stopped with everything else. ``ready_url`` is polled until it answers,
+    so nothing races a sidecar that has not bound its port yet.
+    """
+
+    name: str
+    argv: list[str]
+    ready_url: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+    cwd: str = ""
+
+
+@dataclass
+class StackSpec:
+    """What a booted stack runs, handed to `pytest_scenarios_configure_stack`.
+
+    The defaults are the open-source backend from this checkout. A suite built
+    on this one — a deployment with its own application — changes the fields it
+    needs and leaves the rest; see `harness/hookspecs.py`.
+    """
+
+    #: ``"local"`` — backend processes on this machine — or ``"compose"``.
+    kind: str
+    #: Where the backend answers, fixed before the hook runs so a sidecar can be
+    #: told where to send its webhooks.
+    port: int
+    base_url: str
+    #: The backend's settings. Everything here reaches migrations, the backend
+    #: and every worker.
+    env: dict[str, str] = field(default_factory=dict)
+    #: The checkout the backend runs from, and its interpreter.
+    root: Path = BACKEND_ROOT
+    python: str = ""
+    app: str = "app.app:app"
+    worker: list[str] = field(default_factory=lambda: ["-m", "app.worker"])
+    #: Each a list of arguments to ``python``, run in ``root`` before the
+    #: backend starts, in order.
+    migrations: list[list[str]] = field(
+        default_factory=lambda: [["-m", "alembic", "upgrade", "head"]]
+    )
+    #: Import the native connector catalogue from lemma-backend's script.
+    seed_connectors: bool = True
+    sidecars: list[Sidecar] = field(default_factory=list)
+    #: Compose only: image references by `.env` key, e.g. LEMMA_BACKEND_IMAGE.
+    images: dict[str, str] = field(default_factory=dict)
+    extras: dict[str, Any] = field(default_factory=dict)
+
+    def interpreter(self) -> str:
+        if self.python:
+            return self.python
+        candidate = self.root / ".venv" / "bin" / "python"
+        return str(candidate) if candidate.exists() else _backend_python()
+
+
 @dataclass(frozen=True, slots=True)
 class Stack:
     """A running Lemma, addressable over HTTP."""
@@ -164,6 +224,10 @@ class Stack:
     #: course. A deployment is somebody's, and a run must never quietly
     #: register accounts there — it says the tenant is missing and stops.
     ours: bool = True
+
+    #: Whatever a `pytest_scenarios_configure_stack` hook left for its own
+    #: fixtures — the address of a stand-in it started, a secret it chose.
+    extras: dict[str, Any] = field(default_factory=dict)
 
     def tail(self, lines: int = 80, *, match: str = "") -> str:
         """The end of the server and worker log.
@@ -929,21 +993,41 @@ def _seed_connectors(python_bin: str, env: dict[str, str]) -> None:
         )
 
 
-def _migrate(python_bin: str, env: dict[str, str]) -> None:
-    result = subprocess.run(
-        [python_bin, "-m", "alembic", "upgrade", "head"],
-        cwd=str(BACKEND_ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise StackError(
-            "alembic upgrade head failed — the schema could not be created.\n"
-            "Check the backend's dependencies are installed "
-            "(cd lemma-backend && uv sync).\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+def _migrate(spec: StackSpec) -> None:
+    python_bin = spec.interpreter()
+    for step in spec.migrations:
+        result = subprocess.run(
+            [python_bin, *step],
+            cwd=str(spec.root),
+            env=spec.env,
+            capture_output=True,
+            text=True,
         )
+        if result.returncode != 0:
+            raise StackError(
+                f"{' '.join(step)} failed — the schema could not be created.\n"
+                f"Check the backend's dependencies are installed "
+                f"(cd {spec.root.name} && uv sync).\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
+
+def _start_sidecars(spec: StackSpec, log, processes: list[subprocess.Popen]) -> None:
+    for sidecar in spec.sidecars:
+        processes.append(
+            subprocess.Popen(
+                sidecar.argv,
+                cwd=sidecar.cwd or None,
+                env={**os.environ, **sidecar.env},
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        )
+        if sidecar.ready_url:
+            try:
+                _wait_http(sidecar.ready_url, timeout=60)
+            except StackError as error:
+                raise StackError(f"sidecar {sidecar.name!r}: {error}") from error
 
 
 def refuse_to_take_a_deployments_bot() -> None:
@@ -1001,8 +1085,13 @@ def refuse_to_take_a_deployments_bot() -> None:
     )
 
 
-def start_stack():
-    """Start everything and yield a :class:`Stack`. Generator, for a fixture."""
+def start_stack(configure: Callable[[StackSpec], None] | None = None):
+    """Start everything and yield a :class:`Stack`. Generator, for a fixture.
+
+    ``configure`` is the `pytest_scenarios_configure_stack` hook, called with
+    the spec once the infrastructure is up and before anything of the
+    backend's runs.
+    """
     require_docker()
     refuse_to_take_a_deployments_bot()
 
@@ -1123,9 +1212,17 @@ def start_stack():
             egress=egress,
         )
 
-        python_bin = _backend_python()
-        _migrate(python_bin, env)
-        _seed_connectors(python_bin, env)
+        spec = StackSpec(
+            kind="local", port=port, base_url=f"http://127.0.0.1:{port}", env=env
+        )
+        if configure is not None:
+            configure(spec)
+        env = spec.env
+        python_bin = spec.interpreter()
+        _start_sidecars(spec, log, processes)
+        _migrate(spec)
+        if spec.seed_connectors:
+            _seed_connectors(python_bin, env)
 
         # No scheduler sidecar. APScheduler and `app/scheduler.py` were deleted
         # in #362; time schedules are driven from the worker now. Booting one
@@ -1137,7 +1234,7 @@ def start_stack():
                     python_bin,
                     "-m",
                     "uvicorn",
-                    "app.app:app",
+                    spec.app,
                     # 0.0.0.0, not 127.0.0.1, and this is the whole reason the
                     # sandbox lane failed every night in CI while passing on
                     # every developer's machine.
@@ -1166,13 +1263,13 @@ def start_stack():
                     "--log-level",
                     "warning",
                 ],
-                cwd=str(BACKEND_ROOT),
+                cwd=str(spec.root),
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
         )
-        base_url = f"http://127.0.0.1:{port}"
+        base_url = spec.base_url
         _wait_http(f"{base_url}/health", timeout=120)
 
         # The worker. Agent runs, workflow resumes, scheduled fires and document
@@ -1182,8 +1279,8 @@ def start_stack():
         for _ in range(_how_many_workers(env)):
             processes.append(
                 subprocess.Popen(
-                    [python_bin, "-m", "app.worker"],
-                    cwd=str(BACKEND_ROOT),
+                    [python_bin, *spec.worker],
+                    cwd=str(spec.root),
                     env=env,
                     stdout=log,
                     stderr=subprocess.STDOUT,
@@ -1196,6 +1293,7 @@ def start_stack():
             database_url=database_url,
             log_path=str(log_path),
             egress=egress,
+            extras=spec.extras,
         )
 
     except StackError as error:

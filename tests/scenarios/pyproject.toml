@@ -27,6 +27,22 @@ dependencies = [
     "telethon>=1.36",
 ]
 
+# Installable, so a suite built on this one depends on the harness rather than
+# reaching into this directory by path:
+#
+#     [tool.uv.sources]
+#     lemma-scenarios = { path = "../lemma-platform/tests/scenarios", editable = true }
+#
+# and names the plugin, `pytest_plugins = ["harness.plugin"]`. Editable, so it
+# is still the files in the tree that run. Only `harness` ships; the journeys
+# are this suite's own.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["harness"]
+
 [tool.pytest.ini_options]
 testpaths = ["journeys"]
 python_files = ["test_*.py"]

@@ -43,14 +43,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import importlib.util
+import inspect
 import os
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from harness import consent, credentials, environment, tenant
+from harness import consent, credentials, environment, hookspecs, tenant
 from harness.drivers.api import UnexpectedResponse
 from harness.run import current, made_by_a_run
 from harness.world import Person, World
@@ -59,6 +61,7 @@ JSON = dict[str, Any]
 
 BASE_URL_SETTING = "SCENARIOS_BASE_URL"
 AUTHENTICATE_WITH_SETTING = "SCENARIOS_AUTHENTICATE_WITH"
+PLUGINS_SETTING = "SCENARIOS_PLUGINS"
 
 #: What an --authenticate-with function must return: every tenant.CAST label
 #: mapped to a Person already in the state signs_up/signs_in leave one in.
@@ -97,8 +100,20 @@ def owner_of(company: tenant.Company) -> tenant.Colleague:
 
 
 async def provision(
-    base_url: str, *, reset: bool = False, authenticate: Authenticator | None = None
+    base_url: str,
+    *,
+    reset: bool = False,
+    authenticate: Authenticator | None = None,
+    hooks: Any = None,
 ) -> str:
+    """Build the standing tenant on ``base_url``, or confirm it is there.
+
+    ``hooks`` is a pytest (or pluggy) hook relay carrying the specs in
+    `harness/hookspecs.py`; `pytest_scenarios_prepare_tenant` is called on it
+    once the organizations and their members exist. The `sessions` fixture
+    passes pytest's own; ``--plugin`` builds one for a run from the command
+    line.
+    """
     target = environment.describe(base_url)
     environment.confirm_writable(target)
     ledger = Ledger()
@@ -150,6 +165,12 @@ async def provision(
                 company=companies[colleague.company.key],
                 ledger=ledger,
             )
+
+        # The deployment's turn, before anything that might be metered. A
+        # deployment that caps pods per owner lifts the cap here — only it knows
+        # how — and the standing pods below then fit.
+        if hooks is not None:
+            await _prepare(hooks, world, people, companies, base_url, ledger)
 
         boss = people[owner_of(tenant.VANTAGE).label]
         boss.organization = companies[tenant.VANTAGE.key]
@@ -887,6 +908,56 @@ async def _still_needs_a_person(owner: Person) -> str:
     return "\n".join(lines)
 
 
+async def _prepare(
+    hooks: Any,
+    world: World,
+    people: dict[str, Person],
+    companies: dict[str, JSON],
+    base_url: str,
+    ledger: Ledger,
+) -> None:
+    results = hooks.pytest_scenarios_prepare_tenant(
+        world=world, people=people, organizations=companies, base_url=base_url
+    )
+    for result in results or []:
+        if inspect.isawaitable(result):
+            result = await result
+        if isinstance(result, str) and result:
+            ledger.did(result)
+
+
+def plugin_hooks(modules: list[str]) -> Any:
+    """A hook relay for the command line, carrying these plugin modules.
+
+    The same modules a test run names in ``pytest_plugins``, so provisioning a
+    deployment by hand prepares it exactly as a test run would. Each is an
+    importable module name or a path to a ``.py`` file.
+    """
+    import pluggy
+
+    manager = pluggy.PluginManager("pytest")
+    manager.add_hookspecs(hookspecs)
+    for module in modules:
+        manager.register(_load_module(module), name=module)
+    return manager.hook
+
+
+def _load_module(name: str) -> Any:
+    if not name.endswith(".py"):
+        return importlib.import_module(name)
+    path = Path(name)
+    if not path.is_file():
+        raise SystemExit(f"--plugin: no such file {path}")
+    loaded = importlib.util.spec_from_file_location(
+        f"_scenarios_plugin_{path.stem}", path
+    )
+    if loaded is None or loaded.loader is None:
+        raise SystemExit(f"--plugin: could not load {path}")
+    module = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(module)
+    return module
+
+
 def _load_authenticator(spec: str) -> Authenticator:
     """``spec`` is ``path/to/module.py:function_name``.
 
@@ -935,6 +1006,18 @@ def main(argv: list[str] | None = None) -> int:
             f"docstring."
         ),
     )
+    parser.add_argument(
+        "--plugin",
+        action="append",
+        default=[
+            name for name in os.getenv(PLUGINS_SETTING, "").split(",") if name.strip()
+        ],
+        help=(
+            "a plugin module (importable name or path/to/file.py) implementing "
+            "the hooks in harness/hookspecs.py — the same one a test run names "
+            f"in pytest_plugins. Repeatable (or comma-separated {PLUGINS_SETTING})."
+        ),
+    )
     arguments = parser.parse_args(argv)
     if not arguments.base_url:
         parser.error(
@@ -951,7 +1034,10 @@ def main(argv: list[str] | None = None) -> int:
         print(
             asyncio.run(
                 provision(
-                    arguments.base_url, reset=arguments.reset, authenticate=authenticate
+                    arguments.base_url,
+                    reset=arguments.reset,
+                    authenticate=authenticate,
+                    hooks=plugin_hooks(arguments.plugin) if arguments.plugin else None,
                 )
             )
         )
