@@ -212,3 +212,29 @@ def test_replay_never_reaches_rows_it_republished_itself():
     )
     assert upper.timestamp() * 1000 == 2_100_000
     assert lower.timestamp() * 1000 == 1_000_000 - 5 * 60 * 1000
+
+
+def test_a_lag_longer_than_the_stream_is_a_certain_loss():
+    """Trimming leaves lag (entries added minus read) intact, so a lag longer
+    than everything left means unread entries are gone -- whoever trimmed."""
+    state = _stream(_group("dead", delivered=(50, 0), lag=1_500))  # length 1,000
+
+    gaps = budget.observed_gaps(state)
+
+    assert [(gap.group, gap.after_ms, gap.until_ms) for gap in gaps] == [
+        ("dead", 50, 100)
+    ]
+
+
+def test_a_group_behind_but_within_the_stream_has_lost_nothing():
+    """The dev incident before any trim: lag 32,925 inside 58,430 entries."""
+    assert (
+        budget.observed_gaps(_stream(_group("slow", delivered=(1, 0), lag=900))) == []
+    )
+
+
+def test_an_unacked_delivery_trimmed_away_is_a_certain_loss():
+    state = _stream(
+        _group("g", delivered=(900, 0), lag=0, pending=1, oldest_pending=(40, 0))
+    )
+    assert [gap.after_ms for gap in budget.observed_gaps(state)] == [40]

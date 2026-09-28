@@ -182,6 +182,27 @@ async def test_failing_fast_marks_the_process_unhealthy_and_stops_once(stops):
     assert lane_watchdog.failed_fast()
 
 
+async def test_the_watchdog_stands_down_once_shutdown_has_begun(stops):
+    """An orderly SIGTERM stops readers on purpose; exiting 70 would call it a death."""
+    dead_reader = SimpleNamespace(
+        tasks=[_finished_task()],
+        stream_sub=SimpleNamespace(name="s", group="g", consumer="c"),
+    )
+    lane_watchdog.mark_shutting_down()
+
+    await asyncio.wait_for(
+        lane_watchdog.lane_watchdog_loop(
+            SimpleNamespace(subscribers=[dead_reader]),
+            [],
+            interval_seconds=0.01,
+            stop=stops,
+        ),
+        timeout=1,
+    )
+
+    assert stops.count == 0
+
+
 async def test_a_lane_that_crashes_takes_the_process_down(stops):
     async def crash() -> None:
         raise RuntimeError("Attempted to exit a cancel scope that isn't current")
@@ -313,9 +334,13 @@ class _Get:
 @pytest.mark.parametrize(
     ("stored", "maxlen", "expected"),
     [
-        (b"500", 200_000, 500),  # the guard's cap beats the relaxed ceiling
-        (b"500", 100, 100),  # never raises a lower cap
-        (None, 200_000, 200_000),  # no guard running: unchanged
+        (b"30000", 50_000, 30_000),  # the guard's cap bounds a burst
+        # ...but never below half of maxlen, which is as far behind as the
+        # normal path lets any group be: the cap cannot cut unread entries.
+        (b"500", 50_000, 25_000),
+        (b"500_000", 100, 100),  # unparseable: unchanged
+        (b"900000", 100, 100),  # never raises a lower cap
+        (None, 50_000, 50_000),  # no guard running: unchanged
         (b"500", None, 500),  # an uncapped stream is capped
     ],
 )

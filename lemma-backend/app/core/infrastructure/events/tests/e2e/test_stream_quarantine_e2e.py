@@ -85,10 +85,18 @@ def _quarantine_writes_to_the_same_redis(test_redis_url, monkeypatch):
     monkeypatch.setattr(settings, "redis_url", test_redis_url)
 
 
+#: This stream's per-message failure counters, which outlive a test otherwise.
+_FAILURE_KEYS = f"lemma:stream-failure:{_STREAM}:*"
+
+
 @pytest.fixture
 async def redis_client(test_redis_url):
     client = redis_asyncio.from_url(test_redis_url, decode_responses=True)
-    for key in (_STREAM, dead_letter_stream(_STREAM)):
+    for key in (
+        _STREAM,
+        dead_letter_stream(_STREAM),
+        *await client.keys(_FAILURE_KEYS),
+    ):
         await client.delete(key)
     try:
         yield client
@@ -266,7 +274,7 @@ async def test_a_held_delivery_stays_pending_and_is_not_dead_lettered(
         "a held delivery was acknowledged — nothing will ever redeliver it",
     )
     assert "held-1" not in {event.get("id") for event in handled}
-    assert await redis_client.keys("lemma:stream-failure:*") == [], (
+    assert await redis_client.keys(_FAILURE_KEYS) == [], (
         "a deliberate hand-back was counted as a failure, which walks the "
         "message towards the dead-letter backstop"
     )
@@ -303,7 +311,7 @@ async def test_a_leaked_cancellation_does_not_stop_the_reader(
     assert readers and all(
         any(not task.done() for task in sub.tasks) for sub in readers
     )
-    assert await redis_client.keys("lemma:stream-failure:*"), (
+    assert await redis_client.keys(_FAILURE_KEYS), (
         "a leaked cancellation was not counted, so it can never reach quarantine"
     )
 

@@ -54,19 +54,21 @@ _CLOCK_SKEW_MS = 5 * 60 * 1000
 # finishes widen one window instead of the second forgetting the first.
 _RECORD_GAP_LUA = """
 local after = redis.call('HGET', KEYS[1], 'after_ms')
+local untl = redis.call('HGET', KEYS[1], 'until_ms')
 if (not after) or tonumber(ARGV[1]) < tonumber(after) then
   redis.call('HSET', KEYS[1], 'after_ms', ARGV[1])
 end
-local untl = redis.call('HGET', KEYS[1], 'until_ms')
 if (not untl) or tonumber(ARGV[2]) > tonumber(untl) then
   redis.call('HSET', KEYS[1], 'until_ms', ARGV[2])
 end
-local rec = redis.call('HGET', KEYS[1], 'recorded_ms')
-if (not rec) or tonumber(ARGV[3]) > tonumber(rec) then
+local changed = 0
+if (not after) or tonumber(ARGV[1]) < tonumber(after) then changed = 1 end
+if (not untl) or tonumber(ARGV[2]) > tonumber(untl) then changed = 1 end
+if changed == 1 then
   redis.call('HSET', KEYS[1], 'recorded_ms', ARGV[3])
 end
 redis.call('EXPIRE', KEYS[1], ARGV[4])
-return 1
+return changed
 """
 
 
@@ -81,20 +83,15 @@ def _retention_seconds() -> int:
 async def record_gap(client, gap: StreamGap, *, now_ms: int | None = None) -> None:
     """Persist ``gap`` so it is replayed; never raises.
 
-    The error line carries the whole window. If Redis is too full to take even
-    this small write, that line is what an operator replays from
+    Reported when the gap is new or wider than what was already recorded, so a
+    loss that is observed again on every guard pass is one line, not one per
+    pass. If Redis is too full to take even this small write, the error line
+    carries the whole window, and that is what an operator replays from
     (``python -m app.core.infrastructure.events.admin replay-window``).
     """
     recorded_ms = now_ms if now_ms is not None else int(time.time() * 1000)
-    logger.error(
-        "redis.stream.unread_trimmed",
-        stream_name=gap.stream,
-        group=gap.group,
-        after_ms=gap.after_ms,
-        until_ms=gap.until_ms,
-    )
     try:
-        await client.eval(
+        changed = await client.eval(
             _RECORD_GAP_LUA,
             1,
             gap_key(gap.stream, gap.group),
@@ -111,6 +108,15 @@ async def record_gap(client, gap: StreamGap, *, now_ms: int | None = None) -> No
             after_ms=gap.after_ms,
             until_ms=gap.until_ms,
             exc_info=True,
+        )
+        return
+    if int(changed or 0):
+        logger.error(
+            "redis.stream.unread_trimmed",
+            stream_name=gap.stream,
+            group=gap.group,
+            after_ms=gap.after_ms,
+            until_ms=gap.until_ms,
         )
 
 

@@ -259,6 +259,48 @@ def active_readers(consumers: object, *, within_ms: int) -> int:
     )
 
 
+def _needed_after(group: GroupState) -> StreamId:
+    """The position just before the oldest entry the group still needed.
+
+    Its oldest unacked delivery, or failing that the last entry it read.
+    """
+    needed_after = group.last_delivered
+    if group.oldest_pending is not None:
+        before_pending = (group.oldest_pending[0], group.oldest_pending[1] - 1)
+        needed_after = (
+            before_pending
+            if needed_after is None
+            else min(needed_after, before_pending)
+        )
+    return needed_after if needed_after is not None else (0, 0)
+
+
+def observed_gaps(state: StreamState) -> list[StreamGap]:
+    """Groups that have *certainly* lost entries, whatever trimmed them.
+
+    Not only this module trims: an XADD at the hard ceiling does too, and so
+    does any operator. Two facts survive a trim and prove a loss. Redis keeps
+    ``lag`` as entries-added minus entries-read, which trimming does not change,
+    so a lag longer than the whole stream means unread entries are gone. And an
+    unacked delivery older than the first surviving entry can never be handed
+    back. Only a certain loss counts here: a replay covers minutes of events,
+    and a boundary guess made on every pass would replay them over nothing.
+    """
+    if state.first_id is None:
+        return []
+    return [
+        StreamGap(
+            stream=state.name,
+            group=group.name,
+            after_ms=_needed_after(group)[0],
+            until_ms=state.first_id[0],
+        )
+        for group in state.groups
+        if (isinstance(group.lag, int) and group.lag > state.length)
+        or (group.oldest_pending is not None and group.oldest_pending < state.first_id)
+    ]
+
+
 def _groups_losing_entries(
     state: StreamState, new_first: StreamId | None
 ) -> list[StreamGap]:
@@ -267,18 +309,7 @@ def _groups_losing_entries(
         return []
     gaps: list[StreamGap] = []
     for group in state.groups:
-        # The oldest thing the group still needed: its oldest unacked delivery,
-        # or failing that the first entry after the last one it read.
-        needed_after = group.last_delivered
-        if group.oldest_pending is not None:
-            before_pending = (group.oldest_pending[0], group.oldest_pending[1] - 1)
-            needed_after = (
-                before_pending
-                if needed_after is None
-                else min(needed_after, before_pending)
-            )
-        if needed_after is None:
-            needed_after = (0, 0)
+        needed_after = _needed_after(group)
         # Anything strictly between what it had and what survived is gone.
         if needed_after < (new_first[0], new_first[1] - 1):
             gaps.append(

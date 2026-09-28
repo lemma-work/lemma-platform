@@ -21,8 +21,9 @@ lose output the agent had not read yet.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sandbox_runtime.errors import SandboxProcessNotFound
 from sandbox_runtime.protocol import (
@@ -52,6 +53,14 @@ class E2BOutputBuffer:
     """Sequenced output for one process, shared across pollers and replicas."""
 
     key_prefix: str = "workspace:e2b:output:v1"
+    #: Reserving a sequence range and pushing its chunks are two round trips.
+    #: Two callbacks interleaving between them would push higher sequences
+    #: before lower ones, and a reader's cursor would step past the late ones.
+    #: Every callback for a process runs in the process holding its SDK
+    #: connection, through this buffer, so an in-process lock is enough.
+    _append_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, compare=False, repr=False
+    )
 
     @property
     def _redis(self):
@@ -89,20 +98,21 @@ class E2BOutputBuffer:
             text[start : start + _MAX_CHUNK_CHARS]
             for start in range(0, len(text), _MAX_CHUNK_CHARS)
         ]
-        last = int(await redis.incrby(self._sequence_key(process_id), len(pieces)))
-        first = last - len(pieces) + 1
-        payloads = [
-            json.dumps({"c": channel.value, "d": piece, "n": first + offset})
-            for offset, piece in enumerate(pieces)
-        ]
-        pipe = redis.pipeline()
-        pipe.rpush(key, *payloads)
-        # Trimming here rather than on read keeps the memory bound honest even
-        # if nobody ever reads this process's output.
-        pipe.ltrim(key, -_MAX_CHUNKS, -1)
-        pipe.expire(key, _RETENTION_SECONDS)
-        pipe.expire(self._sequence_key(process_id), _RETENTION_SECONDS)
-        await pipe.execute()
+        async with self._append_lock:
+            last = int(await redis.incrby(self._sequence_key(process_id), len(pieces)))
+            first = last - len(pieces) + 1
+            payloads = [
+                json.dumps({"c": channel.value, "d": piece, "n": first + offset})
+                for offset, piece in enumerate(pieces)
+            ]
+            pipe = redis.pipeline()
+            pipe.rpush(key, *payloads)
+            # Trimming here rather than on read keeps the memory bound honest
+            # even if nobody ever reads this process's output.
+            pipe.ltrim(key, -_MAX_CHUNKS, -1)
+            pipe.expire(key, _RETENTION_SECONDS)
+            pipe.expire(self._sequence_key(process_id), _RETENTION_SECONDS)
+            await pipe.execute()
 
     async def record_start(self, process_id: str) -> None:
         await self._write_state(process_id, state=ProcessState.RUNNING, exit_code=None)

@@ -186,6 +186,10 @@ async def lane_watchdog_loop(
     """
     while True:
         await asyncio.sleep(interval_seconds)
+        if _shutting_down.is_set():
+            # Readers and lanes are being stopped on purpose; none of what
+            # follows is a death.
+            return
         dead = [
             *dead_subscribers(getattr(subscribers_source, "subscribers", ())),
             *dead_lane_tasks(lane_tasks),

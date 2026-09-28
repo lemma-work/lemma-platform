@@ -46,6 +46,7 @@ from app.core.infrastructure.events.stream_budget import (
     enforce_stream_budget,
     publish_entry_cap,
     int_field,
+    observed_gaps,
     read_stream_state,
 )
 from app.core.infrastructure.events.stream_keys import (
@@ -352,6 +353,13 @@ async def _step(name: str, action: Awaitable[object]) -> None:
         _incident(name).record_success()
 
 
+async def _record_observed_gaps(client, states: list[StreamState]) -> None:
+    """Record every certain loss, including ones this guard did not cause."""
+    for state in states:
+        for gap in observed_gaps(state):
+            await record_gap(client, gap)
+
+
 async def _enforce_budget(client, states: list[StreamState], budget: int) -> None:
     outcome = await enforce_stream_budget(client, states, budget)
     if outcome.reclaimed:
@@ -411,6 +419,7 @@ async def run_guard_pass(
     budget = streams_budget(memory, sum(state.memory for state in states))
     if memory is not None:
         await _step("pressure", update_memory_pressure(client, memory))
+    await _step("observed_gaps", _record_observed_gaps(client, states))
     await _step("budget", _enforce_budget(client, states, budget))
     await _step("caps", publish_stream_caps(client, states, budget))
     _report_stalled_groups(states, on_stalled_group, uptime_seconds)

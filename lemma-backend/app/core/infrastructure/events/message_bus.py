@@ -130,13 +130,13 @@ TRIM_REPORT_INTERVAL_SECONDS = 60
 async def _apply_memory_cap(
     redis_client, stream: str, maxlen: int | None
 ) -> int | None:
-    """Lower ``maxlen`` to the entry count the stream guard says fits in memory.
+    """Lower ``maxlen`` toward the entry count the stream guard says fits in memory.
 
-    The lag-aware cap above may relax to the hard ceiling while a group is
-    behind; this is what stops "relax" from meaning "past Redis's memory". The
-    guard publishes the cap every pass from the stream's measured entry size,
-    so a burst between two passes is bounded too. A missing key (no guard
-    running, or the stream is new) leaves ``maxlen`` as it was.
+    Applied only when every group is close to caught up (see ``publish``), and
+    never below half of ``maxlen``: the normal path already guarantees no group
+    is more than that far behind, so the cap bounds a burst between two guard
+    passes without cutting into anything a group has not read. A missing key
+    (no guard running, or the stream is new) leaves ``maxlen`` as it was.
     """
     try:
         raw = await redis_client.get(stream_cap_key(stream))
@@ -148,7 +148,9 @@ async def _apply_memory_cap(
         cap = int(raw)
     except ValueError:
         return maxlen
-    return cap if maxlen is None else min(maxlen, cap)
+    if maxlen is None:
+        return cap
+    return min(maxlen, max(cap, maxlen // 2))
 
 
 class _KeyedReportThrottle:
@@ -378,7 +380,12 @@ class FastStreamRedisMessageBus:
             # the duplicate.
             await ensure_stream_groups(redis_client, stream)
             maxlen = await self._safe_publish_maxlen(redis_client, stream)
-            maxlen = await _apply_memory_cap(redis_client, stream, maxlen)
+            if maxlen == event_transport_settings.stream_maxlen_for(stream):
+                # Only on the normal path. A relaxed cap means some group
+                # still needs the entries a memory cap would cut, and a trim
+                # here records no gap -- the guard's own trim does, and it runs
+                # within seconds.
+                maxlen = await _apply_memory_cap(redis_client, stream, maxlen)
             await broker.publish(payload, stream=stream, maxlen=maxlen)
 
     async def memory_pressure_critical(self) -> bool:
