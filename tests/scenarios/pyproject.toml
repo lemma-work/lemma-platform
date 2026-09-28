@@ -79,6 +79,8 @@ addopts = [
 # @pytest.mark.timeout(...) rather than here.
 timeout = 180
 
+# `open_signup`, `stack_lane` and `source_build` are registered by
+# harness/plugin.py, which acts on them, so a suite built on it has them too.
 markers = [
     "journey: the stretch of product this test belongs to",
     "capability: the coherent thing a person can do",
@@ -87,9 +89,6 @@ markers = [
     "covers: OpenAPI operation ids and analytics events exercised",
     "live: drives a real third party (Google, GitHub, Telegram, Composio) and needs credentials",
     "sandbox: needs a provisioned sandbox, so needs the workspace images built",
-    "stack_lane: needs a deployment configured to be broken in a particular way, so it can only run on one this suite booted",
-    "open_signup: signs somebody new up, so needs a target whose sign-up gates are off",
-    "source_build: builds something from this checkout and tests that, so it proves nothing about a --base-url target",
 ]
 
 [tool.ruff]

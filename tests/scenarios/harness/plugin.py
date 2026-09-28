@@ -97,6 +97,21 @@ def _not_configured_by_us(config: pytest.Config) -> bool:
     )
 
 
+PLUGIN_MARKERS = (
+    (
+        "open_signup",
+        "signs somebody new up, so needs a target whose sign-up gates are off",
+    ),
+    (
+        "stack_lane",
+        "needs a deployment the suite configured to be broken in a particular way",
+    ),
+    (
+        "source_build",
+        "builds something from this checkout, so proves nothing about --base-url",
+    ),
+)
+
 #: The per-scenario cap against a deployment. The fast lane's 180s is shorter
 #: than the harness's own budgets for a real model (a steered run is given 300s),
 #: so against dev a slow model was killed by pytest-timeout mid-wait instead of
@@ -116,6 +131,10 @@ def pytest_configure(config: pytest.Config) -> None:
     workflow remembered to say `SCENARIOS_EGRESS=off` (lemma-infra forgot once,
     and eight scenarios silently stopped running). Said here, once, instead.
     """
+    # The marks this plugin acts on, registered here so a suite built on it
+    # gets them by naming the plugin rather than by copying a list.
+    for name, help_text in PLUGIN_MARKERS:
+        config.addinivalue_line("markers", f"{name}: {help_text}")
     if not _not_configured_by_us(config):
         return
     if not os.getenv(MODE_SETTING):
