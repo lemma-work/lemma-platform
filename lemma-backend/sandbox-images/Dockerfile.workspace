@@ -59,6 +59,10 @@ RUN corepack enable pnpm \
 COPY lemma-backend/sandbox-images/templates/workspace-node/package.json ./package.json
 COPY lemma-backend/sandbox-images/templates/workspace-node/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY lemma-backend/sandbox-images/templates/workspace-node/pnpm-workspace.yaml ./pnpm-workspace.yaml
+# The last two lines drop what records when the install ran: pnpm's own state
+# files, and the compile cache a package's install script left in `.tmp`.
+# Nothing reads them at run time -- nothing runs `pnpm install` here again --
+# and they were the only bytes two builds of one lockfile disagreed on.
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --prod --frozen-lockfile \
     && runtime_arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
@@ -72,7 +76,9 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     && find "${browser_bin_dir}" -maxdepth 1 -type f -name 'agent-browser-*' \
         ! -name "${browser_binary}" -delete \
     && chmod 0755 "${browser_bin_dir}/${browser_binary}" \
-    && pnpm store prune
+    && pnpm store prune \
+    && find node_modules -type d -name .tmp -prune -exec rm -rf {} + \
+    && rm -f node_modules/.modules.yaml node_modules/.pnpm-workspace-state-v1.json
 
 # The third-party closure, and nothing of Lemma's own. Its inputs are the
 # lockfile and nothing else, so this layer -- pandas, matplotlib, fastapi and
@@ -218,8 +224,12 @@ ENV PYTHONUNBUFFERED=1 \
     PATH=/home/user/.python/bin:/home/user/.local/share/pnpm:/home/user/.local/bin:/opt/lemma-runtime/current/bin:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
-# The apt logs go with the lists: they record when the install ran, which two
-# builds of the same inputs always disagree about.
+# What goes with the lists is everything that records *this* install rather
+# than what was installed: apt's logs, the dynamic linker's and fontconfig's
+# caches, which stamp when they were built, and the machine id dbus generates.
+# Two builds of the same inputs disagree about exactly those bytes and nothing
+# else. The caches rebuild themselves on first use, and an empty machine id is
+# the standard state for an image.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bash \
@@ -271,7 +281,9 @@ RUN apt-get update \
         x11-xserver-utils \
         x11vnc \
         xvfb \
-    && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log
+    && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log \
+        /var/cache/ldconfig/aux-cache /var/cache/fontconfig/* /var/lib/dbus/machine-id \
+    && : > /etc/machine-id
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 # npm and npx, not just the node binary. Copying only `node` left the image with
