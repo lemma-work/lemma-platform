@@ -80,6 +80,13 @@ just the backend with `SCENARIOS_BACKEND_IMAGE` — which is how a deployment's
 own image gets its sign-up scenarios. Sandbox images are not pulled unless
 `SCENARIOS_COMPOSE_SANDBOX=1`.
 
+**The images and the suite have to be the same version.** With neither setting,
+compose installs the latest *release*, and a suite checked out from `main`
+proves `main`'s promises against it: every behaviour changed since that release
+fails, correctly, and none of it is a regression. Point it at the images you
+mean — the ones a deployment is about to run — or run the suite from the
+release's own tag.
+
 ## Extending the suite
 
 A deployment built on Lemma has promises of its own — lemma.work's billing is
