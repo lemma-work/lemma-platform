@@ -29,6 +29,12 @@ Three pieces live here:
     paths. That makes a rebuild of an unchanged tree stable too, but it is not
     what the reuse depends on -- the guest's *tree* is not reproducible.
 
+``workspace-image``
+    The same arrangement for the workspace sandbox image: its input
+    fingerprint, and the published image built from the same inputs, if any.
+    On Desktop the image's digest is the sandbox's identity, so a new digest
+    replaces every sandbox and downloads the image again at the next Wake up.
+
 Standard library only: the release jobs run it with the runner's own Python.
 """
 
@@ -44,6 +50,7 @@ import tempfile
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +65,34 @@ GUEST_INPUTS = (
     "scripts/runtime_artifacts.py",
     "desktop/scripts/prepare_guest_boot.py",
     "desktop/local-runtime/guest-image",
+)
+
+WORKSPACE_IMAGE_SCHEMA = "lemma-workspace-image-fingerprint/1"
+WORKSPACE_DOCKERFILE = "lemma-backend/sandbox-images/Dockerfile.workspace"
+
+# What decides the workspace image's content, relative to the repository. The
+# Dockerfile names its base images by digest, so hashing it covers them.
+WORKSPACE_IMAGE_INPUTS = (
+    ".dockerignore",
+    WORKSPACE_DOCKERFILE,
+    "lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh",
+    "lemma-backend/sandbox-images/templates/workspace-github",
+    "lemma-backend/sandbox-images/templates/workspace-node",
+    "lemma-backend/sandbox-images/templates/workspace-python",
+)
+
+# What the image copies and the fingerprint deliberately leaves out: the floor,
+# Lemma's own code, which the runtime overlay supersedes in every sandbox. A
+# release that changed only these reuses the previous image, whose floor is
+# then older than the release -- as it always is on E2B. The first-party
+# packages' *dependencies* are still inputs, through the lockfile above.
+WORKSPACE_IMAGE_FLOOR = (
+    "lemma-backend/sandbox-images/scripts",
+    "lemma-backend/sandbox_runtime",
+    "lemma-cli",
+    "lemma-pod-bundle",
+    "lemma-python",
+    "lemma-skills",
 )
 
 # 1980-01-01, the earliest time a ZIP entry can carry.
@@ -114,13 +149,88 @@ def guest_fingerprint(
     if not target or not package_epoch:
         raise ValueError("target and package epoch are required")
     lines = [FINGERPRINT_SCHEMA, f"target {target}", f"package-epoch {package_epoch}"]
+    lines += _input_lines(root, inputs)
+    lines.append(f"guestd {_sha256_file(guestd)}")
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
+
+
+def _input_lines(root: Path, inputs: Iterable[str]) -> list[str]:
+    lines = []
     for name in inputs:
         for path in _files_under(root, root / name):
             relative = path.relative_to(root).as_posix()
             mode = "x" if _executable(path) else "-"
             lines.append(f"file {mode} {_sha256_file(path)} {relative}")
-    lines.append(f"guestd {_sha256_file(guestd)}")
+    return lines
+
+
+def workspace_image_fingerprint(
+    *,
+    package_epoch: str,
+    root: Path = REPO_ROOT,
+    inputs: Iterable[str] = WORKSPACE_IMAGE_INPUTS,
+) -> str:
+    """The workspace image's input fingerprint, as lowercase hex.
+
+    `package_epoch` stands for Debian's package archive, which `apt-get`
+    installs from unpinned, as it does for the guest: the month, so the
+    image's packages are at most a month behind the archive.
+    """
+    if not package_epoch:
+        raise ValueError("package epoch is required")
+    lines = [WORKSPACE_IMAGE_SCHEMA, f"package-epoch {package_epoch}"]
+    lines += _input_lines(root, inputs)
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()
+
+
+def source_date_epoch(package_epoch: str) -> int:
+    """`SOURCE_DATE_EPOCH` for an image built in `package_epoch`'s month.
+
+    The first second of the month, UTC: the same for every build of the same
+    inputs, which is what lets two builds agree on every timestamp they write.
+    """
+    year, month = (int(part) for part in package_epoch.split("-"))
+    return int(datetime(year, month, 1, tzinfo=timezone.utc).timestamp())
+
+
+@dataclass(frozen=True)
+class ReusableImage:
+    tag: str
+    ref: str
+    digest: str
+
+
+def reusable_workspace_image(
+    manifests: Iterable[tuple[str, dict[str, object]]], fingerprint: str
+) -> ReusableImage | None:
+    """The newest release whose workspace image was built from these inputs.
+
+    Its `ref` is carried over as it was, not rewritten to this release's tag:
+    the sandbox runtime compares the whole reference, so a new tag on the same
+    digest would still replace every sandbox.
+    """
+    for tag, manifest in manifests:
+        fingerprints = manifest.get("input_fingerprints")
+        images = fingerprints.get("images") if isinstance(fingerprints, dict) else None
+        if not isinstance(images, dict) or images.get("workspace") != fingerprint:
+            continue
+        published = manifest.get("images")
+        entry = published.get("workspace") if isinstance(published, dict) else None
+        if not isinstance(entry, dict):
+            continue
+        ref, digest = entry.get("ref"), entry.get("digest")
+        if (
+            isinstance(ref, str)
+            and ref
+            and "@" not in ref
+            and not any(char.isspace() for char in ref)
+            and isinstance(digest, str)
+            and len(digest) == 71
+            and digest.startswith("sha256:")
+            and all(char in "0123456789abcdef" for char in digest[7:])
+        ):
+            return ReusableImage(tag=tag, ref=ref, digest=digest)
+    return None
 
 
 def _zip_entries(source: Path, prefix: str) -> list[tuple[str, Path]]:
@@ -329,7 +439,40 @@ def main(argv: list[str] | None = None) -> int:
     sidecar.add_argument("--archive", type=Path, required=True)
     sidecar.add_argument("--fingerprint", required=True)
 
+    workspace = commands.add_parser(
+        "workspace-image",
+        help="print the workspace image's fingerprint and a published image to reuse",
+    )
+    workspace.add_argument("--package-epoch", required=True)
+    workspace.add_argument("--releases", type=int, default=40)
+    workspace.add_argument(
+        "--rebuild", action="store_true", help="report no reusable image"
+    )
+
     args = parser.parse_args(argv)
+    if args.command == "workspace-image":
+        found = None
+        image_fingerprint = workspace_image_fingerprint(package_epoch=args.package_epoch)
+        if not args.rebuild:
+            try:
+                found = reusable_workspace_image(
+                    _published_manifests(args.releases), image_fingerprint
+                )
+            except (subprocess.CalledProcessError, OSError) as error:
+                # Not finding one is never a failed release: it builds.
+                print(f"published releases could not be read ({error}); building", file=sys.stderr)
+        print(
+            json.dumps(
+                {
+                    "fingerprint": image_fingerprint,
+                    "source_date_epoch": source_date_epoch(args.package_epoch),
+                    "reuse": None
+                    if found is None
+                    else {"tag": found.tag, "ref": found.ref, "digest": found.digest},
+                }
+            )
+        )
+        return 0
     if args.command == "fingerprint":
         print(
             guest_fingerprint(

@@ -81,6 +81,13 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 # not here for `--locked` to resolve against; `python-floor` below checks the
 # lock against them instead.
 FROM ${PYTHON_IMAGE} AS python-runtime
+# In the environment of every `RUN` below, where `py_compile` reads it: with it
+# set, bytecode is validated by the source's hash instead of its mtime. The
+# release build rewrites every file's mtime to this epoch after the fact
+# (`rewrite-timestamp`), and an mtime-keyed `.pyc` would then disagree with
+# its source and be recompiled, in memory, on every import. Unset locally, where
+# nothing rewrites timestamps and the default is right.
+ARG SOURCE_DATE_EPOCH
 ENV UV_PROJECT_ENVIRONMENT=/opt/lemma-python \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
@@ -104,7 +111,10 @@ RUN uv sync \
 # stage lays this over the closure above as a separate small layer. `--no-deps`
 # because everything they depend on is already there, which `uv lock --locked`
 # proves -- it fails if the lockfile no longer matches these sources.
+# `uv_cache.json` is uv's record of when it built each wheel, so it and its
+# `RECORD` line go: they are the only bytes two builds of one source disagree on.
 FROM python-runtime AS python-floor
+ARG SOURCE_DATE_EPOCH
 COPY lemma-python /build/lemma-python
 COPY lemma-pod-bundle /build/lemma-pod-bundle
 COPY lemma-cli /build/lemma-cli
@@ -118,6 +128,8 @@ RUN uv lock --locked \
         /build/lemma-python \
         /build/lemma-pod-bundle \
         /build/lemma-cli \
+    && find /opt/lemma-floor -name uv_cache.json -delete \
+    && sed -i '/uv_cache\.json/d' /opt/lemma-floor/lib/python3.14/site-packages/*.dist-info/RECORD \
     && uv cache clean
 
 FROM ${PYTHON_IMAGE}
@@ -206,6 +218,8 @@ ENV PYTHONUNBUFFERED=1 \
     PATH=/home/user/.python/bin:/home/user/.local/share/pnpm:/home/user/.local/bin:/opt/lemma-runtime/current/bin:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
+# The apt logs go with the lists: they record when the install ran, which two
+# builds of the same inputs always disagree about.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bash \
@@ -257,7 +271,7 @@ RUN apt-get update \
         x11-xserver-utils \
         x11vnc \
         xvfb \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 # npm and npx, not just the node binary. Copying only `node` left the image with
@@ -369,6 +383,10 @@ COPY --chown=10001:10001 lemma-backend/sandbox_runtime/sandbox_memory.py /app/sa
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/browser_relay /app/sandbox_runtime/browser_relay
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_runtime/workspace
+# Declared here rather than at the top of the stage: its value is part of the
+# cache key of every `RUN` after it, and the layers above have no use for it.
+# See `python-runtime` for why bytecode wants it.
+ARG SOURCE_DATE_EPOCH
 RUN python -m compileall -q /app/sandbox_runtime
 
 # The scripts, under the names the overlay's `bin` gives them too
