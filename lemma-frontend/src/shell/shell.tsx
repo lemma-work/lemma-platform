@@ -1284,7 +1284,6 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
             {addingPeople && pod && (
                 <Modal
                     title={"Add someone to " + pod.name}
-                    subtitle="Anyone already in this organization"
                     onClose={() => setAddingPeople(false)}
                 >
                     <AddPeople pod={pod} orgId={activeOrgId} onDone={() => setAddingPeople(false)} />
