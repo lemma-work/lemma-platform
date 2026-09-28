@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.infrastructure.events.stream_guard import stream_guard_loop
 from app.core.log.log import get_logger
 from app.core.observability.process_health import (
     mark_process_unhealthy,
@@ -273,8 +274,6 @@ def start_worker_guards(
     a group whose reader has stopped reading -- and is itself watched, so a
     guard that crashes restarts the worker rather than quietly stop guarding.
     """
-    from app.core.infrastructure.events.stream_guard import stream_guard_loop
-
     watchdog = create_background_task(
         lane_watchdog_loop(broker, lane_tasks), name="worker-lane-watchdog"
     )

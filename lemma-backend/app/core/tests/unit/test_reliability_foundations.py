@@ -283,7 +283,7 @@ async def test_inbox_covers_skip_cancellation_validation_and_retryable_domain_er
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.gather(task)
     assert cancelled.finished == []
 
     # A CancelledError the task was never sent -- one leaked from a client bound

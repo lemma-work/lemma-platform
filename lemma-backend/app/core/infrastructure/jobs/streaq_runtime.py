@@ -9,7 +9,6 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from anyio import TASK_STATUS_IGNORED
@@ -47,6 +46,7 @@ from app.core.infrastructure.events.stream_observability import (
 from app.core.observability.backlog_gauges import backlog_gauge_loop
 from app.core.observability.startup_timing import finish_startup, release_startup_heap
 from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
+from app.core.infrastructure.jobs.lanes import Lane, lane_queue_name
 from app.core.infrastructure.jobs.lane_watchdog import (
     start_worker_guards,
     stop_lanes,
@@ -84,24 +84,6 @@ tracer = trace.get_tracer(__name__)
 meter = metrics.get_meter(__name__)
 job_counter = meter.create_counter("lemma.worker.jobs")
 job_duration = meter.create_histogram("lemma.worker.job.duration", unit="ms")
-
-
-class Lane(StrEnum):
-    """Which queue a task runs on.
-
-    Before lanes, every task type — agent runs, surface messages, workflow
-    resumes, pod imports, document ingestion — shared one queue and one
-    concurrency budget. A bulk upload could therefore occupy every worker slot
-    and stall interactive work behind it. Splitting the queue is what makes the
-    two classes of work independent; they are separate Redis queues, so a deep
-    bulk backlog is invisible to the interactive lane.
-    """
-
-    #: Latency-sensitive, user-facing work. Someone is waiting on it.
-    INTERACTIVE = "interactive"
-    #: Throughput-oriented background work. Slower is acceptable; starving the
-    #: interactive lane is not.
-    BULK = "bulk"
 
 
 #: The lane that owns process-wide startup (see ``secondary_lane_lifespan``).
@@ -152,17 +134,6 @@ async def _stop_secondary_lanes() -> None:
     await stop_lanes(
         _secondary_lane_tasks, timeout_seconds=_SECONDARY_LANE_SHUTDOWN_SECONDS
     )
-
-
-def lane_queue_name(lane: Lane) -> str:
-    """Redis queue name for a lane.
-
-    The interactive lane keeps the bare configured name so existing queues,
-    dashboards and any in-flight jobs survive the upgrade untouched; only the
-    new bulk lane gets a suffix.
-    """
-    base = settings.worker_queue_name
-    return base if lane is Lane.INTERACTIVE else f"{base}-{lane.value}"
 
 
 def lane_concurrency(lane: Lane) -> int:

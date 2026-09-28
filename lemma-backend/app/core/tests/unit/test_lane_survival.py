@@ -77,7 +77,7 @@ async def test_a_real_cancellation_is_not_stray():
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.gather(task)
     assert seen == [False]
 
 
@@ -121,7 +121,7 @@ async def test_a_leaked_cancellation_fails_the_delivery_instead_of_the_reader(
     middleware = q.StreamQuarantineMiddleware(None, context=None)
     task = asyncio.create_task(middleware.consume_scope(handler, _Message()))
     with pytest.raises(StrayCancellationError):
-        await task
+        await asyncio.gather(task)
     assert not task.cancelled()
 
 
@@ -207,7 +207,7 @@ async def test_a_lane_cancelled_by_shutdown_is_not_a_death(stops):
 
 async def test_the_watchdog_loop_stops_at_the_first_dead_lane(stops):
     lane_task = asyncio.create_task(asyncio.sleep(0), name="worker-lane-bulk")
-    await lane_task
+    await asyncio.gather(lane_task)
 
     await asyncio.wait_for(
         lane_watchdog.lane_watchdog_loop(
@@ -267,7 +267,7 @@ async def test_clients_are_opened_and_closed_on_their_own_task(clients):
             await queue.connect()
 
     caller = asyncio.create_task(a_job_with_a_deadline())
-    await caller
+    await asyncio.gather(caller)
 
     assert entered and caller not in entered
     assert len({id(task) for task in entered}) == 1

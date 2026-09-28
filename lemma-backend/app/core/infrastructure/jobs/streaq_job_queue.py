@@ -18,6 +18,7 @@ from streaq.worker import Worker
 
 from app.core.config import settings
 from app.core.domain.job_queue import JobQueuePort
+from app.core.infrastructure.jobs.lanes import Lane, lane_queue_name
 from app.core.log.log import get_logger
 from app.core.origin import current_origin
 from app.core.request_context import (
@@ -134,11 +135,7 @@ class SharedStreaqJobQueue(JobQueuePort):
 
     async def _lane_client(self, job_name: str) -> Worker[Any]:
         """Client for the lane ``job_name`` is registered on."""
-        from app.core.infrastructure.jobs.streaq_runtime import (
-            Lane,
-            lane_for_task,
-            lane_queue_name,
-        )
+        from app.core.infrastructure.jobs.streaq_runtime import lane_for_task
 
         lane = lane_for_task(job_name)
         clients = await self._open_clients()
@@ -181,8 +178,6 @@ class SharedStreaqJobQueue(JobQueuePort):
         return clients
 
     def _start_owner(self) -> _OpenClients:
-        from app.core.infrastructure.jobs.streaq_runtime import Lane, lane_queue_name
-
         # Fresh clients for every generation: one entered by an earlier owner,
         # or still being entered by one, must never be entered again.
         clients = _OpenClients(

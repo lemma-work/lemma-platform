@@ -10,6 +10,7 @@ from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.quarantine import dead_letter_stream
 from app.core.infrastructure.events.stream_budget import active_readers
 from app.core.infrastructure.events.stream_subscriber import registered_stream_groups
+from app.core.infrastructure.jobs.lanes import Lane, lane_queue_name
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
 
@@ -39,8 +40,6 @@ def _streaq_lane_queues() -> set[str]:
     make a bulk-lane backlog — exactly the thing lanes exist to contain —
     invisible on dashboards.
     """
-    from app.core.infrastructure.jobs.streaq_runtime import Lane, lane_queue_name
-
     return {f"streaq:{lane_queue_name(lane)}:queues:normal" for lane in Lane}
 
 
