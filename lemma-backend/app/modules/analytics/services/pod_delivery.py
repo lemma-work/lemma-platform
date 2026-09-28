@@ -67,6 +67,7 @@ AUTONOMOUS_ORIGINS = frozenset(
 )
 
 _CACHE_KEY = "analytics:pod-delivered:{pod_id}"
+_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 async def pod_creator(uow_factory, pod_id: UUID) -> UUID | None:
@@ -152,7 +153,10 @@ async def maybe_emit_pod_delivered(
         await uow.commit()
 
     try:
-        await redis.set(key, "1")
+        # Expiring: a cache hit only saves the claim query, and one key per pod
+        # with no expiry is one key per pod ever created, for as long as Redis
+        # lives. After a week a pod that is still delivering pays one read.
+        await redis.set(key, "1", ex=_CACHE_TTL_SECONDS)
     except RedisError, OSError:
         # The pod row is the truth; this is a shortcut.
         logger.debug("analytics.pod_delivered.cache_unavailable")

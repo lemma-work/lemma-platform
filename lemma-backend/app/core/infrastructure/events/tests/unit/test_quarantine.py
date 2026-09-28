@@ -51,6 +51,12 @@ class _FakeRedis:
     async def expire(self, key, seconds):
         self.expiries[key] = seconds
 
+    async def eval(self, script, numkeys, key, ttl):
+        """``incr_with_ttl``'s script: increment, and expire if not expiring."""
+        count = await self.incr(key)
+        self.expiries.setdefault(key, int(ttl))
+        return count
+
 
 class _Message:
     def __init__(

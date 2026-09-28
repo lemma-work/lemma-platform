@@ -30,6 +30,64 @@ Tune counts to deployment traffic, but retain the no-progress and oldest-age
 alerts. Dashboards and traces should carry event, correlation, causation,
 request, pod, schedule, workflow-run, agent-run, and bundle-job identifiers.
 
+## Redis memory and consumer lanes
+
+Event streams share one Redis with sessions, locks and the job queues, under
+`noeviction`. So a stream that outgrows memory takes down every write in the
+platform, not just its own. Two mechanisms prevent that.
+
+**The worker restarts itself when a lane stops consuming.** It exits with status
+70 in three cases:
+
+- a stream reader task has ended;
+- a streaq lane task has ended;
+- a consumer group it reads has been behind for `REDIS_STREAM_STALL_SECONDS`
+  (default 900) with its reader not reading.
+
+First it logs `worker.lane.dead` or `redis.stream.group_stalled`. Then it stops
+refreshing the heartbeat file (`WORKER_HEARTBEAT_PATH`) and the
+`lemma:worker:alive` key, so readiness reports it stalled. Run the worker under
+something that restarts it, and give it a liveness probe on the heartbeat
+file's freshness.
+
+**Streams are held to one memory budget.** Every
+`REDIS_STREAM_GUARD_INTERVAL_SECONDS` (default 30s) the worker:
+
+1. works out a budget: streams together may use `REDIS_STREAMS_MEMORY_FRACTION`
+   of `maxmemory`, and never so much that total use passes
+   `REDIS_MEMORY_WARN_RATIO`. Without a `maxmemory`, the budget is
+   `REDIS_STREAMS_BUDGET_BYTES`.
+2. trims the largest streams first. Entries every group has read go first.
+3. if that is still over budget, trims entries a group had not read. This logs
+   `redis.stream.unread_trimmed` and records a gap.
+4. once that group reads again, re-publishes the gap from the outbox. Events are
+   kept there for `EVENT_COMPLETED_RETENTION_DAYS`, and consumers dedupe
+   through the inbox.
+
+Above `REDIS_MEMORY_CRITICAL_RATIO` the outbox dispatcher stops publishing until
+use falls below `REDIS_MEMORY_RESUME_RATIO`. Events wait in PostgreSQL in the
+meantime.
+
+Give Redis a `maxmemory` below its container limit. Without one, Redis is killed
+by the kernel instead of refusing writes, and the budget falls back to a fixed
+size.
+
+| Signal | Meaning |
+| --- | --- |
+| `lemma.redis.memory.bytes` (`kind`: `used`, `max`, `streams_budget`) | Headroom |
+| `lemma.redis.stream.group.lag`, `.reader_inactive` | A group falling behind, or its reader silent |
+| `redis.memory.critical` | Publishing paused |
+| `redis.stream.unread_trimmed` | A group lost entries to the budget; replay pending |
+| `redis.stream.gap_unrecoverable` | Part of a gap is older than the outbox keeps |
+
+To replay a window by hand, for example when the gap record itself could not be
+written, pass the `after_ms` and `until_ms` from the `redis.stream.unread_trimmed`
+line:
+
+```bash
+uv run python -m app.core.infrastructure.events.admin replay-window <stream> <after_ms> <until_ms>
+```
+
 ## Rollout order
 
 1. Apply the consolidated `0003_backend_reliability` migration.
