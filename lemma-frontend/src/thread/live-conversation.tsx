@@ -606,12 +606,12 @@ export function LiveConversation({
                 reloadLabel={loadError ? "Retry" : "Reload conversation"}
                 emptyTitle={
                     conversationId === NEW_CONVERSATION || !session.conversationId
-                        ? "New conversation"
+                        ? "What should " + pod.teammate.name + " work on?"
                         : "This conversation is empty"
                 }
                 emptyBody={
                     conversationId === NEW_CONVERSATION || !session.conversationId
-                        ? pod.teammate.name + " is ready. Send a message to start."
+                        ? "Send a message to start a new conversation."
                         : "Send a message to start the conversation."
                 }
                 podId={pod.id}
