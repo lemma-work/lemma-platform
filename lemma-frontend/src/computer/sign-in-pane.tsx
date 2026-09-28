@@ -62,8 +62,8 @@ export function SignInPane({ conversationId, toolCallId, onDone }: {
             <div className="computer-empty">
                 <LockIcon size={26} />
                 <p>
-                    In the sample there is no machine and no waiting teammate. Signed in, this is your
-                    teammate&rsquo;s own browser, open on the site, with your keyboard in it.
+                    In the sample there is no machine and nothing waiting. Signed in, this is the real
+                    browser, open on the site, with your keyboard in it.
                 </p>
             </div>
         );
@@ -76,8 +76,8 @@ export function SignInPane({ conversationId, toolCallId, onDone }: {
             <div className="computer-empty">
                 <WarningIcon size={26} />
                 <p>
-                    This sign-in is not for the account you are signed in to here. Ask the teammate to send
-                    it again, to this one.
+                    This sign-in is not for the account you are signed in to here. Ask for it again, from
+                    this one.
                 </p>
             </div>
         );
@@ -111,11 +111,11 @@ export function SignInPane({ conversationId, toolCallId, onDone }: {
                 {request.data.reason && (
                     /* The teammate's own words, quoted as theirs rather than
                        presented as this app speaking. */
-                    <p className="signin__reason">The teammate says: &ldquo;{request.data.reason}&rdquo;</p>
+                    <p className="signin__reason">It says: &ldquo;{request.data.reason}&rdquo;</p>
                 )}
                 <p className="signin__fine">
-                    Sign in below as you normally would. The browser keeps the session so your teammate can
-                    carry on, and your password never reaches Lemma.
+                    Sign in below as you normally would. The browser keeps the session so it can carry on,
+                    and your password never reaches Lemma.
                 </p>
             </header>
 
@@ -162,7 +162,7 @@ export function SignInPane({ conversationId, toolCallId, onDone }: {
 
             {answer.isError && (
                 <p className="computer-note" role="alert">
-                    That did not reach the teammate. It may have stopped waiting — try again, and if it keeps
+                    That did not get through. It may have stopped waiting — try again, and if it keeps
                     failing you can close this and tell it in the conversation.
                 </p>
             )}

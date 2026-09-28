@@ -15,7 +15,7 @@
       "term": "Agent",
       "oneLiner": "An AI worker with a role, instructions, and scoped access to your tables, files, and apps.",
       "explainer": [
-        "An agent is hired like a teammate: you write its instructions (the job description), pick its runtime, and grant it access to exactly the data and apps it needs.",
+        "An agent is hired the way a person is: you write its instructions (the job description), pick its runtime, and grant it access to exactly the data and apps it needs.",
         "Agents can be asked things in chat, put on a schedule, given steps in a flow, or wired to a surface so they handle inbound work on their own."
       ],
       "example": "A triage agent reads each new support email, labels the issue, and files a row in the Tickets table."

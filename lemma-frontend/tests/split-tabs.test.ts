@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { layoutForTab } from "../src/shell/split-tabs.ts";
 
 test("every resource opens beside the conversation by default", () => {
-    for (const tab of ["apps", "app:launch", "library", "file:brief.md", "table:tasks", "record:tasks:1", "computer", "history"]) {
+    for (const tab of ["library", "file:brief.md", "table:tasks", "record:tasks:1", "computer", "history"]) {
         assert.deepEqual(layoutForTab(tab, false), { main: "conversation", right: tab });
     }
 });
@@ -13,7 +13,13 @@ test("view in full shows only the selected resource", () => {
 });
 
 test("returning to the sidebar restores chat beside the same resource", () => {
-    assert.deepEqual(layoutForTab("app:launch", false), { main: "conversation", right: "app:launch" });
+    assert.deepEqual(layoutForTab("table:tasks", false), { main: "conversation", right: "table:tasks" });
+});
+
+test("apps always open full-width, never in the sidebar", () => {
+    for (const tab of ["apps", "app:launch"]) for (const origin of ["conversation", "library"]) {
+        assert.deepEqual(layoutForTab(tab, false, origin), { main: tab, right: null });
+    }
 });
 
 test("selecting conversation leaves no duplicate conversation pane", () => {

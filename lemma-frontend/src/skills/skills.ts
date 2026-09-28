@@ -162,10 +162,10 @@ export function sayUnloadable(cards: readonly SkillCard[]): string | null {
     if (!broken) return null;
     if (broken === cards.length) {
         return cards.length === 1
-            ? "This skill cannot be loaded, so the teammate cannot use it."
-            : "None of these can be loaded, so the teammate cannot use any of them.";
+            ? "This skill cannot be loaded, so it cannot be used."
+            : "None of these can be loaded, so none of them can be used.";
     }
     return broken === 1
-        ? "One of these cannot be loaded, so the teammate cannot use it."
-        : broken + " of these cannot be loaded, so the teammate cannot use them.";
+        ? "One of these cannot be loaded, so it cannot be used."
+        : broken + " of these cannot be loaded, so they cannot be used.";
 }

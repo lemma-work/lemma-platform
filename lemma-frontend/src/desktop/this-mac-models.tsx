@@ -95,7 +95,7 @@ function OperatorRow({ draft, orgId, onAdded, noun }: { draft: ProviderDraft; or
                     <span className="mrow__detail">{draft.models[0]} · set on {noun}</span>
                 </span>
                 <span className="mrow__note">
-                    {capitalised(noun)} keeps using it for titles and summaries; adding it lets teammates pick it by name.
+                    {capitalised(noun)} keeps using it for titles and summaries; adding it makes it a model you can pick by name.
                 </span>
                 {asking && (
                     <span className="field thismac-operator__key">

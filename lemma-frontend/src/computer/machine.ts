@@ -167,7 +167,7 @@ export function crumbs(path: string, roots: Roots): { name: string; path: string
  */
 export function describe(path: string, roots: Roots): string | null {
     const trimmed = path.replace(/\/+$/, "") || roots.home;
-    if (trimmed === roots.home) return "The whole machine. Yours — every teammate you talk to works on it.";
+    if (trimmed === roots.home) return "The whole machine. Yours — all your work happens on it.";
     if (trimmed === roots.workspace) return "Where conversations and checkouts go.";
     const parts = trimmed.startsWith(roots.workspace + "/")
         ? trimmed.slice(roots.workspace.length + 1).split("/")

@@ -142,8 +142,8 @@ export function SearchPalette({
                     <SearchIcon size={18} />
                     <input
                         autoFocus
-                        aria-label="Search this teammate"
-                        placeholder="Search teammates, conversations, documents, records…"
+                        aria-label="Search"
+                        placeholder="Search conversations, documents, records…"
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
                     />
@@ -187,7 +187,7 @@ export function SearchPalette({
                     )}
                     {!query.trim() && (
                         <p className="palette__quiet">
-                            Teammates, conversations, documents, records, apps, agents, workflows, functions, tables,
+                            Conversations, documents, records, apps, agents, workflows, functions, tables,
                             people and schedules.
                         </p>
                     )}

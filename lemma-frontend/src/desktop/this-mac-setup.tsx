@@ -255,7 +255,7 @@ function AiModel({ snapshot }: { snapshot: ThisMacSnapshot }) {
                 </div>
                 {draft.models.length > 0 && <>
                     <div className="field">
-                        <label htmlFor="server-setup-ai-model">Model teammates use</label>
+                        <label htmlFor="server-setup-ai-model">Default model</label>
                         <select id="server-setup-ai-model" value={draft.defaultModel} onChange={(event) => setDraft({ ...draft, defaultModel: event.target.value })}>
                             {draft.models.map((model) => <option key={model} value={model}>{model}</option>)}
                         </select>
@@ -273,7 +273,7 @@ function AiModel({ snapshot }: { snapshot: ThisMacSnapshot }) {
                     <div className="field">
                         <label htmlFor="server-setup-ai-fast">Fast model, for titles and summaries</label>
                         <select id="server-setup-ai-fast" value={draft.fastModel} onChange={(event) => setDraft({ ...draft, fastModel: event.target.value })}>
-                            <option value="">Same as the model teammates use</option>
+                            <option value="">Same as the default model</option>
                             {draft.models.map((model) => <option key={model} value={model}>{model}</option>)}
                         </select>
                     </div>
@@ -291,8 +291,8 @@ function AiModel({ snapshot }: { snapshot: ThisMacSnapshot }) {
             {preset && problem && !said && <p className="thismac-said">{problem}</p>}
             <Said said={said} />
             <p className="thismac-said">
-                Teammates can also use models your organization adds in{" "}
-                <button type="button" className="linkish" onClick={() => openSettings("models")}>Models</button>.
+                Models your organization adds in{" "}
+                <button type="button" className="linkish" onClick={() => openSettings("models")}>Models</button> work too.
                 {" "}This one is {noun}’s own, and the one the server uses for its own work.
             </p>
         </form>
@@ -606,7 +606,7 @@ export function ThisMacServerSetup({ focus }: { focus: string | null }) {
         <div className="thismac">
             <p className={"thismac-health thismac-health--" + (allReady ? "running" : "starting")} role="status">
                 <i aria-hidden="true" />
-                {allReady ? "This server has what it needs. The rest is optional." : "Set up an AI model so teammates can work."}
+                {allReady ? "This server has what it needs. The rest is optional." : "Set up an AI model so work can start."}
             </p>
             <p className="thismac-said">
                 Saving restarts Lemma’s server: running agents stop, and open chats reconnect when it is back.

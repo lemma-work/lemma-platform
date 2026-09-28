@@ -1,7 +1,7 @@
 export const fileLocations = {
     shared: { label: "Shared files", root: "/", description: "Files shared with everyone here." },
     personal: { label: "My files", root: "/me", description: "Your own files here." },
-    skills: { label: "Skills", root: "/skills", description: "Reusable instructions and supporting files for your teammate." },
+    skills: { label: "Skills", root: "/skills", description: "Reusable instructions and supporting files." },
 };
 export type FileLocation = keyof typeof fileLocations;
 export function inLocation(path: string, location: FileLocation) {

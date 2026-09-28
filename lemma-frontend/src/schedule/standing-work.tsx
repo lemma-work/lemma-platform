@@ -42,7 +42,7 @@ export function StandingWork({ podId, teammate }: { podId: string; teammate: str
             {schedules.isError && (
                 <p className="empty-row" role="alert">
                     {isForbidden(schedules.error)
-                        ? "You may not read this teammate's schedules."
+                        ? "You may not read these schedules."
                         : "Couldn’t load schedules."}{" "}
                     <button className="linkish" onClick={() => void schedules.refetch()}>Try again</button>
                 </p>
@@ -343,7 +343,7 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                 <textarea
                     rows={3}
                     value={draft.instruction}
-                    placeholder="What your teammate should do each time the schedule runs."
+                    placeholder="What to do each time the schedule runs."
                     onChange={(event) => change({ instruction: event.target.value })}
                 />
             </label>

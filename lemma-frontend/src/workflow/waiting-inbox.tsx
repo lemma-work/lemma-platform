@@ -146,8 +146,8 @@ export function WaitingInbox({ pods }: {
                     {(queue.data?.unreadable ?? 0) > 0 && (
                         <p className="wf-inbox__partial">
                             {queue.data?.unreadable === 1
-                                ? "One teammate’s queue could not be read, so this may be short."
-                                : queue.data?.unreadable + " teammates’ queues could not be read, so this may be short."}
+                                ? "One queue could not be read, so this may be short."
+                                : queue.data?.unreadable + " queues could not be read, so this may be short."}
                         </p>
                     )}
                     {queue.isSuccess && rows.length === 0 && (

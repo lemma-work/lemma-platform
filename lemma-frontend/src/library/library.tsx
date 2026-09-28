@@ -68,7 +68,7 @@ export function Library({ podId, onFile, onTable }: { podId: string; onFile: (pa
                 <button className="btn" onClick={() => { setNewFolder(""); writes.clearProblem(); }} disabled={Boolean(writes.busy)}><PlusIcon size={16}/>New folder</button>
             </div> : <span className="library-readonly">Read only</span>}</header>
         <div className="library-controls"><div className="library-filters" aria-label="Resource type">{(["shared", "personal", "skills", "tables"] as const).map(type => <button key={type} aria-pressed={filter === type} onClick={() => { setFilter(type); setDirectory(type === "tables" ? "/" : fileLocations[type].root); setSearch(""); }}>{type === "tables" ? "Tables" : fileLocations[type].label}</button>)}</div><label className="library-search"><SearchIcon size={17}/><input aria-label="Search loaded items" placeholder="Search loaded items…" value={search} onChange={e => setSearch(e.target.value)}/></label></div>
-        <p className="library-location-description">{filter === "tables" ? "Tables you can access with this teammate." : currentLocation.description}</p>
+        <p className="library-location-description">{filter === "tables" ? "Tables you can access here." : currentLocation.description}</p>
         <div className="library-context"><div>{filter !== "tables" && <><button disabled={directory === currentLocation.root} aria-label="Parent folder" onClick={() => setDirectory(parentFolder(directory, location))}><BackIcon size={16}/></button><span>{directory === currentLocation.root ? currentLocation.label : currentLocation.label + " / " + directory.slice(currentLocation.root === "/" ? 1 : currentLocation.root.length + 1)}</span></>}</div><label><input type="checkbox" checked={internal} onChange={e => setInternal(e.target.checked)}/> Include internal items</label></div>
         {newFolder !== null && <form className="library-new" onSubmit={async e => {
             e.preventDefault();
@@ -360,7 +360,7 @@ export function TableView({ podId, name, onOpenRecord }: {
             <p role="status">This is the sample source — connect a session to write anything.</p>
         </Modal>}
         {removing && <Modal title="Delete row" subtitle={readableName(name)} narrow onClose={() => setRemoving(null)}>
-            <p>Delete <strong>{rowLabel(removing, primaryKey)}</strong>? The teammate loses it too, and this cannot be undone from here.</p>
+            <p>Delete <strong>{rowLabel(removing, primaryKey)}</strong>? It is gone for everyone, and this cannot be undone from here.</p>
             <div className="record-form__actions">
                 <button className="btn btn--danger" onClick={() => void removeRow(removing)}>Delete</button>
                 <button className="btn" onClick={() => setRemoving(null)}>Keep it</button>
