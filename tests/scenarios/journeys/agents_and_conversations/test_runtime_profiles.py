@@ -8,12 +8,18 @@ from harness import capability, covers, journey, proves, scenario
 from harness.credentials import needs
 from harness.environment import OPEN_SIGNUP
 
-#: A real, resolvable public host. The platform refuses a base URL it cannot
-#: resolve — the same guard that stops a connector pointing at internal
-#: services — so a made-up domain is rejected before anything is stored.
-#: Nothing here ever calls it: creating a profile records configuration, and
-#: the scenarios assert on what comes back from Lemma, not from a provider.
-PROVIDER_BASE_URL = "https://api.openai.com/v1"
+#: A real, resolvable public host that is not a model provider. The platform
+#: refuses a base URL it cannot resolve — the same guard that stops a connector
+#: pointing at internal services — so a made-up domain is rejected before
+#: anything is stored.
+#:
+#: Creating a profile *does* call it: Lemma asks `{base_url}/models` for the
+#: provider's catalogue, and a 401 or 403 there refuses the key outright. That
+#: is why this is not `api.openai.com`, which rightly rejects the made-up key
+#: below — and did, failing every scenario here the day the refusal landed.
+#: example.com answers 404, which Lemma reads as "no catalogue to read" and
+#: falls back to the model names the scenario typed, which is what is under test.
+PROVIDER_BASE_URL = "https://example.com/v1"
 
 pytestmark = [
     journey("Agents and conversations"),

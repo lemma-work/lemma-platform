@@ -11,6 +11,7 @@ from harness.markers import (
     journey,
     proves,
     scenario,
+    source_build,
     stack_lane,
 )
 from harness.world import Person, World
@@ -23,5 +24,6 @@ __all__ = [
     "journey",
     "proves",
     "scenario",
+    "source_build",
     "stack_lane",
 ]

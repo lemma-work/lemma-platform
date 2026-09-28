@@ -24,7 +24,15 @@ from __future__ import annotations
 
 import pytest
 
-__all__ = ["capability", "covers", "journey", "proves", "scenario", "stack_lane"]
+__all__ = [
+    "capability",
+    "covers",
+    "journey",
+    "proves",
+    "scenario",
+    "source_build",
+    "stack_lane",
+]
 
 
 def journey(title: str):
@@ -67,7 +75,7 @@ def covers(*contract_names: str):
 def stack_lane(why: str):
     """This scenario needs a deployment configured to be *broken* a certain way.
 
-    Three of these, and they are not second-class: a converter that is not
+    A handful of these, and they are not second-class: a converter that is not
     installed, a search provider that is not configured, an organization capped
     at zero spend. Each is a real promise about how the product behaves when
     something it depends on is missing, and each one runs and proves that
@@ -85,3 +93,19 @@ def stack_lane(why: str):
     reported, which is the point.
     """
     return pytest.mark.stack_lane(why)
+
+
+def source_build(why: str):
+    """This scenario builds something from this checkout and tests *that*.
+
+    The public website is the case: it builds `lemma-frontend` from source and
+    serves it on a local port, and never speaks to the Lemma under test at all.
+    Pointed at a deployment it proves nothing about the deployment — and a run
+    that had not installed the frontend's dependencies turned that into three
+    errors on every dev run (`npm run build` exiting 127), none of them about
+    the product.
+
+    Deselected, not skipped, under `--base-url`, for the reason `stack_lane`
+    gives: the question cannot be asked of somebody else's Lemma.
+    """
+    return pytest.mark.source_build(why)

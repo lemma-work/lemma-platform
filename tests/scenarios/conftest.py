@@ -219,7 +219,7 @@ def pytest_collection_modifyitems(
 ) -> None:
     """Do not *ask* a deployment a question only a broken one can answer.
 
-    Three scenarios need the target configured to be missing something — no
+    Four scenarios need the target configured to be missing something — no
     document converter, no search provider, an organization capped at zero
     spend. Each proves a real promise about how the product behaves when a
     dependency is absent, and each runs for real in the fast lane, where
@@ -232,6 +232,10 @@ def pytest_collection_modifyitems(
     wrong word — a skip says "this could have run and did not", and it put three
     permanent entries on a list whose whole value is that somebody reads it.
 
+    The `source_build` ones are the same shape for a different reason: they
+    build something from this checkout — the public website — and test that,
+    so there is nothing about a deployment for them to prove.
+
     So they are deselected instead. `--base-url` is the question being asked:
     with one, the lifecycle belongs to somebody else and the suite cannot decide
     how the target is configured. Without one it booted the target itself and
@@ -241,7 +245,10 @@ def pytest_collection_modifyitems(
         return
     kept, dropped = [], []
     for item in items:
-        (dropped if item.get_closest_marker("stack_lane") else kept).append(item)
+        only_ours = item.get_closest_marker("stack_lane") or item.get_closest_marker(
+            "source_build"
+        )
+        (dropped if only_ours else kept).append(item)
     if dropped:
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept

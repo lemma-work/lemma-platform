@@ -259,13 +259,22 @@ are shown with a retry action rather than an indefinite loading message.
 ### PS-ONB-024 — A person can see the invitations waiting for them
 **Status:** covered
 
-- When a person asks for their invitations, the system shall list every pending
-  invitation addressed to their email across all organizations.
+- When a person whose email address is verified asks for their invitations,
+  the system shall list every pending invitation addressed to that email across
+  all organizations.
+- When a person whose email address is not verified asks for their invitations,
+  the system shall list none, and the invitation's own link shall remain the way
+  to accept it. Listing by an unproven address would let whoever signed up as it
+  first take the seat.
 - The system shall show enough on each invitation — the organization, the role,
   and the pod when it names one — for a person to decide without accepting it
   first.
 
 **Contracts:** `org.invitation.list_mine`, `org.invitation.get`
+
+> **Verified by:** the listing for a verified address is proven by the backend's
+> own e2e suite; the scenario suite boots with verification off and proves the
+> unverified half. A lane with verification on would let a scenario prove both.
 
 ---
 

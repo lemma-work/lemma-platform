@@ -148,6 +148,43 @@ def test_a_scenario_waits_on_a_named_budget():
     )
 
 
+def test_every_wait_says_what_it_waits_for():
+    """`eventually` is called the way it is declared, everywhere.
+
+    Its signature is `eventually(probe, until, *, describe, ...)`. A call
+    missing `until` or `describe` is a `TypeError` — but only when that line
+    runs, and the scenarios that most need waiting are the ones gated on a real
+    model, which run nowhere but a deployment. Two of them shipped that way and
+    first ran, and failed, on dev. Read here instead, where it costs nothing and
+    fails on the pull request.
+    """
+    offenders: list[str] = []
+    for path in [*_scenario_files(), *sorted((SUITE / "harness").rglob("*.py"))]:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", "")
+            )
+            if name != "eventually":
+                continue
+            if any(isinstance(arg, ast.Starred) for arg in node.args) or any(
+                keyword.arg is None for keyword in node.keywords
+            ):
+                continue
+            named = {keyword.arg for keyword in node.keywords}
+            has_until = len(node.args) >= 2 or "until" in named
+            if not has_until or "describe" not in named:
+                offenders.append(f"{path.relative_to(SUITE)}:{node.lineno}")
+    assert not offenders, (
+        "call `eventually(probe, until, describe=...)` — without both it raises "
+        "TypeError the first time the line runs:\n  " + "\n  ".join(offenders)
+    )
+
+
 def test_a_harness_step_waits_on_a_named_budget():
     """The other half of the rule above, and the half that hid a real bound.
 
