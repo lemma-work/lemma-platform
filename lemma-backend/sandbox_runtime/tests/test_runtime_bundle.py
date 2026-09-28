@@ -387,7 +387,10 @@ def test_every_workspace_side_module_is_in_the_bundle() -> None:
     copy of the package, so the module stops existing in every sandbox that
     has the overlay.
     """
-    decided = {*build_runtime_bundle.RUNTIME_SOURCES, *build_runtime_bundle.RUNTIME_EXCLUDED}
+    decided = {
+        *build_runtime_bundle.RUNTIME_SOURCES,
+        *build_runtime_bundle.RUNTIME_EXCLUDED,
+    }
     present = {
         path.relative_to(_BACKEND).as_posix()
         for path in (_BACKEND / "sandbox_runtime").iterdir()

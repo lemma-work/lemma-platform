@@ -103,6 +103,13 @@ def is_browser_private(path: str) -> bool:
 #: an upgrade is the installer's symlink flip and nothing here moves.
 RUNTIME_OVERLAY_BIN = "/opt/lemma-runtime/current/bin"
 
+#: A shell prefix putting the overlay's commands first for the rest of one
+#: command line. For the commands the backend sends: a sandbox created from an
+#: image or template older than the overlay's own `PATH` entry would otherwise
+#: run the baked scripts for as long as it lives. An absent directory costs a
+#: failed lookup, and the image's copy answers.
+OVERLAY_FIRST_ON_PATH = f'PATH="{RUNTIME_OVERLAY_BIN}:$PATH"; '
+
 #: Where the image bakes the same commands. The floor: a sandbox the backend
 #: has not reached with an overlay yet still has every one of them here.
 IMAGE_BIN = "/usr/local/bin"
@@ -125,6 +132,7 @@ __all__ = [
     "BROWSER_PROFILE_ROOT",
     "HOME_ROOT",
     "IMAGE_BIN",
+    "OVERLAY_FIRST_ON_PATH",
     "RUNTIME_OVERLAY_BIN",
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",

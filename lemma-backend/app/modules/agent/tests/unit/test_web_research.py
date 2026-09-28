@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -625,9 +627,46 @@ class TestBrowserCaptureHelpers:
             "https://example.com/a", "research", "example-a", ["markdown", "pdf"]
         )
         assert cmd == (
+            'PATH="/opt/lemma-runtime/current/bin:$PATH"; '
             "mkdir -p research && save-webpage https://example.com/a "
             "--formats markdown,pdf --out research --name example-a"
         )
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a POSIX shell")
+    def test_browser_script_prefers_the_overlay_and_falls_back_to_the_image(
+        self, tmp_path
+    ) -> None:
+        """Run by a real shell: the overlay's copy when it exists, else the image's.
+
+        The overlay directory does not exist until the backend installs it, and
+        a sandbox from an older image never puts it on `PATH` itself.
+        """
+        overlay = tmp_path / "overlay"
+        image = tmp_path / "image"
+
+        def install(directory, who: str) -> None:
+            directory.mkdir()
+            script = directory / "save-webpage"
+            script.write_text(f"#!/bin/sh\necho {who}\n", encoding="utf-8")
+            script.chmod(0o755)
+
+        cmd = web_fetch_module._browser_script(
+            "https://example.com/a", str(tmp_path / "out"), "a", ["markdown"]
+        ).replace("/opt/lemma-runtime/current/bin", str(overlay))
+
+        def run() -> str:
+            return subprocess.run(
+                ["/bin/sh", "-c", cmd],
+                env={"PATH": f"{image}:/usr/bin:/bin"},
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+        install(image, "image")
+        assert run() == "image"
+        install(overlay, "overlay")
+        assert run() == "overlay"
 
     def test_browser_script_quotes_a_url_with_shell_metacharacters(self) -> None:
         """A URL is caller-supplied text, not a trusted command fragment.

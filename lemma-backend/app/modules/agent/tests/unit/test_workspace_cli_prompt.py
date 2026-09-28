@@ -55,7 +55,12 @@ def test_a_run_on_the_mac_is_told_about_the_mac_not_the_vm():
     vm = load_workspace_cli_prompt()
     mac = load_workspace_cli_prompt(host_execution=True)
 
-    for promise in ("whole home directory persists", "NumPy", "lit parse", "/sdk/"):
+    for promise in (
+        "whole home directory persists",
+        "NumPy",
+        "lit parse",
+        "import lemma_sdk",
+    ):
         assert promise in vm
         assert promise not in mac
     assert "on the user's own Mac" in mac
