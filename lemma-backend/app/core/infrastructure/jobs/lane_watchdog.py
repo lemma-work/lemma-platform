@@ -277,7 +277,13 @@ def start_worker_guards(
     The stream guard bounds Redis memory whatever the consumers do and reports
     a group whose reader has stopped reading -- and is itself watched, so a
     guard that crashes restarts the worker rather than quietly stop guarding.
+
+    Clears the shutdown mark first. Every worker startup passes through here,
+    including a single-lane one that never calls :func:`watch_lanes`, so a
+    process that runs the lifespan again (a test, the embedded app restarting
+    its worker) does not start with the watchdog already stood down.
     """
+    clear_shutting_down()
     watchdog = create_background_task(
         lane_watchdog_loop(broker, lane_tasks), name="worker-lane-watchdog"
     )

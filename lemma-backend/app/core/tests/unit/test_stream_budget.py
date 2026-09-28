@@ -238,3 +238,23 @@ def test_an_unacked_delivery_trimmed_away_is_a_certain_loss():
         _group("g", delivered=(900, 0), lag=0, pending=1, oldest_pending=(40, 0))
     )
     assert [gap.after_ms for gap in budget.observed_gaps(state)] == [40]
+
+
+def test_a_stream_trimmed_empty_still_names_what_it_lost():
+    """Emptying a stream loses the most, and has no first entry to measure from.
+
+    Its last generated id survives, and everything up to it is gone."""
+    emptied = budget.StreamState(
+        name="events",
+        length=0,
+        memory=0,
+        first_id=None,
+        last_id=(900, 4),
+        groups=[_group("dead", delivered=(50, 0), lag=40)],
+    )
+
+    assert emptied.survival_bound() == (900, 5)
+    assert [(gap.after_ms, gap.until_ms) for gap in budget.observed_gaps(emptied)] == [
+        (50, 900)
+    ]
+    assert len(budget._groups_losing_entries(emptied, emptied.survival_bound())) == 1

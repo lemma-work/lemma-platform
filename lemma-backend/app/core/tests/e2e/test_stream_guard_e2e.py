@@ -102,6 +102,18 @@ async def test_the_budget_holds_through_a_group_that_never_reads(client):
     assert outcome.gaps[0].until_ms == first_id[0]
 
 
+async def test_a_budget_that_empties_the_stream_still_records_the_gap(client):
+    """The trim that removes every entry loses the most, and must say so."""
+    await _two_groups_one_dead(client, entries=500)
+    state = await stream_budget.read_stream_state(client, _STREAM)
+    assert state is not None
+
+    outcome = await stream_budget.enforce_stream_budget(client, [state], budget_bytes=1)
+
+    assert await client.xlen(_STREAM) == 0
+    assert [gap.group for gap in outcome.gaps] == [_DEAD]
+
+
 async def test_a_healthy_stream_is_trimmed_without_losing_anything(client):
     """Phase 1 only: what every group has read goes first, and is enough."""
     await client.xgroup_create(_STREAM, _LIVE, id="0", mkstream=True)

@@ -43,9 +43,38 @@ _RETENTION_SECONDS = 60 * 60
 # and the reader is told, so an agent sees "output was truncated" rather than
 # silently believing it read everything.
 _MAX_CHUNKS = 4096
-#: Characters per stored chunk; with `_MAX_CHUNKS` this bounds a process's
-#: buffered output to about 64MB of ASCII.
+#: Characters per stored chunk before its size is checked.
 _MAX_CHUNK_CHARS = 16_384
+#: Serialized bytes per stored chunk. Characters alone are not a size: JSON
+#: escapes control characters to six bytes each, and UTF-8 spends up to four on
+#: one character. With `_MAX_CHUNKS` this bounds a process's buffered output at
+#: about 80MB whatever it prints.
+_MAX_CHUNK_BYTES = 20_000
+
+
+def _encode_chunk(channel: str, text: str, sequence: int) -> str:
+    return json.dumps({"c": channel, "d": text, "n": sequence}, ensure_ascii=False)
+
+
+def _bounded_pieces(text: str) -> list[str]:
+    """``text`` split into pieces whose encoded chunk stays under the byte cap."""
+    pieces: list[str] = []
+    pending = [
+        text[start : start + _MAX_CHUNK_CHARS]
+        for start in range(0, len(text), _MAX_CHUNK_CHARS)
+    ]
+    pending.reverse()
+    while pending:
+        piece = pending.pop()
+        # Sequence 0 stands in for the real one: it is at most a few digits
+        # shorter, which the cap's slack above a full ASCII chunk absorbs.
+        oversized = len(_encode_chunk("stdout", piece, 0).encode()) > _MAX_CHUNK_BYTES
+        if oversized and len(piece) > 1:
+            middle = len(piece) // 2
+            pending.extend((piece[middle:], piece[:middle]))
+        else:
+            pieces.append(piece)
+    return pieces
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,17 +122,18 @@ class E2BOutputBuffer:
         # and a length is only a memory bound if each entry is bounded too: the
         # SDK hands over whatever it received, so one noisy process could hold
         # 4,096 arbitrarily large chunks for as long as it kept being polled.
-        text = data.decode("utf-8", errors="replace")
-        pieces = [
-            text[start : start + _MAX_CHUNK_CHARS]
-            for start in range(0, len(text), _MAX_CHUNK_CHARS)
-        ]
+        pieces = _bounded_pieces(data.decode("utf-8", errors="replace"))
         async with self._append_lock:
             last = int(await redis.incrby(self._sequence_key(process_id), len(pieces)))
-            first = last - len(pieces) + 1
+            # Sequences are reserved for everything, but only what the list can
+            # keep is sent: pushing more than `_MAX_CHUNKS` only for `ltrim` to
+            # drop it would make one huge callback a huge Redis write. A reader
+            # sees the dropped ones as truncation, exactly as if `ltrim` had.
+            kept = pieces[-_MAX_CHUNKS:]
+            first_kept = last - len(kept) + 1
             payloads = [
-                json.dumps({"c": channel.value, "d": piece, "n": first + offset})
-                for offset, piece in enumerate(pieces)
+                _encode_chunk(channel.value, piece, first_kept + offset)
+                for offset, piece in enumerate(kept)
             ]
             pipe = redis.pipeline()
             pipe.rpush(key, *payloads)

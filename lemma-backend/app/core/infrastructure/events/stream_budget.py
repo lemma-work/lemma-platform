@@ -129,6 +129,20 @@ class StreamState:
     #: False for job queues, whose entries are work rather than notifications.
     trimmable: bool = True
 
+    def survival_bound(self) -> StreamId | None:
+        """The oldest id still in the stream, or the next one if it is empty.
+
+        An emptied stream has no first entry, but it still has a last generated
+        id; everything up to and including that id is gone. Without this, a
+        trim that removed every entry -- the one that loses the most -- was the
+        one that recorded no gap.
+        """
+        if self.first_id is not None:
+            return self.first_id
+        if self.last_id is not None:
+            return (self.last_id[0], self.last_id[1] + 1)
+        return None
+
     def group_is_behind(self, group: GroupState) -> bool:
         if isinstance(group.lag, int):
             return group.lag > 0
@@ -286,18 +300,19 @@ def observed_gaps(state: StreamState) -> list[StreamGap]:
     back. Only a certain loss counts here: a replay covers minutes of events,
     and a boundary guess made on every pass would replay them over nothing.
     """
-    if state.first_id is None:
+    bound = state.survival_bound()
+    if bound is None:
         return []
     return [
         StreamGap(
             stream=state.name,
             group=group.name,
             after_ms=_needed_after(group)[0],
-            until_ms=state.first_id[0],
+            until_ms=bound[0],
         )
         for group in state.groups
         if (isinstance(group.lag, int) and group.lag > state.length)
-        or (group.oldest_pending is not None and group.oldest_pending < state.first_id)
+        or (group.oldest_pending is not None and group.oldest_pending < bound)
     ]
 
 
@@ -358,7 +373,9 @@ async def _trim_unread(
     before = state.memory
     await client.xtrim(state.name, maxlen=target_length, approximate=False)
     await _remeasure(client, state)
-    return max(0, before - state.memory), _groups_losing_entries(state, state.first_id)
+    return max(0, before - state.memory), _groups_losing_entries(
+        state, state.survival_bound()
+    )
 
 
 async def enforce_stream_budget(
