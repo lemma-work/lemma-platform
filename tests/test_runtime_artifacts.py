@@ -354,6 +354,12 @@ def test_the_build_epoch_is_the_first_second_of_the_package_month() -> None:
     assert source_date_epoch("2026-12") < source_date_epoch("2027-01")
 
 
+def test_a_malformed_package_epoch_is_refused_before_any_lookup() -> None:
+    for epoch in ("2026-09-01", "2026", "2026-13", "26-09"):
+        with pytest.raises(ValueError, match="YYYY-MM"):
+            workspace_image_fingerprint(package_epoch=epoch)
+
+
 def _dockerfile_sources() -> set[str]:
     """Every repository path `Dockerfile.workspace` copies into the image."""
     text = (REPO_ROOT / WORKSPACE_DOCKERFILE).read_text()

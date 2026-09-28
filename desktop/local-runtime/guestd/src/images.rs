@@ -94,23 +94,35 @@ pub(crate) fn pull_in_progress(image: &str) -> GuestError {
 /// How far the sandbox images' download has got, summed over both.
 ///
 /// For `core.sandbox_images_status`, so the app can say "412 MB of 980 MB"
-/// rather than only that something is downloading. `None` until the first
-/// manifest is in and there is a total to be a fraction of.
+/// rather than only that something is downloading. `None` until every image
+/// being downloaded has its manifest in: a sum over only the measured ones
+/// would read "700 of 700 MB" while another is still starting. An image
+/// nobody is downloading -- already here -- adds nothing.
 pub(crate) fn sandbox_images_progress(
     parameters: &CoreParameters,
 ) -> Option<crate::pull_progress::PullProgress> {
-    [
+    let mut sum: Option<crate::pull_progress::PullProgress> = None;
+    for image in [
         parameters.images.workspace.as_deref(),
         parameters.images.function.as_deref(),
     ]
     .into_iter()
     .flatten()
-    .filter_map(crate::pull_progress::progress_for)
-    .reduce(|sum, one| crate::pull_progress::PullProgress {
-        done: sum.done + one.done,
-        total: sum.total + one.total,
-    })
-    .filter(|sum| sum.total > 0)
+    {
+        match crate::pull_progress::progress_for(image) {
+            Some(one) => {
+                let so_far =
+                    sum.unwrap_or(crate::pull_progress::PullProgress { done: 0, total: 0 });
+                sum = Some(crate::pull_progress::PullProgress {
+                    done: so_far.done + one.done,
+                    total: so_far.total + one.total,
+                });
+            }
+            None if crate::pull_progress::is_sampling(image) => return None,
+            None => {}
+        }
+    }
+    sum.filter(|sum| sum.total > 0)
 }
 
 pub(crate) fn validate_image(image: &str) -> Result<(), GuestError> {

@@ -256,7 +256,16 @@ impl ManagedRuntimeController {
         if current.state == SANDBOX_IMAGES_DOWNLOADING || current.state == SANDBOX_IMAGES_READY {
             return current.clone();
         }
-        let status = SandboxImageStatus::new(SANDBOX_IMAGES_NOT_PREPARED, "");
+        // Fetched for this release on an earlier start: Settings should not
+        // offer to download what is already here. If the guest has lost it
+        // since, `sandbox.ensure` fetches it on first use, as for anyone.
+        let status = if self.prepared_sandbox_images().fetched.as_ref()
+            == Some(&self.pinned_sandbox_images())
+        {
+            SandboxImageStatus::new(SANDBOX_IMAGES_READY, "The workspace sandbox is ready")
+        } else {
+            SandboxImageStatus::new(SANDBOX_IMAGES_NOT_PREPARED, "")
+        };
         *current = status.clone();
         status
     }

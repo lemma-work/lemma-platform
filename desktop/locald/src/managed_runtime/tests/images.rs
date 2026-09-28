@@ -290,6 +290,11 @@ fn the_images_already_fetched_are_not_fetched_again() {
     );
 
     assert!(!controller.claim_unasked_sandbox_image_fetch());
+    assert_eq!(
+        controller.note_sandbox_images_not_prepared().state,
+        SANDBOX_IMAGES_READY,
+        "Settings offered to download the images this release already fetched"
+    );
 }
 
 /// An update's images are fetched on its first start, once.

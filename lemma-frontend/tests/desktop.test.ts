@@ -611,6 +611,10 @@ test("a sandbox download says how far it has got, once it can measure it", () =>
     const measured = sandboxImageNotice("downloading", { state: "downloading", detail: "", doneMb: 120, totalMb: 700 });
     assert.equal(measured.kind, "downloading");
     assert.match(measured.kind === "downloading" ? measured.description : "", /120 of 700 MB/);
+    // A poll that measured nothing new is not news.
+    const same = { state: "downloading" as const, detail: "", doneMb: 120, totalMb: 700 };
+    assert.equal(sandboxImageNotice("downloading", same, "120 of 700 MB").kind, "none");
+    assert.equal(sandboxImageNotice("downloading", { ...same, doneMb: 130 }, "120 of 700 MB").kind, "downloading");
     assert.equal(downloadedSoFar({ doneMb: 900, totalMb: 700 }), "700 of 700 MB");
     assert.equal(downloadedSoFar({ doneMb: 5, totalMb: 0 }), null);
     assert.equal(downloadedSoFar({ doneMb: null, totalMb: 700 }), null);

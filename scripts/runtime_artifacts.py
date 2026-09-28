@@ -44,6 +44,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -178,6 +179,10 @@ def workspace_image_fingerprint(
     """
     if not package_epoch:
         raise ValueError("package epoch is required")
+    # The same contract as `source_date_epoch`, checked before any release is
+    # looked up rather than after.
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", package_epoch):
+        raise ValueError(f"package epoch must be YYYY-MM, not {package_epoch!r}")
     lines = [WORKSPACE_IMAGE_SCHEMA, f"package-epoch {package_epoch}"]
     lines += _input_lines(root, inputs)
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()
