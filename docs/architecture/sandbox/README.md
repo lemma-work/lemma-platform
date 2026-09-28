@@ -378,10 +378,22 @@ for a submodule the overlay lacks: an overlay of three modules made every other
 one vanish the moment it was installed.
 
 What the floor is for: a sandbox the backend has not reached yet, and one whose
-install failed, still works. The workspace server is the one process that loads
-its code at container start, so a newer overlay installed mid-session reaches it
-at the next start, not at once. It is not restarted to hurry that: its token is
-single-use and it is the container's only process under `tini`.
+install failed, still works.
+
+The workspace server is the one process that loads its code at container start,
+so an install does not reach it: a fresh container's server runs the floor, a
+resumed one's the previous overlay. With the image reused across releases the
+floor can be older than the backend, and nothing negotiates a protocol version
+between the two. So the server reports what it imported -- the overlay
+version's stamp, or `floor` -- in an `X-Lemma-Runtime-Version` header on
+`/health`, and after installing, the backend restarts a sandbox whose server
+runs anything else, once (`workspace_runtime_restart`): released and resumed
+through the provider, which keeps the home and the overlay on their mounts. Only
+at the start of a session, and only with no running process or Python session;
+a busy sandbox picks the overlay up at its next start instead. Never twice for
+one incarnation and version: a server still stale after its restart is logged
+as an error and left. A runtime that sends no header -- an image from before it
+-- is left alone, as E2B, which serves no HTTP runtime, always is.
 
 On Docker and Desktop the image is fingerprinted by its inputs and reused across
 releases whose inputs did not change (see

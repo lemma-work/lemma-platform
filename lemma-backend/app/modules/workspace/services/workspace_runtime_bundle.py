@@ -142,9 +142,8 @@ def install_command(
     closure moves only with a lockfile that the bundle is built against too.
 
     The workspace server is the one process that imports its code at container
-    start, so a newer overlay installed mid-session reaches it at the next start
-    rather than at once. Not restarted here: its token is single-use and it is
-    the container's only process under `tini`.
+    start, so an install does not reach it. `workspace_runtime_restart` restarts
+    the sandbox once, when that is safe, for a server not running this overlay.
     """
     return (
         "sudo -n true 2>/dev/null && SUDO='sudo -n' || SUDO=''; "
@@ -158,7 +157,7 @@ def install_command(
 
 
 class _ManagerClient(Protocol):
-    """The four calls this mixin makes on the workspace manager client.
+    """The calls these mixins make on the workspace manager client.
 
     A Protocol rather than the concrete class because the mixin is mixed *into*
     that service: naming the real type here would be a cycle, and naming nothing
@@ -201,6 +200,11 @@ class _ManagerClient(Protocol):
         after_sequence: int,
         wait_seconds: int,
     ) -> ProcessOutputSnapshot: ...
+
+    async def release_sandbox(
+        self, workload_kind: WorkloadKind, logical_id: UUID
+    ) -> None:
+        """Stop the sandbox, keeping its storage; the next ensure resumes it."""
 
 
 class WorkspaceRuntimeBundleMixin:

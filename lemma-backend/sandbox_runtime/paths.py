@@ -22,6 +22,7 @@ failure that made the home the durable root in the first place.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 #: The durable root, and the sandbox user's home. Tools put their state in ``~``
 #: whether or not anyone planned for it, so making the home the durable thing is
@@ -115,6 +116,46 @@ RUNTIME_OVERLAY_BIN = f"{RUNTIME_OVERLAY_ROOT}/current/bin"
 #: failed lookup, and the image's copy answers.
 OVERLAY_FIRST_ON_PATH = f'PATH="{RUNTIME_OVERLAY_BIN}:$PATH"; '
 
+#: What a process running the image's own copy of this package reports as its
+#: runtime version.
+RUNTIME_FLOOR = "floor"
+
+#: The file an installed overlay version carries once complete. Kept equal to
+#: `runtime_install.STAMP_NAME`, which cannot be imported from here: the
+#: installer is uploaded on its own and ships in neither the overlay nor the
+#: floor. `test_sandbox_command.py` holds the two together.
+_OVERLAY_STAMP = ".stamp"
+
+
+def running_runtime_version(
+    package_file: str | None = None, *, overlay_root: str = RUNTIME_OVERLAY_ROOT
+) -> str:
+    """Which copy of this package the calling process imported.
+
+    The overlay version's own stamp when the package came from the overlay,
+    otherwise `RUNTIME_FLOOR`. Resolved through `current` to the version
+    directory it named at the time, so asking once at import gives the
+    version the process is running, not whichever one `current` names later.
+    """
+    if package_file is None:
+        import sandbox_runtime
+
+        package_file = sandbox_runtime.__file__ or ""
+    root = Path(overlay_root).resolve()
+    package = Path(package_file).resolve()
+    # <root>/<version>/site-packages/sandbox_runtime/__init__.py
+    if not package.is_relative_to(root) or len(package.parents) < 4:
+        return RUNTIME_FLOOR
+    version_directory = package.parents[2]
+    if version_directory.parent != root:
+        return RUNTIME_FLOOR
+    try:
+        stamp = (version_directory / _OVERLAY_STAMP).read_text(encoding="utf-8")
+    except OSError:
+        return RUNTIME_FLOOR
+    return stamp.strip() or RUNTIME_FLOOR
+
+
 #: Where the image bakes the same commands. The floor: a sandbox the backend
 #: has not reached with an overlay yet still has every one of them here.
 IMAGE_BIN = "/usr/local/bin"
@@ -139,10 +180,12 @@ __all__ = [
     "IMAGE_BIN",
     "OVERLAY_FIRST_ON_PATH",
     "RUNTIME_OVERLAY_BIN",
+    "RUNTIME_FLOOR",
     "RUNTIME_OVERLAY_ROOT",
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",
     "is_browser_private",
     "is_inside_home",
+    "running_runtime_version",
     "sandbox_command",
 ]
