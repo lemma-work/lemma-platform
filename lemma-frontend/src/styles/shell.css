@@ -5580,10 +5580,90 @@ a.reach { text-decoration: none; }
     font-size: var(--t-ui);
 }
 .right-pane-toolbar .icon-button { width: 44px; height: 44px; }
+.pane-sheet-scrim { display: none; }
+.right-pane-toolbar__title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+.right-pane-toolbar__title > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--t-ui);
+}
+
+/* A phone has no width to put a resource beside anything, and halving the
+   height left a letterbox of each. So the resource is a sheet over the
+   conversation: raised to all but a sliver of it, or lowered to its bar, which
+   sits under the composer as the way back.
+
+   The conversation stops a bar's height short of the bottom and never moves.
+   The bar and the pane are moved together by one offset, `--sheet-y`, which is
+   0 raised and the whole travel lowered. `100cqh` is what makes that sayable in
+   CSS, so the body is a size container here and nowhere else; while a finger
+   is on the bar the script writes a pixel `--sheet-y` and turns the easing off. */
 @media (max-width: 767px) {
-    .body--dual > [data-side="left"] { right: 0; bottom: 50%; }
-    .body--dual > [data-side="right"] { left: 0; top: calc(50% + 44px); border-left: 0; }
-    .right-pane-toolbar { left: 0; top: 50%; border-left: 0; border-top: 1px solid var(--line-2); }
+    .body--dual {
+        --sheet-top: 12px;
+        --sheet-bar: 52px;
+        container-type: size;
+        overflow: clip;
+    }
+    .body--peek { --sheet-y: calc(100cqh - var(--sheet-top) - var(--sheet-bar)); }
+    .body--dual > [data-side="left"] { right: 0; bottom: var(--sheet-bar); }
+    .body--dual > [data-side="right"],
+    .body--dual > .right-pane-toolbar {
+        left: 0;
+        z-index: 4;
+        transform: translateY(var(--sheet-y, 0px));
+        transition: transform var(--sheet-motion, 240ms) var(--ease-out);
+    }
+    .body--dual > [data-side="right"] { top: calc(var(--sheet-top) + var(--sheet-bar)); border-left: 0; }
+    .body--dual > .right-pane-toolbar {
+        top: var(--sheet-top);
+        height: var(--sheet-bar);
+        padding-top: 8px;
+        border-bottom: 1px solid var(--line);
+        border-radius: var(--r-lg) var(--r-lg) 0 0;
+        box-shadow: var(--depth-raise);
+        touch-action: none;
+    }
+    /* The grabber: the one mark that says this edge moves. */
+    .body--dual > .right-pane-toolbar::before {
+        content: "";
+        position: absolute;
+        top: 6px;
+        left: 50%;
+        width: 36px;
+        height: 4px;
+        margin-left: -18px;
+        border-radius: 9999px;
+        background: var(--line-2);
+    }
+    .body--peek > .right-pane-toolbar { border-bottom-color: transparent; }
+    .body--dual > .pane-sheet-scrim {
+        display: block;
+        position: absolute;
+        inset: 0;
+        z-index: 3;
+        background: rgb(0 0 0 / 0.22);
+        transition: opacity var(--sheet-motion, 240ms) var(--ease-out);
+    }
+    .body--peek > .pane-sheet-scrim { opacity: 0; pointer-events: none; }
+    .body[data-sheet-held] > :not(.right-pane-toolbar) { pointer-events: none; }
+}
+@media (max-width: 767px) and (prefers-reduced-motion: reduce) {
+    .body--dual { --sheet-motion: 0s; }
 }
 
 .pane-divider {
