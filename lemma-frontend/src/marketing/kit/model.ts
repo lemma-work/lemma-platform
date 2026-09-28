@@ -21,6 +21,19 @@ export function blockers(studio: Studio, asset: Asset): string[] {
         ...(asset.id === "story" && !studio.anonymous && !studio.permission ? ["Customer attribution needs permission or an anonymous version."] : []),
     ];
 }
+/** The one thing that moves an asset forward, short enough for a table cell.
+ *  `blocked` means someone has to act before it can be approved. */
+export function nextStep(studio: Studio, asset: Asset): { text: string; blocked: boolean } {
+    if (isDirty(asset)) return { text: "Save the edited draft", blocked: true };
+    if (asset.id === "storyboard") {
+        const left = studio.shots.filter(shot => !shot).length;
+        if (left) return { text: `${left} of 3 frames to update`, blocked: true };
+    }
+    if (asset.id === "story" && !studio.anonymous && !studio.permission) return { text: "Customer permission needed", blocked: true };
+    if (asset.review === "Approved") return { text: "Ready to ship", blocked: false };
+    if (asset.review === "Changes requested") return { text: "Waiting on a new revision", blocked: false };
+    return { text: "Ready for your review", blocked: false };
+}
 export function editAsset(studio: Studio, id: AssetId, patch: Partial<Copy>): Studio {
     return { ...studio, assets: studio.assets.map(asset => asset.id === id ? { ...asset, draft: { ...asset.draft, ...patch }, review: "Needs review" } : asset) };
 }

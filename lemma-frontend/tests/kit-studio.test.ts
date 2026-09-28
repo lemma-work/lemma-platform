@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { initialStudio, editAsset, saveAsset, approveAsset, blockers, isDirty } from "../src/marketing/kit/model.ts";
+import { initialStudio, editAsset, saveAsset, approveAsset, blockers, isDirty, nextStep } from "../src/marketing/kit/model.ts";
 import { previewSource } from "../src/marketing/preview-source.ts";
 
 test("editing an approved asset requires a saved new revision and fresh approval", () => {
@@ -27,6 +27,20 @@ test("customer attribution and unfinished frames block approval", () => {
     assert.equal(blockers({ ...state, anonymous: true }, state.assets[3]).length, 0);
     assert.equal(approveAsset({ ...state, anonymous: true }, "story").assets[3].review, "Approved");
     assert.equal(approveAsset({ ...state, shots: [true, true, true] }, "storyboard").assets[2].review, "Approved");
+});
+
+test("the release plan names what each asset is waiting on", () => {
+    const state = initialStudio();
+    assert.deepEqual(state.assets.map(asset => nextStep(state, asset)), [
+        { text: "Ready for your review", blocked: false },
+        { text: "Ready for your review", blocked: false },
+        { text: "3 of 3 frames to update", blocked: true },
+        { text: "Customer permission needed", blocked: true },
+    ]);
+    const edited = editAsset(state, "landing", { title: "A clearer headline" });
+    assert.deepEqual(nextStep(edited, edited.assets[0]), { text: "Save the edited draft", blocked: true });
+    const approved = approveAsset(state, "announcement");
+    assert.deepEqual(nextStep(approved, approved.assets[1]), { text: "Ready to ship", blocked: false });
 });
 
 test("sample chats display useful widgets without the handoff narration", async () => {

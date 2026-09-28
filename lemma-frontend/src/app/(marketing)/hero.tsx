@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { CharacterPuppet } from "@/shell/character-puppet";
+import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { INITIAL_TOUR, TOUR_STEPS, tourReducer } from "./tour-state";
 import s from "./landing.module.css";
 
@@ -18,6 +19,13 @@ export function Hero() {
     const [{ step, mode }, dispatch] = useReducer(tourReducer, INITIAL_TOUR);
     const [near, setNear] = useState(false);
     const [ready, setReady] = useState(false);
+    // A frame that never says it is ready is still shown eventually: its
+    // own error is more use to a visitor than a placeholder that never ends.
+    const [waitedOut, setWaitedOut] = useState(false);
+    useEffect(() => {
+        const timer = window.setTimeout(() => setWaitedOut(true), 12_000);
+        return () => window.clearTimeout(timer);
+    }, []);
     const frame = useRef<HTMLElement | null>(null);
     const stage = useRef<HTMLDivElement>(null);
     const viewport = useRef<HTMLDivElement>(null);
@@ -41,12 +49,43 @@ export function Hero() {
             if (event.data?.type === "lemma-tour:interact") dispatch({ type: "explore" });
         };
         window.addEventListener("message", read);
+        // The frame announces itself once; if that happened before this
+        // listener existed, the tour would never drive it on scroll.
+        demo.current?.contentWindow?.postMessage({ type: "lemma-tour:hello" }, window.location.origin);
         return () => window.removeEventListener("message", read);
     }, []);
 
     useEffect(() => {
         if (mode === "guided" && ready) showStep(step);
     }, [step, mode, ready]);
+
+    /* The workspace scrolls inside itself (the profile, the app), and a frame
+       takes every wheel event over it, so a visitor scrolling the page would
+       get stuck scrolling the demo instead. Until they click into it, a clear
+       layer sits on top and the wheel reaches the page. Clicking hands the
+       demo the wheel and rings the frame; leaving it, clicking elsewhere or
+       scrolling it away hands the wheel back. */
+    const [engaged, setEngaged] = useState(false);
+    function engage() {
+        setEngaged(true);
+        dispatch({ type: "explore" });
+    }
+    useEffect(() => {
+        const node = viewport.current;
+        if (!node) return;
+        const outside = (event: PointerEvent) => { if (!node.contains(event.target as Node)) setEngaged(false); };
+        // Keyboard visitors reach the frame by Tab, which never touches the layer.
+        const blur = () => window.setTimeout(() => { if (document.activeElement === demo.current) engage(); });
+        const seen = new IntersectionObserver(([entry]) => { if (entry.intersectionRatio < 0.4) setEngaged(false); }, { threshold: [0.4] });
+        document.addEventListener("pointerdown", outside);
+        window.addEventListener("blur", blur);
+        seen.observe(node);
+        return () => {
+            document.removeEventListener("pointerdown", outside);
+            window.removeEventListener("blur", blur);
+            seen.disconnect();
+        };
+    }, []);
 
     useEffect(() => {
         const node = viewport.current;
@@ -134,9 +173,14 @@ export function Hero() {
                 </div>
             </div>
             <div className={s.field}>
-                <div className={s.productFrame}>
-                    <div className={s.productViewport} ref={viewport}>
+                <div className={s.productFrame} data-engaged={engaged || undefined}>
+                    <div className={s.productViewport} ref={viewport} data-revealed={ready || waitedOut || undefined}
+                        onPointerLeave={event => { if (event.pointerType === "mouse") setEngaged(false); }}>
                         <iframe ref={demo} src="/demo/landing" title="Explore the Acme workspace" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" />
+                        {/* The workspace's own loading shape, drawn by this page so it is
+                            there on first paint, until the frame has something to show. */}
+                        <div className={s.productPoster} aria-hidden="true" inert><WorkspaceLoading /></div>
+                        {!engaged && <div className={s.productShield} aria-hidden="true" onClick={engage}><span>Click to explore</span></div>}
                     </div>
                 </div>
             </div>
