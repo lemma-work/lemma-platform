@@ -1874,7 +1874,8 @@ async def _retire_composio_capabilities(connector_repository, session) -> int:
 
 
 class _ReauthFlagger(Protocol):
-    async def mark_connected_for_reauth(self, auth_config_id: UUID) -> int: ...
+    async def mark_connected_for_reauth(self, auth_config_id: UUID) -> int:
+        """Mark every connected account on this install for reauth; the count."""
 
 
 async def _disable_unmanaged_composio_defaults(

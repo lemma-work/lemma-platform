@@ -35,9 +35,11 @@ MAX_DROPS_PER_RUN = 1000
 
 
 class PodSchemaCatalogPort(Protocol):
-    async def list_pod_schemas(self, *, after: str, limit: int) -> list[str]: ...
+    async def list_pod_schemas(self, *, after: str, limit: int) -> list[str]:
+        """Up to ``limit`` pod schema names after ``after``, in name order."""
 
-    async def drop_schema(self, schema_name: str) -> None: ...
+    async def drop_schema(self, schema_name: str) -> None:
+        """Drop one pod schema and everything in it."""
 
 
 type GonePods = Callable[[Collection[UUID], datetime], Awaitable[set[UUID]]]
