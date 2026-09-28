@@ -1,8 +1,17 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import { JSDOM } from "jsdom";
-import { Readability } from "@mozilla/readability";
-import TurndownService from "turndown";
+import { createRequire } from "node:module";
+
+// Resolved from the image's Node project, not from beside this file. A bare
+// `import` resolves against the file's own location, and the copy the runtime
+// overlay ships lives under `/opt/lemma-runtime`, where no `node_modules` is.
+// The packages come from the image; only this script travels with the overlay.
+const require = createRequire(
+  `${process.env.LEMMA_NODE_PROJECT || "/opt/lemma-node"}/package.json`,
+);
+const { JSDOM } = require("jsdom");
+const { Readability } = require("@mozilla/readability");
+const TurndownService = require("turndown");
 
 function usage() {
   console.error(

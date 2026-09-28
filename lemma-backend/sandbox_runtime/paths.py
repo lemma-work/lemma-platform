@@ -21,6 +21,8 @@ failure that made the home the durable root in the first place.
 
 from __future__ import annotations
 
+import os
+
 #: The durable root, and the sandbox user's home. Tools put their state in ``~``
 #: whether or not anyone planned for it, so making the home the durable thing is
 #: what stops each one needing to be redirected by hand -- which is how
@@ -97,12 +99,36 @@ def is_browser_private(path: str) -> bool:
     return path == BROWSER_PROFILE_ROOT or path.startswith(f"{BROWSER_PROFILE_ROOT}/")
 
 
+#: Where the runtime overlay puts its commands. Named through ``current``, so
+#: an upgrade is the installer's symlink flip and nothing here moves.
+RUNTIME_OVERLAY_BIN = "/opt/lemma-runtime/current/bin"
+
+#: Where the image bakes the same commands. The floor: a sandbox the backend
+#: has not reached with an overlay yet still has every one of them here.
+IMAGE_BIN = "/usr/local/bin"
+
+
+def sandbox_command(name: str, *, overlay_bin: str = RUNTIME_OVERLAY_BIN) -> str:
+    """The absolute path of a Lemma command: the overlay's copy, else the image's.
+
+    For a process that cannot trust its ``PATH`` to put the Lemma copy first --
+    the relay's is the image's service environment, not an agent shell's.
+    Resolved per call rather than once, because the overlay can arrive after
+    the process started.
+    """
+    overlay = f"{overlay_bin}/{name}"
+    return overlay if os.access(overlay, os.X_OK) else f"{IMAGE_BIN}/{name}"
+
+
 __all__ = [
     "BROWSER_PROFILE",
     "BROWSER_PROFILE_ROOT",
     "HOME_ROOT",
+    "IMAGE_BIN",
+    "RUNTIME_OVERLAY_BIN",
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",
     "is_browser_private",
     "is_inside_home",
+    "sandbox_command",
 ]
