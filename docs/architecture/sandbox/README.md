@@ -346,8 +346,48 @@ surface than a shell and is exposed to page script.
   rootfs, so `/home/user` persists, and so does `/opt`.
 - **Docker and `lemma_local`** — a named volume is the only durable object, and it
   is mounted at `/home/user`. Anything outside it is the container layer and is
-  gone when the container is replaced. This is why the mount is the home and not
-  the project root.
+  gone when the container is replaced, with one exception: the runtime overlay
+  (below) has a mount of its own. This is why the mount is the home and not the
+  project root.
+
+#### One layout: a stable image, a floor, and the overlay
+
+Every fabric lays a workspace sandbox out the same way.
+
+| Part | What is in it | Where it comes from | When it changes |
+|---|---|---|---|
+| Image | Debian or Ubuntu packages, Chrome, Node and its tools, the Python interpreter and the third-party closure (`templates/workspace-python/uv.lock`) | `Dockerfile.workspace`, or the E2B workspace template | When a dependency moves, or monthly for the package archive |
+| Floor | Lemma's own code as the image baked it: the SDK and CLI in `/opt/lemma-python`, `sandbox_runtime` in `/app`, the scripts in `/usr/local/bin` | The same build, in its last and smallest layers | Only with the image, so it may be older than the release |
+| Overlay | The same code, current: `site-packages/`, `bin/` and `lib/` under `/opt/lemma-runtime/current` | `scripts/build_runtime_bundle.py`, installed by the backend at session start | Every release that changes it |
+
+The overlay wins everywhere the floor could answer. Its `site-packages` is first
+on the Lemma interpreter's `sys.path` (`lemma-runtime-overlay.pth`), and its `bin`
+is first on `PATH` — in the image's environment, in login shells
+(`lemma-python.sh`), and in every command the backend sends
+(`OVERLAY_FIRST_ON_PATH`), which is what reaches a sandbox made from an image
+older than that `PATH` entry. A process that runs a Lemma script by absolute path
+asks `sandbox_runtime.paths.sandbox_command`, which answers with the overlay's
+copy when one is installed.
+
+The overlay carries the **whole** workspace side of `sandbox_runtime`, and the
+floor bakes exactly the same list (`RUNTIME_SOURCES`;
+`test_the_images_bake_the_overlay_floor` holds the three lists together). A
+partial overlay is not a smaller one. `sandbox_runtime` is a regular package, so
+Python takes it from the first directory that has it and never looks in `/app`
+for a submodule the overlay lacks: an overlay of three modules made every other
+one vanish the moment it was installed.
+
+What the floor is for: a sandbox the backend has not reached yet, and one whose
+install failed, still works. The workspace server is the one process that loads
+its code at container start, so a newer overlay installed mid-session reaches it
+at the next start, not at once. It is not restarted to hurry that: its token is
+single-use and it is the container's only process under `tini`.
+
+On Docker and Desktop the image is fingerprinted by its inputs and reused across
+releases whose inputs did not change (see
+[Desktop](../desktop.md#the-workspace-image-is-reused-across-releases)), so its
+floor is routinely older than the release. That is the arrangement E2B always
+had, where the template is built by hand and rarely.
 
 #### Why the runtime overlay is not in the home
 
@@ -355,24 +395,27 @@ The first-party Lemma code the backend installs lives in `/opt/lemma-runtime`,
 outside the durable root, and that is deliberate. `/opt` is where add-on software
 belongs; it keeps what the platform installed out of the directory the user
 browses; and it keeps the copy set a later disk migration works from as *the
-user's files*, since an overlay installed `--no-deps` against one base image has
-no business being carried onto another.
+user's files*.
 
-The cost is an asymmetry worth stating plainly: the overlay is durable on E2B,
-where the sandbox is the disk, and is **not** durable on Docker or
-`lemma_local`, where `/opt` is the container layer and replacing a container
-discards it. The next use reinstalls it — about 650 ms, on the fabric where
-replacing a container is cheap — so this is a cost, not a correctness problem.
+It is durable on every fabric all the same. On E2B the sandbox is the disk. On
+Docker it is a volume of its own, named after the workspace volume
+(`<volume>-runtime`) and destroyed with it; on `lemma_local` it is a directory
+beside the home on the guest's disk (`runtime/<sandbox>`), removed when the
+sandbox's storage is. A replaced container starts with the overlay installed,
+and the backend's probe finds its stamp instead of reinstalling. A container
+created before the mount existed keeps the overlay in its own layer until it is
+next replaced.
 
-Installing needs no elevation on either fabric: the images create the directory
+Installing needs no elevation on any fabric: the images create the directory
 owned by the sandbox user and bake the `.pth` with exactly the bytes the
 installer would write, so the one step that would need root is never taken.
 
 It does place one requirement on the code. Whatever decides to reinstall must key
-on the sandbox *incarnation*, not on the logical sandbox: a replaced container
-keeps every file and keeps its storage generation while losing `/opt` entirely,
-and a check that missed that would report the overlay installed while the sandbox
-served the image's older copy.
+on the sandbox *incarnation*, not on the logical sandbox: a container replaced
+without the mount keeps every file and its storage generation while losing
+`/opt` entirely, and a check that missed that would report the overlay installed
+while the sandbox served the image's older copy. With the mount the re-probe
+costs one read.
 
 #### What is not promised
 
@@ -384,6 +427,10 @@ served the image's older copy.
   recreated. First-party Lemma code is delivered into the running sandbox instead
   as a content-addressed overlay, so a code change does not require a new
   image.
+- **The same image on every fabric.** The layout is the same; the images are not.
+  E2B's template builds on its own Ubuntu base with Google Chrome and is amd64
+  only; the Docker and Desktop image is Debian with Debian's Chromium, for amd64
+  and arm64.
 
 ## 7. Lifecycle principles
 
