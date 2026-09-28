@@ -144,7 +144,7 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
             )}
             {choice && !chosen && !runtimes.isPending && (
                 <p className="pick__note">
-                    <WarningIcon size={13} /> What this teammate was pinned to is gone. Pick something else.
+                    <WarningIcon size={13} /> What it was pinned to is gone. Pick something else.
                 </p>
             )}
             {/* Said before anyone sends a message, rather than as the error
@@ -156,7 +156,7 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
                     <WarningIcon size={13} />
                     <span>
                         {setup === "none"
-                            ? "No AI model is set up yet, so this teammate cannot answer. Add one in Settings → Models."
+                            ? "No AI model is set up yet, so it cannot answer. Add one in Settings → Models."
                             : "The organization default has no model behind it. Pick one above, or add one in Settings → Models."}
                     </span>
                     <AddModelAction />

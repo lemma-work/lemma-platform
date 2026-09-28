@@ -111,7 +111,7 @@ const CONCEPT_DOCS_EXTRA: Record<ConceptId, ConceptDocsExtra> = {
     surface: {
         useWhen: [
             "Work arrives in Slack, email, WhatsApp, or Teams and someone copy-pastes it in.",
-            "Customers or teammates should reach the pod without learning a new tool.",
+            "Customers or people on your team should reach the pod without learning a new tool.",
             "Approvals should be one click in the surface people already watch.",
             "You want the pod to reply where the conversation started.",
         ],
@@ -140,7 +140,7 @@ const CONCEPT_DOCS_EXTRA: Record<ConceptId, ConceptDocsExtra> = {
                 "Open Apps and create one — describe what the team should be able to do and let AI draft it, or build by hand.",
                 "Put the work front and center: the records, drafts, or decisions people act on.",
                 "Embed agents where the work happens — drafting, summarizing, suggesting — so the app does work, not just display it.",
-                "Share the URL; access follows the pod’s sharing rules, and teammates never see the configuration.",
+                "Share the URL; access follows the pod’s sharing rules, and people never see the configuration.",
             ],
         },
         whereItLives:

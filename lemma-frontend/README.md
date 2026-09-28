@@ -50,7 +50,8 @@ when hidden. Use `pod` for API entities and “teammate” in the interface.
 Clicking a resource tab opens it in the right sidebar alongside the
 conversation. Opening a file or table from Library keeps Library on the left;
 opening a row from a table keeps that table on the left. Closing the right
-pane returns to that source view. Profile opens full-width. The top-right “View in full” control expands that resource;
+pane returns to that source view. Profile and apps open full-width — an app
+squeezed into the sidebar reflows into something cramped, so it never opens there. The top-right “View in full” control expands that resource;
 “Return to sidebar” restores the conversation beside it. Selecting another
 tab opens that tab in the sidebar. Selecting Conversation closes the sidebar.
 Drag the divider to resize the sidebar; its width is remembered in local storage.
@@ -58,13 +59,14 @@ The divider also supports Left/Right arrow keys, Home/End, and double-click to
 reset. The divider uses a single line, highlighted on hover, drag or keyboard focus.
 Documents use the warm paper surface in both themes, matching their sidebar toolbar.
 Chat uses compact horizontal gutters. Resource toolbars omit the Ask action.
-Apps, file editors and the conversation retain their mounted state when
+File editors and the conversation retain their mounted state when
 expanding or returning. Below 768px the views stack vertically.
 
 Run `node --experimental-strip-types --import ./tests/resolve.mjs --test tests/split-tabs.test.ts`
 for pane-selection regressions. For a browser check, open `/demo/landing`,
-click Launch studio, enter a conversation draft, expand the app and return
-it to the sidebar. Verify that the draft and app state survive.
+open a file, enter a conversation draft, expand the file and return
+it to the sidebar. Verify that the draft and file state survive, and that
+Launch studio opens full-width with no divider.
 Repeat at 1440, 1024, 768 and 375px.
 
 ## Deployment

@@ -1,7 +1,8 @@
 import { PdfPreview } from "./pdf-preview";
 import { EmbedPreview } from "./embed-preview";
 import { framedDocument } from "./framed-document";
-import { ExternalIcon, FileIcon } from "@/ui/icons";
+import { DownloadIcon, ExternalIcon, FileIcon } from "@/ui/icons";
+import { saveFile } from "./save-file";
 import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
@@ -108,6 +109,13 @@ function readableSize(bytes: number): string {
     return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
+/** "ZIP", not "binary": the kind is this app's word for a file it cannot
+ *  draw, and the reader knows the file by its extension. */
+function formatOf(name: string): string {
+    const dot = name.lastIndexOf(".");
+    return dot > 0 ? name.slice(dot + 1).toUpperCase() : "File";
+}
+
 /** A file the agent put on screen.
  *
  *  In the transcript it is a preview with one action: open it, which puts it
@@ -119,7 +127,8 @@ function readableSize(bytes: number): string {
  *  goes in a sandbox for the same reason any markup this app did not write
  *  does. Images use signed URLs. PDFs use an authenticated download and a
  *  component-owned object URL so attachment headers do not prevent preview.
- *  Unsupported formats keep explicit download/open actions. */
+ *  An unsupported format downloads from its card, and opens on the platform
+ *  from the stage. */
 export function FileView({
     podId,
     path,
@@ -137,6 +146,7 @@ export function FileView({
        covers more than a bad URL: a signed URL is short-lived, and a codec the
        browser will not take (.mov in Chrome) fails exactly the same way. */
     const [mediaFailed, setMediaFailed] = useState(false);
+    const [saving, setSaving] = useState<"idle" | "busy" | "failed">("idle");
 
     const file = useQuery({
         queryKey: ["file", podId, path],
@@ -313,8 +323,33 @@ export function FileView({
         );
     }
 
-    /* Nothing this app will draw. On the stage that is the whole view, so the
-       platform link is the only way onward and earns its place there. */
+    /* Nothing this app will draw. In the transcript the card's one action is
+       the file itself: opening it as a tab only led to a page saying there is
+       no preview and pointing at a Download button in the toolbar, so the card
+       downloads directly. */
+    if (!full) {
+        const save = async () => {
+            if (saving === "busy") return;
+            setSaving("busy");
+            try { await saveFile(podId, data); setSaving("idle"); }
+            catch { setSaving("failed"); }
+        };
+        return (
+            <button className="resource resource--link" onClick={() => void save()} disabled={saving === "busy"} title={"Download " + data.name}>
+                <span className="resource__glyph"><FileIcon size={22} /></span>
+                <span className="resource__body">
+                    <span className="resource__name">{data.name}</span>
+                    <span className="resource__type">
+                        {saving === "failed" ? "Download failed · try again" : data.note ?? [formatOf(data.name), readableSize(data.size)].filter(Boolean).join(" · ")}
+                    </span>
+                </span>
+                <span className="resource__go"><DownloadIcon size={15} />{saving === "busy" ? "Downloading…" : "Download"}</span>
+            </button>
+        );
+    }
+
+    /* On the stage that is the whole view, so the platform link is the only
+       way onward and earns its place there. */
     const body = (
         <>
             <span className="resource__glyph"><FileIcon size={22} /></span>
@@ -325,20 +360,12 @@ export function FileView({
                     sentence about the wrong thing: the format is drawn, the
                     bytes were the problem. */}
                 <span className="resource__type">
-                    {data.note ?? (full ? "Preview unavailable for this format · use Download to save it" : meta || data.path)}
+                    {data.note ?? "Preview unavailable for this format · use Download to save it"}
                 </span>
             </span>
-            <span className="resource__go">Open{full && <ExternalIcon size={14} />}</span>
+            <span className="resource__go">Open<ExternalIcon size={14} /></span>
         </>
     );
-
-    if (!full && onOpenTab) {
-        return (
-            <button className="resource resource--link" onClick={() => onOpenTab(data.path)}>
-                {body}
-            </button>
-        );
-    }
 
     const href = data.appUrl ?? data.rawUrl;
     return href ? (

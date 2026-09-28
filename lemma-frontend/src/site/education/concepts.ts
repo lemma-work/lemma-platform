@@ -50,7 +50,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         oneLiner:
             "An AI worker with a role, instructions, and scoped access to your tables, files, and apps.",
         explainer: [
-            "An agent is hired like a teammate: you write its instructions (the job description), pick its runtime, and grant it access to exactly the data and apps it needs.",
+            "An agent is hired the way a person is: you write its instructions (the job description), pick its runtime, and grant it access to exactly the data and apps it needs.",
             "Agents can be asked things in chat, put on a schedule, given steps in a flow, or wired to a surface so they handle inbound work on their own.",
         ],
         example:
@@ -125,11 +125,11 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         oneLiner:
             "A custom app where your team and the pod’s agents work together — built on this pod’s data, deployed at its own URL.",
         explainer: [
-            "An app is where people and agents collaborate. A teammate drives the work — opening records, making the calls — and agents pitch in two ways: kick one off in the background with a button, or keep one open beside you like an assistant that drafts and answers as you go.",
+            "An app is where people and agents collaborate. A person drives the work — opening records, making the calls — and agents pitch in two ways: kick one off in the background with a button, or keep one open beside you like an assistant that drafts and answers as you go.",
             "Build it from the same agents, tables, and files as the rest of the pod, share the URL, and your team gets an AI-powered workspace without ever touching the configuration.",
         ],
         example:
-            "A support app where every ticket opens with an agent’s draft reply already written — a teammate sends it, refines it, or asks the assistant for another angle.",
+            "A support app where every ticket opens with an agent’s draft reply already written — a person sends it, refines it, or asks the assistant for another angle.",
         iconKind: "apps",
         guideSlug: "concepts/apps",
         related: ["agent", "table", "grant"],

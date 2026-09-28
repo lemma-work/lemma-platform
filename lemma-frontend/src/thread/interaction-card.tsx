@@ -94,7 +94,7 @@ function clockAt(ms: number): string {
 
 /** What the server is doing on our behalf once a decision is recorded. */
 function afterNote(decision: ApprovalDecision): string {
-    return decision === "DENY" ? "Decision sent. Waiting for the teammate…" : "Approval sent. Waiting for the teammate…";
+    return decision === "DENY" ? "Decision sent." : "Approval sent.";
 }
 
 /** One question, folded back to the answer it got.

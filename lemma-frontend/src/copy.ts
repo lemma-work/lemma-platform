@@ -1,3 +1,17 @@
+/** The name of the category, not a word for every sentence.
+ *
+ *  `pod` in the API; "teammate" only where the interface names the category
+ *  itself: hiring (New teammate, the first-run doorway), the rail header, the
+ *  search group, and the screens that say one is missing. Everywhere else the
+ *  app had started using it as a pronoun — "the teammate cannot load it",
+ *  "search this teammate", "waiting for the teammate" — and the word wore out.
+ *
+ *  So, inside the app: when it is acting, say its name ("Kit wants to run…");
+ *  when the sentence is mechanics, drop the subject ("so it won't load");
+ *  when you are already on its page, drop the scope ("Search"). Humans are
+ *  people, never teammates. Never swap in agent, assistant, bot or pod —
+ *  agent means the things a teammate hands work to. The landing page is its
+ *  own voice and says "teammate" freely. */
 export const MATE = "teammate";
 export const MATES = "Teammates";
 
@@ -17,9 +31,6 @@ export const ORG = "organization";
 
 /** The same thing, said to somebody who has not met one yet.
  *
- *  Inside the app `MATE` is enough. The rail is full of them, the header names
- *  one, and nothing on screen is competing for the word.
- *
  *  On the way in it is not enough, and for a specific reason: the screens that
  *  introduce a teammate are the same screens that talk about colleagues. "Who
  *  else can see your teammates" is, to somebody on their first morning, a
@@ -29,6 +40,6 @@ export const ORG = "organization";
  *
  *  So first contact spells it out and the app stops once you are in, which is
  *  the split the landing page already makes: it says "the AI teammate that
- *  learns your work", and from the rail onward it is just a teammate. */
+ *  learns your work", and from the rail onward it is mostly just a name. */
 export const AI_MATE = "AI " + MATE;
 export const AI_MATES = AI_MATE + "s";

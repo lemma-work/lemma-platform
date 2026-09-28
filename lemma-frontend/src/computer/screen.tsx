@@ -15,7 +15,7 @@ import { screenSay, type BrowserState, type MachineState } from "./machine";
  */
 function liveNote(state: LiveState): string {
     if (state === "connecting") return "Connecting to the screen…";
-    if (state === "no-browser") return "Nothing is open on it yet. This will pick up when a teammate starts something.";
+    if (state === "no-browser") return "Nothing is open on it yet. This will pick up once something starts.";
     if (state === "signed-out") return "Your session ended. Sign in again to watch.";
     if (state === "unsupported") return "This kind of machine has no screen to show.";
     if (state === "stale-image") return "This machine is running an image too old to show its screen.";
@@ -121,7 +121,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                 {showing ? (
                     <>
                         {live !== "live" && <>{liveNote(live)} </>}
-                        {live === "live" && <><strong>Live.</strong> This is the teammate&rsquo;s browser, and you can use it. </>}
+                        {live === "live" && <><strong>Live.</strong> You can use this browser too. </>}
                         {(live === "refused" || live === "stale-image" || live === "unsupported") && (
                             <button className="computer-inline" disabled={busy} onClick={onOpenTab}>
                                 <ExternalIcon size={13} /> {busy ? <LoadingIndicator inline label="Loading" /> : "Open it in a tab"}
