@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.stream_guard import stream_guard_loop
 from app.core.log.log import get_logger
 from app.core.observability.process_health import (
@@ -287,6 +288,11 @@ def start_worker_guards(
     watchdog = create_background_task(
         lane_watchdog_loop(broker, lane_tasks), name="worker-lane-watchdog"
     )
+    if event_transport_settings.redis_stream_guard_interval_seconds <= 0:
+        # Switched off, so not started -- and above all not watched: a guard
+        # that returns at once would read to the watchdog as one that died,
+        # and the switch meant for an emergency would crash-loop the worker.
+        return (watchdog,)
     guard = create_background_task(
         stream_guard_loop(
             message_bus,
