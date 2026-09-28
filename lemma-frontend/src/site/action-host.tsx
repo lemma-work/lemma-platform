@@ -7,9 +7,7 @@ const Actions = dynamic(() => import("./actions").then((m) => m.Actions), {
     loading: () => <p role="status">Opening…</p>,
 });
 export type ActionProps = {
-    action: "import" | "invite" | "logout" | "remix" | "organization";
-    owner?: string;
-    repo?: string;
+    action: "invite" | "logout" | "remix" | "organization";
     invitationId?: string;
     decision?: "accept" | "reject";
     source?: string;

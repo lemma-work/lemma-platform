@@ -48,7 +48,7 @@ interface Invite {
 /** An invitation link, with a way to copy it. The copy can fail -- a shared
  *  address on the LAN is not a secure context -- and says so rather than
  *  pretending, because the link is then the only thing the person needs. */
-function CopyLink({ link, label = "Copy link" }: { link: string; label?: string }) {
+export function CopyLink({ link, label = "Copy link" }: { link: string; label?: string }) {
     const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
     return (
         <button

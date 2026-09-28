@@ -123,8 +123,8 @@ export function SiteHeader() {
             <nav aria-label="Main navigation">
                 <Link href="/templates">Templates</Link>
                 <Link href="/docs">Docs</Link>
-                <HostedOnly><Link href="/download">Download</Link></HostedOnly>
-                <a href={githubUrl}>GitHub ↗</a>
+                <HostedOnly><Link href="/download" data-nav="download">Download</Link></HostedOnly>
+                <a href={githubUrl} data-nav="github">GitHub ↗</a>
                 <Link href="/t">Get started ↗</Link>
             </nav>
         </header>
