@@ -445,7 +445,7 @@ test("the host-execution switch reflects the Agent Host and is off-limits where 
     const on = hostExecutionRow({ host_execution: { enabled: true, available: true } });
     assert.deepEqual(on, { checked: true, blocked: null, consequence: hostExecutionConsequence() });
     assert.match(on.consequence, /inside a sandbox/);
-    assert.match(on.consequence, /Teammates’ runs stay in the VM/);
+    assert.match(on.consequence, /Everything else still runs in the VM/);
     assert.equal(hostExecutionRow({ host_execution: { enabled: false, available: true } }).checked, false);
     // Not macOS: disabled, with the reason, whatever the setting says.
     const unavailable = hostExecutionRow({ host_execution: { enabled: true, available: false } });

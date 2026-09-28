@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Tab } from "@/data";
 import { ExternalIcon, RefreshIcon, PlusIcon, HistoryIcon, CopyIcon, DownloadIcon, MoreIcon, LinkIcon, ComputerIcon } from "@/ui/icons";
 import { ShareDialog } from "@/thread/share-dialog";
+import { saveFile } from "@/thread/save-file";
 import { copyText } from "@/desktop/clipboard";
 import { isDesktop } from "@/desktop/bridge";
 import { useAppFrame } from "@/desktop/pod-apps";
@@ -28,16 +29,8 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
     const download = async () => {
         if (!file.data || downloading) return;
         setDownloading(true); setFeedback("");
-        try {
-            const data = file.data;
-            let blob: Blob;
-            if (data.text !== undefined) blob = new Blob([data.text], {type:data.mime});
-            else blob = await source.downloadFile(podId, path);
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a"); link.href = url; link.download = data.name;
-            document.body.append(link); link.click(); link.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 60000);
-        } catch { setFeedback("Download failed. Please try again."); }
+        try { await saveFile(podId, file.data); }
+        catch { setFeedback("Download failed. Please try again."); }
         finally { setDownloading(false); }
     };
     const copy = async () => {
@@ -72,7 +65,7 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
         secondary = <>
             {/* Not on the History tab itself, where it would open what is open. */}
             {tab?.kind !== "history" && <button className="view-actions__icon" onClick={onHistory} title="History" aria-label="History"><HistoryIcon size={17}/><span>History</span></button>}
-            {!sample && <button className="view-actions__icon" onClick={onComputer} title="The computer this teammate works on" aria-label="Computer"><ComputerIcon size={17}/><span>Computer</span></button>}
+            {!sample && <button className="view-actions__icon" onClick={onComputer} title="The computer it works on" aria-label="Computer"><ComputerIcon size={17}/><span>Computer</span></button>}
         </>;
     }
 

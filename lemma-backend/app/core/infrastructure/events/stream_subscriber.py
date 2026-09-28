@@ -153,6 +153,16 @@ def registered_stream_groups() -> set[tuple[str, str]]:
     return set(_REGISTERED_STREAM_GROUPS | _DECLARED_STREAM_GROUPS)
 
 
+def subscribed_stream_groups() -> set[tuple[str, str]]:
+    """The (stream, group) pairs this process has subscribers for.
+
+    Narrower than :func:`registered_stream_groups`, which also includes groups
+    a module merely declares. Only these are groups whose reader lives in this
+    process, so only these are this process's to restart over.
+    """
+    return set(_REGISTERED_STREAM_GROUPS)
+
+
 def registered_groups_for_stream(stream: str) -> set[str]:
     """Return the declared consumer groups for one static stream name."""
     return {

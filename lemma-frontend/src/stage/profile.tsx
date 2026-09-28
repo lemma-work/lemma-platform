@@ -676,7 +676,7 @@ function HeroName({ name, onRename }: { name: string; onRename?: (next: string) 
                         id={field}
                         className="hero__field"
                         autoFocus
-                        aria-label="This teammate's name"
+                        aria-label="Name"
                         /* Sized to what is in it, so the badge beside the
                            name does not travel to the far edge the moment
                            the field opens. `field-sizing` does this exactly
@@ -884,7 +884,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         {me.unavailable?.includes("apps") ? <p className="empty-row">Couldn’t load apps.</p> : me.projects.length === 0 ? (
                             <p className="empty-row">
                                 {candidate
-                                    ? "Ask your teammate to build an app for the job."
+                                    ? "Ask " + name + " to build an app for the job."
                                     : "No apps yet. Ask it for one in the conversation."}
                             </p>
                         ) : (
@@ -915,7 +915,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         look at when you are already asking what this teammate
                         is made of — which is this page. */}
                     {subject.agents && (
-                        <Section title="Agents" meta="what this teammate hands work to">
+                        <Section title="Agents" meta="what it hands work to">
                             {subject.agents}
                         </Section>
                     )}
@@ -1082,7 +1082,7 @@ export function ProfilePane({
     if (profile.isError) {
         return (
             <div className="pane"><div className="pane__inner">
-                <p className="empty-row">Couldn’t load this teammate’s profile. <button className="linkish" onClick={() => void profile.refetch()}>Try again</button></p>
+                <p className="empty-row">Couldn’t load this profile. <button className="linkish" onClick={() => void profile.refetch()}>Try again</button></p>
             </div></div>
         );
     }

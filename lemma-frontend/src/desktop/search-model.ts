@@ -16,7 +16,7 @@ export interface SearchModelRow {
 export function searchModelRow(status: string | null | undefined): SearchModelRow | null {
     switch (status) {
         case "ready":
-            return { state: "ready", value: "Ready", consequence: "Files you add become searchable for your teammates." };
+            return { state: "ready", value: "Ready", consequence: "Files you add become searchable." };
         case "preparing":
             return {
                 state: "busy",

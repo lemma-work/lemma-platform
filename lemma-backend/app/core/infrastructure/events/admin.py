@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import time
 from uuid import UUID
 
 from sqlalchemy import select
 
 from app.core.infrastructure.db.session import close_engine, get_session_maker
+from app.core.infrastructure.events.gap_replay import (
+    replay_window,
+    requeue_outbox_window,
+)
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.core.infrastructure.events.outbox import replay_outbox_event
 from app.core.log.log import get_logger
@@ -35,6 +40,25 @@ async def _list_events(*, dead_only: bool, limit: int) -> None:
             )
 
 
+async def _replay_window(stream: str, after_ms: int, until_ms: int) -> None:
+    """Re-queue every outbox row for ``stream`` published in the window.
+
+    The same selection the stream guard's automatic replay makes, without its
+    pacing: an operator running this has decided the consumer can take it.
+    """
+    lower, upper = replay_window(after_ms, until_ms, int(time.time() * 1000))
+    session_maker = get_session_maker()
+    total = 0
+    while True:
+        count = await requeue_outbox_window(
+            session_maker, stream=stream, lower=lower, upper=upper, limit=1_000
+        )
+        total += count
+        if count == 0:
+            break
+    print(f"re-queued {total} events on {stream}")
+
+
 async def _run() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -43,11 +67,23 @@ async def _run() -> None:
     list_parser.add_argument("--limit", type=int, default=100)
     replay_parser = subparsers.add_parser("replay")
     replay_parser.add_argument("event_id", type=UUID)
+    window_parser = subparsers.add_parser(
+        "replay-window",
+        help=(
+            "Re-publish one stream's events from a window a trim removed, as "
+            "logged by redis.stream.unread_trimmed (after_ms / until_ms)."
+        ),
+    )
+    window_parser.add_argument("stream")
+    window_parser.add_argument("after_ms", type=int)
+    window_parser.add_argument("until_ms", type=int)
     args = parser.parse_args()
 
     try:
         if args.command == "list":
             await _list_events(dead_only=args.dead_only, limit=args.limit)
+        elif args.command == "replay-window":
+            await _replay_window(args.stream, args.after_ms, args.until_ms)
         else:
             replayed = await replay_outbox_event(get_session_maker(), args.event_id)
             if not replayed:

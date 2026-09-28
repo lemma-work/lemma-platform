@@ -192,7 +192,7 @@ export function ConfirmDelete({
         <div className="library-confirm" role="alertdialog" aria-label={"Delete " + item.name}>
             <p>
                 Delete <strong>{item.name}</strong>
-                {item.kind === "folder" ? " and everything in it" : ""}? The teammate loses access to it too.
+                {item.kind === "folder" ? " and everything in it" : ""}? It is gone for everyone.
             </p>
             <div className="library-confirm__actions">
                 <button ref={confirm} className="btn btn--danger" onClick={onConfirm}>

@@ -51,16 +51,23 @@ const NOTHING: SandboxImageNotice = { kind: "none" };
  *
  *  A download that goes on downloading is news only when it can say how far it
  *  has got. */
-export function sandboxImageNotice(previous: SandboxImageState | null, next: SandboxImageStatus): SandboxImageNotice {
+export function sandboxImageNotice(
+    previous: SandboxImageState | null,
+    next: SandboxImageStatus,
+    /** The progress last shown, so a poll that measured nothing new is not news. */
+    previousDownloaded: string | null = null,
+): SandboxImageNotice {
     const downloaded = downloadedSoFar(next);
-    if (previous === next.state && !(next.state === "downloading" && downloaded)) return NOTHING;
+    if (previous === next.state && !(next.state === "downloading" && downloaded && downloaded !== previousDownloaded)) {
+        return NOTHING;
+    }
     if (next.state === "downloading") {
         return {
             kind: "downloading",
             title: "Preparing the workspace sandbox",
             description: downloaded
-                ? `Downloading the image teammates run their work in: ${downloaded}.`
-                : next.detail || "Downloading the image teammates run their work in.",
+                ? `Downloading the image work runs in: ${downloaded}.`
+                : next.detail || "Downloading the image work runs in.",
         };
     }
     /* Both endings are only worth reporting to someone who saw the beginning. */
@@ -69,7 +76,7 @@ export function sandboxImageNotice(previous: SandboxImageState | null, next: San
         return {
             kind: "ready",
             title: "Workspace sandbox ready",
-            description: `Teammates can run code, shells and browsers on ${thisComputer()}.`,
+            description: `Code, shells and browsers can now run on ${thisComputer()}.`,
         };
     }
     if (next.state === "failed") {
@@ -112,6 +119,7 @@ const POLL_INTERVAL_MS = 2_000;
  *  once hidden, its progress does not bring it back. Its ending does. */
 export function useSandboxImageNotice(): { notice: SandboxImageNotice; dismiss: () => void } {
     const previous = useRef<SandboxImageState | null>(null);
+    const lastDownloaded = useRef<string | null>(null);
     const hidden = useRef(false);
     const [notice, setNotice] = useState<SandboxImageNotice>(NOTHING);
 
@@ -136,7 +144,8 @@ export function useSandboxImageNotice(): { notice: SandboxImageNotice; dismiss: 
                 return;
             }
             if (cancelled) return;
-            const next = sandboxImageNotice(previous.current, status);
+            const next = sandboxImageNotice(previous.current, status, lastDownloaded.current);
+            lastDownloaded.current = downloadedSoFar(status);
             const progressOnly = previous.current === status.state;
             if (!progressOnly) hidden.current = false;
             previous.current = status.state;

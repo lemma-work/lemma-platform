@@ -68,7 +68,7 @@ function FileBody({ path }: { path: string }) {
         return (
             <p className="computer-note">
                 {readableSize(sizeBytes)}, which is more than this pane should show. {save}, or
-                ask the teammate who wrote it what is in it.
+                ask in the conversation what is in it.
             </p>
         );
     }
@@ -189,7 +189,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                 <header className="library-heading"><div><h1>Your computer</h1></div></header>
                 <div className="computer-empty">
                     <TerminalIcon size={26} />
-                    <p>The sample has no machine behind it. Sign in to see the one your teammates work on.</p>
+                    <p>The sample has no machine behind it. Sign in to see yours.</p>
                 </div>
             </section>
         );
@@ -219,7 +219,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                 />
                 <div className="computer-intro">
                     <h1>Your computer</h1>
-                    <p>Your AI teammates share this computer and its browser. Your saved logins stay here.</p>
+                    <p>Everything you ask for runs on this computer and its browser. Your saved logins stay here.</p>
                 </div>
             </header>
 
@@ -292,7 +292,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                         <div className="computer-empty">
                             <TerminalIcon size={26} />
                             <p>
-                                This computer is asleep. It starts when a teammate needs it and stops again
+                                This computer is asleep. It starts when work needs it and stops again
                                 once it has been idle a while — wake it to continue.
                             </p>
                             <button className="btn btn--primary" onClick={() => setWake(true)}>Wake it</button>
@@ -304,7 +304,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                             <FolderIcon size={26} />
                             <p>
                                 Nothing has been written here. A conversation&apos;s folder is made the first
-                                time its teammate saves something into it.
+                                time something is saved into it.
                             </p>
                         </div>
                     )}

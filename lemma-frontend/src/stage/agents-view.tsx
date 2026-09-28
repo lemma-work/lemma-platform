@@ -88,11 +88,11 @@ export function AgentsView({ podId, teammate, embedded, open: opened, onOpen: se
                 )}
             </header>
 
-            {agents.isPending && <LoadingRows label="Loading teammates" />}
+            {agents.isPending && <LoadingRows label="Loading agents" />}
             {agents.isError && (
                 <p className="empty-row" role="alert">
                     {isForbidden(agents.error)
-                        ? "You may not list the agents for this teammate."
+                        ? "You may not list these agents."
                         : "Couldn’t load agents."}{" "}
                     <button className="linkish" onClick={() => void agents.refetch()}>Try again</button>
                 </p>
@@ -301,7 +301,7 @@ function Reading({ detail }: { detail: AgentDetail }) {
             <Block title="Runs on">
                 {runtime
                     ? <p className="agents-line"><code>{runtime}</code></p>
-                    : <p className="empty-row">Nothing pinned — it runs on whatever this teammate runs on.</p>}
+                    : <p className="empty-row">Nothing pinned — it runs on the default.</p>}
             </Block>
 
             {/* Only where there is one. An agent without an input schema is
@@ -433,7 +433,7 @@ function Editor({ podId, detail, onDone }: { podId: string; detail: AgentDetail;
                 it — and a picker that writes them without saying so is worse
                 than not offering them. */}
             <p className="agents-dim">
-                Toolsets, visibility and the model are set by asking {detail.label} for them, or in teammate settings.
+                Toolsets, visibility and the model are set by asking {detail.label} for them, or in settings.
             </p>
 
             {save.isError && (

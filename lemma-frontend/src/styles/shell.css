@@ -2994,6 +2994,9 @@
 }
 .resource__go {
     flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 12.5px;
     color: var(--accent);
 }
@@ -5367,8 +5370,16 @@ button.filecard__open {
 .pane--profile .pcard__head h3 { font-family: inherit; font-size: 18px; font-weight: 650; text-transform: none; letter-spacing: normal; color: var(--ink); }
 .hero__headline[data-collapsed] { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .hero__description-toggle { margin-top: 8px; }
-.composer__box { align-items: flex-end; }
-textarea.composer__input { resize: none; line-height: 1.5; min-height: 36px; max-height: 200px; overflow-y: auto; overflow-wrap: anywhere; }
+/* The box aligns to its bottom edge so a growing draft pushes upward and the
+   controls stay on its last line. That only reads as one row if the first line
+   of text and every control share a centre: bottom-aligning a 34px attach, a
+   30px voice button, a 38px send and a 36px field put four centres on the row,
+   with the placeholder highest and the voice icon lowest. Everything is
+   centred on one line height instead. */
+.composer__box { align-items: flex-end; --composer-line: 38px; }
+textarea.composer__input { resize: none; line-height: 1.5; min-height: var(--composer-line); padding-block: calc((var(--composer-line) - 1.5em) / 2); max-height: 200px; overflow-y: auto; overflow-wrap: anywhere; }
+.composer__attach { margin-block-end: calc((var(--composer-line) - 34px) / 2); }
+.composer__wave { margin-block-end: calc((var(--composer-line) - 30px) / 2); }
 a.reach { text-decoration: none; }
 
 /* Conversation sizing is independent of navigation and document typography. */
