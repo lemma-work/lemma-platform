@@ -21,6 +21,10 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.concurrency.cancellation import (
+    as_stray_cancellation,
+    is_stray_cancellation,
+)
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.config import event_transport_settings
@@ -223,8 +227,21 @@ class InboxConsumer:
                     # wrong: the worker knows nothing about the caller.
                     try:
                         await handler()
-                    except asyncio.CancelledError:
-                        raise
+                    except asyncio.CancelledError as exc:
+                        if not is_stray_cancellation(exc):
+                            raise
+                        # Leaked in from a client bound to another task, not
+                        # aimed at this one. Re-raising it as-is would end the
+                        # subscriber's reader for good and leave this row
+                        # PROCESSING with no attempt counted, so it is recorded
+                        # as the failure it is and retried like any other.
+                        return await self._retry_or_dead_letter(
+                            consumer,
+                            event_id,
+                            event_type,
+                            attempt,
+                            as_stray_cancellation(exc),
+                        )
                     except ValidationError as exc:
                         await self._finish(
                             consumer,

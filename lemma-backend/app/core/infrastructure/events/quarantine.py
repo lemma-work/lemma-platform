@@ -29,7 +29,9 @@ or because it has already had more attempts than any real transient fault needs.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,11 +40,16 @@ from faststream.exceptions import HandlerException
 from pydantic import ValidationError
 from redis.typing import EncodableT, FieldT
 
+from app.core.concurrency.cancellation import (
+    as_stray_cancellation,
+    is_stray_cancellation,
+)
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.stream_subscriber import (
     registered_groups_for_stream,
 )
 from app.core.infrastructure.redis.client import get_redis
+from app.core.infrastructure.redis.counters import incr_with_ttl
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -63,6 +70,34 @@ MAX_DELIVERY_ATTEMPTS = 12
 
 #: Failure counters outlive a redelivery cycle but not a deployment.
 _FAILURE_COUNTER_TTL_SECONDS = 24 * 60 * 60
+
+
+async def _bounded(
+    call_next: Callable[[object], Awaitable[object]], msg: object
+) -> object:
+    """Run one delivery under the handler deadline.
+
+    A stream subscriber handles one message at a time, so a handler that never
+    returns stops its whole lane -- and nothing notices, because the reader task
+    is alive and merely waiting. With a deadline the hang becomes a
+    ``TimeoutError``: an ordinary failure, retried and eventually quarantined
+    like any other, and a lane that keeps moving.
+    """
+    timeout = event_transport_settings.redis_stream_handler_timeout_seconds
+    if timeout <= 0:
+        return await call_next(msg)
+    try:
+        async with asyncio.timeout(timeout):
+            return await call_next(msg)
+    except TimeoutError:
+        stream, message_id = describe_message(msg)
+        logger.error(
+            "events.consumer.handler_timed_out.failed",
+            original_stream=stream,
+            message_id=message_id,
+            timeout_seconds=timeout,
+        )
+        raise
 
 
 def dead_letter_stream(stream: str) -> str:
@@ -113,7 +148,7 @@ class StreamQuarantineMiddleware(BaseMiddleware):
 
     async def consume_scope(self, call_next: Any, msg: Any) -> Any:
         try:
-            return await call_next(msg)
+            return await _bounded(call_next, msg)
         except HandlerException:
             # Not a failure: FastStream's own acknowledgement signals
             # (`NackMessage` and friends) are how a handler *asks* for a
@@ -125,13 +160,33 @@ class StreamQuarantineMiddleware(BaseMiddleware):
             # backstop and be dead-lettered for being popular rather than for
             # being broken.
             raise
-        except Exception as error:
-            if not await self._should_quarantine(msg, error):
+        except asyncio.CancelledError as cancelled:
+            if not is_stray_cancellation(cancelled):
                 raise
-            await self._quarantine(msg, error)
-            # Swallowed: the ack middleware above now sees a clean return and
-            # acknowledges, which is the only thing that clears the PEL entry.
-            return None
+            # Not aimed at this task: a client bound to some other task handed
+            # its own cancellation back to us. Let it through and FastStream's
+            # supervisor treats the reader as cancelled and never restarts it
+            # -- the lane stops for the rest of the process. As an ordinary
+            # failure it is retried, counted and in the end dead-lettered.
+            error = as_stray_cancellation(cancelled)
+            stream, message_id = describe_message(msg)
+            logger.error(
+                "events.consumer.stray_cancellation.failed",
+                original_stream=stream,
+                message_id=message_id,
+                exc_info=error,
+            )
+            return await self._fail(msg, error)
+        except Exception as error:
+            return await self._fail(msg, error)
+
+    async def _fail(self, msg: object, error: Exception) -> None:
+        """Quarantine ``error``'s message if it cannot succeed, else re-raise."""
+        if not await self._should_quarantine(msg, error):
+            raise error
+        await self._quarantine(msg, error)
+        # Swallowed: the ack middleware above now sees a clean return and
+        # acknowledges, which is the only thing that clears the PEL entry.
 
     async def _should_quarantine(self, msg: Any, error: Exception) -> bool:
         if is_permanent(error):
@@ -146,10 +201,7 @@ class StreamQuarantineMiddleware(BaseMiddleware):
         try:
             client = get_redis()
             key = _failure_key(stream, message_id)
-            count = int(await client.incr(key))
-            if count == 1:
-                await client.expire(key, _FAILURE_COUNTER_TTL_SECONDS)
-            return count
+            return await incr_with_ttl(client, key, _FAILURE_COUNTER_TTL_SECONDS)
         except Exception:
             # Counting is best-effort. Losing the count means the message keeps
             # retrying, which is the old behaviour, not a new failure.

@@ -42,6 +42,9 @@ _RETENTION_SECONDS = 60 * 60
 # and the reader is told, so an agent sees "output was truncated" rather than
 # silently believing it read everything.
 _MAX_CHUNKS = 4096
+#: Characters per stored chunk; with `_MAX_CHUNKS` this bounds a process's
+#: buffered output to about 64MB of ASCII.
+_MAX_CHUNK_CHARS = 16_384
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,16 +79,24 @@ class E2BOutputBuffer:
         # index therefore skipped exactly as many chunks as were dropped, and
         # once its cursor reached the cap it matched nothing at all and the
         # process went silent to that reader for the rest of its life.
-        sequence = int(await redis.incr(self._sequence_key(process_id)))
-        payload = json.dumps(
-            {
-                "c": channel.value,
-                "d": data.decode("utf-8", errors="replace"),
-                "n": sequence,
-            }
-        )
+        #
+        # Split to a bounded size first. `_MAX_CHUNKS` bounds the list's length,
+        # and a length is only a memory bound if each entry is bounded too: the
+        # SDK hands over whatever it received, so one noisy process could hold
+        # 4,096 arbitrarily large chunks for as long as it kept being polled.
+        text = data.decode("utf-8", errors="replace")
+        pieces = [
+            text[start : start + _MAX_CHUNK_CHARS]
+            for start in range(0, len(text), _MAX_CHUNK_CHARS)
+        ]
+        last = int(await redis.incrby(self._sequence_key(process_id), len(pieces)))
+        first = last - len(pieces) + 1
+        payloads = [
+            json.dumps({"c": channel.value, "d": piece, "n": first + offset})
+            for offset, piece in enumerate(pieces)
+        ]
         pipe = redis.pipeline()
-        pipe.rpush(key, payload)
+        pipe.rpush(key, *payloads)
         # Trimming here rather than on read keeps the memory bound honest even
         # if nobody ever reads this process's output.
         pipe.ltrim(key, -_MAX_CHUNKS, -1)

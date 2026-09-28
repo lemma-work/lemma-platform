@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
+from functools import partial
 from datetime import datetime
 import json
 from typing import Any, Callable
@@ -18,7 +20,10 @@ from app.core.config import settings
 from app.core.domain.job_queue import JobQueuePort
 from app.core.log.log import get_logger
 from app.core.origin import current_origin
-from app.core.request_context import current_observability_context
+from app.core.request_context import (
+    create_background_task,
+    current_observability_context,
+)
 
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -70,27 +75,62 @@ def create_streaq_client(*, queue_name: str = "default") -> Worker[None]:
     )
 
 
+@dataclass(slots=True)
+class _OpenClients:
+    """One generation of streaq clients, and the task that holds them open.
+
+    ``owner`` and ``ready`` are ``None`` only for clients handed in already open
+    (tests).
+    """
+
+    primary: Worker[Any]
+    lanes: dict[str, Worker[None]]
+    owner: asyncio.Task[None] | None = None
+    ready: asyncio.Future[None] | None = None
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def alive(self) -> bool:
+        if self.owner is None:
+            return True
+        return not self.owner.done() and not self.release.is_set()
+
+
 class SharedStreaqJobQueue(JobQueuePort):
     """Shared streaq-backed job queue for a process.
 
     Lanes are separate Redis queues, so publishing needs a client per lane. The
-    default client (``connect()``) is the interactive lane and also backs the
-    lane-independent plain-Redis helpers below; ``_lane_client`` lazily opens an
-    extra client for any other lane a caller actually enqueues to, so a process
-    that never touches the bulk lane never opens a second connection.
+    interactive client also backs the lane-independent plain-Redis helpers
+    below.
+
+    **Every client is opened and closed on one dedicated owner task**, never on
+    the task that happens to need it first. A streaq client is a coredis
+    connection pool, and a coredis pool is an anyio task group: every new
+    connection runs as a child of it, and the group belongs to whichever task
+    entered it. The bulk-lane client used to be entered lazily, from the first
+    enqueue -- which in the worker is a streaq job running under its own
+    timeout scope. When that scope fired, the pool's group was cancelled with
+    it. From then on every new connection, from every task in the process,
+    failed with a ``CancelledError`` none of them had been sent: it killed the
+    bulk lane's worker outright, and it killed the ``datastore-file-events``
+    stream reader that enqueued next, which FastStream does not restart after a
+    cancellation. Both stayed dead for hours with every health check green.
+
+    Owned by a task of its own, the pool's lifetime is the owner's and nothing
+    else's. A caller cancelled while the clients are opening leaves them
+    opening for the next caller; and if the owner does die -- the pool itself
+    failed -- the next caller opens a fresh generation instead of inheriting a
+    poisoned one.
     """
 
     def __init__(self, worker_factory: Callable[[], Worker[Any]]):
         self._worker_factory = worker_factory
-        self._worker = worker_factory()
-        self._stack: AsyncExitStack | None = None
+        self._clients: _OpenClients | None = None
         self._lock = asyncio.Lock()
-        self._lane_clients: dict[str, Worker[Any]] = {}
-        self._lane_stacks: dict[str, AsyncExitStack] = {}
 
-    def _reset_worker(self) -> None:
-        self._worker = self._worker_factory()
-        self._stack = None
+    @property
+    def connected(self) -> bool:
+        """Whether a generation of clients is open and its owner still alive."""
+        return self._clients is not None and self._clients.alive()
 
     async def _lane_client(self, job_name: str) -> Worker[Any]:
         """Client for the lane ``job_name`` is registered on."""
@@ -101,66 +141,85 @@ class SharedStreaqJobQueue(JobQueuePort):
         )
 
         lane = lane_for_task(job_name)
+        clients = await self._open_clients()
         if lane is Lane.INTERACTIVE:
-            return await self.connect()
-
-        queue_name = lane_queue_name(lane)
-        existing = self._lane_clients.get(queue_name)
-        if existing is not None:
-            return existing
-
-        async with self._lock:
-            existing = self._lane_clients.get(queue_name)
-            if existing is None:
-                client = create_streaq_client(queue_name=queue_name)
-                stack = AsyncExitStack()
-                await stack.__aenter__()
-                await stack.enter_async_context(client)
-                self._lane_clients[queue_name] = client
-                self._lane_stacks[queue_name] = stack
-                existing = client
-        return existing
+            return clients.primary
+        return clients.lanes[lane_queue_name(lane)]
 
     async def _all_clients(self) -> list[Worker[Any]]:
         """Every open client, for id-keyed lookups whose lane is unknown."""
-        return [await self.connect(), *self._lane_clients.values()]
+        clients = await self._open_clients()
+        return [clients.primary, *clients.lanes.values()]
 
     async def connect(self) -> Worker[Any]:
-        """Initialize the shared streaq client if needed."""
-        if self._stack is not None:
-            return self._worker
+        """Open every lane's client, if they are not open, and return the default."""
+        return (await self._open_clients()).primary
 
-        async with self._lock:
-            if self._stack is None:
-                # Never reuse a worker initialized in another lifespan context.
-                if self._worker._initialized:  # noqa: SLF001
-                    self._reset_worker()
-                stack = AsyncExitStack()
-                await stack.__aenter__()
-                await stack.enter_async_context(self._worker)
-                self._stack = stack
+    async def _open_clients(self) -> _OpenClients:
+        clients = self._clients
+        if clients is None or not clients.alive():
+            async with self._lock:
+                clients = self._clients
+                if clients is None or not clients.alive():
+                    if clients is not None and not clients.release.is_set():
+                        # The owner ended without being asked to: the pool
+                        # failed under it. Its traceback is already on record as
+                        # `background_task.failed`; this says what happens next.
+                        logger.error(
+                            "infrastructure.streaq_job_queue.clients_lost.failed",
+                        )
+                    clients = self._start_owner()
+                    # Recorded before the handshake, so a caller cancelled while
+                    # waiting cannot orphan this generation and send the next
+                    # caller off to open a second one over the same clients.
+                    self._clients = clients
+        if clients.ready is not None:
+            # Shielded: one caller being cancelled must not cancel the handshake
+            # every other caller is waiting on. If the owner failed to open, its
+            # error is raised here -- and the next call starts afresh.
+            await asyncio.shield(clients.ready)
+        return clients
 
-        return self._worker
+    def _start_owner(self) -> _OpenClients:
+        from app.core.infrastructure.jobs.streaq_runtime import Lane, lane_queue_name
+
+        # Fresh clients for every generation: one entered by an earlier owner,
+        # or still being entered by one, must never be entered again.
+        clients = _OpenClients(
+            primary=self._worker_factory(),
+            lanes={
+                lane_queue_name(lane): create_streaq_client(
+                    queue_name=lane_queue_name(lane)
+                )
+                for lane in Lane
+                if lane is not Lane.INTERACTIVE
+            },
+            ready=asyncio.get_running_loop().create_future(),
+        )
+        clients.owner = create_background_task(
+            _hold_clients_open(clients), name="streaq-job-queue-clients"
+        )
+        clients.owner.add_done_callback(partial(_settle_ready, clients))
+        return clients
 
     async def disconnect(self) -> None:
-        """Close the shared streaq client when owned by this adapter."""
-        stack = self._stack
-        self._stack = None
-        lane_stacks = list(self._lane_stacks.values())
-        self._lane_stacks.clear()
-        self._lane_clients.clear()
-        for lane_stack in (*lane_stacks, stack):
-            if lane_stack is None:
-                continue
-            try:
-                await lane_stack.aclose()
-            except ValueError as exc:
-                if "different Context" not in str(exc):
-                    raise
-                logger.debug(
-                    "infrastructure.streaq_job_queue.ignoring_streaq_queue_shutdown_context.diagnostic"
-                )
-        self._reset_worker()
+        """Close every client, on the task that opened them."""
+        clients, self._clients = self._clients, None
+        if clients is None or clients.owner is None:
+            return
+        owner = clients.owner
+        clients.release.set()
+        if owner.get_loop() is not asyncio.get_running_loop():
+            # A test that ran the lifespan on a loop that has since closed.
+            # Nothing on this loop can wait on that task.
+            logger.debug(
+                "infrastructure.streaq_job_queue.ignoring_streaq_queue_shutdown_context.diagnostic"
+            )
+            return
+        done, _ = await asyncio.wait({owner}, timeout=_CLOSE_TIMEOUT_SECONDS)
+        if not done:
+            owner.cancel()
+            await asyncio.wait({owner}, timeout=_CLOSE_TIMEOUT_SECONDS)
 
     async def enqueue(self, job_name: str, **kwargs: Any) -> Task[Any] | None:
         worker = await self._lane_client(job_name)
@@ -221,49 +280,6 @@ class SharedStreaqJobQueue(JobQueuePort):
                 return True
         return False
 
-    def _task_job_key(self, task_id: str) -> str:
-        return f"streaq:task-job:{task_id}"
-
-    async def track_task_job(self, task_id: str, job_id: str) -> None:
-        worker = await self.connect()
-        await worker.redis.set(self._task_job_key(task_id), job_id)
-
-    async def get_tracked_task_job_id(self, task_id: str) -> str | None:
-        worker = await self.connect()
-        job_id = await worker.redis.get(self._task_job_key(task_id))
-        return str(job_id) if job_id else None
-
-    async def clear_tracked_task_job(
-        self,
-        task_id: str,
-        *,
-        expected_job_id: str | None = None,
-    ) -> None:
-        worker = await self.connect()
-        key = self._task_job_key(task_id)
-        if expected_job_id is None:
-            await worker.redis.delete([key])
-            return
-
-        current_job_id = await self.get_tracked_task_job_id(task_id)
-        if current_job_id == expected_job_id:
-            await worker.redis.delete([key])
-
-    async def abort_tracked_task_job(
-        self,
-        task_id: str,
-        *,
-        timeout_seconds: float | None = None,
-    ) -> bool:
-        job_id = await self.get_tracked_task_job_id(task_id)
-        if not job_id:
-            return False
-
-        aborted = await self.abort(job_id, timeout_seconds=timeout_seconds)
-        if aborted:
-            await self.clear_tracked_task_job(task_id, expected_job_id=job_id)
-        return aborted
-
     async def status(self, job_id: str) -> TaskStatus:
         # As with abort: the id is lane-agnostic, so consult each open lane and
         # return the first that actually knows this job.
@@ -284,6 +300,39 @@ class SharedStreaqJobQueue(JobQueuePort):
     ) -> Task[Any] | None:
         kwargs["_defer_until"] = defer_until
         return await self.enqueue(job_name, **kwargs)
+
+
+#: How long ``disconnect`` waits for the owner task to close the pools.
+_CLOSE_TIMEOUT_SECONDS = 5.0
+
+
+async def _hold_clients_open(clients: _OpenClients) -> None:
+    """Enter every client, report readiness, and hold them open until released.
+
+    Runs as its own task, so the pools' task groups are anchored here and
+    nowhere else -- see ``SharedStreaqJobQueue``. A failure to open is handed
+    to the waiters by ``_settle_ready`` when this task ends.
+    """
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(clients.primary)
+        for client in clients.lanes.values():
+            await stack.enter_async_context(client)
+        if clients.ready is not None and not clients.ready.done():
+            clients.ready.set_result(None)
+        await clients.release.wait()
+
+
+def _settle_ready(clients: _OpenClients, owner: asyncio.Task[None]) -> None:
+    """Hand an owner that ended before it was ready to everyone waiting on it.
+
+    Never as a cancellation: the waiters were not cancelled, and a
+    CancelledError that reaches a stream reader ends it for good.
+    """
+    ready = clients.ready
+    if ready is None or ready.done():
+        return
+    error = None if owner.cancelled() else owner.exception()
+    ready.set_exception(error or ConnectionError("streaq clients stopped opening"))
 
 
 _job_queue: SharedStreaqJobQueue | None = None

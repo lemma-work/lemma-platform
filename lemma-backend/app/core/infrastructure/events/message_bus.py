@@ -14,6 +14,10 @@ from redis.exceptions import RedisError
 from app.core.bounded import BoundedDict
 from app.core.config import settings
 from app.core.infrastructure.events.config import event_transport_settings
+from app.core.infrastructure.events.stream_keys import (
+    MEMORY_PRESSURE_KEY,
+    stream_cap_key,
+)
 from app.core.infrastructure.events.stream_subscriber import (
     ensure_stream_groups,
     registered_groups_for_stream,
@@ -121,6 +125,30 @@ async def _group_holding_back_trim(
 #: One line a minute per condition is enough to see a stream sitting at its
 #: hard ceiling and enough to date it, while a burst collapses to one line.
 TRIM_REPORT_INTERVAL_SECONDS = 60
+
+
+async def _apply_memory_cap(
+    redis_client, stream: str, maxlen: int | None
+) -> int | None:
+    """Lower ``maxlen`` to the entry count the stream guard says fits in memory.
+
+    The lag-aware cap above may relax to the hard ceiling while a group is
+    behind; this is what stops "relax" from meaning "past Redis's memory". The
+    guard publishes the cap every pass from the stream's measured entry size,
+    so a burst between two passes is bounded too. A missing key (no guard
+    running, or the stream is new) leaves ``maxlen`` as it was.
+    """
+    try:
+        raw = await redis_client.get(stream_cap_key(stream))
+    except RedisError:
+        return maxlen
+    if not isinstance(raw, bytes | str | int):
+        return maxlen
+    try:
+        cap = int(raw)
+    except ValueError:
+        return maxlen
+    return cap if maxlen is None else min(maxlen, cap)
 
 
 class _KeyedReportThrottle:
@@ -350,7 +378,21 @@ class FastStreamRedisMessageBus:
             # the duplicate.
             await ensure_stream_groups(redis_client, stream)
             maxlen = await self._safe_publish_maxlen(redis_client, stream)
+            maxlen = await _apply_memory_cap(redis_client, stream, maxlen)
             await broker.publish(payload, stream=stream, maxlen=maxlen)
+
+    async def memory_pressure_critical(self) -> bool:
+        """Whether the stream guard has asked publishers to stop.
+
+        Unreadable counts as "no": the flag is an optimisation over a budget
+        the guard enforces anyway, and a Redis that cannot answer a GET cannot
+        take a publish either -- the publish failing is what backs off then.
+        """
+        try:
+            client = await self.redis_client()
+            return bool(await client.exists(MEMORY_PRESSURE_KEY))
+        except RedisError, ConnectionError, OSError:
+            return False
 
     async def close(self) -> None:
         if not self._broker:

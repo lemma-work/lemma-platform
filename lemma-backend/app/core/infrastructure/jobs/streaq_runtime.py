@@ -47,6 +47,11 @@ from app.core.infrastructure.events.stream_observability import (
 from app.core.observability.backlog_gauges import backlog_gauge_loop
 from app.core.observability.startup_timing import finish_startup, release_startup_heap
 from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
+from app.core.infrastructure.jobs.lane_watchdog import (
+    start_worker_guards,
+    stop_lanes,
+    watch_lanes,
+)
 from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
 from app.core.infrastructure.jobs.job_liveness import (
     register_job_liveness_middleware,
@@ -144,20 +149,9 @@ def _silence_lane_signal_handler(worker: Worker[AppWorkerContext]) -> None:
 
 async def _stop_secondary_lanes() -> None:
     """Cancel the non-primary lanes and wait, briefly, for them to unwind."""
-    tasks = [task for task in _secondary_lane_tasks if not task.done()]
-    _secondary_lane_tasks.clear()
-    if not tasks:
-        return
-    for task in tasks:
-        task.cancel()
-    _, pending = await asyncio.wait(tasks, timeout=_SECONDARY_LANE_SHUTDOWN_SECONDS)
-    if pending:
-        # Named, because "the worker had to be killed" is not a diagnosis.
-        logger.warning(
-            "infrastructure.streaq_runtime.lane_shutdown_timed_out.degraded",
-            lanes=",".join(sorted(task.get_name() for task in pending)),
-            timeout_seconds=_SECONDARY_LANE_SHUTDOWN_SECONDS,
-        )
+    await stop_lanes(
+        _secondary_lane_tasks, timeout_seconds=_SECONDARY_LANE_SHUTDOWN_SECONDS
+    )
 
 
 def lane_queue_name(lane: Lane) -> str:
@@ -445,6 +439,9 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         redis_stream_snapshot_loop(get_message_bus()),
         name="redis-stream-snapshot",
     )
+    guard_tasks = start_worker_guards(
+        broker, _secondary_lane_tasks, get_message_bus(), async_session_maker
+    )
     # Runs on the worker only: it is the process that owns the queues, and one
     # sampler is enough -- lane depth and pending-row counts are properties of
     # the shared Redis and database, not of the sampling process.
@@ -495,6 +492,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             memory_task,
             heartbeat_task,
             stream_snapshot_task,
+            *guard_tasks,
             backlog_gauge_task,
         ):
             if background_task is not None and not background_task.done():
@@ -717,6 +715,7 @@ async def run_worker_lanes(
         )
         for lane in secondary
     )
+    watch_lanes(_secondary_lane_tasks)
     try:
         await LANE_WORKERS[primary].run_async(task_status=task_status)
     finally:

@@ -14,7 +14,6 @@ on every occurrence.
 from __future__ import annotations
 
 import json
-from contextlib import AsyncExitStack
 from uuid import uuid4
 
 import pytest
@@ -22,6 +21,7 @@ import pytest
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
+    _OpenClients,
 )
 from app.core.origin import (
     Origin,
@@ -42,7 +42,7 @@ class _Thing(DomainEvent):
 
 def _connected_queue(worker: _Worker) -> SharedStreaqJobQueue:
     queue = SharedStreaqJobQueue(lambda: worker)  # type: ignore[arg-type]
-    queue._stack = AsyncExitStack()  # type: ignore[attr-defined]
+    queue._clients = _OpenClients(primary=worker, lanes={})  # type: ignore[arg-type]
     return queue
 
 
