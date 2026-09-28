@@ -8,13 +8,19 @@
 # digest matches the configured one, so bumping the digest in the same release
 # as an image change is what makes a rename here safe.
 
-ARG PYTHON_IMAGE=python:3.14.6-slim
-ARG NODE_IMAGE=node:24.18.0-slim
-ARG UV_VERSION=0.11.31
+# Pinned by digest, not only by tag. A tag is a pointer its publisher moves --
+# a rebuilt `3.14.6-slim` carries the same name and new bytes -- and this
+# image's identity is supposed to change only when its inputs do: its digest
+# is what a Desktop sandbox is keyed on, so a new one replaces every sandbox
+# and downloads the whole image again. The tag stays for the reader.
+# `runtime_artifacts.workspace_image_fingerprint` hashes these lines.
+ARG PYTHON_IMAGE=python:3.14.6-slim@sha256:7bec7ddcddeff7975d6ba9b4be7dd6f6b2f55e7491539145e2978f7f97ce9144
+ARG NODE_IMAGE=node:24.18.0-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.31@sha256:ecd4de2f060c64bea0ff8ecb182ddf46ba3fcccdc8a60cfdbaf20d1a047d7437
 ARG PNPM_VERSION=11.15.1
 ARG GH_VERSION=2.97.0
 
-FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
+FROM ${UV_IMAGE} AS uv-runtime
 
 # The GitHub CLI is not in Debian, and an agent working in a repo reaches for
 # `gh` as readily as `git` -- issues, PRs and releases have no plumbing
@@ -53,6 +59,10 @@ RUN corepack enable pnpm \
 COPY lemma-backend/sandbox-images/templates/workspace-node/package.json ./package.json
 COPY lemma-backend/sandbox-images/templates/workspace-node/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY lemma-backend/sandbox-images/templates/workspace-node/pnpm-workspace.yaml ./pnpm-workspace.yaml
+# The last two lines drop what records when the install ran: pnpm's own state
+# files, and the compile cache a package's install script left in `.tmp`.
+# Nothing reads them at run time -- nothing runs `pnpm install` here again --
+# and they were the only bytes two builds of one lockfile disagreed on.
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --prod --frozen-lockfile \
     && runtime_arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
@@ -66,27 +76,66 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     && find "${browser_bin_dir}" -maxdepth 1 -type f -name 'agent-browser-*' \
         ! -name "${browser_binary}" -delete \
     && chmod 0755 "${browser_bin_dir}/${browser_binary}" \
-    && pnpm store prune
+    && pnpm store prune \
+    && find node_modules -type d -name .tmp -prune -exec rm -rf {} + \
+    && rm -f node_modules/.modules.yaml node_modules/.pnpm-workspace-state-v1.json
 
+# The third-party closure, and nothing of Lemma's own. Its inputs are the
+# lockfile and nothing else, so this layer -- pandas, matplotlib, fastapi and
+# the rest -- is the same bytes until a dependency moves, however often the SDK
+# or the CLI does. `--frozen` because the first-party sources are deliberately
+# not here for `--locked` to resolve against; `python-floor` below checks the
+# lock against them instead.
 FROM ${PYTHON_IMAGE} AS python-runtime
+# In the environment of every `RUN` below, where `py_compile` reads it: with it
+# set, bytecode is validated by the source's hash instead of its mtime. The
+# release build rewrites every file's mtime to this epoch after the fact
+# (`rewrite-timestamp`), and an mtime-keyed `.pyc` would then disagree with
+# its source and be recompiled, in memory, on every import. Unset locally, where
+# nothing rewrites timestamps and the default is right.
+ARG SOURCE_DATE_EPOCH
 ENV UV_PROJECT_ENVIRONMENT=/opt/lemma-python \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 COPY --from=uv-runtime /uv /usr/local/bin/uv
 COPY lemma-backend/sandbox-images/templates/workspace-python/pyproject.toml /build/lemma-backend/sandbox-images/templates/workspace-python/pyproject.toml
 COPY lemma-backend/sandbox-images/templates/workspace-python/uv.lock /build/lemma-backend/sandbox-images/templates/workspace-python/uv.lock
+RUN uv sync \
+        --project /build/lemma-backend/sandbox-images/templates/workspace-python \
+        --frozen \
+        --no-dev \
+        --no-editable \
+        --no-install-package lemma-sdk \
+        --no-install-package lemma-terminal \
+        --no-install-package lemma-pod-bundle \
+    && printf '%s\n' \
+        'import sys; p="/home/user/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
+        > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-overlay.pth \
+    && uv cache clean
+
+# The first-party packages, on their own, into a prefix of their own: the final
+# stage lays this over the closure above as a separate small layer. `--no-deps`
+# because everything they depend on is already there, which `uv lock --locked`
+# proves -- it fails if the lockfile no longer matches these sources.
+# `uv_cache.json` is uv's record of when it built each wheel, so it and its
+# `RECORD` line go: they are the only bytes two builds of one source disagree on.
+FROM python-runtime AS python-floor
+ARG SOURCE_DATE_EPOCH
 COPY lemma-python /build/lemma-python
 COPY lemma-pod-bundle /build/lemma-pod-bundle
 COPY lemma-cli /build/lemma-cli
 COPY lemma-skills /build/lemma-skills
-RUN uv sync \
+RUN uv lock --locked \
         --project /build/lemma-backend/sandbox-images/templates/workspace-python \
-        --locked \
-        --no-dev \
-        --no-editable \
-    && printf '%s\n' \
-        'import sys; p="/home/user/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
-        > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-overlay.pth \
+    && uv pip install \
+        --no-deps \
+        --python /opt/lemma-python/bin/python \
+        --prefix /opt/lemma-floor \
+        /build/lemma-python \
+        /build/lemma-pod-bundle \
+        /build/lemma-cli \
+    && find /opt/lemma-floor -name uv_cache.json -delete \
+    && sed -i '/uv_cache\.json/d' /opt/lemma-floor/lib/python3.14/site-packages/*.dist-info/RECORD \
     && uv cache clean
 
 FROM ${PYTHON_IMAGE}
@@ -152,6 +201,12 @@ ENV PYTHONUNBUFFERED=1 \
     # survives to the next conversation.
     PNPM_HOME=/home/user/.local/share/pnpm \
     UV_CACHE_DIR=/home/user/.uv-cache \
+    # The runtime overlay's commands first, then the image's own: the overlay
+    # supersedes the baked scripts the way its `site-packages` supersedes the
+    # baked packages, and a sandbox with no overlay yet finds the image's
+    # copies. After the user's own directories, which outrank ours as their
+    # `pip install` does on `sys.path`.
+    #
     # `/usr/local/bin` before the npm bin directory, because that is where the
     # `lemma-node-tool` wrappers live and being found is the whole of their job.
     # With the npm directory first, a bare `agent-browser` resolved to the raw
@@ -166,9 +221,15 @@ ENV PYTHONUNBUFFERED=1 \
     # trap in a comment and works around it by spelling the path absolutely;
     # the shell an agent gets had no such workaround, and reported both errors
     # in a real transcript.
-    PATH=/home/user/.python/bin:/home/user/.local/share/pnpm:/home/user/.local/bin:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/home/user/.python/bin:/home/user/.local/share/pnpm:/home/user/.local/bin:/opt/lemma-runtime/current/bin:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
+# What goes with the lists is everything that records *this* install rather
+# than what was installed: apt's logs, the dynamic linker's and fontconfig's
+# caches, which stamp when they were built, and the machine id dbus generates.
+# Two builds of the same inputs disagree about exactly those bytes and nothing
+# else. The caches rebuild themselves on first use, and an empty machine id is
+# the standard state for an image.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bash \
@@ -220,7 +281,9 @@ RUN apt-get update \
         x11-xserver-utils \
         x11vnc \
         xvfb \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log \
+        /var/cache/ldconfig/aux-cache /var/cache/fontconfig/* /var/lib/dbus/machine-id \
+    && : > /etc/machine-id
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 # npm and npx, not just the node binary. Copying only `node` left the image with
@@ -264,18 +327,16 @@ RUN printf '%s\n' \
       'import sys; p="/opt/lemma-runtime/current/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
       > /opt/lemma-python/lib/python3.14/site-packages/lemma-runtime-overlay.pth
 
-COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
-COPY lemma-backend/sandbox-images/scripts/lemma-uv /usr/local/bin/uv
-RUN chmod 0755 /usr/local/bin/uv /usr/local/lib/lemma-uv-bin \
+RUN chmod 0755 /usr/local/lib/lemma-uv-bin \
     && ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
     && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma \
-    && chmod 0755 /usr/local/lib/lemma-node-tool \
     && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/agent-browser \
     && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/lit \
     && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/liteparse \
-    && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/pnpm
+    && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/pnpm \
+    && ln -sf /opt/lemma-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
 
 RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 --home-dir /home/user --create-home appuser \
@@ -298,52 +359,60 @@ RUN groupadd --gid 10001 appuser \
         /tmp/lemma-browser \
     && chmod 0700 /run/lemma-bootstrap
 
-COPY lemma-python /sdk/lemma-python
-COPY lemma-pod-bundle /sdk/lemma-pod-bundle
-COPY lemma-cli /sdk/lemma-cli
-COPY lemma-typescript /sdk/lemma-typescript
-COPY lemma-skills /sdk/lemma-skills
 COPY lemma-backend/sandbox-images/templates/workspace-python/lemma-profile.sh /etc/profile.d/lemma-python.sh
 COPY lemma-backend/sandbox-images/templates/workspace-github/lemma-profile.sh /etc/profile.d/lemma-github.sh
-RUN chmod -R a+rX /sdk
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/bin/start-workspace-runtime
 
+# Everything below is the floor: the first-party code this image carries so a
+# sandbox works before the backend has installed the runtime overlay into it,
+# and keeps working if an install fails. The overlay supersedes all of it --
+# its `site-packages` comes first on `sys.path`, its `bin` first on `PATH` --
+# so a Lemma code change ships without a new image, on this fabric as on E2B.
+#
+# Last, and in small layers, because it is the only part that changes with
+# Lemma's own code. `scripts/runtime_artifacts.py`'s image fingerprint leaves
+# these sources out on purpose: a release that changed only them reuses the
+# previous image, and this floor is then older than the release. That is the
+# same arrangement E2B has always had, and the overlay is what makes it safe.
+#
+# The Python floor is the first-party packages alone, installed over the
+# third-party closure above rather than beside it.
+COPY --from=python-floor /opt/lemma-floor/ /opt/lemma-python/
+
+# The same list the runtime overlay carries (`RUNTIME_SOURCES` in
+# `scripts/build_runtime_bundle.py`), and the same list the E2B template bakes;
+# `test_the_images_bake_the_overlay_floor` holds the three together. A module
+# left out here does not fail the build -- the container starts, exits 1 on
+# the import, and every sandbox operation then waits for a runtime that is
+# never coming.
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_runtime/__init__.py
-# `paths` before the packages that import it: `contracts` and the whole
-# workspace runtime read the filesystem roots from it, and a missing module
-# here does not fail the build -- the container starts, exits 1 on import,
-# and every sandbox operation then waits for a runtime that is never coming.
-COPY --chown=10001:10001 lemma-backend/sandbox_runtime/paths.py /app/sandbox_runtime/paths.py
-COPY --chown=10001:10001 lemma-backend/sandbox_runtime/sandbox_memory.py /app/sandbox_runtime/sandbox_memory.py
-# Loopback in this sandbox, falling through to the machine Lemma runs on.
-# Listed here for the reason the whole list exists: a module the image does
-# not copy is not a smaller image, it is an `ImportError` the first time
-# somebody opens their own dev server.
-COPY --chown=10001:10001 lemma-backend/sandbox_runtime/host_fallback.py /app/sandbox_runtime/host_fallback.py
-COPY --chown=10001:10001 lemma-backend/sandbox_runtime/protocol.py /app/sandbox_runtime/protocol.py
-COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/contracts.py /app/sandbox_runtime/contracts.py
-COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_runtime/workspace
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/errors.py /app/sandbox_runtime/errors.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/host_fallback.py /app/sandbox_runtime/host_fallback.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/paths.py /app/sandbox_runtime/paths.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/protocol.py /app/sandbox_runtime/protocol.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/sandbox_memory.py /app/sandbox_runtime/sandbox_memory.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/browser_relay /app/sandbox_runtime/browser_relay
-COPY lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/bin/start-workspace-runtime
-COPY lemma-backend/sandbox-images/scripts/set-display-size.sh /usr/local/bin/set-display-size
-COPY lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh /usr/local/bin/lemma-ensure-display
-COPY lemma-backend/sandbox-images/scripts/start-browser.sh /usr/local/bin/start-browser
-COPY lemma-backend/sandbox-images/scripts/start-browser-relay.sh /usr/local/bin/start-browser-relay
-COPY lemma-backend/sandbox-images/scripts/browser-is-live.sh /usr/local/bin/browser-is-live
-COPY lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh /usr/local/bin/start-vnc-bridge
-COPY lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
-COPY lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/lemma-node/webpage-to-markdown.mjs
-RUN ln -sf /opt/lemma-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
-RUN chmod 0755 \
-        /usr/local/bin/start-workspace-runtime \
-        /usr/local/bin/lemma-ensure-display \
-        /usr/local/bin/start-browser \
-        /usr/local/bin/start-browser-relay \
-        /usr/local/bin/browser-is-live \
-        /usr/local/bin/start-vnc-bridge \
-        /usr/local/bin/save-webpage \
-        /usr/local/lib/webpage-to-markdown.mjs \
-    && python -m compileall -q /app/sandbox_runtime
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_runtime/workspace
+# Declared here rather than at the top of the stage: its value is part of the
+# cache key of every `RUN` after it, and the layers above have no use for it.
+# See `python-runtime` for why bytecode wants it.
+ARG SOURCE_DATE_EPOCH
+RUN python -m compileall -q /app/sandbox_runtime
+
+# The scripts, under the names the overlay's `bin` gives them too
+# (`SCRIPT_NAMES` in `scripts/build_runtime_bundle.py`).
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/lemma-uv /usr/local/bin/uv
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/set-display-size.sh /usr/local/bin/set-display-size
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh /usr/local/bin/lemma-ensure-display
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/start-browser.sh /usr/local/bin/start-browser
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/start-browser-relay.sh /usr/local/bin/start-browser-relay
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/browser-is-live.sh /usr/local/bin/browser-is-live
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh /usr/local/bin/start-vnc-bridge
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/lemma-node/webpage-to-markdown.mjs
 
 # The project root, which the image must create: Docker pre-populates an empty
 # volume from the image, so a directory baked here arrives in the volume owned

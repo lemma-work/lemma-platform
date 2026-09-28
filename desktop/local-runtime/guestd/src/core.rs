@@ -177,6 +177,16 @@ impl<E: Engine + 'static> GuestService<E> {
             "/data",
             "--requirepass",
             parameters.credentials.redis_password.as_str(),
+            // Below the container's 512m, so a full Redis refuses writes
+            // instead of being OOM-killed by the kernel -- which, with the
+            // append-only file on, can recur on every restart as the replay
+            // itself crosses the limit. `noeviction` because streams, job
+            // queues and locks must never be silently dropped; the worker's
+            // stream guard keeps streams inside a share of this ceiling.
+            "--maxmemory",
+            "384mb",
+            "--maxmemory-policy",
+            "noeviction",
         ]
         .iter()
         .map(|value| (*value).to_owned())
@@ -184,9 +194,9 @@ impl<E: Engine + 'static> GuestService<E> {
         self.ensure_core_container(
             "lemma-core-redis",
             &parameters.images.redis,
-            // Bumped so an existing Stack container is replaced rather than
-            // adopted: the configuration moved from the environment to argv.
-            "redis-v3",
+            // Bumped so an existing container is replaced rather than adopted
+            // whenever its argv changes (v4: a maxmemory ceiling).
+            "redis-v4",
             &BTreeMap::new(),
             &[
                 "--network".into(),

@@ -63,4 +63,4 @@ Pair the inbox with run status so operators see *where* a process is stuck: show
 history) next to the form. This is the app side of human-agent collaboration —
 don't hide waits in logs.
 
-> Exact fields: `cat /sdk/lemma-typescript/src/react/{useWorkflowRunWaitAssignments,useWorkflowForm,useWorkflowResume}.ts`.
+> Exact fields: `cat node_modules/lemma-sdk/dist/react/{useWorkflowRunWaitAssignments,useWorkflowForm,useWorkflowResume}.d.ts`.

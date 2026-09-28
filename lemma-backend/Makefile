@@ -777,8 +777,13 @@ SANDBOX_PLATFORMS ?= linux/amd64,linux/arm64
 # rather than following the host the way the workspace image now does.
 SANDBOX_FUNCTION_PLATFORM  ?= linux/amd64
 SANDBOX_FUNCTION_PLATFORMS ?= linux/amd64
-SANDBOX_PYTHON_IMAGE ?= python:3.14.6-slim
-SANDBOX_NODE_IMAGE   ?= node:24.18.0-slim
+# Empty by default, so the Dockerfiles' own digest-pinned bases are used. Set
+# either to build on a different base; the image is then not the one a release
+# publishes, and its digest will not match.
+SANDBOX_PYTHON_IMAGE ?=
+SANDBOX_NODE_IMAGE   ?=
+SANDBOX_BASE_ARGS := $(if $(SANDBOX_PYTHON_IMAGE),--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE)) \
+	$(if $(SANDBOX_NODE_IMAGE),--build-arg NODE_IMAGE=$(SANDBOX_NODE_IMAGE))
 
 WORKSPACE_IMAGE := $(SANDBOX_REGISTRY)/lemma-workspace
 FUNCTION_IMAGE  := $(SANDBOX_REGISTRY)/lemma-function
@@ -814,8 +819,7 @@ sandbox-image-workspace:
 	docker build \
 		--platform $(SANDBOX_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.workspace \
-		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
-		--build-arg NODE_IMAGE=$(SANDBOX_NODE_IMAGE) \
+		$(SANDBOX_BASE_ARGS) \
 		-t $(WORKSPACE_IMAGE):$(SANDBOX_TAG) \
 		..
 
@@ -823,7 +827,7 @@ sandbox-image-function:
 	docker build \
 		--platform $(SANDBOX_FUNCTION_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.function \
-		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
+		$(SANDBOX_BASE_ARGS) \
 		-t $(FUNCTION_IMAGE):$(SANDBOX_TAG) \
 		..
 
@@ -833,8 +837,7 @@ push-sandbox-workspace:
 	docker buildx build \
 		--platform $(SANDBOX_PLATFORMS) \
 		-f $(IMAGES_DIR)/Dockerfile.workspace \
-		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
-		--build-arg NODE_IMAGE=$(SANDBOX_NODE_IMAGE) \
+		$(SANDBOX_BASE_ARGS) \
 		-t $(WORKSPACE_IMAGE):$(SANDBOX_TAG) \
 		--push \
 		..
@@ -843,7 +846,7 @@ push-sandbox-function:
 	docker buildx build \
 		--platform $(SANDBOX_FUNCTION_PLATFORMS) \
 		-f $(IMAGES_DIR)/Dockerfile.function \
-		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
+		$(SANDBOX_BASE_ARGS) \
 		-t $(FUNCTION_IMAGE):$(SANDBOX_TAG) \
 		--push \
 		..

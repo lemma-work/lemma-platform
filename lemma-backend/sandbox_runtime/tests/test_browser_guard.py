@@ -269,5 +269,5 @@ class TestClosing:
         finally:
             subprocess.run = original  # type: ignore[assignment]
 
-        assert seen["argv"] == [browser_guard.AGENT_BROWSER, "close", "--all"]
+        assert seen["argv"] == ["/usr/local/bin/agent-browser", "close", "--all"]
         assert seen["timeout"] == browser_guard.CLOSE_TIMEOUT_SECONDS

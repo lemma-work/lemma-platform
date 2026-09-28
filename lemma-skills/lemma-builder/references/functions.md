@@ -186,17 +186,18 @@ and `pod.query(sql)`. Single-record helpers return plain dicts; list/query helpe
 return typed response objects — call `.to_dict()` on those to get plain data. Errors
 raise `LemmaAPIError` with `.status_code`, `.message`, `.code`.
 
-> **Read the SDK source when unsure.** The full Python SDK is readable at
-> **`/sdk/lemma-python`** (and the TypeScript SDK at `/sdk/lemma-typescript`) **in
-> the agent workspace** — that is where you author and inspect it. (The function
-> sandbox itself has no `/sdk` mount; don't shell out to these paths from function
-> code.) When you need an exact method signature, argument name, or response
-> shape, read it directly instead of guessing:
+> **Read the SDK source when unsure.** The Python SDK is installed **in the agent
+> workspace**, and its source is readable where the interpreter found it — that
+> is where you author and inspect it. (Don't shell out to these paths from
+> function code; the function sandbox is a different machine.) When you need an
+> exact method signature, argument name, or response shape, read it directly
+> instead of guessing:
 > ```bash
-> cat /sdk/lemma-python/lemma_sdk/resources/data.py        # tables, records, queries
-> cat /sdk/lemma-python/lemma_sdk/resources/files.py       # files
-> cat /sdk/lemma-python/lemma_sdk/resources/connectors.py  # connector operations
-> ls  /sdk/lemma-python/lemma_sdk/resources/               # every facade
+> SDK="$(python -c 'import lemma_sdk; print(lemma_sdk.__path__[0])')"
+> cat "$SDK/resources/data.py"        # tables, records, queries
+> cat "$SDK/resources/files.py"       # files
+> cat "$SDK/resources/connectors.py"  # connector operations
+> ls  "$SDK/resources/"               # every facade
 > ```
 
 ### Response shapes (the #1 gotcha)

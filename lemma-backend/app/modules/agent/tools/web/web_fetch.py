@@ -1,6 +1,6 @@
 """Capture web pages into the agent's workspace.
 
-The capability already existed — `/usr/local/bin/save-webpage` drives a headed
+The capability already existed — `save-webpage` drives a headed
 Chrome in the sandbox and emits Readability→Turndown markdown, a PDF, and
 full-page screenshots — but it was reachable only by `exec_command` and
 advertised in ten lines of prose, one URL at a time. Research means reading ten
@@ -73,6 +73,7 @@ from app.modules.agent.tools.web.page_extract import (
     fetch_and_clean,
     render_document,
 )
+from sandbox_runtime.paths import OVERLAY_FIRST_ON_PATH
 from app.modules.agent.tools.workspace_cli.workspace_cli import (
     get_workspace_session,
     workspace_runtime_context,
@@ -173,8 +174,9 @@ async def _write_markdown(session, *, path: str, content: str) -> None:
 
 
 def _browser_script(url: str, out_dir: str, name: str, formats: list[str]) -> str:
+    """The capture, by name: the runtime overlay's `save-webpage`, else the image's."""
     return (
-        f"mkdir -p {shlex.quote(out_dir)} && "
+        OVERLAY_FIRST_ON_PATH + f"mkdir -p {shlex.quote(out_dir)} && "
         f"save-webpage {shlex.quote(url)} "
         f"--formats {shlex.quote(','.join(formats))} "
         f"--out {shlex.quote(out_dir)} --name {shlex.quote(name)}"

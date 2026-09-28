@@ -48,7 +48,7 @@ import tempfile
 
 import httpx
 
-from sandbox_runtime.paths import BROWSER_PROFILE
+from sandbox_runtime.paths import BROWSER_PROFILE, sandbox_command
 
 #: The browser, and the person's logins. Durable -- see ``paths.py``.
 _DEFAULT_PROFILE = BROWSER_PROFILE
@@ -165,15 +165,16 @@ _START_TIMEOUT_SECONDS = 240.0
 #: Spelled absolutely, because **this process's PATH is not the agent's PATH**.
 #:
 #: Two things answer to `agent-browser` in this image: the raw npm binary in
-#: `/opt/lemma-node/node_modules/.bin`, and the `lemma-node-tool` wrapper in
-#: `/usr/local/bin` which runs `start-browser` first -- writing the config file
+#: `/opt/lemma-node/node_modules/.bin`, and the `lemma-node-tool` wrapper --
+#: the overlay's copy, or the image's in `/usr/local/bin` -- which runs
+#: `start-browser` first -- writing the config file
 #: and starting Xvfb -- before handing over. An agent shell finds the wrapper.
 #: A daemon does not: `/opt/lemma-node/node_modules/.bin` comes earlier on its
 #: PATH, so the bare name resolves to the binary that cannot bootstrap, and in a
 #: container where nothing has used the browser yet it fails with `config file
 #: not found` -- which reads like a broken image rather than a missing
 #: prerequisite. Naming the wrapper is what makes a cold sandbox work.
-_AGENT_BROWSER = "/usr/local/bin/agent-browser"
+_AGENT_BROWSER = "agent-browser"
 
 #: Long enough to distinguish "refused" from "busy", short enough that a viewer
 #: is not left waiting on a browser that has gone.
@@ -195,7 +196,8 @@ def agent_browser_argv(*args: str, session: str | None = None) -> list[str]:
     Falls back to the bare name only when the wrapper is absent, which is the
     case in a unit test with a stub on PATH and never in the shipped image.
     """
-    executable = _AGENT_BROWSER if Path(_AGENT_BROWSER).exists() else "agent-browser"
+    wrapper = sandbox_command(_AGENT_BROWSER)
+    executable = wrapper if Path(wrapper).exists() else _AGENT_BROWSER
     prefix: list[str] = []
     if session:
         prefix += ["--session", session]
@@ -209,7 +211,7 @@ def agent_browser_argv(*args: str, session: str | None = None) -> list[str]:
 def agent_browser_env(session: str | None = None) -> dict[str, str]:
     """The environment to run the CLI in, with this session's names spelled out.
 
-    The flags above are not enough on their own. `/usr/local/bin/agent-browser`
+    The flags above are not enough on their own. The `agent-browser` wrapper
     is a wrapper that bootstraps a cold sandbox by running `start-browser`, and
     that script reads `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PROFILE` from
     its environment -- it never sees the flags. So a relay that inherited one
@@ -540,10 +542,10 @@ async def open_url(url: str, *, session: str | None = None) -> None:
 
 
 #: The script that owns the RandR dance -- creating a mode before it can be
-#: chosen, and clamping to the framebuffer Xvfb allocated at startup. Spelled
-#: absolutely for the same reason `_AGENT_BROWSER` is: this process's PATH is
+#: chosen, and clamping to the framebuffer Xvfb allocated at startup. Run by its
+#: absolute path for the same reason `_AGENT_BROWSER` is: this process's PATH is
 #: not an agent shell's.
-_SET_DISPLAY_SIZE = "/usr/local/bin/set-display-size"
+_SET_DISPLAY_SIZE = "set-display-size"
 
 
 #: The size the display starts at, and returns to when nobody is watching.
@@ -568,7 +570,7 @@ def default_display_size() -> tuple[int, int]:
 #: Brings up x11vnc and websockify. Not started with the display: they serve
 #: a person watching, and measured at 67 MiB together in a sandbox where
 #: most sessions have nobody watching at all.
-_START_VNC_BRIDGE = "/usr/local/bin/start-vnc-bridge"
+_START_VNC_BRIDGE = "start-vnc-bridge"
 
 #: Bounded well under the ten seconds a `websockets.connect` will wait for
 #: a handshake, because this runs *before* `accept()`: a viewer whose relay
@@ -618,7 +620,8 @@ async def ensure_vnc_bridge() -> bool:
     a dropped TCP connection with no close frame and no reason. A file has no
     EOF to wait for, and it cannot fill and deadlock either.
     """
-    if not Path(_START_VNC_BRIDGE).exists():
+    bridge = sandbox_command(_START_VNC_BRIDGE)
+    if not Path(bridge).exists():
         return True
     log = logging.getLogger(__name__)
     with tempfile.TemporaryDirectory(prefix="lemma-vnc-bridge-") as directory:
@@ -626,7 +629,7 @@ async def ensure_vnc_bridge() -> bool:
         try:
             with errors.open("wb") as sink:
                 process = await asyncio.create_subprocess_exec(
-                    _START_VNC_BRIDGE,
+                    bridge,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=sink,
                 )
@@ -719,7 +722,8 @@ async def set_display_size(width: int, height: int) -> str | None:
     now, and `app.py`'s `/vnc` docstring records per-session displays as the
     real fix.
     """
-    if not Path(_SET_DISPLAY_SIZE).exists():
+    resize = sandbox_command(_SET_DISPLAY_SIZE)
+    if not Path(resize).exists():
         return None
     if await recording_in_progress():
         # The recorder is built around the framebuffer it started with --
@@ -734,7 +738,7 @@ async def set_display_size(width: int, height: int) -> str | None:
         )
     try:
         process = await asyncio.create_subprocess_exec(
-            _SET_DISPLAY_SIZE,
+            resize,
             str(width),
             str(height),
             stdout=asyncio.subprocess.PIPE,

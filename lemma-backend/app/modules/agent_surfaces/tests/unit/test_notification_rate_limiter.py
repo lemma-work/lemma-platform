@@ -39,6 +39,13 @@ class FakeRedis:
     async def expire(self, key: str, ttl: int) -> None:
         self.expiries[key] = ttl
 
+    async def eval(self, script, numkeys, key, ttl):
+        """``incr_with_ttl``'s script: increment, and expire if not expiring."""
+        count = await self.incr(key)
+        if key not in self.expiries:
+            await self.expire(key, ttl)
+        return count
+
 
 async def test_the_hourly_budget_is_per_pod_and_per_recipient():
     """Two pods messaging one person are two relationships.

@@ -7,11 +7,14 @@ from app.core.settings_env import dotenv_path
 
 
 _DEFAULT_STREAM_MAXLEN_OVERRIDES = {
-    # Webhook payloads are much larger than ordinary domain events. Keeping
-    # 50k of them can consume hundreds of MiB even in a low-traffic install.
-    "webhook_events": 1_000,
     "usage_events": 10_000,
 }
+
+#: Streams nothing publishes to or reads any more, deleted by the stream guard.
+#: ``webhook_events`` held raw inbound webhooks -- 65MB in production long after
+#: its last publisher was removed, because nothing trims a stream nothing
+#: writes to: trimming happens on write.
+RETIRED_STREAMS: tuple[str, ...] = ("webhook_events",)
 
 #: Dead-letter streams are named `{stream}:dead` at runtime, so they match no
 #: static override and inherited the 50,000 default. Their entries carry up to
@@ -99,16 +102,92 @@ class EventTransportSettings(BaseSettings):
         default_factory=lambda: dict(_DEFAULT_STREAM_MAXLEN_OVERRIDES),
         description="Per-stream MAXLEN overrides encoded as a JSON object.",
     )
-    redis_stream_max_bytes: int = Field(
-        default=256 * 1024 * 1024,
+    redis_streams_memory_fraction: float = Field(
+        default=0.5,
+        gt=0,
+        le=0.9,
+        description=(
+            "Share of Redis ``maxmemory`` that event streams may occupy between "
+            "them. One budget for all of them, not one per stream: per-stream "
+            "budgets summed to several times the memory Redis actually had. "
+            "Enforced every guard pass by trimming the largest streams first -- "
+            "fully-consumed entries before anything else, and unread entries "
+            "only when that is not enough, recording what was trimmed so it is "
+            "replayed from the outbox. Env: ``REDIS_STREAMS_MEMORY_FRACTION``."
+        ),
+    )
+    redis_streams_budget_bytes: int = Field(
+        default=512 * 1024 * 1024,
         ge=0,
         description=(
-            "Byte budget per stream, enforced by a periodic trim rather than on "
-            "publish. The MAXLEN cap counts entries, and entries are not what "
-            "runs out: the same 50,000 meant 9MB for one stream and 831MB for "
-            "another. Only fully-consumed entries are removed, so this can "
-            "never destroy unread work. 0 disables it. Env: "
-            "``REDIS_STREAM_MAX_BYTES``."
+            "Stream budget when Redis reports no ``maxmemory`` (0, unlimited), "
+            "which is what a bare ``redis-server`` does. 0 disables the budget "
+            "in that case. Env: ``REDIS_STREAMS_BUDGET_BYTES``."
+        ),
+    )
+    redis_memory_warn_ratio: float = Field(
+        default=0.70,
+        gt=0,
+        lt=1,
+        description=(
+            "Redis memory use, as a share of ``maxmemory``, above which the "
+            "stream budget shrinks to whatever keeps Redis under this line "
+            "given everything else it holds. Env: ``REDIS_MEMORY_WARN_RATIO``."
+        ),
+    )
+    redis_memory_critical_ratio: float = Field(
+        default=0.85,
+        gt=0,
+        lt=1,
+        description=(
+            "Redis memory use above which the outbox dispatcher stops "
+            "publishing. Events wait in PostgreSQL -- durably, and at no cost "
+            "to Redis -- until use falls below "
+            "``REDIS_MEMORY_RESUME_RATIO``. Env: ``REDIS_MEMORY_CRITICAL_RATIO``."
+        ),
+    )
+    redis_memory_resume_ratio: float = Field(
+        default=0.60,
+        gt=0,
+        lt=1,
+        description=(
+            "Redis memory use below which a paused outbox dispatcher resumes. "
+            "Below the critical ratio so the dispatcher does not flap. Env: "
+            "``REDIS_MEMORY_RESUME_RATIO``."
+        ),
+    )
+    redis_stream_guard_interval_seconds: float = Field(
+        default=30.0,
+        ge=0,
+        description=(
+            "How often the worker enforces the stream budget, checks Redis "
+            "memory, looks for stalled consumer groups and replays trimmed "
+            "gaps. It was an hourly cron; an hour of a bulk import is more than "
+            "a small Redis holds. 0 disables the guard. Env: "
+            "``REDIS_STREAM_GUARD_INTERVAL_SECONDS``."
+        ),
+    )
+    redis_stream_stall_seconds: int = Field(
+        default=900,
+        ge=0,
+        description=(
+            "How long a consumer group this worker reads may sit behind with "
+            "its reader not reading before the worker restarts itself. Must "
+            "exceed the handler timeout, which is the longest a live reader "
+            "can legitimately go without reading. 0 disables it. Env: "
+            "``REDIS_STREAM_STALL_SECONDS``."
+        ),
+    )
+    redis_stream_gap_replay_batch_size: int = Field(
+        default=1_000,
+        ge=1,
+        le=50_000,
+        description=(
+            "Outbox rows re-published per guard pass while replaying entries a "
+            "stream lost to the memory budget. A batch is only started once the "
+            "group has read the previous one, so replay runs at the pace of the "
+            "slowest reader instead of refilling the stream it was trimmed "
+            "from. Env: ``REDIS_STREAM_GAP_REPLAY_BATCH_SIZE``."
         ),
     )
     redis_stream_pending_hold_seconds: int = Field(
@@ -144,6 +223,19 @@ class EventTransportSettings(BaseSettings):
             "stream and it grew until Redis was OOM-killed. A stuck consumer "
             "must degrade to retaining more, never to retaining everything. "
             "Env: ``REDIS_STREAM_HARD_MAXLEN_MULTIPLIER``."
+        ),
+    )
+    redis_stream_handler_timeout_seconds: float = Field(
+        default=300.0,
+        ge=0,
+        description=(
+            "Deadline for one stream delivery. A subscriber handles one "
+            "message at a time, so a handler that never returns stops its "
+            "whole lane while its reader task still looks alive. Past this the "
+            "delivery fails with TimeoutError and takes the ordinary retry and "
+            "quarantine path. Handlers enqueue work rather than do it, so "
+            "minutes is generous. 0 disables it. Env: "
+            "``REDIS_STREAM_HANDLER_TIMEOUT_SECONDS``."
         ),
     )
     redis_stream_snapshot_interval_seconds: float = Field(default=300.0, ge=0)
@@ -225,6 +317,19 @@ class EventTransportSettings(BaseSettings):
             "behaviour. Keep it well under the cron period."
         ),
     )
+
+    @model_validator(mode="after")
+    def _memory_ratios_are_ordered(self) -> "EventTransportSettings":
+        """Resume below critical, or a paused dispatcher flaps on every pass."""
+        if not (
+            self.redis_memory_resume_ratio < self.redis_memory_critical_ratio
+            and self.redis_memory_warn_ratio <= self.redis_memory_critical_ratio
+        ):
+            raise ValueError(
+                "REDIS_MEMORY_RESUME_RATIO must be below REDIS_MEMORY_CRITICAL_RATIO, "
+                "and REDIS_MEMORY_WARN_RATIO must not exceed it"
+            )
+        return self
 
     @model_validator(mode="after")
     def _reap_window_outlives_a_claim(self) -> "EventTransportSettings":

@@ -40,7 +40,10 @@ from app.modules.workspace.providers.lemma_local_config import (
     LemmaLocalProviderConfig,
     LocalBridgeError,
 )
-from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeClient
+from app.modules.workspace.providers.runtime_client import (
+    RuntimeState,
+    WorkspaceRuntimeClient,
+)
 from app.modules.workspace.providers.runtime_errors import WorkspaceRuntimeError
 
 
@@ -248,6 +251,12 @@ class LemmaLocalOpsMixin:
             await client.terminate(
                 process_id, grace_seconds=grace_seconds, deadline_at=deadline_at
             )
+
+    async def runtime_state(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> RuntimeState:
+        async with self._ops(instance, deadline_at) as client:
+            return await client.runtime_state(deadline_at=deadline_at)
 
     async def list_processes(
         self, instance: ProviderInstance, *, deadline_at: datetime

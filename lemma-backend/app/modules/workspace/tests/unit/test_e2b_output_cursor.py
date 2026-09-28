@@ -186,3 +186,32 @@ async def test_a_polled_silent_process_stays_known(buffer) -> None:
     assert await redis.ttl(state_key) > 5, "a read did not renew the window"
     snapshot = await buffer.read("quiet", after_sequence=0)
     assert snapshot.state is ProcessState.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_a_chunk_is_bounded_in_bytes_not_characters(buffer) -> None:
+    """JSON escapes a control character to six bytes, and UTF-8 spends four on
+    an emoji: a character count alone let one chunk cost many times its cap."""
+    hostile = "\x01" * 40_000 + "😀" * 40_000
+    await buffer.append("p", channel=ProcessOutputChannel.STDOUT, data=hostile.encode())
+
+    stored = await buffer._redis.lrange(buffer._chunks_key("p"), 0, -1)
+    assert max(len(raw) for raw in stored) <= e2b_output._MAX_CHUNK_BYTES
+    snapshot = await buffer.read("p", after_sequence=0)
+    assert b"".join(chunk.data for chunk in snapshot.chunks) == hostile.encode()
+
+
+@pytest.mark.asyncio
+async def test_a_huge_callback_keeps_the_newest_sequences_contiguous(buffer) -> None:
+    """Only the last `_MAX_CHUNKS` pieces of one huge callback are sent, while
+    sequences are reserved for all of it. What a reader sees must be exactly
+    what `ltrim` would have left: the newest window, numbered without a gap."""
+    await _emit(buffer, "p", 3)
+    pieces = _MAX_CHUNKS + 50
+    huge = "x" * (e2b_output._MAX_CHUNK_CHARS * pieces)
+    await buffer.append("p", channel=ProcessOutputChannel.STDOUT, data=huge.encode())
+
+    assert await buffer._redis.llen(buffer._chunks_key("p")) == _MAX_CHUNKS
+    snapshot = await buffer.read("p", after_sequence=0)
+    sequences = [chunk.sequence for chunk in snapshot.chunks]
+    assert sequences == list(range(3 + pieces - _MAX_CHUNKS + 1, 3 + pieces + 1))

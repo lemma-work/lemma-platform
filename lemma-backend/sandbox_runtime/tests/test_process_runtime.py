@@ -345,3 +345,23 @@ async def test_direct_exit_is_terminal_when_descendant_holds_output_pipe(
         await asyncio.sleep(0.01)
     else:
         raise AssertionError("detached descendant survived exact process termination")
+
+
+async def test_health_says_which_code_the_server_runs(tmp_path: Path):
+    """In a header, which a backend from before it ignores; this checkout is the floor."""
+    from sandbox_runtime.workspace.models import RUNTIME_VERSION_HEADER
+
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        response = await client.get("/health", headers=HEADERS)
+
+    assert response.status_code == 200
+    assert response.headers[RUNTIME_VERSION_HEADER] == "floor"
+    assert set(response.json()) == {
+        "status",
+        "managed_processes",
+        "active_python_sessions",
+    }
