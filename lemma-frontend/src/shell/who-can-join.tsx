@@ -41,7 +41,7 @@ export function WhoCanJoin({ podId, orgName }: { podId: string; orgName: string 
     });
 
     if (current.isError) {
-        return <p className="joins__unreadable">Couldn’t load teammate access settings.</p>;
+        return <p className="joins__unreadable">Couldn’t load access settings.</p>;
     }
 
     /* Optimistic while a write is in flight: a door is the one control where

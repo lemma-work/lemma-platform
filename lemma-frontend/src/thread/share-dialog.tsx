@@ -106,7 +106,7 @@ export function ShareDialog({
                         aria-pressed={audience === "pod"}
                         onClick={() => setAudience("pod")}
                     >
-                        <b>People with access to this teammate</b>
+                        <b>People who already have access</b>
                         <span>Recipients must sign in and have access to this file.</span>
                     </button>
                     <button

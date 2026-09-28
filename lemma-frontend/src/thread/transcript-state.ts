@@ -30,7 +30,7 @@ export interface RunFailure {
 const CODING_AGENT_FAILURES: { pattern: RegExp; text: string }[] = [
     {
         pattern: /No Agent Host received the run|HOST_WAIT_TIMEOUT|Agent Host harness is unavailable/i,
-        text: "The computer this teammate runs on didn’t pick up the task in time. Check that it’s awake and Lemma is open on it, then try again.",
+        text: "The computer didn’t pick up the task in time. Check that it’s awake and Lemma is open on it, then try again.",
     },
     {
         pattern: /acceptance could not be confirmed|delivery could not be confirmed|HOST_ACCEPTANCE_UNKNOWN/i,
@@ -54,7 +54,7 @@ const CODING_AGENT_FAILURES: { pattern: RegExp; text: string }[] = [
     },
     {
         pattern: /Invalid Agent Host runtime profile/i,
-        text: "This teammate’s coding-agent settings are no longer valid. Choose its agent again in Models.",
+        text: "The coding-agent settings here are no longer valid. Choose the agent again in Models.",
     },
     {
         pattern: /Agent Host/i,

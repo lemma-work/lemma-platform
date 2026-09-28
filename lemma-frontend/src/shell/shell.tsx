@@ -1022,8 +1022,8 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                             {/* A shortcut nobody can see is not a feature. */}
                             <button
                                 className="icon-button"
-                                title="Search this teammate (⌘K)"
-                                aria-label="Search this teammate"
+                                title="Search (⌘K)"
+                                aria-label="Search"
                                 onClick={() => setSearching(true)}
                             >
                                 <SearchIcon size={19} />
@@ -1284,7 +1284,6 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
             {addingPeople && pod && (
                 <Modal
                     title={"Add someone to " + pod.name}
-                    subtitle="Anyone already in this organization"
                     onClose={() => setAddingPeople(false)}
                 >
                     <AddPeople pod={pod} orgId={activeOrgId} onDone={() => setAddingPeople(false)} />

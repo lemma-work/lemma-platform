@@ -311,7 +311,7 @@ lemma pod describe <pod-id>`,
             {
                 type: "paragraph",
                 title: "Operating job",
-                body: "Scope the pod around the work it moves: triage support, qualify leads, review expenses, onboard teammates, track launch items, or run a back-office loop. Multiple apps, workflows, agents, and assistants can live inside one pod when they serve the same operating job.",
+                body: "Scope the pod around the work it moves: triage support, qualify leads, review expenses, onboard new people, track launch items, or run a back-office loop. Multiple apps, workflows, agents, and assistants can live inside one pod when they serve the same operating job.",
             },
             {
                 type: "paragraph",

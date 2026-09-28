@@ -1884,7 +1884,9 @@ button svg, a svg { flex-shrink:0; }
     .convo-title { padding-inline: 10px }
     .convo-host .composer { padding: 6px 10px max(10px, env(safe-area-inset-bottom)) }
     .convo-host .composer__row { padding-inline: 0; gap: 6px }
-    .convo-host .composer__box { padding: 6px; gap: 6px }
+    .convo-host .composer__box { padding: 6px; gap: 6px; --composer-line: 44px }
+    .convo-host .composer__attach,
+    .convo-host .composer__wave { margin-block-end: 0 }
     .convo-host .composer__input { padding-left: 2px }
     .convo-host .composer__attach,
     .convo-host .composer__send,

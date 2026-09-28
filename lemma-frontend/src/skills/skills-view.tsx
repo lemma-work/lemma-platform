@@ -99,7 +99,7 @@ export function SkillsView({ podId, teammate, onFile, onCreate }: {
             {skills.isError && (
                 <p className="empty-row" role="alert">
                     {isForbidden(skills.error)
-                        ? "You may not read this teammate’s skills."
+                        ? "You may not read these skills."
                         : "Couldn’t load skills."}{" "}
                     <button className="linkish" onClick={() => void skills.refetch()}>Try again</button>
                 </p>
