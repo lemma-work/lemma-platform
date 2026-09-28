@@ -69,7 +69,7 @@ throwaway stack, everything else on the deployment.
 
 ```bash
 make scenarios-compose                          # everything, on a disposable stack
-make scenarios-split TARGET=https://api.asur.work
+make scenarios-split TARGET=https://api.lemma.example.com
 ```
 
 `scenarios-split` is `--stack compose -m open_signup` followed by

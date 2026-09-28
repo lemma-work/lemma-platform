@@ -32,7 +32,9 @@ replaced by `SCENARIOS_BACKEND_IMAGE` / `SCENARIOS_FRONTEND_IMAGE` or by a
 
 from __future__ import annotations
 
+import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -115,7 +117,7 @@ def start_compose_stack(
         _bootstrap(work)
         _pin_images(work / ".env", spec.images)
         (work / "scenarios.override.yml").write_text(
-            _override(project, port, spec.env), encoding="utf-8"
+            _override(project, port, spec.env, _commands(spec)), encoding="utf-8"
         )
         compose = _compose_in(work, project)
         started = True
@@ -175,14 +177,45 @@ def _pin_images(env_file: Path, images: dict[str, str]) -> None:
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _override(project: str, port: int, settings: dict[str, str]) -> str:
+def _commands(spec: StackSpec) -> dict[str, list[str]]:
+    """What each backend service runs, when the spec says something else.
+
+    The same fields the local stack reads — `app`, `worker`, `migrations` — so
+    one `pytest_scenarios_configure_stack` hook describes an application for
+    both kinds of stack. Left alone, the images' own commands in
+    deploy/compose run, which are the open-source backend's.
+    """
+    default = StackSpec(kind="compose", port=0, base_url="")
+    commands: dict[str, list[str]] = {}
+    if spec.app != default.app:
+        commands["api"] = ["uvicorn", spec.app, "--host", "0.0.0.0", "--port", "8000"]
+    if spec.worker != default.worker:
+        commands["worker"] = ["python", *spec.worker]
+    if spec.migrations != default.migrations:
+        steps = " && ".join(
+            "python " + " ".join(shlex.quote(part) for part in step)
+            for step in spec.migrations
+        )
+        commands["migrate"] = ["/bin/sh", "-euc", steps]
+    return commands
+
+
+def _override(
+    project: str,
+    port: int,
+    settings: dict[str, str],
+    commands: dict[str, list[str]] | None = None,
+) -> str:
     """The Compose override that makes an install a disposable test target."""
+    commands = commands or {}
     services = []
     for service in BACKEND_SERVICES:
         # Where this API answers, since there is no Caddy in front of it to
         # answer at the bootstrapped https address.
         values = {**settings, "API_URL": f"http://127.0.0.1:{port}"}
         block = f"  {service}:\n"
+        if service in commands:
+            block += f"    command: {json.dumps(commands[service])}\n"
         if service == "api":
             block += f'    ports: ["127.0.0.1:{port}:8000"]\n'
         block += "    environment:\n" + "".join(
