@@ -289,6 +289,8 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
             // report a download they never asked about.
             ui.sandbox_images = event["state"].as_str().unwrap_or_default().into();
             ui.sandbox_images_detail = event["detail"].as_str().unwrap_or_default().into();
+            ui.sandbox_images_done_mb = event["done_mb"].as_u64();
+            ui.sandbox_images_total_mb = event["total_mb"].as_u64();
         }
         "runtime.prepared" => {
             let ready = event["ready"].as_bool().unwrap_or(false);

@@ -314,7 +314,15 @@ impl<E: Engine + 'static> GuestService<E> {
             "core.sandbox_images_status" => {
                 let parameters = self.parse_core_parameters(request.parameters)?;
                 let ready = self.poll_sandbox_images(&parameters)?;
-                Ok(json!({"ready": ready}))
+                let mut answer = json!({"ready": ready});
+                if let Some(progress) = (!ready)
+                    .then(|| sandbox_images_progress(&parameters))
+                    .flatten()
+                {
+                    answer["done_mb"] = json!(progress.done_mb());
+                    answer["total_mb"] = json!(progress.total_mb());
+                }
+                Ok(answer)
             }
             "core.postgres" => self.ensure_core_stage(request.parameters, CoreStage::Postgres),
             "core.redis" => self.ensure_core_stage(request.parameters, CoreStage::Redis),

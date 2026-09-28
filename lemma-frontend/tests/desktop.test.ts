@@ -20,7 +20,7 @@ import {
     capitalised, describeThisComputer, needsUpdate, plainConnectError, plainHostError, selectWorkspaceTarget, thisComputer,
 } from "../src/desktop/this-computer.ts";
 import { adoptConversationFolder, bindFolder, folderLabel, readFolder, unbindFolder } from "../src/desktop/folders.ts";
-import { sandboxImageNotice, shouldKeepPolling } from "../src/desktop/sandbox-images.ts";
+import { downloadedSoFar, readSandboxImageStatus, sandboxImageNotice, shouldKeepPolling } from "../src/desktop/sandbox-images.ts";
 import { requestedSection } from "../src/desktop/open-settings.ts";
 import { browserSignInUrl, requestIdFromSearch, shouldUseBrowserHandoff } from "../src/desktop/auth-handoff.ts";
 
@@ -605,6 +605,22 @@ test("a sandbox that was already warm says nothing", () => {
     assert.equal(sandboxImageNotice("downloading", { state: "failed", detail: "" }).kind, "unavailable");
     assert.equal(shouldKeepPolling("unsupported"), false);
     assert.equal(shouldKeepPolling("downloading"), true);
+});
+
+test("a sandbox download says how far it has got, once it can measure it", () => {
+    const measured = sandboxImageNotice("downloading", { state: "downloading", detail: "", doneMb: 120, totalMb: 700 });
+    assert.equal(measured.kind, "downloading");
+    assert.match(measured.kind === "downloading" ? measured.description : "", /120 of 700 MB/);
+    assert.equal(downloadedSoFar({ doneMb: 900, totalMb: 700 }), "700 of 700 MB");
+    assert.equal(downloadedSoFar({ doneMb: 5, totalMb: 0 }), null);
+    assert.equal(downloadedSoFar({ doneMb: null, totalMb: 700 }), null);
+    assert.deepEqual(readSandboxImageStatus({ state: "downloading", detail: "", done_mb: 120, total_mb: 700 }), {
+        state: "downloading",
+        detail: "",
+        doneMb: 120,
+        totalMb: 700,
+    });
+    assert.equal(readSandboxImageStatus({ state: "ready" }).doneMb, null);
 });
 
 /* ── settings from the shell ───────────────────────────────────────── */

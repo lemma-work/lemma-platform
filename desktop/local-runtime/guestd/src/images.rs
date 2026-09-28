@@ -91,6 +91,28 @@ pub(crate) fn pull_in_progress(image: &str) -> GuestError {
     }
 }
 
+/// How far the sandbox images' download has got, summed over both.
+///
+/// For `core.sandbox_images_status`, so the app can say "412 MB of 980 MB"
+/// rather than only that something is downloading. `None` until the first
+/// manifest is in and there is a total to be a fraction of.
+pub(crate) fn sandbox_images_progress(
+    parameters: &CoreParameters,
+) -> Option<crate::pull_progress::PullProgress> {
+    [
+        parameters.images.workspace.as_deref(),
+        parameters.images.function.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(crate::pull_progress::progress_for)
+    .reduce(|sum, one| crate::pull_progress::PullProgress {
+        done: sum.done + one.done,
+        total: sum.total + one.total,
+    })
+    .filter(|sum| sum.total > 0)
+}
+
 pub(crate) fn validate_image(image: &str) -> Result<(), GuestError> {
     if image.is_empty()
         || image.len() > 512

@@ -106,6 +106,7 @@ fn image_warmup_polls_until_ready_and_rejects_invalid_responses() {
             calls += 1;
             Ok(json!({"ready": calls == 3}))
         },
+        |_, _| {},
     )
     .unwrap();
     assert_eq!(calls, 3);
@@ -115,6 +116,7 @@ fn image_warmup_polls_until_ready_and_rejects_invalid_responses() {
             Duration::from_secs(5),
             Duration::ZERO,
             || Ok(response.clone()),
+            |_, _| {},
         )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
@@ -124,9 +126,13 @@ fn image_warmup_polls_until_ready_and_rejects_invalid_responses() {
 #[test]
 fn image_warmup_stops_on_cancellation_deadline_and_guest_failure() {
     let cancellation = lemma_desktop_process::Cancellation::default();
-    let error = poll_sandbox_image_warmup(&cancellation, Duration::ZERO, Duration::ZERO, || {
-        panic!("expired work must not dispatch")
-    })
+    let error = poll_sandbox_image_warmup(
+        &cancellation,
+        Duration::ZERO,
+        Duration::ZERO,
+        || panic!("expired work must not dispatch"),
+        |_, _| {},
+    )
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     let error = poll_sandbox_image_warmup(
@@ -134,6 +140,7 @@ fn image_warmup_stops_on_cancellation_deadline_and_guest_failure() {
         Duration::from_secs(5),
         Duration::ZERO,
         || Err(io::Error::new(io::ErrorKind::ConnectionReset, "guest lost")),
+        |_, _| {},
     )
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
@@ -147,6 +154,7 @@ fn image_warmup_stops_on_cancellation_deadline_and_guest_failure() {
             cancellation.cancel();
             Ok(json!({"ready": false}))
         },
+        |_, _| {},
     )
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
@@ -162,14 +170,20 @@ fn image_warmup_rejects_success_after_cancellation_or_deadline() {
         } else {
             Duration::from_millis(1)
         };
-        let error = poll_sandbox_image_warmup(&cancellation, budget, Duration::ZERO, || {
-            if cancel {
-                cancellation.cancel();
-            } else {
-                thread::sleep(budget);
-            }
-            Ok(json!({"ready": true}))
-        })
+        let error = poll_sandbox_image_warmup(
+            &cancellation,
+            budget,
+            Duration::ZERO,
+            || {
+                if cancel {
+                    cancellation.cancel();
+                } else {
+                    thread::sleep(budget);
+                }
+                Ok(json!({"ready": true}))
+            },
+            |_, _| {},
+        )
         .unwrap_err();
         assert_eq!(
             error.kind(),
@@ -180,4 +194,132 @@ fn image_warmup_rejects_success_after_cancellation_or_deadline() {
             }
         );
     }
+}
+
+/// The guest's MB figures reach the app while it downloads, clamped, and a
+/// guest that sends none is waited on as before.
+#[test]
+fn image_warmup_passes_on_how_far_the_download_has_got() {
+    let cancellation = lemma_desktop_process::Cancellation::default();
+    let answers = [
+        json!({"ready": false}),
+        json!({"ready": false, "done_mb": 120, "total_mb": 700}),
+        json!({"ready": false, "done_mb": 900, "total_mb": 700}),
+        json!({"ready": false, "done_mb": 5, "total_mb": 0}),
+        json!({"ready": true}),
+    ];
+    let mut calls = 0;
+    let mut heard = Vec::new();
+    poll_sandbox_image_warmup(
+        &cancellation,
+        Duration::from_secs(5),
+        Duration::ZERO,
+        || {
+            calls += 1;
+            Ok(answers[calls - 1].clone())
+        },
+        |done, total| heard.push((done, total)),
+    )
+    .unwrap();
+
+    assert_eq!(heard, [(120, 700), (700, 700)]);
+}
+
+#[test]
+fn a_downloading_status_carries_its_progress_to_the_app() {
+    let (_root, controller) = test_controller();
+    let heard = Mutex::new(Vec::new());
+
+    controller.publish_sandbox_images(
+        SandboxImageStatus::downloading(120, 700),
+        &|status: &SandboxImageStatus| heard.lock().unwrap().push(status.clone()),
+    );
+
+    let status = controller.sandbox_image_status();
+    assert_eq!(status.state, SANDBOX_IMAGES_DOWNLOADING);
+    assert_eq!((status.done_mb, status.total_mb), (Some(120), Some(700)));
+    assert!(
+        status.detail.contains("120 MB of 700 MB"),
+        "{}",
+        status.detail
+    );
+    let serialized = serde_json::to_value(&status).unwrap();
+    assert_eq!(serialized["done_mb"], 120);
+    assert_eq!(heard.lock().unwrap().len(), 1);
+}
+
+fn record(
+    controller: &ManagedRuntimeController,
+    fetched: Option<(&str, &str)>,
+) -> PreparedSandboxImages {
+    let record = PreparedSandboxImages {
+        fetched: fetched.map(|(workspace, function)| PinnedSandboxImages {
+            workspace: Some(workspace.into()),
+            function: Some(function.into()),
+        }),
+        fetched_unasked: None,
+    };
+    fs::write(
+        &controller.prepared_images,
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    record
+}
+
+/// Someone who has never fetched a sandbox image is never sent one unasked.
+///
+/// A person using only the coding agents has no pod workload to sandbox;
+/// fetching on their start is the several hundred megabytes that
+/// `announce_sandbox_images` exists to not spend.
+#[test]
+fn a_computer_that_never_fetched_the_images_is_not_sent_them() {
+    let (_root, controller) = test_controller();
+
+    assert!(!controller.claim_unasked_sandbox_image_fetch());
+    fs::write(&controller.prepared_images, b"not json").unwrap();
+    assert!(!controller.claim_unasked_sandbox_image_fetch());
+}
+
+#[test]
+fn the_images_already_fetched_are_not_fetched_again() {
+    let (_root, controller) = test_controller();
+    record(
+        &controller,
+        Some(("workspace@sha256:test", "function@sha256:test")),
+    );
+
+    assert!(!controller.claim_unasked_sandbox_image_fetch());
+}
+
+/// An update's images are fetched on its first start, once.
+///
+/// A failure is not retried on every start after it: Settings offers it, and
+/// the first task that needs the image fetches it anyway.
+#[test]
+fn an_update_fetches_its_images_once_for_someone_who_uses_them() {
+    let (_root, controller) = test_controller();
+    record(
+        &controller,
+        Some(("workspace@sha256:old", "function@sha256:old")),
+    );
+
+    assert!(controller.claim_unasked_sandbox_image_fetch());
+    assert!(
+        !controller.claim_unasked_sandbox_image_fetch(),
+        "a second start of the same release fetched again"
+    );
+    let saved = controller.prepared_sandbox_images();
+    assert_eq!(
+        saved.fetched_unasked,
+        Some(PinnedSandboxImages {
+            workspace: Some("workspace@sha256:test".into()),
+            function: Some("function@sha256:test".into()),
+        })
+    );
+    assert_eq!(
+        saved.fetched.unwrap().workspace.as_deref(),
+        Some("workspace@sha256:old"),
+        "claiming the fetch is not the same as having finished it"
+    );
 }

@@ -27,11 +27,15 @@ pub(crate) struct PullProgress {
 impl PullProgress {
     /// "412 MB of 980 MB", as a person reads it and the backend parses it.
     pub(crate) fn sentence(self) -> String {
-        format!(
-            "{} MB of {} MB",
-            mebibytes(self.done),
-            mebibytes(self.total)
-        )
+        format!("{} MB of {} MB", self.done_mb(), self.total_mb())
+    }
+
+    pub(crate) fn done_mb(self) -> u64 {
+        mebibytes(self.done)
+    }
+
+    pub(crate) fn total_mb(self) -> u64 {
+        mebibytes(self.total)
     }
 }
 

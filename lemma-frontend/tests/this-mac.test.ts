@@ -166,6 +166,7 @@ test("the sandbox download is offered only where it would do something", () => {
     for (const offered of ["not-prepared", "failed"]) assert.equal(sandboxWording(offered, "this Mac").offer, true, offered);
     for (const quiet of ["ready", "downloading", "unsupported", undefined]) assert.equal(sandboxWording(quiet, "this Mac").offer, false, String(quiet));
     assert.match(sandboxWording("ready", "this PC").text, /this PC/);
+    assert.equal(sandboxWording("downloading", "this Mac", "120 of 700 MB").text, "Downloading… 120 of 700 MB");
 });
 
 /* ── sharing ───────────────────────────────────────────────────────── */

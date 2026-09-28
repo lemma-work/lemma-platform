@@ -79,3 +79,35 @@ fn stored_blobs_count_whole_and_active_ones_up_to_their_size() {
         "1 MB of 5 MB"
     );
 }
+
+/// Both sandbox images' downloads, as one figure the app can show.
+#[test]
+fn the_sandbox_images_report_their_downloads_together() {
+    let mut parameters = super::core_parameters("docker.io/postgres:17");
+    parameters.images.workspace = Some("test.invalid/progress-workspace@sha256:1".into());
+    parameters.images.function = Some("test.invalid/progress-function@sha256:2".into());
+    assert_eq!(crate::sandbox_images_progress(&parameters), None);
+
+    crate::pull_progress::pull_progress()
+        .lock()
+        .unwrap()
+        .extend([
+            (
+                "test.invalid/progress-workspace@sha256:1".to_owned(),
+                PullProgress {
+                    done: 100 * 1024 * 1024,
+                    total: 700 * 1024 * 1024,
+                },
+            ),
+            (
+                "test.invalid/progress-function@sha256:2".to_owned(),
+                PullProgress {
+                    done: 20 * 1024 * 1024,
+                    total: 50 * 1024 * 1024,
+                },
+            ),
+        ]);
+    let progress = crate::sandbox_images_progress(&parameters).unwrap();
+
+    assert_eq!((progress.done_mb(), progress.total_mb()), (120, 750));
+}
