@@ -29,10 +29,21 @@ pub(crate) const SANDBOX_PIDS_LIMIT: u32 = 1024;
 /// containers are started at `CORE_OOM_SCORE_ADJ` for the same reason.
 pub(crate) const SANDBOX_OOM_SCORE_ADJ: i32 = 500;
 
+/// Where the backend installs the runtime overlay inside a workspace sandbox:
+/// Lemma's own code, newer than the copy the image bakes.
+///
+/// Mounted from the guest's disk rather than left in the container layer, so
+/// it outlives the container. A sandbox is replaced whenever its image, its
+/// grants or its hardening change, and the overlay used to go with it: the
+/// next session reinstalled it, and until then the sandbox ran the image's
+/// older copy.
+pub(crate) const RUNTIME_OVERLAY_MOUNT: &str = "/opt/lemma-runtime";
+
 pub(crate) fn build_run_arguments(
     parameters: &EnsureParameters,
     workspace: Option<&Path>,
     runtime_token: Option<&Path>,
+    runtime_overlay: Option<&Path>,
     env_file: &Path,
     host_gateway: &str,
     host_loopback_directory: &Path,
@@ -156,9 +167,16 @@ pub(crate) fn build_run_arguments(
             let runtime_token_mount = runtime_token
                 .parent()
                 .expect("workspace runtime token must have a private directory");
+            let runtime_overlay =
+                runtime_overlay.expect("workspace workload must have a runtime overlay");
             arguments.extend([
                 "--mount".into(),
                 format!("type=bind,src={},dst=/home/user", workspace.display()),
+                "--mount".into(),
+                format!(
+                    "type=bind,src={},dst={RUNTIME_OVERLAY_MOUNT}",
+                    runtime_overlay.display()
+                ),
                 "--mount".into(),
                 format!(
                     "type=bind,src={},dst=/run/lemma-bootstrap",
@@ -226,9 +244,35 @@ pub(crate) fn container_name(sandbox_id: &str) -> String {
     format!("{CONTAINER_PREFIX}{sandbox_id}")
 }
 
+fn remove_sandbox_directory(root: &Path, sandbox_id: &str) -> Result<bool, GuestError> {
+    let path = root.join(sandbox_id);
+    if path.parent() != Some(root) {
+        return Err(GuestError::invalid("workspace escaped managed root"));
+    }
+    if !path.exists() {
+        return Ok(false);
+    }
+    fs::remove_dir_all(path).map_err(|error| GuestError::engine(error.to_string()))?;
+    Ok(true)
+}
+
 impl<E: Engine + 'static> GuestService<E> {
     pub(crate) fn workspace(&self, sandbox_id: &str) -> Result<PathBuf, GuestError> {
-        let root = self.state_root.join("workspaces");
+        self.sandbox_owned_directory("workspaces", sandbox_id)
+    }
+
+    /// The sandbox's runtime overlay, kept beside its home and removed with it.
+    ///
+    /// Not inside the home: that is the user's file tree, and the overlay is
+    /// platform code that has no business in their listings, exports or
+    /// reach of an agent's `rm`.
+    pub(crate) fn runtime_overlay(&self, sandbox_id: &str) -> Result<PathBuf, GuestError> {
+        self.sandbox_owned_directory("runtime", sandbox_id)
+    }
+
+    /// A private directory under `state_root/<root>`, owned by the sandbox user.
+    fn sandbox_owned_directory(&self, root: &str, sandbox_id: &str) -> Result<PathBuf, GuestError> {
+        let root = self.state_root.join(root);
         let path = root.join(sandbox_id);
         if path.parent() != Some(root.as_path()) {
             return Err(GuestError::invalid("workspace escaped managed root"));
@@ -247,17 +291,14 @@ impl<E: Engine + 'static> GuestService<E> {
         Ok(path)
     }
 
+    /// Remove the sandbox's home and its runtime overlay; report whether it
+    /// had a home.
+    ///
+    /// The overlay goes too. It is only worth keeping for the next container
+    /// of the same sandbox, and a purged sandbox has none.
     pub(crate) fn purge_workspace(&self, sandbox_id: &str) -> Result<bool, GuestError> {
-        let root = self.state_root.join("workspaces");
-        let path = root.join(sandbox_id);
-        if path.parent() != Some(root.as_path()) {
-            return Err(GuestError::invalid("workspace escaped managed root"));
-        }
-        if !path.exists() {
-            return Ok(false);
-        }
-        fs::remove_dir_all(path).map_err(|error| GuestError::engine(error.to_string()))?;
-        Ok(true)
+        remove_sandbox_directory(&self.state_root.join("runtime"), sandbox_id)?;
+        remove_sandbox_directory(&self.state_root.join("workspaces"), sandbox_id)
     }
 
     pub(crate) fn write_env_file(

@@ -27,11 +27,15 @@ pub(crate) struct PullProgress {
 impl PullProgress {
     /// "412 MB of 980 MB", as a person reads it and the backend parses it.
     pub(crate) fn sentence(self) -> String {
-        format!(
-            "{} MB of {} MB",
-            mebibytes(self.done),
-            mebibytes(self.total)
-        )
+        format!("{} MB of {} MB", self.done_mb(), self.total_mb())
+    }
+
+    pub(crate) fn done_mb(self) -> u64 {
+        mebibytes(self.done)
+    }
+
+    pub(crate) fn total_mb(self) -> u64 {
+        mebibytes(self.total)
     }
 }
 
@@ -42,6 +46,24 @@ fn mebibytes(bytes: u64) -> u64 {
 pub(crate) fn pull_progress() -> &'static Mutex<HashMap<String, PullProgress>> {
     static PROGRESS: OnceLock<Mutex<HashMap<String, PullProgress>>> = OnceLock::new();
     PROGRESS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Images a sampler is watching right now, measured or not yet.
+///
+/// Separate from the figures: a pull that has started but not yet read its
+/// manifest has no total, and a sum over the images that do would present a
+/// part as the whole.
+pub(crate) fn sampling() -> &'static Mutex<HashSet<String>> {
+    static SAMPLING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SAMPLING.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Whether `image` is being downloaded by this process.
+pub(crate) fn is_sampling(image: &str) -> bool {
+    sampling()
+        .lock()
+        .expect("pull sampling poisoned")
+        .contains(image)
 }
 
 pub(crate) fn progress_for(image: &str) -> Option<PullProgress> {
@@ -61,6 +83,10 @@ pub(crate) struct Sampler {
 
 impl Sampler {
     pub(crate) fn start(image: &str) -> Self {
+        sampling()
+            .lock()
+            .expect("pull sampling poisoned")
+            .insert(image.to_owned());
         let stop = Arc::new(AtomicBool::new(false));
         let owned = image.to_owned();
         let flag = Arc::clone(&stop);
@@ -95,6 +121,10 @@ impl Drop for Sampler {
         pull_progress()
             .lock()
             .expect("pull progress poisoned")
+            .remove(&self.image);
+        sampling()
+            .lock()
+            .expect("pull sampling poisoned")
             .remove(&self.image);
     }
 }

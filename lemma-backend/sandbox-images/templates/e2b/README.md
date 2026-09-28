@@ -10,6 +10,29 @@ Sandbox provisioning uses two immutable E2B template builds:
   Python contexts see the same home-backed package set.
 - `lemma-function` contains only the function runner and Lemma SDK.
 
+The workspace template has the same layout as `Dockerfile.workspace`: the
+packages, the browser and the locked third-party Python closure, with Lemma's
+own code on top as a floor -- the SDK and CLI, the same `sandbox_runtime` list
+the runtime overlay carries, and the scripts under the names the overlay's
+`bin/` gives them. The overlay the backend installs at session start supersedes
+the floor on `sys.path` and, through `lemma-python.sh` and `set_envs`, on `PATH`,
+so a Lemma code change never needs a new template. See
+[the sandbox layout](../../../../docs/architecture/sandbox/README.md#one-layout-a-stable-image-a-floor-and-the-overlay).
+`test_the_images_bake_the_overlay_floor` fails if the template and the
+Dockerfile stop baking the same floor.
+
+Rebuild and promote the template when what it installs changes -- a package, a
+lockfile, the profile scripts -- not for a Lemma code change. The backend keeps
+working against an older template: the scripts it runs are looked up on a
+`PATH` that puts the overlay first, and fall back to the template's own copies.
+Promoting a new template means new sandboxes for users, so treat it as the
+exception it is.
+
+Known differences from the Docker image, both deliberate: this template runs
+Google Chrome from Google's apt repository rather than Debian's Chromium
+(`chromium` on this Ubuntu base is a snap that does not run in a container),
+and it is built for amd64 only.
+
 Builds are created from the monorepo source. Both profiles default to 1 vCPU and
 2 GB RAM; deployments may override the build resources with
 `E2B_{WORKSPACE,FUNCTION}_{CPU_COUNT,MEMORY_MB}`. E2B's template build

@@ -14,6 +14,7 @@ from __future__ import annotations
 from app.modules.workspace.services.browser_proxy import (
     BROWSER_PROXY_DECISION_PATH,
 )
+from sandbox_runtime.paths import OVERLAY_FIRST_ON_PATH
 
 #: Bring the display stack up, on this image or on the one before it.
 #:
@@ -72,8 +73,14 @@ APPLY_PROXY_DECISION = (
     "fi; "
 )
 
+#: The runtime overlay's scripts first, then the image's. Not rollout
+#: scaffolding like the rest of this file: the overlay is how a script change
+#: reaches a running sandbox, and a sandbox made from an image or template
+#: older than the overlay's own `PATH` entry never looks there by itself.
 ENSURE_DISPLAY = (
-    APPLY_PROXY_DECISION + "if command -v lemma-ensure-display >/dev/null 2>&1; then "
+    OVERLAY_FIRST_ON_PATH
+    + APPLY_PROXY_DECISION
+    + "if command -v lemma-ensure-display >/dev/null 2>&1; then "
     "  lemma-ensure-display; "
     "else "
     "  start-browser; "

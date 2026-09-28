@@ -27,12 +27,17 @@ pub const SANDBOX_IMAGES_UNSUPPORTED: &str = "unsupported";
 /// not already happening.
 pub const SANDBOX_IMAGES_NOT_PREPARED: &str = "not-prepared";
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxImageStatus {
     /// One of the `SANDBOX_IMAGES_*` constants above.
     pub state: String,
     pub detail: String,
+    /// How far a download has got, in MB, once the guest can measure it.
+    #[serde(rename = "done_mb", skip_serializing_if = "Option::is_none")]
+    pub done_mb: Option<u64>,
+    #[serde(rename = "total_mb", skip_serializing_if = "Option::is_none")]
+    pub total_mb: Option<u64>,
 }
 
 impl SandboxImageStatus {
@@ -40,8 +45,44 @@ impl SandboxImageStatus {
         Self {
             state: state.to_owned(),
             detail: detail.to_owned(),
+            done_mb: None,
+            total_mb: None,
         }
     }
+
+    pub(crate) fn downloading(done_mb: u64, total_mb: u64) -> Self {
+        Self {
+            done_mb: Some(done_mb),
+            total_mb: Some(total_mb),
+            ..Self::new(
+                SANDBOX_IMAGES_DOWNLOADING,
+                &format!(
+                    "Downloading the image pods run their work in ({done_mb} MB of {total_mb} MB)"
+                ),
+            )
+        }
+    }
+}
+
+/// The sandbox images this computer last fetched, and the ones a start last
+/// fetched unasked. Kept beside locald's other state as `sandbox-images.json`.
+///
+/// The first says this person uses sandboxes: someone who only runs coding
+/// agents never fetched one, and must not be sent several hundred megabytes
+/// on an update. The second makes the unasked fetch happen once per release:
+/// a download that failed is not retried on every start, only offered.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub(crate) struct PreparedSandboxImages {
+    #[serde(default)]
+    pub(crate) fetched: Option<PinnedSandboxImages>,
+    #[serde(default)]
+    pub(crate) fetched_unasked: Option<PinnedSandboxImages>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub(crate) struct PinnedSandboxImages {
+    pub(crate) workspace: Option<String>,
+    pub(crate) function: Option<String>,
 }
 
 impl Default for SandboxImageStatus {
@@ -50,11 +91,16 @@ impl Default for SandboxImageStatus {
     }
 }
 
+/// Ask the guest until the images are ready, passing on how far it has got.
+///
+/// `progress` hears the guest's MB figures while it is downloading. A guest
+/// from before it measured them sends none, and is waited on exactly as before.
 pub(crate) fn poll_sandbox_image_warmup(
     cancellation: &lemma_desktop_process::Cancellation,
     budget: Duration,
     interval: Duration,
     mut request: impl FnMut() -> io::Result<serde_json::Value>,
+    mut progress: impl FnMut(u64, u64),
 ) -> io::Result<()> {
     let deadline = Instant::now() + budget;
     loop {
@@ -76,7 +122,15 @@ pub(crate) fn poll_sandbox_image_warmup(
         }
         match response.get("ready").and_then(serde_json::Value::as_bool) {
             Some(true) => return Ok(()),
-            Some(false) => {}
+            Some(false) => {
+                let done = response.get("done_mb").and_then(serde_json::Value::as_u64);
+                let total = response.get("total_mb").and_then(serde_json::Value::as_u64);
+                if let (Some(done), Some(total)) = (done, total) {
+                    if total > 0 {
+                        progress(done.min(total), total);
+                    }
+                }
+            }
             None => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -136,6 +190,7 @@ impl ManagedRuntimeController {
                 "callback_ports": [controller.spec.ports.backend, controller.spec.ports.frontend],
             });
             let result = if cfg!(target_os = "macos") {
+                let mut last = None;
                 poll_sandbox_image_warmup(
                     &controller.cancellation,
                     Duration::from_secs(8 * 60),
@@ -146,6 +201,16 @@ impl ManagedRuntimeController {
                             parameters.clone(),
                             controller.cancellation.clone(),
                         )
+                    },
+                    |done, total| {
+                        // Said when the figure moves, not on every poll.
+                        if last != Some((done, total)) {
+                            last = Some((done, total));
+                            controller.publish_sandbox_images(
+                                SandboxImageStatus::downloading(done, total),
+                                &report,
+                            );
+                        }
                     },
                 )
             } else {
@@ -162,6 +227,7 @@ impl ManagedRuntimeController {
             };
             let status = match result {
                 Ok(_) => {
+                    controller.record_fetched_sandbox_images();
                     SandboxImageStatus::new(SANDBOX_IMAGES_READY, "The workspace sandbox is ready")
                 }
                 Err(error) => {
@@ -190,7 +256,16 @@ impl ManagedRuntimeController {
         if current.state == SANDBOX_IMAGES_DOWNLOADING || current.state == SANDBOX_IMAGES_READY {
             return current.clone();
         }
-        let status = SandboxImageStatus::new(SANDBOX_IMAGES_NOT_PREPARED, "");
+        // Fetched for this release on an earlier start: Settings should not
+        // offer to download what is already here. If the guest has lost it
+        // since, `sandbox.ensure` fetches it on first use, as for anyone.
+        let status = if self.prepared_sandbox_images().fetched.as_ref()
+            == Some(&self.pinned_sandbox_images())
+        {
+            SandboxImageStatus::new(SANDBOX_IMAGES_READY, "The workspace sandbox is ready")
+        } else {
+            SandboxImageStatus::new(SANDBOX_IMAGES_NOT_PREPARED, "")
+        };
         *current = status.clone();
         status
     }
@@ -215,6 +290,66 @@ impl ManagedRuntimeController {
         );
         *current = started.clone();
         Some(started)
+    }
+
+    /// Whether this start should fetch the sandbox images nobody asked for,
+    /// and if so, the note that it has.
+    ///
+    /// Only for someone who uses sandboxes -- this computer fetched them
+    /// before -- and whose release pins different ones: an update. Without it
+    /// the new image arrived on the first Wake up after the update, and the
+    /// person waited on the download there. Once per release, recorded before
+    /// the fetch starts, so a failure is offered in Settings rather than
+    /// retried on every start. With the image reused across releases, the
+    /// workspace image's reference usually has not moved and the fetch finds
+    /// it already there.
+    pub fn claim_unasked_sandbox_image_fetch(&self) -> bool {
+        let pinned = self.pinned_sandbox_images();
+        if pinned.workspace.is_none() && pinned.function.is_none() {
+            return false;
+        }
+        let mut record = self.prepared_sandbox_images();
+        let Some(fetched) = record.fetched.as_ref() else {
+            return false;
+        };
+        if *fetched == pinned || record.fetched_unasked.as_ref() == Some(&pinned) {
+            return false;
+        }
+        record.fetched_unasked = Some(pinned);
+        self.write_prepared_sandbox_images(&record);
+        true
+    }
+
+    fn record_fetched_sandbox_images(&self) {
+        let mut record = self.prepared_sandbox_images();
+        record.fetched = Some(self.pinned_sandbox_images());
+        self.write_prepared_sandbox_images(&record);
+    }
+
+    fn pinned_sandbox_images(&self) -> PinnedSandboxImages {
+        PinnedSandboxImages {
+            workspace: self.spec.images.workspace.clone(),
+            function: self.spec.images.function.clone(),
+        }
+    }
+
+    /// The record, or an empty one: unreadable reads as "never fetched", which
+    /// is the answer that downloads nothing.
+    pub(crate) fn prepared_sandbox_images(&self) -> PreparedSandboxImages {
+        fs::read(&self.prepared_images)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// Best effort: losing it costs one unasked fetch, never a broken start.
+    fn write_prepared_sandbox_images(&self, record: &PreparedSandboxImages) {
+        let written = serde_json::to_vec_pretty(record)
+            .map_err(io::Error::other)
+            .and_then(|bytes| fs::write(&self.prepared_images, bytes));
+        if let Err(error) = written {
+            eprintln!("locald: could not record the sandbox images: {error}");
+        }
     }
 
     pub(crate) fn publish_sandbox_images(

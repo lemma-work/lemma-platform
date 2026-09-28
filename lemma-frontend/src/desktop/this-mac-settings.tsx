@@ -21,6 +21,7 @@ import { ThisMacSharing } from "./this-mac-sharing";
 import { ThisMacServerSetup } from "./this-mac-setup";
 import { SearchReadinessRow } from "./search-readiness";
 import { DiskUsageRows } from "./disk-usage";
+import { downloadedSoFar } from "./sandbox-images";
 import { needsSetup, capabilityStatus, CAPABILITIES } from "./server-setup";
 
 /** Settings → This Mac: the settings a person changes about their own
@@ -248,7 +249,12 @@ function CodingAgents() {
             <HostExecution />
             <Loading snapshot={snapshot}>
                 {(data) => {
-                    const wording = sandboxWording(data.sandbox_images?.state, noun);
+                    const images = data.sandbox_images;
+                    const wording = sandboxWording(
+                        images?.state,
+                        noun,
+                        images ? downloadedSoFar({ doneMb: images.done_mb, totalMb: images.total_mb }) : null,
+                    );
                     return (
                         <SettingRow name="Workspace sandbox" consequence={wording.text}>
                             {wording.offer && (

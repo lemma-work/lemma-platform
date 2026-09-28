@@ -39,6 +39,9 @@ from app.modules.workspace.services.workspace_process_store import WorkspaceProc
 from app.modules.workspace.services.workspace_runtime_bundle import (
     WorkspaceRuntimeBundleMixin,
 )
+from app.modules.workspace.services.workspace_runtime_restart import (
+    ensure_runtime_current,
+)
 from app.modules.workspace.services.workspace_storage_generation_store import (
     WorkspaceStorageGenerationStore,
 )
@@ -404,6 +407,15 @@ class WorkspaceSandboxService(
                 self._ensure_runtime_bundle(user_id, sandbox_info),
                 budget.remaining(),
             )
+            # Before the session exists: a restart must not end work this
+            # session is about to start. See `workspace_runtime_restart`.
+            if await self._await_shared(
+                ensure_runtime_current(self, user_id, sandbox_info),
+                budget.remaining(),
+            ):
+                sandbox_info = await self._ensure_workspace_directory(
+                    user_id, resolved_cwd, budget=budget
+                )
             await self._ensure_browser_proxy(
                 user_id, sandbox_info, wait_seconds=budget.remaining()
             )

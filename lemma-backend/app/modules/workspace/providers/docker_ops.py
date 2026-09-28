@@ -48,6 +48,7 @@ from app.modules.workspace.providers.docker_engine import (
 )
 from app.modules.workspace.providers.profiles import SandboxProfile, profile_for
 from app.modules.workspace.providers.runtime_client import (
+    RuntimeState,
     WorkspaceRuntimeClient,
 )
 from app.modules.workspace.providers.runtime_errors import (
@@ -155,6 +156,12 @@ class DockerOpsMixin:
             )
             for item in running
         )
+
+    async def runtime_state(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> RuntimeState:
+        async with self._ops_client(instance, deadline_at=deadline_at) as client:
+            return await client.runtime_state(deadline_at=deadline_at)
 
     async def stat_file(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime

@@ -60,6 +60,7 @@ import asyncio
 from dataclasses import dataclass
 import subprocess
 
+from sandbox_runtime.paths import sandbox_command
 from sandbox_runtime.sandbox_memory import SandboxMemory, read_memory
 
 #: The fallback threshold, against `/proc/meminfo`'s `MemAvailable`, used
@@ -97,8 +98,9 @@ HEADROOM_FLOOR_MB = 256
 #: Desktop's kernel, which has no `memory.pressure` at all.
 PRESSURE_FULL_AVG10 = 10.0
 
-#: The CLI that owns the browser's lifecycle.
-AGENT_BROWSER = "/usr/local/bin/agent-browser"
+#: The CLI that owns the browser's lifecycle, run by its absolute path: the
+#: overlay's wrapper, else the image's (`paths.sandbox_command`).
+AGENT_BROWSER = "agent-browser"
 
 #: How long it gets. Long enough for a CLI to reach a busy daemon, short
 #: enough that a starved sandbox's reaper tick is not held open by it.
@@ -172,7 +174,7 @@ async def shed_browser() -> bool:
     def _close() -> bool:
         try:
             done = subprocess.run(  # noqa: S603
-                [AGENT_BROWSER, "close", "--all"],
+                [sandbox_command(AGENT_BROWSER), "close", "--all"],
                 capture_output=True,
                 timeout=CLOSE_TIMEOUT_SECONDS,
                 check=False,

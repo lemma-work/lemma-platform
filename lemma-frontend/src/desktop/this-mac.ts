@@ -151,7 +151,7 @@ export interface ThisMacSnapshot {
         readiness: Record<string, string>;
     };
     sharing: Sharing | null;
-    sandbox_images: { state: string; detail: string } | null;
+    sandbox_images: { state: string; detail: string; done_mb?: number | null; total_mb?: number | null } | null;
     paths: { locald: string; logs: string } | null;
     /** What Lemma takes on this disk; null from a shell that predates it. */
     disk_usage: DiskUsage | null;
@@ -241,7 +241,14 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
             readiness: Object.fromEntries(Object.entries(record(operator.readiness)).map(([key, value]) => [key, text(value)])),
         },
         sharing,
-        sandbox_images: raw.sandbox_images ? { state: text(images.state, "unknown"), detail: text(images.detail) } : null,
+        sandbox_images: raw.sandbox_images
+            ? {
+                  state: text(images.state, "unknown"),
+                  detail: text(images.detail),
+                  done_mb: typeof images.done_mb === "number" ? images.done_mb : null,
+                  total_mb: typeof images.total_mb === "number" ? images.total_mb : null,
+              }
+            : null,
         paths: raw.paths ? { locald: text(paths.locald), logs: text(paths.logs) } : null,
         disk_usage: readDiskUsage(raw.disk_usage),
         warnings: readStartupWarnings(raw.warnings),
@@ -531,12 +538,16 @@ export function healthLine(snapshot: ThisMacSnapshot, update: AppUpdateStatus | 
 /** What the sandbox row says, and whether the download is worth offering.
  *  `not-prepared` and `failed` are the only states where the button does
  *  anything useful. */
-export function sandboxWording(state: string | null | undefined, noun: string): { text: string; offer: boolean } {
+export function sandboxWording(
+    state: string | null | undefined,
+    noun: string,
+    downloaded: string | null = null,
+): { text: string; offer: boolean } {
     switch (state) {
         case "ready":
             return { text: `Downloaded. Pods can run code, shells and browsers on ${noun}.`, offer: false };
         case "downloading":
-            return { text: "Downloading…", offer: false };
+            return { text: downloaded ? `Downloading… ${downloaded}` : "Downloading…", offer: false };
         case "failed":
             return { text: "The last download did not finish. The first task that needs it will try again, or try now.", offer: true };
         case "unsupported":
