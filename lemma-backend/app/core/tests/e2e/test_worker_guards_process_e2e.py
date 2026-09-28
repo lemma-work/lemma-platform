@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ import pytest_asyncio
 import redis.asyncio as redis_asyncio
 
 from app.core.infrastructure.events.gap_replay import gap_key
+from app.core.infrastructure.jobs.lane_watchdog import CHECK_INTERVAL_SECONDS
 from app.modules.datastore.config import datastore_settings
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.waiters import eventually
@@ -48,12 +50,26 @@ _BUDGET_BYTES = 2_000_000
 _ENTRY = "x" * 4_000
 
 
+#: A Redis logical database of this test's own. The worker it starts trims to a
+#: tiny budget every second, and in the shared per-xdist-worker database that
+#: would trim -- and later replay -- other tests' streams. Per-worker databases
+#: start at 0 and stay far below this at the suite's parallelism.
+_REDIS_DB = 15
+
+
+def _isolated_redis_url(url: str) -> str:
+    base, _, tail = url.rpartition("/")
+    return f"{base}/{_REDIS_DB}" if tail.isdigit() else f"{url.rstrip('/')}/{_REDIS_DB}"
+
+
 @pytest_asyncio.fixture
 async def redis(e2e_settings):
-    client = redis_asyncio.from_url(e2e_settings.redis_url, decode_responses=True)
-    await client.delete(_STREAM, gap_key(_STREAM, _DEAD_GROUP))
+    client = redis_asyncio.from_url(
+        _isolated_redis_url(e2e_settings.redis_url), decode_responses=True
+    )
+    await client.flushdb()
     yield client
-    await client.delete(_STREAM, gap_key(_STREAM, _DEAD_GROUP))
+    await client.flushdb()
     await client.aclose()
 
 
@@ -65,6 +81,7 @@ async def worker_process(request, e2e_settings, db_manager, redis):
     """
     del db_manager  # schema only
     overrides: dict[str, str] = getattr(request, "param", {})
+    queue_name = f"guard-test-{uuid4().hex[:8]}"
     log_path = Path(f"/tmp/lemma_guard_worker_{uuid4().hex}.log")
     backend_root = Path(__file__).resolve().parents[4]
     log_file = open(log_path, "w+")
@@ -76,10 +93,10 @@ async def worker_process(request, e2e_settings, db_manager, redis):
             "PYTHONPATH": ".",
             "PYTHONUNBUFFERED": "1",
             # A queue of its own, so it never takes the shared worker's jobs.
-            "WORKER_QUEUE_NAME": f"guard-test-{uuid4().hex[:8]}",
+            "WORKER_QUEUE_NAME": queue_name,
             "DATABASE_URL": e2e_settings.database_url,
             "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
-            "REDIS_URL": e2e_settings.redis_url,
+            "REDIS_URL": _isolated_redis_url(e2e_settings.redis_url),
             "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
             "ENVIRONMENT": "testing",
             "EMAIL_TRANSPORT": "filesystem",
@@ -87,8 +104,7 @@ async def worker_process(request, e2e_settings, db_manager, redis):
             "EMBEDDING_PROVIDER": "local",
             "REDIS_STREAM_GUARD_INTERVAL_SECONDS": "1",
             "REDIS_STREAMS_BUDGET_BYTES": str(_BUDGET_BYTES),
-            # Other suites' groups share this Redis and may be behind; this
-            # test is about the budget, not about restarting over them.
+            # This test is about the budget, not about restarting over a group.
             "REDIS_STREAM_STALL_SECONDS": "0",
             **overrides,
         },
@@ -117,6 +133,21 @@ async def worker_process(request, e2e_settings, db_manager, redis):
             ),
             timeout_seconds=60.0,
             interval_seconds=0.2,
+        )
+
+        # `service.started` is logged inside the lifespan, before streaq starts
+        # its SIGTERM handler; a signal in that gap kills the process outright.
+        # streaq starts the handler just before the loop that writes this
+        # health key, so the key existing means the handler is in place.
+        async def health_keys() -> list[str]:
+            return await redis.keys(f"streaq:{queue_name}:health:*")
+
+        await eventually(
+            label="the worker to install its signal handler",
+            probe=health_keys,
+            done=bool,
+            timeout_seconds=30.0,
+            interval_seconds=0.1,
         )
         yield proc, logs
     finally:
@@ -165,20 +196,26 @@ async def test_switching_the_guard_off_leaves_the_worker_running(worker_process)
     disabled guard that simply returned used to read as a dead one -- and the
     worker restarted itself, over and over, the moment it was switched off."""
     proc, logs = worker_process
+    started = time.monotonic()
 
     async def still_running() -> dict:
-        return {"code": proc.poll()}
+        return {"code": proc.poll(), "elapsed": time.monotonic() - started}
 
-    # Several watchdog passes (10s each would be slow to wait for; a done
-    # callback fires at once, which is where the old failure came from).
+    # Past a full watchdog pass, not just the first probe: the old failure came
+    # from a done-callback, which is immediate, but the periodic check is the
+    # other way a disabled guard could be misread.
     await eventually(
         label="the worker to stay up with the guard off",
         probe=still_running,
-        done=lambda v: v["code"] is None,
-        timeout_seconds=5.0,
+        done=lambda v: v["elapsed"] > CHECK_INTERVAL_SECONDS + 2,
+        fail_fast=lambda v: (
+            f"worker exited with {v['code']}:\n{logs()[-4000:]}"
+            if v["code"] is not None
+            else None
+        ),
+        timeout_seconds=CHECK_INTERVAL_SECONDS + 20,
         interval_seconds=0.5,
     )
-    assert proc.poll() is None, logs()[-4000:]
 
     proc.terminate()
     assert proc.wait(timeout=60) == 0, logs()[-4000:]
