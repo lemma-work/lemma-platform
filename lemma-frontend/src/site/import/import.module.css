@@ -1,0 +1,735 @@
+/* The install page: what you are getting on the left, the install beside it.
+   The panel stays in view on wide screens; on narrow ones it follows the
+   hero and a bottom bar keeps the way back to it one tap away. */
+
+.page {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 56px clamp(16px, 4vw, 48px) 120px;
+}
+
+.hero {
+    max-width: 760px;
+    margin-bottom: 48px;
+    padding-top: 8px;
+}
+.hero h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: clamp(44px, 6vw, 76px);
+    line-height: 1.02;
+    letter-spacing: -0.035em;
+    margin: 20px 0 16px;
+}
+.hero p {
+    font-size: var(--t-lead);
+    line-height: 1.55;
+    color: var(--ink-2);
+    margin: 0;
+    max-width: 60ch;
+}
+.source {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 6px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 99px;
+    background: var(--paper);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink-2) !important;
+    text-decoration: none;
+    transition: border-color 0.15s;
+}
+.source:hover {
+    border-color: var(--ink-3);
+    color: var(--ink) !important;
+}
+
+.layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 400px;
+    gap: 64px;
+    align-items: start;
+}
+.body {
+    min-width: 0;
+}
+.aside {
+    position: sticky;
+    top: 104px;
+    scroll-margin-top: 104px;
+}
+
+.section + .section {
+    margin-top: 48px;
+    padding-top: 40px;
+    border-top: 1px solid var(--line);
+}
+.label {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 20px;
+}
+.outcomes {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 14px;
+}
+.outcomes li {
+    position: relative;
+    padding-left: 26px;
+    font-size: 17px;
+    line-height: 1.5;
+}
+.outcomes li::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 0.5em;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--accent);
+}
+.includes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+    gap: 12px;
+    margin: 0;
+}
+.includes div {
+    padding: 18px 20px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+}
+.includes dt {
+    font-weight: 500;
+    margin-bottom: 6px;
+}
+.includes dd {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: var(--t-ui);
+    line-height: 1.55;
+}
+.readme > :first-child {
+    margin-top: 0;
+}
+
+/* ── The panel ─────────────────────────────────────────────────────── */
+
+.panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-height: calc(100dvh - 128px);
+    overflow: auto;
+    scrollbar-width: thin;
+    padding: 24px;
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-xl);
+    box-shadow: var(--shadow-soft);
+}
+.panelTitle {
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    margin: 0;
+}
+.muted {
+    color: var(--ink-2);
+    font-size: var(--t-ui);
+    line-height: 1.55;
+    margin: 0;
+}
+.fine {
+    color: var(--ink-3);
+    font-size: 12.5px;
+    text-align: center;
+    margin: -6px 0 0;
+}
+
+.steps {
+    display: flex;
+    gap: 6px;
+    list-style: none;
+    margin: 0 0 4px;
+    padding: 0;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.steps li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+}
+.steps li + li::before {
+    content: "";
+    flex: 0 0 12px;
+    height: 1px;
+    background: var(--line-2);
+    margin-right: 2px;
+}
+.steps span {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 99px;
+    border: 1px solid var(--line-2);
+    font-family: var(--mono);
+    font-size: 11px;
+    flex: none;
+}
+.steps li[data-state="now"] {
+    color: var(--ink);
+}
+.steps li[data-state="now"] span {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.steps li[data-state="done"] span {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+}
+
+.choices {
+    display: grid;
+    gap: 8px;
+}
+.existing {
+    display: grid;
+    gap: 8px;
+    max-height: 232px;
+    overflow: auto;
+    scrollbar-width: thin;
+}
+.choice {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 56px;
+    padding: 10px 14px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+.choice:hover {
+    border-color: var(--ink-3);
+}
+.choice[data-on] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+.choice input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.choice:has(input:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.newMark {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-mark);
+    border: 1px dashed var(--ink-3);
+    color: var(--ink-2);
+    flex: none;
+}
+.choice[data-on] .newMark {
+    border-style: solid;
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.choiceText {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+.choiceText b {
+    font-weight: 500;
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.choiceText small {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+.or {
+    font-size: 12px;
+    color: var(--ink-3);
+    margin: 6px 0 0;
+}
+
+.panel input:not([type="radio"], [type="checkbox"]),
+.panel select {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    margin: 0;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: var(--canvas);
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+}
+.panel input:focus-visible,
+.panel select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: transparent;
+}
+.nameField,
+.field {
+    display: grid;
+    gap: 6px;
+}
+.nameField {
+    margin: 0 0 4px 44px;
+}
+.nameField > span,
+.field > span:first-child {
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.field em {
+    font-style: normal;
+    color: var(--ink-3);
+}
+.field small {
+    color: var(--ink-3);
+    font-size: 12.5px;
+    line-height: 1.45;
+    margin-top: -2px;
+}
+.fieldActions {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+}
+.fieldActions a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent) !important;
+    text-decoration: none;
+}
+
+.primary,
+.secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 12px 22px;
+    border-radius: 99px;
+    font: inherit;
+    font-size: 15px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: filter 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.primary {
+    width: 100%;
+    border: 0;
+    background: var(--accent);
+    color: var(--on-accent) !important;
+}
+.primary:hover:not(:disabled) {
+    filter: brightness(1.1);
+}
+.secondary {
+    border: 1px solid var(--line-2);
+    background: transparent;
+    color: var(--ink);
+}
+.secondary:hover:not(:disabled) {
+    border-color: var(--ink-3);
+}
+.primary:disabled,
+.secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.primary:focus-visible,
+.secondary:focus-visible,
+.quiet:focus-visible,
+.link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+.row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+}
+.quiet {
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.quiet:hover {
+    color: var(--ink);
+}
+.link {
+    border: 0;
+    background: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+
+.for {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.for b {
+    font-weight: 500;
+    color: var(--ink);
+}
+
+.plan {
+    display: grid;
+    align-content: start;
+    gap: 16px;
+    flex: 0 1 auto;
+    min-height: 120px;
+    overflow: auto;
+    scrollbar-width: thin;
+    margin: 0 -24px;
+    padding: 4px 24px;
+    border-block: 1px solid var(--line);
+}
+.plan section {
+    padding-top: 12px;
+}
+.plan section:last-child {
+    padding-bottom: 12px;
+}
+.plan h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 8px;
+}
+.plan h3 span {
+    font-family: var(--mono);
+    letter-spacing: 0;
+}
+.plan ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+}
+.plan li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    min-height: 34px;
+}
+.stepName {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--t-ui);
+    overflow-wrap: anywhere;
+}
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 11.5px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    white-space: nowrap;
+}
+.badge[data-tone="quiet"] {
+    background: transparent;
+    color: var(--ink-3);
+}
+.badge[data-tone="ok"] {
+    background: color-mix(in srgb, var(--ok) 14%, transparent);
+    color: var(--ok);
+}
+.badge[data-tone="bad"] {
+    background: color-mix(in srgb, var(--bad) 12%, transparent);
+    color: var(--bad);
+}
+.stepError {
+    flex-basis: 100%;
+    color: var(--bad);
+    font-size: 12.5px;
+}
+
+.confirm {
+    display: grid;
+    gap: 16px;
+}
+.needs {
+    display: grid;
+    gap: 16px;
+    border: 0;
+    margin: 0;
+    padding: 0;
+}
+.needs legend {
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 12px;
+    padding: 0;
+}
+.check {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: var(--t-ui);
+    line-height: 1.5;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+.check input {
+    width: 18px !important;
+    height: 18px;
+    margin: 2px 0 0 !important;
+    accent-color: var(--accent);
+    flex: none;
+}
+.check em {
+    font-style: normal;
+    color: var(--bad);
+}
+
+.progress {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.progress small {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-3);
+    white-space: nowrap;
+}
+.bar {
+    flex: 1;
+    height: 6px;
+    border-radius: 99px;
+    background: var(--line);
+    overflow: hidden;
+}
+.bar i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent);
+    transition: width 0.4s ease;
+}
+.bar[data-indeterminate] i {
+    width: 35%;
+    animation: slide 1.2s ease-in-out infinite;
+}
+@keyframes slide {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(290%); }
+}
+.spin {
+    animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.warnings {
+    list-style: none;
+    margin: 0;
+    padding: 12px 14px;
+    display: grid;
+    gap: 8px;
+    border-radius: var(--r-md);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    font-size: 13px;
+    line-height: 1.45;
+}
+.warnings li {
+    display: flex;
+    gap: 8px;
+}
+.warnings svg {
+    flex: none;
+    margin-top: 2px;
+    color: var(--warn);
+}
+.error {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--bad);
+}
+.error svg {
+    flex: none;
+    margin-top: 1px;
+}
+
+.done {
+    display: grid;
+    justify-items: center;
+    text-align: center;
+    gap: 10px;
+    padding: 12px 0 4px;
+}
+
+/* ── Narrow screens ────────────────────────────────────────────────── */
+
+.mobileBar {
+    display: none;
+}
+
+@media (max-width: 960px) {
+    .page {
+        padding-top: 36px;
+    }
+    .hero {
+        margin-bottom: 28px;
+    }
+    .layout {
+        grid-template-columns: 1fr;
+        gap: 48px;
+    }
+    .aside {
+        position: static;
+        order: -1;
+        scroll-margin-top: 88px;
+    }
+    .panel {
+        max-height: none;
+    }
+    .mobileBar {
+        position: sticky;
+        bottom: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+        background: var(--paper);
+        border-top: 1px solid var(--line-2);
+    }
+    .mobileBar span {
+        font-weight: 500;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .mobileBar a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 22px;
+        border-radius: 99px;
+        background: var(--accent);
+        color: var(--on-accent) !important;
+        text-decoration: none;
+        flex: none;
+    }
+    .plan {
+        max-height: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spin,
+    .bar[data-indeterminate] i {
+        animation: none;
+    }
+    .bar i {
+        transition: none;
+    }
+}
+
+/* In the height-capped panel only the plan gives way; everything else keeps
+   its size, so the Install button is always on screen. */
+.panel > * {
+    flex-shrink: 0;
+}
+.panel > .plan {
+    flex-shrink: 1;
+}
+
+/* The panel's main action stays pinned to its bottom edge, so a long list
+   of teammates or plan steps never pushes it out of sight. */
+.foot {
+    position: sticky;
+    bottom: -24px;
+    z-index: 1;
+    display: grid;
+    gap: 12px;
+    margin: 0 -24px -24px;
+    padding: 16px 24px 24px;
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+}
+.row.foot {
+    display: grid;
+    grid-template-columns: 1fr auto;
+}
+.foot .fine {
+    margin: 0;
+}
+@media (max-width: 960px) {
+    .foot {
+        position: static;
+        border-top: 0;
+        padding-top: 0;
+    }
+}
