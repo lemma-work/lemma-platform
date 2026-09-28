@@ -110,8 +110,7 @@ export default async function Page({ params }: Props) {
                                 <span>START HERE</span>
                                 <h2>Your first steps with Lemma ↗</h2>
                                 <p>
-                                    Set up your workspace and get your first
-                                    teammate working.
+                                    Set up your workspace and put it to work.
                                 </p>
                             </Link>
                             <h2 className="docs-explore">

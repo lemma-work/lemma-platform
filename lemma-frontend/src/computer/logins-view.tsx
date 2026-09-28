@@ -65,8 +65,8 @@ export function Logins({ visible }: { visible: boolean }) {
 
                     {!sleeping && !logins.isPending && items.length === 0 && (
                         <p className="computer-note">
-                            Nothing yet. A teammate asks you to sign in when a site it needs wants a person,
-                            and the browser keeps that session afterwards.
+                            Nothing yet. You are asked to sign in when a site needs a person, and the
+                            browser keeps that session afterwards.
                         </p>
                     )}
 
@@ -133,8 +133,8 @@ function Row({ login, forgetting, busy, onAsk, onKeep, onForget }: {
         return (
             <div className="logins__row logins__row--asking" role="alertdialog" aria-label={"Sign out of " + login.site}>
                 <p>
-                    Sign the browser out of <strong>{login.site}</strong>? A teammate working there will be
-                    asked for you again.
+                    Sign the browser out of <strong>{login.site}</strong>? Any work there will ask for you
+                    again.
                 </p>
                 <div className="logins__actions">
                     <button className="btn btn--danger" disabled={busy} onClick={onForget}>

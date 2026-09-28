@@ -22,7 +22,7 @@ export const PUBLIC_TEMPLATES: PublicTemplate[] = [
             "A shared task board where people and agents can pick up work, leave a clear trail, and hand it back.",
         github: "https://github.com/deepak-jha-kgp/roundtable",
         outcomes: [
-            "Assign the same issue to a teammate or a named agent",
+            "Assign the same issue to a person or a named agent",
             "Keep questions, progress, files, and final work in one thread",
             "Continue agent work without starting over in a fresh chat",
         ],

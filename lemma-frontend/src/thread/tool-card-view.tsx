@@ -305,7 +305,7 @@ function WorkspaceImage({ path, name }: { path: string; name: string }) {
     if (body.isError || !href) {
         return (
             <p className="toolcard__fine">
-                That file could not be read. It may have been written over since the teammate looked at it.{" "}
+                That file could not be read. It may have been written over since.{" "}
                 <button type="button" className="toolcard__more" onClick={() => void body.refetch()}>
                     Try again
                 </button>
@@ -364,7 +364,7 @@ function WorkspaceShot({
 
 /** Where the file lives, in the words this app uses for the two stores. */
 const STORE_WORD: Record<ImageLook["store"], string> = {
-    pod: "in teammate files",
+    pod: "in files",
     workspace: "on the computer",
     "": "",
 };
@@ -911,7 +911,7 @@ function SignInCard({ ask, conversationId, toolCallId }: { ask: SignInAsk; conve
                                     between two paragraphs; here it is what it
                                     is — the thing to know before pressing. */}
                                 <p className="toolcard__fine">
-                                    Sign in to {ask.host} in the teammate&rsquo;s browser.
+                                    Sign in to {ask.host} in the browser on your computer.
                                 </p>
                                 <button className="btn btn--primary toolcard__go" onClick={() => setSigningIn(true)}>
                                     Sign in to {ask.host}
@@ -925,7 +925,7 @@ function SignInCard({ ask, conversationId, toolCallId }: { ask: SignInAsk; conve
             {signingIn && conversationId && toolCallId && (
                 <Modal
                     title={"Sign in to " + ask.host}
-                    subtitle="In your teammate's browser, on your computer."
+                    subtitle="In the browser on your computer."
                     wide
                     onClose={() => setSigningIn(false)}
                 >

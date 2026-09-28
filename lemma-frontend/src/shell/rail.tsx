@@ -45,14 +45,14 @@ export function Rail({ pods, activeId, onPick, onHire, orgId, compact = false }:
         }, 120);
     }
     return <nav className="rail" aria-label={MATES}>
-        {!compact && <label className="rail__search"><SearchIcon size={16} /><input placeholder="Find a teammate" aria-label="Find a teammate" value={search} onChange={e => setSearch(e.target.value)} />{search && <button onClick={() => setSearch("")} aria-label="Clear search"><CloseIcon size={14} /></button>}</label>}
+        {!compact && <label className="rail__search"><SearchIcon size={16} /><input placeholder="Find by name" aria-label="Find by name" value={search} onChange={e => setSearch(e.target.value)} />{search && <button onClick={() => setSearch("")} aria-label="Clear search"><CloseIcon size={14} /></button>}</label>}
         <div className="rail__section"><span className="rail__label">{MATES}</span>{!compact && <span className="rail__count">{pods.length}</span>}</div>
         <div className="rail__list">
             {(compact ? pods : filtered).map(pod => <button key={pod.id} className="rail__pod" aria-current={pod.id === activeId ? "page" : undefined} onClick={() => onPick(pod.id)} title={pod.name} aria-label={pod.name}
                 onMouseEnter={() => warm(pod)} onMouseLeave={() => clearTimeout(intent.current)} onFocus={() => warm(pod)} onBlur={() => clearTimeout(intent.current)}>
                 <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={30} still={still} /><span className="rail__name">{pod.name}</span>
             </button>)}
-            {!compact && filtered.length === 0 && <div className="rail__empty">{pods.length ? "No teammates match." : "Your teammates will appear here."}</div>}
+            {!compact && filtered.length === 0 && <div className="rail__empty">{pods.length ? "No matches." : "Nothing here yet."}</div>}
         </div>
         <NewTeammate orgId={orgId} onOpen={onHire} />
     </nav>;
