@@ -66,7 +66,10 @@ class NightliesAreCheckedBeforeAnythingIsPublished(unittest.TestCase):
         gate = job(source, "protected-e2e-gate")
         self.assertIn("uses: ./.github/actions/require-ci-passed", gate)
         self.assertIn("inputs.share && !inputs.publish", gate)
-        self.assertIn("needs: [merge, infra-digests, guest-runtimes, host-packs]", job(source, "manifest"))
+        self.assertIn(
+            "needs: [merge, infra-digests, guest-runtimes, host-packs, workspace-image-plan]",
+            job(source, "manifest"),
+        )
 
     def test_no_job_reads_only_the_first_page_of_check_runs(self) -> None:
         for name in ("release-local-images.yml", "nightly-desktop.yml"):
