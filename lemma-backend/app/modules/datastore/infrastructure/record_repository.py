@@ -7,7 +7,6 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreInfrastructureError,
@@ -45,13 +44,13 @@ from app.modules.datastore.infrastructure.record_update_sql import (
     order_bulk_keys,
     split_previous_image,
 )
-from app.modules.datastore.infrastructure.rls_context import verify_rls_context
+from app.modules.datastore.infrastructure.readonly_query import (
+    QueryRows,
+    execute_readonly_query,
+)
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.infrastructure.record_indexes import ensure_listing_index_for
-from app.modules.datastore.infrastructure.record_query_cost import (
-    guard_query_plan,
-)
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.value_converter import ValueConverter
 from app.core.log.log import get_logger
@@ -308,7 +307,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         enable_rls: bool = True,
         is_pod_admin: bool = False,
-    ) -> tuple[list[dict], int, bool]:
+    ) -> QueryRows:
         """Execute a pre-validated read-only SQL query inside the pod schema.
 
         Callers must validate the statement (single, read-only, no cross-schema
@@ -318,61 +317,18 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         streamed row cap so a large result never fully materializes.
 
         ``is_pod_admin`` is forwarded to the RLS context: when true, RLS-enabled
-        tables return all rows; otherwise rows are scoped to ``user_id``.
+        tables return all rows; otherwise rows are scoped to ``user_id``. The
+        query itself runs in ``readonly_query``.
         """
-        max_rows = datastore_settings.datastore_query_max_rows
-        query_role = sanitize_identifier(datastore_settings.datastore_query_role)
         try:
-            async with self.schema_manager.session_factory() as session:
-                await session.execute(text("SET TRANSACTION READ ONLY"))
-                await session.execute(
-                    text("SELECT set_config('statement_timeout', :ms, true)"),
-                    {
-                        "ms": str(
-                            datastore_settings.datastore_query_statement_timeout_ms
-                        )
-                    },
-                )
-
-                schema_name = self.schema_manager.get_schema_name(pod_id)
-                # All SETs are transaction-local so nothing leaks back to the pool.
-                await session.execute(text(f'SET LOCAL search_path TO "{schema_name}"'))
-
-                if enable_rls:
-                    await self.schema_manager.set_rls_context(
-                        session, user_id, is_pod_admin=is_pod_admin
-                    )
-
-                # Run the user's SQL as the non-superuser, NOBYPASSRLS role so RLS
-                # policies are enforced (the app's own connection bypasses RLS).
-                # Set after the RLS-context GUCs above, which the policies read.
-                await session.execute(text(f'SET LOCAL ROLE "{query_role}"'))
-
-                await guard_query_plan(session, query, schema_name=schema_name)
-
-                # Stream via a server-side cursor and pull at most max_rows + 1 so a
-                # runaway result set never fully materializes in memory; the extra
-                # row only tells us the result was truncated.
-                result = await session.stream(text(query))
-                rows: list[dict] = []
-                async for row in result:
-                    rows.append(dict(row._mapping))
-                    if len(rows) > max_rows:
-                        break
-                await result.close()
-                # The extra row is the only evidence the result was cut, and it
-                # used to be dropped here -- so a caller was handed exactly
-                # `max_rows` rows and a count equal to them, which reads as a
-                # complete result. An agent then reports "you have 1000 orders"
-                # to someone with forty thousand.
-                truncated = len(rows) > max_rows
-                if truncated:
-                    rows = rows[:max_rows]
-                if enable_rls:
-                    await verify_rls_context(
-                        session, user_id, is_pod_admin=is_pod_admin
-                    )
-                return rows, len(rows), truncated
+            return await execute_readonly_query(
+                self.schema_manager,
+                pod_id,
+                query,
+                user_id,
+                enable_rls=enable_rls,
+                is_pod_admin=is_pod_admin,
+            )
         except DBAPIError as exc:
             logger.debug("datastore.record.query.propagated", exc_info=True)
             raise_record_read_error(exc, operation="query execution")

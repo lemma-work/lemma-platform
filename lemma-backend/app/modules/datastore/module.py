@@ -225,34 +225,8 @@ def _event_routers():
     return [router, pod_schema_router]
 
 
-@asynccontextmanager
-async def _backfill_query_role(app):
-    """Ensure the RLS-subject role can read every existing pod schema, so ad-hoc
-    datastore queries (run under that role) are scoped. Non-fatal: schemas and
-    tables also grant on creation, and queries fail closed. This is the repair
-    path for schemas that predate those grants — not the primary one."""
-    from app.modules.datastore.infrastructure.transactional_events import (
-        ensure_datastore_event_outbox,
-    )
-
-    # Fail startup when the durable event table cannot be established. Record
-    # mutation must never degrade to post-commit best-effort publication.
-    await ensure_datastore_event_outbox()
-
-    try:
-        from app.modules.datastore.api.dependencies import get_schema_manager
-
-        await get_schema_manager().backfill_query_role_grants()
-        logger.debug("datastore.module.datastore_query_role_grants_ensured.observed")
-    except Exception:  # noqa: BLE001
-        # Warning, not debug: when this fails, every pod schema whose grant was
-        # never established stays unqueryable, and this is the only line that
-        # says so.
-        logger.warning(
-            "datastore.module.query_role_grant_backfill.degraded",
-            exc_info=True,
-        )
-    yield
+def _register_streaq() -> None:
+    import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
 
 
 @asynccontextmanager
@@ -361,7 +335,11 @@ module = LemmaModule(
     resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
-    api_lifespans=(_preload_local_embeddings, _backfill_query_role),
+    register_streaq=_register_streaq,
+    # Nothing here may scale with data: see `test_boot_hooks.py`. The query
+    # role and its grants are ensured lazily, and the datastore outbox table is
+    # created by the first record write or the worker's dispatcher.
+    api_lifespans=(_preload_local_embeddings,),
     worker_lifespans=(
         _close_datastore_engine,
         _preload_local_embeddings,

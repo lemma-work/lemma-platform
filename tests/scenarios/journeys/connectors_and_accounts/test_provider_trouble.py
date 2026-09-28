@@ -39,7 +39,9 @@ async def connected(world, provider):
     await alice.connects_account(
         in_organization=organization,
         auth_config=auth_config,
-        credentials={"access_token": "alice-provider-token"},
+        credentials=await alice.credential_for(
+            auth_config, holding="alice-provider-token"
+        ),
     )
     provider.clear()
     return alice, organization, auth_config

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -15,19 +16,30 @@ from app.modules.connectors.domain.account import (
     ComposioCredentials,
     OAuthCredentials,
 )
-from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CREDENTIALS_REQUIRED,
+    COMPOSIO_SYSTEM_DEFAULT_REASON,
+    AuthConfigEntity,
+    AuthConfigSource,
+)
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connector import (
     AuthScheme,
+    ComposioKindSpec,
+    ConnectorEntity,
     ConnectorKind,
 )
-from app.modules.connectors.domain.errors import ConnectorValidationError
+from app.modules.connectors.domain.errors import (
+    ConnectorReauthRequiredError,
+    ConnectorValidationError,
+)
 from app.modules.connectors.infrastructure.repositories.account_repository import (
     AccountRepository,
 )
 from app.modules.connectors.services.auth.composio_auth_provider import (
     ComposioAuthProvider,
 )
+from app.modules.connectors.services.auth_install_resolver import resolve_auth_install
 
 
 class _FakeConnectionState(BaseModel):
@@ -550,3 +562,78 @@ async def test_an_org_custom_install_with_no_credentials_is_refused_before_compo
             redirect_uri="https://lemma/callback",
         )
     create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["EXPIRED", "FAILED", "REVOKED"])
+async def test_refreshing_a_dead_composio_connection_asks_for_a_reconnect(status):
+    """Composio keeps serving the last token after the connection has died.
+
+    Returning it handed a dead token to the caller, which then failed at the
+    provider as something unrelated. The status is what says the grant is gone.
+    """
+    provider = _provider(_FakeConnectionState(access_token="dead-token"), status)
+
+    with pytest.raises(ConnectorReauthRequiredError) as raised:
+        await provider.refresh_credentials(
+            install=_install(),
+            credentials=OAuthCredentials(
+                access_token="dead-token", connection_id="ca_test_connection"
+            ),
+            user_id=uuid4(),
+        )
+
+    assert raised.value.status_code == 409
+    assert raised.value.reason == f"composio_{status.lower()}"
+
+
+@pytest.mark.asyncio
+async def test_a_lemma_default_install_of_an_unmanaged_toolkit_is_refused_before_composio():
+    """Asking Composio for managed credentials it no longer holds was a 502.
+
+    The install was made while Composio managed the toolkit. Refused with the
+    answer creating it would now get, before anything reaches Composio.
+    """
+    create = MagicMock()
+    composio = SimpleNamespace(auth_configs=SimpleNamespace(create=create))
+    provider = ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: composio,
+    )
+    stale = replace(
+        _install("shopify", toolkit_slug="shopify"), composio_managed_auth=False
+    )
+
+    with pytest.raises(ConnectorValidationError) as raised:
+        await provider.get_authorization_url(
+            install=stale,
+            user_id=uuid4(),
+            state="state",
+            redirect_uri="https://app.example.com/callback",
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.message == COMPOSIO_ORG_CREDENTIALS_REQUIRED
+    assert raised.value.details == {"reason": COMPOSIO_SYSTEM_DEFAULT_REASON}
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("managed", [True, False])
+def test_resolving_an_install_carries_whether_composio_still_manages_it(managed):
+    """Carried, not refused: resolving is also how an install is deleted."""
+    connector = ConnectorEntity(
+        id="shopify",
+        kinds=[
+            ComposioKindSpec(toolkit_slug="shopify", system_default_available=managed)
+        ],
+    )
+    install = AuthConfigEntity(
+        organization_id=uuid4(),
+        connector_id="shopify",
+        kind=ConnectorKind.COMPOSIO,
+        name="shopify",
+    )
+
+    resolved = resolve_auth_install(connector, install, MagicMock())
+
+    assert resolved.composio_managed_auth is managed

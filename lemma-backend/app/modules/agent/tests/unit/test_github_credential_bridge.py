@@ -401,7 +401,7 @@ def _project_context(*, account_id: UUID | None = None) -> BaseAgentContext:
 _DELEGATED = SimpleNamespace(organization_id=None)
 
 
-async def _fake_build_delegated_context(uow, ctx):
+async def _fake_tool_authorization_context(uow, ctx):
     del uow, ctx
     return _DELEGATED
 
@@ -438,7 +438,7 @@ async def _resolve(ctx, service, refresh=_passthrough_refresh):
     return await bridge._resolve_github_credential(
         ctx,
         uow_factory=_uow_factory(),
-        delegated_context=_fake_build_delegated_context,
+        delegated_context=_fake_tool_authorization_context,
         account_resolution=lambda _uow: service,
         refresh_credentials=refresh,
     )

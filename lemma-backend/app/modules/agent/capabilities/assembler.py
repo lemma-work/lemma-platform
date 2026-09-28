@@ -314,7 +314,9 @@ async def _build_lemma_harness_tooling(
     # answers, and a cached copy would have the agent chasing a closed question.
     if extra:
         # Tool search reveals the deferred extra tools on demand (provider-native
-        # on Anthropic/OpenAI, a local search_tools function on Fireworks).
+        # on Anthropic/OpenAI, a local search_tools function on Fireworks, and
+        # local everywhere under a monetary limit -- the native search has no
+        # price, see `MeteredModel`).
         capabilities.append(ToolSearch())
         capabilities.extend(
             _deferred_capability(obj, host_execution=host_execution) for obj in extra

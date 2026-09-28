@@ -3,27 +3,34 @@
 Ad-hoc SQL (``query.execute``) runs as ``datastore_query_role`` via
 ``SET LOCAL ROLE`` so row-level security is actually enforced — the
 application's own connection is a superuser/BYPASSRLS role that would otherwise
-see every row. That only works if the role can reach the pod's schema, which
-makes these grants part of provisioning a pod, not an afterthought of creating
-its first table.
+see every row. That only works if the role can reach the pod's schema.
 
-Every grant here is best-effort and never raises: a deployment whose app role
-cannot create or grant roles must still be able to create pods and tables.
-Queries fail closed, and ``backfill_grants`` repairs whatever was missed.
+Access is given **by construction**, never by sweeping the catalog. A pod
+schema is born with ``USAGE`` for the role and with a per-schema default
+privilege that grants ``SELECT`` on every table the app later creates in it, all
+inside the transaction that creates the schema. Nothing grants per table, and
+nothing runs at boot: a repair that walks every pod schema grows with the number
+of pods ever created, which is how it came to dominate API startup.
 
-The commonest way to lose a grant, though, is not privilege but contention.
-``GRANT`` writes a catalog row, and two sessions granting on the same schema at
-once — two API processes, or two test workers — leave one of them holding a
-transient error instead of the grant it asked for. Those are retried here
-rather than degraded, because "best-effort" was never meant to mean "gives up
-the first time two pods are created at the same moment".
+The default privilege is scoped ``IN SCHEMA`` on purpose. A database-wide
+``ALTER DEFAULT PRIVILEGES ... ON TABLES`` would also hand the role ``SELECT`` on
+every platform table a later migration creates whenever the datastore shares the
+platform database (the default), and ``public`` is reachable by every role.
+
+Schemas that predate this carry no such ACL. They heal on first use:
+``missing_access`` tells a real missing relation from an invisible one, and
+``heal_schema`` grants that one schema and nothing else.
+
+A deployment whose app role cannot create the role must still be able to create
+pods and tables, so ensuring the role is best-effort; queries then fail closed.
 """
 
 import asyncio
 import random
+import re
 
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
@@ -47,6 +54,13 @@ _TRANSIENT_SQLSTATES = frozenset({"40001", "40P01"})
 # this list exists at all.
 _TRANSIENT_MESSAGES = ("tuple concurrently updated", "tuple concurrently deleted")
 
+#: What ``SchemaManager.get_schema_name`` produces: ``pod_`` and a UUID with its
+#: hyphens replaced. Healing grants to exactly these and nothing else.
+POD_SCHEMA_RE = re.compile(r"pod_[0-9a-f]{8}(?:_[0-9a-f]{4}){3}_[0-9a-f]{12}")
+
+# Relation kinds `GRANT SELECT ON ALL TABLES IN SCHEMA` covers.
+_READABLE_RELKINDS = "('r', 'p', 'v', 'm', 'f')"
+
 
 def _is_transient_conflict(exc: BaseException) -> bool:
     """Whether PostgreSQL refused the statement over contention, not privilege.
@@ -62,6 +76,28 @@ def _is_transient_conflict(exc: BaseException) -> bool:
     return any(fragment in message for fragment in _TRANSIENT_MESSAGES)
 
 
+def query_role_name() -> str:
+    """Validated identifier for the RLS-subject role used by ad-hoc queries."""
+    return sanitize_identifier(datastore_settings.datastore_query_role)
+
+
+def schema_access_statements(schema_name: str) -> tuple[str, ...]:
+    """What makes one pod schema, and every table later made in it, readable.
+
+    Issued in the transaction that creates the schema. ``FOR ROLE CURRENT_USER``
+    because default privileges attach to whoever creates the objects, and the
+    app's own role is what creates pod tables.
+    """
+    role = query_role_name()
+    return (
+        f'GRANT USAGE ON SCHEMA "{schema_name}" TO "{role}"',
+        (
+            "ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER "
+            f'IN SCHEMA "{schema_name}" GRANT SELECT ON TABLES TO "{role}"'
+        ),
+    )
+
+
 class QueryRoleGrants:
     """Owns the query role's existence and its read access to pod schemas."""
 
@@ -69,15 +105,13 @@ class QueryRoleGrants:
         self._engine = engine
         self._role_ready = False
 
-    def _role(self) -> str:
-        """Validated identifier for the RLS-subject role used by ad-hoc queries."""
-        return sanitize_identifier(datastore_settings.datastore_query_role)
-
     async def ensure_role(self) -> None:
         """Idempotently establish the read-only, RLS-subject query role.
 
         The role is ``NOLOGIN`` (entered only via ``SET ROLE``) and granted to
         the connecting role so a non-superuser app role can switch into it.
+        Cached per instance, and the manager holding it is a process singleton,
+        so this costs two catalog lookups once per process.
 
         Both statements are *probed before they are issued*, because PostgreSQL
         checks the ``CREATEROLE`` privilege before it checks for a duplicate:
@@ -85,13 +119,11 @@ class QueryRoleGrants:
         not ``duplicate_object``, so the exception guard below cannot catch it.
         An app role that is merely a member of an already-provisioned query
         role — the least privilege this mechanism can run on — would otherwise
-        fail here on every call, taking ``try_grant`` and the ``backfill_grants``
-        repair path down with it. Asking first costs two catalog lookups and
-        makes the no-op case a genuine no-op.
+        fail here on every call. Asking first makes the no-op a genuine no-op.
         """
         if self._role_ready:
             return
-        role = self._role()
+        role = query_role_name()
         async with self._engine.begin() as conn:
             exists = await conn.execute(
                 text("SELECT 1 FROM pg_roles WHERE rolname = :role"),
@@ -116,24 +148,32 @@ class QueryRoleGrants:
                 await conn.execute(text(f'GRANT "{role}" TO CURRENT_USER'))
         self._role_ready = True
 
-    async def _retrying(
-        self,
-        run,
-        schema_name: str | None = None,
-        table_name: str | None = None,
-    ) -> None:
+    async def try_ensure_role(self) -> bool:
+        """``ensure_role`` for callers that must not fail because of it.
+
+        Schema creation proceeds without the role's ACL, and a query proceeds
+        to fail closed on ``SET LOCAL ROLE``. Warning, not debug: this is the
+        only line that says why every query on the deployment is refused.
+        """
+        try:
+            await self.ensure_role()
+        except SQLAlchemyError:
+            logger.warning(
+                "datastore.query_role.ensure.degraded",
+                role=query_role_name(),
+                exc_info=True,
+            )
+            return False
+        return True
+
+    async def _retrying(self, run, schema_name: str) -> None:
         """Run ``run`` again while PostgreSQL is only losing a catalog race.
 
-        ``ensure_role`` guards its own concurrency in SQL, with ``EXCEPTION
-        WHEN duplicate_object``. A ``GRANT`` has no such clause available: the
-        conflict surfaces as an aborted transaction, so the equivalent guard
-        has to be issuing the statement again. Each attempt opens a fresh
-        transaction — the failed one is already rolled back, and every
-        statement under this role is idempotent, so a repeat is a no-op once
-        the racing session has committed.
-
-        Backoff is jittered so that workers that collided once do not line up
-        to collide again on the same schedule.
+        A ``GRANT`` has no ``EXCEPTION WHEN`` available to it: two sessions
+        granting on one schema at once leave one of them with an aborted
+        transaction. Each attempt opens a fresh transaction and every statement
+        is idempotent, so a repeat is a no-op once the other session commits.
+        Jittered so that callers which collided once do not collide again.
         """
         for attempt in range(1, _GRANT_ATTEMPTS + 1):
             try:
@@ -146,77 +186,67 @@ class QueryRoleGrants:
                     "datastore.query_role.grant.contended",
                     attempt=attempt,
                     schema_name=schema_name,
-                    table_name=table_name,
                 )
             delay = _GRANT_BACKOFF_SECONDS * 2 ** (attempt - 1)
             await asyncio.sleep(delay + random.uniform(0, delay / 2))
 
-    async def try_grant(self, schema_name: str, table_name: str | None = None) -> None:
-        """Best-effort read access to one schema, and optionally one table.
+    async def missing_access(self, schema_name: str) -> bool:
+        """Whether the role cannot see this pod schema or one of its tables.
 
-        Runs in its own transaction so a failure cannot roll back the schema or
-        table it follows, and retries a transient conflict before degrading —
-        losing this grant to a momentary catalog race would be indistinguishable
-        from never having had the privilege, and only one of those is worth a
-        warning.
-
-        Logged at warning, not debug: a pod that silently loses this grant
-        answers every ``query.execute`` with "permission denied for schema",
-        and nothing else in the system says why.
+        Asked only after a query failed. Without ``USAGE`` an unqualified name
+        on the pod's ``search_path`` does not say "permission denied" — the
+        schema is skipped and the table reads as *does not exist* — so the
+        error alone cannot tell a legacy schema from a typo. The catalog can.
         """
-        role = self._role()
+        if not POD_SCHEMA_RE.fullmatch(schema_name):
+            return False
+        async with self._engine.connect() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT NOT has_schema_privilege(:role, n.oid, 'USAGE') "
+                    "OR EXISTS (SELECT 1 FROM pg_class c "
+                    "WHERE c.relnamespace = n.oid "
+                    f"AND c.relkind IN {_READABLE_RELKINDS} "
+                    "AND NOT has_table_privilege(:role, c.oid, 'SELECT')) "
+                    "FROM pg_namespace n WHERE n.nspname = :schema"
+                ),
+                {"role": query_role_name(), "schema": schema_name},
+            )
+            return bool(result.scalar())
+
+    async def heal_schema(self, schema_name: str) -> bool:
+        """Give the role what a new pod schema is born with. One schema only.
+
+        For schemas created before access was granted by construction: the
+        existing tables get ``SELECT``, and the schema gets the same default
+        privilege a new one carries, so tables added later need no second heal.
+        Returns whether it worked; the caller retries its query only if so.
+        """
+        if not POD_SCHEMA_RE.fullmatch(schema_name):
+            return False
+        role = query_role_name()
 
         async def grant() -> None:
-            await self.ensure_role()
             async with self._engine.begin() as conn:
-                await conn.execute(
-                    text(f'GRANT USAGE ON SCHEMA "{schema_name}" TO "{role}"')
-                )
-                if table_name is not None:
-                    await conn.execute(
-                        text(
-                            f'GRANT SELECT ON "{schema_name}"."{table_name}" '
-                            f'TO "{role}"'
-                        )
-                    )
-
-        try:
-            await self._retrying(grant, schema_name=schema_name, table_name=table_name)
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "datastore.query_role.grant.degraded",
-                schema_name=schema_name,
-                table_name=table_name,
-                exc_info=True,
-            )
-
-    async def backfill_grants(self) -> None:
-        """Grant read access across all existing pod schemas.
-
-        Idempotent; covers pods whose schemas/tables were created before the
-        role mechanism existed. Safe to run at every startup, but it is the
-        repair path — schemas and tables grant on creation.
-
-        Retried on the same conflicts as ``try_grant``, and with more at stake:
-        this is one transaction over *every* pod schema, so a single grant
-        losing a race to a pod being created alongside it discards the repair
-        for all the others too, until the next restart.
-        """
-        role = self._role()
-
-        async def backfill() -> None:
-            await self.ensure_role()
-            async with self._engine.begin() as conn:
+                for statement in schema_access_statements(schema_name):
+                    await conn.execute(text(statement))
                 await conn.execute(
                     text(
-                        "DO $$ DECLARE s text; BEGIN "
-                        "FOR s IN SELECT nspname FROM pg_namespace "
-                        "WHERE nspname LIKE 'pod\\_%' LOOP "
-                        f"EXECUTE format('GRANT USAGE ON SCHEMA %I TO \"{role}\"', s); "
-                        "EXECUTE format("
-                        f"'GRANT SELECT ON ALL TABLES IN SCHEMA %I TO \"{role}\"', s); "
-                        "END LOOP; END $$"
+                        f'GRANT SELECT ON ALL TABLES IN SCHEMA "{schema_name}" '
+                        f'TO "{role}"'
                     )
                 )
 
-        await self._retrying(backfill)
+        if not await self.try_ensure_role():
+            return False
+        try:
+            await self._retrying(grant, schema_name)
+        except DBAPIError:
+            logger.warning(
+                "datastore.query_role.heal.degraded",
+                schema_name=schema_name,
+                exc_info=True,
+            )
+            return False
+        logger.info("datastore.query_role.schema_healed", schema_name=schema_name)
+        return True

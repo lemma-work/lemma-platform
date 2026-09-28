@@ -17,8 +17,8 @@ _outbox_lock = asyncio.Lock()
 #: Serializes the create below across processes. An `asyncio.Lock` coordinates
 #: one event loop; two API replicas or two workers booting together are two
 #: processes, and both can observe the table as absent and race the `pg_type` /
-#: `pg_class` catalogs — where the loser gets a unique violation and, because
-#: the API lifespan calls this, refuses to start. The two other bootstrap paths
+#: `pg_class` catalogs — where the loser gets a unique violation and fails the
+#: record write or the worker start that asked. The two other bootstrap paths
 #: in this module (`SchemaManager._lock_schema_bootstrap`,
 #: `PostgresSearchService.ensure_schema`) already take an advisory lock for the
 #: same reason; a constant key, since there is one table.
@@ -41,6 +41,11 @@ async def ensure_datastore_event_outbox() -> None:
     The consolidated Alembic revision owns the canonical/main-database table.
     A separate datastore database is provisioned dynamically like its pod
     schemas, so it receives the identical SQLAlchemy table definition here.
+
+    Called where the table is first needed -- before a record write stages an
+    event, and when the worker's outbox dispatcher starts -- not at API boot.
+    Once per process: after that it returns without a round trip. A failure
+    raises, so a write never commits with nowhere to put its event.
     """
     global _outbox_ready
     if _outbox_ready:

@@ -42,6 +42,10 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
     _surface_source_event_id,
     _verify_inbound_request,
 )
+from app.modules.agent_surfaces.api.controllers.webhook_rejections import (
+    record_whatsapp_number_mismatch,
+    record_whatsapp_signature_rejected,
+)
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.onboarding_slack_modal import (
@@ -52,6 +56,9 @@ from app.modules.agent_surfaces.services.surface_service import (
 )
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagedBotProvisioningInProgressError,
+)
+from app.modules.agent_surfaces.services.webhook_security_service import (
+    SurfaceWebhookAuthenticationError,
 )
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
@@ -253,11 +260,20 @@ async def handle_whatsapp_number_webhook(
     )
     # Raises SurfaceWebhookAuthenticationError (a DomainError) on a bad or
     # missing signature, translated to the right status by the global handler.
-    security_service.verify_whatsapp_app_secret(
-        headers=headers,
-        raw_body=raw_body,
-        app_secret=app_secret,
-    )
+    try:
+        security_service.verify_whatsapp_app_secret(
+            headers=headers,
+            raw_body=raw_body,
+            app_secret=app_secret,
+        )
+    except SurfaceWebhookAuthenticationError:
+        record_whatsapp_signature_rejected(
+            phone_number_id=phone_number_id,
+            number=number,
+            headers=headers,
+            app_secret=app_secret,
+        )
+        raise
 
     payload = _decode_webhook_payload(raw_body, headers)
 
@@ -283,6 +299,9 @@ async def handle_whatsapp_number_webhook(
     # notifications do not), and refusing those would break them for a check
     # they cannot answer. The signature already established who sent them.
     if addressed and addressed != {phone_number_id}:
+        record_whatsapp_number_mismatch(
+            phone_number_id=phone_number_id, addressed=addressed
+        )
         raise HTTPException(
             status_code=400,
             detail="Webhook payload is addressed to a different phone number",

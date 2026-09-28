@@ -1162,9 +1162,16 @@ class TestPodAgentLifecycle:
         captured: dict[str, object] = {"calls": 0}
 
         async def fake_execute_as_user(
-            self, *, conversation, user_id, agent_run_id, tool_name, args
+            self,
+            *,
+            conversation,
+            user_id,
+            agent_run_id,
+            tool_name,
+            args,
+            approval_id=None,
         ):  # noqa: ANN001 - test stub matching the service signature
-            del self, conversation, user_id, agent_run_id
+            del self, conversation, user_id, agent_run_id, approval_id
             captured["calls"] = int(captured["calls"]) + 1
             captured["tool_name"] = tool_name
             captured["args"] = args
@@ -1445,9 +1452,16 @@ class TestPodAgentLifecycle:
         executed: list[str] = []
 
         async def fail_if_executed(
-            self, *, conversation, user_id, agent_run_id, tool_name, args
+            self,
+            *,
+            conversation,
+            user_id,
+            agent_run_id,
+            tool_name,
+            args,
+            approval_id=None,
         ):
-            del self, conversation, user_id, agent_run_id, args
+            del self, conversation, user_id, agent_run_id, args, approval_id
             executed.append(tool_name)
             return {"ok": True, "value": {"stdout": "deleted", "success": True}}
 
@@ -1529,7 +1543,9 @@ class TestPodAgentLifecycle:
         exploit with `;`/`&&`/`|` to smuggle extra commands past an approval."""
         executed_calls: list[dict] = []
 
-        async def fake_execute_as_user(self, *, deps, tool_name, args):
+        async def fake_execute_as_user(
+            self, *, deps, tool_name, args, approval_id=None
+        ):
             executed_calls.append({"tool_name": tool_name, "args": args})
             return {"stdout": "ok", "success": True}
 

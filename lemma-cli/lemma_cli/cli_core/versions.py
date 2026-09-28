@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.metadata as _md
 import os
+from collections.abc import MutableMapping
 from pathlib import Path
 
 
@@ -18,6 +19,20 @@ def cli_version() -> str:
         return __version__
     except Exception:
         return "unknown"
+
+
+def declare_client(environ: MutableMapping[str, str]) -> None:
+    """Say what we are on every request, through the variables the SDK reads.
+
+    The SDK cannot tell a CLI invocation apart from any other program using it,
+    and "a person ran a command" is a different fact from "something called the
+    API". The version is the CLI's own, which is what the server compares with
+    its release to suggest an upgrade; a caller that named itself something else
+    keeps whatever version it declared.
+    """
+    if environ.setdefault("LEMMA_CLIENT", "lemma-cli") != "lemma-cli":
+        return
+    environ["LEMMA_CLIENT_VERSION"] = cli_version()
 
 
 def sdk_dist_version() -> str:

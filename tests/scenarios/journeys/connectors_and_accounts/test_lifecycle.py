@@ -66,12 +66,12 @@ async def installed(world, stack):
     account = await alice.connects_account(
         in_organization=organization,
         auth_config=auth_config,
-        # `access_token` is the key the HTTP executor turns into a bearer
-        # header. A credential under any other name is stored and never sent —
-        # which is why the same one works for a catalogue connector that has
-        # never heard of it: a credential-managed account stores what it is
-        # given, and nothing here asks it to be spent.
-        credentials={"access_token": "alice-provider-token"},
+        # Shaped by the kind's own credential schema: the HTTP connector spends
+        # `access_token` as a bearer header, and a catalogue connector such as
+        # Telegram requires `bot_token` and refuses anything else.
+        credentials=await alice.credential_for(
+            auth_config, holding="alice-provider-token"
+        ),
     )
     return alice, organization, auth_config, account
 
@@ -310,7 +310,9 @@ class TestConnectingAnAccount:
         reconnected = await alice.connects_account(
             in_organization=organization,
             auth_config=auth_config,
-            credentials={"access_token": "alice-new-token"},
+            credentials=await alice.credential_for(
+                auth_config, holding="alice-new-token"
+            ),
         )
 
         result = await alice.runs_operation(

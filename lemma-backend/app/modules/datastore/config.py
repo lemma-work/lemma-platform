@@ -4,10 +4,7 @@ Field names are unchanged from the former monolithic ``Settings`` so the
 environment variables resolve identically (``DATASTORE_QUERY_MAX_ROWS``,
 ``PDF_RENDER_DPI``, ``KREUZBERG_URL``, …).
 
-NOTE: ``datastore_database_url`` deliberately stays in core ``Settings`` — it is
-a second database URL (infrastructure, parallel to ``database_url``) and the e2e
-test infra mutates it on the shared settings object. Embedding settings also stay
-in core (consumed by ``app/core/embeddings``).
+Embedding settings stay in core (consumed by ``app/core/embeddings``).
 """
 
 from typing import Literal, Optional
@@ -38,9 +35,7 @@ class DatastoreSettings(BaseSettings):
     # arriving as a file passed a ceiling and every byte arriving as a record
     # cell passed none -- which is how a multi-megabyte column filled Redis (the
     # whole row is copied into `datastore.events`, capped by entry count rather
-    # than bytes) and stalled the API event loop decoding it. Production rows
-    # have averaged ~2KB, so 256KB is roughly 100x real use and still makes a
-    # megabyte document impossible. 0 disables the bound.
+    # than bytes) and stalled the API event loop decoding it. 0 disables a bound.
     datastore_cell_max_bytes: int = Field(
         default=256 * 1024,
         description=(
@@ -524,15 +519,17 @@ class DatastoreSettings(BaseSettings):
             return self.document_processor
         return "kreuzberg" if (self.kreuzberg_url or "").strip() else "xberg"
 
-    # Moved out of `app/core/config.py`, which was 1,756 lines and 220 fields.
-    # Every production reader of these is in `mod:datastore`; the few elsewhere
-    # are e2e fixtures and the worker subprocess's environment, repointed with
-    # them. The env var names do not change -- no settings class sets
-    # `env_prefix`, so pydantic derives the name from the field identically on
-    # whichever class holds it.
+    # Moved out of `app/core/config.py`. No settings class sets `env_prefix`,
+    # so the env var names are unchanged by where the field lives.
     datastore_database_url: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5432/lemma_datastore",
         description="Database URL for datastore data storage (each datastore uses schema=datastore_id)",
+    )
+    datastore_orphan_schema_retention_days: int = Field(
+        default=30,
+        ge=0,
+        description="Days a deleted pod's datastore schema (its tables and rows) "
+        "is kept before the daily cleanup drops it; 0 disables the cleanup.",
     )
     local_embedding_preload: bool = Field(
         default=True,

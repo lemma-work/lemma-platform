@@ -70,3 +70,31 @@ async def test_loopback_is_refused_while_the_install_is_shared(
 async def test_private_addresses_stay_refused_in_local_mode(local_install):
     with pytest.raises(ValueError):
         await discovery._validate_public_base_url("http://192.168.1.5:11434/v1")
+
+
+#: Reserved (RFC 6761), so it resolves nowhere, on any network.
+_UNRESOLVABLE = "https://provider.scenarios.invalid/v1/models"
+
+
+async def test_an_unresolvable_host_passes_under_test(monkeypatch):
+    """The product scenarios point a provider at a reserved name their egress
+    proxy answers for; the connector guard allows the same under `testing`."""
+    monkeypatch.setattr(discovery.settings, "environment", "testing")
+    await discovery._validate_public_base_url(_UNRESOLVABLE)
+
+
+async def test_an_unresolvable_host_is_a_typo_on_a_local_install(local_install):
+    with pytest.raises(ValueError):
+        await discovery._validate_public_base_url(_UNRESOLVABLE)
+
+
+async def test_an_unresolvable_host_is_refused_in_production(monkeypatch):
+    monkeypatch.setattr(discovery.settings, "environment", "production")
+    with pytest.raises(ValueError):
+        await discovery._validate_public_base_url(_UNRESOLVABLE)
+
+
+async def test_a_private_address_is_refused_even_under_test(monkeypatch):
+    monkeypatch.setattr(discovery.settings, "environment", "testing")
+    with pytest.raises(ValueError):
+        await discovery._validate_public_base_url("http://10.0.0.5/v1/models")
