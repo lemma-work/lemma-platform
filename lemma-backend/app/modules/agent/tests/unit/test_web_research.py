@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import shlex
 import subprocess
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -632,7 +631,6 @@ class TestBrowserCaptureHelpers:
             "--formats markdown,pdf --out research --name example-a"
         )
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="runs a POSIX shell")
     def test_browser_script_prefers_the_overlay_and_falls_back_to_the_image(
         self, tmp_path
     ) -> None:

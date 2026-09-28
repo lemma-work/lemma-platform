@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-
-import pytest
 
 from sandbox_runtime.paths import IMAGE_BIN, sandbox_command
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the executable bit is a POSIX notion")
 def test_the_overlay_copy_wins_when_it_is_installed(tmp_path: Path) -> None:
     script = tmp_path / "set-display-size"
     script.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -27,7 +23,6 @@ def test_the_image_copy_is_the_floor_without_an_overlay(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the executable bit is a POSIX notion")
 def test_a_file_that_cannot_run_is_not_a_command(tmp_path: Path) -> None:
     """A half-extracted overlay must not take a command away from the image."""
     (tmp_path / "start-vnc-bridge").write_text("#!/bin/sh\n", encoding="utf-8")

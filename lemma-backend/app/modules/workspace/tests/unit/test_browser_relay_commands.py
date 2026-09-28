@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -11,10 +10,7 @@ import pytest
 from app.modules.workspace.services.browser_relay_commands import ENSURE_DISPLAY
 from sandbox_runtime.paths import RUNTIME_OVERLAY_BIN
 
-pytestmark = [
-    pytest.mark.unit,
-    pytest.mark.skipif(sys.platform == "win32", reason="runs a POSIX shell"),
-]
+pytestmark = pytest.mark.unit
 
 
 def _install(directory: Path, who: str) -> None:
