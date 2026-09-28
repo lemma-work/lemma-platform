@@ -912,6 +912,17 @@ const CONVERSATION: Conversation = {
             tool_name: "display_resource",
             tool_args: { type: "FILE", path: "/launch-preview.html" },
         },
+        /* A file this app will not draw. Its card is a download, and that was
+           unreachable in the sample too. */
+        {
+            id: "m11d",
+            role: "assistant",
+            kind: "TOOL_CALL",
+            sequence: 11.7,
+            created_at: new Date().toISOString(),
+            tool_name: "display_resource",
+            tool_args: { type: "FILE", path: "/me/exports/launch-assets.zip" },
+        },
         {
             id: "m12",
             role: "assistant",
@@ -1918,6 +1929,10 @@ async function sampleFile(path: string): Promise<FileContent> {
             note: "Too big to show here · 2.4 MB",
             appUrl: "https://example.invalid/file",
         };
+    }
+    if (/\.(zip|docx|xlsx|pptx)$/i.test(path)) {
+        await wait(60);
+        return { name: path.split("/").pop() ?? path, path, mime: "application/zip", size: 4_812_390, kind: "binary" as const, appUrl: "https://example.invalid/file" };
     }
     if (/\.html?$/i.test(path)) {
         await wait(60);
