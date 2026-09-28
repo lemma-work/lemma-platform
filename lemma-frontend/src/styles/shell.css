@@ -2330,7 +2330,15 @@
 .addpeople__hint[data-bad="true"] { color: var(--bad); }
 .addpeople__unsent { display: grid; gap: 6px; margin-top: 8px; }
 .addpeople--modal .addpeople__list { margin-top: 12px; }
+/* Who is here: not buttons, so neither the pointer nor the hover says they
+   can be pressed. */
+.addpeople__row--member { align-items: center; cursor: default; }
+.addpeople__row--member:hover { color: var(--ink-2); }
 .addpeople__row--pending { color: var(--ink-3); cursor: default; }
+.addpeople__row--pending:hover { color: var(--ink-3); }
+.addpeople__you { color: var(--ink-3); }
+.addpeople__access { font-size: var(--t-meta); color: var(--ink-3); white-space: nowrap; }
+.addpeople__section { margin: 16px 0 0; font-size: var(--t-meta); color: var(--ink-3); }
 .quiet__detail {
     font-family: var(--mono);
     font-size: 11px;
@@ -3445,6 +3453,9 @@ button.filecard__open {
     letter-spacing: 0.06em;
     color: var(--ink-3);
 }
+/* A section's own control goes to the far end; the meta stays by the title
+   it describes rather than being spaced into the middle. */
+.pcard__head > .btn { margin-left: auto; }
 
 /* Hero ---------------------------------------------------------------- */
 

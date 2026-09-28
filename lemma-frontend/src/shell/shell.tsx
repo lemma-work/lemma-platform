@@ -1002,8 +1002,8 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                             <button
                                 className="head__faces"
                                 onClick={() => setAddingPeople((was) => !was)}
-                                title="People here"
-                                aria-label="People here"
+                                title="People with access"
+                                aria-label="People with access"
                             >
                                 {pod.members.slice(0, 4).map((member) => (
                                     <span
@@ -1248,6 +1248,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         setConversationId(null);
                                     }}
                                     onMessage={() => pickTab("conversation")}
+                                    onAddPeople={() => setAddingPeople(true)}
                                     onDiscussAgent={(name) => {
                                         void (async () => {
                                             const id = await discussion.open("agent", name);
@@ -1283,10 +1284,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
 
             {addingPeople && pod && (
                 <Modal
-                    title={"Add someone to " + pod.name}
+                    title={"People with access to " + pod.name}
                     onClose={() => setAddingPeople(false)}
                 >
-                    <AddPeople pod={pod} orgId={activeOrgId} onDone={() => setAddingPeople(false)} />
+                    <AddPeople pod={pod} orgId={activeOrgId} />
                 </Modal>
             )}
         </div>

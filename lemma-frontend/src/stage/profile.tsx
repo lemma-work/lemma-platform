@@ -20,6 +20,7 @@ import { WorkflowsView } from "@/workflow/workflows-view";
 import { AtTheDoor } from "@/shell/at-the-door";
 import { RunsOn } from "@/shell/runs-on";
 import { WhoCanJoin } from "@/shell/who-can-join";
+import { AddPeopleButton } from "@/shell/add-people";
 
 /** The teammate's own page.
  *
@@ -212,7 +213,9 @@ function leadName(raw: string): string {
 
 function leadOf(members: Member[]): string | null {
     const people = members.filter((member) => member.kind === "person");
-    const owner = people.find((member) => /owner/i.test(member.role));
+    /* A pod has admins rather than an owner; the sample source still says
+       Owner. */
+    const owner = people.find((member) => /^(owner|admin)$/i.test(member.role));
     if (owner) return leadName(owner.name);
     return people.length === 1 ? leadName(people[0].name) : null;
 }
@@ -312,10 +315,13 @@ function Reach({ me }: { me: Profile }) {
 function Section({
     title,
     meta,
+    action,
     children,
 }: {
     title: string;
     meta?: string;
+    /** A control that acts on the whole section, at the end of its head. */
+    action?: ReactNode;
     children: React.ReactNode;
 }) {
     return (
@@ -323,6 +329,7 @@ function Section({
             <div className="pcard__head">
                 <h3>{title}</h3>
                 {meta && <span className="meta">{meta}</span>}
+                {action}
             </div>
             {children}
         </section>
@@ -550,6 +557,10 @@ export interface Subject {
      *  read it. Absent on a candidate, who has no pod for anybody to knock
      *  on. */
     knocking?: ReactNode;
+    /** The way to add somebody to the roster, rendered — it asks the server
+     *  whether this person may, and draws nothing when they may not. Absent on
+     *  a candidate, who has nobody to add anybody to. */
+    addPeople?: ReactNode;
     /** Type over the name. Absent where the name is not this person's to
      *  change — a candidate's name is set at the moment of hiring, and that
      *  field is on the hiring floor. */
@@ -935,6 +946,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         <Section
                             title="People with access"
                             meta={members.length > 0 ? "who can ask, and what each may do" : undefined}
+                            action={subject.addPeople}
                         >
                             {members.length === 0 && (
                                 <p className="empty-row">Nobody here but you yet.</p>
@@ -995,6 +1007,7 @@ export function ProfilePane({
     onFile,
     onDiscussAgent,
     onDiscussWorkflow,
+    onAddPeople,
 }: {
     initialSection?: string;
     pod: Pod;
@@ -1028,6 +1041,9 @@ export function ProfilePane({
      *  tab, ready to be read and sent. The shell owns which conversation is
      *  open and owns the composer, so it does the filling. */
     onAskFor?: (text: string) => void;
+    /** Open the people dialog. The shell owns it, because the header's faces
+     *  open the same one. */
+    onAddPeople?: () => void;
 }) {
 
     const queryClient = useQueryClient();
@@ -1154,6 +1170,7 @@ export function ProfilePane({
                 runsOn: <RunsOn podId={pod.id} orgId={pod.orgId} />,
                 joining: <WhoCanJoin podId={pod.id} orgName={orgName} />,
                 knocking: <AtTheDoor podId={pod.id} teammate={pod.teammate?.name ?? pod.name} />,
+                addPeople: onAddPeople && <AddPeopleButton podId={pod.id} onOpen={onAddPeople} />,
                 onRename: rename.mutateAsync,
                 aside: others.length > 0 ? (
                     <section className="pcard">
