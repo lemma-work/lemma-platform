@@ -185,6 +185,64 @@ def test_every_wait_says_what_it_waits_for():
     )
 
 
+def test_a_scenario_that_signs_somebody_up_says_so():
+    """Every scenario that signs a new person up carries `open_signup`.
+
+    The mark is how a run is split between a disposable stack, where sign-up
+    gates are off, and a deployment, where they are on. `world.new_person()`
+    enforces it at run time; this says so on the pull request, including for a
+    scenario in a lane that seldom runs. A scenario counts if it signs somebody
+    up itself or through a fixture in its own module.
+    """
+
+    def signs_up(function: ast.AST) -> bool:
+        for node in ast.walk(function):
+            if not (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "attr", "") == "new_person"
+            ):
+                continue
+            if not any(
+                keyword.arg == "sign_up"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+                for keyword in node.keywords
+            ):
+                return True
+        return False
+
+    def marked(node: ast.AST) -> bool:
+        return any(
+            "open_signup" in ast.unparse(decorator) for decorator in node.decorator_list
+        )
+
+    offenders: list[str] = []
+    for path in _scenario_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        module_marked = any(
+            isinstance(node, ast.Assign)
+            and any(getattr(target, "id", "") == "pytestmark" for target in node.targets)
+            and "open_signup" in ast.unparse(node.value)
+            for node in tree.body
+        )
+        functions = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        signers = {name for name, node in functions.items() if signs_up(node)}
+        for name, node in functions.items():
+            if not name.startswith("test_") or module_marked or marked(node):
+                continue
+            arguments = {argument.arg for argument in node.args.args}
+            if name in signers or arguments & signers:
+                offenders.append(f"{path.relative_to(SUITE)}::{name}")
+    assert not offenders, (
+        "these sign somebody up but are not marked `open_signup`, so a split run "
+        "would send them to a deployment whose gates are on:\n  " + "\n  ".join(offenders)
+    )
+
+
 def test_a_harness_step_waits_on_a_named_budget():
     """The other half of the rule above, and the half that hid a real bound.
 

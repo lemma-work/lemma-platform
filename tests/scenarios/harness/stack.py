@@ -377,6 +377,50 @@ def _mapped_port(container_id: str, internal_port: int) -> int:
     return int(result.stdout.strip().splitlines()[0].rsplit(":", 1)[1])
 
 
+#: Each run's Compose project is this plus the pytest process's id.
+COMPOSE_PREFIX = "lemma-scenarios-"
+
+
+def _reap_abandoned_projects() -> None:
+    """Take down the stacks of runs that died without tearing theirs down.
+
+    A run that is killed — Ctrl-C twice, a CI job cancelled, a laptop lid —
+    never reaches `compose down`, and its Postgres, Redis and SuperTokens stay
+    up holding ports and memory until somebody notices. The project name
+    carries the pid that owned it, so a project whose process is gone is safe
+    to remove, and one whose process is alive (a parallel run) is left alone.
+    """
+    listed = subprocess.run(
+        ["docker", "compose", "ls", "--all", "--format", "json"],
+        capture_output=True,
+        text=True,
+    )
+    if listed.returncode != 0:
+        return
+    try:
+        projects = json.loads(listed.stdout or "[]")
+    except ValueError:
+        return
+    for project in projects:
+        name = str(project.get("Name") or "")
+        if not name.startswith(COMPOSE_PREFIX):
+            continue
+        owner = name.removeprefix(COMPOSE_PREFIX)
+        if not owner.isdigit() or _alive(int(owner)):
+            continue
+        _compose(name, "down", "--volumes", "--remove-orphans")
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _compose(project: str, *arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -1000,7 +1044,8 @@ def start_stack():
             )
             postgres_port = _mapped_port(postgres, 5432)
         else:
-            compose_project = f"lemma-scenarios-{os.getpid()}"
+            _reap_abandoned_projects()
+            compose_project = f"{COMPOSE_PREFIX}{os.getpid()}"
             started = _compose(compose_project, "up", "-d", "--wait")
             if started.returncode != 0:
                 logs = _compose(compose_project, "logs", "--no-color", "--tail", "80")

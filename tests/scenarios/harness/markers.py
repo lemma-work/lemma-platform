@@ -28,6 +28,7 @@ __all__ = [
     "capability",
     "covers",
     "journey",
+    "open_signup",
     "proves",
     "scenario",
     "source_build",
@@ -109,3 +110,17 @@ def source_build(why: str):
     gives: the question cannot be asked of somebody else's Lemma.
     """
     return pytest.mark.source_build(why)
+
+
+#: This scenario signs somebody new up.
+#:
+#: A deployment keeps its sign-up gates on — proof of work, verified addresses,
+#: deliverability checks — so these scenarios can only run on a stack whose
+#: gates are off, which in practice means one the suite boots. The mark is what
+#: lets a run be split: `-m open_signup` against a disposable stack, and
+#: `-m "not open_signup"` against dev, so the sign-up journey is proved on every
+#: release instead of skipping wherever it matters.
+#:
+#: Enforced by `world.new_person()`, which refuses to sign anybody up in a
+#: scenario that is not marked, fixtures included.
+open_signup = pytest.mark.open_signup

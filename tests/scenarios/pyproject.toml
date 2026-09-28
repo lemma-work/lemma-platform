@@ -72,6 +72,7 @@ markers = [
     "live: drives a real third party (Google, GitHub, Telegram, Composio) and needs credentials",
     "sandbox: needs a provisioned sandbox, so needs the workspace images built",
     "stack_lane: needs a deployment configured to be broken in a particular way, so it can only run on one this suite booted",
+    "open_signup: signs somebody new up, so needs a target whose sign-up gates are off",
     "source_build: builds something from this checkout and tests that, so it proves nothing about a --base-url target",
 ]
 

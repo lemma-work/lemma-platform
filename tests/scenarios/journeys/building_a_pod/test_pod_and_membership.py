@@ -6,7 +6,7 @@ Proves promises in
 
 from __future__ import annotations
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 from harness.credentials import needs
 from harness.environment import OPEN_SIGNUP
 
@@ -29,6 +29,7 @@ async def test_pod_creator_administers_it(world, run):
 @scenario("Someone outside the organization cannot create a pod in it")
 @proves("PS-POD-001")
 @covers("pod.create")
+@open_signup
 async def test_outsider_cannot_create_a_pod(world, run):
     alice = await world.person("priya")
     organization = alice.organization
@@ -247,6 +248,7 @@ class TestLettingPeopleAskToJoin:
     @scenario("Someone outside the organization cannot walk into an org-open pod")
     @proves("PS-POD-020")
     @covers("pod.update", "pod.join")
+    @open_signup
     async def test_an_outsider_cannot_join_an_org_open_pod(self, world, run):
         alice = await world.person("priya")
         pod = await alice.creates_a_pod(named=run.name("pod"))

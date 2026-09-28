@@ -8,6 +8,7 @@ world rather than touching it.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 
@@ -15,7 +16,7 @@ import pytest
 import pytest_asyncio
 
 from harness import environment, run as run_scope
-from harness.egress import Egress
+from harness.egress import MODE_SETTING, Egress
 from harness.environment import Deployment
 from harness.provider_view import ProviderView
 from harness.provision import provision, sweep
@@ -61,6 +62,35 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "a deployed environment."
         ),
     )
+
+
+#: The per-scenario cap against a deployment. The fast lane's 180s is shorter
+#: than the harness's own budgets for a real model (a steered run is given 300s),
+#: so against dev a slow model was killed by pytest-timeout mid-wait instead of
+#: failing with the sentence `eventually` writes. `make scenarios-deployment`
+#: always passed 900; a bare `pytest --base-url` did not.
+DEPLOYMENT_TIMEOUT = 900
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    """A target the suite does not own has no proxy in front of it.
+
+    Egress defaults to `fake`, because a stack the suite boots routes through
+    one. Against `--base-url` nothing does, but the default still said `fake`
+    — so `telegram_is_forged()` and `needs(EGRESS_RECORDED)` answered for a
+    proxy that was never started, and the live Telegram lane skipped unless a
+    workflow remembered to say `SCENARIOS_EGRESS=off` (lemma-infra forgot once,
+    and eight scenarios silently stopped running). Said here, once, instead.
+    """
+    if not config.getoption("--base-url"):
+        return
+    if not os.getenv(MODE_SETTING):
+        os.environ[MODE_SETTING] = "off"
+    # Before pytest-timeout reads it (hence `tryfirst`), and only when nobody
+    # asked for a timeout of their own.
+    if not any(str(arg).startswith("--timeout") for arg in config.invocation_params.args):
+        config.option.timeout = DEPLOYMENT_TIMEOUT
 
 
 @pytest.fixture(scope="session")
@@ -137,10 +167,14 @@ def sessions(stack: Stack, target: Deployment) -> Iterator[Sessions]:
 
 @pytest_asyncio.fixture
 async def world(
-    stack: Stack, target: Deployment, sessions: Sessions
+    request: pytest.FixtureRequest, stack: Stack, target: Deployment, sessions: Sessions
 ) -> AsyncIterator[World]:
     """A fresh world for one scenario, on the shared stack."""
-    world = World(base_url=stack.base_url, sessions=sessions)
+    world = World(
+        base_url=stack.base_url,
+        sessions=sessions,
+        may_sign_up=request.node.get_closest_marker("open_signup") is not None,
+    )
     try:
         yield world
     finally:

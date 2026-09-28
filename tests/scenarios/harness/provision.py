@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any
 
 from harness import consent, credentials, environment, tenant
+from harness.drivers.api import UnexpectedResponse
 from harness.run import current, made_by_a_run
 from harness.world import Person, World
 
@@ -158,6 +159,19 @@ async def provision(
         holder = people[tenant.CONNECTOR_HOLDER]
         holder.organization = companies[tenant.VANTAGE.key]
         await _standing_connectors(holder, ledger)
+        if reset:
+            # Before the standing pods, not after. On a deployment that caps how
+            # many pods a person owns, the pods earlier runs leaked are exactly
+            # what is using the allowance up — so a reset that made the standing
+            # pods first died on POD_LIMIT_REACHED before it reached the cleanup
+            # that would have made room, and could never recover on its own.
+            for company in tenant.COMPANIES:
+                owner = people[owner_of(company).label]
+                owner.organization = companies[company.key]
+                await _clear_run_pods(owner, ledger)
+                await _uninstall_run_connectors(owner, ledger, mine=made_by_a_run)
+                await _only_the_cast(owner, ledger)
+            boss.organization = companies[tenant.VANTAGE.key]
         standing_pods: dict[str, JSON] = {}
         for standing_pod in tenant.STANDING_PODS:
             pod = await _pod(boss, standing_pod, ledger)
@@ -167,13 +181,6 @@ async def provision(
                 await _clear_run_debris(boss, pod, ledger, mine=made_by_a_run)
         await _known_on_telegram(holder, ledger)
         await _standing_reach(holder, standing_pods, ledger)
-        if reset:
-            for company in tenant.COMPANIES:
-                owner = people[owner_of(company).label]
-                owner.organization = companies[company.key]
-                await _clear_run_pods(owner, ledger)
-                await _uninstall_run_connectors(owner, ledger, mine=made_by_a_run)
-                await _only_the_cast(owner, ledger)
 
         written = ledger.report(
             f"{'Reset' if reset else 'Provisioned'} {base_url} ({target.environment})"
@@ -258,7 +265,25 @@ async def _standing(
 
 async def _pod(owner: Person, standing: tenant.StandingPod, ledger: Ledger) -> JSON:
     before = {pod.get("name") for pod in await owner.pods_in(owner.organization)}
-    pod = await owner.works_in(standing.name)
+    try:
+        pod = await owner.works_in(standing.name)
+    except UnexpectedResponse as refused:
+        if "POD_LIMIT_REACHED" not in str(refused):
+            raise
+        # The target meters pods and the owner is at the cap. That is the
+        # deployment's plan, not the suite's bug, and the fix is on that side:
+        # the tenant needs every standing pod plus room for the pods a run
+        # makes while it works.
+        raise AssertionError(
+            f"{owner.label} may not own another pod on this deployment, so the "
+            f"standing tenant cannot be built: it needs "
+            f"{len(tenant.STANDING_PODS)} standing pods plus headroom for the "
+            f"pods each run makes. Put the scenario organizations on a plan "
+            f"without a pod cap — a deployment that meters pods can do that "
+            f"from a `scenarios_prepare_tenant` hook (see tests/scenarios/README.md). "
+            f"Pods earlier runs leaked count too; `--reset` clears those first.\n\n"
+            f"{refused}"
+        ) from refused
     if standing.name in before:
         ledger.already(f"pod {standing.name!r} is there")
     else:
@@ -502,8 +527,19 @@ async def _only_the_cast(owner: Person, ledger: Ledger) -> None:
     Matched against the declared cast rather than against a name pattern: anyone
     who is not one of them was put there by a run, and the owner is never
     removed by construction — they are in the cast.
+
+    The cast *of this organization*, not the whole cast. Hannah owns Calder
+    Retail and is the suite's outsider at Vantage; a usage scenario makes her a
+    Vantage member for a moment, and matching on the whole cast kept her there
+    for good — after which every "somebody outside is refused" scenario was
+    asking an insider.
     """
-    belongs = {colleague.email.lower() for colleague in tenant.CAST}
+    here = str(owner.organization.get("name") or "")
+    belongs = {
+        colleague.email.lower()
+        for colleague in tenant.CAST
+        if colleague.company.name == here
+    }
     for member in await owner.members_of(owner.organization):
         email = str(member.get("user_email") or member.get("email") or "").lower()
         if not email or email in belongs:

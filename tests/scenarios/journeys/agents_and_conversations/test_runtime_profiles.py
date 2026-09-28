@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 from harness.credentials import needs
 from harness.environment import OPEN_SIGNUP
 
@@ -139,6 +139,7 @@ async def test_a_provider_can_be_archived_and_restored(org, run):
 @scenario("Someone outside the organization cannot add a provider")
 @proves("PS-AGENT-004")
 @covers("agent.runtime.profiles.create")
+@open_signup
 async def test_an_outsider_cannot_add_a_provider(world, org, run):
     _alice, organization = org
     # Somebody in no organization at all, which is what this promise is about.

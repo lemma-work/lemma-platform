@@ -8,9 +8,13 @@ hold. The ids stay with the promises they prove.
 from __future__ import annotations
 
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 
-pytestmark = [journey("Getting started"), capability("Create an organization")]
+pytestmark = [
+    journey("Getting started"),
+    capability("Create an organization"),
+    open_signup,
+]
 
 
 @scenario("Two organizations may be called the same thing")

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 from harness.credentials import needs
 from harness.environment import OPEN_SIGNUP
 
@@ -47,6 +47,7 @@ async def pod_admin_who_is_only_a_member(world, run):
 @scenario("A pod admin cannot mint an organization owner by approving a request")
 @proves("PS-POD-022")
 @covers("pod.join_request.approve", "org.member.list")
+@open_signup
 async def test_approving_cannot_confer_a_higher_organization_role(
     pod_admin_who_is_only_a_member,
 ):
@@ -69,6 +70,7 @@ async def test_approving_cannot_confer_a_higher_organization_role(
 @scenario("A pod admin can still approve at the level they actually hold")
 @proves("PS-POD-022")
 @covers("pod.join_request.approve", "pod.member.list")
+@open_signup
 async def test_approving_within_your_own_authority_is_allowed(
     pod_admin_who_is_only_a_member,
 ):
