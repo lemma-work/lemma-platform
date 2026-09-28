@@ -184,6 +184,10 @@ class StackSpec:
     env: dict[str, str] = field(default_factory=dict)
     #: The checkout the backend runs from, and its interpreter.
     root: Path = BACKEND_ROOT
+    #: Where the backend and workers run, when not ``root`` — an empty
+    #: directory, for an application whose settings read a ``.env`` from the
+    #: working directory that a developer's checkout usually has.
+    run_from: Path | None = None
     python: str = ""
     app: str = "app.app:app"
     worker: list[str] = field(default_factory=lambda: ["-m", "app.worker"])
@@ -1263,7 +1267,7 @@ def start_stack(configure: Callable[[StackSpec], None] | None = None):
                     "--log-level",
                     "warning",
                 ],
-                cwd=str(spec.root),
+                cwd=str(spec.run_from or spec.root),
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -1280,7 +1284,7 @@ def start_stack(configure: Callable[[StackSpec], None] | None = None):
             processes.append(
                 subprocess.Popen(
                     [python_bin, *spec.worker],
-                    cwd=str(spec.root),
+                    cwd=str(spec.run_from or spec.root),
                     env=env,
                     stdout=log,
                     stderr=subprocess.STDOUT,
