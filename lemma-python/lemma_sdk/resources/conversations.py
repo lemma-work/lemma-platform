@@ -91,7 +91,7 @@ class PodConversations(BoundResource):
 
     def create_for_agent(
         self,
-        agent_name: str,
+        agent_name: str | None = None,
         *,
         title: str | None = None,
         metadata: Metadata | None = None,
@@ -102,7 +102,8 @@ class PodConversations(BoundResource):
             self._pod_uuid(),
             body=compact(
                 {
-                    "agent_name": agent_name,
+                    # None or blank: the pod's own assistant, by leaving it out.
+                    "agent_name": (agent_name or "").strip() or None,
                     "title": title,
                     "metadata": metadata,
                     "parent_id": parent_id,

@@ -222,6 +222,14 @@ class World:
                 f"pytestmark), or use world.person() for somebody who already "
                 f"works here."
             )
+        if sign_up and self.may_sign_up:
+            # And skip, saying why, where this target's sign-up gates are on.
+            # A scenario that forgets to ask used to fail on the gate instead —
+            # "Missing proof-of-work" — reporting the deployment as broken.
+            from harness.credentials import needs
+            from harness.environment import OPEN_SIGNUP
+
+            needs(OPEN_SIGNUP)
         person = self.arriving(label, f"{label}-{uuid4().hex[:12]}@{EMAIL_DOMAIN}")
         if sign_up:
             await person.signs_up()
