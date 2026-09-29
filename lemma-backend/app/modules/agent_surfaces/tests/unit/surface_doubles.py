@@ -282,7 +282,7 @@ def build_doubles(
 
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = existing_link
-    conversation_link_repository.create.side_effect = lambda link: link
+    conversation_link_repository.create.side_effect = lambda link, **_: link
     conversation_link_repository.update_last_event.side_effect = lambda **kwargs: (
         existing_link
     )

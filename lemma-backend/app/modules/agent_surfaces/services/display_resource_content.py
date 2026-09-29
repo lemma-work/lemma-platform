@@ -178,10 +178,14 @@ async def resolve_pod_file_parts(
         path=path,
         require_inline_fit=True,
     )
-    if resolved is None:
+    if isinstance(resolved, _ReadFailed):
         return PodFileParts(
             files=[], facts=PodFileDelivery(delivered=False, unreadable=True)
         )
+    if resolved is None:
+        # Nothing at that path, which is not a failure to read one: the caller's
+        # card still links to where the file would be.
+        return PodFileParts(files=[], facts=PodFileDelivery(delivered=False))
     entity, content, ctx = resolved
     if content is None:
         return PodFileParts(
@@ -257,7 +261,7 @@ async def load_pod_file_bytes(
         path=path,
         require_inline_fit=False,
     )
-    if resolved is None or resolved[1] is None:
+    if resolved is None or isinstance(resolved, _ReadFailed) or resolved[1] is None:
         return None
     return resolved[0], resolved[1]
 
@@ -354,6 +358,13 @@ def _filter_op(op: Any) -> str:
     return str(op.value if hasattr(op, "value") else op)
 
 
+class _ReadFailed:
+    """Distinct from ``None`` (no such file): the read was attempted and failed."""
+
+
+_READ_FAILED = _ReadFailed()
+
+
 async def _load_pod_file(
     *,
     uow: Any,
@@ -361,14 +372,15 @@ async def _load_pod_file(
     conversation_id: UUID,
     path: str,
     require_inline_fit: bool,
-) -> tuple[Any, bytes | None, Context] | None:
+) -> tuple[Any, bytes | None, Context] | _ReadFailed | None:
     """Resolve a pod file, and download it unless it is too big to attach.
 
     Returns ``(entity, content, ctx)`` where ``content`` is ``None`` for a file
     that cleared authorization but not the platform's cap — the caller still
     wants the entity, to describe what it could not send.
 
-    Returns ``None`` when the file could not be read, and says why. This is not
+    Returns ``None`` when there is no such file, and ``_READ_FAILED`` when the
+    read itself failed, and says why. This is not
     an enrichment read: the file *is* the message. It used to go through
     ``_best_effort`` at debug level, so an unreadable file became a link card the
     recipient often cannot open, and nothing recorded that the file was never
@@ -391,7 +403,7 @@ async def _load_pod_file(
             path=path,
             exc_info=True,
         )
-        return None
+        return _READ_FAILED
 
 
 async def _read_pod_file(

@@ -71,7 +71,7 @@ async def test_the_chat_is_locked_before_a_link_is_created():
     binder, links = _binder(surface)
     calls: list[str] = []
     links.lock_thread.side_effect = lambda **_: calls.append("lock")
-    links.create.side_effect = lambda link: calls.append("create") or link
+    links.create.side_effect = lambda link, **_: calls.append("create") or link
 
     await binder.bind_conversation(
         surface=surface,

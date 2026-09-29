@@ -283,6 +283,8 @@ class SurfaceConversationLinkRepository:
     async def create(
         self,
         link: AgentSurfaceConversationLink,
+        *,
+        locked: bool = False,
     ) -> AgentSurfaceConversationLink:
         """Insert the link, or return the one that beat this to it.
 
@@ -291,25 +293,27 @@ class SurfaceConversationLinkRepository:
         what makes "at most one link per chat" true: the unique index treats a
         missing channel or user as always distinct, so for a direct chat it
         cannot say so, and the lock is held to commit so a loser sees the
-        winner's row when it re-reads. ``ON CONFLICT DO NOTHING`` still covers
+        winner's row when it re-reads. ``locked`` says the caller has already
+        taken it and read, so neither is repeated. ``ON CONFLICT DO NOTHING`` still covers
         the chats that do have every part of the key.
         """
-        await self.lock_thread(
-            surface_id=link.surface_id,
-            platform=link.platform,
-            external_channel_id=link.external_channel_id,
-            external_thread_id=link.external_thread_id,
-            external_user_id=link.external_user_id,
-        )
-        existing = await self.get_by_external_thread(
-            surface_id=link.surface_id,
-            platform=link.platform,
-            external_channel_id=link.external_channel_id,
-            external_thread_id=link.external_thread_id,
-            external_user_id=link.external_user_id,
-        )
-        if existing is not None:
-            return existing
+        if not locked:
+            await self.lock_thread(
+                surface_id=link.surface_id,
+                platform=link.platform,
+                external_channel_id=link.external_channel_id,
+                external_thread_id=link.external_thread_id,
+                external_user_id=link.external_user_id,
+            )
+            existing = await self.get_by_external_thread(
+                surface_id=link.surface_id,
+                platform=link.platform,
+                external_channel_id=link.external_channel_id,
+                external_thread_id=link.external_thread_id,
+                external_user_id=link.external_user_id,
+            )
+            if existing is not None:
+                return existing
         statement = (
             pg_insert(AgentSurfaceConversationLinkModel)
             .values(

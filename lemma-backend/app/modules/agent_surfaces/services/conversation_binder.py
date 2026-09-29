@@ -248,7 +248,9 @@ class ConversationBinder:
                 last_message_id=parsed.external_message_id,
                 # This row exists because they just wrote to us.
                 last_inbound_at=datetime.now(timezone.utc),
-            )
+            ),
+            # Locked and re-read above, before the conversation was opened.
+            locked=True,
         )
         if created_link.conversation_id != conversation.id:
             # Beaten to the insert despite the lock -- another writer does not

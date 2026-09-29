@@ -135,7 +135,7 @@ def _build_service(*, surface, monkeypatch):
     )
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = None
-    conversation_link_repository.create.side_effect = lambda link: link
+    conversation_link_repository.create.side_effect = lambda link, **_: link
     slack_credentials = {
         "access_token": "xoxb-test",
         "scope": "assistant:write,chat:write.customize,reactions:write",

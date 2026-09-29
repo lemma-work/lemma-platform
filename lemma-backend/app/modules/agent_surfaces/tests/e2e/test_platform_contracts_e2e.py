@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -295,7 +296,7 @@ async def test_whatsapp_final_answer_contract(fake_whatsapp, message_store):
     assert payload["text"] == {"body": "Contract reply"}
 
 
-async def test_chat_surfaces_skip_outbound_when_credentials_are_missing(
+async def test_chat_surfaces_refuse_outbound_when_credentials_are_missing(
     fake_slack,
     fake_whatsapp,
     message_store,
@@ -313,8 +314,14 @@ async def test_chat_surfaces_skip_outbound_when_credentials_are_missing(
         }
     )
 
-    await slack.send_message(event=_slack_event(), message="should not send")
-    await whatsapp.send_message(event=_whatsapp_event(), message="should not send")
+    # A send that cannot happen says so: a quiet return was recorded as
+    # delivered, and nothing ever told the person or the model otherwise.
+    with pytest.raises(AgentSurfaceValidationError):
+        await slack.send_message(event=_slack_event(), message="should not send")
+    with pytest.raises(AgentSurfaceValidationError):
+        await whatsapp.send_message(
+            event=_whatsapp_event(), message="should not send"
+        )
 
     assert message_store.get_all("SLACK") == []
     assert message_store.get_all("WHATSAPP") == []
