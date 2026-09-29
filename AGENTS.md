@@ -130,16 +130,33 @@ reason in `lemma-backend/app/core/tests/unit/test_boot_hooks.py`, and
 `test_boot_budget_e2e.py` holds module boot to a budget against a thousand pod
 schemas.
 
+## Tools to run
+
+Through `make`, rather than calling ruff, eslint or cargo yourself: the targets
+run the version and config CI does, on the right paths.
+[CONTRIBUTING.md](CONTRIBUTING.md#local-development) has the details.
+
+| While working | Before a pull request |
+|---|---|
+| `make fix` — every safe auto-fixer, on what changed | `make quality` |
+| `make lint` — every fast linter, on what changed (`ALL=1` for everything) | `make quality-frontend` if you touched a frontend package or the SDK |
+| `make lint-python` / `-frontend` / `-rust` / `-shell` / `-ci` / `-docker` / `-docs` / `-config` | |
+
+`make help` lists every target. CodeQL runs in CI, not locally, and posts its
+findings on the pull request.
+
 ## Before opening a pull request
 
 ```bash
 make quality
 ```
 
-`make quality` is Python only, all the way down. If you touched the frontend or
-the TypeScript SDK, add `make quality-frontend` — eslint, `tsc`, the
-design-system audit and the education anchors, the four gates CI runs that
-`quality` cannot see. (`make check` is both, plus CodeQL.)
+`make quality` is Python, plus the repository-wide shell, workflow, Dockerfile,
+spelling and config lints. If you touched the frontend or the TypeScript SDK,
+add `make quality-frontend` — eslint, `tsc`, the design-system audit and the
+education anchors, the four gates CI runs that `quality` cannot see. (`make
+check` is both. CodeQL is not in it: CI runs it on the pull request and
+comments with what it found on the lines you changed.)
 
 Then the checks for the component you touched, from the table in
 `CONTRIBUTING.md`. The pull request template lists what the description needs —
