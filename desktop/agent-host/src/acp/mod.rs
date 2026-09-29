@@ -29,6 +29,7 @@ use crate::adapters::ResolvedAdapter;
 use crate::permissions::{AlwaysAllowOffer, AlwaysAllowScope, PermissionDecision, PermissionGate};
 use crate::protocol::{ConfigOption, EventType, JsonMap, RunSpec, RunState};
 
+mod agent_homes;
 mod driver;
 mod options;
 mod outcome;
@@ -39,6 +40,8 @@ mod session_setup;
 mod steering;
 mod supervision;
 
+pub use agent_homes::AgentHomes;
+pub(crate) use agent_homes::{claude_sign_in, codex_home, opencode_config_home};
 pub use driver::*;
 pub(crate) use options::*;
 pub use outcome::*;
@@ -64,6 +67,10 @@ pub struct AcpRunRequest {
     /// Whether the person chose to have this agent load its own skills and
     /// settings (`HostConfig::own_settings`). See `session_options`.
     pub own_settings: bool,
+    /// Where each agent's own setup is on this Mac, and where Lemma builds the
+    /// private ones it is started in instead (`acp::agent_homes`). `None` reads
+    /// this process's environment and builds nothing.
+    pub agent_homes: Option<AgentHomes>,
     pub mcp_server: Option<McpServer>,
     /// Whether this harness advertised `loadSession` at probe time. A run only
     /// tries to resume `run_spec.resume_session_id` when it did.

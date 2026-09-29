@@ -144,6 +144,7 @@ impl TargetWorker {
                 scratch_directory: scratch.clone(),
                 agent_environment,
                 own_settings,
+                agent_homes: crate::acp::AgentHomes::for_host(&paths.root),
                 mcp_server: Some(mcp_server),
                 can_load_session,
                 published_config_options,

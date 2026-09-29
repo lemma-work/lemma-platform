@@ -119,6 +119,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                 adapter,
                 agent_environment: std::collections::BTreeMap::default(),
                 own_settings: false,
+                agent_homes: None,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id: Uuid::new_v4(),
@@ -182,6 +183,7 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
             adapter,
             agent_environment: std::collections::BTreeMap::default(),
             own_settings: false,
+            agent_homes: None,
             run_spec: RunSpec {
                 agent_run_id: Uuid::new_v4(),
                 conversation_id: Uuid::new_v4(),
@@ -273,6 +275,7 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
                 adapter,
                 agent_environment: std::collections::BTreeMap::default(),
                 own_settings: false,
+                agent_homes: None,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id: Uuid::new_v4(),

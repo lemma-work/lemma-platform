@@ -35,6 +35,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = "2"
+# Reading the person's Codex `config.toml` for the sign-in settings a
+# Lemma-private Codex home carries over (`acp::agent_homes`).
+toml = "1.1"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 # The link to Lemma. native-tls for the same reason reqwest used it here: the
 # system trust store, so a machine behind a TLS-inspecting corporate proxy

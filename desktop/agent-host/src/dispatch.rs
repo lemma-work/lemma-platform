@@ -5,7 +5,7 @@ use std::sync::Arc;
 use clap::Parser;
 use std::time::Duration;
 
-use lemma_agent_host::acp::{AcpDriver, AcpRunRequest, AgentDriver};
+use lemma_agent_host::acp::{AcpDriver, AcpRunRequest, AgentDriver, AgentHomes};
 use lemma_agent_host::adapters::AdapterManifest;
 use lemma_agent_host::config::{HostConfig, HostPaths};
 use lemma_agent_host::journal::Journal;
@@ -312,6 +312,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                         // credential.
                         agent_environment: std::collections::BTreeMap::default(),
                         own_settings: false,
+                        agent_homes: AgentHomes::for_host(&paths.root),
                         mcp_server: None,
                         can_load_session: false,
                         published_config_options: Vec::new(),
