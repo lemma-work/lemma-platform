@@ -293,12 +293,12 @@ def test_the_reply_budget_is_sent_as_max_tokens():
     part ends the run. A trace of 19 model calls and 18 tool calls died exactly
     that way, with nothing to show for the work.
     """
-    from app.modules.agent.services.agent_runner_service import _with_reply_budget
+    from app.modules.agent.services.run_input_settings import with_reply_budget
 
     budget = context_budget_for(None)
 
-    assert _with_reply_budget(None, budget) == {"max_tokens": budget.reply_token_budget}
-    assert _with_reply_budget({"temperature": 0.2}, budget) == {
+    assert with_reply_budget(None, budget) == {"max_tokens": budget.reply_token_budget}
+    assert with_reply_budget({"temperature": 0.2}, budget) == {
         "temperature": 0.2,
         "max_tokens": budget.reply_token_budget,
     }
@@ -307,11 +307,11 @@ def test_the_reply_budget_is_sent_as_max_tokens():
 def test_an_operator_who_set_max_tokens_keeps_it():
     """They know something about their model that a fraction of a window does
     not, and a default that overrode them would be unfixable from config."""
-    from app.modules.agent.services.agent_runner_service import _with_reply_budget
+    from app.modules.agent.services.run_input_settings import with_reply_budget
 
     settings = {"max_tokens": 512}
 
-    assert _with_reply_budget(settings, context_budget_for(None)) == settings
+    assert with_reply_budget(settings, context_budget_for(None)) == settings
 
 
 def test_an_explicit_zero_is_a_choice_and_is_kept():
@@ -321,11 +321,11 @@ def test_an_explicit_zero_is_a_choice_and_is_kept():
     substituting a number they did not choose leaves them looking at a setting
     that silently did nothing. Absent and null are the two that mean unset.
     """
-    from app.modules.agent.services.agent_runner_service import _with_reply_budget
+    from app.modules.agent.services.run_input_settings import with_reply_budget
 
     budget = context_budget_for(None)
 
-    assert _with_reply_budget({"max_tokens": 0}, budget) == {"max_tokens": 0}
-    assert _with_reply_budget({"max_tokens": None}, budget) == {
+    assert with_reply_budget({"max_tokens": 0}, budget) == {"max_tokens": 0}
+    assert with_reply_budget({"max_tokens": None}, budget) == {
         "max_tokens": budget.reply_token_budget
     }

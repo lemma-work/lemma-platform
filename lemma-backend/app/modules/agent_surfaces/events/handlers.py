@@ -1,8 +1,6 @@
 from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
-from datetime import datetime, timezone
-from sqlalchemy import false, update
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
@@ -39,8 +37,8 @@ from app.modules.agent_surfaces.domain.events import (
     SurfaceOnboardingReadyEvent,
     SurfaceEvents,
 )
-from app.modules.agent_surfaces.infrastructure.onboarding_models import (
-    VerifiedSurfaceIdentity,
+from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (  # noqa: E501
+    VerifiedSurfaceIdentityRepository,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceIngressRequest,
@@ -49,6 +47,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
 from app.modules.agent_surfaces.domain.onboarding_state import OnboardingIngressResult
+from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
 )
@@ -64,6 +63,8 @@ from app.modules.agent_surfaces.services.surface_inbound import (
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
 from app.core.log.log import get_logger
+
+from app.modules.agent_surfaces.domain.delivery_limits import CONSUMER_ATTEMPTS
 
 logger = get_logger(__name__)
 
@@ -103,7 +104,9 @@ async def handle_onboarding_ready(
             ready.pending_id, uow_factory=uow_factory, job_queue=job_queue
         )
 
-    await inbox.process("agent-surfaces.onboarding", event, process)
+    await inbox.process(
+        "agent-surfaces.onboarding", event, process, max_attempts=CONSUMER_ATTEMPTS
+    )
 
 
 def provide_onboarding_handler(
@@ -132,8 +135,8 @@ async def handle_surface_webhook(
         [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
     ] = Depends(provide_onboarding_handler),
 ) -> None:
-    # ``surface_events`` also carries ``surface.connected`` and
-    # ``surface.message.answered``, which exist for the analytics projections.
+    # ``surface_events`` also carries ``surface.connected``, which exists for the
+    # analytics projections.
     # Only the webhook belongs here, so the parameter stays untyped and the
     # event is parsed after the tag check -- declaring
     # ``SurfaceWebhookReceivedEvent`` here instead moves validation ahead of the
@@ -158,7 +161,9 @@ async def handle_surface_webhook(
             onboarding_handler=onboarding_handler,
         )
 
-    await inbox.process("agent-surfaces.webhook", received, process)
+    await inbox.process(
+        "agent-surfaces.webhook", received, process, max_attempts=CONSUMER_ATTEMPTS
+    )
 
 
 async def _context_for_delivery(
@@ -204,6 +209,7 @@ async def _release_claim_for_retry(
     context: AgentSurfaceContext,
     *,
     event: SurfaceWebhookReceivedEvent,
+    event_dedup_store: SurfaceEventDedupStorePort,
 ) -> None:
     """Say the delivery reached no job, then hand its claim back.
 
@@ -227,9 +233,7 @@ async def _release_claim_for_retry(
         # traceback is the whole reason an operator can act on this line.
         exc_info=True,  # noqa: LOG014
     )
-    await release_ingress_claim(
-        context, event_dedup_store=get_surface_event_dedup_store()
-    )
+    await release_ingress_claim(context, event_dedup_store=event_dedup_store)
 
 
 async def _process_surface_webhook(
@@ -242,6 +246,9 @@ async def _process_surface_webhook(
         [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
     ]
     | None = None,
+    # The process-wide store unless a caller has its own to hand: what a failed
+    # enqueue gives its claim back to has to be the store the claim came from.
+    event_dedup_store: SurfaceEventDedupStorePort | None = None,
 ) -> None:
 
     if event.surface_id:
@@ -289,20 +296,40 @@ async def _process_surface_webhook(
         )
 
         onboarding_handler = ChatOnboardingCoordinator(uow_factory).handle
-    contexts: list[tuple[int, AgentSurfaceContext | None]] = []
-    for index, part in enumerate(deliveries):
-        contexts.append(
-            (
-                index,
-                await _context_for_delivery(
-                    part,
-                    onboarding_handler=onboarding_handler,
-                    uow_factory=uow_factory,
-                ),
-            )
-        )
+    await _enqueue_deliveries(
+        deliveries,
+        event,
+        onboarding_handler=onboarding_handler,
+        uow_factory=uow_factory,
+        job_queue=job_queue,
+        event_dedup_store=event_dedup_store,
+    )
 
-    for index, context in contexts:
+
+async def _enqueue_deliveries(
+    deliveries: list[SurfaceIngressRequest],
+    event: SurfaceWebhookReceivedEvent,
+    *,
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ],
+    uow_factory: UnitOfWorkFactory,
+    job_queue: SharedStreaqJobQueue,
+    event_dedup_store: SurfaceEventDedupStorePort | None,
+) -> None:
+    for index, part in enumerate(deliveries):
+        # Each part is enqueued as soon as it is prepared, not after every part
+        # has been. Preparing them all first spent every part's delivery claim
+        # up front, so an enqueue that failed on part N left the claims of
+        # parts N+1.. spent with no job behind them -- and the inbox's retry then
+        # read each of those as a duplicate and dropped it for good. This way at
+        # most one claim is ever held without a job, and a failure before a part
+        # is prepared leaves the later ones untouched for the retry.
+        context = await _context_for_delivery(
+            part,
+            onboarding_handler=onboarding_handler,
+            uow_factory=uow_factory,
+        )
         if not context:
             continue
         # `prepare_ingress` spent the delivery claim above, and the work that
@@ -332,7 +359,12 @@ async def _process_surface_webhook(
             enqueued = True
         finally:
             if not enqueued:
-                await _release_claim_for_retry(context, event=event)
+                await _release_claim_for_retry(
+                    context,
+                    event=event,
+                    event_dedup_store=event_dedup_store
+                    or get_surface_event_dedup_store(),
+                )
 
 
 @reliable_redis_stream_subscriber(
@@ -356,7 +388,12 @@ async def on_pod_deleted(
         async with uow_factory() as uow:
             await build_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
 
-    await inbox.process("agent-surfaces.pod-deletion", event, process)
+    await inbox.process(
+        "agent-surfaces.pod-deletion",
+        event,
+        process,
+        max_attempts=CONSUMER_ATTEMPTS,
+    )
 
 
 @reliable_redis_stream_subscriber(
@@ -380,29 +417,18 @@ async def on_identity_event(
         phone = await current_verified_phone(uow_factory, parsed.user_id)
         async with uow_factory() as uow:
             await ExternalSurfaceUserRepository(uow).clear_resolved_user(parsed.user_id)
-            # Every phone-bound identity goes when the account no longer has a
-            # verified number; otherwise only the ones bound to the old one. The
-            # `phone is None` arm has to be written as a SQL literal -- a plain
-            # Python bool inside `or_` reads as SQL and is not.
-            still_bound = (
-                VerifiedSurfaceIdentity.verified_phone == phone
-                if phone is not None
-                else false()
-            )
-            await uow.session.execute(
-                update(VerifiedSurfaceIdentity)
-                .where(
-                    VerifiedSurfaceIdentity.user_id == parsed.user_id,
-                    VerifiedSurfaceIdentity.verified_phone.isnot(None),
-                    ~still_bound,
-                )
-                .values(revoked_at=datetime.now(timezone.utc))
+            await VerifiedSurfaceIdentityRepository(uow).revoke_phone_bound_except(
+                parsed.user_id, phone
             )
 
-    await inbox.process("agent-surfaces.identity", event, process)
+    await inbox.process(
+        "agent-surfaces.identity", event, process, max_attempts=CONSUMER_ATTEMPTS
+    )
 
 
-@streaq_task(name="process_surface_message")
+# Bounded by `delivery_limits`: a send that failed is already terminal here, so
+# this only retries what happens before one.
+@streaq_task(name="process_surface_message", max_tries=CONSUMER_ATTEMPTS)
 async def process_surface_message(
     payload: dict,
 ):

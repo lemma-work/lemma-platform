@@ -89,63 +89,6 @@ async def test_thread_title_never_raises(monkeypatch):
     assert await home.set_thread_title(event=_event(), title="Q3 pipeline") is False
 
 
-async def test_suggested_prompts_are_capped_and_shaped(monkeypatch):
-    calls: list[dict] = []
-
-    async def fake_set_prompts(self, **kwargs):
-        calls.append(kwargs)
-        return {"ok": True}
-
-    monkeypatch.setattr(
-        AsyncWebClient, "assistant_threads_setSuggestedPrompts", fake_set_prompts
-    )
-    home = SlackHomeSurface(
-        credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
-    )
-
-    delivered = await home.set_suggested_prompts(
-        event=_event(),
-        prompts=[
-            ("Pipeline", "Show me the pipeline"),
-            ("Blockers", "What is blocked?"),
-            ("Owners", "Who owns what?"),
-            ("Risks", "What is at risk?"),
-            ("Fifth", "Dropped — Slack takes four"),
-            ("", "no title, dropped"),
-        ],
-        title="Try one of these",
-    )
-
-    assert delivered is True
-    prompts = calls[0]["prompts"]
-    assert [p["title"] for p in prompts] == [
-        "Pipeline",
-        "Blockers",
-        "Owners",
-        "Risks",
-    ]
-    assert calls[0]["title"] == "Try one of these"
-    assert calls[0]["channel_id"] == "D1"
-
-
-async def test_suggested_prompts_need_at_least_one_usable_pair(monkeypatch):
-    async def fake_set_prompts(self, **kwargs):  # pragma: no cover - must not run
-        raise AssertionError("should not call Slack with nothing to suggest")
-
-    monkeypatch.setattr(
-        AsyncWebClient, "assistant_threads_setSuggestedPrompts", fake_set_prompts
-    )
-    home = SlackHomeSurface(
-        credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
-    )
-
-    assert await home.set_suggested_prompts(event=_event(), prompts=[]) is False
-    assert (
-        await home.set_suggested_prompts(event=_event(), prompts=[("  ", "  ")])
-        is False
-    )
-
-
 async def test_manifest_declares_the_agent_messaging_experience():
     """The app must present as an agent, or none of the above is reachable.
 

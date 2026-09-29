@@ -10,6 +10,7 @@ and this is the half that comes away cleanly.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -20,11 +21,15 @@ from sqlalchemy import select
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.composition import build_conversation_binder
+from app.modules.agent_surfaces.composition import (
+    build_conversation_binder,
+    build_surface_router,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.onboarding_state import (
     OnboardingIngressResult,
     OnboardingStep,
@@ -185,6 +190,81 @@ async def create_pending(
     return state
 
 
+async def personal_dm_result(
+    event_dedup_store: SurfaceEventDedupStorePort,
+    *,
+    installation_surface_id: UUID,
+    event: ParsedInboundSurfaceEvent,
+    prepare: Callable[[], Awaitable[SurfaceChatContext]],
+) -> OnboardingIngressResult:
+    """A personal DM's context, under the delivery claim it takes for itself.
+
+    This path answers instead of `prepare_ingress`, which is where the delivery
+    claim otherwise lives. Without it a personal DM is the one conversation on
+    the platform with no message-level defence against a redelivery -- and it is
+    the one a person uses every day. Keyed on the route's own installation, which
+    is what the context carries and therefore what `release_ingress_claim` hands
+    back.
+    """
+    if not await event_dedup_store.claim_message(
+        surface_installation_id=installation_surface_id,
+        platform=event.platform.value,
+        external_channel_id=event.external_channel_id,
+        external_thread_id=event.external_thread_id,
+        external_message_id=event.external_message_id,
+    ):
+        return OnboardingIngressResult(True)
+    # Kept only once a context comes back. Any failure before that leaves the
+    # claim spent with nothing behind it, so the inbox's retry would read the
+    # message as a duplicate and drop it; a `finally` so a cancellation counts
+    # too.
+    prepared = False
+    try:
+        context = await prepare()
+        prepared = True
+    except PersonalRouteUnavailable:
+        # The route died between one message and the next: the pod deleted, the
+        # person removed from it, the app uninstalled. Not a failure to retry --
+        # the path that will deliver it, ordinary ingestion, which routes by pod
+        # membership, takes a claim of its own. Holding this one would make that
+        # second attempt read as a duplicate and drop the message, which is why
+        # the `finally` gives it back first.
+        return OnboardingIngressResult(False)
+    finally:
+        if not prepared:
+            await event_dedup_store.release_message(
+                surface_installation_id=installation_surface_id,
+                platform=event.platform.value,
+                external_channel_id=event.external_channel_id,
+                external_thread_id=event.external_thread_id,
+                external_message_id=event.external_message_id,
+            )
+    return OnboardingIngressResult(True, context)
+
+
+async def saved_default_outranks_route(
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, user_id: UUID
+) -> bool:
+    """Has this person chosen, through `/surfaces/me`, somewhere else to be answered?
+
+    A personal route answers a private message before ordinary selection runs,
+    and selection was the only place the saved default was ever read -- so the
+    default, which routing documents as authoritative, did nothing for anyone
+    with a route. Asked here, of the router's own predicate, the route steps
+    aside exactly when selection would have honoured the default.
+    """
+    async with uows() as uow:
+        default = await build_surface_router(uow).deliverable_default(
+            user_id=user_id,
+            parsed=transport.event,
+            receiver_surface_ids=transport.receiver_surface_ids,
+            # The same narrowing selection applies to an event that arrived on
+            # the shared system bot.
+            system_credentials_only=transport.surface is None,
+        )
+    return default is not None
+
+
 async def recognize_sender(
     uows: UnitOfWorkFactory,
     transport: OnboardingTransport,
@@ -197,44 +277,28 @@ async def recognize_sender(
         uows, transport.binding_key
     )
     if verified_user_id is not None and route is not None and event.is_dm:
-        # This path answers instead of `prepare_ingress`, which is where the
-        # delivery claim otherwise lives. Without it a personal DM is the one
-        # conversation on the platform with no message-level defence against
-        # a redelivery -- and it is the one a person uses every day. Keyed on
-        # the route's own installation, which is what the context carries and
-        # therefore what `release_ingress_claim` hands back.
-        if not await event_dedup_store.claim_message(
-            surface_installation_id=route.installation_surface_id,
-            platform=event.platform.value,
-            external_channel_id=event.external_channel_id,
-            external_thread_id=event.external_thread_id,
-            external_message_id=event.external_message_id,
-        ):
-            return OnboardingIngressResult(True)
-        try:
+        if await saved_default_outranks_route(uows, transport, verified_user_id):
+            # Not handled here: ordinary ingestion selects by membership, the
+            # saved default and continuity, which is the order the router
+            # documents and the one the person asked for.
+            return OnboardingIngressResult(False)
+        route_id = route.id
+
+        async def prepare() -> SurfaceChatContext:
             async with uows() as uow:
-                context = await prepare_personal_dm_context(
+                return await prepare_personal_dm_context(
                     uow,
-                    route_id=route.id,
+                    route_id=route_id,
                     event=event,
                     linker=build_conversation_binder(uow),
                 )
-        except PersonalRouteUnavailable:
-            # The route died between one message and the next: the pod deleted,
-            # the person removed from it, the app uninstalled. The claim goes
-            # back with it, because this message has not been delivered and the
-            # path that will deliver it -- ordinary ingestion, which routes by
-            # pod membership -- takes a claim of its own. Holding it here would
-            # make that second attempt read as a duplicate and drop the message.
-            await event_dedup_store.release_message(
-                surface_installation_id=route.installation_surface_id,
-                platform=event.platform.value,
-                external_channel_id=event.external_channel_id,
-                external_thread_id=event.external_thread_id,
-                external_message_id=event.external_message_id,
-            )
-            return OnboardingIngressResult(False)
-        return OnboardingIngressResult(True, context)
+
+        return await personal_dm_result(
+            event_dedup_store,
+            installation_surface_id=route.installation_surface_id,
+            event=event,
+            prepare=prepare,
+        )
     if verified_user_id is not None:
         offered = await offer_workspace_choice(uows, transport, verified_user_id)
         if offered is not None:

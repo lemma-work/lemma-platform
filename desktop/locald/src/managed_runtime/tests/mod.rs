@@ -55,6 +55,7 @@ pub(super) fn test_controller() -> (tempfile::TempDir, ManagedRuntimeController)
         clock_keeper: Mutex::new(None),
         last_clock_error: Mutex::new(None),
         sandbox_images: Mutex::new(SandboxImageStatus::default()),
+        prepared_images: root.path().join("sandbox-images.json"),
         pending_auth: Mutex::new(None),
         pending_images: Mutex::new(None),
         cancellation: lemma_desktop_process::Cancellation::default(),

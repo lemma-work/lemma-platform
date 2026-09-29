@@ -181,7 +181,14 @@ class NotificationEgress:
                 external_channel_id=thread.external_channel_id,
                 external_thread_id=thread.external_thread_id,
                 external_user_id=(channel.email_address or "").strip().lower() or None,
+                # The agent the conversation was opened under. Inbound compares
+                # it to the agent the reply routes to, and a link that names
+                # nobody reads as the pod's own assistant -- so for any other
+                # agent's mailbox the person's first reply would be cut into a
+                # new conversation, away from the notification it answers.
+                routed_agent_id=surface.agent_id,
                 conversation_kind="EMAIL",
+                route_key="email",
                 last_event=thread.last_event,
                 last_message_id=thread.external_message_id,
                 # They have not written to us. Claiming otherwise would let an
@@ -199,6 +206,13 @@ class NotificationEgress:
         repoints the link with a compare-and-set, so an inbound arriving in the
         same instant cannot leave one platform thread split across two
         conversations.
+
+        A thread is also continued, however cold, while its conversation still
+        holds a question nobody has answered. The recipient's agent is told what
+        a reply answers through the conversation the question was delivered into
+        and nowhere else, and the link only ever points at one conversation: a
+        second message opening a new one would move the person's next reply
+        away from the first question, which could then never be closed.
 
         A message you cannot reply to is an alert, not a conversation — which is
         why this always resolves to a conversation the *recipient* owns, never
@@ -220,6 +234,8 @@ class NotificationEgress:
                 <= self.CONTINUE_CONVERSATION_WITHIN
             ):
                 return conversation.id
+            if await self.links.conversation_holds_notification(conversation.id):
+                return conversation.id
 
         opened = await self.open_conversation(channel, notification=notification)
         if opened is None:
@@ -228,6 +244,7 @@ class NotificationEgress:
             link_id=channel.link.id,
             conversation_id=opened,
             expected_conversation_id=channel.link.conversation_id,
+            routed_agent_id=channel.surface.agent_id,
         )
         if repointed is None:
             # An inbound won the race and already repointed the link. Deliver

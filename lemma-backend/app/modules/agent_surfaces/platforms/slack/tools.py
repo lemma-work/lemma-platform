@@ -13,9 +13,7 @@ from app.modules.agent_surfaces.platforms.slack.models import (
     SlackSearchChannelMessagesResult,
 )
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
-from app.core.log.log import get_logger
-
-logger = get_logger(__name__)
+from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 
 
 def build_slack_surface_toolset(
@@ -29,31 +27,28 @@ def build_slack_surface_toolset(
         request: SlackRecentChannelMessagesParams,
     ) -> SlackRecentChannelMessagesResult:
         """Get recent messages from the current Slack channel, including any shared files."""
-        try:
-            return await service.get_recent_channel_messages(ctx=ctx, request=request)
-        except Exception:
-            logger.debug("surface.slack.history_failed", exc_info=True)
-            return SlackRecentChannelMessagesResult(
+        return await guarded_tool_result(
+            service.get_recent_channel_messages(ctx=ctx, request=request),
+            tool="slack_get_recent_channel_messages",
+            failure=SlackRecentChannelMessagesResult(
                 success=False,
                 error="Slack channel history lookup failed unexpectedly.",
-            )
+            ),
+        )
 
     async def slack_search_current_channel(
         ctx: RunContext[ConversationContext],
         request: SlackSearchChannelMessagesParams,
     ) -> SlackSearchChannelMessagesResult:
         """Search recent messages in the current Slack channel without leaving the active agent conversation."""
-        try:
-            return await service.search_current_channel(ctx=ctx, request=request)
-        except Exception:
-            logger.debug(
-                "surface.slack.search_failed",
-                exc_info=True,
-            )
-            return SlackSearchChannelMessagesResult(
+        return await guarded_tool_result(
+            service.search_current_channel(ctx=ctx, request=request),
+            tool="slack_search_current_channel",
+            failure=SlackSearchChannelMessagesResult(
                 success=False,
                 error="Slack channel search failed unexpectedly.",
-            )
+            ),
+        )
 
     return FunctionToolset[ConversationContext](
         tools=[

@@ -142,5 +142,5 @@ still applies) for counts, group-bys, and joins the record hooks don't cover. On
 options object, and the SQL goes under `query`; the result is `{ items, total, sql,
 isLoading, error, refresh }`.
 
-> Exact return fields: `cat /sdk/lemma-typescript/src/react/useRecords.ts` and
-> `src/react/generated/records.ts`.
+> Exact return fields: `cat node_modules/lemma-sdk/dist/react/useRecords.d.ts` and
+> `dist/react/generated/records.d.ts`.

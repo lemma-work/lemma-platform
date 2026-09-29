@@ -12,13 +12,11 @@ from pydantic import BaseModel, Field
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
+from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 from app.modules.agent_surfaces.services.surface_display_delivery import (
     deliver_surface_message_to_surface,
 )
-
-logger = get_logger(__name__)
 
 
 class SurfaceSendMessageResult(BaseModel):
@@ -44,15 +42,14 @@ def build_surface_send_toolset() -> FunctionToolset[ConversationContext]:
             return SurfaceSendMessageResult(
                 success=False, message="No active surface conversation."
             )
-        try:
-            sent = await deliver_surface_message_to_surface(
+        sent = await guarded_tool_result(
+            deliver_surface_message_to_surface(
                 conversation_id=conversation_id, message=message
-            )
-        except Exception:  # pragma: no cover - defensive
-            logger.debug(
-                "surface.message.send_failed",
-                exc_info=True,
-            )
+            ),
+            tool="surface_send_message",
+            failure=None,
+        )
+        if sent is None:
             return SurfaceSendMessageResult(
                 success=False, message="Could not deliver the message."
             )

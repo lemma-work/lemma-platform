@@ -180,7 +180,14 @@ class TelegramClient:
         *,
         fields: dict[str, Any],
         files: dict[str, tuple[str, bytes, str]],
+        timeout: float | None = None,
     ) -> dict[str, Any]:
+        """POST a Bot API method as multipart, for file uploads.
+
+        ``timeout`` overrides the client's, because an upload is the one call
+        whose duration scales with a payload of tens of megabytes; the default
+        is sized for a JSON round-trip.
+        """
         data = {
             key: json.dumps(value, separators=(",", ":"))
             if isinstance(value, (dict, list))
@@ -188,7 +195,7 @@ class TelegramClient:
             for key, value in fields.items()
         }
         await assert_safe_api_base(self.base_url, platform="Telegram")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
             response = await client.post(
                 f"{self.base_url}/{method}",
                 data=data,

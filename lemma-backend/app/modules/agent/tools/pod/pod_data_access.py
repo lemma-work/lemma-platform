@@ -18,10 +18,10 @@ from typing import AsyncIterator
 
 from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent.tools.authority import tool_authorization_context
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.datastore.contracts.agent_tools import (
     DatastoreFileService,
@@ -31,7 +31,6 @@ from app.modules.datastore.contracts.agent_tools import (
     build_record_service,
     build_table_service,
 )
-from app.core.authorization.factory import create_authorization_data_service
 
 
 @dataclass(slots=True)
@@ -45,25 +44,14 @@ class PodServices:
 
 @asynccontextmanager
 async def pod_services(deps: BaseAgentContext) -> AsyncIterator[PodServices]:
-    """Yield datastore services bound to the agent's authorization context.
+    """Yield datastore services bound to this call's authorization context.
 
-    Commits the unit of work on clean exit so record mutations and their events
-    are persisted; never restricts by delegation scope so the agent's resource
-    grants are the sole limiter (matching the agent's real workspace token).
+    The agent's own grants, or -- for a call a person approved -- that
+    person's authority (see ``tool_authorization_context``). Commits the unit
+    of work on clean exit so record mutations and their events are persisted.
     """
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        auth_ctx = await create_authorization_data_service(
-            uow
-        ).build_delegated_workload_context(
-            user_id=deps.user_id,
-            principal_type="AGENT",
-            principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
-            pod_id=deps.pod_id,
-            is_default_pod_agent=deps.is_pod_default_agent,
-            delegation_actor_name=deps.agent_name,
-            # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
-            delegation_session_id=str(deps.conversation_id),
-        )
+        auth_ctx = await tool_authorization_context(uow, deps)
         token = set_current_context(auth_ctx)
         try:
             yield PodServices(

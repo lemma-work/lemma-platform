@@ -47,7 +47,10 @@ services:
   redis:
     image: ${LEMMA_REDIS_IMAGE}
     restart: unless-stopped
-    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    # maxmemory with noeviction: a full Redis refuses writes rather than
+    # silently dropping streams, job queues or locks, and the worker's stream
+    # guard keeps event streams inside a share of it. Size to the host.
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no", "--maxmemory", "${LEMMA_REDIS_MAXMEMORY:-1gb}", "--maxmemory-policy", "noeviction"]
     volumes:
       - redis_data:/data
     healthcheck:

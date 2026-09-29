@@ -4,7 +4,6 @@ retry + error-mapping + timeout paths against fakes (no live backend, no sleeps)
 from __future__ import annotations
 
 import json
-import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -19,7 +18,12 @@ from lemma_sdk.errors import (
     LemmaServerError,
     LemmaTimeoutError,
 )
-from lemma_sdk.transport import _RETRYABLE_STATUS, LemmaTransport
+from lemma_sdk.transport import (
+    _RETRYABLE_STATUS,
+    LemmaTransport,
+    _client_header,
+    suggested_cli_version,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -489,37 +493,63 @@ def test_401_is_not_in_the_retry_set():
     assert 401 not in _RETRYABLE_STATUS
 
 
-# --- outdated-CLI notice ----------------------------------------------------
+# --- the server's suggested CLI release ---------------------------------------
 
 
-def test_outdated_header_warns_once_on_stderr(
+def test_latest_cli_header_is_recorded_not_printed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
-
-    monkeypatch.setattr("lemma_sdk.transport._outdated_notice", threading.Event())
-    monkeypatch.setenv("LEMMA_CLIENT", "lemma-cli")
-    headers = httpx.Headers({"X-Lemma-Client-Outdated": "0.8.1"})
+    """The SDK remembers the suggestion and says nothing: whether and how often
+    to mention it is the CLI's decision, and a library must not write to stderr
+    on its caller's behalf."""
+    monkeypatch.setattr("lemma_sdk.transport._suggested_cli", None)
+    headers = httpx.Headers({"X-Lemma-Latest-CLI": "0.9.0"})
     transport = make_transport()
-    endpoint = FakeEndpoint(
-        [
-            FakeResponse(200, parsed={"ok": 1}, headers=headers),
-            FakeResponse(200, parsed={"ok": 2}, headers=headers),
-        ]
-    )
+    endpoint = FakeEndpoint([FakeResponse(200, parsed={"ok": 1}, headers=headers)])
+
     assert transport.call(endpoint) == {"ok": 1}
-    assert transport.call(endpoint) == {"ok": 2}
+
+    assert suggested_cli_version() == "0.9.0"
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.count("older than the server supports (0.8.1)") == 1
-    assert "lemma update" in captured.err
+    assert captured.err == ""
 
 
-def test_no_outdated_header_no_notice(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-):
-
-    monkeypatch.setattr("lemma_sdk.transport._outdated_notice", threading.Event())
+def test_no_latest_cli_header_suggests_nothing(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("lemma_sdk.transport._suggested_cli", None)
     transport = make_transport()
     endpoint = FakeEndpoint([FakeResponse(200, parsed={"ok": True})])
     transport.call(endpoint)
-    assert capsys.readouterr().err == ""
+    assert suggested_cli_version() is None
+
+
+# --- X-Lemma-Client ----------------------------------------------------------
+
+
+def test_the_cli_is_identified_by_its_own_version(monkeypatch: pytest.MonkeyPatch):
+    """The server compares this with its own release to suggest an upgrade, so
+    it must be the CLI's version, not the SDK's."""
+    monkeypatch.setenv("LEMMA_CLIENT", "lemma-cli")
+    monkeypatch.setenv("LEMMA_CLIENT_VERSION", "0.7.9")
+    assert _client_header() == "lemma-cli/0.7.9"
+
+
+def test_a_declared_client_without_a_version_falls_back_to_the_sdk_version(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("LEMMA_CLIENT", "lemma-cli")
+    monkeypatch.delenv("LEMMA_CLIENT_VERSION", raising=False)
+    client, _, version = _client_header().partition("/")
+    assert client == "lemma-cli"
+    assert version
+
+
+def test_an_undeclared_caller_is_the_sdk_whatever_version_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("LEMMA_CLIENT", raising=False)
+    monkeypatch.delenv("LEMMA_CLIENT_VERSION", raising=False)
+    plain = _client_header()
+    monkeypatch.setenv("LEMMA_CLIENT_VERSION", "0.7.9")
+    assert plain.startswith("lemma-sdk-py/")
+    assert _client_header() == plain

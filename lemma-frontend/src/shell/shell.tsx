@@ -2,7 +2,6 @@
 import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
 import { settingsFromQuery } from "@/site/legacy-address";
 
-import { PageLoading } from "@/ui/loading";
 import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { Library, TableView } from "@/library/library";
 import { readableName } from "@/library/reading";
@@ -11,7 +10,7 @@ import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
 import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
-import { ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
+import { MinimizeIcon, ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, AppIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -44,6 +43,7 @@ import { LiveConversation } from "@/thread/live-conversation";
 import { ProfilePane } from "@/stage/profile";
 import { History } from "@/thread/history";
 import { AllConversations } from "@/thread/all-conversations";
+import { refreshConversationLists } from "@/thread/conversation-list";
 import { ComputerView } from "@/computer/computer-view";
 import { FileView } from "@/thread/file-view";
 import { acknowledge, readComposeRequest, registerFrame } from "@/thread/compose-bridge";
@@ -57,6 +57,9 @@ import { DesktopNotices } from "@/desktop/desktop-notices";
 import { ReconnectStrip } from "./reconnect-strip";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
 import { useVoiceConfigured } from "@/call/voice-config";
+import { PaneDivider } from "./pane-divider";
+import { RightPaneToolbar, usePhoneWidth } from "./pane-sheet";
+import { clampPaneWidth, layoutForTab } from "./split-tabs";
 import { AppFrameView } from "@/desktop/app-frame";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
@@ -77,7 +80,7 @@ function readJson<T>(key: string, fallback: T): T {
     }
 }
 
-export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRevision?: number } = {}) {
+export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
@@ -221,18 +224,28 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     const [reaching, setReaching] = useState(() => incoming.get('reach') === '1');
 
     // Only the explicitly labelled, isolated product-tour document accepts this prop.
-    // These are the same UI states reached by the shell's own buttons.
+    // These are the same UI states reached by the shell's own buttons. Each step
+    // puts back everything a visitor could have moved while exploring, so the
+    // screen matches the copy beside it; the sidebar folds away once the
+    // teammate is hired, leaving the space to what the step is about.
     useEffect(() => {
         if (!preview || demoStep === undefined) return;
         setPreviewPod("kit");
+        setSelection(previous => previous.id === null ? previous : { id: null, generation: previous.generation + 1 });
         setSettings(null);
         setSearching(false);
         setMobileOpen(false);
         setHeaderHidden(false);
+        setSidebarHidden(false);
+        setCollapsed(demoStep >= 1);
+        setExpandedTab(null);
+        setExtraTabs({});
+        setOpenAgentName(null);
         setHiring(demoStep === 0);
         setAddingPeople(demoStep === 1);
         setReaching(demoStep === 4);
         setTabs(previous => ({ ...previous, kit: previewTabForStep(demoStep) }));
+        for (const frame of Object.values(appFrames.current)) frame?.contentWindow?.postMessage({ type: "lemma-tour:step", step: demoStep }, window.location.origin);
     }, [demoStep, demoRevision, preview]);
 
     const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000 });
@@ -355,7 +368,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         if (!openConversationId || openConversationId === NEW_CONVERSATION) {
             setConversationId(callConversationId);
         }
-        void queryClient.invalidateQueries({ queryKey: ["conversations", callIn.id] });
+        void refreshConversationLists(queryClient, callIn.id);
     }, [callConversationId, queryClient, pod?.id, callIn.id, openConversationId]);
 
     const { start: openCall, end: closeCall } = huddle;
@@ -389,15 +402,46 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     const activeTabId = (pod && tabs[pod.id]) || "conversation";
     const activeTab: Tab | undefined = allTabs.find((tab) => tab.id === activeTabId) ?? allTabs[0];
 
+    const [paneWidth, setPaneWidth] = useState(() => clampPaneWidth(readJson<unknown>(key("sidebar-width"), 52)));
+    useEffect(() => {
+        try { localStorage.setItem(key("sidebar-width"), JSON.stringify(paneWidth)); } catch { /* Display preferences are optional. */ }
+    }, [paneWidth]);
+    const [tabOrigins, setTabOrigins] = useState<Record<string, string>>({});
+    const [expandedTab, setExpandedTab] = useState<string | null>(null);
+    const expanded = Boolean(pod && expandedTab === pod.id + "|" + activeTab?.id);
+    const origin = pod && activeTab ? tabOrigins[pod.id + "|" + activeTab.id] : undefined;
+    const layout = layoutForTab(activeTab?.id ?? "conversation", expanded,
+        allTabs.some(tab => tab.id === origin) ? origin : "conversation");
+    const rightTab = allTabs.find(tab => tab.id === layout.right);
+    /* On a phone the right pane is a sheet over the conversation, lowered to
+       its bar or raised. Kept per tab so opening a different resource, or
+       picking this one again, always brings it up. */
+    const phone = usePhoneWidth();
+    const bodyRef = useRef<HTMLDivElement>(null);
+    const [peekedTab, setPeekedTab] = useState<string | null>(null);
+    const sheetLowered = Boolean(phone && pod && rightTab && peekedTab === pod.id + "|" + rightTab.id);
+    const isVisible = (id: string) => id === layout.main || id === layout.right;
+    const paneProps = (id: string) => ({
+        hidden: !isVisible(id),
+        "data-side": id === layout.right ? "right" : "left",
+        inert: sheetLowered && id === layout.right,
+    });
+    const toggleExpanded = () => {
+        if (pod && activeTab) setExpandedTab(expanded ? null : pod.id + "|" + activeTab.id);
+    };
+
     const openTab = useCallback(
-        (tab: Tab) => {
+        (tab: Tab, origin = "conversation") => {
             if (!pod) return;
             setExtraTabs((previous) => {
                 const existing = previous[pod.id] ?? [];
                 if (existing.some((entry) => entry.id === tab.id)) return previous;
                 return { ...previous, [pod.id]: [...existing, tab] };
             });
-            setTabs((previous) => ({ ...previous, [pod.id]: tab.id }));
+            setTabOrigins(previous => ({ ...previous, [pod.id + "|" + tab.id]: origin }));
+            setExpandedTab(null);
+            setPeekedTab(null);
+            setTabs(previous => ({ ...previous, [pod.id]: tab.id }));
         },
         [pod],
     );
@@ -416,13 +460,16 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         (tabId: string) => {
             if (!pod) return;
             const podId = pod.id;
+            const sourceId = tabOrigins[podId + "|" + tabId];
+            const returnTo = allTabs.some(tab => tab.id === sourceId && tab.id !== tabId) ? sourceId : "conversation";
+            if (activeTabId === tabId && returnTo !== "conversation") setExpandedTab(podId + "|" + returnTo);
             const drop = () => {
                 setExtraTabs((previous) => ({
                     ...previous,
                     [podId]: (previous[podId] ?? []).filter((entry) => entry.id !== tabId),
                 }));
                 setTabs((previous) =>
-                    previous[podId] === tabId ? { ...previous, [podId]: "conversation" } : previous,
+                    previous[podId] === tabId ? { ...previous, [podId]: returnTo } : previous,
                 );
                 setClosingTabs((previous) => {
                     if (!previous[tabId]) return previous;
@@ -441,7 +488,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
             setClosingTabs((previous) => ({ ...previous, [tabId]: true }));
             closeTimers.current.push(window.setTimeout(drop, TAB_CLOSE_MS));
         },
-        [pod],
+        [pod, tabOrigins, allTabs, activeTabId],
     );
 
     const openTable = useCallback(
@@ -452,18 +499,18 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     /* Keyed by table and id, so the same row opened twice is one tab and two
        rows from one table are two. */
     const openRecord = useCallback(
-        (table: string, recordId: string) => openTab({
+        (table: string, recordId: string, origin = "conversation") => openTab({
             id: "record:" + table + ":" + recordId,
             kind: "record",
             label: readableName(table) + " row",
             table,
             recordId,
-        }),
+        }, origin),
         [openTab],
     );
 
     const openHistory = useCallback(
-        () => openTab({ id: "history", kind: "history", label: "All conversations" }),
+        () => openTab({ id: "history", kind: "history", label: "History" }),
         [openTab],
     );
 
@@ -491,9 +538,9 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     );
 
     const openFile = useCallback(
-        (path: string) => {
+        (path: string, origin = "conversation") => {
             const label = path.split("/").filter(Boolean).pop() ?? path;
-            openTab({ id: "file:" + path, kind: "file", label, path });
+            openTab({ id: "file:" + path, kind: "file", label, path }, origin);
         },
         [openTab],
     );
@@ -601,10 +648,29 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
 
     /* Remember every app tab that has been opened, with its URL. */
     useEffect(() => {
-        if (!activeTab || activeTab.kind !== "app" || !pod) return;
-        const key = pod.id + "|" + activeTab.id;
-        setOpenedApps((previous) => (previous[key] ? previous : { ...previous, [key]: activeTab.url }));
-    }, [activeTab, pod]);
+        if (!pod) return;
+        for (const tab of [activeTab, rightTab]) {
+            if (tab?.kind !== "app") continue;
+            const key = pod.id + "|" + tab.id;
+            setOpenedApps(previous => previous[key] ? previous : { ...previous, [key]: tab.url });
+        }
+    }, [activeTab, rightTab, pod]);
+
+    /* The landing tour: the page keeps its placeholder up until there is a
+       teammate and a conversation list to show, and once the visitor is in
+       the tour the teammate's app loads out of sight, so the step that opens
+       it does not open onto a blank frame. */
+    useEffect(() => {
+        if (preview && pod && history.isSuccess) onPreviewPainted?.();
+    }, [preview, pod, history.isSuccess, onPreviewPainted]);
+    useEffect(() => {
+        if (!preview || !pod || demoStep === undefined || demoStep < 0) return;
+        for (const tab of allTabs) {
+            if (tab.kind !== "app") continue;
+            const key = pod.id + "|" + tab.id;
+            setOpenedApps(previous => previous[key] ? previous : { ...previous, [key]: tab.url });
+        }
+    }, [preview, pod, demoStep, allTabs]);
 
     /** An organization with nobody in it opens on the hiring floor.
      *
@@ -623,6 +689,8 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     const pickTab = useCallback(
         (tabId: string) => {
             if (!pod) return;
+            setExpandedTab(null);
+            setPeekedTab(null);
             setTabs((previous) => ({ ...previous, [pod.id]: tabId }));
         },
         [pod],
@@ -681,10 +749,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     const selectedTabRef = useRef<HTMLButtonElement | null>(null);
     useEffect(() => { selectedTabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [activeTab?.id]);
     const [visitedLibraries, setVisitedLibraries] = useState<Record<string, boolean>>({});
-    useEffect(() => { if (pod && activeTab?.kind === "library") setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind]);
+    useEffect(() => { if (pod && (activeTab?.kind === "library" || rightTab?.kind === "library")) setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind, rightTab?.kind]);
 
     if (orgs.isPending) {
-        return preview ? <PageLoading label="Opening sample workspace" /> : <WorkspaceLoading />;
+        return <WorkspaceLoading />;
     }
 
     /* A 401 has already told `SessionGate` to show the door; this component is
@@ -731,7 +799,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     /* `focusedView` is the view asking for the whole pane; `compactView` is
        only about whether the header is on screen. They were one flag, which
        is why hiding the header by hand would also have restyled the pane. */
-    const focusedView = activeTab?.kind === "apps" || activeTab?.kind === "app" || activeTab?.kind === "file" || activeTab?.kind === "profile" || activeTab?.kind === "library" || activeTab?.kind === "table" || activeTab?.kind === "record" || activeTab?.kind === "computer";
+    const focusedView = !rightTab && (activeTab?.kind === "apps" || activeTab?.kind === "app" || activeTab?.kind === "file" || activeTab?.kind === "profile" || activeTab?.kind === "library" || activeTab?.kind === "table" || activeTab?.kind === "record" || activeTab?.kind === "computer");
     const compactView = focusedView || headerHidden;
     const activeKey = pod && activeTab ? pod.id + "|" + activeTab.id : "";
 
@@ -910,7 +978,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     } : undefined}
                     hidden={Boolean(hiring || huddle.expanded || stranger)}
                 >
-                {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? (preview ? <PageLoading label="Opening sample workspace" /> : <WorkspaceLoading embedded />) :
+                {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
                     access.state === "error" || access.state === "missing" ? (
                         <div className="screen"><div className="screen__inner">
                             <h2>{access.state === "missing" ? "We couldn’t find this teammate" : "We couldn’t open this teammate"}</h2>
@@ -970,8 +1038,8 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                             <button
                                 className="head__faces"
                                 onClick={() => setAddingPeople((was) => !was)}
-                                title="People here"
-                                aria-label="People here"
+                                title="People with access"
+                                aria-label="People with access"
                             >
                                 {pod.members.slice(0, 4).map((member) => (
                                     <span
@@ -990,8 +1058,8 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                             {/* A shortcut nobody can see is not a feature. */}
                             <button
                                 className="icon-button"
-                                title="Search this teammate (⌘K)"
-                                aria-label="Search this teammate"
+                                title="Search (⌘K)"
+                                aria-label="Search"
                                 onClick={() => setSearching(true)}
                             >
                                 <SearchIcon size={19} />
@@ -1035,7 +1103,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                     <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={24}/><span>{pod.name}</span>
                                 </button>
                             )}
-                        <div className="tabs" role="tablist" aria-label="Views">
+                        <div className="tabs" role="tablist" aria-label="Views" aria-multiselectable="true">
                             {allTabs.map((tab) => (
                                 <span className={`tab__slot${closingTabs[tab.id] ? " tab__slot--closing" : ""}`} key={tab.id}>
                                     <span className="tab__slot-inner">
@@ -1043,10 +1111,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         ref={tab.id === activeTab?.id ? selectedTabRef : undefined}
                                         className="tab"
                                         role="tab"
-                                        aria-selected={tab.id === activeTab?.id}
+                                        aria-selected={isVisible(tab.id)}
                                         onClick={() => pickTab(tab.id)}
                                     >
-                                        {tab.kind === "conversation" ? <ChatIcon size={17} /> : tab.kind === "profile" ? <ProfileIcon size={17} /> : tab.kind === "history" ? <HistoryIcon size={17} /> : tab.kind === "library" ? <LibraryIcon size={17} /> : tab.kind === "table" ? <TableIcon size={17} /> : tab.kind === "file" ? <FileIcon size={17} /> : tab.kind === "record" ? <TableIcon size={17} /> : tab.kind === "computer" ? <ComputerIcon size={17} /> : <AppsIcon size={17} />}
+                                        {tab.kind === "conversation" ? <ChatIcon size={17} /> : tab.kind === "profile" ? <ProfileIcon size={17} /> : tab.kind === "history" ? <HistoryIcon size={17} /> : tab.kind === "library" ? <LibraryIcon size={17} /> : tab.kind === "table" ? <TableIcon size={17} /> : tab.kind === "file" ? <FileIcon size={17} /> : tab.kind === "record" ? <TableIcon size={17} /> : tab.kind === "computer" ? <ComputerIcon size={17} /> : tab.kind === "app" ? <AppIcon size={17} /> : <AppsIcon size={17} />}
                                         {tab.label}
 
                                     </button>
@@ -1066,8 +1134,6 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                             {podTabs.isPending && <span className="tab">…</span>}
                         </div>
                             <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
-                                teammate={pod.teammate?.name}
-                                onDiscuss={(conversationId) => { setConversationId(conversationId); pickTab("conversation"); }}
                                 onNew={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
                                 onHistory={openHistory}
                                 onComputer={openComputer}
@@ -1077,14 +1143,28 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                     const frame = appFrames.current[activeKey];
                                     if (frame && activeTab?.kind === "app") frame.src = frame.getAttribute("src") ?? activeTab.url;
                                 }} />
+                            {expanded && <button className="icon-button" title="Return to sidebar" aria-label="Return to sidebar" onClick={toggleExpanded}><MinimizeIcon size={18} /></button>}
                         </div>
 
-                        <div className="body">
+                        <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
+                            {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
+                            {rightTab && <RightPaneToolbar
+                                body={bodyRef}
+                                label={rightTab.label}
+                                peeked={sheetLowered}
+                                onPeek={lowered => setPeekedTab(lowered ? pod.id + "|" + rightTab.id : null)}
+                                onExpand={toggleExpanded}
+                                onClose={() => {
+                                    const main = layout.main;
+                                    pickTab(main);
+                                    if (main !== "conversation") setExpandedTab(pod.id + "|" + main);
+                                }}
+                            />}
                             {Object.entries(openedApps).map(([key, url]) => (
+                                <div className="pane app-pane" key={key} {...paneProps(key.startsWith(pod.id + "|") ? key.slice(pod.id.length + 1) : "")}>
                                 <AppFrameView
-                                    key={key}
                                     url={url}
-                                    hidden={key !== activeKey}
+                                    hidden={key !== activeKey && key !== pod.id + "|" + rightTab?.id}
                                     frameRef={element => { appFrames.current[key] = element; }}
                                     /* Registered on load, not on mount: an app
                                        that navigates gets a new contentWindow,
@@ -1095,9 +1175,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         appFrameGuests.current[key] = registerFrame(view);
                                     }}
                                 />
+                                </div>
                             ))}
 
-                            <div className="split" hidden={activeTab?.kind !== "conversation"}>
+                            <div className="split" {...paneProps("conversation")}>
                                     <div className="convo-host">
                                         {source.label === "live" ? (
                                             <LiveConversation
@@ -1136,8 +1217,8 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         onSeeAll={openHistory}
                                     />
                             </div>
-                            {activeTab?.kind === "apps" && <AppsPane name={pod.name} tabs={allTabs} onOpen={pickTab} onAsk={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }} />}
-                            {activeTab?.kind === "history" && (
+                            {isVisible("apps") && <div className="pane" {...paneProps("apps")}><AppsPane name={pod.name} tabs={allTabs} onOpen={pickTab} onAsk={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }} /></div>}
+                            {isVisible("history") && (<div className="pane" {...paneProps("history")}>
                                 <AllConversations
                                     pod={pod}
                                     conversationId={conversationId}
@@ -1146,9 +1227,9 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         pickTab("conversation");
                                     }}
                                 />
-                            )}
+                            </div>)}
                             {allTabs.some((tab) => tab.kind === "computer") && (
-                                <div className="pane library-pane" hidden={activeTab?.kind !== "computer"}>
+                                <div className="pane library-pane" {...paneProps("computer")}>
                                     {/* The sentinel is a conversation that does not
                                         exist yet, so there is no directory to ask
                                         about — the view opens on the whole machine
@@ -1157,21 +1238,21 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                     <ComputerView
                                         podId={pod.id}
                                         conversationId={openConversationId === NEW_CONVERSATION ? null : openConversationId}
-                                        visible={activeTab?.kind === "computer"}
+                                        visible={isVisible("computer")}
                                     />
                                 </div>
                             )}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "file"}> => tab.kind === "file").map(tab => (
-                                <div className="pane file-tab-pane" key={tab.id} hidden={activeTab?.id !== tab.id}>
+                                <div className="pane file-tab-pane" key={tab.id} {...paneProps(tab.id)}>
                                     <div className="pane__inner"><FileView podId={pod.id} path={tab.path} full /></div>
                                 </div>
                             ))}
-                            <div className="pane library-pane" hidden={activeTab?.kind !== "library"} key={pod.id + ":library"}>
-                                {(activeTab?.kind === "library" || visitedLibraries[pod.id]) && <Library podId={pod.id} onFile={openFile} onTable={name => openTab({ id: "table:" + name, kind: "table", label: readableName(name), name })}/>}
+                            <div className="pane library-pane" {...paneProps("library")} key={pod.id + ":library"}>
+                                {(isVisible("library") || visitedLibraries[pod.id]) && <Library podId={pod.id} onFile={path => openFile(path, "library")} onTable={name => openTab({ id: "table:" + name, kind: "table", label: readableName(name), name }, "library")}/>}
                             </div>
-                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "table"}> => tab.kind === "table").map(tab => <div className="pane library-pane" key={pod.id + tab.id} hidden={activeTab?.id !== tab.id}><TableView podId={pod.id} name={tab.name} onOpenRecord={openRecord}/></div>)}
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "table"}> => tab.kind === "table").map(tab => <div className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}><TableView podId={pod.id} name={tab.name} onOpenRecord={(table, recordId) => openRecord(table, recordId, tab.id)}/></div>)}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "record"}> => tab.kind === "record").map(tab => (
-                                <div className="pane library-pane" key={pod.id + tab.id} hidden={activeTab?.id !== tab.id}>
+                                <div className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <RecordView
                                         podId={pod.id}
                                         tableName={tab.table}
@@ -1181,9 +1262,9 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                     />
                                 </div>
                             ))}
-                            {activeTab?.kind === "profile" && (
+                            {isVisible("profile") && (<div className="pane" {...paneProps("profile")}>
                                 <ProfilePane
-                                    key={pod.id}
+                                    key={preview ? pod.id + "|" + demoRevision : pod.id}
                                     initialSection={preview && demoStep === 2 ? "skills" : entrySection}
                                     openAgentName={openAgentName}
                                     onOpenAgentName={setOpenAgentName}
@@ -1206,6 +1287,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         setConversationId(null);
                                     }}
                                     onMessage={() => pickTab("conversation")}
+                                    onAddPeople={() => setAddingPeople(true)}
                                     onDiscussAgent={(name) => {
                                         void (async () => {
                                             const id = await discussion.open("agent", name);
@@ -1219,7 +1301,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                                         })();
                                     }}
                                 />
-                            )}
+                            </div>)}
                             {/* Mounted only while it is in front, the way the
                                 profile is: the list is a request per pod, and
                                 a pane kept alive behind every conversation
@@ -1241,11 +1323,10 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
 
             {addingPeople && pod && (
                 <Modal
-                    title={"Add someone to " + pod.name}
-                    subtitle="Anyone already in this organization"
+                    title={"People with access to " + pod.name}
                     onClose={() => setAddingPeople(false)}
                 >
-                    <AddPeople pod={pod} orgId={activeOrgId} onDone={() => setAddingPeople(false)} />
+                    <AddPeople pod={pod} orgId={activeOrgId} />
                 </Modal>
             )}
         </div>

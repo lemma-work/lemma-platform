@@ -395,8 +395,8 @@ def test_skill_output_never_advertises_a_workspace_filesystem_path():
 def test_workspace_image_creates_no_skills_directory(source: Path):
     """The claim the field descriptions make, checked against the images.
 
-    Both workspace builds put the shipped skills under `/sdk/lemma-skills` and
-    inside the installed `lemma_cli` package; neither creates `/skills`. If one
+    Both workspace builds put the shipped skills inside the installed
+    `lemma_cli` package; neither creates `/skills`. If one
     ever mounts or symlinks it, this fails — and `pod_path` should go back to
     advertising a real container path.
     """

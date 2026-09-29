@@ -46,24 +46,6 @@ class SurfaceConnectedEvent(DomainEvent):
         return SurfaceEvents.STREAM
 
 
-class SurfaceMessageAnsweredEvent(DomainEvent):
-    """An agent answered a member on a surface.
-
-    Not raised at ingress: `execute_chat` only *starts* the run and cannot know
-    whether an answer followed. This is projected from the agent run's own
-    completion, where the outcome is known.
-    """
-
-    event_type: str = "surface.message.answered"
-    surface_id: UUID
-    pod_id: UUID
-    agent_id: UUID | None = None
-
-    @classmethod
-    def stream_name(cls) -> str:
-        return SurfaceEvents.STREAM
-
-
 class NotificationSettledEvent(DomainEvent):
     """An asking conversation is owed no further answers.
 

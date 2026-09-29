@@ -110,12 +110,14 @@ async def test_public_agent_runs_platform_context_tools_through_real_worker(
     fixed_test_user,
     fake_slack,
     fake_teams,
-    fake_telegram,
     worker,
 ):
-    """A user can run Slack/Teams/Telegram/WhatsApp context tools through
-    HTTP+SSE; each call reaches the production worker, platform adapter, and
-    provider contract and persists its structured tool return."""
+    """A user can run Slack/Teams context tools through HTTP+SSE; each call
+    reaches the production worker, platform adapter, and provider contract and
+    persists its structured tool return.
+
+    Telegram and WhatsApp are absent on purpose: they have no platform toolset
+    (their only tools echoed event metadata the agent already reads)."""
 
     del worker
     pod_id = test_pod["id"]
@@ -378,94 +380,3 @@ async def test_public_agent_runs_platform_context_tools_through_real_worker(
     assert teams_provider_failure["success"] is False
     assert teams_provider_failure["error"] == "Graph API returned HTTP 503."
     assert teams_provider_failure["messages"] == []
-
-    telegram_account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="telegram",
-        credentials={
-            "bot_token": "telegram-surface-tools",
-            "api_base_url": f"{fake_telegram.api_base}/bot",
-        },
-    )
-    telegram_agent, telegram_surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "TELEGRAM", "account_id": str(telegram_account.id)},
-    )
-    telegram_items = await _run_public_surface_tool_script(
-        authenticated_client,
-        pod_id=pod_id,
-        agent_name=telegram_agent["name"],
-        metadata={
-            "surface_id": telegram_surface["id"],
-            "surface_platform": "TELEGRAM",
-            "surface_event_metadata": {
-                "platform": "TELEGRAM",
-                "chat_type": "supergroup",
-                "chat_id": "-100123456",
-                "is_topic_message": True,
-                "message_thread_id": "42",
-            },
-            "external_channel_id": "-100123456",
-            "external_thread_id": "42",
-            "external_user_id": "telegram-surface-tool-user",
-        },
-        script=[
-            script_tool_call(
-                "telegram_get_current_chat",
-                {"request": {}},
-                tool_call_id="telegram-current",
-            )
-        ],
-    )
-    telegram_result = _tool_result(telegram_items, "telegram_get_current_chat")
-    assert telegram_result["success"] is True
-    assert telegram_result["chat_id"] == "-100123456"
-    assert telegram_result["message_thread_id"] == "42"
-
-    whatsapp_account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="whatsapp",
-        credentials={
-            "access_token": "whatsapp-surface-tools",
-            "phone_number_id": "1234567890",
-            "waba_id": "waba-surface-tools",
-        },
-    )
-    whatsapp_agent, whatsapp_surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "WHATSAPP", "account_id": str(whatsapp_account.id)},
-    )
-    whatsapp_items = await _run_public_surface_tool_script(
-        authenticated_client,
-        pod_id=pod_id,
-        agent_name=whatsapp_agent["name"],
-        metadata={
-            "surface_id": whatsapp_surface["id"],
-            "surface_platform": "WHATSAPP",
-            "surface_event_metadata": {
-                "platform": "WHATSAPP",
-                "waba_id": "waba-surface-tools",
-                "phone_number_id": "1234567890",
-                "contacts": [{"wa_id": "15550550123", "profile": {"name": "Ada"}}],
-            },
-            "external_channel_id": "1234567890",
-            "external_thread_id": "15550550123@1234567890",
-            "external_user_id": "15550550123",
-        },
-        script=[
-            script_tool_call(
-                "whatsapp_get_current_contact",
-                {"request": {}},
-                tool_call_id="whatsapp-current",
-            )
-        ],
-    )
-    whatsapp_result = _tool_result(whatsapp_items, "whatsapp_get_current_contact")
-    assert whatsapp_result["success"] is True
-    assert whatsapp_result["phone_number_id"] == "1234567890"
-    assert whatsapp_result["wa_id"] == "15550550123"
-    assert whatsapp_result["display_name"] == "Ada"

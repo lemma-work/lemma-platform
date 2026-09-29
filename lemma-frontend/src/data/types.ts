@@ -14,6 +14,10 @@ export type MemberKind = "person" | "teammate";
 export interface Member {
     id: string;
     name: string;
+    /** Their address, when the source knows it. Not the name: a person with a
+     *  profile is called by it, and "is this me" has to be asked of something
+     *  that does not change when they fill one in. */
+    email?: string;
     initials: string;
     kind: MemberKind;
     role: string;
@@ -259,6 +263,13 @@ export interface ConversationRef {
      *  carries. Its front door is that resource, so the recent panel leaves it
      *  out — see `unbound`. */
     boundTo?: string | null;
+}
+
+/** One page of a teammate's conversations, most recently active first.
+ *  `next` is the server's opaque token for the page after, `null` at the end. */
+export interface ConversationPage {
+    items: ConversationRef[];
+    next: string | null;
 }
 
 export interface Conversation {
@@ -557,7 +568,12 @@ export interface PodSource {
      *  authenticated and injects the runtime config the widget's browser SDK
      *  needs, which inline HTML in an iframe can never have. */
     widgetEmbedUrl(podId: string, conversationId: string, toolCallId: string): Promise<string>;
+    /** The first page — what the sidebar, the rail and search want. */
     listConversations(podId: string): Promise<ConversationRef[]>;
+    /** Any page, for the one place that shows every conversation. `search`
+     *  keeps titles containing it (case-insensitive), matched by the server so
+     *  it reaches conversations no page has loaded yet. */
+    listConversationsPage(podId: string, cursor?: string | null, search?: string): Promise<ConversationPage>;
     /** The call threads hanging off one conversation.
      *
      *  A call runs in a conversation of its own, parented to whatever was

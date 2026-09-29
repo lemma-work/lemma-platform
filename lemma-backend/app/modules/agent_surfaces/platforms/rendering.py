@@ -108,15 +108,75 @@ def _safe_cut(chunk: str) -> str:
     return chunk
 
 
+# Room kept in every chunk of a text that has code fences, for the closing fence
+# a chunk may need appended. The reopening fence goes on the next chunk, which
+# is why the split runs under `limit - _FENCE_RESERVE` rather than at `limit`.
+_FENCE_RESERVE = 16
+
+
 def chunk_text(text: str, *, limit: int) -> list[str]:
     """Split ``text`` into chunks no longer than ``limit`` characters.
 
     Prefers paragraph (``\\n\\n``) then line (``\\n``) then word boundaries;
     hard-splits only a single run longer than ``limit``. Safe to call on
     already-rendered MarkdownV2 because it never cuts an escape pair.
+
+    Code fences are kept balanced across the split: a chunk that ends inside a
+    fence is closed, and the next one reopens it with the same language tag.
+    Cut mid-fence, both halves render wrong -- the first swallows the rest of
+    the message into a code block, and the second shows the closing marker as
+    literal text.
     """
     if limit <= 0:
         raise ValueError("limit must be positive")
+    if len(text) <= limit:
+        return [text] if text else []
+    if "```" not in text or limit <= 4 * _FENCE_RESERVE:
+        return _split_text(text, limit)
+
+    chunks: list[str] = []
+    reopen = ""
+    for chunk in _split_text(text, limit - _FENCE_RESERVE):
+        if reopen:
+            first_line, _, rest = chunk.partition("\n")
+            if first_line.strip() == "```":
+                # The fence this chunk would have reopened is closing right
+                # here, and the previous chunk already closed it for us.
+                chunk = rest.lstrip("\n")
+                if not chunk:
+                    reopen = ""
+                    continue
+            else:
+                chunk = f"{reopen}\n{chunk}"
+        language = _fence_left_open(chunk)
+        if language is None:
+            reopen = ""
+        else:
+            chunk = f"{chunk}\n```"
+            reopen = f"```{language}"
+        chunks.append(chunk)
+    return chunks
+
+
+def _fence_left_open(chunk: str) -> str | None:
+    """The language tag of the fence this chunk ends inside, or ``None``.
+
+    A line that opens and closes a fence on its own (```code```) does not count.
+    """
+    language: str | None = None
+    for line in chunk.split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("```"):
+            continue
+        if language is not None:
+            language = None
+        elif "```" not in stripped[3:]:
+            language = stripped[3:].strip()
+    return language
+
+
+def _split_text(text: str, limit: int) -> list[str]:
+    """The boundary-preferring split behind :func:`chunk_text`."""
     if len(text) <= limit:
         return [text] if text else []
 

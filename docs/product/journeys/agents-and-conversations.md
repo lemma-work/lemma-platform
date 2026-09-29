@@ -103,6 +103,8 @@ whether copying succeeded.
   and then to the deployment's.
 - The system shall keep provider credentials secret — never returning them to
   any client, in any response, at any privilege level.
+- If the provider refuses the key a person gives when adding it, then the
+  system shall not add the provider, and shall say the key was rejected.
 - If a configured provider is unreachable, then the system shall fail the run
   with a message saying the provider failed, rather than silently using a
   different one.

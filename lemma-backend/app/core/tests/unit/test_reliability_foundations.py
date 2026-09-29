@@ -27,6 +27,7 @@ from app.core.api.uploads import (
 from app.core.domain.errors import DomainError, PayloadTooLargeError
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.concurrency.cancellation import StrayCancellationError
 from app.core.infrastructure.events.inbox import (
     ClaimOutcome,
     InboxConsumer,
@@ -270,14 +271,32 @@ async def test_inbox_covers_skip_cancellation_validation_and_retryable_domain_er
     skipped = _MemoryInbox(attempt=None)  # type: ignore[arg-type]
     assert await skipped.process("consumer", event, AsyncMock()) is False
 
+    # A real cancellation of the consuming task propagates untouched.
     cancelled = _MemoryInbox()
+    started = asyncio.Event()
 
-    async def cancel() -> None:
+    async def wait_forever() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(cancelled.process("consumer", event, wait_forever))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.gather(task)
+    assert cancelled.finished == []
+
+    # A CancelledError the task was never sent -- one leaked from a client bound
+    # to another task -- is a failure of the call, recorded and retried. Let
+    # through, it would end the subscriber's reader for good.
+    stray = _MemoryInbox()
+
+    async def leak_cancellation() -> None:
         raise asyncio.CancelledError
 
-    with pytest.raises(asyncio.CancelledError):
-        await cancelled.process("consumer", event, cancel)
-    assert cancelled.finished == []
+    with pytest.raises(StrayCancellationError):
+        await stray.process("consumer", event, leak_cancellation)
+    assert stray.finished == [(InboxStatus.RETRYING, "StrayCancellationError")]
 
     with pytest.raises(ValidationError) as exc_info:
         _ValidationProbe.model_validate({"value": "not-an-integer"})

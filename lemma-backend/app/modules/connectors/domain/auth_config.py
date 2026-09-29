@@ -45,11 +45,21 @@ COMPOSIO_SYSTEM_CREDENTIALS_ONLY = (
 )
 COMPOSIO_ORG_CUSTOM_REASON = "org_custom_not_supported_for_composio"
 
+# Never "needs an OAuth app": the frontend's `oauthAppMissing` matches that
+# wording for the native case, whose fix is a different one.
 COMPOSIO_ORG_CREDENTIALS_REQUIRED = (
-    "Composio has no managed credentials for this toolkit, so it cannot be "
-    "installed with Lemma's defaults. Supply the app's own credentials."
+    "Composio has no managed OAuth credentials for this toolkit, so it cannot "
+    "be installed with Lemma's defaults. Your organization has to supply its "
+    "own OAuth app: register one with the provider and enter its client ID and "
+    "client secret."
 )
 COMPOSIO_SYSTEM_DEFAULT_REASON = "system_default_not_available_for_composio"
+
+# The native counterpart: an OAuth2 connector installed with the deployment's
+# own app when the deployment has none. Worded for the person differently from
+# the Composio case, so a client that has to tell "no credentials behind this"
+# apart from every other refusal reads this rather than the sentence.
+SYSTEM_DEFAULT_OAUTH_NOT_CONFIGURED_REASON = "system_default_oauth_not_configured"
 
 
 class AuthConfigEntity(Entity):

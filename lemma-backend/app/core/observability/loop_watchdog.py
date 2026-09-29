@@ -35,6 +35,7 @@ import time
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.observability.process_health import process_unhealthy_reason
 from app.core.request_context import create_background_task
 from app.core.observability.stall_sampler import (
     keep_loop_tick_fresh,
@@ -267,7 +268,9 @@ async def loop_lag_watchdog(
             lag = max(0.0, lag)
             _lag.seconds = lag
 
-            if heartbeat_path:
+            # A process that has given up (see `process_health`) stops proving
+            # it is alive, so the probe reading this file restarts it.
+            if heartbeat_path and process_unhealthy_reason() is None:
                 try:
                     # Offloaded because it is real filesystem I/O — mkdir, a
                     # temp file, an atomic rename — on whatever volume the pod

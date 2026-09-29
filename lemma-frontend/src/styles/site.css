@@ -16,6 +16,10 @@
   justify-content: space-between;
   border-bottom: 1px solid var(--line-2);
   gap: 24px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--canvas);
 }
 .site-header svg,
 .site-footer svg {
@@ -293,6 +297,18 @@
   .site-header nav {
     gap: 16px;
     font-size: 13px;
+  }
+  /* Sticky, so it has to stay one row: on a phone the secondary links go and
+     the footer keeps them. */
+  .site-header {
+    flex-wrap: nowrap;
+    padding: 14px 16px;
+  }
+  .site-header svg {
+    width: 84px;
+  }
+  .site-header nav > :is([data-nav="download"], [data-nav="github"]) {
+    display: none;
   }
   .site-main {
     padding-top: 40px;

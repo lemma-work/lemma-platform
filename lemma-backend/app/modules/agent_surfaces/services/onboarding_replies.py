@@ -31,6 +31,7 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
 from app.modules.agent_surfaces.services.onboarding_inputs import (
     native_prompt_metadata,
 )
+from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.services.onboarding_transport import (
     OnboardingTransport,
 )
@@ -105,7 +106,8 @@ async def say_privately(
     metadata["private_onboarding"] = True
     if destination.platform == SurfacePlatform.TELEGRAM:
         metadata["reply_markup"] = telegram_keyboard(step)
-    await adapter.send_message(
+    await reply_text(
+        adapter=adapter,
         credentials=transport.credentials,
         event=destination,
         message=message,
@@ -143,7 +145,8 @@ async def room_notice(
         return False
     adapter = adapters.get(event.platform)
     assert adapter is not None
-    await adapter.send_message(
+    await reply_text(
+        adapter=adapter,
         credentials=transport.credentials,
         event=event,
         message=CHECK_YOUR_DM_MESSAGE,

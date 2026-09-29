@@ -740,6 +740,12 @@
     padding: 56px 0 0;
     max-width: 46ch;
 }
+/* An empty thread starts where its first message will land: at the bottom,
+   on the composer's left edge. Floated 56px below the tabs it read as a stray
+   heading in the corner of an empty page, unrelated to the box you type in. */
+.pane__inner:has(> .quiet) { min-height: 100%; display: flex; flex-direction: column; }
+.pane__inner > .quiet { margin-top: auto; padding: 0 0 12px; }
+.quiet > .mark { margin-bottom: 6px; }
 .quiet h2 {
     margin: 0;
     font-size: var(--t-lead);
@@ -2297,6 +2303,42 @@
     font-size: 13px;
     color: var(--ink-3);
 }
+/* The address bar is the dialog's first thing: an address or a name, the
+   role it grants, and the one button whose word says which of add or invite
+   will happen. */
+.addpeople__bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.addpeople__email {
+    flex: 1 1 200px;
+    min-width: 0;
+    font: inherit;
+    font-size: var(--t-ui);
+    padding: 8px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    color: var(--ink);
+}
+.addpeople__email:focus { outline: none; border-color: var(--accent); }
+.addpeople__bar .btn:disabled { opacity: .45; cursor: default; }
+.addpeople__bar .addpeople__role { padding: 8px 9px; border-radius: var(--r-md); font-size: var(--t-ui); }
+@media (max-width: 560px) { .addpeople__bar { flex-wrap: wrap; } }
+.addpeople__hint { margin: 7px 0 0; font-size: var(--t-meta); color: var(--ink-3); }
+.addpeople__hint[data-bad="true"] { color: var(--bad); }
+.addpeople__unsent { display: grid; gap: 6px; margin-top: 8px; }
+.addpeople--modal .addpeople__list { margin-top: 12px; }
+/* Who is here: not buttons, so neither the pointer nor the hover says they
+   can be pressed. */
+.addpeople__row--member { align-items: center; cursor: default; }
+.addpeople__row--member:hover { color: var(--ink-2); }
+.addpeople__row--pending { color: var(--ink-3); cursor: default; }
+.addpeople__row--pending:hover { color: var(--ink-3); }
+.addpeople__you { color: var(--ink-3); }
+.addpeople__access { font-size: var(--t-meta); color: var(--ink-3); white-space: nowrap; }
+.addpeople__section { margin: 16px 0 0; font-size: var(--t-meta); color: var(--ink-3); }
 .quiet__detail {
     font-family: var(--mono);
     font-size: 11px;
@@ -2960,6 +3002,9 @@
 }
 .resource__go {
     flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 12.5px;
     color: var(--accent);
 }
@@ -3411,6 +3456,9 @@ button.filecard__open {
     letter-spacing: 0.06em;
     color: var(--ink-3);
 }
+/* A section's own control goes to the far end; the meta stays by the title
+   it describes rather than being spaced into the middle. */
+.pcard__head > .btn { margin-left: auto; }
 
 /* Hero ---------------------------------------------------------------- */
 
@@ -5333,8 +5381,16 @@ button.filecard__open {
 .pane--profile .pcard__head h3 { font-family: inherit; font-size: 18px; font-weight: 650; text-transform: none; letter-spacing: normal; color: var(--ink); }
 .hero__headline[data-collapsed] { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .hero__description-toggle { margin-top: 8px; }
-.composer__box { align-items: flex-end; }
-textarea.composer__input { resize: none; line-height: 1.5; min-height: 36px; max-height: 200px; overflow-y: auto; overflow-wrap: anywhere; }
+/* The box aligns to its bottom edge so a growing draft pushes upward and the
+   controls stay on its last line. That only reads as one row if the first line
+   of text and every control share a centre: bottom-aligning a 34px attach, a
+   30px voice button, a 38px send and a 36px field put four centres on the row,
+   with the placeholder highest and the voice icon lowest. Everything is
+   centred on one line height instead. */
+.composer__box { align-items: flex-end; --composer-line: 38px; }
+textarea.composer__input { resize: none; line-height: 1.5; min-height: var(--composer-line); padding-block: calc((var(--composer-line) - 1.5em) / 2); max-height: 200px; overflow-y: auto; overflow-wrap: anywhere; }
+.composer__attach { margin-block-end: calc((var(--composer-line) - 34px) / 2); }
+.composer__wave { margin-block-end: calc((var(--composer-line) - 30px) / 2); }
 a.reach { text-decoration: none; }
 
 /* Conversation sizing is independent of navigation and document typography. */
@@ -5360,12 +5416,19 @@ a.reach { text-decoration: none; }
 .copy-section { position: relative; }
 .copy-control { display: inline-flex; }
 .message-text { width: fit-content; max-width: 100%; min-width: 0; }
-.message-text, .msg--you { position: relative; }
-.message-actions { position: absolute; right: 6px; bottom: -12px; z-index: 1; display: flex; opacity: 0; pointer-events: none; }
+.message-text, .msg--you .msg__body { position: relative; }
+/* Never straddling an edge. Half on, half off the bubble read as a control
+   that had slipped. Yours sits beside the bubble, in the empty side of the
+   row; the teammate's sits inside its card's corner, where every section's
+   copy button already is. */
+.message-actions { position: absolute; z-index: 1; display: flex; opacity: 0; pointer-events: none; }
+.message-text > .message-actions { top: 6px; right: 6px; }
+.msg--you .message-actions { right: calc(100% + 6px); bottom: 2px; }
 .message-text:hover > .message-actions,
 .message-text:focus-within > .message-actions,
-.msg--you:hover > .message-actions,
-.msg--you:focus-within > .message-actions { opacity: 1; pointer-events: auto; }
+.msg--you:hover .message-actions,
+.msg--you:focus-within .message-actions { opacity: 1; pointer-events: auto; }
+.message-text > .message-actions .copy-control__button { background: var(--chrome); }
 .message-actions .copy-control__button { width: 28px; height: 28px; background: var(--paper); color: var(--ink-3); }
 .message-actions .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
 .copy-control__button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: var(--paper); color: var(--ink-2); cursor: pointer; }
@@ -5496,3 +5559,151 @@ a.reach { text-decoration: none; }
     box-shadow: var(--depth-raise);
     font-size: 13px;
 }
+
+/* Keep each view in the same DOM position when it changes sides, preserving
+   editors, iframe sessions and conversation drafts. */
+.body--dual > [data-side="left"] { right: calc(100% - var(--split-position, 52%)); }
+.body--dual > [data-side="right"] {
+    left: var(--split-position, 52%);
+    top: 44px;
+}
+.body--dual > .split { grid-template-columns: minmax(0, 1fr); }
+.body--dual > .split > .history { display: none; }
+.right-pane-toolbar {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: var(--split-position, 52%);
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+}
+.right-pane-toolbar > span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--t-ui);
+}
+.right-pane-toolbar .icon-button { width: 44px; height: 44px; }
+.pane-sheet-scrim { display: none; }
+.right-pane-toolbar__title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+.right-pane-toolbar__title > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--t-ui);
+}
+
+/* A phone has no width to put a resource beside anything, and halving the
+   height left a letterbox of each. So the resource is a sheet over the
+   conversation: raised to all but a sliver of it, or lowered to its bar, which
+   sits under the composer as the way back.
+
+   The conversation stops a bar's height short of the bottom and never moves.
+   The bar and the pane are moved together by one offset, `--sheet-y`, which is
+   0 raised and the whole travel lowered. `100cqh` is what makes that sayable in
+   CSS, so the body is a size container here and nowhere else; while a finger
+   is on the bar the script writes a pixel `--sheet-y` and turns the easing off. */
+@media (max-width: 767px) {
+    .body--dual {
+        --sheet-top: 12px;
+        --sheet-bar: 52px;
+        container-type: size;
+        overflow: clip;
+    }
+    .body--peek { --sheet-y: calc(100cqh - var(--sheet-top) - var(--sheet-bar)); }
+    .body--dual > [data-side="left"] { right: 0; bottom: var(--sheet-bar); }
+    .body--dual > [data-side="right"],
+    .body--dual > .right-pane-toolbar {
+        left: 0;
+        z-index: 4;
+        transform: translateY(var(--sheet-y, 0px));
+        transition: transform var(--sheet-motion, 240ms) var(--ease-out);
+    }
+    .body--dual > [data-side="right"] { top: calc(var(--sheet-top) + var(--sheet-bar)); border-left: 0; }
+    .body--dual > .right-pane-toolbar {
+        top: var(--sheet-top);
+        height: var(--sheet-bar);
+        padding-top: 8px;
+        border-bottom: 1px solid var(--line);
+        border-radius: var(--r-lg) var(--r-lg) 0 0;
+        box-shadow: var(--depth-raise);
+        touch-action: none;
+    }
+    /* The grabber: the one mark that says this edge moves. */
+    .body--dual > .right-pane-toolbar::before {
+        content: "";
+        position: absolute;
+        top: 6px;
+        left: 50%;
+        width: 36px;
+        height: 4px;
+        margin-left: -18px;
+        border-radius: 9999px;
+        background: var(--line-2);
+    }
+    .body--peek > .right-pane-toolbar { border-bottom-color: transparent; }
+    .body--dual > .pane-sheet-scrim {
+        display: block;
+        position: absolute;
+        inset: 0;
+        z-index: 3;
+        background: rgb(0 0 0 / 0.22);
+        transition: opacity var(--sheet-motion, 240ms) var(--ease-out);
+    }
+    .body--peek > .pane-sheet-scrim { opacity: 0; pointer-events: none; }
+    .body[data-sheet-held] > :not(.right-pane-toolbar) { pointer-events: none; }
+}
+@media (max-width: 767px) and (prefers-reduced-motion: reduce) {
+    .body--dual { --sheet-motion: 0s; }
+}
+
+.pane-divider {
+    position: absolute;
+    inset-block: 0;
+    left: var(--split-position, 52%);
+    width: 10px;
+    transform: translateX(-50%);
+    z-index: 6;
+    cursor: col-resize;
+    touch-action: none;
+}
+.pane-divider::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: 5px;
+    width: 1px;
+    background: var(--line-2);
+}
+.pane-divider:hover::after,
+.pane-divider:focus-visible::after,
+.pane-divider--dragging::after { background: var(--accent); }
+.pane-resize-shield { position: absolute; inset: 0; z-index: 5; cursor: col-resize; }
+@media (max-width: 767px) {
+    .pane-divider, .pane-resize-shield { display: none; }
+}
+
+/* The separator itself is the focus indicator; outlining its hit area draws
+   two extra rails on either side of the actual boundary. */
+.pane-divider[tabindex]:focus-visible { outline: none; box-shadow: none; }
+.file-tab-pane { background: var(--paper); }

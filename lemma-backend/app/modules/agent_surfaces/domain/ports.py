@@ -301,6 +301,19 @@ class SurfaceEventDedupStorePort(Protocol):
         """
         ...
 
+    async def release_stranger_reply(
+        self,
+        *,
+        platform: str,
+        surface_installation_id: UUID | None,
+        sender_external_user_id: str | None,
+    ) -> None:
+        """Hand the stranger-reply window back after a send that did not happen.
+
+        Otherwise one failed send silences the sender for the whole window.
+        """
+        ...
+
     async def release_message(
         self,
         *,

@@ -371,6 +371,9 @@ async def test_every_envelope_field_reaches_the_person_on_every_platform(
 _NATIVE_PATHS = {
     "supports_native_files": ("_render_file", "_render_one"),
     "supports_native_choices": ("_render_choices",),
+    # The prompt says `say` is "a native voice note" only where this is True, so
+    # the claim has to be the adapter's own `_render_voice` and nothing else.
+    "supports_native_voice": ("_render_voice",),
 }
 
 

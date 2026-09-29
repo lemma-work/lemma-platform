@@ -148,6 +148,101 @@ def test_a_scenario_waits_on_a_named_budget():
     )
 
 
+def test_every_wait_says_what_it_waits_for():
+    """`eventually` is called the way it is declared, everywhere.
+
+    Its signature is `eventually(probe, until, *, describe, ...)`. A call
+    missing `until` or `describe` is a `TypeError` — but only when that line
+    runs, and the scenarios that most need waiting are the ones gated on a real
+    model, which run nowhere but a deployment. Two of them shipped that way and
+    first ran, and failed, on dev. Read here instead, where it costs nothing and
+    fails on the pull request.
+    """
+    offenders: list[str] = []
+    for path in [*_scenario_files(), *sorted((SUITE / "harness").rglob("*.py"))]:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", "")
+            )
+            if name != "eventually":
+                continue
+            if any(isinstance(arg, ast.Starred) for arg in node.args) or any(
+                keyword.arg is None for keyword in node.keywords
+            ):
+                continue
+            named = {keyword.arg for keyword in node.keywords}
+            has_until = len(node.args) >= 2 or "until" in named
+            if not has_until or "describe" not in named:
+                offenders.append(f"{path.relative_to(SUITE)}:{node.lineno}")
+    assert not offenders, (
+        "call `eventually(probe, until, describe=...)` — without both it raises "
+        "TypeError the first time the line runs:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_a_scenario_that_signs_somebody_up_says_so():
+    """Every scenario that signs a new person up carries `open_signup`.
+
+    The mark is how a run is split between a disposable stack, where sign-up
+    gates are off, and a deployment, where they are on. `world.new_person()`
+    enforces it at run time; this says so on the pull request, including for a
+    scenario in a lane that seldom runs. A scenario counts if it signs somebody
+    up itself or through a fixture in its own module.
+    """
+
+    def signs_up(function: ast.AST) -> bool:
+        for node in ast.walk(function):
+            if not (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "attr", "") == "new_person"
+            ):
+                continue
+            if not any(
+                keyword.arg == "sign_up"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+                for keyword in node.keywords
+            ):
+                return True
+        return False
+
+    def marked(node: ast.AST) -> bool:
+        return any(
+            "open_signup" in ast.unparse(decorator) for decorator in node.decorator_list
+        )
+
+    offenders: list[str] = []
+    for path in _scenario_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        module_marked = any(
+            isinstance(node, ast.Assign)
+            and any(getattr(target, "id", "") == "pytestmark" for target in node.targets)
+            and "open_signup" in ast.unparse(node.value)
+            for node in tree.body
+        )
+        functions = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        signers = {name for name, node in functions.items() if signs_up(node)}
+        for name, node in functions.items():
+            if not name.startswith("test_") or module_marked or marked(node):
+                continue
+            arguments = {argument.arg for argument in node.args.args}
+            if name in signers or arguments & signers:
+                offenders.append(f"{path.relative_to(SUITE)}::{name}")
+    assert not offenders, (
+        "these sign somebody up but are not marked `open_signup`, so a split run "
+        "would send them to a deployment whose gates are on:\n  " + "\n  ".join(offenders)
+    )
+
+
 def test_a_harness_step_waits_on_a_named_budget():
     """The other half of the rule above, and the half that hid a real bound.
 
@@ -418,8 +513,10 @@ def test_a_target_is_vetted_before_any_scenario_can_write():
     unhooking it: a `world` that no longer waits on `target`, or a `target` that
     no longer asks.
     """
-    conftest = SUITE / "conftest.py"
-    tree = ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest))
+    # The fixtures live in the plugin, so a suite built on this one gets the
+    # same vetting by naming it.
+    plugin = SUITE / "harness" / "plugin.py"
+    tree = ast.parse(plugin.read_text(encoding="utf-8"), filename=str(plugin))
     functions = {
         node.name: node
         for node in ast.walk(tree)
@@ -427,7 +524,7 @@ def test_a_target_is_vetted_before_any_scenario_can_write():
     }
 
     assert "target" in functions, (
-        "conftest has no `target` fixture, so nothing asks the deployment what "
+        "harness/plugin.py has no `target` fixture, so nothing asks the deployment what "
         "it is or whether this run may write to it"
     )
     vets = any(
@@ -758,7 +855,7 @@ def test_a_fixture_never_asserts_on_something_a_deployment_lacks():
         f"these assert on something only a booted stack has: {offenders}. A "
         f"deployment run has no proxy and no stand-ins, so this has to skip "
         f"with a reason rather than error. See the `egress` fixture in "
-        f"conftest.py for the shape."
+        f"harness/plugin.py for the shape."
     )
 
 

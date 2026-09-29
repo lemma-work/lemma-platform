@@ -26,10 +26,14 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
-    WhatsAppNumberRepository,
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    has_shared_system_bot,
 )
-from app.modules.agent_surfaces.services.credential_resolver import native_credentials
+from app.modules.agent_surfaces.services.credential_resolver import (
+    SurfaceCredentialResolver,
+    arrival_number,
+    native_credentials,
+)
 from app.modules.agent_surfaces.services.onboarding_submissions import (
     parse_native_submission,
 )
@@ -38,18 +42,6 @@ from app.modules.agent_surfaces.services.onboarding_private_delivery import (
 )
 from app.modules.connectors.contracts.surfaces import account_with_secrets
 from app.modules.pod.contracts.agent_access import pod_organization_ids
-
-#: Where a platform-wide webhook arrives on Lemma's own shared bot, so a surface
-#: bound to a customer's own account cannot be what it is for. Mirrors
-#: `surface_inbound._has_shared_system_bot`, which owns the rule; duplicated
-#: rather than imported because that module imports this one.
-_SHARED_SYSTEM_BOT_PLATFORMS = frozenset(
-    {SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP}
-)
-
-
-def _has_shared_system_bot(platform: SurfacePlatform) -> bool:
-    return platform in _SHARED_SYSTEM_BOT_PLATFORMS
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +119,7 @@ async def resolve_onboarding_transport(
         and surface.status.accepts_inbound_events()
         and surface.matches_tenant(parsed.tenant_id)
     ]
-    if platform in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM):
+    if has_shared_system_bot(platform):
         return await _shared_transport(
             request, surfaces, parsed, receiver_ids, uow_factory
         )
@@ -144,7 +136,7 @@ async def _transport_candidates(
             if direct is None:
                 return None
             platform = direct.surface_type
-            if platform in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM) and (
+            if has_shared_system_bot(platform) and (
                 direct.account_id is not None
                 or direct.credential_mode != SurfaceCredentialMode.SYSTEM
             ):
@@ -160,7 +152,7 @@ async def _transport_candidates(
             # production caller by design; reaching for it here would put that
             # read back on the path every inbound message takes.
             receiver_surface_ids = request.receiver_surface_ids
-            if receiver_surface_ids is None and _has_shared_system_bot(platform):
+            if receiver_surface_ids is None and has_shared_system_bot(platform):
                 # The shared bot's transport is its system credentials, and
                 # `_shared_transport` consults this list only to refuse a
                 # *receiver-scoped* delivery -- which this is not. Loading it
@@ -172,7 +164,7 @@ async def _transport_candidates(
                 platform.value,
                 surface_ids=receiver_surface_ids,
                 system_credentials_only=(
-                    receiver_surface_ids is None and _has_shared_system_bot(platform)
+                    receiver_surface_ids is None and has_shared_system_bot(platform)
                 ),
             )
             if receiver_surface_ids is not None and not surfaces:
@@ -205,9 +197,7 @@ async def _shared_transport(
         )
     ):
         return None
-    credentials = TypeAdapter(dict[str, JsonValue]).validate_python(
-        native_credentials(platform)
-    )
+    resolved = native_credentials(platform)
     if platform == SurfacePlatform.WHATSAPP:
         # Every pooled number is a system number and behaves like the one in
         # settings, so signup works on all of them. What the gate is actually
@@ -215,24 +205,23 @@ async def _shared_transport(
         # to answer that by comparing against the single configured one, and a
         # pool is the reason it no longer can.
         #
-        # The lookup matters for more than the gate: the reply has to go out
-        # from the number the person messaged. Handing the settings credentials
-        # to a signup that arrived on a pooled number would answer from a
-        # different number than the one they wrote to, which for a stranger
-        # being asked to trust us is the worst possible first impression.
-        arrived_on = parsed.reply_target.get("phone_number_id")
+        # The credentials come from the resolver every other inbound step asks,
+        # not from a merge of this module's own: the reply has to go out from
+        # the number the person messaged, and answering a stranger's signup
+        # from a different number than the one they wrote to is the worst
+        # possible first impression.
+        arrived_on = arrival_number(parsed)
         if not arrived_on:
             return None
-        if arrived_on != credentials.get("phone_number_id"):
-            async with uow_factory() as uow:
-                number = await WhatsAppNumberRepository(uow).get_by_phone_number_id(
-                    arrived_on
-                )
-            if number is None:
-                # Not a number this deployment owns. The signature check upstream
-                # proves Meta sent it; it does not prove it was meant for us.
-                return None
-            credentials = {**credentials, **number.credential_overrides()}
+        async with uow_factory() as uow:
+            resolved = await SurfaceCredentialResolver(uow=uow).for_platform(
+                platform, None, surface=None, arrived_on=arrived_on
+            )
+        if resolved.get("phone_number_id") != arrived_on:
+            # Neither the settings number nor a pool row. The signature check
+            # upstream proves Meta sent it; it does not prove it was meant for us.
+            return None
+    credentials = TypeAdapter(dict[str, JsonValue]).validate_python(resolved)
     return OnboardingTransport(
         parsed,
         None,

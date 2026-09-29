@@ -1,8 +1,11 @@
-"""Classifying a typed approval reply, and the third case that matters.
+"""A typed approval reply on a surface: transport plumbing around the agent's reading of it.
 
-A reply to a pending ``request_approval`` is a decision, or it is not. The
-"not" case is the one these tests exist for: it used to be folded into DENY,
-which cancelled the action *and* discarded what the person wrote.
+What a reply *means* is the agent's (`agent/tests/unit/test_interaction_reply.py`
+pins the vocabulary). What is pinned here is what the surface does with that
+answer: consume the message and record the decision, or -- the case these tests
+exist for -- fall through as an ordinary message. A "not a decision" reply used
+to be folded into DENY, which cancelled the action *and* discarded what the
+person wrote.
 """
 
 from __future__ import annotations
@@ -17,91 +20,17 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalButton,
     SurfaceApprovalRenderPlan,
 )
-from app.modules.agent_surfaces.services.pending_interaction_resume import (
-    ResumeOutcome,
+from app.modules.agent.contracts.interaction_replies import (
+    classify_approval_reply as _classify_approval_reply,
+)
+from app.modules.agent.services.interaction_reply import (
     _APPROVE_ONCE_REPLIES,
     _APPROVE_SESSION_REPLIES,
     _DENY_REPLIES,
-    _classify_approval_reply,
 )
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "approve",
-        "Approve",
-        "yes",
-        "Yes!",
-        "y",
-        "ok",
-        "sure",
-        "go ahead",
-        "yeah go ahead",
-        "do it",
-        "go for it",
-        "lgtm",
-        "sounds good",
-        "1",
-        "👍",
-    ],
+from app.modules.agent_surfaces.services.pending_interaction_resume import (
+    ResumeOutcome,
 )
-def test_approval_words_approve_once(text: str) -> None:
-    assert _classify_approval_reply(text) is AgentRunApprovalDecision.APPROVE_ONCE
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "approve session",
-        "approve for session",
-        "always allow",
-        "yes to all",
-        "dont ask again",
-        "don't ask again",
-        "don’t ask again",
-    ],
-)
-def test_session_words_approve_for_session(text: str) -> None:
-    """The decision the text fallback used to drop entirely."""
-    assert (
-        _classify_approval_reply(text) is AgentRunApprovalDecision.APPROVE_FOR_SESSION
-    )
-
-
-@pytest.mark.parametrize(
-    "text",
-    ["deny", "no", "n", "nope", "cancel", "stop", "don't", "never mind", "2", "👎"],
-)
-def test_denial_words_deny(text: str) -> None:
-    assert _classify_approval_reply(text) is AgentRunApprovalDecision.DENY
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "wait, why do you need that?",
-        "yes, but only if it's the staging table",
-        "actually delete the other one instead",
-        "what does that command do?",
-        "maybe later",
-        "hold on",
-        "",
-        "   ",
-    ],
-)
-def test_everything_else_is_not_a_decision(text: str) -> None:
-    """None, so the caller delivers the message instead of inventing a decision.
-
-    Each of these used to be DENY: the action was cancelled and the words were
-    thrown away, including the two that are questions about the action itself.
-    """
-    assert _classify_approval_reply(text) is None
-
-
-def test_a_qualified_yes_is_not_consent() -> None:
-    """The reason the sets are exact matches rather than prefixes."""
-    assert _classify_approval_reply("yes, but only if X") is None
 
 
 def _plan(*decisions: str) -> SurfaceApprovalRenderPlan:
@@ -361,3 +290,18 @@ async def test_a_message_that_is_no_decision_still_falls_through() -> None:
 
     assert outcome is ResumeOutcome.NOT_A_DECISION
     resolve.assert_not_awaited()
+
+
+async def test_an_approval_typed_by_someone_else_is_just_a_message() -> None:
+    """An approved call runs with the owner's authority, so only the owner can
+    approve it (the rule the buttons apply too). Somebody else in a shared
+    thread typing "approve" records nothing and goes on as an ordinary message
+    -- not as a failure the person is told about."""
+    from app.modules.agent.contracts.conversations_for_surfaces import (
+        ApprovalNotOwnedError,
+    )
+
+    outcome, resolve = await _resume("approve", resolve_raises=ApprovalNotOwnedError())
+
+    assert outcome is ResumeOutcome.NOT_A_DECISION
+    assert resolve.await_count == 1

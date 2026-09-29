@@ -33,6 +33,16 @@ on:
         required: false
         default: false
         type: boolean
+      rebuild_guest_runtime:
+        description: "Build the guest runtimes even when a published one has the same input fingerprint."
+        required: false
+        default: false
+        type: boolean
+      rebuild_workspace_image:
+        description: "Build the workspace sandbox image even when a published one has the same input fingerprint."
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -113,35 +123,26 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ github.sha }}
 
-  build:
-    timeout-minutes: 90
-    name: Build ${{ matrix.image.name }} (${{ matrix.platform.arch }})
+  # The workspace sandbox image changes far less often than Lemma's code, which
+  # reaches every sandbox through the runtime overlay instead. On Desktop the
+  # image's digest is the sandbox's identity, so building it every release
+  # replaced every sandbox and downloaded the whole image again at the next
+  # Wake up. The fingerprint covers what decides its content -- see
+  # scripts/runtime_artifacts.py -- and the month stands for the unpinned
+  # Debian archive, so its packages refresh at least monthly. The month also
+  # fixes SOURCE_DATE_EPOCH, so two builds of the same inputs agree on every
+  # timestamp they write.
+  workspace-image-plan:
+    timeout-minutes: 30
+    name: Decide whether the workspace image needs building
     needs: protected-e2e-gate
-    runs-on: ${{ matrix.platform.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        image:
-          - name: lemma-backend
-            context: .
-            dockerfile: lemma-backend/Dockerfile
-          - name: lemma-frontend
-            context: .
-            dockerfile: lemma-frontend/Dockerfile
-          - name: lemma-harness
-            context: .
-            dockerfile: lemma-harness/Dockerfile
-          - name: lemma-workspace
-            context: .
-            dockerfile: lemma-backend/sandbox-images/Dockerfile.workspace
-          - name: lemma-function
-            context: .
-            dockerfile: lemma-backend/sandbox-images/Dockerfile.function
-        platform:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
+    outputs:
+      fingerprint: ${{ steps.plan.outputs.fingerprint }}
+      source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
+      reuse: ${{ steps.check.outputs.reuse }}
+      reuse_ref: ${{ steps.check.outputs.ref }}
+      reuse_digest: ${{ steps.check.outputs.digest }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -156,8 +157,124 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Fingerprint the workspace image and find a published one
+        id: plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REBUILD: ${{ inputs.rebuild_workspace_image && '--rebuild' || '' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # REBUILD is a flag or empty, on purpose.
+          plan="$(python3 scripts/runtime_artifacts.py workspace-image \
+            --package-epoch "$(date -u +%Y-%m)" ${REBUILD})"
+          echo "${plan}"
+          PLAN="${plan}" python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import os
+
+          plan = json.loads(os.environ["PLAN"])
+          reuse = plan["reuse"] or {}
+          print(f"fingerprint={plan['fingerprint']}")
+          print(f"source_date_epoch={plan['source_date_epoch']}")
+          for key in ("tag", "ref", "digest"):
+              print(f"candidate_{key}={reuse.get(key, '')}")
+          PY
+
+      # Reused only if the published image is still there with both platforms.
+      # Anything else -- no match, a missing image, the registry failing --
+      # builds.
+      - name: Check the published image is still there
+        id: check
+        shell: bash
+        env:
+          REF: ${{ steps.plan.outputs.candidate_ref }}
+          DIGEST: ${{ steps.plan.outputs.candidate_digest }}
+          TAG: ${{ steps.plan.outputs.candidate_tag }}
+        run: |
+          set -uo pipefail
+          reuse=false
+          if [ -n "${REF}" ] && [ -n "${DIGEST}" ] \
+            && raw="$(docker buildx imagetools inspect "${REF}@${DIGEST}" --raw)" \
+            && RAW="${raw}" python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          index = json.loads(os.environ["RAW"])
+          platforms = {
+              "{os}/{architecture}".format(**item.get("platform", {}))
+              for item in index.get("manifests", [])
+              if {"os", "architecture"} <= item.get("platform", {}).keys()
+          }
+          sys.exit(0 if {"linux/amd64", "linux/arm64"} <= platforms else 1)
+          PY
+          then
+            reuse=true
+            echo "Reusing ${REF}@${DIGEST}, first published by ${TAG}"
+          fi
+          {
+            echo "reuse=${reuse}"
+            echo "ref=$([ "${reuse}" = true ] && echo "${REF}")"
+            echo "digest=$([ "${reuse}" = true ] && echo "${DIGEST}")"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    timeout-minutes: 90
+    name: Build ${{ matrix.image.name }} (${{ matrix.platform.arch }})
+    needs: [protected-e2e-gate, workspace-image-plan]
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: lemma-backend
+            context: .
+            dockerfile: lemma-backend/Dockerfile
+          - name: lemma-frontend
+            context: .
+            dockerfile: lemma-frontend/Dockerfile
+          - name: lemma-harness
+            context: .
+            dockerfile: lemma-harness/Dockerfile
+          # Reproducible: pinned bases, SOURCE_DATE_EPOCH and rewritten
+          # timestamps, so the same inputs build the same layers.
+          - name: lemma-workspace
+            context: .
+            dockerfile: lemma-backend/sandbox-images/Dockerfile.workspace
+            reproducible: true
+          - name: lemma-function
+            context: .
+            dockerfile: lemma-backend/sandbox-images/Dockerfile.function
+            reproducible: true
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      # A reused workspace image skips every step: `merge` points the release
+      # at the published one.
+      - name: Checkout code
+        if: ${{ matrix.image.name != 'lemma-workspace' || needs.workspace-image-plan.outputs.reuse != 'true' }}
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        if: ${{ matrix.image.name != 'lemma-workspace' || needs.workspace-image-plan.outputs.reuse != 'true' }}
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: ${{ matrix.image.name != 'lemma-workspace' || needs.workspace-image-plan.outputs.reuse != 'true' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and push by digest
         id: build
+        if: ${{ matrix.image.name != 'lemma-workspace' || needs.workspace-image-plan.outputs.reuse != 'true' }}
         uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.image.context }}
@@ -172,8 +289,9 @@ jobs:
             NEXT_PUBLIC_API_URL=${{ vars.FRONTEND_API_URL }}
             NEXT_PUBLIC_AUTH_URL=${{ vars.FRONTEND_AUTH_URL }}
             NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=${{ vars.FRONTEND_APPS_DOMAIN_SUFFIX }}
+            ${{ matrix.image.reproducible && format('SOURCE_DATE_EPOCH={0}', needs.workspace-image-plan.outputs.source_date_epoch) || '' }}
           # Push by digest only; the merge job assembles the tagged manifest list.
-          outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true${{ matrix.image.reproducible && ',rewrite-timestamp=true' || '' }}
           # Per-(image, arch) cache scope so the two arch builds never clobber
           # each other's cache. Layer reuse keys on the Dockerfile COPY order:
           # npm ci / uv sync layers stay cached until package-lock / uv.lock changes.
@@ -181,6 +299,7 @@ jobs:
           cache-to: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }},mode=max
 
       - name: Export digest
+        if: ${{ matrix.image.name != 'lemma-workspace' || needs.workspace-image-plan.outputs.reuse != 'true' }}
         shell: bash
         run: |
           mkdir -p /tmp/digests
@@ -188,6 +307,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
+        if: ${{ matrix.image.name != 'lemma-workspace' || needs.workspace-image-plan.outputs.reuse != 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: digest-${{ matrix.image.name }}--${{ matrix.platform.arch }}
@@ -199,7 +319,7 @@ jobs:
     timeout-minutes: 90
     name: Merge ${{ matrix.image }}
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, workspace-image-plan]
     strategy:
       fail-fast: false
       matrix:
@@ -231,6 +351,7 @@ jobs:
           echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
+        if: ${{ !(matrix.image == 'lemma-workspace' && needs.workspace-image-plan.outputs.reuse == 'true') }}
         uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
@@ -247,7 +368,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # This release's tag on the published image, so it is reachable by the
+      # release's name too. One source and no annotations copies the index as
+      # it is; the record step below refuses the release if the digest moved.
+      - name: Tag the reused workspace image
+        if: ${{ matrix.image == 'lemma-workspace' && needs.workspace-image-plan.outputs.reuse == 'true' }}
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+          SOURCE: ${{ needs.workspace-image-plan.outputs.reuse_ref }}@${{ needs.workspace-image-plan.outputs.reuse_digest }}
+        run: |
+          tags=(
+            -t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ steps.version.outputs.image_tag }}
+          )
+          if [[ "${PUBLISH}" == "true" ]]; then
+            tags+=(-t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:latest)
+          fi
+          mkdir -p /tmp/digests
+          docker buildx imagetools create "${tags[@]}" "${SOURCE}"
+
       - name: Create and push manifest list
+        if: ${{ !(matrix.image == 'lemma-workspace' && needs.workspace-image-plan.outputs.reuse == 'true') }}
         working-directory: /tmp/digests
         env:
           PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
@@ -270,6 +410,8 @@ jobs:
           mkdir -p digests-out
           IMAGE="${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ steps.version.outputs.image_tag }}" \
           NAME="${{ matrix.image }}" \
+          REUSED_REF="${{ (matrix.image == 'lemma-workspace' && needs.workspace-image-plan.outputs.reuse == 'true') && needs.workspace-image-plan.outputs.reuse_ref || '' }}" \
+          REUSED_DIGEST="${{ (matrix.image == 'lemma-workspace' && needs.workspace-image-plan.outputs.reuse == 'true') && needs.workspace-image-plan.outputs.reuse_digest || '' }}" \
           python3 - <<'PY'
           import json
           import os
@@ -297,6 +439,17 @@ jobs:
               text=True,
           ).strip().strip('"')
           entry = {"name": os.environ["NAME"], "digest": digest, "platforms": platforms}
+          # A reused image keeps the reference it was first published under.
+          # The sandbox runtime compares the whole reference, tag included, so
+          # this release's tag on the same digest would still replace every
+          # sandbox.
+          if os.environ["REUSED_REF"]:
+              if digest != os.environ["REUSED_DIGEST"]:
+                  raise SystemExit(
+                      f"retagging moved {ref} to {digest}, "
+                      f"not the reused {os.environ['REUSED_DIGEST']}"
+                  )
+              entry["ref"] = os.environ["REUSED_REF"]
           Path(f"digests-out/{os.environ['NAME']}.json").write_text(
               json.dumps(entry, indent=2) + "\n"
           )
@@ -410,12 +563,62 @@ jobs:
       - name: Build guest control daemon
         run: cargo build --manifest-path desktop/Cargo.toml -p lemma-guestd --release
 
+      # The guest runtime changes far less often than the app, and a rebuild
+      # of unchanged inputs is not byte-identical (package installs, mkfs,
+      # initramfs), so rebuilding it every release made every installed Lemma
+      # download it again. The fingerprint covers what decides its content --
+      # see scripts/runtime_artifacts.py -- and the month stands for the
+      # unpinned Ubuntu package archive, so the guest's packages refresh at
+      # least monthly.
+      - name: Fingerprint the guest runtime's inputs
+        id: fingerprint
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          fingerprint="$(python3 scripts/runtime_artifacts.py fingerprint \
+            --target "${TARGET}" \
+            --guestd desktop/target/release/lemma-guestd \
+            --package-epoch "$(date -u +%Y-%m)")"
+          echo "fingerprint=${fingerprint}" >> "$GITHUB_OUTPUT"
+          echo "${TARGET} guest input fingerprint: ${fingerprint}"
+
+      # Republished, not referenced: the manifest points at this release's own
+      # copy, so deleting or pruning an older nightly can never break a newer
+      # one, and the DMG jobs keep downloading everything from one tag. The
+      # archive is checked against the SHA-256 its own manifest recorded. Any
+      # failure here -- nothing matching, a mismatch, gh itself -- builds.
+      - name: Reuse the published guest runtime built from the same inputs
+        id: reuse
+        if: ${{ !inputs.rebuild_guest_runtime }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ matrix.target }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+        run: |
+          set -uo pipefail
+          archive="guest-runtime-out/lemma-guest-runtime-${TARGET}.zip"
+          if python3 scripts/runtime_artifacts.py reuse \
+              --target "${TARGET}" --fingerprint "${FINGERPRINT}" --output "${archive}" \
+            && python3 scripts/runtime_artifacts.py guest-sidecar \
+              --archive "${archive}" --fingerprint "${FINGERPRINT}"; then
+            echo "reused=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f "${archive}" "${archive}.json"
+            echo "reused=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Assemble private guest artifact
+        if: steps.reuse.outputs.reused != 'true'
         shell: bash
         run: |
           bash scripts/build_local_guest_runtime.sh \
             --target "${{ matrix.target }}" \
             --guestd desktop/target/release/lemma-guestd \
+            --fingerprint "${{ steps.fingerprint.outputs.fingerprint }}" \
             --output "guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip"
 
       - name: Upload managed guest runtime
@@ -551,7 +754,7 @@ jobs:
 
           def image(name):
               return {
-                  "ref": f"{prefix}/{name}:{image_tag}",
+                  "ref": digests[name].get("ref") or f"{prefix}/{name}:{image_tag}",
                   "digest": digests[name]["platforms"][platform],
               }
 
@@ -675,7 +878,7 @@ jobs:
     timeout-minutes: 90
     name: Publish release manifest
     runs-on: ubuntu-latest
-    needs: [merge, infra-digests, guest-runtimes, host-packs]
+    needs: [merge, infra-digests, guest-runtimes, host-packs, workspace-image-plan]
     steps:
       - name: Resolve version
         id: version
@@ -742,6 +945,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           SOURCE_SHA: ${{ github.sha }}
+          WORKSPACE_FINGERPRINT: ${{ needs.workspace-image-plan.outputs.fingerprint }}
         run: |
           python3 - <<'PY'
           import json
@@ -755,14 +959,18 @@ jobs:
           repository = os.environ["REPOSITORY"]
           release_tag = os.environ["RELEASE_TAG"]
           source_sha = os.environ["SOURCE_SHA"]
+          workspace_fingerprint = os.environ["WORKSPACE_FINGERPRINT"]
           digests = {}
           for path in Path("digests").glob("*.json"):
               entry = json.loads(path.read_text())
               if "name" in entry:
-                  digests[entry["name"]] = entry["digest"]
+                  digests[entry["name"]] = entry
 
           def image(name: str) -> dict:
-              return {"ref": f"{prefix}/{name}:{image_tag}", "digest": digests[name]}
+              return {
+                  "ref": digests[name].get("ref") or f"{prefix}/{name}:{image_tag}",
+                  "digest": digests[name]["digest"],
+              }
 
           host_packs = {}
           for path in sorted(Path("host-packs").glob("lemma-host-pack-*.zip")):
@@ -791,6 +999,7 @@ jobs:
               }
 
           guest_runtimes = {}
+          guest_fingerprints = {}
           for path in sorted(Path("guest-runtimes").glob("lemma-guest-runtime-*.zip")):
               target = path.stem.removeprefix("lemma-guest-runtime-")
               platform, architecture = {
@@ -802,6 +1011,7 @@ jobs:
               metadata = json.loads(path.with_suffix(path.suffix + ".json").read_text())
               if metadata["sha256"] != digest or metadata["size"] != path.stat().st_size:
                   raise SystemExit(f"{path.name} metadata mismatch")
+              guest_fingerprints[target] = metadata["input_fingerprint"]
               guest_runtimes[target] = {
                   "url": (
                       f"https://github.com/{repository}/releases/download/"
@@ -851,6 +1061,15 @@ jobs:
               },
               "host_packs": host_packs,
               "guest_runtimes": guest_runtimes,
+              # What each guest and the workspace image were built from, so
+              # the next release can reuse this one's instead of rebuilding it
+              # (see scripts/runtime_artifacts.py). Top level, and additive: the
+              # artifact entries are read strictly by installed apps, the
+              # manifest's top level is not.
+              "input_fingerprints": {
+                  "guest_runtimes": guest_fingerprints,
+                  "images": {"workspace": workspace_fingerprint},
+              },
           }
           Path("lemma-local.json").write_text(json.dumps(manifest, indent=2) + "\n")
           for host_target, guest_target in (

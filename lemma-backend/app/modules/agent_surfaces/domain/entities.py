@@ -162,16 +162,6 @@ class ParsedInboundSurfaceEvent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
-    def is_group_conversation(self) -> bool:
-        return self.conversation_type == ConversationType.EXTERNAL_GROUP
-
-    def reply_recipient_id(self) -> str | None:
-        return (
-            self.reply_target.get("channel")
-            or self.reply_target.get("chat_id")
-            or self.external_channel_id
-        )
-
 
 class SurfaceLifecycleKind(StrEnum):
     """What happened to the app itself, as opposed to what someone said to it."""

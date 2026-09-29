@@ -47,6 +47,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
+    arrival_number,
 )
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_a_prompt_that_arrived_as_words,
@@ -95,9 +96,8 @@ class SurfaceDelivery:
         Absent on a message the agent starts, which has nothing to have arrived
         on -- there the surface's own number, or settings, is the whole answer.
         """
-        arrived = event.reply_target.get("phone_number_id") if event else None
         return await self.credential_resolver.for_surface(
-            surface, arrived_on=str(arrived) if arrived else None
+            surface, arrived_on=arrival_number(event)
         )
 
     async def agent_name_for_surface(self, surface: AgentSurfaceEntity) -> str | None:
@@ -261,7 +261,13 @@ class SurfaceDelivery:
 
         Returning ``False`` matters as much as delivering. A prompt that reached
         nobody leaves the run WAITING on an answer that cannot come, so the
-        caller un-dedupes and a later WAITING event tries again.
+        caller un-dedupes and falls back to asking in plain words.
+
+        "Reached nobody" is judged on the prompt, not on the envelope. The
+        narration text can land while the choices or the approval card do not,
+        and that is the worst outcome there is: the person reads "let me check
+        with you first" and is given nothing to answer. That used to report
+        True because *something* arrived.
         """
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(self.uow.session):
@@ -291,6 +297,17 @@ class SurfaceDelivery:
                     platform=target.surface.surface_type.value,
                     parts=receipt.degraded,
                 )
+        lost_prompt = [
+            part for part in receipt.undelivered if part in {"choices", "decision"}
+        ]
+        if lost_prompt:
+            logger.error(
+                "agent_surfaces.egress.prompt_reached_nobody.failed",
+                conversation_id=str(conversation_id),
+                platform=target.surface.surface_type.value,
+                parts=receipt.undelivered,
+            )
+            return False
         await remember_a_prompt_that_arrived_as_words(
             self.uow,
             conversation_id=conversation_id,

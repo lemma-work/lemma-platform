@@ -84,8 +84,8 @@ async def build_slack_client(credentials: dict[str, Any]) -> AsyncWebClient:
     Async because vetting resolves DNS. `api_base_url` arrives from stored
     account credentials, which makes it tenant-supplied input, and a name
     pointed at internal infrastructure is the SSRF the literal check above
-    cannot see. Every other surface — Gmail, Outlook, Resend, Telegram,
-    WhatsApp — goes through `assert_safe_api_base` for exactly this; Slack was
+    cannot see. Every other surface — Resend, Telegram, WhatsApp,
+    Teams — goes through `assert_safe_api_base` for exactly this; Slack was
     the one that did not, because this constructor used to be synchronous.
     """
     kwargs: dict[str, Any] = {}

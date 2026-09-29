@@ -502,15 +502,13 @@ async def test_slack_home_tab_publishes_pod_and_agents(
     assert agent["name"] in view_repr
 
 
-async def test_slack_set_suggested_prompts_and_thread_title_require_assistant_scope(
+async def test_slack_set_thread_title_requires_assistant_scope(
     fake_slack,
     message_store,
 ):
-    """``set_suggested_prompts``/``set_thread_title`` are complete, unit-tested
-    features not yet wired into a live agent's send flow -- exercised here
-    directly against ``SlackHomeSurface`` (real HTTP to ``fake_slack``), per
-    their own contract: both require ``assistant:write`` and both apply only
-    inside a DM thread."""
+    """``set_thread_title`` requires ``assistant:write`` and applies only inside
+    a DM thread -- exercised directly against ``SlackHomeSurface`` (real HTTP to
+    ``fake_slack``)."""
     from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
     from app.modules.agent_surfaces.platforms.slack.home import SlackHomeSurface
 
@@ -527,46 +525,28 @@ async def test_slack_set_suggested_prompts_and_thread_title_require_assistant_sc
 
     surface = SlackHomeSurface(
         credentials={
-            "access_token": "xoxb-prompts-e2e",
+            "access_token": "xoxb-title-e2e",
             "scope": "assistant:write",
             "api_base_url": fake_slack.base_url,
         }
     )
-    prompts_ok = await surface.set_suggested_prompts(
-        event=event,
-        prompts=[
-            ("Summarize", "Summarize the latest report"),
-            ("Draft", "Draft a reply"),
-        ],
-        title="Try asking",
-    )
-    assert prompts_ok is True
     title_ok = await surface.set_thread_title(
         event=event, title="Weekly report follow-up"
     )
     assert title_ok is True
 
-    prompt_calls = message_store.get_all("SLACK_SUGGESTED_PROMPTS")
-    assert prompt_calls[-1]["channel_id"] == "D0123456"
-    assert prompt_calls[-1]["thread_ts"] == "1700000000.100100"
-    assert "Summarize the latest report" in str(prompt_calls[-1]["prompts"])
-
     title_calls = message_store.get_all("SLACK_THREAD_TITLE")
     assert title_calls[-1]["channel_id"] == "D0123456"
     assert title_calls[-1]["title"] == "Weekly report follow-up"
 
-    # Without `assistant:write`, both are silent no-ops -- an older-install
-    # workspace keeps Slack's default thread naming and gets no chips.
+    # Without `assistant:write` it is a silent no-op -- an older-install
+    # workspace keeps Slack's default thread naming.
     limited_surface = SlackHomeSurface(
         credentials={
-            "access_token": "xoxb-prompts-e2e-2",
+            "access_token": "xoxb-title-e2e-2",
             "scope": "chat:write",
             "api_base_url": fake_slack.base_url,
         }
-    )
-    assert (
-        await limited_surface.set_suggested_prompts(event=event, prompts=[("A", "B")])
-        is False
     )
     assert (
         await limited_surface.set_thread_title(event=event, title="Should not apply")

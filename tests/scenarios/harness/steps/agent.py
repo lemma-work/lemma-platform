@@ -57,6 +57,60 @@ SETTLED = FINISHED | PAUSED_FOR_A_PERSON
 #: skip with a reason where there is no model to think with.
 
 
+#: How a person saying "yes, go ahead" picks among an agent's options. Ordered:
+#: the first label containing one of these wins.
+_AFFIRMATIVE = ("yes", "approve", "proceed", "confirm", "go ahead", "delete", "do it")
+
+
+#: Words that turn an option into a refusal, wherever they appear: "Do not
+#: delete" contains "delete" and must never be what an approving person picks.
+_NEGATIVE = ("no", "not", "don't", "dont", "cancel", "deny", "keep", "stop", "skip")
+
+
+def _is_a_refusal(label: str) -> bool:
+    words = label.lower().replace("’", "'").split()
+    return any(word.strip(".,!?") in _NEGATIVE for word in words)
+
+
+def _response_to(approval: JSON, allow: bool) -> JSON:
+    """What a person answering this request actually says.
+
+    An `ask_user` question is also listed as an approval, and it is answered
+    with *answers* — keyed by each question's header — not with a bare
+    decision. Approving one with an empty response hands the model
+    `answers={}`: the person pressed "yes" and said nothing, and a careful
+    model reasonably does not act on that. So a person allowing picks the
+    affirmative option of every question, which is what they meant.
+    """
+    if not allow or str(approval.get("tool_name") or "") != "ask_user":
+        return {}
+    arguments = approval.get("tool_args") or {}
+    answers: dict[str, Any] = {}
+    for question in arguments.get("questions") or []:
+        options = [
+            str(option.get("label") or "") for option in question.get("options") or []
+        ]
+        chosen = next(
+            (
+                label
+                for word in _AFFIRMATIVE
+                for label in options
+                if word in label.lower() and not _is_a_refusal(label)
+            ),
+            None,
+        )
+        if chosen is None:
+            recommended = [
+                str(option.get("label") or "")
+                for option in question.get("options") or []
+                if option.get("recommended")
+            ]
+            chosen = (recommended or options or ["Yes"])[0]
+        key = str(question.get("header") or question.get("question") or "answer")
+        answers[key] = [chosen] if question.get("multi_select") else chosen
+    return {"answers": answers}
+
+
 def _approval_id(approval: JSON) -> str:
     """How an approval is addressed when deciding it.
 
@@ -384,7 +438,7 @@ class AgentSteps:
             "POST",
             f"/pods/{in_pod['id']}/conversations/{conversation['id']}"
             f"/approvals/{_approval_id(approval)}/decision",
-            json={"decision": decision, "response": {}},
+            json={"decision": decision, "response": _response_to(approval, allow)},
         )
 
     async def answers_approval(

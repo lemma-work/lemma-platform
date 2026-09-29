@@ -9,7 +9,7 @@ const surface = {
     id: "surface-example", name: "slack", pod_id: "pod-example", platform: "SLACK", agent_name: "reviewer",
     status: "NEEDS_SETUP", config: {
         channels: [{ channel_id: "C1", channel_name: "launch" }, { channel_id: "C2", channel_name: "archived" }],
-        dm_conversation_reset_after_hours: 72, slack: { app_name: "existing-app" }, send_policy: { allow_send: true },
+        slack: { app_name: "existing-app" }, send_policy: { allow_send: true },
     },
 } as AgentSurfaceResponse;
 
@@ -23,7 +23,6 @@ test("editing a responder preserves channel routes, send policy and unowned prov
     assert.deepEqual(patch.config?.channels, surface.config.channels);
     assert.deepEqual(patch.config?.send_policy, { allow_send: true });
     assert.equal(Object.hasOwn(patch.config!, "slack"), false);
-    assert.equal(Object.hasOwn(patch.config!, "dm_conversation_reset_after_hours"), false);
     assert.equal(Object.hasOwn(patch.config!, "identity"), false);
 });
 

@@ -146,16 +146,46 @@ observer renders them on the surface and a submission resumes the run.
 
 ### Routing, defaults, and history
 
-- **Shared-bot surface selection.** When one system bot/number is reachable across
-  pods in multiple orgs, `_select_surface` picks deterministically:
-  pod membership → a valid saved default (`/surfaces/me`) which is **authoritative
-  over conversation continuity** → continuity → oldest-tiebreak. A stale default
-  (pointing at a pod the user left) is cleared and ignored.
+- **One precedence decides where a private message goes.** Routing answers only
+  *which* pod, surface, agent and conversation a message belongs to, highest
+  first: pod membership → a valid saved default (`/surfaces/me`) → a verified
+  personal route → continuity → oldest-tiebreak. The saved default is the
+  person's explicit choice, so it is **authoritative over a personal route and
+  over continuity**; a stale default (pointing at a pod the user left) is cleared
+  and ignored, and the personal route then answers again. `SurfaceRouter`
+  documents the order; `select_surface` applies it to ordinary delivery and
+  `deliverable_default` is how the personal route (Slack and Teams, which answer
+  a private message from the person's own pod through a company installation)
+  steps aside for a default that ordinary selection would honour on that
+  delivery. WhatsApp and Telegram have no personal route -- their pod is a
+  per-pod surface on the shared bot -- so selection alone decides there.
+- **A private chat is one conversation wherever it is delivered.** The link key
+  names a delivery address (surface, channel, thread id), and on WhatsApp that
+  embeds the number the message arrived on. For a private chat that address is a
+  delivery detail: when the exact key misses, selection and the binder look for
+  the same person's latest private-chat link on a candidate surface (the pod's
+  own surfaces, for the binder) and move that link to the new address, so a
+  reassigned pool number keeps the conversation. Only a link whose conversation
+  is the sender's own, in the route's pod and with the route's agent, is taken;
+  the reset window still applies. Channel and email threads are never adopted.
+- **A sender is a user only on proof.** A chat sender resolves to a Lemma user by
+  the profile email or Telegram handle, or by a mobile number already
+  *verified* on the profile. A number a profile merely lists does not match by
+  default: it would hand the number's real owner's messages -- and the agent's
+  replies, sent from the shared number -- to whoever typed it. That sender goes
+  through signup instead. A deployment can accept that risk with
+  `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH=true`: a number claimed by exactly one
+  profile then routes to it, each such match is logged
+  (`unverified_phone_match_used`). A verified owner always wins; a number claimed by several *unverified* profiles never matches.
 - **DM reset window.** A DM starts a fresh Lemma conversation after
-  `dm_conversation_reset_after_hours` of inactivity.
-- **Runtime history window.** For surface conversations, prior history passed to
-  the model is bounded by `surface_runtime_history_{max_messages,window_hours}`,
-  trimmed at agent-run granularity so tool-call/return pairs stay intact.
+  `SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS` (default 24) of inactivity, measured
+  from the last *inbound* message. It is deployment-wide; the old per-surface
+  `dm_conversation_reset_after_hours` field is accepted and ignored.
+  This is the only place a surface decides which conversation a message joins.
+- **History is not the surface's.** A surface never trims or reshapes what the
+  model sees. Once a message is bound to a conversation, the agent module alone
+  decides how much history the run carries (run cap, whole recent runs,
+  collapsed older runs, token compaction).
 
 ## Authorization and security
 
@@ -164,6 +194,14 @@ Webhook security handles Slack signatures, Teams/Telegram/WhatsApp verification,
 email provider metadata, timestamp windows, and challenge responses. Identity
 policy controls whether unknown external senders are rejected, linked, or
 represented as contacts. Redis dedup guards repeat provider deliveries.
+
+A pooled WhatsApp number answers with its own pool row's credentials for
+everything done to a message that arrived on it -- the read receipt, the typing
+indicator, the media download, the fallback and the reply -- through
+`SurfaceCredentialResolver`'s `arrived_on`. A delivery the per-number webhook
+refuses logs `whatsapp_number_signature_rejected.denied` (the number, why, and
+which secret was tried, never the secret) or `whatsapp_number_mismatch.denied`,
+and counts on `lemma.surface.webhook.rejected` by `platform` and `reason`.
 
 ## Tests and operations
 

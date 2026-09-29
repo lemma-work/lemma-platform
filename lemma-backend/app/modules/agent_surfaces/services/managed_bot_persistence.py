@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from uuid import UUID
 
-from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.events.message_bus import get_message_bus
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfaceCredentialMode,
@@ -16,92 +15,33 @@ from app.modules.agent_surfaces.domain.surface_connectors import (
 from app.modules.agent_surfaces.services.managed_bot_identity import (
     link_managed_bot_creator,
 )
-from app.modules.connectors.domain.account import AccountEntity, GenericCredentials
-from app.modules.connectors.domain.auth_config import (
-    AuthConfigEntity,
-    AuthConfigSource,
+from app.modules.agent_surfaces.services.telegram_manager_store import (
+    TelegramManagedBotSetup,
 )
-from app.modules.connectors.infrastructure.repositories.account_repository import (
-    AccountRepository,
-)
-from app.modules.connectors.infrastructure.repositories.auth_config_repository import (
-    AuthConfigRepository,
-)
+from app.modules.connectors.contracts.surfaces import upsert_bot_token_account
 
 
 async def persist_managed_bot(
     *,
-    uow_factory,
-    setup: Any,
+    uow_factory: UnitOfWorkFactory,
+    setup: TelegramManagedBotSetup,
     bot_id: int,
     bot_username: str | None,
     bot_token: str,
-):
+) -> tuple[UUID, UUID]:
     async with uow_factory() as uow:
-        auth_configs = AuthConfigRepository(
-            uow=uow,
-            encryption=get_secret_cipher(),
-            message_bus=get_message_bus(),
+        display_name = f"@{bot_username}" if bot_username else str(bot_id)
+        telegram = surface_connector_binding(SurfacePlatform.TELEGRAM)
+        account_id = await upsert_bot_token_account(
+            uow,
+            connector_id=telegram.connector_id,
+            connector_kind=telegram.kind,
+            organization_id=setup.organization_id,
+            user_id=setup.user_id,
+            provider_account_id=str(bot_id),
+            display_name=display_name,
+            bot_token=bot_token,
         )
-        auth_config = await auth_configs.get_active_by_org_and_app(
-            setup.organization_id,
-            "telegram",
-        )
-        if auth_config is None:
-            auth_config = await auth_configs.create(
-                AuthConfigEntity(
-                    organization_id=setup.organization_id,
-                    connector_id="telegram",
-                    # Named, not inferred. This used to say
-                    # `provider=AuthProvider.LEMMA` and relied on a legacy
-                    # validator to turn that into a kind -- which resolved to
-                    # the vendored-package kind, the one thing Telegram is not.
-                    kind=surface_connector_binding(SurfacePlatform.TELEGRAM).kind,
-                    config_source=AuthConfigSource.SYSTEM_DEFAULT,
-                    name="telegram",
-                    created_by_user_id=setup.user_id,
-                    updated_by_user_id=setup.user_id,
-                )
-            )
-        accounts = AccountRepository(
-            uow=uow,
-            encryption=get_secret_cipher(),
-            message_bus=get_message_bus(),
-        )
-        account = await accounts.get_by_user_auth_config_and_provider_account(
-            setup.user_id,
-            auth_config.id,
-            str(bot_id),
-        )
-        if account is None:
-            default_account = await accounts.get_by_user_and_auth_config(
-                setup.user_id,
-                auth_config.id,
-            )
-            account = await accounts.create(
-                AccountEntity(
-                    user_id=setup.user_id,
-                    organization_id=setup.organization_id,
-                    auth_config_id=auth_config.id,
-                    connector_id="telegram",
-                    is_default=default_account is None,
-                    email=None,
-                    credentials=GenericCredentials.model_validate(
-                        {"bot_token": bot_token}
-                    ),
-                    provider_account_id=str(bot_id),
-                    display_name=f"@{bot_username}" if bot_username else str(bot_id),
-                    preferences=None,
-                    allowed_scopes=None,
-                    connector=None,
-                )
-            )
-        else:
-            account.credentials = GenericCredentials.model_validate(
-                {"bot_token": bot_token}
-            )
-            account.display_name = f"@{bot_username}" if bot_username else str(bot_id)
-            account = await accounts.update(account)
         from app.modules.agent_surfaces.composition import build_surface_service
 
         surface_service = build_surface_service(uow)
@@ -131,12 +71,12 @@ async def persist_managed_bot(
                 name=setup.surface_name,
                 config=SurfaceConfig.model_validate(setup.surface_config),
                 credential_mode=SurfaceCredentialMode.CUSTOM,
-                account_id=account.id,
+                account_id=account_id,
             )
         elif (
             surface.surface_type is not SurfacePlatform.TELEGRAM
             or surface.credential_mode is not SurfaceCredentialMode.CUSTOM
-            or surface.account_id != account.id
+            or surface.account_id != account_id
         ):
             raise DomainError(
                 "A different surface already owns this Telegram setup target",
@@ -157,4 +97,4 @@ async def persist_managed_bot(
             user_id=setup.user_id,
         )
         await uow.commit()
-        return account.id, surface.id
+        return account_id, surface.id

@@ -11,25 +11,37 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import pytest
+
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfaceConfig,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.services.conversation_binder import (
     should_start_a_new_conversation,
 )
 
 
+@pytest.fixture(autouse=True)
+def _restore_reset_window():
+    original = surface_settings.surface_dm_conversation_reset_after_hours
+    yield
+    surface_settings.surface_dm_conversation_reset_after_hours = original
+
+
 def _surface(*, reset_hours: int = 24):
+    """A surface, with the deployment-wide reset window set to ``reset_hours``."""
+    surface_settings.surface_dm_conversation_reset_after_hours = reset_hours
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
         agent_id=uuid4(),
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
-        config=SurfaceConfig(dm_conversation_reset_after_hours=reset_hours),
+        config=SurfaceConfig(),
     )
 
 

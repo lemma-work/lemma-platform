@@ -843,12 +843,11 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     )
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.managed_bot_persistence."
-        "AuthConfigRepository",
+        "app.modules.connectors.contracts.surfaces.AuthConfigRepository",
         lambda **_: auth_configs,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.managed_bot_persistence.AccountRepository",
+        "app.modules.connectors.contracts.surfaces.AccountRepository",
         lambda **_: accounts,
     )
     monkeypatch.setattr(
@@ -940,14 +939,13 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
     )
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.managed_bot_persistence."
-        "AuthConfigRepository",
+        "app.modules.connectors.contracts.surfaces.AuthConfigRepository",
         lambda **_: SimpleNamespace(
             get_active_by_org_and_app=AsyncMock(return_value=auth_config)
         ),
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.managed_bot_persistence.AccountRepository",
+        "app.modules.connectors.contracts.surfaces.AccountRepository",
         lambda **_: accounts,
     )
     monkeypatch.setattr(

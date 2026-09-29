@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, create_autospec, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.modules.connectors.domain.account import (
@@ -37,6 +38,7 @@ from app.modules.connectors.domain.connector_operation import (
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     ConnectorNotFoundError,
+    ConnectorReauthRequiredError,
     ConnectorValidationError,
     ConnectRequestStateRequiredError,
     OAuthWorkflowError,
@@ -675,6 +677,111 @@ async def test_get_account_credentials_marks_reauth_required_on_refresh_failure(
 
     assert account.status == AccountStatus.REAUTH_REQUIRED
     account_repo.update.assert_awaited()
+
+
+def _refreshing_service(
+    credentials: OAuthCredentials, *, refresh_error: Exception | None = None
+):
+    """A service over one account whose provider refresh fails as given."""
+    user_id = uuid4()
+    account = AccountEntity(
+        id=uuid4(),
+        user_id=user_id,
+        organization_id=ORG_ID,
+        auth_config_id=uuid4(),
+        connector_id="slack",
+        credentials=credentials,
+    )
+    account_repo = AsyncMock()
+    account_repo.get.return_value = account
+    account_repo.update.side_effect = lambda entity: entity
+    auth_provider = _auth_provider()
+    auth_provider.refresh_credentials.side_effect = refresh_error
+    service = _service(
+        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector())),
+        auth_config_repository=_auth_config_repo(
+            AuthConfigEntity(
+                id=account.auth_config_id,
+                organization_id=ORG_ID,
+                connector_id="slack",
+                kind=ConnectorKind.HTTP,
+                config_source=AuthConfigSource.SYSTEM_DEFAULT,
+                name="slack",
+            )
+        ),
+        account_repository=account_repo,
+        auth_provider_registry=Mock(get=Mock(return_value=auth_provider)),
+    )
+    return service, account
+
+
+@pytest.mark.parametrize("expired", [True, False])
+async def test_a_withdrawn_grant_is_a_409_that_asks_for_a_reconnect(expired):
+    """The provider answered: the grant is gone. That is not an upstream outage.
+
+    It was a 502, which told the caller the provider was unwell and to try again
+    -- which can never work. Unexpired too: a forced refresh follows a 401, and
+    a revoked grant is exactly what an expiry check cannot see.
+    """
+    offset = timedelta(minutes=-5 if expired else 5)
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old",
+            refresh_token="refresh",
+            expires_at=datetime.now() + offset,
+        ),
+        refresh_error=ConnectorReauthRequiredError(reason="invalid_grant"),
+    )
+
+    with pytest.raises(ConnectorReauthRequiredError) as raised:
+        await service.get_account_credentials(
+            account.id, account.user_id, force_refresh=not expired
+        )
+
+    assert raised.value.status_code == 409
+    assert raised.value.code == "CONNECTOR_REAUTH_REQUIRED"
+    assert raised.value.details == {
+        "reason": "invalid_grant",
+        "account_id": str(account.id),
+        "connector_id": "slack",
+    }
+    assert account.status == AccountStatus.REAUTH_REQUIRED
+
+
+async def test_an_expired_token_with_nothing_to_refresh_with_asks_for_a_reconnect():
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old", expires_at=datetime.now() - timedelta(minutes=5)
+        )
+    )
+
+    with pytest.raises(ConnectorReauthRequiredError) as raised:
+        await service.get_account_credentials(account.id, account.user_id)
+
+    assert raised.value.status_code == 409
+    assert account.status == AccountStatus.REAUTH_REQUIRED
+
+
+async def test_an_unreachable_provider_is_still_a_502():
+    """A 5xx or a dropped connection is the provider's problem, not the person's."""
+    request = httpx.Request("POST", "https://slack.com/api/oauth.v2.access")
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old",
+            refresh_token="refresh",
+            expires_at=datetime.now() - timedelta(minutes=5),
+        ),
+        refresh_error=httpx.HTTPStatusError(
+            "bad gateway",
+            request=request,
+            response=httpx.Response(503, request=request),
+        ),
+    )
+
+    with pytest.raises(OAuthWorkflowError) as raised:
+        await service.get_account_credentials(account.id, account.user_id)
+
+    assert raised.value.status_code == 502
 
 
 async def test_handle_oauth_callback_resets_status_to_connected():

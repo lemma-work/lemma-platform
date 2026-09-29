@@ -363,14 +363,14 @@ def test_freshness_falls_back_to_updated_at_for_pre_migration_rows():
 # --------------------------------------------------- the DM-reset regression
 
 
-def _dm_surface(reset_hours: int = 24) -> AgentSurfaceEntity:
+def _dm_surface() -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
         agent_id=uuid4(),
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
-        config=SurfaceConfig(dm_conversation_reset_after_hours=reset_hours),
+        config=SurfaceConfig(),
     )
 
 

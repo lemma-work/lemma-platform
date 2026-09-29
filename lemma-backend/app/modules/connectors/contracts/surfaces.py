@@ -33,7 +33,13 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.connectors.api.dependencies import get_connector_service
+from app.modules.connectors.domain.account import AccountEntity, GenericCredentials
+from app.modules.connectors.domain.auth_config import (
+    AuthConfigEntity,
+    AuthConfigSource,
+)
 from app.modules.connectors.domain.connector import AuthProvider, AuthScheme
 from app.modules.connectors.domain.errors import ConnectorNotFoundError
 from app.modules.connectors.infrastructure.models.account import Account
@@ -209,6 +215,79 @@ async def account_with_secrets(
     return _as_surface_account(found), credentials
 
 
+async def upsert_bot_token_account(
+    uow,
+    *,
+    connector_id: str,
+    connector_kind: str,
+    organization_id: UUID,
+    user_id: UUID,
+    provider_account_id: str,
+    display_name: str,
+    bot_token: str,
+) -> UUID:
+    """Record a bot the platform minted for a person, and return its account id.
+
+    Finds or creates the organization's system-default install of the connector,
+    then finds the person's account for this bot on it -- creating it, or
+    replacing the token and name when the bot was already connected. Creates the
+    rows through the connector repositories so the events and encryption every
+    other account write gets are not skipped, and does not commit: the caller
+    owns the transaction it is also writing its own rows in.
+    """
+    encryption = get_secret_cipher()
+    message_bus = get_message_bus()
+    auth_configs = AuthConfigRepository(
+        uow=uow, encryption=encryption, message_bus=message_bus
+    )
+    install = await auth_configs.get_active_by_org_and_app(
+        organization_id, connector_id
+    )
+    if install is None:
+        install = await auth_configs.create(
+            AuthConfigEntity(
+                organization_id=organization_id,
+                connector_id=connector_id,
+                # Named, not inferred: the legacy provider vocabulary resolves to
+                # the vendored-package kind, which no bot connector is.
+                kind=connector_kind,
+                config_source=AuthConfigSource.SYSTEM_DEFAULT,
+                name=connector_id,
+                created_by_user_id=user_id,
+                updated_by_user_id=user_id,
+            )
+        )
+    accounts = AccountRepository(
+        uow=uow, encryption=encryption, message_bus=message_bus
+    )
+    credentials = GenericCredentials.model_validate({"bot_token": bot_token})
+    existing = await accounts.get_by_user_auth_config_and_provider_account(
+        user_id, install.id, provider_account_id
+    )
+    if existing is not None:
+        existing.credentials = credentials
+        existing.display_name = display_name
+        return (await accounts.update(existing)).id
+    default_account = await accounts.get_by_user_and_auth_config(user_id, install.id)
+    created = await accounts.create(
+        AccountEntity(
+            user_id=user_id,
+            organization_id=organization_id,
+            auth_config_id=install.id,
+            connector_id=connector_id,
+            is_default=default_account is None,
+            email=None,
+            credentials=credentials,
+            provider_account_id=provider_account_id,
+            display_name=display_name,
+            preferences=None,
+            allowed_scopes=None,
+            connector=None,
+        )
+    )
+    return created.id
+
+
 async def refreshed_credentials(
     uow, account_id: UUID, *, force_refresh: bool
 ) -> dict[str, object]:
@@ -313,4 +392,5 @@ __all__ = [
     "refreshed_credentials",
     "require_account_owner",
     "surface_connector",
+    "upsert_bot_token_account",
 ]

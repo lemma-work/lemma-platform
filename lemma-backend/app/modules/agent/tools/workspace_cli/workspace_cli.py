@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.log.log import get_logger
+from app.modules.agent.tools.authority import workspace_principal
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.tool_errors import (
@@ -129,6 +130,7 @@ async def get_workspace_session(
     runtime=None,
 ):
     runtime_context = workspace_runtime_context(ctx)
+    principal = workspace_principal(ctx)
     if runtime is None:
         runtime = get_workspace_tool_runtime()
     host_workspace = getattr(ctx, "host_workspace", None)
@@ -143,9 +145,9 @@ async def get_workspace_session(
             root=host_workspace.root,
             host_id=host_workspace.host_id,
             organization_id=ctx.organization_id,
-            workload_type=ctx.workload_type,
-            workload_id=ctx.workload_id,
-            workload_name=ctx.agent_name,
+            workload_type=principal.workload_type,
+            workload_id=principal.workload_id,
+            workload_name=principal.workload_name,
             scope_key=runtime_context.scope_key,
             session_id=session_id,
             close_on_exit=close_on_exit,
@@ -160,9 +162,9 @@ async def get_workspace_session(
         user_id=ctx.user_id,
         pod_id=ctx.pod_id,
         organization_id=ctx.organization_id,
-        workload_type=ctx.workload_type,
-        workload_id=ctx.workload_id,
-        workload_name=ctx.agent_name,
+        workload_type=principal.workload_type,
+        workload_id=principal.workload_id,
+        workload_name=principal.workload_name,
         scope_key=runtime_context.scope_key,
         session_id=session_id,
         initial_cwd=runtime_context.initial_cwd,

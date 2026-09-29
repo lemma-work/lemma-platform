@@ -37,7 +37,7 @@ export function NoModelNotice({ orgId }: { orgId: string | null }) {
             <span className="desk-notice__body">
                 <b>No AI model is connected yet</b>
                 <span>
-                    Teammates can’t reply until one is.{" "}
+                    Nothing can reply until one is.{" "}
                     <button type="button" className="linkish" onClick={() => openSettings("this-mac-setup", "ai")}>Set one up</button>
                 </span>
             </span>

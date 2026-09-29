@@ -33,6 +33,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
 )
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.domain.value_objects import (
     TEXTUAL_MESSAGE_KINDS,
     MessageKind,
@@ -41,6 +42,9 @@ from app.modules.agent.domain.value_objects import (
 )
 
 logger = get_logger(__name__)
+
+# Telegram's ``chat.type`` values for a chat with more than the sender in it.
+_GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
 
 
 def history_and_prompt(
@@ -383,7 +387,6 @@ def user_prompt_text(msg: object) -> str:
         # not alternatives: a message can carry three photos of which one
         # arrived, and the saved-paths block returns early once it has any.
         _failed_files_block(metadata),
-        _email_reply_block(platform),
     ]
     if "state" in metadata:
         pieces.append(_metadata_state_text(metadata["state"]))
@@ -399,6 +402,11 @@ def _sender_label(metadata: dict, platform: object) -> str | None:
         or metadata.get("external_user_id")
     )
     label_parts = [str(part).strip() for part in (platform, display_name) if part]
+    # What `telegram_get_current_chat` used to be called to find out: whether
+    # this is a group. It is the one fact of that tool's answer the agent acts
+    # on (who else is reading), and it belongs on the message it applies to.
+    if label_parts and metadata.get("chat_type") in _GROUP_CHAT_TYPES:
+        label_parts.append("group chat")
     return f"[{' | '.join(label_parts)}]:" if label_parts else None
 
 
@@ -539,31 +547,8 @@ def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
     attachments = metadata.get("attachments")
     if not isinstance(attachments, list) or not attachments:
         return []
-    try:
-        from app.modules.agent_surfaces.contracts import platforms as surfaces
-    except ImportError:
-        return [f"Attachments: {len(attachments)}"]
-    try:
-        attachment_block, hint = surfaces.render_attachment_context(
-            attachments, platform=str(platform or "external").upper()
-        )
-    except Exception:
-        # The attachments came off a webhook, so their shape is whatever the
-        # platform sent. A prompt that says "Attachments: 3" is worth more than
-        # a run that fails on one it could not describe.
-        return [f"Attachments: {len(attachments)}"]
-    return [piece for piece in (attachment_block, hint) if piece]
-
-
-def _email_reply_block(platform: object) -> str | None:
-    """How to reply, on the surfaces where replying has its own rules."""
-    if not platform:
-        return None
-    try:
-        from app.modules.agent_surfaces.contracts import platforms as surfaces
-    except ImportError:
-        return None
-    return surfaces.email_reply_instruction(str(platform)) or None
+    block = attachment_listing_block(attachments, platform=str(platform or ""))
+    return [block] if block else [f"Attachments: {len(attachments)}"]
 
 
 def _metadata_state_text(state: object) -> str:

@@ -9,8 +9,10 @@ from harness.markers import (
     capability,
     covers,
     journey,
+    open_signup,
     proves,
     scenario,
+    source_build,
     stack_lane,
 )
 from harness.world import Person, World
@@ -21,7 +23,9 @@ __all__ = [
     "capability",
     "covers",
     "journey",
+    "open_signup",
     "proves",
     "scenario",
+    "source_build",
     "stack_lane",
 ]

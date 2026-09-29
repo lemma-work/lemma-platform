@@ -29,7 +29,7 @@ import {
  *  sorted first became "A REST API".
  */
 const LOOKS = {
-    mcp: { title: "An MCP server", blurb: "Tools your teammates can call, from any server speaking MCP." },
+    mcp: { title: "An MCP server", blurb: "Tools from any server speaking MCP." },
     http: { title: "A REST API", blurb: "Anything with an OpenAPI description. Its operations are read from the spec." },
     sql: { title: "A database", blurb: "Query it directly, with a connection string you supply." },
 } as const;

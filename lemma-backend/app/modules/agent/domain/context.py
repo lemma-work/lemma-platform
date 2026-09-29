@@ -9,6 +9,35 @@ from pydantic import BaseModel, ConfigDict
 from app.modules.agent.domain.value_objects import JsonObject
 
 
+class ApprovedExecution(BaseModel):
+    """One tool call a person approved, running with that person's authority.
+
+    Approval is how an agent does what its own grants do not allow: a missing
+    grant, a destructive action, an auth-required step all come back as
+    ``needs_approval``, and the person the agent works for lends their authority
+    to exactly one described call. It is never standing access -- the agent's
+    next call is judged on its own grants again.
+
+    Carried on the tool context of the approved call only, so every tool builds
+    its authorization context from it explicitly (``tool_authorization_context``)
+    instead of inferring "this is the user" from a missing workload id, which is
+    what #597 broke.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: The person lending their authority: always the conversation's owner, the
+    #: user the agent is working for.
+    approver_user_id: UUID
+    #: The agent that asked. Recorded for the audit trail; it grants nothing.
+    agent_id: UUID | None
+    conversation_id: UUID
+    tool_name: str
+    #: The ``request_approval`` call id, or ``None`` when an earlier session
+    #: approval covered this exact call.
+    approval_id: str | None = None
+
+
 class AgentContext(BaseModel):
     """Request context exposed to tools and framework deps."""
 
@@ -31,6 +60,10 @@ class AgentContext(BaseModel):
     # invoking user for the assistant, where a named agent is limited to its own
     # resource grants.
     is_pod_default_agent: bool = False
+    # Set only on the context of a call a person approved; see
+    # `ApprovedExecution`. Tools must not read it directly: they get their
+    # authorization context from `tool_authorization_context`.
+    approved_execution: ApprovedExecution | None = None
     # Whether this run gets the memory contract and its AGENTS.md scopes. Not
     # simply "MEMORY is on the agent": memory carries no tools, so it is inert
     # without WORKSPACE_CLI or POD to read and write with -- see

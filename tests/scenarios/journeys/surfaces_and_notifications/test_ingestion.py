@@ -24,7 +24,7 @@ from uuid import uuid4
 
 import pytest
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 from harness.waiting import eventually, never
 
 pytestmark = [
@@ -71,6 +71,7 @@ async def test_an_unknown_sender_is_told_how_to_get_access(forged):
 @scenario("Somebody with an account but no place in the pod is not let into it")
 @proves("PS-SURF-012")
 @covers("surface.webhook.handle_platform", "agent.surface.send", "pod.get")
+@open_signup
 async def test_reaching_the_bot_is_not_membership_of_the_pod(world, forged):
     """The sender this promise is really about, and the easiest one to miss.
 

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""The first-party Python a workspace sandbox runs, as one content-addressed archive.
+"""The first-party code a workspace sandbox runs, as one content-addressed archive.
+
+That is all of it: the SDK, the CLI and its skills, the workspace side of
+``sandbox_runtime``, and the image's scripts. ``site-packages/`` for imports,
+``bin/`` for commands and ``lib/`` for what the scripts read.
 
 This exists so that shipping a Lemma code change stops requiring a new sandbox
 template. On E2B the sandbox *is* the disk, and adopting a new template means
 destroying the one that holds the user's files -- so every release that touched
 ``lemma-cli`` or ``lemma-python`` was a release that wiped workspaces. The
 expensive parts of the image (Chromium, Node, the apt layer, pandas) change a
-handful of times a year; the first-party payload changed on roughly a quarter of
-all commits, and it is under two megabytes of pure Python.
+handful of times a year; the first-party payload changes on most releases, and
+it is a couple of megabytes of Python and shell.
 
 So it moves out of the image and into a bundle the backend installs into a
 running sandbox. The template keeps a copy, which becomes a floor rather than
@@ -35,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import configparser
 import hashlib
 import json
 import shutil
@@ -57,16 +62,72 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 #: Order is not significant -- nothing here may shadow anything else there.
 WHEEL_PROJECTS = ("lemma-python", "lemma-cli")
 
-#: The part of ``sandbox_runtime`` a workspace sandbox actually runs. The
-#: workspace runtime itself is deliberately absent: an E2B sandbox serves no HTTP
-#: of its own, and the relay is the one exception, which is why it was built as a
-#: separate process in the first place. ``tasks.py`` is here because
-#: ``browser_relay.app`` and ``browser_relay.stream_proxy`` both import it.
+#: Every part of ``sandbox_runtime`` a workspace sandbox runs, which is all of
+#: it except the function runtime, the installer and the tests.
+#:
+#: All of it, not the part one fabric happens to need, because the overlay does
+#: not add to the image's copy -- it replaces it. ``sandbox_runtime`` is a
+#: regular package and the overlay is first on ``sys.path``, so Python finds the
+#: package there and never looks in ``/app`` for a submodule the overlay lacks.
+#: A bundle carrying three modules made every other one vanish the moment it
+#: was installed: the relay's ``import sandbox_runtime.paths``, the Python
+#: worker, and the workspace server of a container starting again.
+#:
+#: The image floor copies exactly this list too (``Dockerfile.workspace`` and
+#: the E2B workspace template), so a sandbox with no overlay yet runs the same
+#: modules as one with it. ``test_the_images_bake_the_overlay_floor`` holds the
+#: three lists together.
 RUNTIME_SOURCES = (
     "sandbox_runtime/__init__.py",
+    "sandbox_runtime/contracts.py",
+    "sandbox_runtime/errors.py",
+    "sandbox_runtime/host_fallback.py",
+    "sandbox_runtime/paths.py",
+    "sandbox_runtime/protocol.py",
+    "sandbox_runtime/sandbox_memory.py",
     "sandbox_runtime/tasks.py",
     "sandbox_runtime/browser_relay",
+    "sandbox_runtime/workspace",
 )
+
+#: What stays out of the overlay, and why. The function runtime runs in its own
+#: image, which has no overlay; the installer is uploaded on its own, before
+#: any bundle exists; the tests and README are not code a sandbox runs.
+RUNTIME_EXCLUDED = (
+    "sandbox_runtime/README.md",
+    "sandbox_runtime/function",
+    "sandbox_runtime/runtime_install.py",
+    "sandbox_runtime/tests",
+)
+
+#: Where the image's own scripts come from, and the names each is installed
+#: under in the overlay's ``bin/``. The same names the images give the baked
+#: copies in ``/usr/local/bin``, so the overlay's copy wins by coming first on
+#: ``PATH`` and nothing that calls a script by name changes.
+#:
+#: ``lemma-node-tool`` is one script that dispatches on the name it was run
+#: as, so it is installed once per name. The images symlink those names to one
+#: file; an archive carries copies, which are a few kilobytes each.
+SCRIPTS_DIRECTORY = "sandbox-images/scripts"
+SCRIPT_NAMES: dict[str, tuple[str, ...]] = {
+    "browser-is-live.sh": ("browser-is-live",),
+    "lemma-ensure-display.sh": ("lemma-ensure-display",),
+    "lemma-node-tool": ("agent-browser", "lit", "liteparse", "pnpm"),
+    "lemma-uv": ("uv",),
+    "save-webpage.sh": ("save-webpage",),
+    "set-display-size.sh": ("set-display-size",),
+    "start-browser-relay.sh": ("start-browser-relay",),
+    "start-browser.sh": ("start-browser",),
+    "start-vnc-bridge.sh": ("start-vnc-bridge",),
+}
+
+#: Files scripts read rather than run, installed into the overlay's ``lib/``.
+SCRIPT_LIBRARIES = ("webpage-to-markdown.mjs",)
+
+#: Scripts that stay baked only. Each is what a container runs as its command,
+#: before the backend can have delivered any overlay, and the function
+#: launcher belongs to an image with no overlay at all.
+IMAGE_ONLY_SCRIPTS = ("start-workspace-runtime.sh", "lemma-function-runtime")
 
 #: Everything the overlay must be able to import once installed. Recorded in the
 #: manifest and checked by the installer *inside the sandbox*, which is the only
@@ -76,11 +137,22 @@ RUNTIME_SOURCES = (
 #: A gate that answers a different question from the one it appears to ask is
 #: worse than no gate, so this file checks structure and the installer checks
 #: behaviour.
+#:
+#: The ``sandbox_runtime`` entries are the ones a sandbox process imports
+#: first: the relay, the Python worker, the loopback fall-through and the
+#: workspace runtime's app. ``workspace.app`` rather than ``workspace.server``,
+#: because importing ``server`` builds the app, and that consumes the runtime's
+#: single-use token.
 REQUIRED_IMPORTS = (
     "lemma_sdk",
     "lemma_cli.cli",
     "lemma_pod_bundle",
     "sandbox_runtime.browser_relay",
+    "sandbox_runtime.browser_relay.chrome",
+    "sandbox_runtime.host_fallback",
+    "sandbox_runtime.paths",
+    "sandbox_runtime.workspace.app",
+    "sandbox_runtime.workspace.python_worker",
 )
 
 #: What must be present in the staged tree, as directories. The skills entry is
@@ -92,6 +164,7 @@ REQUIRED_PACKAGES = (
     "lemma_cli/skills",
     "lemma_pod_bundle",
     "sandbox_runtime/browser_relay",
+    "sandbox_runtime/workspace",
 )
 
 #: The interpreter a console script in the bundle must name. ``uv pip install``
@@ -192,6 +265,53 @@ def _copy_runtime_sources(site_packages: Path, backend_root: Path) -> None:
             shutil.copy2(source, target)
 
 
+def _script_body(source: Path) -> bytes:
+    """A script's bytes with Unix line endings, whatever the checkout used.
+
+    The Windows host pack builds this bundle too, and a checkout there may have
+    rewritten every line to CRLF. A shebang ending in ``\\r`` names an
+    interpreter that does not exist, and the digest would differ from a Unix
+    build of the same sources.
+    """
+    return source.read_bytes().replace(b"\r\n", b"\n")
+
+
+def _copy_scripts(payload: Path, backend_root: Path) -> None:
+    """The image's scripts into ``bin/`` and ``lib/``, under their installed names.
+
+    Every file in the scripts directory has to be classified -- shipped,
+    library, or image-only -- so a new script cannot be left out of the overlay
+    by nobody deciding.
+    """
+    source = backend_root / SCRIPTS_DIRECTORY
+    present = {path.name for path in source.iterdir() if path.is_file()}
+    classified = {*SCRIPT_NAMES, *SCRIPT_LIBRARIES, *IMAGE_ONLY_SCRIPTS}
+    if unclassified := sorted(present - classified):
+        raise SystemExit(
+            f"scripts nobody decided about: {unclassified}; add each to "
+            "SCRIPT_NAMES, SCRIPT_LIBRARIES or IMAGE_ONLY_SCRIPTS"
+        )
+    if missing := sorted(classified - present):
+        raise SystemExit(f"scripts named but missing from {source}: {missing}")
+
+    scripts = payload / "bin"
+    scripts.mkdir(parents=True, exist_ok=True)
+    for name, installed_as in sorted(SCRIPT_NAMES.items()):
+        body = _script_body(source / name)
+        for command in installed_as:
+            target = scripts / command
+            if target.exists():
+                raise SystemExit(f"two things in the bundle are both bin/{command}")
+            target.write_bytes(body)
+            target.chmod(0o755)
+    libraries = payload / "lib"
+    libraries.mkdir(parents=True, exist_ok=True)
+    for name in SCRIPT_LIBRARIES:
+        target = libraries / name
+        target.write_bytes(_script_body(source / name))
+        target.chmod(0o644)
+
+
 #: Installer bookkeeping that records *where this build ran*, not what it
 #: produced. ``direct_url.json`` carries the ``file://`` URL of the wheel, which
 #: is a temporary directory and therefore different on every build;
@@ -201,39 +321,62 @@ def _copy_runtime_sources(site_packages: Path, backend_root: Path) -> None:
 _PROVENANCE_FILES = ("direct_url.json", "uv_cache.json")
 
 
-def _relocate_scripts(site_packages: Path, payload: Path) -> None:
-    """Lift the console scripts out of site-packages, to the payload root.
+#: Where ``uv pip install --target`` puts console scripts inside the target:
+#: ``bin`` on Unix, ``Scripts`` on Windows.
+_INSTALLER_SCRIPT_DIRS = ("bin", "Scripts")
 
-    ``uv pip install --target`` writes them to ``<target>/bin``, which here puts
-    a ``bin`` directory *inside* site-packages -- importable, which it is not,
-    and a confusing place to look for ``lemma``. Moving it up gives the layout
-    the installed overlay actually presents: ``current/site-packages`` for
-    imports and ``current/bin`` for scripts.
+
+def _write_console_scripts(site_packages: Path, payload: Path) -> None:
+    """Write the sandbox's console scripts from the wheels' entry points.
+
+    Written here rather than taken from ``uv pip install --target``, which
+    generates scripts for the machine running the build: a shebang naming the
+    build's interpreter, and on Windows ``.exe`` launchers. Neither runs in a
+    Linux sandbox, and either would make the bundle's identity depend on where
+    it was built. The body is the one ``uv`` emits on Unix, so a bundle built
+    anywhere is byte-identical.
+
+    They go to ``<payload>/bin``, beside ``site-packages`` rather than inside
+    it: ``current/site-packages`` for imports and ``current/bin`` for scripts,
+    the layout the installed overlay presents.
     """
-    nested = site_packages / "bin"
-    if not nested.is_dir():
-        raise SystemExit(f"the staged bundle has no console scripts at {nested}")
-    nested.rename(payload / "bin")
-
-
-def _retarget_console_scripts(payload: Path) -> None:
-    """Point every console script at the sandbox's interpreter.
-
-    Rewritten rather than regenerated because the body ``uv`` emits is already
-    correct -- it imports the entry point and calls it. Only the first line is
-    wrong, and it is wrong in a way that both breaks the script and leaks the
-    build machine into the bundle's identity.
-    """
+    for name in _INSTALLER_SCRIPT_DIRS:
+        shutil.rmtree(site_packages / name, ignore_errors=True)
     scripts = payload / "bin"
-    for script in sorted(scripts.iterdir()):
-        if not script.is_file():
+    scripts.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for entry_points in sorted(site_packages.glob("*.dist-info/entry_points.txt")):
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.optionxform = str  # type: ignore[assignment,method-assign]
+        parser.read(entry_points, encoding="utf-8")
+        if not parser.has_section("console_scripts"):
             continue
-        lines = script.read_text(encoding="utf-8").splitlines(keepends=True)
-        if not lines or not lines[0].startswith("#!"):
-            raise SystemExit(f"{script} has no shebang to retarget")
-        lines[0] = f"#!{SANDBOX_PYTHON}\n"
-        script.write_text("".join(lines), encoding="utf-8")
-        script.chmod(0o755)
+        for name, target in sorted(parser.items("console_scripts")):
+            module, _, attribute = target.partition(":")
+            if not module or not attribute:
+                raise SystemExit(
+                    f"{entry_points}: malformed entry point {name} = {target}"
+                )
+            imported = attribute.strip().split(".", 1)[0]
+            script = scripts / name
+            script.write_text(
+                f"#!{SANDBOX_PYTHON}\n"
+                "# -*- coding: utf-8 -*-\n"
+                "import sys\n"
+                f"from {module.strip()} import {imported}\n"
+                'if __name__ == "__main__":\n'
+                '    if sys.argv[0].endswith("-script.pyw"):\n'
+                "        sys.argv[0] = sys.argv[0][:-11]\n"
+                '    elif sys.argv[0].endswith(".exe"):\n'
+                "        sys.argv[0] = sys.argv[0][:-4]\n"
+                f"    sys.exit({attribute.strip()}())\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            script.chmod(0o755)
+            written += 1
+    if not written:
+        raise SystemExit(f"no console scripts found in {site_packages}")
 
 
 def _record_hash(path: Path) -> tuple[str, int]:
@@ -247,8 +390,8 @@ def _normalise_dist_info(site_packages: Path) -> None:
     """Drop per-build bookkeeping, then reseal ``RECORD`` against what is left.
 
     Two things have to happen together. The provenance files vary per build, so
-    they go. And ``_retarget_console_scripts`` has already rewritten a script
-    that ``RECORD`` carries a hash for, so every surviving entry is recomputed
+    they go. And the console scripts ``RECORD`` lists were replaced by
+    ``_write_console_scripts``, so every surviving entry is recomputed
     from disk rather than trusted -- otherwise the bundle would ship a manifest
     that quietly disagreed with its own contents.
     """
@@ -385,8 +528,8 @@ def build(
         site_packages = scratch / "payload" / "site-packages"
         _unpack(wheels, site_packages)
         _copy_runtime_sources(site_packages, backend_root)
-        _relocate_scripts(site_packages, scratch / "payload")
-        _retarget_console_scripts(scratch / "payload")
+        _write_console_scripts(site_packages, scratch / "payload")
+        _copy_scripts(scratch / "payload", backend_root)
         _normalise_dist_info(site_packages)
         _prune(site_packages)
         _verify_payload(site_packages)

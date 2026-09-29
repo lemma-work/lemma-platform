@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { REDACTED, blank, fields, isSecretName, payload, problems, unchangedSecret } from "../src/connect/schema.ts";
 import {
     canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName,
-    connectorProblem, installSchema, isBringYourOwn, isTenantConfigured, kindFor, kindNamed, needsOwnApp, oauthAppMissing, primaryKind, urlRefusal,
+    connectorProblem, installSchema, isBringYourOwn, isStaleDefault, isTenantConfigured, kindFor, kindNamed, needsOwnApp, oauthAppMissing, primaryKind, urlRefusal,
     type CatalogEntry, type ConnectorKind,
 } from "../src/connect/install.ts";
 
@@ -269,8 +269,25 @@ test("the role refusal is said as the role it is", () => {
     assert.equal(connectorProblem(null, "Could not connect."), "Could not connect.");
 });
 
+test("a withdrawn sign-in points at the Reconnect button, not a retry", () => {
+    const withdrawn = Object.assign(new Error("Sign-in for the slack account has expired or was revoked."), { code: "CONNECTOR_REAUTH_REQUIRED" });
+    assert.match(connectorProblem(withdrawn, "x"), /Needs signing in again/);
+});
+
 test("a missing OAuth app is recognised from the backend's words", () => {
     assert.equal(oauthAppMissing("GitHub needs an OAuth app before anyone can sign in to it."), true);
     assert.equal(oauthAppMissing("Invalid bot token"), false);
     assert.equal(oauthAppMissing(null), false);
+});
+
+test("a Lemma-default install of a toolkit Composio stopped managing is not one to connect against", () => {
+    const unmanaged = { kind: "composio", auth_scheme: "OAUTH2", system_default_available: false } as ConnectorKind;
+    const managed = { kind: "composio", auth_scheme: "OAUTH2", system_default_available: true } as ConnectorKind;
+    const lemmas = { id: "i1", connector_id: "shopify", kind: "composio", name: "shopify", config_source: "SYSTEM_DEFAULT" };
+    const theirs = { ...lemmas, id: "i2", config_source: "ORG_CUSTOM" };
+
+    assert.equal(isStaleDefault(lemmas, unmanaged), true);
+    assert.equal(isStaleDefault(theirs, unmanaged), false);
+    assert.equal(isStaleDefault(lemmas, managed), false);
+    assert.equal(isStaleDefault(null, unmanaged), false);
 });

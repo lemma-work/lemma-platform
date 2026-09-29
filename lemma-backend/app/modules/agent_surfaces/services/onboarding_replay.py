@@ -3,7 +3,10 @@
 from __future__ import annotations
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.contracts.onboarding import UserEntity
-from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
+from app.modules.agent_surfaces.domain.ingress_context import (
+    AgentSurfaceContext,
+    SurfaceChatContext,
+)
 
 from datetime import datetime, timezone
 from uuid import UUID
@@ -92,6 +95,8 @@ async def replay_onboarding(
                 )
             else:
                 context = await _shared_replay_context(uow, state, event, user)
+            if isinstance(context, SurfaceChatContext):
+                context = context.model_copy(update={"onboarding_handoff_id": state.id})
     await job_queue.enqueue(
         "process_surface_message",
         payload={"context": context.model_dump(mode="json")},
@@ -148,8 +153,6 @@ async def _shared_replay_context(
             display_name=user.first_name,
         ),
     )
-    from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-
     if not isinstance(context, SurfaceChatContext):
         raise ValueError("The shared personal route is unavailable")
     return context

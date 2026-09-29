@@ -135,7 +135,10 @@ def _build_service(*, surface, monkeypatch):
     )
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = None
-    conversation_link_repository.create.side_effect = lambda link: link
+    # A bare AsyncMock answers every call with a truthy mock, which the binder
+    # would read as "this person has an earlier private-chat link".
+    conversation_link_repository.find_latest_dm_link_for_person.return_value = None
+    conversation_link_repository.create.side_effect = lambda link, **_: link
     slack_credentials = {
         "access_token": "xoxb-test",
         "scope": "assistant:write,chat:write.customize,reactions:write",
@@ -151,6 +154,8 @@ def _build_service(*, surface, monkeypatch):
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[surface.pod_id]),
             get_user_email=AsyncMock(return_value="sender@example.com"),
+            get_user_default_surface_id=AsyncMock(return_value=None),
+            clear_user_default_surface_id=AsyncMock(return_value=None),
         ),
         identity_service=SimpleNamespace(
             resolve=AsyncMock(

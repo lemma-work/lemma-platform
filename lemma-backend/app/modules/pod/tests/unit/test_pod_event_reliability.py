@@ -36,7 +36,7 @@ async def test_pod_created_wrapper_ignores_other_events() -> None:
 async def test_pod_created_wrapper_claims_inbox_before_processing(monkeypatch) -> None:
     event = _created_event().model_dump(mode="json")
     manager = SimpleNamespace(create_datastore_schema=AsyncMock())
-    monkeypatch.setattr(pod_schema_consumer, "SchemaManager", lambda: manager)
+    monkeypatch.setattr(pod_schema_consumer, "get_schema_manager", lambda: manager)
     logger = Mock()
 
     await pod_schema_consumer.on_pod_created(
@@ -51,7 +51,7 @@ async def test_pod_created_wrapper_claims_inbox_before_processing(monkeypatch) -
 async def test_pod_schema_creation_is_idempotently_delegated(monkeypatch) -> None:
     event = _created_event()
     manager = SimpleNamespace(create_datastore_schema=AsyncMock())
-    monkeypatch.setattr(pod_schema_consumer, "SchemaManager", lambda: manager)
+    monkeypatch.setattr(pod_schema_consumer, "get_schema_manager", lambda: manager)
 
     await pod_schema_consumer.on_pod_created(
         event.model_dump(mode="json"),
@@ -71,7 +71,7 @@ async def test_pod_schema_failure_rethrows_for_inbox_retry(monkeypatch) -> None:
     manager = SimpleNamespace(
         create_datastore_schema=AsyncMock(side_effect=DependencyFailure())
     )
-    monkeypatch.setattr(pod_schema_consumer, "SchemaManager", lambda: manager)
+    monkeypatch.setattr(pod_schema_consumer, "get_schema_manager", lambda: manager)
 
     with pytest.raises(DependencyFailure):
         await pod_schema_consumer.on_pod_created(

@@ -59,6 +59,9 @@ pub(crate) struct UiState {
     /// `failed`.
     pub(crate) sandbox_images: String,
     pub(crate) sandbox_images_detail: String,
+    /// How far that download has got, when the guest can measure it.
+    pub(crate) sandbox_images_done_mb: Option<u64>,
+    pub(crate) sandbox_images_total_mb: Option<u64>,
     /// What the daemon's start found that someone has to act on -- an update
     /// that stopped mid-migration, settings writes switched off. From the
     /// handshake, so the splash can say it before anything else loads.
@@ -75,6 +78,13 @@ pub(crate) struct UiState {
     /// wildly different times, and a number that mixes them says nothing.
     #[serde(skip)]
     pub(crate) installed_this_launch: bool,
+    /// Whether this launch's time-to-ready has been recorded.
+    ///
+    /// Its own flag rather than `!ready`: the daemon says `state ready` just
+    /// before it says `ready`, so by the time `ready` arrived the launch
+    /// already looked ready and its time was never recorded at all.
+    #[serde(skip)]
+    pub(crate) ready_recorded: bool,
 }
 
 /// What a broken installation can still be offered.
@@ -313,10 +323,31 @@ pub(crate) struct AppUpdateStatus {
 #[derive(Default)]
 pub(crate) struct LemmaUpdateMetadata {
     pub(crate) postgres_major: Option<u64>,
+    /// Both runtime archives together: what an installation with nothing to
+    /// reuse downloads, and all a feed from before `runtime_artifacts` says.
     pub(crate) runtime_download_bytes: Option<u64>,
+    /// Each archive's digest and size, so this machine can leave out the ones
+    /// it already has. Empty when the feed does not carry them.
+    pub(crate) runtime_artifacts: Vec<(artifact_install::Component, String, u64)>,
 }
 
 impl LemmaUpdateMetadata {
+    /// What the update's first launch will actually download here.
+    ///
+    /// Counted from the archives the installed releases cannot supply, so an
+    /// update whose guest runtime did not change is announced at the size of
+    /// its host pack. Falls back to the feed's whole-release figure when the
+    /// feed does not itemise.
+    pub(crate) fn runtime_bytes_to_download(&self, install_root: &Path) -> Option<u64> {
+        if self.runtime_artifacts.is_empty() {
+            return self.runtime_download_bytes;
+        }
+        Some(artifact_install::bytes_to_download(
+            install_root,
+            &self.runtime_artifacts,
+        ))
+    }
+
     /// Whether this update leaves the installation's data usable.
     ///
     /// Everything Lemma keeps is a Postgres data directory and a folder of

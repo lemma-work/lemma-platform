@@ -3,6 +3,7 @@
 mod app_health;
 mod clock;
 mod concurrency;
+mod container_stop;
 mod core_data;
 mod data_binding;
 mod diagnostics;
@@ -19,6 +20,7 @@ mod protocol;
 mod pull_progress;
 mod replacement;
 mod run_contract;
+mod runtime_overlay;
 mod sandbox_tunnel;
 
 use super::*;

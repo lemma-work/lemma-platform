@@ -11,11 +11,13 @@ It also owns getting a pod file onto the surface, because the two are the same
 read: the entity that says whether the file fits is the entity whose name and
 size describe it when it does not.
 
-**Nothing here may fail the send.** Every read is enrichment; the card, and the
-message behind it, must still go out when a table cannot be read or a document
-will not rasterize. That promise is kept in one place — :func:`_best_effort` —
-rather than by a ``try`` around each caller, so the module has one broad catch
-and one answer to what happens after it.
+**Enrichment may not fail the send.** The table preview and a PDF's page image
+are extras; the card, and the message behind it, must still go out when a table
+cannot be read or a document will not rasterize. That promise is kept in one
+place -- :func:`_best_effort` -- rather than by a ``try`` around each caller.
+The file itself is the opposite: it is the message, so a file that cannot be
+read is reported (``PodFileDelivery.unreadable``) instead of being replaced by a
+card that pretends it was shown.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.file_types import is_untyped_mime, sniff_media_mime
 from app.core.log.log import get_logger
 from app.modules.datastore.contracts.surfaces import (
+    DatastoreFileNotFoundError,
     TableRows,
     download_pod_file,
     read_pod_file,
@@ -76,6 +79,10 @@ class PodFileDelivery:
     # card can explain — a file too big for this chat — from the ones it cannot,
     # where saying nothing beats guessing at a reason.
     fits: bool = True
+    # The file could not be read at all. Not the same as "too big": a card can
+    # honestly say a file is too large for this chat, and cannot say anything
+    # true about a file it never managed to open.
+    unreadable: bool = False
 
     @property
     def description(self) -> str | None:
@@ -172,7 +179,13 @@ async def resolve_pod_file_parts(
         path=path,
         require_inline_fit=True,
     )
+    if isinstance(resolved, _ReadFailed):
+        return PodFileParts(
+            files=[], facts=PodFileDelivery(delivered=False, unreadable=True)
+        )
     if resolved is None:
+        # Nothing at that path, which is not a failure to read one: the caller's
+        # card still links to where the file would be.
         return PodFileParts(files=[], facts=PodFileDelivery(delivered=False))
     entity, content, ctx = resolved
     if content is None:
@@ -249,7 +262,7 @@ async def load_pod_file_bytes(
         path=path,
         require_inline_fit=False,
     )
-    if resolved is None or resolved[1] is None:
+    if resolved is None or isinstance(resolved, _ReadFailed) or resolved[1] is None:
         return None
     return resolved[0], resolved[1]
 
@@ -346,6 +359,13 @@ def _filter_op(op: Any) -> str:
     return str(op.value if hasattr(op, "value") else op)
 
 
+class _ReadFailed:
+    """Distinct from ``None`` (no such file): the read was attempted and failed."""
+
+
+_READ_FAILED = _ReadFailed()
+
+
 async def _load_pod_file(
     *,
     uow: Any,
@@ -353,24 +373,42 @@ async def _load_pod_file(
     conversation_id: UUID,
     path: str,
     require_inline_fit: bool,
-) -> tuple[Any, bytes | None, Context] | None:
+) -> tuple[Any, bytes | None, Context] | _ReadFailed | None:
     """Resolve a pod file, and download it unless it is too big to attach.
 
     Returns ``(entity, content, ctx)`` where ``content`` is ``None`` for a file
     that cleared authorization but not the platform's cap — the caller still
     wants the entity, to describe what it could not send.
+
+    Returns ``None`` when there is no such file, and ``_READ_FAILED`` when the
+    read itself failed, and says why. This is not
+    an enrichment read: the file *is* the message. It used to go through
+    ``_best_effort`` at debug level, so an unreadable file became a link card the
+    recipient often cannot open, and nothing recorded that the file was never
+    sent. The caller now sees ``PodFileDelivery.unreadable`` and reports failure.
     """
-    return await _best_effort(
-        lambda: _read_pod_file(
+    try:
+        return await _read_pod_file(
             uow=uow,
             target=target,
             conversation_id=conversation_id,
             path=path,
             require_inline_fit=require_inline_fit,
-        ),
-        step="pod_file_read",
-        conversation_id=conversation_id,
-    )
+        )
+    except DatastoreFileNotFoundError:
+        # No such file: the card still links to where it would be, so this is not
+        # a failed read.
+        return None
+    except Exception:
+        # Broad because the read crosses authorization, the datastore and object
+        # storage, and every one of them means the same thing to the caller.
+        logger.warning(
+            "agent_surfaces.display_resource_content.pod_file_unreadable.degraded",
+            conversation_id=str(conversation_id),
+            path=path,
+            exc_info=True,
+        )
+        return _READ_FAILED
 
 
 async def _read_pod_file(

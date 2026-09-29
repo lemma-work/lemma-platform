@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, SendIcon } from "@/ui/icons";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ArrowDownIcon } from "@/ui/icons";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { TRANSCRIPT_ROW_ATTRIBUTE, useTranscriptScroll } from "./use-transcript-scroll";
 import { runFailure, transcriptState } from "./transcript-state";
@@ -57,20 +57,22 @@ function Notes({
      *  something out, often mid-dead-end, and watching that scroll past is not
      *  the same as being told what is happening.
      *
-     *  Finished: the last step, as before. Not the last comment — a run of
-     *  forty-six steps whose last comment came at step twelve would present
-     *  that sentence as a summary of the whole thing, which is a claim nobody
-     *  made. What a finished run owes you is what it cost, and the count
-     *  beside this says that. */
+     *  Finished: nothing. Not the last comment — a run of forty-six steps
+     *  whose last comment came at step twelve would present that sentence as
+     *  a summary of the whole thing, which is a claim nobody made. And not the
+     *  last step's label, which it used to be: that is usually "Thought", and
+     *  "Worked for 1m 25s · 18 steps | Thought" reads as two controls, the
+     *  second saying nothing. What a finished run owes you is what it cost,
+     *  and the count says that on its own. */
     const saying = live ? [...notes].reverse().find((note) => note.said && note.detail) : undefined;
-    const peek = saying ? saying.detail : last.label;
+    const peek = live ? (saying ? saying.detail : last.label) : null;
 
     return (
         <div className="steps" data-live={live ? "" : undefined}>
             <button className="steps__toggle" onClick={() => setOpen((was) => !was)} aria-expanded={open}>
                 <span className="steps__state">{live ? <span className="steps__pulse" /> : <CheckIcon size={11} />}</span>
                 <span className="steps__what">{live ? "Working" : span ? "Worked for " + span + " · " + count : count}</span>
-                {!open && <span className="steps__peek">{peek}</span>}
+                {!open && peek && <span className="steps__peek">{peek}</span>}
                 <span className="steps__chev">{open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}</span>
             </button>
             {open && (
@@ -231,6 +233,7 @@ export function Transcript({
 
                 {display === "empty" && (
                     <div className="quiet">
+                        <Mark seed={podId} name={teammate.name} icon={teammate.iconUrl} size={44} greeting={1} />
                         <h2>{emptyTitle}</h2>
                         <p>{emptyBody}</p>
                     </div>
@@ -260,8 +263,8 @@ export function Transcript({
                                         </div>
                                         <div className="msg__body">
                                             <Prose text={turn.human.text} />
+                                            <div className="message-actions"><CopyButton text={turn.human.text} label="Copy message" /></div>
                                         </div>
-                                        <div className="message-actions"><CopyButton text={turn.human.text} label="Copy message" /></div>
                                     </div>
                                 )}
 
@@ -418,7 +421,7 @@ export function Transcript({
                     aria-label="Jump to the newest message"
                     title="Jump to the newest message"
                 >
-                    <SendIcon size={16} />
+                    <ArrowDownIcon size={16} />
                 </button>
             )}
         </div>

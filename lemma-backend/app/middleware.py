@@ -17,7 +17,7 @@ from app.core.domain.errors import PayloadTooLargeError
 from starlette.types import Scope
 
 from app.core.config import settings
-from app.version import MIN_CLI_VERSION
+from app.version import API_VERSION
 from app.core.origin import origin_for_path, origin_scope, resolve_client_identity
 from app.core.log.log import get_logger
 
@@ -68,8 +68,8 @@ class TrailingSlashMiddleware:
         await self.app(scope, receive, send)
 
 
-def _is_outdated_cli(client: str | None, version: str | None) -> bool:
-    """Whether a caller is a ``lemma`` CLI older than :data:`MIN_CLI_VERSION`.
+def _is_older_cli(client: str | None, version: str | None) -> bool:
+    """Whether a caller is a ``lemma`` CLI older than this server's release.
 
     An unparsable version is not flagged: the header is advice, and advice
     built on a guess would tell a dev build to downgrade.
@@ -77,10 +77,10 @@ def _is_outdated_cli(client: str | None, version: str | None) -> bool:
     if client != "lemma-cli" or not version:
         return False
     current = _release_parts(version)
-    minimum = _release_parts(MIN_CLI_VERSION)
-    if current is None or minimum is None:
+    latest = _release_parts(API_VERSION)
+    if current is None or latest is None:
         return False
-    return current < minimum
+    return current < latest
 
 
 _RELEASE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
@@ -103,7 +103,9 @@ class RequestObserverMiddleware:
     # How the work arrived, per docs/design/product-analytics.md. Resolved once
     # here so every downstream emit reads it from context rather than guessing.
     CLIENT_HEADER = b"x-lemma-client"
-    OUTDATED_HEADER = b"x-lemma-client-outdated"
+    # Advice for an older ``lemma`` CLI, never a refusal: the value is the
+    # release this server runs, which the CLI may suggest upgrading to.
+    LATEST_CLI_HEADER = b"x-lemma-latest-cli"
     REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
     SLOW_SECONDS = 2.0
     QUIET_PATHS = frozenset(
@@ -157,9 +159,9 @@ class RequestObserverMiddleware:
                     "",
                 )
                 raw_headers.append((self.HEADER, request_id.encode("ascii")))
-                if outdated_client:
+                if older_cli:
                     raw_headers.append(
-                        (self.OUTDATED_HEADER, MIN_CLI_VERSION.encode("ascii"))
+                        (self.LATEST_CLI_HEADER, API_VERSION.encode("ascii"))
                     )
                 message = {**message, "headers": raw_headers}
             await send(message)
@@ -172,7 +174,7 @@ class RequestObserverMiddleware:
         identity = resolve_client_identity(
             client_header.decode("latin-1", "replace") if client_header else None
         )
-        outdated_client = _is_outdated_cli(identity.client, identity.version)
+        older_cli = _is_older_cli(identity.client, identity.version)
         resolved_origin = origin_for_path(scope.get("path") or "") or identity.origin
 
         caught: Exception | None = None

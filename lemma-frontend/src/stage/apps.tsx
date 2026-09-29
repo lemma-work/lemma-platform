@@ -1,7 +1,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import type { Tab } from "@/data";
-import { AppsIcon, ArrowRightIcon, PlusIcon } from "@/ui/icons";
+import { AppIcon, ArrowRightIcon, PlusIcon } from "@/ui/icons";
 import { APP_CATEGORIES } from "./app-ideas";
 
 export function AppsPane({ name, tabs, onOpen, onAsk }: {
@@ -21,7 +21,7 @@ export function AppsPane({ name, tabs, onOpen, onAsk }: {
                 <div><h1>Apps</h1><p>Open your apps or ask {name} to build something new.</p></div>
                 <button className="btn" onClick={() => onAsk("I'd like to build an app. Help me work out what it should do.")}><PlusIcon size={16} />Describe an app</button>
             </header>
-            {apps.length > 0 && <div className="apps-pane__existing" aria-label="Your apps">{apps.map(app => <button className="apps-pane__app" key={app.id} onClick={() => onOpen(app.id)}><span className="apps-pane__icon"><AppsIcon size={20} /></span><span>{app.label}</span><ArrowRightIcon size={16} /></button>)}</div>}
+            {apps.length > 0 && <div className="apps-pane__existing" aria-label="Your apps">{apps.map(app => <button className="apps-pane__app" key={app.id} onClick={() => onOpen(app.id)}><span className="apps-pane__icon"><AppIcon size={20} /></span><span>{app.label}</span><ArrowRightIcon size={16} /></button>)}</div>}
             <section className="app-catalog" aria-labelledby="app-catalog-heading">
                 <header className="app-catalog__header"><h2 id="app-catalog-heading">App ideas</h2><span>Example previews · Built to fit your needs</span></header>
                 <div className="app-catalog__categories" role="group" aria-label="App categories">

@@ -1,16 +1,60 @@
 from __future__ import annotations
 
+from collections.abc import Collection
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceConversationLink,
+    AgentSurfaceEntity,
+    ParsedSurfaceInteraction,
+)
+from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
+from app.modules.agent_surfaces.infrastructure.adapters.registry import (
+    SurfacePlatformAdapterRegistry,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
+    SurfaceConversationLinkRepository,
+)
+from app.modules.agent_surfaces.services.credential_resolver import (
+    SurfaceCredentialResolver,
+)
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     parse_callback_id,
 )
 
 logger = get_logger(__name__)
 
+#: Where a submission was matched to: the thread's link, the surface that owns it,
+#: the adapter to answer through, and the credentials to answer with.
+InteractionDelivery = tuple[
+    AgentSurfaceConversationLink,
+    AgentSurfaceEntity,
+    SurfacePlatformAdapterPort,
+    dict[str, Any],
+]
 
-def parse_interaction_target(parsed) -> tuple[UUID, str] | None:
+
+class InteractionIngress(Protocol):
+    """The four collaborators these lookups read from the ingress service.
+
+    They were handed the whole service -- every mixin, untyped -- when what they
+    touch is this. Naming it is what lets the type checker follow a call like
+    ``ingress.credential_resolver.for_surface`` instead of reading it as
+    possibly-anything.
+    """
+
+    conversation_link_repository: SurfaceConversationLinkRepository
+    surface_repository: SurfaceInstallationRepositoryPort
+    adapter_registry: SurfacePlatformAdapterRegistry
+    credential_resolver: SurfaceCredentialResolver
+
+
+def parse_interaction_target(
+    parsed: ParsedSurfaceInteraction,
+) -> tuple[UUID, str] | None:
     raw_target = parse_callback_id(parsed.callback_id)
     if raw_target is None or not raw_target[0]:
         logger.debug(
@@ -39,7 +83,9 @@ def _external_id(value) -> str:
     return str(value or "").strip().casefold()
 
 
-def interaction_sender_matches(link, parsed) -> bool:
+def interaction_sender_matches(
+    link: AgentSurfaceConversationLink, parsed: ParsedSurfaceInteraction
+) -> bool:
     """May this person resolve the interaction shown in this conversation?
 
     Both ids must be present and equal. This used to return True whenever
@@ -60,7 +106,10 @@ def interaction_sender_matches(link, parsed) -> bool:
     return bool(link_id) and bool(sender_id) and link_id == sender_id
 
 
-def _within_authorized_scope(link, authorized_surface_ids) -> bool:
+def _within_authorized_scope(
+    link: AgentSurfaceConversationLink,
+    authorized_surface_ids: Collection[UUID] | None,
+) -> bool:
     """Was this request allowed to act on the surface holding that conversation?
 
     `None` means "no receiver list", which happens only where the payload was
@@ -84,12 +133,12 @@ def _within_authorized_scope(link, authorized_surface_ids) -> bool:
 
 
 async def resolve_interaction_delivery(
-    ingress,
-    parsed,
+    ingress: InteractionIngress,
+    parsed: ParsedSurfaceInteraction,
     conversation_id: UUID,
     *,
-    authorized_surface_ids=None,
-):
+    authorized_surface_ids: Collection[UUID] | None = None,
+) -> InteractionDelivery | None:
     link = await ingress.conversation_link_repository.get_by_conversation_id(
         conversation_id
     )
@@ -111,8 +160,11 @@ async def resolve_interaction_delivery(
 
 
 async def resolve_current_interaction_delivery(
-    ingress, parsed, *, authorized_surface_ids=None
-):
+    ingress: InteractionIngress,
+    parsed: ParsedSurfaceInteraction,
+    *,
+    authorized_surface_ids: Collection[UUID] | None = None,
+) -> InteractionDelivery | None:
     external_thread_id = str(parsed.external_thread_id or "").strip()
     if not external_thread_id:
         return None
@@ -150,7 +202,11 @@ async def resolve_current_interaction_delivery(
     return await _resolve_link_delivery(ingress, parsed, link)
 
 
-async def _resolve_link_delivery(ingress, parsed, link):
+async def _resolve_link_delivery(
+    ingress: InteractionIngress,
+    parsed: ParsedSurfaceInteraction,
+    link: AgentSurfaceConversationLink,
+) -> InteractionDelivery | None:
     surface = await ingress.surface_repository.get(link.surface_id)
     if surface is None or not surface.is_active:
         logger.debug(

@@ -55,7 +55,12 @@ impl Daemon {
             // download without knowing whether it had already happened.
             "sandbox_images": self.managed_runtime.as_ref().map(|runtime| {
                 let status = runtime.sandbox_image_status();
-                json!({ "state": status.state, "detail": status.detail })
+                json!({
+                    "state": status.state,
+                    "detail": status.detail,
+                    "done_mb": status.done_mb,
+                    "total_mb": status.total_mb,
+                })
             }),
             "sharing": self.sharing.as_ref().map(|sharing| sharing.snapshot(true)),
             "agent_host": self.agent_host.detailed_status(),

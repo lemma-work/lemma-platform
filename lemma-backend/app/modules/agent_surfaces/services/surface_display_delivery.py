@@ -55,9 +55,12 @@ async def deliver_display_resource_to_surface(
 ) -> bool:
     """Deliver one display resource to the conversation's chat surface.
 
-    Returns True when delivered, False when the conversation has no active
-    surface egress target. Never raises — delivery is best-effort and must not
-    abort the agent run.
+    Returns True when delivered, False when it was not -- either the
+    conversation has no active surface egress target or the platform refused it.
+    Never raises: delivery must not abort the agent run. The caller has to read
+    the answer, though, because the model will otherwise believe a file it was
+    never able to show has been shown; a failure is logged as a warning here so
+    it is visible even where the caller ignores it.
     """
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
@@ -70,10 +73,11 @@ async def deliver_display_resource_to_surface(
                 metadata=metadata,
             )
     except Exception:
-        logger.debug(
-            "agent_surfaces.surface_display_delivery.surface_display_resource_delivery_conversation.diagnostic",
+        logger.warning(
+            "agent_surfaces.surface_display_delivery.display_resource_delivery_failed.degraded",
             conversation_id=conversation_id,
             tool_call_id=tool_call_id,
+            exc_info=True,
         )
         return False
 
@@ -96,9 +100,10 @@ async def deliver_surface_message_to_surface(
                 message=message,
             )
     except Exception:
-        logger.debug(
-            "agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic",
+        logger.warning(
+            "agent_surfaces.surface_display_delivery.surface_message_delivery_failed.degraded",
             conversation_id=conversation_id,
+            exc_info=True,
         )
         return False
 
@@ -124,8 +129,9 @@ async def deliver_voice_note_to_surface(
                 caption=caption,
             )
     except Exception:
-        logger.debug(
-            "agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic",
+        logger.warning(
+            "agent_surfaces.surface_display_delivery.voice_note_delivery_failed.degraded",
             conversation_id=conversation_id,
+            exc_info=True,
         )
         return False

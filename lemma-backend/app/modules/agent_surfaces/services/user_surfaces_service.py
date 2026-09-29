@@ -104,6 +104,14 @@ class UserSurfacesService:
         platform: SurfacePlatform,
         surface_id: UUID,
     ) -> UserPreferences:
+        """Save the person's choice of which surface answers them on a platform.
+
+        Nothing else is written. A verified personal route is not touched: routing
+        asks the router for a deliverable default before it uses the route (see
+        `SurfaceRouter.deliverable_default`), so the choice takes effect on the
+        next message and the route answers again if the default goes stale --
+        rather than the route being deleted here and lost for good.
+        """
         surface = await self._surfaces.get(surface_id)
         if surface is None:
             raise AgentSurfaceNotFoundError(str(surface_id))
@@ -118,16 +126,5 @@ class UserSurfacesService:
 
         preferences = await self._load_preferences(user_id)
         updated = preferences.with_default_surface(platform.value, surface_id)
-        await self._users.set_preferences(user_id, updated)
-        return updated
-
-    async def clear_default_surface(
-        self,
-        *,
-        user_id: UUID,
-        platform: SurfacePlatform,
-    ) -> UserPreferences:
-        preferences = await self._load_preferences(user_id)
-        updated = preferences.without_default_surface(platform.value)
         await self._users.set_preferences(user_id, updated)
         return updated

@@ -18,10 +18,7 @@ pub(crate) fn run() {
                     handle_deep_link(app, &url);
                 }
             }
-            if let Some(window) = app.get_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            bring_lemma_back(app);
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -218,24 +215,27 @@ fn setup(
 ///
 /// Failure is cheap and total: a miss costs RESUME_PROBE_TIMEOUT and lands on
 /// exactly the splash path this replaced.
+///
+/// It is for one case: this process is new but the stack is not -- the shell
+/// exited without stopping locald (a crash, a force quit, the OS ending it).
+/// Everything else that brings Lemma back finds either a stopped stack (quit
+/// and update both stop it, so a miss after them is correct) or this same
+/// process still running (closing the window hides it; a second launch is
+/// handed to it by the single-instance plugin, see `bring_lemma_back`).
 fn resume_attempt(mode: &str) -> Option<ResumeTarget> {
-    let resume = (mode == "local")
-        .then(read_resume_target)
-        .flatten()
-        // Parsed before the probe, not after: this comes out of a
-        // user-writable config file, and a launch that panicked on a
-        // hand-edited route would be a far worse failure than a slow one. An
-        // unparseable target simply is not a resume.
-        .filter(|target| resume_entry_url(target).parse::<tauri::Url>().is_ok())
-        .filter(resume_target_is_serving);
-    launch_trace(if mode != "local" {
-        "resume: skipped (hosted)"
-    } else if resume.is_some() {
-        "resume: hit, opening the workspace directly"
-    } else {
-        "resume: miss, falling back to the splash"
+    if mode != "local" {
+        launch_trace("resume: skipped (hosted)");
+        return None;
+    }
+    let decision = decide_resume(
+        resume_target_from(&read_config(), env!("CARGO_PKG_VERSION")),
+        resume_target_is_serving,
+    );
+    launch_trace(match &decision {
+        Ok(_) => "resume: hit, opening the workspace directly",
+        Err(miss) => miss.launch_trace(),
     });
-    resume
+    decision.ok()
 }
 
 fn initial_url(mode: &str, resume: Option<&ResumeTarget>) -> WebviewUrl {
@@ -263,6 +263,9 @@ fn seed_resumed_state(handle: &AppHandle, target: &ResumeTarget) {
     ui.api_url = target.api_url.clone();
     ui.running = true;
     ui.ready = true;
+    // A resumed launch was ready before the daemon said so; `resume: hit` in
+    // the launch log is its time-to-ready.
+    ui.ready_recorded = true;
 }
 
 /// Bring the daemon up behind a workspace that resumed without it.
@@ -372,7 +375,7 @@ fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             // registered on the builder, so it sees *every* window: without
             // the guard, closing a pod app window prevented its own close and
             // hid it, leaving an app the user could neither see nor get rid of.
-            if window.label() != "main" {
+            if !close_hides_to_tray(window.label()) {
                 return;
             }
             // Hide to tray; services keep running. Hidden first: the route is
@@ -425,7 +428,7 @@ fn on_run_event(app: &AppHandle, event: tauri::RunEvent) {
         // Clicking the Dock icon with every window closed. macOS-only: the
         // variant does not exist on other platforms.
         #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen { .. } => reopen_from_dock(app),
+        tauri::RunEvent::Reopen { .. } => bring_lemma_back(app),
         // Dock → Quit and any other OS-issued terminate arrive here without
         // passing a menu, so the prompt is armed here rather than only on the
         // items the app draws itself. Fail-safe by construction: an exit is
@@ -457,17 +460,25 @@ fn on_run_event(app: &AppHandle, event: tauri::RunEvent) {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn reopen_from_dock(app: &AppHandle) {
+/// Show Lemma again: the Dock icon, a second launch, or the tray icon.
+///
+/// Closing the window hides it and leaves everything running, so a person
+/// coming back is not starting anything -- the process is still here, and so
+/// is the stack. A second launch reaches this through the single-instance
+/// plugin rather than as a new process, which is why it never goes through the
+/// launch's resume probe and does not need to.
+pub(crate) fn bring_lemma_back(app: &AppHandle) {
     restore_dock_presence(app);
     if let Some(window) = app.get_window("main") {
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
         return;
     }
-    // Every window closed, which on macOS leaves the app running. The Dock
-    // icon is how a person brings it back, so with no window to show, one is
-    // opened.
+    // No window left -- on macOS every window can close with the app still
+    // running, and a server switch can be caught between windows. The single
+    // instance callback used to do nothing at all here, so on Windows a second
+    // launch left Lemma running with nothing on screen.
     let snapshot = {
         let shell: State<Shell> = app.state();
         let ui = shell.ui.lock_or_recover();

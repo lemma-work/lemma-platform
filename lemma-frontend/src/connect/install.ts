@@ -224,6 +224,14 @@ export function needsOwnApp(kind: ConnectorKind | null): boolean {
     return kind.system_default_available === false;
 }
 
+/** Whether an install stands on Lemma's credentials for a toolkit Composio
+ *  no longer manages. Made while it still did, it cannot connect anybody now:
+ *  the organization's own app comes first, exactly as if there were no install.
+ *  The backend refuses the connect with that same answer. */
+export function isStaleDefault(install: Install | null, kind: ConnectorKind | null): boolean {
+    return install?.config_source === "SYSTEM_DEFAULT" && needsOwnApp(kind);
+}
+
 /** Whether "use your own app" is on offer beside Lemma's.
  *
  *  Never for a managed Composio toolkit: it runs on Lemma's Composio account
@@ -267,12 +275,17 @@ export function discoveryNote(
  *  writes its messages for people. */
 export const NEEDS_EDITOR = "Only an organization owner or editor can set up a new connector. Ask one of them to enable it — then anybody can connect an account.";
 
+/** The provider withdrew the account's sign-in. Said the way the account list
+ *  says it, so the note and the Reconnect button beside the account agree. */
+export const NEEDS_SIGNING_IN = "Needs signing in again. Reconnect the account to keep using it.";
+
 export function connectorProblem(problem: unknown, fallback: string): string {
     const code = (problem as { code?: unknown } | null)?.code;
     const message = problem instanceof Error ? problem.message : typeof problem === "string" ? problem : "";
     if (code === "ORGANIZATION_CONNECTORS_NOT_FOUND" || /No connectors are available in organization/i.test(message)) {
         return NEEDS_EDITOR;
     }
+    if (code === "CONNECTOR_REAUTH_REQUIRED") return NEEDS_SIGNING_IN;
     return urlRefusal(message) ?? (message || fallback);
 }
 

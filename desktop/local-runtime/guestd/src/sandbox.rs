@@ -165,6 +165,10 @@ impl<E: Engine + 'static> GuestService<E> {
                 WorkloadKind::Workspace => Some(self.workspace(&parameters.sandbox_id)?),
                 WorkloadKind::Function => None,
             };
+            let runtime_overlay = match parameters.workload_kind {
+                WorkloadKind::Workspace => Some(self.runtime_overlay(&parameters.sandbox_id)?),
+                WorkloadKind::Function => None,
+            };
             let runtime_token = match parameters.runtime_token.as_deref() {
                 Some(token) => Some(self.write_runtime_token(&parameters.sandbox_id, token)?),
                 None => None,
@@ -182,6 +186,7 @@ impl<E: Engine + 'static> GuestService<E> {
                 &parameters,
                 workspace.as_deref(),
                 runtime_token.as_deref(),
+                runtime_overlay.as_deref(),
                 &env_file,
                 &self.host_gateway,
                 &relay_directory,

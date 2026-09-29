@@ -61,11 +61,13 @@ lemma doctor                 # what's installed, and whether it matches the serv
 
 After a command that talked to a server, the CLI checks — in the background,
 after the command has already printed — whether that server is running a newer
-release, and prints a one-line notice on stderr once per version. It asks the
-server, not PyPI: one release publishes `lemma-terminal`, `lemma-sdk` and the API
-together, so the server's API version *is* the released version, and the check
-adds no host the command was not already talking to. Set `LEMMA_UPDATE_CHECK=0`
-to turn it off.
+release, and prints a one-line notice on stderr at most once a day while you are
+behind. It asks the server, not PyPI: one release publishes `lemma-terminal`,
+`lemma-sdk` and the API together, so the server's API version *is* the released
+version, and the check adds no host the command was not already talking to. The
+server also names its release in an `X-Lemma-Latest-CLI` header on responses to
+an older CLI. It is only ever a suggestion: no CLI version is refused. Set
+`LEMMA_UPDATE_CHECK=0` to turn the notice off.
 
 `lemma update` reinstalls via `uv tool install --force`. Where that cannot work —
 a source checkout, or an image that overlays its Python environment — it says so

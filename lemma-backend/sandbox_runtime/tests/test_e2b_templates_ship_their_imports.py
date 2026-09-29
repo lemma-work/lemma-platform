@@ -28,6 +28,7 @@ that `importorskip("e2b")` and only run in the conformance workflow.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import re
 from pathlib import Path
 
@@ -204,3 +205,52 @@ def test_the_sandbox_images_ship_what_they_import() -> None:
             f"{where} needs {sorted(names)}" for where, names in missing.items()
         )
     )
+
+
+def _bundle_builder():
+    path = BACKEND / "scripts" / "build_runtime_bundle.py"
+    spec = importlib.util.spec_from_file_location("build_runtime_bundle", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_images_bake_the_overlay_floor() -> None:
+    """Docker, E2B and the overlay carry one `sandbox_runtime` list.
+
+    The overlay replaces the image's copy of the package once it is installed,
+    so a sandbox runs the overlay's modules or the floor's, never a mix. If the
+    floor were smaller, a module would work after an install and be missing
+    before it; if larger, the reverse. Held equal, a sandbox has the same
+    modules whichever it is running.
+    """
+    expected = {
+        f"lemma-backend/{source}" for source in _bundle_builder().RUNTIME_SOURCES
+    }
+
+    assert set(_copies_per_template()["workspace_template"]) == expected
+    assert set(_copies_per_dockerfile()["Dockerfile.workspace"]) == expected
+
+
+def test_the_images_bake_every_script_the_overlay_ships() -> None:
+    """The floor under the overlay's `bin/` and `lib/`, on both fabrics."""
+    builder = _bundle_builder()
+    shipped = {*builder.SCRIPT_NAMES, *builder.SCRIPT_LIBRARIES}
+    prefix = "lemma-backend/sandbox-images/scripts/"
+    e2b = set(
+        re.findall(
+            '"' + re.escape(prefix) + '([^"]+)"',
+            BUILDER.read_text(encoding="utf-8"),
+        )
+    )
+    docker = set(
+        re.findall(
+            r"^COPY\s+(?:--\S+\s+)*" + re.escape(prefix) + r"(\S+)",
+            DOCKERFILES[0].read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    )
+
+    assert shipped - e2b == set()
+    assert shipped - docker == set()

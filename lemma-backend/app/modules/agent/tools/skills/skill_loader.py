@@ -26,8 +26,8 @@ _FRONTMATTER_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
 # there, and the system skills shipped in `lemma-skills/` are spliced in
 # read-only by `SystemSkillFileProvider`. It is not a directory in the
 # workspace container — the workspace image (sandbox-images/Dockerfile.workspace)
-# creates no `/skills`, and the shipped copies land at `/sdk/lemma-skills` and
-# inside the installed `lemma_cli` package instead. These paths were once
+# creates no `/skills`, and the shipped copies live inside the installed
+# `lemma_cli` package instead. These paths were once
 # emitted as `workspace_path`/`workspace_dir`, and agents did the reasonable
 # thing: `cat /skills/<name>/references/<file>.md`, then `ls`, then `find /`.
 # They are named `pod_path`/`pod_dir` now, and the way to read one is

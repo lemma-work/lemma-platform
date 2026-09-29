@@ -153,14 +153,6 @@ def _common_fields(
                 source=SurfaceSetupFieldSource.CREATE_REQUEST,
                 description="DM, CHANNEL, or EMAIL depending on the platform.",
             ),
-            SurfaceSetupField(
-                name="dm_conversation_reset_after_hours",
-                label="DM reset window",
-                source=SurfaceSetupFieldSource.CREATE_REQUEST,
-                description="Hours of inactivity after which DM mode starts a new Lemma conversation.",
-                required=False,
-                example="24",
-            ),
         ]
     )
     if include_channel:

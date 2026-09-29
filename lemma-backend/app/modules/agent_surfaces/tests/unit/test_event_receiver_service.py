@@ -552,3 +552,94 @@ async def test_the_stand_down_expires_so_the_bot_comes_back_on_its_own(monkeypat
 
     await _reconcile_and_settle(coordinator, candidate.key)
     assert starts == [1, 1]
+
+
+class _RecordingRedis:
+    """A Redis that remembers the order of what happened to it.
+
+    Installed into the shared client cache, where `get_redis` looks first, so
+    the runner's own cursor helpers run for real against it.
+    """
+
+    def __init__(self, events: list[str], *, broken: bool = False) -> None:
+        self._events = events
+        self._broken = broken
+
+    async def get(self, *_):
+        if self._broken:
+            raise ConnectionError("redis down")
+        return
+
+    async def set(self, key, *_args, **_kwargs):
+        if self._broken:
+            raise ConnectionError("redis down")
+        self._events.append("store")
+
+
+def _install_redis(monkeypatch, redis: _RecordingRedis) -> None:
+    from app.core.config import settings
+    from app.core.infrastructure.redis import client as redis_client
+
+    key = (settings.redis_url, True, settings.redis_read_timeout_seconds or None)
+    monkeypatch.setitem(redis_client._clients, key, redis)
+
+
+def _telegram_runner() -> TelegramPollingReceiverRunner:
+    return TelegramPollingReceiverRunner(
+        NativeReceiverCandidate(
+            key="telegram:system:abc",
+            platform=SurfacePlatform.TELEGRAM,
+            surface_ids=(UUID("019eadff-0000-7000-8000-000000000001"),),
+            credential_label="system",
+            credentials={"bot_token": "token-1"},
+        )
+    )
+
+
+_PUBLISH = "app.core.infrastructure.events.publisher.EventPublisher.publish"
+
+
+async def test_telegram_offset_is_stored_only_after_the_update_is_published(
+    monkeypatch,
+):
+    """Stored first, a crash between the two skipped an update for good."""
+    order: list[str] = []
+    _install_redis(monkeypatch, _RecordingRedis(order))
+    monkeypatch.setattr(
+        _PUBLISH, AsyncMock(side_effect=lambda *_: order.append("publish"))
+    )
+
+    offset = await _telegram_runner()._dispatch(
+        {"update_id": 41, "message": {"text": "hi"}}, None
+    )
+
+    assert order == ["publish", "store"]
+    assert offset == 42
+
+
+async def test_a_failed_publish_does_not_advance_the_stored_offset(monkeypatch):
+    order: list[str] = []
+    _install_redis(monkeypatch, _RecordingRedis(order))
+    monkeypatch.setattr(_PUBLISH, AsyncMock(side_effect=ConnectionError("redis blip")))
+
+    with pytest.raises(ConnectionError):
+        await _telegram_runner()._dispatch(
+            {"update_id": 41, "message": {"text": "hi"}}, None
+        )
+
+    assert order == []
+
+
+async def test_a_cursor_that_cannot_be_read_or_written_is_logged(monkeypatch, caplog):
+    """No cursor means "seed silently" for Resend, so this must not be invisible."""
+    _install_redis(monkeypatch, _RecordingRedis([], broken=True))
+
+    with caplog.at_level(logging.DEBUG):
+        assert await resend_polling_receiver._load_resend_cursor("k") is None
+        await resend_polling_receiver._store_resend_cursor("k", "email-1")
+        assert await telegram_polling_runner._load_telegram_offset("k") is None
+        await telegram_polling_runner._store_telegram_offset("k", 5)
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 4, [r.message for r in caplog.records]
+    assert "redis down" in caplog.text

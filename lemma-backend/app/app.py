@@ -242,8 +242,8 @@ async def lifespan(app: FastAPI):
             await get_message_bus().connect()
         started = False
         try:
-            # Module-contributed API lifespans (e.g. datastore query-role
-            # backfill on enter; surface-dedup + user-cache close on exit).
+            # Module-contributed API lifespans (e.g. embedding preload on
+            # enter; surface-dedup + user-cache close on exit).
             # Entered after core startup so startup hooks can use core
             # resources, and unwound before the core closers below.
             async with AsyncExitStack() as module_stack:

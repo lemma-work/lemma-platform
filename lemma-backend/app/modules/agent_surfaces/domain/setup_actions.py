@@ -65,146 +65,166 @@ def build_surface_setup_actions(
     the org's *own* OAuth app (auth config ``ORG_CUSTOM``). When the account
     uses Lemma's own platform app (``SYSTEM_DEFAULT``), the webhook is already
     wired up centrally and the user has nothing to configure. Telegram
-    (auto-registers its webhook) and email (Composio polling) never need manual
-    webhook setup. Teams admin consent is handled separately because it applies
-    to both system and custom apps.
+    (auto-registers its webhook) and email never need manual webhook setup.
+    Teams admin consent is handled separately because it applies to both system
+    and custom apps.
     """
     if not is_custom_app:
         return []
 
     if platform is SurfacePlatform.SLACK:
-        actions: list[SurfaceSetupAction] = []
-        if slack_signing_secret_missing:
-            actions.append(
-                SurfaceSetupAction(
-                    key="slack_signing_secret",
-                    title="Add the Slack signing secret",
-                    description=(
-                        "This workspace uses its own Slack app, but its signing "
-                        "secret is missing. Lemma rejects every event until the "
-                        "secret from Slack's Basic Information page is saved."
-                    ),
-                    link=slack_repair_url,
-                    link_label="Edit Slack credentials",
-                    steps=[
-                        "Open the Slack app's Basic Information page and copy its signing secret.",
-                        "Edit this Slack connector in Lemma and save the signing secret.",
-                    ],
-                )
-            )
-        if slack_app_id_missing:
-            actions.append(
-                SurfaceSetupAction(
-                    key="slack_app_id",
-                    title="Reconnect this Slack workspace",
-                    description=(
-                        "This workspace uses its own Slack app, but Lemma never "
-                        "recorded which app it is. Lemma rejects every event "
-                        "until it can tell this app's events from another's, "
-                        "and only Slack can tell it — reconnecting the account "
-                        "records the app id as it signs in."
-                    ),
-                    link=slack_repair_url,
-                    link_label="Reconnect Slack",
-                    steps=[
-                        "Open Connectors and find this Slack connection.",
-                        "Reconnect it, so Slack returns the app id with the sign-in.",
-                    ],
-                )
-            )
-        if slack_socket_mode or not webhook_url:
-            return actions
-        # Reference, not instructions. An app made from Lemma's manifest already
-        # has this URL and every event Lemma listens for — so telling someone to
-        # set them by hand is at best noise, and at worst wrong: the list used to
-        # name four events and the manifest declares six. Following it built an
-        # app whose App Home never opened, because `app_home_opened` was missing.
-        #
-        # Kept for the app that was *not* made from the manifest, where this is
-        # the only place the URL appears. Nothing here restates the events; that
-        # list lives in the manifest, which is the thing that can't drift.
+        return _slack_actions(
+            webhook_url=webhook_url,
+            socket_mode=slack_socket_mode,
+            signing_secret_missing=slack_signing_secret_missing,
+            app_id_missing=slack_app_id_missing,
+            repair_url=slack_repair_url,
+        )
+    if platform is SurfacePlatform.TEAMS:
+        return _teams_actions(webhook_url)
+    if platform is SurfacePlatform.WHATSAPP:
+        return _whatsapp_actions(webhook_url, whatsapp_verify_token)
+    return []
+
+
+def _slack_actions(
+    *,
+    webhook_url: str | None,
+    socket_mode: bool,
+    signing_secret_missing: bool,
+    app_id_missing: bool,
+    repair_url: str | None,
+) -> list[SurfaceSetupAction]:
+    actions: list[SurfaceSetupAction] = []
+    if signing_secret_missing:
         actions.append(
             SurfaceSetupAction(
-                key="slack_event_subscriptions",
-                title="Where Slack sends messages",
+                key="slack_signing_secret",
+                title="Add the Slack signing secret",
                 description=(
-                    "This workspace runs its own Slack app. If you made it from "
-                    "Lemma's manifest, it already points here and there's "
-                    "nothing to do."
+                    "This workspace uses its own Slack app, but its signing "
+                    "secret is missing. Lemma rejects every event until the "
+                    "secret from Slack's Basic Information page is saved."
                 ),
-                link="https://api.slack.com/apps",
-                link_label="Open your Slack apps",
-                informational=True,
-                fields=[
-                    SurfaceSetupActionField(label="Request URL", value=webhook_url)
-                ],
+                link=repair_url,
+                link_label="Edit Slack credentials",
                 steps=[
-                    (
-                        "Messages not arriving? Open your app on api.slack.com and "
-                        "check ‘Event Subscriptions’ shows this URL as Verified."
-                    ),
-                    (
-                        "If you changed anything, Slack may ask you to reinstall the "
-                        "app to your workspace."
-                    ),
+                    "Open the Slack app's Basic Information page and copy its signing secret.",
+                    "Edit this Slack connector in Lemma and save the signing secret.",
                 ],
             )
         )
-        return actions
-
-    if platform is SurfacePlatform.TEAMS:
-        if not webhook_url:
-            return []
-        return [
+    if app_id_missing:
+        actions.append(
             SurfaceSetupAction(
-                key="teams_messaging_endpoint",
-                title="Set your Teams bot's messaging endpoint",
+                key="slack_app_id",
+                title="Reconnect this Slack workspace",
                 description=(
-                    "Your tenant uses its own bot registration, so Teams needs "
-                    "Lemma's messaging endpoint."
+                    "This workspace uses its own Slack app, but Lemma never "
+                    "recorded which app it is. Lemma rejects every event "
+                    "until it can tell this app's events from another's, "
+                    "and only Slack can tell it — reconnecting the account "
+                    "records the app id as it signs in."
                 ),
-                link="https://portal.azure.com",
-                link_label="Open Azure Portal",
-                fields=[
-                    SurfaceSetupActionField(
-                        label="Messaging endpoint", value=webhook_url
-                    )
-                ],
+                link=repair_url,
+                link_label="Reconnect Slack",
                 steps=[
-                    "In the Azure Portal, open the Azure Bot resource for this tenant.",
-                    "Open ‘Configuration’ and set ‘Messaging endpoint’ to the URL above.",
-                    "Make sure the ‘Microsoft Teams’ channel is enabled on the bot.",
-                    "Save your changes.",
+                    "Open Connectors and find this Slack connection.",
+                    "Reconnect it, so Slack returns the app id with the sign-in.",
                 ],
             )
-        ]
+        )
+    if socket_mode or not webhook_url:
+        return actions
+    # Reference, not instructions. An app made from Lemma's manifest already
+    # has this URL and every event Lemma listens for — so telling someone to
+    # set them by hand is at best noise, and at worst wrong: the list used to
+    # name four events and the manifest declares six. Following it built an
+    # app whose App Home never opened, because `app_home_opened` was missing.
+    #
+    # Kept for the app that was *not* made from the manifest, where this is
+    # the only place the URL appears. Nothing here restates the events; that
+    # list lives in the manifest, which is the thing that can't drift.
+    actions.append(
+        SurfaceSetupAction(
+            key="slack_event_subscriptions",
+            title="Where Slack sends messages",
+            description=(
+                "This workspace runs its own Slack app. If you made it from "
+                "Lemma's manifest, it already points here and there's "
+                "nothing to do."
+            ),
+            link="https://api.slack.com/apps",
+            link_label="Open your Slack apps",
+            informational=True,
+            fields=[SurfaceSetupActionField(label="Request URL", value=webhook_url)],
+            steps=[
+                (
+                    "Messages not arriving? Open your app on api.slack.com and "
+                    "check ‘Event Subscriptions’ shows this URL as Verified."
+                ),
+                (
+                    "If you changed anything, Slack may ask you to reinstall the "
+                    "app to your workspace."
+                ),
+            ],
+        )
+    )
+    return actions
 
-    if platform is SurfacePlatform.WHATSAPP:
-        if not webhook_url:
-            return []
-        fields = [SurfaceSetupActionField(label="Callback URL", value=webhook_url)]
-        if whatsapp_verify_token:
-            fields.append(
-                SurfaceSetupActionField(
-                    label="Verify token", value=whatsapp_verify_token, secret=True
-                )
-            )
-        return [
-            SurfaceSetupAction(
-                key="whatsapp_webhook",
-                title="Configure your WhatsApp webhook",
-                description="Your WhatsApp Business app needs to deliver messages to Lemma.",
-                link="https://developers.facebook.com/apps",
-                link_label="Open Meta for Developers",
-                fields=fields,
-                steps=[
-                    "Open developers.facebook.com/apps and select your WhatsApp Business app.",
-                    "Go to ‘WhatsApp → Configuration’.",
-                    "Set the Callback URL and Verify token to the values above.",
-                    "Subscribe to the ‘messages’ webhook field.",
-                    "Click ‘Verify and save’.",
-                ],
-            )
-        ]
 
-    return []
+def _teams_actions(webhook_url: str | None) -> list[SurfaceSetupAction]:
+    if not webhook_url:
+        return []
+    return [
+        SurfaceSetupAction(
+            key="teams_messaging_endpoint",
+            title="Set your Teams bot's messaging endpoint",
+            description=(
+                "Your tenant uses its own bot registration, so Teams needs "
+                "Lemma's messaging endpoint."
+            ),
+            link="https://portal.azure.com",
+            link_label="Open Azure Portal",
+            fields=[
+                SurfaceSetupActionField(label="Messaging endpoint", value=webhook_url)
+            ],
+            steps=[
+                "In the Azure Portal, open the Azure Bot resource for this tenant.",
+                "Open ‘Configuration’ and set ‘Messaging endpoint’ to the URL above.",
+                "Make sure the ‘Microsoft Teams’ channel is enabled on the bot.",
+                "Save your changes.",
+            ],
+        )
+    ]
+
+
+def _whatsapp_actions(
+    webhook_url: str | None, verify_token: str | None
+) -> list[SurfaceSetupAction]:
+    if not webhook_url:
+        return []
+    fields = [SurfaceSetupActionField(label="Callback URL", value=webhook_url)]
+    if verify_token:
+        fields.append(
+            SurfaceSetupActionField(
+                label="Verify token", value=verify_token, secret=True
+            )
+        )
+    return [
+        SurfaceSetupAction(
+            key="whatsapp_webhook",
+            title="Configure your WhatsApp webhook",
+            description="Your WhatsApp Business app needs to deliver messages to Lemma.",
+            link="https://developers.facebook.com/apps",
+            link_label="Open Meta for Developers",
+            fields=fields,
+            steps=[
+                "Open developers.facebook.com/apps and select your WhatsApp Business app.",
+                "Go to ‘WhatsApp → Configuration’.",
+                "Set the Callback URL and Verify token to the values above.",
+                "Subscribe to the ‘messages’ webhook field.",
+                "Click ‘Verify and save’.",
+            ],
+        )
+    ]

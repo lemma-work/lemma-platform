@@ -22,8 +22,6 @@ from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.factory import create_authorization_data_service
-from app.modules.agent.contracts import AgentNotFoundError
-from app.modules.agent.contracts.agents import agent_id_for_name
 from app.modules.agent.contracts.pod_summaries import (
     PodAgentSummary,
     list_agent_summaries_by_pod,
@@ -255,28 +253,6 @@ class ConfigurationAccess:
             ):
                 visible.append(agent)
         return visible
-
-    async def _validated_agent_choice(
-        self, *, surface, ctx, agent_name: str | None, action: str
-    ) -> str | None:
-        """The name back again, once it names an agent this viewer may pick.
-
-        The name is returned rather than the row's, because the lookup is an
-        exact match: there is nothing the row could say that the input did not.
-        """
-        if not agent_name:
-            return None
-        try:
-            agent_id = await agent_id_for_name(
-                self.uow.session, pod_id=surface.pod_id, name=agent_name
-            )
-        except AgentNotFoundError:
-            return None
-        if not await self._can_access_agent(
-            surface=surface, ctx=ctx, agent_id=agent_id, action=action
-        ):
-            return None
-        return agent_name
 
     async def _can_access_agent(self, *, surface, ctx, agent_id, action: str) -> bool:
         return await ctx.can(

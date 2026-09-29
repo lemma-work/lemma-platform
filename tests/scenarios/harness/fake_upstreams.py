@@ -17,7 +17,8 @@ Three things follow from that, and they are the point:
   readable, rather than logic buried in a mitmproxy hook.
 
 Imported by `egress_addon`, which runs inside mitmproxy's own interpreter — so
-this module must stay standard-library only. It has no other callers.
+this module must stay standard-library only. Scenarios read its constants (the
+key the provider refuses, the models it lists) and nothing else.
 """
 
 from __future__ import annotations
@@ -269,6 +270,15 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
 
 # --- a generic HTTP provider ------------------------------------------------
 
+#: The models the provider lists at ``<base>/models``, in the OpenAI shape an
+#: Anthropic listing shares. Adding a model provider asks this, with the key the
+#: person typed, before anything is saved.
+LISTED_MODELS = ("scenarios-model",)
+
+#: The one key the provider refuses. Any other is accepted: the scenarios are
+#: about what Lemma does with the answer, not about keys being real.
+REJECTED_API_KEY = "a-key-the-provider-rejects"
+
 
 @dataclass
 class ReceivedCall:
@@ -450,8 +460,25 @@ def start_fake_provider() -> FakeProvider:
             )
             return received[-1].body
 
+        def _list_models(self) -> None:
+            if self.headers.get("Authorization") == f"Bearer {REJECTED_API_KEY}":
+                self._reply(401, {"error": {"message": "Incorrect API key"}})
+                return
+            self._reply(
+                200,
+                {
+                    "object": "list",
+                    "data": [{"id": name, "object": "model"} for name in LISTED_MODELS],
+                },
+            )
+
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path.endswith("/models"):
+                # Not recorded, like the spec below: the listing is Lemma
+                # checking the key, not a scenario calling an operation.
+                self._list_models()
+                return
             if path == "/openapi.json":
                 # Not recorded: fetching the description is Lemma discovering
                 # the provider, not a scenario calling an operation.

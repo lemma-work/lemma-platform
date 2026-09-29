@@ -20,6 +20,7 @@ import { WorkflowsView } from "@/workflow/workflows-view";
 import { AtTheDoor } from "@/shell/at-the-door";
 import { RunsOn } from "@/shell/runs-on";
 import { WhoCanJoin } from "@/shell/who-can-join";
+import { AddPeopleButton } from "@/shell/add-people";
 
 /** The teammate's own page.
  *
@@ -212,7 +213,9 @@ function leadName(raw: string): string {
 
 function leadOf(members: Member[]): string | null {
     const people = members.filter((member) => member.kind === "person");
-    const owner = people.find((member) => /owner/i.test(member.role));
+    /* A pod has admins rather than an owner; the sample source still says
+       Owner. */
+    const owner = people.find((member) => /^(owner|admin)$/i.test(member.role));
     if (owner) return leadName(owner.name);
     return people.length === 1 ? leadName(people[0].name) : null;
 }
@@ -312,10 +315,13 @@ function Reach({ me }: { me: Profile }) {
 function Section({
     title,
     meta,
+    action,
     children,
 }: {
     title: string;
     meta?: string;
+    /** A control that acts on the whole section, at the end of its head. */
+    action?: ReactNode;
     children: React.ReactNode;
 }) {
     return (
@@ -323,6 +329,7 @@ function Section({
             <div className="pcard__head">
                 <h3>{title}</h3>
                 {meta && <span className="meta">{meta}</span>}
+                {action}
             </div>
             {children}
         </section>
@@ -527,7 +534,9 @@ export interface Subject {
     members: Member[];
     /** Omitted for a candidate: nobody has talked to them yet, and a zero
      *  there reads as a dead product rather than as an empty one. */
-    stats?: { talks: number; people: number };
+    /** `talksMore`: there are more conversations than `talks` counts. The
+     *  count is one page of the list, not a total, and says so ("25+"). */
+    stats?: { talks: number; talksMore: boolean; people: number };
     issued?: boolean;
     /** The hero's primary control, and the chips beside it. */
     action: ReactNode;
@@ -548,6 +557,10 @@ export interface Subject {
      *  read it. Absent on a candidate, who has no pod for anybody to knock
      *  on. */
     knocking?: ReactNode;
+    /** The way to add somebody to the roster, rendered — it asks the server
+     *  whether this person may, and draws nothing when they may not. Absent on
+     *  a candidate, who has nobody to add anybody to. */
+    addPeople?: ReactNode;
     /** Type over the name. Absent where the name is not this person's to
      *  change — a candidate's name is set at the moment of hiring, and that
      *  field is on the hiring floor. */
@@ -674,7 +687,7 @@ function HeroName({ name, onRename }: { name: string; onRename?: (next: string) 
                         id={field}
                         className="hero__field"
                         autoFocus
-                        aria-label="This teammate's name"
+                        aria-label="Name"
                         /* Sized to what is in it, so the badge beside the
                            name does not travel to the far edge the moment
                            the field opens. `field-sizing` does this exactly
@@ -782,7 +795,8 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         <div className="hero__body">
                             {stats && (
                                 <p className="hero__stats">
-                                    <b>{stats.talks}</b> {stats.talks === 1 ? "conversation" : "conversations"} ·{" "}
+                                    <b>{stats.talks}{stats.talksMore && "+"}</b>{" "}
+                                    {stats.talks === 1 && !stats.talksMore ? "conversation" : "conversations"} ·{" "}
                                     <b>{stats.people}</b> {stats.people === 1 ? "person" : "people"} with access
                                 </p>
                             )}
@@ -881,7 +895,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         {me.unavailable?.includes("apps") ? <p className="empty-row">Couldn’t load apps.</p> : me.projects.length === 0 ? (
                             <p className="empty-row">
                                 {candidate
-                                    ? "Ask your teammate to build an app for the job."
+                                    ? "Ask " + name + " to build an app for the job."
                                     : "No apps yet. Ask it for one in the conversation."}
                             </p>
                         ) : (
@@ -912,7 +926,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         look at when you are already asking what this teammate
                         is made of — which is this page. */}
                     {subject.agents && (
-                        <Section title="Agents" meta="what this teammate hands work to">
+                        <Section title="Agents" meta="what it hands work to">
                             {subject.agents}
                         </Section>
                     )}
@@ -932,6 +946,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         <Section
                             title="People with access"
                             meta={members.length > 0 ? "who can ask, and what each may do" : undefined}
+                            action={subject.addPeople}
                         >
                             {members.length === 0 && (
                                 <p className="empty-row">Nobody here but you yet.</p>
@@ -992,6 +1007,7 @@ export function ProfilePane({
     onFile,
     onDiscussAgent,
     onDiscussWorkflow,
+    onAddPeople,
 }: {
     initialSection?: string;
     pod: Pod;
@@ -1025,6 +1041,9 @@ export function ProfilePane({
      *  tab, ready to be read and sent. The shell owns which conversation is
      *  open and owns the composer, so it does the filling. */
     onAskFor?: (text: string) => void;
+    /** Open the people dialog. The shell owns it, because the header's faces
+     *  open the same one. */
+    onAddPeople?: () => void;
 }) {
 
     const queryClient = useQueryClient();
@@ -1065,19 +1084,21 @@ export function ProfilePane({
         },
     });
 
-    /* Both of these are already on screen elsewhere in this pod, so they
-       come from the same cache rather than being fetched twice. */
+    /* Surfaces are already on screen elsewhere in this pod, so they come from
+       the same cache. Conversations are a page of their own: the count needs
+       to know whether there is a next page, which the sidebar's list drops.
+       Under `["conversations", pod.id]`, so a refresh of the lists reaches it. */
     const surfaces = useSurfaces(pod.id);
     const conversations = useQuery({
-        queryKey: ["conversations", pod.id],
-        queryFn: () => source.listConversations(pod.id),
+        queryKey: ["conversations", pod.id, "first"],
+        queryFn: () => source.listConversationsPage(pod.id),
         staleTime: 60_000,
     });
 
     if (profile.isError) {
         return (
             <div className="pane"><div className="pane__inner">
-                <p className="empty-row">Couldn’t load this teammate’s profile. <button className="linkish" onClick={() => void profile.refetch()}>Try again</button></p>
+                <p className="empty-row">Couldn’t load this profile. <button className="linkish" onClick={() => void profile.refetch()}>Try again</button></p>
             </div></div>
         );
     }
@@ -1106,7 +1127,9 @@ export function ProfilePane({
                 onRetryProfile: () => { void profile.refetch(); },
                 reach,
                 members: pod.members,
-                stats: conversations.isSuccess ? { talks: conversations.data.length, people: pod.members.length } : undefined,
+                stats: conversations.isSuccess
+                    ? { talks: conversations.data.items.length, talksMore: conversations.data.next !== null, people: pod.members.length }
+                    : undefined,
                 onOpenProject: onOpenTab,
                 onDiscussAgent,
                 action: (
@@ -1147,6 +1170,7 @@ export function ProfilePane({
                 runsOn: <RunsOn podId={pod.id} orgId={pod.orgId} />,
                 joining: <WhoCanJoin podId={pod.id} orgName={orgName} />,
                 knocking: <AtTheDoor podId={pod.id} teammate={pod.teammate?.name ?? pod.name} />,
+                addPeople: onAddPeople && <AddPeopleButton podId={pod.id} onOpen={onAddPeople} />,
                 onRename: rename.mutateAsync,
                 aside: others.length > 0 ? (
                     <section className="pcard">

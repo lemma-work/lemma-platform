@@ -78,9 +78,17 @@ jobs:
         env:
           GUEST_TARGET: ${{ inputs.platform == 'macos' && 'macos-aarch64' || 'windows-x86_64' }}
         run: |
+          set -euo pipefail
+          # Recorded beside the archive like a release's, though a test build
+          # never republishes one: it exists to try what the branch builds.
+          fingerprint="$(python3 scripts/runtime_artifacts.py fingerprint \
+            --target "${GUEST_TARGET}" \
+            --guestd desktop/target/release/lemma-guestd \
+            --package-epoch "$(date -u +%Y-%m)")"
           bash scripts/build_local_guest_runtime.sh \
             --target "${GUEST_TARGET}" \
             --guestd desktop/target/release/lemma-guestd \
+            --fingerprint "${fingerprint}" \
             --output "guest-runtime-out/lemma-guest-runtime-${GUEST_TARGET}.zip"
 
       - name: Upload the guest runtime for the installer job

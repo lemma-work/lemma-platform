@@ -614,7 +614,15 @@ jobs:
               },
               "lemma": {
                   "postgres_major": major,
+                  # The whole release, which is what a Lemma from before
+                  # runtime_artifacts announces.
                   "runtime_download_bytes": host["size"] + guest["size"],
+                  # Itemised, so a newer Lemma can leave out of that figure
+                  # an archive it already has installed and will reuse.
+                  "runtime_artifacts": {
+                      "host": {"sha256": host["sha256"], "size": host["size"]},
+                      "guest": {"sha256": guest["sha256"], "size": guest["size"]},
+                  },
               },
           }
           (artifacts / "latest.json").write_text(json.dumps(feed, indent=2) + "\n")

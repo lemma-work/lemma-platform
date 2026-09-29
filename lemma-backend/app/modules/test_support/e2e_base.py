@@ -99,6 +99,9 @@ def _remove_workspace_volumes() -> None:
         check=False,
     )
     names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    # Each workspace volume's runtime-overlay volume, which carries no labels
+    # to filter on and is named after it (`naming.runtime_volume_name`).
+    names += [f"{name}-runtime" for name in names]
     if names:
         # A volume still mounted by a container Docker has not finished removing
         # refuses deletion; the next sweep gets it.

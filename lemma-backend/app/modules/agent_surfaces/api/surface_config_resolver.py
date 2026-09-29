@@ -261,10 +261,6 @@ async def merge_surface_config(
         )
     if "channels" in config_input.model_fields_set:
         updates["channels"] = _resolve_channel_routes(config_input=config_input)
-    if "dm_conversation_reset_after_hours" in config_input.model_fields_set:
-        updates["dm_conversation_reset_after_hours"] = (
-            config_input.dm_conversation_reset_after_hours
-        )
     if "send_policy" in config_input.model_fields_set:
         updates["send_policy"] = SurfaceSendPolicy(
             allow_send=config_input.send_policy.allow_send

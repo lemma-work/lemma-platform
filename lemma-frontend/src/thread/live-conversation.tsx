@@ -8,8 +8,7 @@ import type { Pod } from "@/data";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { InteractionDock } from "./interaction-dock";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
-import { applyTitle } from "./conversation-list";
-import type { ConversationRef } from "@/data";
+import { applyTitle, patchConversationLists, refreshConversationLists } from "./conversation-list";
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
@@ -123,10 +122,7 @@ export function LiveConversation({
         onTitle: (title, id) => {
             const target = id ?? streamingIn.current;
             if (!target) return;
-            queryClient.setQueryData<ConversationRef[]>(
-                ["conversations", pod.id],
-                previous => applyTitle(previous, target, title),
-            );
+            patchConversationLists(queryClient, pod.id, (list) => applyTitle(list, target, title));
         },
         // Omit agentName: creation uses the pod default when no named agent is supplied.
         conversationId: conversationId === NEW_CONVERSATION ? null : conversationId,
@@ -483,7 +479,7 @@ export function LiveConversation({
                     onCreated: made => {
                         createdHere.current = made.id;
                         onCreated?.(made.id);
-                        void queryClient.invalidateQueries({ queryKey: ["conversations", pod.id] });
+                        void refreshConversationLists(queryClient, pod.id);
                     },
                     send: async (content, id, knownConversation) => {
                         const { content: said, settled } = await putFiles(id, content, knownConversation as { pod_cwd?: string } | undefined);
@@ -514,7 +510,7 @@ export function LiveConversation({
                         }
                     },
                 });
-                void queryClient.invalidateQueries({ queryKey: ["conversations", pod.id] });
+                void refreshConversationLists(queryClient, pod.id);
             } catch (problem) {
                 if (mounted.current) {
                     setSendError(saidAboutSending(problem, "That did not send."));
@@ -610,12 +606,12 @@ export function LiveConversation({
                 reloadLabel={loadError ? "Retry" : "Reload conversation"}
                 emptyTitle={
                     conversationId === NEW_CONVERSATION || !session.conversationId
-                        ? "New conversation"
+                        ? "What should " + pod.teammate.name + " work on?"
                         : "This conversation is empty"
                 }
                 emptyBody={
                     conversationId === NEW_CONVERSATION || !session.conversationId
-                        ? pod.teammate.name + " is ready. Send a message to start."
+                        ? "Send a message to start a new conversation."
                         : "Send a message to start the conversation."
                 }
                 podId={pod.id}

@@ -9,6 +9,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -64,12 +65,11 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        await WhatsAppPlatformService(credentials)._render_resource(
+        return await WhatsAppPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,
         )
-        return True
 
     async def _render_choices(
         self,
@@ -78,7 +78,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> bool | PartDelivery:
         return await WhatsAppPlatformService(credentials)._render_choices(
             event, question_plan, metadata
         )

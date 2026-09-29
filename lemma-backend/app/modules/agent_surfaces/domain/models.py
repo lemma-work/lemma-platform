@@ -225,7 +225,7 @@ class SurfaceApprovalRenderPlan(BaseModel):
         """Text fallback used when a platform can't render native buttons.
 
         Feeds the typed-reply resume path, so the wording and
-        ``_classify_approval_reply`` have to agree: every phrase quoted here is
+        ``classify_approval_reply`` (agent module) have to agree: every phrase quoted here is
         one that path accepts.
         """
         lines = [f"Approval needed: {self.title}"]

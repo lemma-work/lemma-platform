@@ -195,8 +195,8 @@ async def _maybe_deliver_to_surface(
         renders the persisted tool result.
       * MANY (Slack/Teams/Telegram/WhatsApp) → deliver now, native file or link
         as the surface decides.
-      * ONE (email) → hold the file for the single reply, which the reply tool
-        drains when it sends.
+      * ONE (email) → hold the file for the single reply, which the run
+        observer's reply carries when it goes out.
 
     That last branch used to `return` here, silently, *after* the tool had
     already told the model "FILE resource ready for display." The model believed
@@ -219,22 +219,35 @@ async def _maybe_deliver_to_surface(
     )
 
     if platform_delivers_one_reply(platform):
-        _hold_for_the_one_reply(deps, request, response)
+        await _hold_for_the_one_reply(deps, request, response)
         return
     if not platform_supports_chat_delivery(platform):
         return
 
     from app.modules.agent_surfaces.contracts.egress import deliver_display_resource
 
-    await deliver_display_resource(
+    delivered = await deliver_display_resource(
         conversation_id=deps.conversation_id,
         request=request,
         tool_call_id=getattr(ctx, "tool_call_id", None),
         tool_output=response,
     )
+    if delivered:
+        return
+    # The same correction the email branch makes, for the same reason: the tool
+    # had already decided it succeeded before delivery was attempted, and a
+    # `success=True` that the person never saw makes the model tell them "here
+    # is the file" about a file that did not arrive. Delivery logs why.
+    response.success = False
+    response.message = None
+    response.error = (
+        "This resource could not be delivered to the person -- they have not "
+        "seen it. Tell them what it was and why it is missing, or describe it "
+        "in your reply instead."
+    )
 
 
-def _hold_for_the_one_reply(
+async def _hold_for_the_one_reply(
     deps: BaseAgentContext,
     request: DisplayResourceRequest,
     response: DisplayResourceResponse,
@@ -256,7 +269,9 @@ def _hold_for_the_one_reply(
             "use display_resource only for files you want attached."
         )
         return
-    if not hold_display_for_one_reply(deps.conversation_id, request.path):
+    if not await hold_display_for_one_reply(
+        deps.conversation_id, request.path, deps.agent_run_id
+    ):
         response.success = False
         response.message = None
         response.error = (
@@ -386,15 +401,15 @@ async def _run_if_exact_match_already_approved(
     and made the identical sequence succeed, which is what made it look like
     magic rather than a bug.
     """
-    from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
     from app.core.authorization.session_approvals import (
         exact_command_permission_id,
         has_session_approval,
     )
+    from app.modules.agent.tools.authority import workload_actor_id as actor_of
 
-    workload_actor_id = (
-        f"agent:{getattr(deps, 'workload_id', None) or DEFAULT_POD_AGENT_ID}"
-    )
+    # The same key the agent's own delegated context carries, so an approval
+    # recorded for this agent is found by the same derivation that checks it.
+    workload_actor_id = actor_of(deps)
 
     # Every permission this call needs must ALREADY be granted -- the exact
     # command key on its own is not enough. `permission_ids` is a tool argument,

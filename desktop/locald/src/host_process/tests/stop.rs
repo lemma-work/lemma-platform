@@ -35,6 +35,130 @@ fn a_stop_that_cannot_retake_the_ports_is_still_a_stop() {
     assert!(manager.status().iter().all(|service| !service.running));
 }
 
+/// A service stops only after everything that depends on it has.
+#[test]
+fn services_stop_after_their_dependents_and_independent_ones_together() {
+    let specs = |services: Vec<HostProcessSpec>| -> HashMap<String, HostProcessSpec> {
+        services
+            .into_iter()
+            .map(|spec| (spec.id.clone(), spec))
+            .collect()
+    };
+    let ids = |values: &[&str]| values.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+
+    let dependent = specs(vec![
+        service("backend", &[]),
+        service("frontend", &["backend"]),
+    ]);
+    assert_eq!(
+        stop_tiers(&ids(&["backend", "frontend"]), &dependent),
+        [ids(&["frontend"]), ids(&["backend"])]
+    );
+
+    // The shipped manifest declares no dependencies, so its two services
+    // stop at once, in the reverse of the order they started in.
+    let independent = specs(vec![service("backend", &[]), service("frontend", &[])]);
+    assert_eq!(
+        stop_tiers(&ids(&["backend", "frontend"]), &independent),
+        [ids(&["frontend", "backend"])]
+    );
+}
+
+/// Two independent services that each take a while to go cost one wait, not two.
+#[cfg(unix)]
+#[test]
+fn independent_services_are_stopped_at_the_same_time() {
+    // Takes about a second to honour SIGTERM, as a real server draining does.
+    // Each one says when its trap is set: a SIGTERM that arrives before then
+    // kills the shell at once, which is a test that measured nothing.
+    let root = tempdir().unwrap();
+    let armed = |id: &str| root.path().join(format!("{id}.armed"));
+    let slow_to_stop = |id: &str| {
+        vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!(
+                "trap 'sleep 1; exit 0' TERM; : > '{}'; while :; do sleep 0.1; done",
+                armed(id).display()
+            ),
+        ]
+    };
+    let mut backend = service("backend", &[]);
+    backend.command = slow_to_stop("backend");
+    let mut frontend = service("frontend", &[]);
+    frontend.command = slow_to_stop("frontend");
+    let mut value = manifest(vec![backend, frontend]);
+    value.setup[0].command = vec!["/usr/bin/true".into()];
+    let manager = manager_in(&root, value);
+    manager.start_all().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !(armed("backend").is_file() && armed("frontend").is_file()) {
+        assert!(
+            Instant::now() < deadline,
+            "the services never set their traps"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let started = Instant::now();
+    let (result, timings) = manager.stop_all_timed();
+    let elapsed = started.elapsed();
+
+    result.unwrap();
+    assert!(manager.status().iter().all(|process| !process.running));
+    let each: Vec<Duration> = timings.iter().map(|(_, duration)| *duration).collect();
+    assert_eq!(timings.len(), 2, "every service reports its own time");
+    assert!(each
+        .iter()
+        .all(|duration| *duration >= Duration::from_millis(900)));
+    // In turn, the stop would take the sum; together, the longer of the two.
+    assert!(
+        elapsed + Duration::from_millis(500) < each[0] + each[1],
+        "the services were stopped one after another: {elapsed:?} for {timings:?}"
+    );
+}
+
+/// Quit leaves nothing behind: each service's whole process group goes, the
+/// grandchildren a server forks included, not only the process locald started.
+#[cfg(unix)]
+#[test]
+fn a_parallel_stop_takes_every_services_whole_tree() {
+    // A leader with a child of its own, as `node` or `uvicorn` workers are.
+    let forks_a_child = vec!["/bin/sh".into(), "-c".into(), "/bin/sleep 30 & wait".into()];
+    let mut backend = service("backend", &[]);
+    backend.command = forks_a_child.clone();
+    let mut frontend = service("frontend", &[]);
+    frontend.command = forks_a_child;
+    let root = tempdir().unwrap();
+    let mut value = manifest(vec![backend, frontend]);
+    value.setup[0].command = vec!["/usr/bin/true".into()];
+    let manager = manager_in(&root, value);
+    manager.start_all().unwrap();
+    let groups: Vec<i32> = manager
+        .status()
+        .iter()
+        .filter_map(|process| process.pid)
+        .map(|pid| i32::try_from(pid).unwrap())
+        .collect();
+    assert_eq!(groups.len(), 2);
+
+    manager.stop_all_timed().0.unwrap();
+
+    // A killed grandchild is reparented to init, which reaps it when it gets
+    // to it; until then the group still answers `kill(-group, 0)` as a zombie.
+    // A group still there seconds later is one the stop did not kill.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    for group in groups {
+        while unsafe { libc::kill(-group, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "process group {group} outlived the stop"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_stop_request_interrupts_an_inflight_service_health_wait() {

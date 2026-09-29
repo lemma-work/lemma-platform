@@ -11,9 +11,7 @@ from app.modules.agent_surfaces.platforms.teams.models import (
     TeamsGetRecentMessagesResult,
 )
 from app.modules.agent_surfaces.platforms.teams.service import TeamsPlatformService
-from app.core.log.log import get_logger
-
-logger = get_logger(__name__)
+from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 
 
 def build_teams_surface_toolset(
@@ -27,14 +25,14 @@ def build_teams_surface_toolset(
         request: TeamsGetRecentMessagesParams,
     ) -> TeamsGetRecentMessagesResult:
         """Get recent messages from the current Teams channel or thread, including shared files."""
-        try:
-            return await service.get_recent_channel_messages(ctx=ctx, request=request)
-        except Exception:
-            logger.debug("surface.teams.history_failed", exc_info=True)
-            return TeamsGetRecentMessagesResult(
+        return await guarded_tool_result(
+            service.get_recent_channel_messages(ctx=ctx, request=request),
+            tool="teams_get_recent_channel_messages",
+            failure=TeamsGetRecentMessagesResult(
                 success=False,
                 error="Teams channel history lookup failed unexpectedly.",
-            )
+            ),
+        )
 
     return FunctionToolset[ConversationContext](
         tools=[

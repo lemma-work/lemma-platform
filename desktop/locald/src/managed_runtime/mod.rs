@@ -64,6 +64,8 @@ pub struct ManagedRuntimeController {
     /// said once rather than twice a minute for as long as the stack runs.
     last_clock_error: Mutex<Option<String>>,
     sandbox_images: Mutex<SandboxImageStatus>,
+    /// `sandbox-images.json`: see [`PreparedSandboxImages`].
+    prepared_images: PathBuf,
     /// The auth service, still coming up while the backend boots.
     ///
     /// See `start_with_progress`. Joined by `await_private_services` before

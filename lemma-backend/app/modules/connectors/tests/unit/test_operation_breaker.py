@@ -61,6 +61,13 @@ class _FakeRedis:
         self._check()
         self.ttls[key] = seconds
 
+    async def eval(self, script, numkeys, key, ttl):
+        """``incr_with_ttl``'s script: increment, and expire if not expiring."""
+        count = await self.incr(key)
+        if key not in self.ttls:
+            await self.expire(key, ttl)
+        return count
+
     async def set(self, key, value, ex=None, nx=False):
         self._check()
         if nx and key in self.store:

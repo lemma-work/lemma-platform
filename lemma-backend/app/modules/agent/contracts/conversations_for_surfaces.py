@@ -47,6 +47,7 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.api.dependencies import get_conversation_service
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     MessageDraft,
@@ -462,6 +463,9 @@ __all__ = [
     # into. A published function whose argument type is unreachable is not
     # published.
     "AgentRunApprovalDecision",
+    # Raised by `resolve_pending_interaction` when somebody other than the
+    # owner tries to approve; a surface treats that as an ordinary message.
+    "ApprovalNotOwnedError",
     "PendingInteraction",
     "SurfaceAgentIdentity",
     "SurfaceConversation",

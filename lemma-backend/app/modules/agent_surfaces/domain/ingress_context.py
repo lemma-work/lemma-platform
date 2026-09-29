@@ -53,6 +53,10 @@ class SurfaceChatContext(SurfaceContextBase):
     message_user_id: UUID
     message_external_user_id: str | None = None
     message_external_message_id: str | None = None
+    # Set only on the replay of a message saved while the sender was being
+    # onboarded: the pending row this turn hands off. Its commit marker is what
+    # makes a queue retry unable to record or run the request twice.
+    onboarding_handoff_id: UUID | None = None
     # Set only when this turn *created* the conversation, carrying its title.
     # It is how the platform learns a fresh thread began — the one moment worth
     # naming the thread on Slack. None on every subsequent message.

@@ -42,6 +42,17 @@ async def open_onboarding_modal(
         # The existing private prompt remains usable through typed replies.
         logger.warning("agent_surfaces.onboarding.modal_deadline_exceeded")
         return True
+    except PrivateDeliveryUnavailable as unavailable:
+        # An expired, foreign or malformed setup token is a stale click, not a
+        # server fault. Left to propagate it was a 500 from the webhook route,
+        # which Slack reads as a failed delivery and retries -- into the same
+        # refusal. The click is handled (True: nothing further to publish) and
+        # the private prompt it came from still offers typed replies.
+        logger.info(
+            "agent_surfaces.onboarding.modal_click_refused",
+            reason=str(unavailable),
+        )
+        return True
 
 
 async def _open_onboarding_modal(

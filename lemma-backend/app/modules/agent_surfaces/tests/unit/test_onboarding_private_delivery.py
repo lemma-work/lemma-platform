@@ -115,3 +115,27 @@ async def test_a_transport_failure_is_still_a_transport_failure() -> None:
             ),
             bot_token=AsyncMock(return_value="bot-token"),
         )
+
+
+async def test_a_stale_onboarding_click_is_handled_not_a_server_error() -> None:
+    """The click is answered; it must not reach Slack as a 500 and be retried.
+
+    A setup button whose payload names no token cannot be honoured, and
+    `open_onboarding_modal` says so with `PrivateDeliveryUnavailable` -- a
+    `RuntimeError`, so uncaught it left the webhook route as a 500, which Slack
+    reads as a failed delivery and retries into the same refusal. An expired or
+    foreign token takes the same road through `require_input`.
+    """
+    from app.modules.agent_surfaces.services.onboarding_slack_modal import (
+        OPEN_ACTION,
+        open_onboarding_modal,
+    )
+
+    payload = {
+        "type": "block_actions",
+        "actions": [{"action_id": OPEN_ACTION}],
+        "user": {"id": "U1"},
+        "team": {"id": "T1"},
+    }
+
+    assert await open_onboarding_modal(payload, None, uows=AsyncMock()) is True

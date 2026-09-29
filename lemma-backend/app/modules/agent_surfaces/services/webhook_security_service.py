@@ -101,8 +101,6 @@ class SurfaceWebhookAuthenticationError(DomainError):
         super().__init__(
             detail, code="SURFACE_WEBHOOK_AUTH_FAILED", status_code=status_code
         )
-        # Preserve the legacy attribute name for any existing readers.
-        self.detail = detail
 
 
 class SurfaceWebhookSecurityService:

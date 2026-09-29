@@ -13,17 +13,14 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayAction,
     SurfaceDisplayRenderPlan,
 )
-from app.modules.agent_surfaces.platforms.email_render import (
-    render_display_resource_email_html,
-)
 from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     _display_resource_blocks,
 )
 from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_display_resource_card,
 )
-from app.modules.agent_surfaces.platforms.telegram.service import (
-    _telegram_display_resource_text,
+from app.modules.agent_surfaces.platforms.telegram.outbound import (
+    display_resource_text as _telegram_display_resource_text,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     whatsapp_display_resource_text,
@@ -76,13 +73,6 @@ def test_teams_gives_the_block_a_monospace_text_block():
     assert monospace[0]["wrap"] is False
 
 
-def test_email_puts_the_block_in_a_pre():
-    html = render_display_resource_email_html([_plan()])
-
-    assert "<pre" in html
-    assert "1   won" in html
-
-
 def test_a_card_without_a_block_is_unchanged_everywhere():
     plan = _plan().model_copy(update={"preview_block": None})
 
@@ -94,4 +84,3 @@ def test_a_card_without_a_block_is_unchanged_everywhere():
         for item in _teams_display_resource_card(plan)["body"]
         if item.get("fontType") == "Monospace"
     ]
-    assert "<pre" not in render_display_resource_email_html([plan])

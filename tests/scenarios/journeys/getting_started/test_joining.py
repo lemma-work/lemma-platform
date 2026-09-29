@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 
 pytestmark = [
     journey("Getting started"),
     capability("Join an organization that already exists"),
+    open_signup,
 ]
 
 

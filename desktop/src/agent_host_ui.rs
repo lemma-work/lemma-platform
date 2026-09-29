@@ -487,6 +487,8 @@ pub(crate) fn sandbox_image_status(window: Webview, app: AppHandle) -> Result<Va
             ui.sandbox_images.as_str()
         },
         "detail": ui.sandbox_images_detail,
+        "done_mb": ui.sandbox_images_done_mb,
+        "total_mb": ui.sandbox_images_total_mb,
     }))
 }
 

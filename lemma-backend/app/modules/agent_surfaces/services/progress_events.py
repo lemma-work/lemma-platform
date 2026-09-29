@@ -15,6 +15,8 @@ from app.modules.agent.contracts import (
     MessageKind,
     MessageRole,
 )
+from app.modules.agent.contracts.progress_tools import progress_comment_for_tool_call
+from app.modules.agent_surfaces.domain.display_redaction import redact_secrets_in_text
 from app.modules.agent_surfaces.platforms.rendering import (
     sanitize_user_visible_text,
     strip_thinking_tokens,
@@ -49,7 +51,7 @@ def _progress_text_from_event(event: AgentEvent) -> str | None:
     if not isinstance(data, MessageDraft):
         return None
     if data.kind == MessageKind.TOOL_CALL:
-        comment = _find_comment(data.tool_args)
+        comment = progress_comment_for_tool_call(data.tool_args)
         if comment:
             # A comment that is entirely reasoning sanitizes to empty -> no
             # progress update (rather than streaming a blank/leaky message).
@@ -136,24 +138,13 @@ def _assistant_text_was_all_reasoning(event: AgentEvent) -> bool:
     return bool(raw) and not strip_thinking_tokens(raw)
 
 
-def _find_comment(value: object) -> str | None:
-    if not isinstance(value, dict):
-        return None
-    for key in ("comment", "progress_comment", "progress", "status"):
-        raw = value.get(key)
-        if isinstance(raw, str) and raw.strip():
-            return raw
-    request = value.get("request")
-    if isinstance(request, dict):
-        return _find_comment(request)
-    return None
-
-
 def _sanitize_progress_text(value: str) -> str:
     # Strip model reasoning BEFORE collapsing/truncating: a model that writes
     # ``<think>…</think>`` into a tool-call comment must never have it streamed
     # to the surface as a live progress update.
-    text = " ".join(sanitize_user_visible_text(value).split())
+    # A model-written status line can quote the command it is about to run;
+    # mask credentials before the line is cut, so none is split by the cut.
+    text = " ".join(redact_secrets_in_text(sanitize_user_visible_text(value)).split())
     if len(text) <= _MAX_PROGRESS_TEXT_LENGTH:
         return text
     return text[: _MAX_PROGRESS_TEXT_LENGTH - 1].rstrip() + "..."

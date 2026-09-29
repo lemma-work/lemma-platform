@@ -112,6 +112,7 @@ jobs:
               - 'lemma-frontend/src/site/education/concepts.ts'
               - 'scripts/prepare_desktop_test_runtime.py'
               - 'scripts/build_local_guest_runtime.sh'
+              - 'scripts/runtime_artifacts.py'
               - '.github/actions/setup-apple-signing/**'
               - '.github/workflows/release-desktop.yml'
               - '.github/workflows/release-local-images.yml'
@@ -158,6 +159,7 @@ jobs:
               - 'Makefile'
               - 'scripts/build_local_host_pack.py'
               - 'scripts/build_local_guest_runtime.sh'
+              - 'scripts/runtime_artifacts.py'
               - 'desktop/locald/src/native_host_pack.rs'
               - 'desktop/contracts/**'
               - 'desktop/local-runtime/guest-image/**'
@@ -176,12 +178,13 @@ jobs:
               - 'Makefile'
               - 'tests/**'
               - 'scripts/check_version_consistency.py'
-              # tests/ imports these two as modules, so they are covered by a
+              # tests/ imports these as modules, so they are covered by a
               # job that took twenty seconds and did not run for them. Editing
               # prepare_desktop_test_runtime.py started the ninety-minute
               # desktop job and skipped the test that reads it.
               - 'scripts/build_local_host_pack.py'
               - 'scripts/prepare_desktop_test_runtime.py'
+              - 'scripts/runtime_artifacts.py'
               # The host-pack layout contract. Both halves of it have to run
               # when it changes, and this is the half that lives in tests/.
               - 'desktop/contracts/**'

@@ -155,6 +155,33 @@ async def test_a_surface_holding_nothing_still_answers_from_settings(
     assert credentials["phone_number_id"] == "deployment-pn"
 
 
+async def test_the_worker_acts_on_a_message_with_the_number_it_arrived_on(
+    db_session, monkeypatch
+) -> None:
+    """Read receipts, typing and media downloads, with no surface row in hand.
+
+    The worker resolves credentials from the run's context alone, and the
+    platform lookup it uses ignored the pool: a message that came in on a
+    pooled number was marked read and had its media fetched with the settings
+    token, which belongs to another number.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "deployment-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "deployment-pn")
+    await _number(db_session, phone_number_id="pool-w", token="the-pools-token")
+    resolver = SurfaceCredentialResolver(uow=SqlAlchemyUnitOfWork(db_session))
+
+    pooled = await resolver.for_platform(
+        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on="pool-w"
+    )
+    unpooled = await resolver.for_platform(
+        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on="deployment-pn"
+    )
+
+    assert pooled["access_token"] == "the-pools-token"
+    assert pooled["phone_number_id"] == "pool-w"
+    assert unpooled["access_token"] == "deployment-token"
+
+
 async def test_a_number_whose_row_was_removed_keeps_the_surface_on_the_air(
     db_session, test_pod, monkeypatch
 ) -> None:
@@ -752,7 +779,6 @@ async def test_the_config_the_caller_sent_survives_taking_a_number(
             "config": {
                 "send_policy": {"allow_send": True},
                 "identity": {"allowed_domains": ["acme.test"]},
-                "dm_conversation_reset_after_hours": 6,
             },
         },
     )
@@ -765,7 +791,6 @@ async def test_the_config_the_caller_sent_survives_taking_a_number(
         "allocation, and the API reported success anyway"
     )
     assert body["config"]["identity"]["allowed_domains"] == ["acme.test"]
-    assert body["config"]["dm_conversation_reset_after_hours"] == 6
 
 
 async def test_the_setup_panel_names_this_numbers_own_callback_and_token(
@@ -873,3 +898,67 @@ async def test_a_pool_with_nothing_marked_special_still_answers_cold_opens(
         "mobile verification was off with credentials sitting in the table"
     )
     assert resolved.access_token == "cold-open-first-token"
+
+
+async def test_a_number_reassignment_keeps_the_person_in_their_conversation(
+    db_session, test_pod, fixed_test_user, monkeypatch
+) -> None:
+    """The number a message arrives on is a delivery detail of a private chat.
+
+    The link key embeds it -- as the channel and inside the thread id -- so a
+    surface moved to another pooled number read as a chat nobody had spoken in,
+    and the person's next message opened a fresh conversation with none of the
+    history they could still see on their phone.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_ingress
+    from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+    from app.modules.agent_surfaces.domain.ingress_request import (
+        SurfacePlatformWebhookIngress,
+    )
+    from app.modules.agent_surfaces.tests.e2e.helpers import (
+        _set_user_mobile_number,
+        _whatsapp_payload,
+    )
+
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "deployment-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "deployment-pn")
+    pod_id = UUID(test_pod["id"])
+    await _number(db_session, phone_number_id="pool-before", token="before")
+    await _number(db_session, phone_number_id="pool-after", token="after")
+    surface = await _whatsapp_surface(db_session, pod_id=pod_id, holding="pool-before")
+    sender = "15550557777"
+    await _set_user_mobile_number(
+        db_session, user_id=fixed_test_user["id"], mobile_number=sender
+    )
+
+    async def say(text: str, *, arriving_on: str, message_id: str):
+        uow = SqlAlchemyUnitOfWork(db_session)
+        context = await build_surface_ingress(uow).prepare_ingress(
+            SurfacePlatformWebhookIngress(
+                source="whatsapp",
+                payload=_whatsapp_payload(
+                    text=text,
+                    message_id=message_id,
+                    phone_number_id=arriving_on,
+                    waba_id=f"waba-{arriving_on}",
+                    sender_phone=sender,
+                ),
+                headers={},
+            )
+        )
+        await uow.commit()
+        return context
+
+    first = await say("hello", arriving_on="pool-before", message_id="wamid-pool-1")
+    assert isinstance(first, SurfaceChatContext)
+
+    # The deployment moves this surface to another number in the pool.
+    surface.surface_identity_id = "pool-after"
+    await db_session.commit()
+
+    second = await say("still me", arriving_on="pool-after", message_id="wamid-pool-2")
+    assert isinstance(second, SurfaceChatContext)
+    assert second.conversation_id == first.conversation_id, (
+        "the reassigned number started a new conversation, so the person lost "
+        "the history they were still looking at"
+    )

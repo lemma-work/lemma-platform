@@ -286,6 +286,8 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
             "config": {
                 "identity": {"allowed_domains": ["Lemma.Test "]},
                 "channels": [{"channel_id": "C-ROUTED"}],
+                # Retired: a deployment-wide setting now. Still accepted, so a
+                # pod bundle exported before that keeps importing.
                 "dm_conversation_reset_after_hours": 6,
             },
         },
@@ -296,12 +298,10 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     assert set(config) == {
         "identity",
         "channels",
-        "dm_conversation_reset_after_hours",
         "send_policy",
         "slack",
         "telegram",
     }
-    assert config["dm_conversation_reset_after_hours"] == 6
     # Identity values are normalized on write.
     assert config["identity"]["allowed_domains"] == ["lemma.test"]
     route = config["channels"][0]
@@ -314,11 +314,11 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     # A partial update (only one config field) leaves identity + channels intact.
     partial = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
-        json={"config": {"dm_conversation_reset_after_hours": 48}},
+        json={"config": {"send_policy": {"allow_send": True}}},
     )
     assert partial.status_code == 200, partial.text
     config = partial.json()["config"]
-    assert config["dm_conversation_reset_after_hours"] == 48
+    assert config["send_policy"]["allow_send"] is True
     assert config["identity"]["allowed_domains"] == ["lemma.test"]
     assert config["channels"][0]["channel_id"] == "C-ROUTED"
 
@@ -327,7 +327,6 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     assert set(schemas["SurfaceConfigResponse"]["properties"]) == {
         "identity",
         "channels",
-        "dm_conversation_reset_after_hours",
         "send_policy",
         "slack",
         "telegram",

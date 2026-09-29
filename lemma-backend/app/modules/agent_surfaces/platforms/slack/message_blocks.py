@@ -24,34 +24,18 @@ from app.modules.agent_surfaces.platforms.slack.models import (
 def _markdown_chunk(text: str) -> dict[str, Any]:
     """Model text as a stream chunk.
 
-    A stream is either chunk-based or plain-text for its whole life. Because
-    the step timeline uses chunks, the answer must be a chunk too — appending
+    A stream is either chunk-based or plain-text for its whole life. The stream
+    opens in the chunk mode, so the answer must be a chunk too — appending
     top-level ``markdown_text`` to a chunk stream is rejected with
     ``streaming_mode_mismatch``.
     """
     return {"type": "markdown_text", "text": text}
 
 
-def _task_chunk(sequence: int, title: str | None, status: str) -> dict[str, Any]:
-    """One step of the agent's work, as a Slack ``task_update`` chunk.
-
-    The id is stable per step so appending the same id with ``complete`` closes
-    the step already on screen rather than adding a second one.
-    """
-    return {
-        "type": "task_update",
-        "id": f"step-{sequence}",
-        "title": _truncate_slack_text(str(title or "Working…"), 200) or "Working…",
-        "status": status,
-    }
-
-
-def _progress_status_text(metadata: dict[str, Any] | None) -> tuple[str, str]:
-    progress_text = (metadata or {}).get("progress_text")
-    if isinstance(progress_text, str) and progress_text.strip():
-        text = progress_text.strip()
-        return text, text
-    return "is taking a look...", "Taking a look..."
+# The assistant-thread status bubble: the phrase after the app's name, and the
+# loading line Slack cycles through.
+PROCESSING_STATUS_TEXT = "is taking a look..."
+PROCESSING_LOADING_TEXT = "Taking a look..."
 
 
 def _question_select_element(question: SurfaceQuestion) -> dict[str, Any] | None:
@@ -71,6 +55,18 @@ def _question_select_element(question: SurfaceQuestion) -> dict[str, Any] | None
                 or "—",
             },
             "value": opt.label,
+            # An option object has a line for exactly this; without it the
+            # description the agent wrote never reached the person.
+            **(
+                {
+                    "description": {
+                        "type": "plain_text",
+                        "text": _truncate_slack_text(opt.description.strip(), 75),
+                    }
+                }
+                if opt.description and opt.description.strip()
+                else {}
+            ),
         }
         for opt in question.options[:100]
     ]

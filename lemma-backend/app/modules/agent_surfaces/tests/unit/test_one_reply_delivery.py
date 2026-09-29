@@ -8,11 +8,17 @@ both halves of the fix -- the file is held, and the reply carries it.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import fakeredis
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
+
+from app.core.config import settings
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 
 from app.modules.agent.tools.user_interaction.models import (
     DisplayResourceRequest,
@@ -26,13 +32,31 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
     DeliveryCardinality,
 )
+from app.modules.agent_surfaces.services import pending_envelope
 from app.modules.agent_surfaces.services.pending_envelope import (
+    RunFiles,
     discard_display_paths,
+    held_display_paths,
+    release_display_paths,
     remember_display_path,
-    take_display_paths,
 )
 
 pytestmark = pytest.mark.unit
+
+RUN = RunFiles(uuid4())
+
+
+@pytest.fixture(autouse=True)
+def _held_paths_in_redis():
+    """Held paths live in Redis now, so the tests need one that is not the network."""
+    cache = RedisJsonCache(
+        redis_url=settings.redis_url, key_prefix="test:held", ttl_seconds=60
+    )
+    cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
+    previous = pending_envelope._cache
+    pending_envelope._cache = cache
+    yield cache
+    pending_envelope._cache = previous
 
 
 # --- the capability -------------------------------------------------------
@@ -60,26 +84,102 @@ def test_pausing_is_not_a_capability_because_every_surface_can() -> None:
     assert caps.delivery_cardinality is DeliveryCardinality.ONE
 
 
-def test_a_file_shown_twice_is_attached_once() -> None:
+async def test_a_file_shown_twice_is_attached_once() -> None:
     conversation = uuid4()
-    assert remember_display_path(conversation, "/me/q3.pdf")
-    assert remember_display_path(conversation, "/me/q3.pdf")
-    assert take_display_paths(conversation) == ["/me/q3.pdf"]
+    assert await remember_display_path(conversation, RUN, "/me/q3.pdf")
+    assert await remember_display_path(conversation, RUN, "/me/q3.pdf")
+    assert await held_display_paths(conversation, RUN) == ["/me/q3.pdf"]
 
 
-def test_draining_is_final_so_a_second_reply_does_not_re_attach() -> None:
+async def test_reading_the_held_files_does_not_drain_them() -> None:
+    """A reply that fails to send must not take the attachments with it.
+
+    They used to be popped on read, so a send that then failed had spent the
+    files, and the retry -- or the error email -- went out without them.
+    """
     conversation = uuid4()
-    remember_display_path(conversation, "/me/q3.pdf")
-    assert take_display_paths(conversation) == ["/me/q3.pdf"]
-    assert take_display_paths(conversation) == []
+    await remember_display_path(conversation, RUN, "/me/q3.pdf")
+    assert await held_display_paths(conversation, RUN) == ["/me/q3.pdf"]
+    assert await held_display_paths(conversation, RUN) == ["/me/q3.pdf"]
 
 
-def test_a_runaway_run_is_bounded_rather_than_growing_forever() -> None:
+async def test_releasing_is_final_so_a_second_reply_does_not_re_attach() -> None:
     conversation = uuid4()
-    accepted = [remember_display_path(conversation, f"/me/{i}.pdf") for i in range(40)]
+    await remember_display_path(conversation, RUN, "/me/q3.pdf")
+    await release_display_paths(conversation, RUN, ["/me/q3.pdf"])
+    assert await held_display_paths(conversation, RUN) == []
+
+
+async def test_a_file_shown_while_the_reply_was_sending_is_not_released_with_it() -> (
+    None
+):
+    conversation = uuid4()
+    await remember_display_path(conversation, RUN, "/me/first.pdf")
+    sent = await held_display_paths(conversation, RUN)
+    await remember_display_path(conversation, RUN, "/me/second.pdf")
+    await release_display_paths(conversation, RUN, sent)
+    assert await held_display_paths(conversation, RUN) == ["/me/second.pdf"]
+
+
+async def test_a_runaway_run_is_bounded_rather_than_growing_forever() -> None:
+    conversation = uuid4()
+    accepted = [
+        await remember_display_path(conversation, RUN, f"/me/{i}.pdf")
+        for i in range(40)
+    ]
     assert accepted.count(True) == 20
     assert accepted[-1] is False
-    discard_display_paths(conversation)
+    await discard_display_paths(conversation, RUN)
+    assert await held_display_paths(conversation, RUN) == []
+
+
+async def test_two_files_shown_in_one_turn_are_both_held() -> None:
+    """Parallel tool calls add to the same run's files at once.
+
+    A read-modify-write of one list lost the second writer's file, and an
+    attachment the model had been told was queued silently never went out.
+    """
+    conversation = uuid4()
+    paths = [f"/me/{i}.pdf" for i in range(8)]
+    results = await asyncio.gather(
+        *(remember_display_path(conversation, RUN, path) for path in paths)
+    )
+    assert all(results)
+    assert sorted(await held_display_paths(conversation, RUN)) == sorted(paths)
+
+
+async def test_held_files_are_visible_to_a_different_process(
+    _held_paths_in_redis: RedisJsonCache,
+) -> None:
+    """The reason they moved out of a dict.
+
+    A remote harness's tool call executes in an API replica; the observer that
+    sends the reply runs in a worker. Two caches over one Redis stand for the two
+    processes -- a per-process dict would have shown the second one nothing.
+    """
+    conversation = uuid4()
+    await remember_display_path(conversation, RUN, "/me/q3.pdf")
+
+    other_process = RedisJsonCache(
+        redis_url=settings.redis_url, key_prefix="test:held", ttl_seconds=60
+    )
+    other_process._redis = _held_paths_in_redis._redis
+    pending_envelope._cache = other_process
+    assert await held_display_paths(conversation, RUN) == ["/me/q3.pdf"]
+
+
+async def test_redis_being_down_declines_the_file_and_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch, _held_paths_in_redis: RedisJsonCache
+) -> None:
+    async def down(*_args, **_kwargs):
+        raise RedisConnectionError("redis is down")
+
+    monkeypatch.setattr(_held_paths_in_redis, "ordered_set_add", down)
+    monkeypatch.setattr(_held_paths_in_redis, "ordered_set_members", down)
+    conversation = uuid4()
+    assert await remember_display_path(conversation, RUN, "/me/q3.pdf") is False
+    # Reading degrades to "nothing held": the reply goes out without them.
+    assert await held_display_paths(conversation, RUN) == []
 
 
 # --- the tool's own answer ------------------------------------------------
@@ -89,7 +189,10 @@ async def _display(request: DisplayResourceRequest, *, platform: str, conversati
     response = DisplayResourceResponse(success=True, message="ready")
     ctx = SimpleNamespace(
         deps=SimpleNamespace(
-            surface_platform=platform, conversation_id=conversation, pod_id=uuid4()
+            surface_platform=platform,
+            conversation_id=conversation,
+            pod_id=uuid4(),
+            agent_run_id=RUN.agent_run_id,
         ),
         tool_call_id="tool-1",
     )
@@ -106,7 +209,23 @@ async def test_showing_a_file_on_email_holds_it_and_says_so() -> None:
     )
     assert response.success is True
     assert "attached to your email reply" in (response.message or "")
-    assert take_display_paths(conversation) == ["/me/q3.pdf"]
+    assert await held_display_paths(conversation, RUN) == ["/me/q3.pdf"]
+
+
+async def test_showing_a_file_on_email_reports_failure_when_it_cannot_be_held(
+    monkeypatch: pytest.MonkeyPatch, _held_paths_in_redis: RedisJsonCache
+) -> None:
+    async def down(*_args, **_kwargs):
+        raise RedisConnectionError("redis is down")
+
+    monkeypatch.setattr(_held_paths_in_redis, "ordered_set_add", down)
+    response = await _display(
+        DisplayResourceRequest(type=DisplayResourceType.FILE, path="/me/q3.pdf"),
+        platform="RESEND",
+        conversation=uuid4(),
+    )
+    assert response.success is False
+    assert response.message is None
 
 
 async def test_showing_a_table_on_email_reports_failure_rather_than_success() -> None:
@@ -123,25 +242,44 @@ async def test_showing_a_table_on_email_reports_failure_rather_than_success() ->
     )
     assert response.success is False
     assert "email conversation" in (response.error or "")
-    assert take_display_paths(conversation) == []
+    assert await held_display_paths(conversation, RUN) == []
 
 
-async def test_a_chat_surface_is_untouched_by_any_of_this() -> None:
-    conversation = uuid4()
+@pytest.mark.parametrize(
+    ("platform", "delivered"), [("SLACK", True), ("TELEGRAM", False)]
+)
+async def test_a_chat_surface_delivers_now_and_says_what_became_of_it(
+    platform: str, delivered: bool
+) -> None:
+    """A chat surface delivers at once and does not hold; and the tool reports it.
+
+    The tool had already returned success before delivery was attempted, and
+    `deliver_display_resource` answered False with the boolean dropped -- so the
+    model told the person "here is the file" about a file that never arrived.
+    The email branch already corrected `response`; this is the same correction
+    for chat.
+    """
     from unittest.mock import patch
 
+    conversation = uuid4()
     with patch(
         "app.modules.agent_surfaces.contracts.egress.deliver_display_resource",
-        new=AsyncMock(return_value=True),
-    ) as delivered:
+        new=AsyncMock(return_value=delivered),
+    ) as deliver:
         response = await _display(
             DisplayResourceRequest(type=DisplayResourceType.FILE, path="/me/q3.pdf"),
-            platform="SLACK",
+            platform=platform,
             conversation=conversation,
         )
-    assert response.success is True
-    delivered.assert_awaited_once()
-    assert take_display_paths(conversation) == [], "chat delivers now, it does not hold"
+
+    deliver.assert_awaited_once()
+    assert response.success is delivered
+    if not delivered:
+        assert response.message is None
+        assert "could not be delivered" in (response.error or "")
+    assert await held_display_paths(conversation, RUN) == [], (
+        "chat delivers now, it does not hold"
+    )
 
 
 # --- the run stopping is the run stopping, whatever stopped it -------------

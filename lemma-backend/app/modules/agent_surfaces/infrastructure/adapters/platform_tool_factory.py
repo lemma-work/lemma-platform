@@ -15,12 +15,6 @@ from app.modules.agent_surfaces.platforms.slack.tools import (
 from app.modules.agent_surfaces.platforms.teams.tools import (
     build_teams_surface_toolset,
 )
-from app.modules.agent_surfaces.platforms.telegram.tools import (
-    build_telegram_surface_toolset,
-)
-from app.modules.agent_surfaces.platforms.whatsapp.tools import (
-    build_whatsapp_surface_toolset,
-)
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
@@ -33,14 +27,14 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     native_credentials,
 )
 
-# Email is absent on purpose. Its surfaces used to carry a reply tool, and
-# nothing else -- so with the reply moved to the run observer there is no
-# platform toolset left to build. See `progress_observer`.
+# Email, WhatsApp and Telegram are absent on purpose. Email's reply moved to the
+# run observer, and the only tools WhatsApp and Telegram carried were
+# `whatsapp_get_current_contact` / `telegram_get_current_chat`, which echoed
+# event metadata the agent already reads off the message and cost schema tokens
+# on every turn. Files flow through auto-ingest and `display_resource`.
 _TOOLSET_BUILDERS = {
     "SLACK": build_slack_surface_toolset,
     "TEAMS": build_teams_surface_toolset,
-    "WHATSAPP": build_whatsapp_surface_toolset,
-    "TELEGRAM": build_telegram_surface_toolset,
 }
 
 
@@ -57,14 +51,18 @@ class SurfacePlatformToolFactory:
     ) -> list[AbstractToolset[ConversationContext]]:
         metadata = conversation.metadata or {}
         surface_type = str(metadata.get("surface_platform") or "")
-        builder = _TOOLSET_BUILDERS.get(str(surface_type or "").upper())
-        if builder is None:
+        # Chat surfaces only: email's reply is sent by the observer, and an
+        # unknown platform has nothing to build. A chat platform with no builder
+        # of its own (WhatsApp, Telegram) still gets `surface_send_message` below.
+        caps = get_platform_capabilities(surface_type)
+        if caps is None or caps.is_email:
             return []
+        builder = _TOOLSET_BUILDERS.get(caps.platform)
 
         surface_id = metadata.get("surface_id")
         if surface_id is None:
             # Conversations on system credentials carry no surface row.
-            if not has_native_credentials(surface_type):
+            if builder is None or not has_native_credentials(surface_type):
                 return []
             return [builder(credentials=native_credentials(surface_type))]
 
@@ -88,12 +86,11 @@ class SurfacePlatformToolFactory:
                 return []
             allow_send = surface.config.send_policy.allow_send
 
-        toolsets: list[AbstractToolset[ConversationContext]] = [
-            builder(credentials=credentials)
-        ]
+        toolsets: list[AbstractToolset[ConversationContext]] = []
+        if builder is not None:
+            toolsets.append(builder(credentials=credentials))
         # The current-user surface_send_message tool, opt-in per surface and only
-        # on chat surfaces (email replies go through the email reply tool).
-        caps = get_platform_capabilities(surface.surface_type.value)
-        if allow_send and (caps is None or not caps.is_email):
+        # on chat surfaces (the observer sends an email surface's one reply).
+        if allow_send:
             toolsets.append(build_surface_send_toolset())
         return toolsets

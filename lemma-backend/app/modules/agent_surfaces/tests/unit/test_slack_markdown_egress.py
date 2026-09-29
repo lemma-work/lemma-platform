@@ -85,36 +85,3 @@ async def test_long_answer_is_split_across_messages(monkeypatch):
         assert blocks[0]["type"] == "markdown"
         assert len(blocks[0]["text"]) <= MARKDOWN_BLOCK_CHAR_LIMIT
         assert payload["thread_ts"] == "100.0"
-
-
-async def test_feedback_buttons_only_on_the_last_message(monkeypatch):
-    """Feedback rates the answer, so a chunked answer gets exactly one rating."""
-    sent = _capture(monkeypatch)
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
-
-    paragraph = "word " * 400
-    body = "\n\n".join([paragraph] * 12)
-    await svc.send_message(
-        event=_event(),
-        message=body,
-        metadata={"feedback_callback_id": "run-abc"},
-    )
-
-    assert len(sent) > 1
-    for payload in sent[:-1]:
-        assert [b["type"] for b in payload["blocks"]] == ["markdown"]
-    last_blocks = sent[-1]["blocks"]
-    assert [b["type"] for b in last_blocks] == ["markdown", "context_actions"]
-    element = last_blocks[1]["elements"][0]
-    assert element["type"] == "feedback_buttons"
-    assert element["action_id"].endswith("run-abc")
-
-
-async def test_no_feedback_buttons_without_a_callback_id(monkeypatch):
-    """Question/approval fallbacks reuse send_message and must not be rated."""
-    sent = _capture(monkeypatch)
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
-
-    await svc.send_message(event=_event(), message="Approve this?")
-
-    assert [b["type"] for b in sent[0]["blocks"]] == ["markdown"]

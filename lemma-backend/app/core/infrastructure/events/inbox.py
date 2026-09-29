@@ -21,6 +21,10 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.concurrency.cancellation import (
+    as_stray_cancellation,
+    is_stray_cancellation,
+)
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.config import event_transport_settings
@@ -78,6 +82,8 @@ class EventInboxPort(Protocol):
         consumer: str,
         event: BaseModel | Mapping[str, Any],
         handler: Callable[[], Awaitable[None]],
+        *,
+        max_attempts: int | None = None,
     ) -> bool: ...
 
 
@@ -154,7 +160,15 @@ class InboxConsumer:
         consumer: str,
         event: BaseModel | Mapping[str, Any],
         handler: Callable[[], Awaitable[None]],
+        *,
+        max_attempts: int | None = None,
     ) -> bool:
+        """Run ``handler`` once for this delivery, classifying how it ended.
+
+        ``max_attempts`` lets a consumer whose work is expensive or visible to
+        people (a message sent to someone) cap its own retries below the
+        default, without changing it for every other consumer.
+        """
         payload = normalized_event_payload(event)
         carrier = {
             key: str(payload[key])
@@ -223,8 +237,22 @@ class InboxConsumer:
                     # wrong: the worker knows nothing about the caller.
                     try:
                         await handler()
-                    except asyncio.CancelledError:
-                        raise
+                    except asyncio.CancelledError as exc:
+                        if not is_stray_cancellation(exc):
+                            raise
+                        # Leaked in from a client bound to another task, not
+                        # aimed at this one. Re-raising it as-is would end the
+                        # subscriber's reader for good and leave this row
+                        # PROCESSING with no attempt counted, so it is recorded
+                        # as the failure it is and retried like any other.
+                        return await self._retry_or_dead_letter(
+                            consumer,
+                            event_id,
+                            event_type,
+                            attempt,
+                            as_stray_cancellation(exc),
+                            max_attempts,
+                        )
                     except ValidationError as exc:
                         await self._finish(
                             consumer,
@@ -242,7 +270,12 @@ class InboxConsumer:
                     except DomainError as exc:
                         if exc.status_code == 503:
                             return await self._retry_or_dead_letter(
-                                consumer, event_id, event_type, attempt, exc
+                                consumer,
+                                event_id,
+                                event_type,
+                                attempt,
+                                exc,
+                                max_attempts,
                             )
                         await self._finish(
                             consumer,
@@ -253,7 +286,7 @@ class InboxConsumer:
                         return True
                     except Exception as exc:
                         return await self._retry_or_dead_letter(
-                            consumer, event_id, event_type, attempt, exc
+                            consumer, event_id, event_type, attempt, exc, max_attempts
                         )
 
             await self._finish(consumer, event_id, InboxStatus.COMPLETED)
@@ -333,8 +366,9 @@ class InboxConsumer:
         event_type: str,
         attempt: int,
         exc: Exception,
+        max_attempts: int | None = None,
     ) -> bool:
-        terminal = attempt >= self.max_attempts
+        terminal = attempt >= (max_attempts or self.max_attempts)
         status = InboxStatus.DEAD_LETTER if terminal else InboxStatus.RETRYING
         await self._finish(
             consumer,

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 
 pytestmark = [
     journey("Getting started"),
     capability("Change and remove membership"),
+    open_signup,
 ]
 
 

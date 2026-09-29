@@ -166,6 +166,7 @@ test("the sandbox download is offered only where it would do something", () => {
     for (const offered of ["not-prepared", "failed"]) assert.equal(sandboxWording(offered, "this Mac").offer, true, offered);
     for (const quiet of ["ready", "downloading", "unsupported", undefined]) assert.equal(sandboxWording(quiet, "this Mac").offer, false, String(quiet));
     assert.match(sandboxWording("ready", "this PC").text, /this PC/);
+    assert.equal(sandboxWording("downloading", "this Mac", "120 of 700 MB").text, "Downloading… 120 of 700 MB");
 });
 
 /* ── sharing ───────────────────────────────────────────────────────── */
@@ -444,7 +445,7 @@ test("the host-execution switch reflects the Agent Host and is off-limits where 
     const on = hostExecutionRow({ host_execution: { enabled: true, available: true } });
     assert.deepEqual(on, { checked: true, blocked: null, consequence: hostExecutionConsequence() });
     assert.match(on.consequence, /inside a sandbox/);
-    assert.match(on.consequence, /Teammates’ runs stay in the VM/);
+    assert.match(on.consequence, /Everything else still runs in the VM/);
     assert.equal(hostExecutionRow({ host_execution: { enabled: false, available: true } }).checked, false);
     // Not macOS: disabled, with the reason, whatever the setting says.
     const unavailable = hostExecutionRow({ host_execution: { enabled: true, available: false } });

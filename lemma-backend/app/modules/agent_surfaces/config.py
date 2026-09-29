@@ -223,20 +223,28 @@ class SurfaceSettings(BaseSettings):
             "short enough that coming back later still gets an answer."
         ),
     )
-    surface_runtime_history_max_messages: int = Field(
-        default=40,
-        description=(
-            "Maximum prior persisted messages to pass to the model for external "
-            "agent-surface conversations. The latest inbound message is passed "
-            "separately as the user prompt."
-        ),
-    )
-    surface_runtime_history_window_hours: int = Field(
+    surface_dm_conversation_reset_after_hours: int = Field(
         default=24,
         description=(
-            "Maximum age, in hours, of prior persisted messages passed to the model "
-            "for external agent-surface conversations. Set to 0 to disable the "
-            "time window."
+            "Hours since a person's last inbound DM after which their next "
+            "message opens a fresh Lemma conversation instead of continuing the "
+            "old one. This is the only way a surface decides which conversation "
+            "a message joins; what the agent then sees of that conversation is "
+            "the agent module's business. Set to 0 to never start a fresh DM "
+            "conversation on inactivity."
+        ),
+    )
+    surface_allow_unverified_phone_match: bool = Field(
+        default=False,
+        description=(
+            "Route a WhatsApp/Telegram sender to the Lemma user whose profile "
+            "carries their phone number even when that number was never verified. "
+            "Off by default: anyone can write another person's number on their own "
+            "profile, and when that person messages the bot the message -- and the "
+            "agent's reply, sent from the shared number -- goes to whoever wrote "
+            "it. Turning it on trades that narrow impersonation risk for not "
+            "turning away real users who typed their own number and never verified "
+            "it. A verified owner always wins; among unverified claims, a number claimed by more than one profile never matches."
         ),
     )
 

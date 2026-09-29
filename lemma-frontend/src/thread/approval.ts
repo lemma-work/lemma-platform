@@ -183,7 +183,7 @@ export function approvalDetails(toolArgs: unknown, fallbackText?: string): Appro
         title: title || (toolName ? toolTitle(toolName) : "") || asString(fallbackText),
         request:
             reason ||
-            (toolName ? "The teammate wants to run " + toolTitle(toolName) + "." : "") ||
+            (toolName ? "It wants to run " + toolTitle(toolName) + "." : "") ||
             asString(fallbackText),
         params,
         toolName: toolName || undefined,
@@ -213,7 +213,7 @@ export function interactionHeading(
     settled: boolean,
 ): string {
     if (title) return title;
-    const who = asString(teammate) || "Your teammate";
+    const who = asString(teammate) || "It";
     if (kind === "question") return settled ? who + " asked you" : who + " needs your answer";
     return settled ? who + " asked to run something" : who + " needs your approval";
 }

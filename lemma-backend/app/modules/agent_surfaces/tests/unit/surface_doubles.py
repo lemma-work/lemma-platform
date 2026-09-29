@@ -282,7 +282,10 @@ def build_doubles(
 
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = existing_link
-    conversation_link_repository.create.side_effect = lambda link: link
+    # A bare AsyncMock answers every call with a truthy mock, which the binder
+    # would read as "this person has an earlier private-chat link".
+    conversation_link_repository.find_latest_dm_link_for_person.return_value = None
+    conversation_link_repository.create.side_effect = lambda link, **_: link
     conversation_link_repository.update_last_event.side_effect = lambda **kwargs: (
         existing_link
     )
@@ -381,6 +384,8 @@ def build_ingress_service(
             return_value=[surface.pod_id for surface in resolved_surfaces]
         ),
         get_user_email=AsyncMock(return_value="sender@example.com"),
+        get_user_default_surface_id=AsyncMock(return_value=None),
+        clear_user_default_surface_id=AsyncMock(return_value=None),
     )
     identity = SimpleNamespace(
         resolve=AsyncMock(
@@ -424,6 +429,8 @@ def build_ingress_service(
         event_dedup_store=SimpleNamespace(
             claim_message=AsyncMock(return_value=True),
             claim_stranger_reply=AsyncMock(return_value=True),
+            release_message=AsyncMock(),
+            release_stranger_reply=AsyncMock(),
         ),
     )
 
@@ -592,6 +599,7 @@ def build_turn_starter(
     existing_link: AgentSurfaceConversationLink | None = None,
     uow_factory: object | None = None,
     file_ingest_service: object | None = None,
+    pooled_numbers: object | None = None,
 ) -> SurfaceTurnStarter:
     """The worker's half, over doubled collaborators.
 
@@ -612,9 +620,12 @@ def build_turn_starter(
         event_dedup_store=SimpleNamespace(
             claim_message=AsyncMock(return_value=True),
             claim_stranger_reply=AsyncMock(return_value=True),
+            release_message=AsyncMock(),
+            release_stranger_reply=AsyncMock(),
         ),
         file_ingest_service=file_ingest_service
         or SimpleNamespace(
             ingest_attachments=AsyncMock(return_value=AttachmentIngest())
         ),
+        pooled_numbers=pooled_numbers,
     )

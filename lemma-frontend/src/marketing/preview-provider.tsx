@@ -8,7 +8,8 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
     const [standalone, setStandalone] = useState(false);
     useEffect(() => {
         setStandalone(window.parent === window);
-        document.documentElement.dataset.theme = "light";
+        // Theme is set before paint (`layout.tsx`): light, unless the visitor
+        // chose otherwise in this demo's Appearance settings.
         document.documentElement.dataset.accent = "violet";
         document.documentElement.dataset.corners = "soft";
         function interact(event: Event) {

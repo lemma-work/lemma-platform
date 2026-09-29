@@ -64,7 +64,7 @@ def whatsapp_signup(db_session, fake_whatsapp, message_store, monkeypatch):
     written by the code under test rather than by the test.
     """
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")

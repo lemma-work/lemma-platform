@@ -1,4 +1,4 @@
-"""Tests for the agent_surfaces pod-deletion cleanup handler."""
+"""Tests for the agent_surfaces event handlers: surface webhooks and pod deletion."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.events import (
     SurfaceConnectedEvent,
-    SurfaceMessageAnsweredEvent,
     SurfaceWebhookReceivedEvent,
 )
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
@@ -270,12 +269,6 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
                 surface_id=uuid4(), pod_id=uuid4(), platform="RESEND"
             ).model_dump(mode="json"),
             id="surface.connected",
-        ),
-        pytest.param(
-            SurfaceMessageAnsweredEvent(surface_id=uuid4(), pod_id=uuid4()).model_dump(
-                mode="json"
-            ),
-            id="surface.message.answered",
         ),
     ],
 )

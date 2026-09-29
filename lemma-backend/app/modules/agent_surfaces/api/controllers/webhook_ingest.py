@@ -10,7 +10,6 @@ ever reach it.
 from __future__ import annotations
 
 import json
-import hashlib
 from typing import Any
 from uuid import UUID
 
@@ -31,13 +30,18 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
-from app.modules.identity.services.whatsapp_mobile_verification import (
+from app.modules.identity.contracts.whatsapp_verification import (
     is_whatsapp_verification_configured,
     parse_reserved_verification_message,
 )
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound as _normalize_resend_inbound,
-    resend_source_event_id,
+)
+from app.modules.agent_surfaces.domain.source_event_ids import (
+    resend_webhook_source_event_id,
+)
+from app.modules.agent_surfaces.services.resend_recipients import (
+    surface_for_recipients,
 )
 from app.modules.agent_surfaces.api.controllers.slack_webhook_verification import (
     slack_api_app_id,
@@ -79,37 +83,6 @@ def _opens_a_slack_modal(payload: dict) -> bool:
 #: constant names it honestly. (Slack also serves an org's own app there, and
 #: needs no help: its ``event_id`` is unique across workspaces.)
 SHARED_PLATFORM_RECEIVER = "shared"
-
-
-def _surface_source_event_id(
-    platform: str, payload: dict, raw_body: bytes, *, receiver: str
-) -> str:
-    """The durable identity of one inbound delivery.
-
-    A provider's own event id is only unique *within one receiver*. Telegram's
-    ``update_id`` is a per-bot counter that starts low, so two pods with their
-    own bots both produce update 1, update 2, ... -- and keyed on the platform
-    alone the second bot's update is claimed by the inbox as a duplicate of the
-    first's, dropped without a reply, an error, or a log line.
-
-    ``receiver`` names the bot the delivery arrived on: the surface id on a
-    surface-level webhook, ``SHARED_PLATFORM_RECEIVER`` on the platform-level
-    one. The pair is unique across the deployment; neither half is on its own.
-    """
-    candidates: list[object] = [
-        payload.get("event_id"),
-        payload.get("update_id"),
-        payload.get("id"),
-        payload.get("message_id"),
-        payload.get("data", {}).get("message_id")
-        if isinstance(payload.get("data"), dict)
-        else None,
-    ]
-    for candidate in candidates:
-        if candidate is not None and str(candidate):
-            return f"{platform}:{receiver}:{candidate}"
-    digest = hashlib.sha256(raw_body).hexdigest()
-    return f"{platform}:{receiver}:content-sha256:{digest}"
 
 
 def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -189,29 +162,6 @@ async def _verify_inbound_request(
     return None
 
 
-async def _surface_for_recipients(
-    normalized: dict[str, Any],
-    recipients: list[Any],
-    uow_factory: UnitOfWorkFactory,
-) -> Any:
-    """The surface this mail was delivered for, stamping the address that matched.
-
-    Every address it was delivered for is tried, not just the one the sender
-    typed: under aliasing or forwarding the pod's address is in ``received_for``
-    and matching on ``to`` alone loses the mail.
-    """
-    async with uow_scope(uow_factory) as uow:
-        repository = get_surface_service(uow).surface_repository
-        for address in recipients:
-            surface = await repository.get_active_by_address(
-                platform="RESEND", address=address
-            )
-            if surface is not None:
-                normalized["to"] = address
-                return surface
-    return None
-
-
 async def _handle_resend_webhook(
     *,
     payload: dict[str, Any],
@@ -229,17 +179,18 @@ async def _handle_resend_webhook(
     if not recipients:
         return {"message": "Ignored: no destination address"}
 
-    surface = await _surface_for_recipients(normalized, recipients, uow_factory)
+    async with uow_scope(uow_factory) as uow:
+        surface = await surface_for_recipients(
+            get_surface_service(uow).surface_repository, normalized, recipients
+        )
     if surface is None:
         return {"message": "Ignored: no surface for address"}
 
     # Resend's own id rather than the generic candidate list, because the
     # polling receiver has to be able to mint the same one for the same email
     # and has no raw body to fall back on.
-    source_event_id = resend_source_event_id(
-        normalized, receiver=str(surface.id)
-    ) or _surface_source_event_id(
-        "resend", normalized, raw_body, receiver=str(surface.id)
+    source_event_id = resend_webhook_source_event_id(
+        normalized, raw_body, receiver=str(surface.id)
     )
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),

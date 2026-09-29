@@ -20,13 +20,14 @@ import { request as __request } from '../core/request.js';
 export class AgentConversationsService {
     /**
      * List Pod Agent Conversations
-     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive.
+     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive. Pass search to keep only conversations whose title contains it (case-insensitive). Ordered by last_activity_at, most recent first.
      * @param podId
      * @param agentName
      * @param status
      * @param type
      * @param parentId
      * @param archived
+     * @param search
      * @param pageToken
      * @param limit
      * @returns ConversationListResponse Successful Response
@@ -39,6 +40,7 @@ export class AgentConversationsService {
         type?: (ConversationType | null),
         parentId?: (string | null),
         archived: boolean = false,
+        search?: (string | null),
         pageToken?: (string | null),
         limit: number = 20,
     ): CancelablePromise<ConversationListResponse> {
@@ -54,6 +56,7 @@ export class AgentConversationsService {
                 'type': type,
                 'parent_id': parentId,
                 'archived': archived,
+                'search': search,
                 'page_token': pageToken,
                 'limit': limit,
             },

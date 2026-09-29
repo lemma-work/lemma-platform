@@ -63,27 +63,64 @@ identified by path, and those paths change every launch.
 Installation:
 
 1. Validate manifest schema, release, target, source, digest, and sizes.
-2. Reserve space for the compressed downloads, expanded sizes, and 4 GiB of
-   working headroom before extraction.
-3. Reuse a verified archive or resume its `.part` file with a strict
+2. Reuse what an installed release already has (see
+   [Reusing an installed component](#reusing-an-installed-component)): copy a
+   component whose archive digest matches into the staging directory and hash
+   the copy. Only components that did not verify are downloaded.
+3. Reserve space for the archives still to download, their expanded sizes,
+   and 4 GiB of working headroom before extraction. The 6 GiB compressed and
+   8 GiB expanded limits apply to the whole release whatever is reused.
+4. Reuse a verified archive or resume its `.part` file with a strict
    `Content-Range`. A connection that drops, or is silent for 60 seconds
    (the header wait and every body read), is resumed automatically up to five
    times with backoff; a digest, range or client error is not retried.
-4. Hash the existing prefix and new bytes as they transfer.
-5. Reject redirects outside HTTPS, wrong status/size/digest, archive overlap,
+   Download progress counts only the archives actually fetched.
+5. Hash the existing prefix and new bytes as they transfer.
+6. Reject redirects outside HTTPS, wrong status/size/digest, archive overlap,
    path escape, duplicate entries, symlinks, and unsafe expansion.
-6. Extract into `.release-pid-time.staging`; create sparse holes for zero-filled
+7. Extract into `.release-pid-time.staging`; create sparse holes for zero-filled
    raw-disk chunks.
-7. Validate host/guest release markers and write artifact identity.
-8. Sync the completed stage and parent directory, then atomically rename into
+8. Validate host/guest release markers, write artifact identity, and record
+   each component's contents (below).
+9. Sync the completed stage and parent directory, then atomically rename into
    a directory identified by the release and artifact digests. A same-version
    rebuild or repair gets its own directory; existing runtime trees stay in place.
-9. Keep valid downloads across retry; delete archives only after staging succeeds.
-10. Stop the previous runtime only after the candidate has been fully staged,
+10. Keep valid downloads across retry; delete archives only after staging succeeds.
+11. Stop the previous runtime only after the candidate has been fully staged,
     then save the candidate binding. Retain previous releases; staging does not
     establish database compatibility or health and never authorizes pruning.
 
 No file inside the archive is individually fsynced.
+
+### Reusing an installed component
+
+A release is two archives that change at different rates: the host pack
+carries the app and changes every release, the guest runtime is a Linux image
+that changes rarely. Beside `.lemma-runtime-artifacts.json` (the archive
+digests the release was installed from), each release records
+`.lemma-runtime-contents.json`: per component, the archive digest and a digest
+of the tree it expanded to (`local-runtime/` for the host pack,
+`managed-runtime/` for the guest) -- every path, kind, file size, SHA-256 and,
+on Unix, permission bits.
+
+When the manifest names an archive whose digest and size an installed release
+records for the same target, the installer copies that release's tree into
+staging (`clonefile` on APFS, a real copy elsewhere, so the releases never
+share a file) and hashes the copy. A digest that matches the record is as
+trusted as a verified download; anything else -- a changed file, an extra one,
+a link, a copy that fails -- discards the copy, says why in the install log,
+and downloads the archive as if nothing had been installed. Repair
+(`reinstall_from_manifest`) reuses nothing. A release installed before these
+records existed has none, so an update from it downloads everything, as
+before. Because a copy is independent, `prune_retired_releases` and rollback to
+`previousRuntime` are unaffected.
+
+The update dialog's runtime size comes from the feed. Feeds carry each
+archive's digest and size (`lemma.runtime_artifacts`) beside the whole-release
+`runtime_download_bytes`; an app that can read them subtracts every archive an
+installed release records, so the figure is what will be downloaded. It reads
+records only -- the install still hashes -- and an app from before this reads
+the whole-release figure.
 
 ## 3. Immutable guest and persistent data
 
@@ -130,6 +167,23 @@ and This Mac's **Free up space** asks for it on demand. The guest refuses to
 decide without a container listing, skips any image a pull holds a claim on,
 and never passes `--force` to `rmi`, so the engine's own in-use refusal is a
 second guard. The next `sandbox.ensure` that needs a removed image pulls it.
+
+The sandbox images are fetched only when somebody asks (This Mac → Coding
+agents, `sandbox.prepare`), with one exception: an update. When this computer
+has fetched sandbox images before and the release pins different ones, locald
+fetches them after `ready`, behind the workspace, so the download is not
+waiting at the next Wake up. Once per release: `sandbox-images.json` in
+locald's state records the images last fetched and the ones last fetched
+unasked, written before the fetch starts, so a failure is offered in Settings
+rather than retried on every start. With the workspace image reused across
+releases this usually finds it already there. While it downloads,
+`core.sandbox_images_status` carries the MB done and in total across both
+images, and the workspace notice and the Settings row show them.
+
+A workspace sandbox's runtime overlay is bind-mounted from
+`runtime/<sandbox>` beside its home on the data disk, at `/opt/lemma-runtime`,
+so it survives the container being replaced; purging the sandbox's storage and a
+local-data reset remove it.
 
 This Mac → Overview shows the data disk's allocated size (blocks, never the
 24 GiB length), the pre-migration backup (§5), and the runtime releases, in
@@ -276,6 +330,61 @@ runtime manager's reclaim alike.
 Only one daemon runs per installation root: `lemma-locald serve` takes an
 exclusive lock on `<root>/locald.lock` before it reclaims anything, so a second
 daemon exits without touching the first one's services.
+
+### 4.1 Shutdown, closing and quitting
+
+**Close is not quit.** On every platform, closing the workspace window hides
+it: the tray (Windows notification area, macOS menu bar), the daemon and the
+stack keep running, and on macOS the app also leaves the Dock. A pod app's
+window closes normally. Lemma comes back from the tray's Open Lemma, the Dock
+icon (macOS), a second launch (handed to the running process by the
+single-instance plugin, which reopens a window if none is left), or on Windows
+a left click on the tray icon; the tray menu is on the right button there and
+on any click on macOS. "Open Lemma at login" only launches the app; it adds no
+background agent of its own.
+
+**Quit is quit.** ⌘Q, the app menu's and the tray's Quit Lemma, Dock → Quit
+and any other OS terminate all take one path (`request_quit`): confirm if
+something would be lost, send `shutdown-daemon`, and exit once the daemon has
+stopped. Nothing is left: locald stops the Agent Host's process tree, each
+host service's process group (Windows: its stdin is closed, then
+`taskkill /T /F` after the grace, and the Job Object takes anything left when
+locald exits), and the guest; it then exits itself, and the shell waits for
+its control endpoint to disappear, forcing a verified identity if it does not.
+
+**The stop runs in tiers** (`locald/src/daemon/shutdown.rs`). Steps in a tier
+run at once; a tier starts when the previous one has finished:
+
+| Tier | Steps | Why here |
+|---|---|---|
+| 1 | `operations`: an in-flight start, stop, reset or config operation reaches its next checkpoint | Instant when nothing is running; only then is the "safe stopping point" wait announced. A running migration finishes |
+| 2 | `agent-host` and `sharing` | The Agent Host reports its runs' final states to the backend, so it goes first |
+| 3 | `host-processes`: backend and frontend together (`host.<id>` each) | Each service has a 5s grace before SIGKILL; stopped one after another they cost the sum |
+| 4 | `runtime` (`runtime.workers`, `runtime.guest-services`, `runtime.power-off`) and, on a developer stack, `supervisor` | After the backend, whose last writes go to the database |
+
+Inside the guest (`system.shutdown`), sandboxes stop first (1s grace each),
+then every core container at once, one engine call each: Postgres with its
+image's `SIGINT` (fast shutdown, clean, no recovery on the next start) and
+Redis with `SIGTERM` (a `SHUTDOWN` that fsyncs the append-only file and saves
+per its save points), both with 15s grace; SuperTokens, which keeps nothing
+and never answers `SIGTERM`, with 1s. The guest then powers off; the host
+polls the VM's exit, and signals it only after 20s. On Windows the
+distribution is terminated with `wsl --terminate` instead.
+
+Every finished step is broadcast as a `shutdown.step` event (`step`,
+`duration_ms`, `ok`, `error`, `detail` -- the guest's own per-phase times for
+`runtime.guest-services`) and written to `locald.log`, followed by one
+`shutdown took …ms: …` summary; the final `state stopped` event carries the
+total `duration_ms`. Both land in `events.jsonl`. A failed step does not skip
+the rest; the daemon exits non-zero and the next start reclaims what is left
+by identity.
+
+**Resume** is for one case: a new shell process in front of a stack that is
+still serving, because the shell exited without stopping locald (a crash, a
+force quit). The launch probes the recorded workspace's backend and frontend
+for the generation it recorded and opens it directly on a match. A launch
+after a quit or an update always misses, by design -- both stop the stack --
+and `launch.log` names the reason for every miss.
 
 ## 5. Host process contract
 
@@ -1021,11 +1130,65 @@ current workspace opens its own Settings instead.
 
 - builds digest-pinned OCI images;
 - builds/prunes host packs;
-- builds/shrinks guest runtimes;
+- builds/shrinks guest runtimes, or republishes one (below);
+- writes both runtime archives deterministically -- sorted entries, fixed
+  timestamps, normalised modes -- so an unchanged tree archives to the same
+  bytes;
 - writes archive sidecars and size breakdown;
 - enforces 6 GiB compressed and 8 GiB expanded gates;
 - publishes runtime assets for a release;
 - on manual non-publish dispatch, builds the compressed PR test DMG.
+
+The guest runtime's tree is not reproducible (packages are installed at build
+time, `mkfs.ext4` writes a fresh UUID, the initramfs carries timestamps), so a
+rebuild of unchanged inputs used to publish new bytes and every installed app
+downloaded them. `scripts/runtime_artifacts.py fingerprint` hashes what decides
+the guest's content before building it: the build script, the image
+definition and overlay, the boot preparer, the archive writer, the built
+`lemma-guestd`, the target, and the month, which stands for the unpinned Ubuntu
+package archive and caps how stale the guest's packages get. The manifest
+records it as `input_fingerprints.guest_runtimes.<target>` -- at the top level,
+because installed apps refuse unknown fields in artifact entries. When the
+newest published release with the same fingerprint is found, its archive is
+downloaded, checked against the SHA-256 its own manifest recorded, and
+republished in this release. It is copied rather than linked so pruning an
+older nightly never breaks a newer one. The `rebuild_guest_runtime` dispatch
+input forces a build.
+
+The host pack is not fingerprinted: its `release.json` names the version and
+the digests of images built in the same run, so it differs every release.
+
+#### The workspace image is reused across releases
+
+On Desktop the workspace image's digest is the sandbox's identity: the backend's
+profile digest is the image's own (`profiles._digest_for`), and guestd replaces a
+container whose `lemma.work/image-ref` differs. A new workspace image therefore
+replaced every sandbox and downloaded the whole image at the next Wake up. Lemma's
+own code no longer needs one -- it reaches every sandbox in the runtime overlay
+([sandbox layout](sandbox/README.md#one-layout-a-stable-image-a-floor-and-the-overlay))
+-- so the image is rebuilt only when what decides its content changes.
+
+`scripts/runtime_artifacts.py workspace-image` hashes those inputs:
+`Dockerfile.workspace` (which pins its base images by digest), the Python and
+Node lockfiles and profile scripts, the container's own start script, and the
+month, for the unpinned Debian archive. The floor -- Lemma's code the image also
+bakes -- is deliberately not an input, and a guard test fails when the
+Dockerfile starts copying a file that is neither hashed nor floor. The manifest
+records the result as `input_fingerprints.images.workspace`. When the newest
+published release with the same fingerprint has its image in the registry with
+both platforms, both architecture builds are skipped; `merge` tags that index
+with this release's name and the manifests point at its digest under the
+reference it was **first** published with, since a new tag on the same digest
+would still change the image reference guestd compares. The
+`rebuild_workspace_image` dispatch input forces a build.
+
+Both sandbox images are also built reproducibly -- digest-pinned bases,
+`SOURCE_DATE_EPOCH` from the fingerprint's month, `rewrite-timestamp`, and
+nothing left in a layer that records when it was built -- so a rebuild of the
+same inputs gives the same layers. The function image is still rebuilt every
+release, since it bakes `sandbox_runtime.function` and has no overlay; its
+layers are ordered so a release that changed only Lemma's code changes only the
+small ones at the top.
 
 `release-desktop.yml`:
 

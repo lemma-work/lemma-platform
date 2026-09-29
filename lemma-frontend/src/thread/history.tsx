@@ -4,8 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { lemma } from "@/session/client";
 import { source, NEW_CONVERSATION } from "@/data";
-import type { ConversationRef, Pod } from "@/data";
-import { applyArchived, unbound } from "./conversation-list";
+import type { Pod } from "@/data";
+import { applyArchived, patchConversationLists, refreshConversationLists, unbound } from "./conversation-list";
 
 import { ConversationTitle } from "./conversation-title";
 
@@ -50,10 +50,8 @@ export function History({
        and an archived conversation is still readable by id. What changes is
        this list, which is "conversations you can open here". */
     async function archive(id: string) {
-        const key = ["conversations", pod.id];
-        const previous = cache.getQueryData<ConversationRef[]>(key);
         setArchiving(id);
-        cache.setQueryData(key, applyArchived(previous, id));
+        patchConversationLists(cache, pod.id, (list) => applyArchived(list, id));
         /* Leave the pane rather than leave it pointed at something that is no
            longer in the list beside it. */
         if (id === conversationId) onPick(NEW_CONVERSATION);
@@ -66,7 +64,7 @@ export function History({
                 await lemma(pod.id).conversations.update(id, { is_archived: true }, { pod_id: pod.id });
             }
         } catch {
-            cache.setQueryData(key, previous);
+            void refreshConversationLists(cache, pod.id);
         } finally {
             setArchiving(null);
         }
@@ -76,7 +74,11 @@ export function History({
        This panel is for the conversations that have no other front door. */
     const all = unbound(history.data);
     const recent = all.slice(0, SHOWN);
-    const rest = all.length - recent.length;
+    /* Against the raw first page, not the unbound rows: the server pages before
+       bound rows are dropped, so a page of mostly bound rows can leave five or
+       fewer here while older pages still exist. Any row the server sent that
+       this panel is not showing means there is more to see. */
+    const more = (history.data?.length ?? 0) > recent.length;
 
     return (
         <aside className="history" aria-label={"Conversations with " + pod.name}>
@@ -141,9 +143,13 @@ export function History({
                 </>
             )}
 
-            {rest > 0 && (
+            {more && (
                 <button className="history__more" onClick={onSeeAll}>
-                    {rest} more <ArrowRightIcon size={15} />
+                    {/* No count: this list is the first page, so any number
+                        here would be a floor dressed up as a total. Named
+                        for where it goes, the History tab, rather than a
+                        third name for the same list. */}
+                    See all in History <ArrowRightIcon size={15} />
                 </button>
             )}
         </aside>

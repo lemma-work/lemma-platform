@@ -89,7 +89,15 @@ class SurfaceBehaviorConfigInput(BaseModel):
         default_factory=SurfaceIdentityConfigInput
     )
     channels: list[SurfaceChannelRouteInput] = Field(default_factory=list)
-    dm_conversation_reset_after_hours: int = 24
+    dm_conversation_reset_after_hours: int | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Ignored. The DM reset window is a deployment-wide setting "
+            "(SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so "
+            "existing pod bundles and clients keep working."
+        ),
+    )
     send_policy: SurfaceSendPolicyConfig = Field(
         default_factory=SurfaceSendPolicyConfig
     )
@@ -130,7 +138,6 @@ class SurfaceConfigResponse(BaseModel):
         default_factory=SurfaceIdentityConfigResponse
     )
     channels: list[SurfaceChannelRouteResponse] = Field(default_factory=list)
-    dm_conversation_reset_after_hours: int = 24
     send_policy: SurfaceSendPolicyConfig = Field(
         default_factory=SurfaceSendPolicyConfig
     )
@@ -153,7 +160,6 @@ def surface_config_from_input(
 ) -> SurfaceConfig:
     """Build the domain config from API input."""
     return SurfaceConfig(
-        dm_conversation_reset_after_hours=config_input.dm_conversation_reset_after_hours,
         identity=SurfaceIdentityPolicy(
             allowed_domains=config_input.identity.allowed_domains,
             allowed_email_addresses=config_input.identity.allowed_email_addresses,

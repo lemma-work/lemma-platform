@@ -22,6 +22,7 @@ from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_tool_call_id,
 )
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     MessageKind,
@@ -518,14 +519,18 @@ class TestResolutionRouting:
         host is still executing — the whole reason this branch exists."""
         dispatched: list = []
         service, repository, run_id = self._service(monkeypatch, dispatched)
+        # The owner decides: an approval lends the owner's authority.
         conversation = SimpleNamespace(
-            id=repository.call.conversation_id, agent_id=None, pod_id=uuid4()
+            id=repository.call.conversation_id,
+            agent_id=None,
+            pod_id=uuid4(),
+            user_id=uuid4(),
         )
 
         resolution = await service.resolve_user_approval_internal(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
-            user_id=uuid4(),
+            user_id=conversation.user_id,
             pod_id=conversation.pod_id,
             decision=AgentRunApprovalDecision.APPROVE_ONCE,
         )
@@ -535,20 +540,51 @@ class TestResolutionRouting:
         assert repository.created_runs == 0
 
     @pytest.mark.asyncio
+    async def test_only_the_owner_can_approve(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An approved call runs with the owner's authority, so a decision from
+        anyone else is refused before anything is recorded -- the one place
+        every entry point (HTTP, buttons, typed replies) passes through."""
+        service, repository, _ = self._service(monkeypatch, [])
+        conversation = SimpleNamespace(
+            id=repository.call.conversation_id,
+            agent_id=None,
+            pod_id=uuid4(),
+            user_id=uuid4(),
+        )
+
+        with pytest.raises(ApprovalNotOwnedError):
+            await service.resolve_user_approval_internal(
+                conversation=conversation,
+                approval_id=repository.call.tool_call_id,
+                user_id=uuid4(),
+                pod_id=conversation.pod_id,
+                decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            )
+
+        assert repository.decision is None
+        assert repository.appended == []
+
+    @pytest.mark.asyncio
     async def test_the_card_is_closed_with_a_tool_return(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Pending approvals are listed by "call without a return". Skipping the
         return would leave the card stuck asking forever."""
         service, repository, _ = self._service(monkeypatch, [])
+        # The owner decides: an approval lends the owner's authority.
         conversation = SimpleNamespace(
-            id=repository.call.conversation_id, agent_id=None, pod_id=uuid4()
+            id=repository.call.conversation_id,
+            agent_id=None,
+            pod_id=uuid4(),
+            user_id=uuid4(),
         )
 
         await service.resolve_user_approval_internal(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
-            user_id=uuid4(),
+            user_id=conversation.user_id,
             pod_id=conversation.pod_id,
             decision=AgentRunApprovalDecision.APPROVE_ONCE,
         )
@@ -565,14 +601,18 @@ class TestResolutionRouting:
         a wake-up is milliseconds, and someone is watching the agent wait."""
         dispatched: list = []
         service, repository, _ = self._service(monkeypatch, dispatched)
+        # The owner decides: an approval lends the owner's authority.
         conversation = SimpleNamespace(
-            id=repository.call.conversation_id, agent_id=None, pod_id=uuid4()
+            id=repository.call.conversation_id,
+            agent_id=None,
+            pod_id=uuid4(),
+            user_id=uuid4(),
         )
 
         resolution = await service.resolve_user_approval_internal(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
-            user_id=uuid4(),
+            user_id=conversation.user_id,
             pod_id=conversation.pod_id,
             decision=AgentRunApprovalDecision.APPROVE_ONCE,
             defer_reconciliation=True,
@@ -658,14 +698,18 @@ class TestAParkedInteractionDoesNotResume:
         repository.paused_run = SimpleNamespace(
             id=run_id, status=AgentRunStatus.RUNNING
         )
+        # The owner decides: an approval lends the owner's authority.
         conversation = SimpleNamespace(
-            id=repository.call.conversation_id, agent_id=None, pod_id=uuid4()
+            id=repository.call.conversation_id,
+            agent_id=None,
+            pod_id=uuid4(),
+            user_id=uuid4(),
         )
 
         await service.resolve_user_approval_internal(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
-            user_id=uuid4(),
+            user_id=conversation.user_id,
             pod_id=conversation.pod_id,
             # Denied rather than approved: an approval would run the wrapped
             # tool as the user, which is a different mechanism entirely. The

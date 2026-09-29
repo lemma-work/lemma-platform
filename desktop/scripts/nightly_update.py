@@ -57,6 +57,27 @@ def artifact_size(manifest: dict[str, object], kind: str, target: str) -> int:
     return size
 
 
+def runtime_artifacts(
+    manifest: dict[str, object], host: str, guest: str
+) -> dict[str, dict[str, object]] | None:
+    """Each runtime archive's digest and size, so the app can leave out of the
+    download it announces whatever it already has installed.
+
+    None unless both archives carry a digest: a feed that itemised one of them
+    would have the app announce half a download as the whole of it.
+    """
+    entries: dict[str, dict[str, object]] = {}
+    for name, kind, target in (
+        ("host", "host_packs", host),
+        ("guest", "guest_runtimes", guest),
+    ):
+        sha256 = object_field(object_field(manifest, kind), target).get("sha256")
+        if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+            return None
+        entries[name] = {"sha256": sha256, "size": artifact_size(manifest, kind, target)}
+    return entries
+
+
 def stage(
     target: str,
     version: str,
@@ -103,6 +124,9 @@ def stage(
         },
         "sha256": hashlib.sha256(payload.read_bytes()).hexdigest(),
     }
+    itemised = runtime_artifacts(manifest, host, guest)
+    if itemised is not None:
+        object_field(fragment, "lemma")["runtime_artifacts"] = itemised
     (directory / f"{target}.json").write_text(json.dumps(fragment, indent=2) + "\n")
 
 

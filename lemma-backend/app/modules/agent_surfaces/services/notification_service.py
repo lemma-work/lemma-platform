@@ -423,7 +423,9 @@ class NotificationService:
         workflow engine's job.
         """
         conversation_id = notification.origin_conversation_id
-        if conversation_id is None:
+        if conversation_id is None or not notification.expects_response:
+            # An FYI closes nothing the asker was waiting on, so its expiry is
+            # not news either.
             return
         if notification.origin_kind is not NotificationOriginKind.AGENT_RUN:
             return
@@ -505,7 +507,13 @@ class NotificationService:
             if not notification.is_past_due(now=now):
                 continue
             notification.expire()
-            await self.notifications.update(notification)
+            # An expired ask is as settled as an answered one: the asking
+            # conversation counts it as no longer outstanding, so the sweep that
+            # closes the last one has to say so, or that conversation waits on a
+            # question nobody can answer any more.
+            await self._announce_if_settled(
+                await self.notifications.update(notification)
+            )
             expired += 1
         return expired
 

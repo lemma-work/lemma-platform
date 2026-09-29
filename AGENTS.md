@@ -114,6 +114,18 @@ provider's JSON, an untyped third-party library — and then say so in a comment
 and narrow it once the data is checked. `make architecture` ratchets the count
 per module; it may fall, not rise.
 
+## Boot hooks must not scale with data
+
+A module's `api_lifespans` and `worker_lifespans` run on every replica, on
+every restart, before anything is served. Work there that walks stored data —
+a backfill over every pod schema, a repair over every row — grows with every
+pod ever created until it owns the boot, and a boot past the liveness deadline
+restarts into the same boot. Backfills go in a migration or a worker job;
+repairs happen lazily, where the thing is used. Every hook is listed with its
+reason in `lemma-backend/app/core/tests/unit/test_boot_hooks.py`, and
+`test_boot_budget_e2e.py` holds module boot to a budget against a thousand pod
+schemas.
+
 ## Before opening a pull request
 
 ```bash

@@ -23,6 +23,7 @@ from app.modules.agent.infrastructure.models import (
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
+    assemble_runtime_history,
     runtime_full_run_ids,
 )
 from app.modules.test_support.query_counting import counted_queries
@@ -95,7 +96,7 @@ async def _load(db_session, agent_run_id, *, limit=MAX_HISTORY_AGENT_RUNS):
     if not window.runs:
         return window.runs
     return await repo.attach_runtime_history_messages(
-        window.runs, full_run_ids=runtime_full_run_ids(window.runs, None)
+        window.runs, full_run_ids=runtime_full_run_ids(window.runs)
     )
 
 
@@ -244,3 +245,115 @@ async def test_the_digest_read_does_not_grow_with_the_conversation(
     assert len(short.runs) == 6
     assert len(long.runs) == MAX_HISTORY_AGENT_RUNS
     assert long.total_runs == 90
+
+
+async def test_a_notification_that_belongs_to_no_run_is_still_loaded(
+    db_session, scenario
+):
+    """A proactive message is written outside any run, so reading by run id
+    never finds it -- and the person's "yes" reached an agent that could not see
+    what had been asked."""
+    await scenario.create_org_with_pod(name_prefix="History")
+    run_ids = await _seed(db_session, scenario, runs=2, messages_per_run=3)
+    conversation_id = (await db_session.get(AgentRunModel, run_ids[0])).conversation_id
+    for sequence, text, run_id in (
+        (500, "your report is ready", None),
+        (501, "an ordinary message with no run", None),
+    ):
+        db_session.add(
+            MessageModel(
+                id=uuid4(),
+                conversation_id=conversation_id,
+                agent_run_id=run_id,
+                sequence=sequence,
+                role="assistant" if sequence == 500 else "user",
+                kind="NOTIFICATION" if sequence == 500 else "TEXT",
+                text=text,
+                created_at=_BASE + timedelta(minutes=30),
+            )
+        )
+    await db_session.flush()
+
+    loaded = await _repo(db_session).load_unattached_notifications(
+        conversation_id, after_sequence=None, before_sequence=None, limit=20
+    )
+
+    assert [message.text for message in loaded] == ["your report is ready"]
+
+    # Bounded on both sides: older than the history, or arriving after the turn
+    # being answered, it stays out.
+    assert (
+        await _repo(db_session).load_unattached_notifications(
+            conversation_id, after_sequence=500, before_sequence=None, limit=20
+        )
+        == []
+    )
+    assert (
+        await _repo(db_session).load_unattached_notifications(
+            conversation_id, after_sequence=None, before_sequence=500, limit=20
+        )
+        == []
+    )
+
+
+async def test_the_first_reply_to_a_notification_is_read_against_it(
+    db_session, scenario
+):
+    """A notification opened this conversation, so it precedes the first run.
+
+    The lower bound used to be the oldest message carried -- here the run's own
+    first message, immediately after the notification -- so the query asked for
+    sequences both above and below the same number and returned nothing. The
+    person's "yes" reached an agent that could not see what had been asked.
+    """
+    await scenario.create_org_with_pod(name_prefix="HistoryFirstReply")
+    conversation = ConversationModel(
+        id=uuid4(),
+        user_id=UUID(scenario.owner_user["id"]),
+        pod_id=UUID(scenario.pod_id),
+        organization_id=UUID(scenario.org_id),
+    )
+    db_session.add(conversation)
+    run = AgentRunModel(
+        id=uuid4(),
+        conversation_id=conversation.id,
+        status="RUNNING",
+        agent_runtime={"profile_id": "system:lemma"},
+        started_at=_BASE,
+        created_at=_BASE,
+    )
+    db_session.add(run)
+    for sequence, run_id, role, kind, text in (
+        (1, None, "assistant", "NOTIFICATION", "your report is ready"),
+        (2, run.id, "user", "TEXT", "yes"),
+        # Written while the turn runs: it must not end up after the reply.
+        (3, None, "assistant", "NOTIFICATION", "arrived mid-run"),
+    ):
+        db_session.add(
+            MessageModel(
+                id=uuid4(),
+                conversation_id=conversation.id,
+                agent_run_id=run_id,
+                sequence=sequence,
+                role=role,
+                kind=kind,
+                text=text,
+                created_at=_BASE + timedelta(seconds=sequence),
+            )
+        )
+    await db_session.flush()
+
+    repo = _repo(db_session)
+    messages = await assemble_runtime_history(
+        repo,
+        await repo.load_runtime_history_digests_by_run_id(
+            run.id, limit=MAX_HISTORY_AGENT_RUNS
+        ),
+        conversation_id=conversation.id,
+        run_id=run.id,
+    )
+
+    assert [message.text for message in sorted(messages, key=lambda m: m.sequence)] == [
+        "your report is ready",
+        "yes",
+    ]

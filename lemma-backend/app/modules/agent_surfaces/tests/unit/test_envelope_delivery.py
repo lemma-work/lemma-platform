@@ -152,6 +152,18 @@ async def test_an_envelope_where_something_landed_does_not_raise() -> None:
     assert receipt.delivered
 
 
+async def test_choices_that_landed_partly_as_words_are_reported_as_degraded() -> None:
+    """The receipt is what arms a typed answer, so it must not say NATIVE."""
+    adapter = _Adapter(_render_choices=AsyncMock(return_value=PartDelivery.DEGRADED))
+
+    receipt = await _deliver(adapter, SurfaceEnvelope(choices=_questions()))
+
+    assert receipt.parts["choices"] is PartDelivery.DEGRADED
+    assert receipt.degraded == ["choices"]
+    # Nothing was sent again: the platform already asked the rest itself.
+    adapter.send_message.assert_not_awaited()
+
+
 # --- what a bug must not look like ---------------------------------------
 
 

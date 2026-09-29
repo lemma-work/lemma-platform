@@ -127,7 +127,7 @@ function ConnectedRow({ surface, pod, onDrop, onManage }: { surface: Surface; po
                     /* A surface on this pod that answers as a different agent.
                        Drawn like the pod's own, it says "Marketing is on
                        Telegram" about a bot that is not Marketing. */
-                    <span className="reachrow__note">answers as {surface.agentName || "another teammate"}</span>
+                    <span className="reachrow__note">{surface.agentName ? "answers as " + surface.agentName : "answers under another name"}</span>
                 )}
             </div>
             <div className="reachrow__acts">
@@ -293,7 +293,7 @@ function why(entry: Connectable): string {
         return (
             "Lemma's shared " +
             (entry.platform === "WHATSAPP" ? "number" : "identity") +
-            " is already taken by another teammate in this organization."
+            " is already taken elsewhere in this organization."
         );
     }
     if (entry.effort === "instant" && entry.platform === "RESEND" && entry.emailDomain) {
@@ -526,7 +526,7 @@ function ConnectRow({
                 )}
                 {elsewhere && held && !guiding && (
                     <span className="reachrow__note">
-                        Another teammate already answers on {name}, so this one needs an identity of its own.
+                        {name} is already in use elsewhere in this organization, so this one needs an identity of its own.
                     </span>
                 )}
                 {/* A choice, not only a fallback: a bot carrying this
@@ -627,8 +627,8 @@ function Focused({
                     <h3>Give {pod.name} a Slack bot of its own</h3>
                     <p>
                         {taken
-                            ? "That Slack account already answers as " + taken + ". One account belongs to one teammate, and one Slack app is one bot user — so this one needs an app of its own."
-                            : "One Slack app is one bot user, so a teammate that answers under its own name needs an app under its own name. Four steps, and the manifest does most of them."}
+                            ? "That Slack account already answers under another name in this organization. One account answers under one name, and one Slack app is one bot user — so this one needs an app of its own."
+                            : "One Slack app is one bot user, so " + pod.name + " needs an app under its own name. Four steps, and the manifest does most of them."}
                     </p>
                     <OwnBot entry={entry} pod={pod} onDone={onDone} />
                 </>
@@ -636,7 +636,7 @@ function Focused({
                 <>
                     <h3>Give {pod.name} a bot of its own</h3>
                     <p>
-                        Lemma&rsquo;s setup bot makes it for you and names it after this teammate. You will not need
+                        Lemma&rsquo;s setup bot makes it for you and names it after {pod.name}. You will not need
                         to touch BotFather.
                     </p>
                     <Guided pod={pod} onDone={onDone} />
@@ -746,7 +746,7 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
             /* Not a failure to report and stop at: the account is spoken for,
                and the answer is an identity of this teammate's own. */
             if (!isCredentialConflict(problem)) return;
-            setTaken("another teammate");
+            setTaken("elsewhere");
             setFocus(variables.entry);
         },
     });
@@ -783,7 +783,7 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
     return (
         <Modal
             title={"Where can you reach " + pod.name + "?"}
-            subtitle="Pick a channel and your teammate answers there, under its own name."
+            subtitle={"Pick a channel and " + pod.name + " answers there, under its own name."}
             onClose={onClose}
         >
             {managing ? <SurfaceManage pod={pod} surface={managing} onBack={() => setManaging(null)} onSaved={() => { refresh(); setManaging(null); }} /> : focus ? (

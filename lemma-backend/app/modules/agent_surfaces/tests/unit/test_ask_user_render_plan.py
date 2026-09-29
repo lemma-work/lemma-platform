@@ -11,7 +11,6 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_ask_user_render_plan,
     merge_other_answers,
     parse_callback_id,
-    render_questions_as_text,
 )
 
 
@@ -70,11 +69,11 @@ def test_single_question_title_is_the_question():
     assert plan.title == "Ship it?"
 
 
-def test_render_questions_as_text_numbers_options_and_marks_recommended():
+def test_question_plan_to_plain_text_numbers_options_and_marks_recommended():
     plan = build_ask_user_render_plan(
         request=_request(), conversation_id=uuid4(), tool_call_id="t"
     )
-    text = render_questions_as_text(plan)
+    text = plan.to_plain_text()
     assert "1. Pick a color" in text
     assert "Blue (recommended)" in text
     assert "S — small" in text

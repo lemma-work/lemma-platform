@@ -169,6 +169,8 @@ class Conversation(Entity):
     output: JsonValue | None = None
     metadata: JsonObject | None = None
     is_archived: bool = False
+    #: None only before the row is written.
+    last_activity_at: datetime | None = None
     # Diagnostics from the most recent agent run, so a single `conversations get`
     # can explain a failure without separately fetching runs.
     last_run_status: AgentRunStatus | None = None
@@ -219,14 +221,10 @@ class AgentRun(Entity):
     messages: list[Message] = Field(default_factory=list)
     #: How many messages the run actually has, which is not always how many are
     #: loaded. Runtime history loads older runs down to their first and last
-    #: message, so anything reasoning about the *size* of a run -- the history
-    #: budget, the elision count -- must ask this rather than len(messages).
+    #: message, so anything reasoning about the *size* of a run -- the elision
+    #: count -- must ask this rather than len(messages).
     #: None means nothing was elided and the two are the same.
     total_message_count: int | None = None
-    #: Newest message timestamp, carried when the messages themselves are not.
-    #: The surface age window asks a run how recently it was active, and it has
-    #: to be able to ask that before deciding which runs are worth loading.
-    newest_message_at: datetime | None = None
 
     @property
     def message_count(self) -> int:

@@ -91,8 +91,8 @@ class InMemoryRepository(Generic[E]):
 class PassthroughEventInbox:
     """Unit-test inbox double that executes one delivery without persistence."""
 
-    async def process(self, consumer, event, handler):
-        del consumer, event
+    async def process(self, consumer, event, handler, *, max_attempts=None):
+        del consumer, event, max_attempts
         await handler()
         return True
 

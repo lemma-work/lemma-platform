@@ -23,6 +23,11 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
+from app.modules.agent.contracts.sign_in import (
+    sign_in_link,
+    sign_in_message,
+    sign_in_request_from_tool_args,
+)
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 
@@ -50,29 +55,24 @@ async def sign_in_prompt_envelope(
     if waiting is None or waiting.tool_call_id != tool_call_id:
         return None
 
-    origin = str(waiting.tool_args.get("origin") or "")
-    reason = str(waiting.tool_args.get("reason") or "")
-    if not origin:
+    request = sign_in_request_from_tool_args(waiting.tool_args)
+    if request is None:
         return None
 
-    lines = [f"I need you to sign in to {origin} so I can carry on."]
-    if reason:
-        lines.append(f"What I am doing: {sanitize_user_visible_text(reason)}")
-    # Addressed by the pause it is for: the conversation and the tool call that
-    # is waiting. It used to be a row id, which meant a second record of what
-    # this link is about, kept in step by hand.
-    lines.append(
-        f"{settings.frontend_url.rstrip('/')}/sign-in-to-site"
-        f"/{conversation_id}/{tool_call_id}"
-    )
-    lines.append(
-        "The link opens the site in my browser for you. I will not ask for your "
-        "password and I cannot see it."
+    # What is said, and where the link goes, is the agent's (`agent.contracts.
+    # sign_in`); what is safe to put in front of somebody on this surface is not.
+    body = sign_in_message(
+        origin=request.origin,
+        reason=sanitize_user_visible_text(request.reason) if request.reason else "",
+        link=sign_in_link(
+            settings.frontend_url,
+            conversation_id=conversation_id,
+            tool_call_id=tool_call_id,
+        ),
     )
 
     # One message, like the question path: a lead-in sent separately arrives as a
     # second message on chat and a second email on email.
-    body = "\n".join(lines)
     return SurfaceEnvelope(text="\n\n".join(part for part in [narration, body] if part))
 
 

@@ -42,6 +42,8 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
+from typing import Protocol
+from uuid import UUID
 
 from dotenv import load_dotenv
 
@@ -83,6 +85,7 @@ def _load_model_registry() -> None:
 
 
 from app.core.config import reveal_secret
+from app.core.crypto import get_secret_cipher
 from app.core.config import settings
 from app.modules.connectors.config import connector_settings
 from app.core.infrastructure.db.session import async_session_maker
@@ -101,7 +104,10 @@ from app.modules.connectors.domain.connector import (
     SqlKindSpec,
     SystemOAuthCredentialRef,
 )
-from app.modules.connectors.domain.auth_config import AuthConfigStatus
+from app.modules.connectors.domain.auth_config import (
+    AuthConfigSource,
+    AuthConfigStatus,
+)
 from app.modules.connectors.services.auth_config_schemas import (
     default_auth_config_schema,
 )
@@ -118,6 +124,9 @@ from app.modules.connectors.infrastructure.adapters.schema_compiler import (
 )
 from app.modules.connectors.infrastructure.repositories.connector_operation_repository import (
     ConnectorOperationRepository,
+)
+from app.modules.connectors.infrastructure.repositories.account_repository import (
+    AccountRepository,
 )
 from app.modules.connectors.infrastructure.repositories.connector_repository import (
     ConnectorRepository,
@@ -1864,6 +1873,111 @@ async def _retire_composio_capabilities(connector_repository, session) -> int:
     return retired
 
 
+class _ReauthFlagger(Protocol):
+    async def mark_connected_for_reauth(self, auth_config_id: UUID) -> int:
+        """Mark every connected account on this install for reauth; the count."""
+
+
+async def _disable_unmanaged_composio_defaults(
+    connector_repository, account_repository: _ReauthFlagger, session
+) -> int:
+    """Switch off Lemma-default installs of toolkits Composio stopped managing.
+
+    Such an install was made while Composio still held credentials for the
+    toolkit. Once the catalog says it does not, connecting through it asks
+    Composio for managed credentials that no longer exist -- a 404 the person
+    saw as a 502 -- and there is no way to fix that from the install. Disabling
+    it puts the organization back where a fresh install would start: bring its
+    own app. Creating such an install is already refused.
+
+    Disabled rather than deleted, as the retirement sweep does, and for the same
+    reason: deleting would silently disconnect people. Their accounts are
+    flagged ``REAUTH_REQUIRED`` instead, so each one shows the reconnect the
+    person now needs rather than failing on its next call.
+
+    Idempotent: a disabled install no longer matches, so a second import is a
+    no-op.
+    """
+    from sqlalchemy import text
+
+    composio_kind = ConnectorKind.COMPOSIO.value
+    candidates = await session.execute(
+        text(
+            "SELECT DISTINCT connector_id FROM auth_configs "
+            "WHERE kind = :kind AND config_source = :system_default "
+            "AND status <> :disabled"
+        ),
+        {
+            "kind": composio_kind,
+            "system_default": AuthConfigSource.SYSTEM_DEFAULT.value,
+            "disabled": AuthConfigStatus.DISABLED.value,
+        },
+    )
+    swept = 0
+    for connector_id in sorted(str(row[0]) for row in candidates.all()):
+        connector = await connector_repository.get(connector_id)
+        spec = next(
+            (
+                one
+                for one in (connector.kinds if connector else [])
+                if one.kind is ConnectorKind.COMPOSIO
+            ),
+            None,
+        )
+        if spec is None or spec.system_default_available:
+            continue
+        disabled = await session.execute(
+            text(
+                "UPDATE auth_configs SET status = :disabled, is_default = false "
+                "WHERE connector_id = :connector_id AND kind = :kind "
+                "AND config_source = :system_default AND status <> :disabled "
+                "RETURNING id"
+            ),
+            {
+                "disabled": AuthConfigStatus.DISABLED.value,
+                "connector_id": connector_id,
+                "kind": composio_kind,
+                "system_default": AuthConfigSource.SYSTEM_DEFAULT.value,
+            },
+        )
+        install_ids = [row[0] for row in disabled.all()]
+        flagged = 0
+        for install_id in install_ids:
+            flagged += await account_repository.mark_connected_for_reauth(install_id)
+        swept += len(install_ids)
+        logger.warning(
+            "connector_catalog.unmanaged_composio_default.installs_disabled",
+            connector_id=connector_id,
+            count=len(install_ids),
+            accounts_flagged=flagged,
+        )
+    return swept
+
+
+async def _run_unmanaged_composio_default_sweep(*, dry_run: bool) -> int:
+    """Session wrapper around :func:`_disable_unmanaged_composio_defaults`.
+
+    Every import, like the retirement sweep: the toolkit's answer is whatever
+    the catalog holds now, whichever provider this run synced.
+    """
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        try:
+            swept = await _disable_unmanaged_composio_defaults(
+                ConnectorRepository(uow),
+                AccountRepository(uow, encryption=get_secret_cipher()),
+                session,
+            )
+            if dry_run:
+                await uow.rollback()
+            else:
+                await uow.commit()
+            return swept
+        except Exception:
+            await uow.rollback()
+            raise
+
+
 async def _run_composio_retirements(*, dry_run: bool) -> int:
     """Session wrapper around :func:`_retire_composio_capabilities`.
 
@@ -2280,6 +2394,10 @@ async def main() -> None:
             "connector_catalog.composio_retirements.applied",
             count=retired_connectors,
         )
+
+    # After the Composio sync above, which is what decides whether Composio
+    # still manages each toolkit (idempotent).
+    await _run_unmanaged_composio_default_sweep(dry_run=args.dry_run)
 
     # Apply any one-time connector id renames now that the target connectors have
     # been synced (idempotent; skips renames whose old connector is already gone).

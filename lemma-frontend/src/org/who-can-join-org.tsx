@@ -193,7 +193,7 @@ export function WhoCanJoinOrg({ orgId, mayChange }: {
             {/* Said here because the refusal it causes is raised somewhere
                 else entirely — on a teammate's own page, by somebody who may
                 not be able to do anything about it. */}
-            <p className="joins__aside">A teammate can only be opened as wide as the organization around it.</p>
+            <p className="joins__aside">Nothing inside can be opened wider than the organization around it.</p>
         </div>
     );
 }

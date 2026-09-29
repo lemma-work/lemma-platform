@@ -174,6 +174,8 @@ fn the_stop_budget_and_the_split_counts_are_reportable() {
     let stopped = StoppedContainers {
         sandboxes: 4,
         core: 3,
+        sandboxes_ms: 0,
+        core_ms: 0,
     };
     assert_eq!(stopped.total(), 7);
 }

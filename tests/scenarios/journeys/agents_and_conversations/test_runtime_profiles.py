@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import pytest
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 from harness.credentials import needs
 from harness.environment import OPEN_SIGNUP
+from harness.fake_upstreams import REJECTED_API_KEY
+from harness.provider_view import PROVIDER_BASE
 
-#: A real, resolvable public host. The platform refuses a base URL it cannot
-#: resolve — the same guard that stops a connector pointing at internal
-#: services — so a made-up domain is rejected before anything is stored.
-#: Nothing here ever calls it: creating a profile records configuration, and
-#: the scenarios assert on what comes back from Lemma, not from a provider.
-PROVIDER_BASE_URL = "https://api.openai.com/v1"
+#: Adding a provider asks it for its models with the key the person typed, and
+#: a key it refuses is refused here too -- a real provider refuses every key a
+#: scenario could make up. So the provider is the one the egress proxy stands in
+#: for, and every scenario that adds one asks for the `provider` fixture, which
+#: skips saying why on a run with no proxy: against a deployment, or with
+#: SCENARIOS_EGRESS=off.
+PROVIDER_BASE_URL = f"{PROVIDER_BASE}/v1"
 
 pytestmark = [
     journey("Agents and conversations"),
@@ -41,7 +44,7 @@ async def org(world):
     "agent.runtime.profiles.get",
     "agent.runtime.profiles.list",
 )
-async def test_an_organization_can_add_a_provider(org, run):
+async def test_an_organization_can_add_a_provider(org, provider, run):
     alice, organization = org
 
     created = await alice.api.post(
@@ -67,7 +70,7 @@ async def test_an_organization_can_add_a_provider(org, run):
 @scenario("A provider's credential is never handed back")
 @proves("PS-AGENT-004", "PS-CONN-011")
 @covers("agent.runtime.profiles.get", "agent.runtime.profiles.list")
-async def test_a_provider_key_is_never_returned(org, run):
+async def test_a_provider_key_is_never_returned(org, provider, run):
     alice, organization = org
     created = await alice.api.post(
         f"/organizations/{organization['id']}/agent-runtime/profiles",
@@ -94,6 +97,37 @@ async def test_a_provider_key_is_never_returned(org, run):
     )
 
 
+@scenario("A provider that refuses the key is not added")
+@proves("PS-AGENT-004")
+@covers("agent.runtime.profiles.create", "agent.runtime.profiles.list")
+async def test_a_key_the_provider_rejects_is_refused(org, provider, run):
+    alice, organization = org
+    name = run.name("refused-gateway")
+
+    response = await alice.api.call(
+        "POST",
+        f"/organizations/{organization['id']}/agent-runtime/profiles",
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "name": name,
+            "base_url": PROVIDER_BASE_URL,
+            "api_key": REJECTED_API_KEY,
+            "model_names": ["house-model"],
+        },
+    )
+
+    assert response.status_code == 400, (response.status_code, response.text)
+    assert "rejected this API key" in response.text, response.text
+    assert REJECTED_API_KEY not in response.text, (
+        "a refused credential must not come back either"
+    )
+    listed = {p["name"] for p in await alice.runtime_profiles_in(organization)}
+    assert name not in listed, (
+        "a provider whose key was refused must not be saved, or it reads as "
+        f"available and fails every run: {listed}"
+    )
+
+
 @scenario("A provider can be renamed, archived, and brought back")
 @proves("PS-AGENT-004")
 @covers(
@@ -101,7 +135,7 @@ async def test_a_provider_key_is_never_returned(org, run):
     "agent.runtime.profiles.archive",
     "agent.runtime.profiles.restore",
 )
-async def test_a_provider_can_be_archived_and_restored(org, run):
+async def test_a_provider_can_be_archived_and_restored(org, provider, run):
     alice, organization = org
     created = await alice.api.post(
         f"/organizations/{organization['id']}/agent-runtime/profiles",
@@ -133,6 +167,7 @@ async def test_a_provider_can_be_archived_and_restored(org, run):
 @scenario("Someone outside the organization cannot add a provider")
 @proves("PS-AGENT-004")
 @covers("agent.runtime.profiles.create")
+@open_signup
 async def test_an_outsider_cannot_add_a_provider(world, org, run):
     _alice, organization = org
     # Somebody in no organization at all, which is what this promise is about.

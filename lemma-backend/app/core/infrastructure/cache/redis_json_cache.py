@@ -87,6 +87,57 @@ class RedisJsonCache(Generic[T]):
         )
         return bool(deleted)
 
+    async def ordered_set_add(
+        self,
+        suffix: str,
+        member: str,
+        *,
+        limit: int,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        """Append ``member`` to an insertion-ordered set, at most ``limit`` long.
+
+        Each command is atomic on its own, and the sequence needs no lock: a
+        sequence number from ``INCR`` orders writers, ``ZADD NX`` makes adding a
+        member that is already there a no-op, and the member's *rank* afterwards
+        says whether it fits. Concurrent writers therefore all land, each once,
+        and when the set is full the earliest ``limit`` win -- by rank, not by
+        who read the size first, so two writers racing for the last slot cannot
+        both take it. Returns False when the member did not fit.
+        """
+        redis = await self._get_redis()
+        ttl = ttl_seconds if ttl_seconds is not None else self._ttl_seconds
+        key = self.build_key(suffix)
+        sequence_key = self.build_key(f"{suffix}:sequence")
+        sequence = await redis.incr(sequence_key)
+        pipe = redis.pipeline(transaction=True)
+        pipe.zadd(key, {member: sequence}, nx=True)
+        pipe.expire(key, ttl)
+        pipe.expire(sequence_key, ttl)
+        pipe.zrank(key, member)
+        *_, rank = await pipe.execute()
+        if rank is not None and rank < limit:
+            return True
+        await redis.zrem(key, member)
+        return False
+
+    async def ordered_set_members(self, suffix: str) -> list[str]:
+        """Every member, oldest first."""
+        redis = await self._get_redis()
+        members = await redis.zrange(self.build_key(suffix), 0, -1)
+        return [m.decode() if isinstance(m, bytes) else str(m) for m in members]
+
+    async def ordered_set_remove(self, suffix: str, members: list[str]) -> None:
+        """Remove exactly ``members``; anything added meanwhile stays."""
+        if not members:
+            return
+        redis = await self._get_redis()
+        await redis.zrem(self.build_key(suffix), *members)
+
+    async def ordered_set_clear(self, suffix: str) -> None:
+        redis = await self._get_redis()
+        await redis.delete(self.build_key(suffix), self.build_key(f"{suffix}:sequence"))
+
     async def get_json(self, suffix: str) -> Any | None:
         raw = await self.get_raw(suffix)
         return json.loads(raw) if raw is not None else None

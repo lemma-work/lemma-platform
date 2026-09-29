@@ -18,6 +18,7 @@ FastStream ever reorders those, the counts below go non-zero and this fails.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -84,10 +85,18 @@ def _quarantine_writes_to_the_same_redis(test_redis_url, monkeypatch):
     monkeypatch.setattr(settings, "redis_url", test_redis_url)
 
 
+#: This stream's per-message failure counters, which outlive a test otherwise.
+_FAILURE_KEYS = f"lemma:stream-failure:{_STREAM}:*"
+
+
 @pytest.fixture
 async def redis_client(test_redis_url):
     client = redis_asyncio.from_url(test_redis_url, decode_responses=True)
-    for key in (_STREAM, dead_letter_stream(_STREAM)):
+    for key in (
+        _STREAM,
+        dead_letter_stream(_STREAM),
+        *await client.keys(_FAILURE_KEYS),
+    ):
         await client.delete(key)
     try:
         yield client
@@ -111,6 +120,11 @@ async def running_broker(test_redis_url, redis_client):
         if event.get("hold"):
             # What the inbox does when another worker already holds the claim.
             raise NackMessage
+        if event.get("leak"):
+            # What coredis raised in development: a CancelledError from
+            # `connect_tcp`, delivered into a task nobody had cancelled because
+            # the connection pool belonged to another task's cancel scope.
+            raise asyncio.CancelledError("Cancelled via cancel scope by connect_tcp")
         if event.get("explode"):
             # A real pydantic failure, because that is what actually happened:
             # the surface_events poison messages were ValidationErrors. A bare
@@ -260,11 +274,46 @@ async def test_a_held_delivery_stays_pending_and_is_not_dead_lettered(
         "a held delivery was acknowledged — nothing will ever redeliver it",
     )
     assert "held-1" not in {event.get("id") for event in handled}
-    assert await redis_client.keys("lemma:stream-failure:*") == [], (
+    assert await redis_client.keys(_FAILURE_KEYS) == [], (
         "a deliberate hand-back was counted as a failure, which walks the "
         "message towards the dead-letter backstop"
     )
     assert int(await redis_client.xlen(dead_letter_stream(_STREAM))) == 0
+
+
+async def test_a_leaked_cancellation_does_not_stop_the_reader(
+    running_broker, redis_client
+):
+    """The 2026-09-28 lane death, against a real broker.
+
+    FastStream restarts a reader task that raised -- unless it ended cancelled.
+    A handler that let a leaked ``CancelledError`` out ended the
+    ``datastore-file-events`` reader for good, and the message behind it was
+    never read. Converted to an ordinary failure, the reader lives, the next
+    message is handled, and the failed one stays pending for the reclaimer.
+    """
+    broker, handled = running_broker
+
+    await _publish(
+        redis_client, {"event_type": "probe.wanted", "id": "leak-1", "leak": True}
+    )
+    await _publish(redis_client, {"event_type": "probe.wanted", "id": "after-leak"})
+
+    await _wait_for(
+        lambda: _handled_ids(handled, {"after-leak"}),
+        "the reader stopped at a leaked cancellation -- the lane is dead",
+    )
+    readers = [
+        sub
+        for sub in broker.subscribers
+        if getattr(getattr(sub, "stream_sub", None), "min_idle_time", None) is None
+    ]
+    assert readers and all(
+        any(not task.done() for task in sub.tasks) for sub in readers
+    )
+    assert await redis_client.keys(_FAILURE_KEYS), (
+        "a leaked cancellation was not counted, so it can never reach quarantine"
+    )
 
 
 # -- small async predicates, kept out of the tests for readability -----------
