@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Screen } from "@/auth/screens";
-import { onApi, PORTAL_PATH, siteOrigin } from "@/auth/config";
+import { PORTAL_PATH, siteOrigin } from "@/auth/config";
 import { landing } from "@/auth/redirects";
+import { signedInEmail } from "@/auth/completion";
 import { Session } from "@/auth/supertokens";
 import { LoadingIndicator } from "@/ui/loading";
 import {
@@ -149,18 +150,6 @@ function useNow(ticking: boolean): number | null {
         return () => window.clearInterval(timer);
     }, [ticking]);
     return now;
-}
-
-/** The account this browser is signed in as, for the confirmation to name. */
-async function signedInEmail(fetcher: typeof fetch = fetch): Promise<string | null> {
-    try {
-        const response = await fetcher(onApi("/users/me"), { credentials: "include", cache: "no-store" });
-        if (!response.ok) return null;
-        const body = (await response.json()) as { email?: unknown };
-        return typeof body.email === "string" ? body.email : null;
-    } catch {
-        return null;
-    }
 }
 
 /** The browser's side: signed in, ask, tell the backend which app asked, then
