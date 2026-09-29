@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
@@ -148,8 +149,11 @@ class SurfaceIdentityResolutionService:
        ``telegram_username`` resolves directly (no contact-share needed).
     3. Email match — profile email (fetched from platform API) matched against
        the users table.
-    4. Phone match — fallback for platforms that expose phone numbers (e.g. the
-       Telegram contact-share flow).
+    4. Phone match — for platforms that expose phone numbers (WhatsApp, and
+       Telegram's contact-share flow), against numbers verified on a profile.
+       An unverified profile number matches only where the deployment has opted
+       in (``surface_allow_unverified_phone_match``) and exactly one profile
+       claims it.
 
     No connected-account (OAuth Account table) lookups are performed.  Platform
     adapters fetch sender emails directly from the platform API (Teams Graph /
@@ -236,7 +240,7 @@ class SurfaceIdentityResolutionService:
         if known.external_user_id:
             external_user = await self._upsert(event, known)
             cached = await self._cached_resolution(
-                external_user, known, require_proven_identity
+                external_user, known, require_proven_identity, event
             )
             if cached is not None:
                 return cached
@@ -273,6 +277,7 @@ class SurfaceIdentityResolutionService:
         external_user: _CachedSender,
         known: "_KnownSender",
         require_proven_identity: bool,
+        event: ParsedInboundSurfaceEvent,
     ) -> ResolvedSurfaceUser | None:
         """The answer this sender resolved to before, if it still stands.
 
@@ -306,6 +311,8 @@ class SurfaceIdentityResolutionService:
             known, external_user.resolved_user_id
         ):
             return None
+        if await self._cache_rests_on_an_unverified_number(external_user, known, event):
+            return None
         return ResolvedSurfaceUser(
             internal_user_id=external_user.resolved_user_id,
             external_user_id=external_user.external_user_id,
@@ -331,11 +338,6 @@ class SurfaceIdentityResolutionService:
         confirms, so a handle that changes hands would otherwise let its new
         owner be bound to the previous one's account.
 
-        Deliberately not `_match_user_by_phone` either, whose unverified
-        fallback exists so an ordinary message can still be routed. Routing and
-        binding are not the same permission, and only the verified half of that
-        function is a proof.
-
         What this does not do is make a profile email proof of ownership. It is
         the platform's word, and a workspace administrator can set it; the
         `require_proven_identity` matcher refuses it outright for a sender with
@@ -357,6 +359,54 @@ class SurfaceIdentityResolutionService:
                 if ids == [cached_user_id]:
                     return True
         return False
+
+    async def _cache_rests_on_an_unverified_number(
+        self,
+        external_user: _CachedSender,
+        known: "_KnownSender",
+        event: ParsedInboundSurfaceEvent,
+    ) -> bool:
+        """Was this cached resolution made on a number nobody verified, and only that?
+
+        The cache stores who a sender resolved to and not how, so a resolution
+        made while unverified numbers were accepted would outlive the setting
+        that allowed it: turning it off would change nothing for anyone already
+        matched. Where the deployment does not accept them, a cached resolution
+        is dropped when the *only* thing linking this sender to that user is an
+        unverified profile number -- and kept when anything else does: a verified
+        number, the profile email, the Telegram handle, or nothing about the
+        phone at all, which is how a managed bot's owner is bound.
+
+        Dropping it sends the sender through ordinary matching, which now
+        resolves nobody and clears the row.
+        """
+        if surface_settings.surface_allow_unverified_phone_match:
+            return False
+        if event.platform not in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM):
+            return False
+        cached_user_id = external_user.resolved_user_id
+        phone = known.phone or external_user.phone
+        candidates = _phone_lookup_candidates(phone) if phone else []
+        if cached_user_id is None or not candidates:
+            return False
+        unverified = await self._users.user_ids_by_mobile_numbers(
+            candidates, verified=False
+        )
+        if cached_user_id not in unverified:
+            return False
+        if await self._cache_is_attested(known, cached_user_id):
+            return False
+        verified = await self._users.user_ids_by_mobile_numbers(
+            candidates, verified=True
+        )
+        if cached_user_id in verified:
+            return False
+        handle = _telegram_username(event)
+        if handle and (
+            await self._match_user_by_telegram_username(handle) == cached_user_id
+        ):
+            return False
+        return True
 
     async def _match_proven_sender(
         self, event: ParsedInboundSurfaceEvent, known: _KnownSender
@@ -388,22 +438,6 @@ class SurfaceIdentityResolutionService:
             raw_profile=known.raw_profile,
             **extra,
         )
-
-    async def _match_user(
-        self,
-        *,
-        email: str | None,
-        phone: str | None,
-        telegram_username: str | None = None,
-    ) -> UUID | None:
-        """Return the internal user_id for this sender, or None if not found."""
-        return (
-            await self._match_user_result(
-                email=email,
-                phone=phone,
-                telegram_username=telegram_username,
-            )
-        ).user_id
 
     async def _match_user_result(
         self,
@@ -444,8 +478,9 @@ class SurfaceIdentityResolutionService:
         candidates = _phone_lookup_candidates(phone)
         if not candidates:
             return _UserMatch(None)
-        # Prefer verified ownership. If verification is optional or has not yet
-        # happened, a single eligible profile match still routes the surface.
+        # Verified ownership first. The sender's number is attested by the
+        # platform, but the profile's is a claim until its owner proves it, and
+        # anyone can write another person's number on their own profile.
         ids = await self._users.user_ids_by_mobile_numbers(candidates, verified=True)
         if len(ids) == 1:
             return _UserMatch(ids[0])
@@ -456,11 +491,20 @@ class SurfaceIdentityResolutionService:
                 candidate_count=len(ids),
             )
             return _UserMatch(None)
-
+        # Matching on the claim would send that person's messages -- and the
+        # agent's replies to them -- to whoever wrote it, so a sender with no
+        # verified match is a stranger unless the deployment has accepted that
+        # trade (see the setting) and exactly one profile claims the number.
+        if not surface_settings.surface_allow_unverified_phone_match:
+            return _UserMatch(None)
         unverified_ids = await self._users.user_ids_by_mobile_numbers(
             candidates, verified=False
         )
         if len(unverified_ids) == 1:
+            # Logged, because the sender was routed on a claim nobody proved.
+            logger.warning(
+                "agent_surfaces.identity.unverified_phone_match_used.observed",
+            )
             return _UserMatch(unverified_ids[0])
         if len(unverified_ids) > 1:
             logger.error(

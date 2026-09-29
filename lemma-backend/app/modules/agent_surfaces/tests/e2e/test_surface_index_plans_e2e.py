@@ -267,6 +267,74 @@ async def _a_conversation(db_session, surface: AgentSurface) -> UUID:
     return conversation.id
 
 
+_PERSON_SQL = """
+SELECT id FROM agent_surface_conversation_links
+WHERE platform = :platform
+  AND external_user_id = :user
+  AND conversation_kind = 'DM'
+  AND surface_id IN (:surface)
+ORDER BY coalesce(last_inbound_at, updated_at) DESC
+LIMIT 1
+"""
+
+
+async def test_the_person_level_dm_read_is_bounded_by_the_surface_index(
+    test_pod, pod_agent_id, db_session
+):
+    """A first message asks "has this person chatted before" of every candidate.
+
+    `find_latest_dm_link_for_person` is the one link read keyed on the person
+    instead of a thread, and it is only affordable because it is always handed a
+    surface list: `(surface_id, external_user_id, ...)` is
+    `ix_agent_surface_link_surface_member`. Without the surface list the same
+    question would read every link of the platform, so the property held still is
+    that the rows it touches do not grow with other people's chats.
+    """
+    surface = await _surface(db_session, test_pod["id"], pod_agent_id, _PLATFORM)
+    conversation_id = await _a_conversation(db_session, surface)
+    params = {
+        "platform": _PLATFORM,
+        "user": "the-person-under-test",
+        "surface": surface.id,
+    }
+    db_session.add(
+        AgentSurfaceConversationLinkModel(
+            id=uuid7(),
+            surface_id=surface.id,
+            conversation_id=conversation_id,
+            platform=_PLATFORM,
+            external_channel_id="the-chat-under-test",
+            external_thread_id="the-chat-under-test",
+            external_user_id=params["user"],
+            conversation_kind="DM",
+            last_event={},
+        )
+    )
+    await db_session.commit()
+
+    await _seed_threads(db_session, surface.id, conversation_id, 5, prefix="few")
+    await db_session.execute(text("ANALYZE agent_surface_conversation_links"))
+    few = await _plan(db_session, _PERSON_SQL, params)
+
+    await _seed_threads(db_session, surface.id, conversation_id, 200, prefix="many")
+    await db_session.execute(text("ANALYZE agent_surface_conversation_links"))
+    many = await _plan(db_session, _PERSON_SQL, params)
+
+    assert "ix_agent_surface_link_surface_member" in _index_names(many), (
+        f"the person-level read fell back to another plan: {_index_names(many)}"
+    )
+    read_few = _rows_read(few, "agent_surface_conversation_links")
+    read_many = _rows_read(many, "agent_surface_conversation_links")
+    assert read_few >= 1, (
+        "the person under test was not found, so this measured nothing"
+    )
+    assert read_many <= read_few, (
+        "the person-level read grew with the surface's other chats: "
+        f"{read_few} rows at 6 links, {read_many} at 206"
+    )
+    assert read_many <= _CONTINUITY_ROW_CEILING
+
+
 async def test_the_routing_index_is_exactly_the_routing_predicate(db_session):
     """The index definition, checked against the query it is named for.
 

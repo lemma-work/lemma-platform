@@ -56,6 +56,22 @@ _CONVERSATION_TITLE_MAX_LENGTH = 120
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
 
+def _same_agent(left: UUID | None, right: UUID | None, *, pod_id: UUID) -> bool:
+    """Whether two agent references name the same agent.
+
+    Compared through `effective_agent_id`, because the two sides are written in
+    different eras and the assistant has more than one spelling. A conversation
+    now names it by the pod's own id; a route computed from surface configuration
+    still names it by naming nobody. Raw, those two differ, and this reads "the
+    agent changed" for a thread whose agent never changed -- cutting a fresh
+    conversation and stranding the history the person can still see above the
+    reply.
+    """
+    return effective_agent_id(left, pod_id=pod_id) == effective_agent_id(
+        right, pod_id=pod_id
+    )
+
+
 def _agent_changed(
     *,
     link: AgentSurfaceConversationLink,
@@ -64,25 +80,13 @@ def _agent_changed(
 ) -> bool:
     """Is the agent that answers now a different one from the conversation's?"""
 
-    # Compared through `effective_agent_id`, because the two sides are
-    # written in different eras and the assistant has more than one spelling.
-    # A conversation now names it by the pod's own id; a route computed from
-    # surface configuration still names it by naming nobody. Raw, those two
-    # differ, and this reads "the agent changed" for a thread whose agent
-    # never changed -- cutting a fresh conversation and stranding the history
-    # the person can still see above the reply.
-    def same_agent(left: UUID | None, right: UUID | None, *, pod_id: UUID) -> bool:
-        return effective_agent_id(left, pod_id=pod_id) == effective_agent_id(
-            right, pod_id=pod_id
-        )
-
     if route is None:
         return False
-    if current_conversation_agent_id is not None and not same_agent(
+    if current_conversation_agent_id is not None and not _same_agent(
         current_conversation_agent_id, route.agent_id, pod_id=route.pod_id
     ):
         return True
-    return not same_agent(link.routed_agent_id, route.agent_id, pod_id=route.pod_id)
+    return not _same_agent(link.routed_agent_id, route.agent_id, pod_id=route.pod_id)
 
 
 def _idle_beyond_reset_window(
@@ -206,6 +210,13 @@ class ConversationBinder:
                 external_thread_id=parsed.external_thread_id,
                 external_user_id=external_user_id,
             )
+            if link is None:
+                link = await self._adopt_earlier_dm_link(
+                    surface=surface,
+                    parsed=parsed,
+                    resolved_user=resolved_user,
+                    route=route,
+                )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
             if await self._starts_new_conversation(
@@ -282,6 +293,77 @@ class ConversationBinder:
             # was started on this turn from the platform's point of view.
             return created_link, None
         return created_link, conversation.title
+
+    async def _adopt_earlier_dm_link(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        resolved_user: ResolvedSurfaceUser,
+        route: ResolvedSurfaceRoute,
+    ) -> AgentSurfaceConversationLink | None:
+        """The link this person's private chat already has, under an older address.
+
+        A private chat is one conversation to the person wherever it is
+        delivered, but its link key names a delivery address: on WhatsApp the
+        channel and the thread id both embed the number the message arrived on.
+        A number reassigned within the pool, or another surface of the same pod
+        taking the chat over, therefore misses the exact lookup and would open a
+        fresh conversation with none of the history the person can still see.
+
+        So, once the exact key has missed, look for the same person's latest
+        private-chat link among this pod's surfaces and move it to the new
+        address. Only a link whose conversation is this person's own, in the pod
+        and with the agent this route names, is taken -- one number is not one
+        person, and a conversation in another pod is another conversation. The
+        reset and agent-change rules then run on the adopted link exactly as they
+        would have on one found by the exact key.
+
+        Private chats only: a channel or email thread is bounded by the platform,
+        so there is no "same person, new address" to continue.
+        """
+        external_user_id = resolved_user.external_user_id
+        user_id = resolved_user.internal_user_id
+        if (
+            external_user_id is None
+            or user_id is None
+            or thread_shape(route.conversation_kind) is not ThreadShape.MULTIPLEXED
+        ):
+            return None
+        platform = surface.surface_type.value
+        # This pod's surfaces, plus the one that received the message: the pod
+        # the conversation must be in is the route's, and the per-surface index
+        # is what keeps the read cheap.
+        siblings = await self.surface_repository.list_active_for_routing(
+            platform, pod_ids=[route.pod_id]
+        )
+        surface_ids = {surface.id, *(sibling.id for sibling in siblings)}
+        links = self.conversation_link_repository
+        earlier = await links.find_latest_dm_link_for_person(
+            platform=platform,
+            external_user_id=external_user_id,
+            surface_ids=sorted(surface_ids, key=str),
+        )
+        if earlier is None:
+            return None
+        conversation = await agent_conversations.surface_conversation(
+            self.uow, earlier.conversation_id
+        )
+        if (
+            conversation is None
+            or conversation.user_id != user_id
+            or conversation.pod_id != route.pod_id
+            or not _same_agent(
+                conversation.agent_id, route.agent_id, pod_id=route.pod_id
+            )
+        ):
+            return None
+        return await links.rebind_thread_address(
+            link_id=earlier.id,
+            surface_id=surface.id,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+        )
 
     async def _starts_new_conversation(
         self,

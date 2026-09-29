@@ -295,6 +295,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.identity.ambiguous_mobile_match': EventSpec('error', frozenset({'candidate_count', 'verification_state'})),
     'agent_surfaces.identity.email_sender_failed_authentication.degraded': EventSpec('warning', frozenset({'platform', 'sender_email'})),
     'agent_surfaces.identity.email_sender_unauthenticated.degraded': EventSpec('warning', frozenset({'platform', 'resolved', 'sender_email'})),
+    'agent_surfaces.identity.unverified_phone_match_used.observed': EventSpec('warning', frozenset()),
     'agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic': EventSpec('debug', frozenset({'default_id', 'user_id'})),
     'agent_surfaces.ingress_service.agent_surface_dropped_event_after.observed': EventSpec('debug', frozenset({'surface_type'})),
     'agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed': EventSpec('debug', frozenset({'external_channel_id', 'surface_type'})),
