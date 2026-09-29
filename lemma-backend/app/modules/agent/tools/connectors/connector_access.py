@@ -20,36 +20,11 @@ from typing import AsyncIterator
 
 from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.authorization.factory import create_authorization_data_service
+from app.modules.agent.tools.authority import tool_authorization_context
 from app.modules.agent.tools.context import BaseAgentContext
-
-
-async def build_delegated_context(
-    uow: SqlAlchemyUnitOfWork, deps: BaseAgentContext
-) -> Context:
-    """Build the delegated-workload authorization context for an agent tool call.
-
-    Shared by every in-process caller that needs to make the same "does this
-    workload have the grant it's using" decision `AccountResolutionService`
-    makes -- currently connector operation execution and the workspace
-    GitHub-credential bridge -- so there is one implementation of the
-    delegation shape, not several that can drift.
-    """
-    return await create_authorization_data_service(
-        uow
-    ).build_delegated_workload_context(
-        user_id=deps.user_id,
-        principal_type="AGENT",
-        principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
-        pod_id=deps.pod_id,
-        is_default_pod_agent=deps.is_pod_default_agent,
-        delegation_actor_name=deps.agent_name,
-        delegation_session_id=str(deps.conversation_id),
-    )
 
 
 @dataclass(slots=True)
@@ -112,7 +87,7 @@ async def connector_services(
     dependencies = _connector_dependencies()
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        auth_ctx = await build_delegated_context(uow, deps)
+        auth_ctx = await tool_authorization_context(uow, deps)
         token = set_current_context(auth_ctx)
         try:
             yield ConnectorServices(

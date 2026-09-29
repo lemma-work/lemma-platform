@@ -47,6 +47,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
+    arrival_number,
 )
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_a_prompt_that_arrived_as_words,
@@ -95,9 +96,8 @@ class SurfaceDelivery:
         Absent on a message the agent starts, which has nothing to have arrived
         on -- there the surface's own number, or settings, is the whole answer.
         """
-        arrived = event.reply_target.get("phone_number_id") if event else None
         return await self.credential_resolver.for_surface(
-            surface, arrived_on=str(arrived) if arrived else None
+            surface, arrived_on=arrival_number(event)
         )
 
     async def agent_name_for_surface(self, surface: AgentSurfaceEntity) -> str | None:

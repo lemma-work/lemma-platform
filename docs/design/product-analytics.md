@@ -333,6 +333,7 @@ repository.
 | `LEMMA_TELEMETRY_HOST` | CLI, Desktop | `https://eu.i.posthog.com` | — |
 | `LEMMA_TELEMETRY` | CLI, Desktop | — | `0`/`false`/`off`/`no` disables |
 | `LEMMA_CLIENT` | Python SDK | — | requests resolve to origin `SDK` |
+| `LEMMA_CLIENT_VERSION` | Python SDK | — | a declared client is sent with the SDK's own version |
 
 Two details that are easy to get wrong:
 

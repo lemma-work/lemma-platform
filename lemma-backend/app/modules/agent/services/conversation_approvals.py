@@ -37,7 +37,10 @@ from app.modules.agent.domain.agent_host_permissions import (
 )
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.entities import Conversation, Message
-from app.modules.agent.domain.errors import UnknownApprovalError
+from app.modules.agent.domain.errors import (
+    ApprovalNotOwnedError,
+    UnknownApprovalError,
+)
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.ports import ConversationRepository
 from app.modules.agent.domain.value_objects import (
@@ -157,6 +160,12 @@ class ApprovalCoordinator:
         paused_run_id = paused.agent_run_id
 
         if decision_row is None:
+            if kind != "ask_user" and user_id != conversation.user_id:
+                # An approved call runs with the owner's authority (see
+                # `ApprovedExecution`), so only the owner may decide it. Every
+                # entry point checks this already; this is the one place all
+                # of them pass through, so it is enforced here too.
+                raise ApprovalNotOwnedError()
             # Fresh resolve: record the decision. The unique (conversation,
             # approval) row locks out a concurrent double-submit before any
             # side-effecting tool runs.

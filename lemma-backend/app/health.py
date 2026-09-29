@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.exposure import local_relaxations_allowed
-from app.version import API_VERSION, MIN_CLI_VERSION
+from app.version import API_VERSION
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.migration_state import schema_migration_state
 from app.core.observability.dependency_incident import DependencyIncident
@@ -71,6 +71,10 @@ def _liveness_payload() -> tuple[dict, int]:
     against every real deployment. A probe endpoint is the right home for it:
     it is already public, already cheap, and already the thing a client can
     reach before it has credentials.
+
+    `latest_cli_version` is the same number under the name a CLI reads it by:
+    releases are mono-version, so this server's release is the newest `lemma`
+    it knows of. It is a suggestion; no CLI version is ever refused.
     """
     from app.core.observability.loop_watchdog import (
         get_loop_lag_seconds,
@@ -82,7 +86,7 @@ def _liveness_payload() -> tuple[dict, int]:
         "status": "ok" if healthy else "unhealthy",
         "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
         "api_version": API_VERSION,
-        "min_cli_version": MIN_CLI_VERSION,
+        "latest_cli_version": API_VERSION,
         "release": settings.release_sha or None,
     }
     return payload, 200 if healthy else 503

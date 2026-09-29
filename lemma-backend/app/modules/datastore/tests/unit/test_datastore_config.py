@@ -125,6 +125,11 @@ EXPECTED = [
         604800,
     ),
     ("datastore_signed_url_code_bytes", "DATASTORE_SIGNED_URL_CODE_BYTES", 9),
+    (
+        "datastore_orphan_schema_retention_days",
+        "DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS",
+        30,
+    ),
 ]
 
 # Non-numeric fields (bool / Literal) that the "env=7" parametrization below

@@ -32,6 +32,7 @@ from app.modules.agent_surfaces.services.surface_candidates import (
 )
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
+    arrival_number,
 )
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.entities import (
@@ -281,7 +282,7 @@ class SurfaceInboundMixin:
                 adapter=adapter,
                 parsed=parsed,
                 credentials=await self.credential_resolver.for_surface(
-                    identity_surface
+                    identity_surface, arrived_on=arrival_number(parsed)
                 ),
                 installation_id=identity_surface.account_id or identity_surface.id,
             )
@@ -359,11 +360,13 @@ class SurfaceInboundMixin:
                 return None
         if resolved_user is None:
             credentials = (
-                await self.credential_resolver.for_surface(surface)
+                await self.credential_resolver.for_surface(
+                    surface, arrived_on=arrival_number(parsed)
+                )
                 if surface is not None
                 # No surface on this path by definition: the event matched none.
                 else await self.credential_resolver.for_platform(
-                    platform, None, surface=None
+                    platform, None, surface=None, arrived_on=arrival_number(parsed)
                 )
             )
             resolved_user = await self.router.resolve_sender(
@@ -408,7 +411,9 @@ class SurfaceInboundMixin:
         if surface.should_ignore_sender(parsed.sender_external_user_id):
             return None
 
-        credentials = await self.credential_resolver.for_surface(surface)
+        credentials = await self.credential_resolver.for_surface(
+            surface, arrived_on=arrival_number(parsed)
+        )
         fallback_agent_name = await agent_name_for_surface(self.uow, surface)
         fallback_agent_display_name = agent_display_name(fallback_agent_name)
 

@@ -26,7 +26,7 @@ from pydantic_ai.messages import (
     VideoUrl,
 )
 from pydantic_ai.models import ModelRequestParameters
-from pydantic_ai.native_tools import WebSearchTool
+from pydantic_ai.native_tools import AbstractNativeTool, WebSearchTool
 from pydantic_ai.tools import ToolDefinition
 
 from app.modules.usage.infrastructure.request_features import (
@@ -201,3 +201,41 @@ def test_a_tool_returning_a_model_is_text_because_that_is_what_is_sent() -> None
         ),
     ]
     assert priceable(messages, ModelRequestParameters(), {})
+
+
+def test_local_tool_search_is_an_ordinary_tool_call() -> None:
+    """`search_tools` is a function the model calls and we answer, so it costs
+    ordinary tokens -- which is why a limited run searches this way."""
+    from pydantic_ai.capabilities import ToolSearch
+    from pydantic_ai.messages import ToolSearchCallPart, ToolSearchReturnPart
+
+    messages: list[ModelMessage] = [
+        ModelResponse(
+            parts=[ToolSearchCallPart(args={"queries": ["weather"]}, tool_call_id="1")]
+        ),
+        ModelRequest(
+            parts=[
+                ToolSearchReturnPart(
+                    content={"discovered_tools": [{"name": "get_weather"}]},
+                    tool_call_id="1",
+                )
+            ]
+        ),
+    ]
+    local = ModelRequestParameters(
+        function_tools=[
+            ToolDefinition(
+                name="search_tools", parameters_json_schema={"type": "object"}
+            )
+        ]
+    )
+    assert priceable(messages, local)
+
+    native = ModelRequestParameters(
+        native_tools=[
+            tool
+            for tool in ToolSearch().get_native_tools()
+            if isinstance(tool, AbstractNativeTool)
+        ]
+    )
+    assert not priceable([], native), "the provider's own search has no price here"

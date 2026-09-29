@@ -68,6 +68,20 @@ decrypted credential values into a session-free DTO. The provider call happens
 outside a UoW; a final short UoW marks accounts for reauthentication when an
 unauthorized response is classified.
 
+A credential refresh fails one of two ways, and they answer differently. When
+the provider says the grant itself is gone (`invalid_grant`, `invalid_client`,
+`unauthorized_client`, a Composio connection in a terminal state), or an expired
+token has nothing to refresh with, the account is marked `REAUTH_REQUIRED` and
+the caller gets a 409 `CONNECTOR_REAUTH_REQUIRED` naming the account to
+reconnect. A provider that is unreachable or answers 5xx is a 502
+`OAUTH_FLOW_ERROR`, because retrying may help and reconnecting will not.
+
+A Composio toolkit's `system_default_available` can turn false on a later
+catalog import. Connecting through a Lemma-default install of such a toolkit is
+refused with the same 400 as creating one, and the importer disables those
+installs and flags their accounts `REAUTH_REQUIRED`, so the organization is
+asked to bring its own OAuth app.
+
 ## Authorization and secrets
 
 - Auth configurations are organization-scoped; accounts remain owned by one

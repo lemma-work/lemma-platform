@@ -41,7 +41,9 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 )
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.services.credential_resolver import (
+    PooledNumberReader,
     SurfaceCredentialResolver,
+    arrival_number,
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     deliver_fallback_reply,
@@ -74,8 +76,11 @@ class SurfaceTurnStarter:
         adapter_registry: SurfacePlatformAdapterRegistry | None = None,
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
+        pooled_numbers: PooledNumberReader | None = None,
     ) -> None:
         self.uow_factory = uow_factory
+        # `None` reads the pool through each short scope's own unit of work.
+        self.pooled_numbers = pooled_numbers
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
         self.file_ingest_service = file_ingest_service or SurfaceFileIngestService(
             adapter_registry=self.adapter_registry
@@ -264,15 +269,26 @@ class SurfaceTurnStarter:
         The extra read is Resend's alone -- its ``from_address`` is the only
         credential value stored per surface -- so it stays off every other
         platform's inbound path.
+
+        The number the message arrived on is passed through for the same
+        reason in reverse: the read receipt, the typing indicator, the media
+        download and the fallback reply all act on *that* message, so on a
+        pooled WhatsApp number they need that number's token, not the one in
+        settings.
         """
         surface_id = context.surface_id
         is_resend = str(context.platform or "").upper() == SurfacePlatform.RESEND.value
         async with self.uow_factory() as uow:
-            resolver = SurfaceCredentialResolver(uow=uow)
+            resolver = SurfaceCredentialResolver(
+                uow=uow, pooled_numbers=self.pooled_numbers
+            )
             if surface_id is not None and is_resend:
                 surface = await SurfaceRepository(uow).get(surface_id)
                 if surface is not None:
                     return await resolver.for_surface(surface)
             return await resolver.for_platform(
-                context.platform, context.surface_account_id, surface=None
+                context.platform,
+                context.surface_account_id,
+                surface=None,
+                arrived_on=arrival_number(context.event),
             )

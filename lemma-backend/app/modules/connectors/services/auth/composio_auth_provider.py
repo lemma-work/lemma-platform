@@ -15,10 +15,17 @@ os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
 from app.modules.connectors.infrastructure.composio_client import get_composio_client
 
 from app.modules.connectors.domain.account import ComposioCredentials, OAuthCredentials
-from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CREDENTIALS_REQUIRED,
+    COMPOSIO_SYSTEM_DEFAULT_REASON,
+    AuthConfigSource,
+)
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connector import AuthScheme
-from app.modules.connectors.domain.errors import ConnectorValidationError
+from app.modules.connectors.domain.errors import (
+    ConnectorReauthRequiredError,
+    ConnectorValidationError,
+)
 from app.modules.connectors.domain.ports import ConnectorRepositoryPort
 from app.modules.connectors.services.auth.auth_provider import AuthProviderInterface
 from app.core.concurrency.offload import run_blocking
@@ -222,6 +229,15 @@ class ComposioAuthProvider(AuthProviderInterface):
                 "type": "use_custom_auth",
                 "auth_scheme": custom_auth_scheme,
             }
+        elif not install.composio_managed_auth:
+            # A SYSTEM_DEFAULT install made while Composio still managed this
+            # toolkit. Asking for managed credentials now is answered with a
+            # 404 that surfaced as a 502; refuse the way creating the install
+            # would have, so the person is told the org needs its own app.
+            raise ConnectorValidationError(
+                COMPOSIO_ORG_CREDENTIALS_REQUIRED,
+                details={"reason": COMPOSIO_SYSTEM_DEFAULT_REASON},
+            )
         else:
             options = {"type": "use_composio_managed_auth"}
         auth_config = await run_blocking(
@@ -454,6 +470,13 @@ class ComposioAuthProvider(AuthProviderInterface):
             lambda: composio.connected_accounts.get(credentials.connection_id),
             limiter="external_http",
         )
+
+        # Composio keeps answering with the last token it held after the
+        # connection has died, so reading the token alone handed back a dead
+        # one and the call failed later, at the provider, as something else.
+        status = str(getattr(connection_account, "status", "") or "").upper()
+        if status in _TERMINAL_CONNECTION_STATES:
+            raise ConnectorReauthRequiredError(reason=f"composio_{status.lower()}")
 
         state_value = connection_account.state.val
         access_token = getattr(state_value, "access_token", None)

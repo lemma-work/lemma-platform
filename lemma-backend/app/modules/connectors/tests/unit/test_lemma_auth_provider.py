@@ -5,7 +5,9 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from authlib.integrations.base_client import OAuthError
 
+from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connector import (
@@ -13,6 +15,7 @@ from app.modules.connectors.domain.connector import (
     ConnectorKind,
     OAuth2Config,
 )
+from app.modules.connectors.domain.errors import ConnectorReauthRequiredError
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
 from app.modules.connectors.services.credential_freshness import (
     credential_refresh_due,
@@ -348,3 +351,46 @@ def test_an_install_with_no_oauth_at_all_asks_for_no_verifier():
         oauth2=None,
     )
     assert pkce_verifier_for(install) is None
+
+
+def _refusing_session(error: str):
+    class _RefusingOAuth2Session(FakeOAuth2Session):
+        async def refresh_token(self, **kwargs):
+            raise OAuthError(error=error, description="provider said no")
+
+    return _RefusingOAuth2Session
+
+
+@pytest.mark.parametrize(
+    "error", ["invalid_grant", "invalid_client", "unauthorized_client"]
+)
+async def test_a_withdrawn_grant_asks_for_a_reconnect(error):
+    """The token endpoint answered, and the answer is the person's to fix.
+
+    This surfaced as a 502, which says the provider is unwell and invites a
+    retry that can never succeed.
+    """
+    provider = LemmaAuthProvider(oauth_session_factory=_refusing_session(error))
+
+    with pytest.raises(ConnectorReauthRequiredError) as raised:
+        await provider.refresh_credentials(
+            install=_install(),
+            credentials=OAuthCredentials(access_token="old", refresh_token="r"),
+            user_id=uuid4(),
+        )
+
+    assert raised.value.reason == error
+
+
+async def test_any_other_answer_from_the_token_endpoint_is_not_a_reconnect():
+    """Only a withdrawn grant is the person's to fix; anything else is ours."""
+    provider = LemmaAuthProvider(
+        oauth_session_factory=_refusing_session("temporarily_unavailable")
+    )
+
+    with pytest.raises(OAuthError):
+        await provider.refresh_credentials(
+            install=_install(),
+            credentials=OAuthCredentials(access_token="old", refresh_token="r"),
+            user_id=uuid4(),
+        )

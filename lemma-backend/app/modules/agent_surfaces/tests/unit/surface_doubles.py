@@ -592,6 +592,7 @@ def build_turn_starter(
     existing_link: AgentSurfaceConversationLink | None = None,
     uow_factory: object | None = None,
     file_ingest_service: object | None = None,
+    pooled_numbers: object | None = None,
 ) -> SurfaceTurnStarter:
     """The worker's half, over doubled collaborators.
 
@@ -617,4 +618,5 @@ def build_turn_starter(
         or SimpleNamespace(
             ingest_attachments=AsyncMock(return_value=AttachmentIngest())
         ),
+        pooled_numbers=pooled_numbers,
     )
