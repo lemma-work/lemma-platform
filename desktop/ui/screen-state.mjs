@@ -47,6 +47,8 @@ const ERROR_LOG = {
   "runtime-prepare-failed": "vm",
   "runtime-recovery": "vm",
   "guest-kernel-failed": "vm",
+  "guest-dns-blocked": "vm",
+  "network-dns-failed": "vm",
   "managed-runtime-unavailable": "vm",
   "managed-runtime-recovery-failed": "vm",
   "local-data-incompatible": "vm",
@@ -106,7 +108,24 @@ function downloadFailed(state) {
  * reader learned nothing from it that the error box did not say better. Each
  * failure with a known cause now says which thing stopped.
  */
-function describeFailure(state, code) {
+function describeFailure(state, code, windows) {
+  if (code === "guest-dns-blocked") {
+    return {
+      headline: "Lemma's VM can't look up names.",
+      note: windows
+        ? "Your PC can reach the internet, but a VPN or DNS filter is likely blocking WSL. " +
+          "Pause it and press Try again, or set dnsTunneling=true under [wsl2] in your .wslconfig."
+        : "Your Mac can reach the internet, but a VPN or DNS filter such as Cloudflare WARP is " +
+          "likely blocking Lemma's VM. Pause it and press Try again, or allow Lemma's VM through it.",
+    };
+  }
+  if (code === "network-dns-failed") {
+    return {
+      headline: "This computer isn't online.",
+      note: "It can't reach the internet right now. Connect to a network, then press Try again. " +
+        "Your data is untouched.",
+    };
+  }
   if (NEEDS_WINDOWS_SETUP.includes(code)) return { headline: "Windows needs one permission.", note: "" };
   if (code === "wsl-reboot-required") return { headline: "One restart, then Lemma continues.", note: "" };
   if (code === "runtime-install-failed") {
@@ -139,6 +158,24 @@ function describeFailure(state, code) {
 
 const NEEDS_WINDOWS_SETUP = ["wsl-required", "wsl-setup-denied"];
 
+/** Failures whose message is a sentence for a person followed, in brackets,
+ *  by what the guest actually reported. */
+const EXPLAINED_DNS = ["guest-dns-blocked", "network-dns-failed"];
+
+/**
+ * What goes in the error box.
+ *
+ * For a DNS failure the note already says what the daemon's sentence says, so
+ * the box keeps only the raw report from its end -- the part somebody asked to
+ * help will want -- rather than saying the same thing twice.
+ */
+function errorDetailFor(state, code) {
+  const status = String(state?.status || "") || "startup failed";
+  if (!EXPLAINED_DNS.includes(code)) return status;
+  const raw = /\((.+)\)$/s.exec(status);
+  return raw ? raw[1] : status;
+}
+
 /**
  * The diagnostic log to open for this state.
  *
@@ -168,12 +205,13 @@ export function diagnosticSourceForState(state, served = LOG_SOURCES) {
 /**
  * Which screen a snapshot means, and what the screen offers.
  *
- * `context` carries the three things that are not in the snapshot: the phase
- * last seen (a state with no phase is still a state), whether this run has ever
- * been a first setup, and whether the user has asked to stop.
+ * `context` carries the things that are not in the snapshot: the phase last
+ * seen (a state with no phase is still a state), whether this run has ever
+ * been a first setup, whether the user has asked to stop, and whether this is
+ * Windows, where a fix that names the Mac would be no help.
  */
 export function deriveScreen(state, context = {}) {
-  const { lastPhase = "boot", sawSetup = false, isShuttingDown = false } = context;
+  const { lastPhase = "boot", sawSetup = false, isShuttingDown = false, windows = false } = context;
   const phaseKey = state?.phaseKey || lastPhase || "boot";
   const setup = sawSetup || Boolean(state?.setup);
   const base = {
@@ -209,7 +247,7 @@ export function deriveScreen(state, context = {}) {
     const windowsRestart = code === "wsl-reboot-required";
     const unreadable = UNRETRYABLE.includes(code);
     const otherRelease = writtenByAnotherRelease(state);
-    const { headline, note } = describeFailure(state, code);
+    const { headline, note } = describeFailure(state, code, windows);
     return {
       ...base,
       screen: "error",
@@ -217,7 +255,7 @@ export function deriveScreen(state, context = {}) {
       windowsRestart,
       headline,
       note,
-      errorDetail: state.status || "startup failed",
+      errorDetail: errorDetailFor(state, code),
       // Retrying an unreadable data directory reproduces it exactly, and
       // offering Try again is how somebody learns the app has nothing for them.
       showRetry: !windowsSetup && !windowsRestart && !unreadable,

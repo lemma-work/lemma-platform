@@ -53,6 +53,16 @@ pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result
         }
     }
 
+    // The guest's second name server, answered by the Mac's resolver. A
+    // guest that cannot bind it resolves through the gateway alone, as it
+    // always did.
+    if let Err(error) = crate::host_dns::start(crate::host_dns::HOST_DNS_ADDRESS, || {
+        let stream = vsock::connect(libc::VMADDR_CID_HOST, crate::host_dns::HOST_DNS_VSOCK_PORT)?;
+        crate::host_dns::bounded_stream(stream, crate::host_dns::HOST_EXCHANGE_TIMEOUT)
+    }) {
+        eprintln!("lemma-guestd: host DNS relay unavailable: {error}");
+    }
+
     let listener = vsock::listen(VSOCK_PORT)?;
     let connections = Arc::new(AtomicUsize::new(0));
     loop {
