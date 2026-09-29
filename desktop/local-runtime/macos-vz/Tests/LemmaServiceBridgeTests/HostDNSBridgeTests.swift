@@ -134,6 +134,16 @@ final class HostDNSBridgeTests: XCTestCase {
         XCTAssertEqual(DNSMessage.read16(empty, 6), 0)
     }
 
+    func testAnAnyAnswerNeverPairsACnameWithOtherData() {
+        let cname = DNSRecord(type: DNSMessage.typeCNAME, recordClass: 1, ttl: 60, data: Data([3, 0x77, 0x77, 0x77, 0]))
+        let address = DNSRecord(type: 1, recordClass: 1, ttl: 60, data: Data([192, 0, 2, 1]))
+        let any = try! DNSMessage.parseQuery(dnsQuery("alias.example", type: DNSMessage.typeANY)).get()
+        let both = [UInt8](DNSMessage.response(to: any, .answers([cname, address])))
+        XCTAssertEqual(DNSMessage.read16(both, 6), 1, "the CNAME is dropped beside data")
+        let alone = [UInt8](DNSMessage.response(to: any, .answers([cname])))
+        XCTAssertEqual(DNSMessage.read16(alone, 6), 1, "a CNAME on its own is the answer")
+    }
+
     func testAnOversizedQueryIsNotRead() throws {
         let resolver = ScriptedResolver(.noData)
         let dns = bridge(resolver)

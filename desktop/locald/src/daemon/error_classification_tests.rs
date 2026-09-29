@@ -6,7 +6,7 @@
 
 use tempfile::tempdir;
 
-use super::dispatch::explain_dns_failure;
+use super::dispatch::{explain_dns_failure, host_resolves_within};
 use super::{error_diagnostic_source, runtime_operation_error_code};
 
 #[test]
@@ -196,4 +196,20 @@ fn other_failures_are_left_alone_and_nothing_is_explained_twice() {
         error_diagnostic_source(&format!("backend start: {GUEST_DNS}")),
         ("infrastructure", "vm")
     );
+}
+
+/// The host's own lookup is bounded: it runs while the operation still holds
+/// the lifecycle, and a hung resolver would leave every later operation busy.
+#[test]
+fn the_host_lookup_answers_within_its_deadline() {
+    let started = std::time::Instant::now();
+    assert!(host_resolves_within(
+        "localhost",
+        std::time::Duration::from_secs(3)
+    ));
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    assert!(!host_resolves_within(
+        "lemma-no-such-host.invalid",
+        std::time::Duration::from_secs(3)
+    ));
 }

@@ -285,12 +285,32 @@ const REGISTRY_HOST: &str = "registry-1.docker.io";
 /// network at all, is only knowable here: resolve the same name on this
 /// computer. The raw message stays on the end, for the log and for whoever is
 /// asked to read it.
+///
+/// The lookup runs on its own thread with a deadline: this is called while the
+/// operation still holds the lifecycle, and a resolver that hangs would keep
+/// every later operation answering `busy`. A lookup that does not finish in
+/// time is taken as this computer not resolving it either.
 pub(super) fn explain_runtime_failure(message: String) -> String {
     explain_dns_failure(message, cfg!(windows), || {
-        (REGISTRY_HOST, 443)
-            .to_socket_addrs()
-            .is_ok_and(|mut addresses| addresses.next().is_some())
+        host_resolves_within(REGISTRY_HOST, HOST_LOOKUP_DEADLINE)
     })
+}
+
+/// How long the host's own lookup may take before it counts as a failure.
+const HOST_LOOKUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
+pub(super) fn host_resolves_within(host: &'static str, deadline: std::time::Duration) -> bool {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("lemma-dns-probe".into())
+        .spawn(move || {
+            let resolved = (host, 443)
+                .to_socket_addrs()
+                .is_ok_and(|mut addresses| addresses.next().is_some());
+            // The receiver is gone once the deadline passed; nothing to tell.
+            let _ = sender.send(resolved);
+        });
+    spawned.is_ok() && receiver.recv_timeout(deadline).unwrap_or(false)
 }
 
 pub(super) fn explain_dns_failure(

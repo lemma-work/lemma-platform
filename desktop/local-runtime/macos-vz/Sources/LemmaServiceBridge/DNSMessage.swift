@@ -108,7 +108,13 @@ enum DNSMessage {
         var records: [DNSRecord] = []
         var rcode: UInt8 = 0
         switch resolution {
-        case .answers(let found): records = found.filter { answers(query, $0) }
+        case .answers(let found):
+            records = found.filter { answers(query, $0) }
+            // Flattened under one owner name, a CNAME beside any other data
+            // is a combination RFC 1034 forbids; for ANY, keep the data.
+            if query.type == typeANY, records.contains(where: { $0.type != typeCNAME }) {
+                records.removeAll { $0.type == typeCNAME }
+            }
         case .noData: break
         case .noSuchName: rcode = rcodeNameError
         case .failed: rcode = rcodeServerFailure
