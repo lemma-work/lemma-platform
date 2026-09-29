@@ -510,9 +510,31 @@ def _reap_abandoned_projects() -> None:
                 text=True,
                 timeout=120,
             )
+            # And its volumes, by the label Compose put on them: without the
+            # file that declared them, `down --volumes` has nothing to name.
+            volumes = subprocess.run(
+                [
+                    "docker",
+                    "volume",
+                    "ls",
+                    "-q",
+                    "--filter",
+                    f"label=com.docker.compose.project={name}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            ).stdout.split()
+            if volumes:
+                subprocess.run(
+                    ["docker", "volume", "rm", *volumes],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
         except subprocess.TimeoutExpired as error:
             raise StackError(
-                f"taking down the abandoned project {name!r} did not finish in 120s"
+                f"taking down the abandoned project {name!r} did not finish in time"
             ) from error
 
 
