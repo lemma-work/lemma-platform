@@ -205,6 +205,7 @@ class ConversationService:
         metadata: dict[str, object] | None | UnsetType = UNSET,
         is_archived: bool | UnsetType = UNSET,
     ) -> Conversation:
+        agent_name = _named_agent(agent_name)
         expected_agent_id = await resolve_expected_agent_id(
             self.agent_repository,
             pod_id=pod_id,
@@ -405,6 +406,9 @@ class ConversationService:
         message_metadata: dict[str, object] | None = None,
         require_execute_grant: bool = True,
     ) -> AgentRunStartResult:
+        # Once, here, so creating the conversation and checking it against the
+        # expected agent read the same answer.
+        agent_name = _named_agent(agent_name)
         conversation = await self._get_or_create_conversation_for_message(
             conversation_id=conversation_id,
             user_id=user_id,
