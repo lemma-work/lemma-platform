@@ -17,7 +17,7 @@ So a component that has not landed is named as missing, and the message says so
 in its first line. The announcement is the check.
 
 The prose comes from the changelog entry the release already has, in
-``lemma-harness/content/changelog/``, rather than from generated commit notes:
+``lemma-frontend/content/changelog/`` (what lemma.work/changelog renders), rather than from generated commit notes:
 it is the one description of the release written for a person to read.
 
 Usage::
@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CHANGELOG_DIR = REPO_ROOT / "lemma-harness/content/changelog"
+CHANGELOG_DIR = REPO_ROOT / "lemma-frontend/content/changelog"
 REPOSITORY = "lemma-work/lemma-platform"
 
 #: Slack renders a `text` payload well past this, but stops being read long
@@ -126,6 +126,36 @@ def github_release_exists(version: str) -> Optional[bool]:
     return bool(data.get("tag_name"))
 
 
+def desktop_is_live(version: str) -> Optional[bool]:
+    """Whether the release carries a DMG *and* installed apps are offered it.
+
+    The GitHub Release existing says nothing about Desktop: release-local-images
+    creates it, and release-desktop attaches the app afterwards, in a separate
+    run that can fail on its own. 0.8.0 was announced complete with no DMG and a
+    stable update feed that 404'd. So this asks the two things a person needs:
+    is there an app to download, and does the feed every installed app polls --
+    ``releases/latest/download/latest.json`` -- name this version.
+    """
+    release = _read(
+        "https://api.github.com/repos/{}/releases/tags/v{}".format(REPOSITORY, version)
+    )
+    if release is ABSENT:
+        return False
+    if release is None:
+        return None
+    names = [asset.get("name", "") for asset in release.get("assets") or []]
+    if not any(name.endswith(".dmg") for name in names):
+        return False
+    feed = _read(
+        "https://github.com/{}/releases/latest/download/latest.json".format(REPOSITORY)
+    )
+    if feed is ABSENT:
+        return False
+    if feed is None:
+        return None
+    return str(feed.get("version", "")).removeprefix("v") == version
+
+
 def changelog_path(version: str) -> Path:
     """The entry for this version. Named with dashes: 0.8.0 -> 0-8-0.mdx."""
     return CHANGELOG_DIR / "{}.mdx".format(version.replace(".", "-"))
@@ -176,6 +206,7 @@ def compose(version: str) -> Tuple[str, bool]:
         ("lemma-terminal (PyPI)", pypi_has("lemma-terminal", version)),
         ("lemma-sdk (npm)", npm_has("lemma-sdk", version)),
         ("GitHub Release", github_release_exists(version)),
+        ("Desktop app and update feed", desktop_is_live(version)),
     ]
     missing = [name for name, state in components if state is False]
     unknown = [name for name, state in components if state is None]

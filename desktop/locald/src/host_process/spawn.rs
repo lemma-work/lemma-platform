@@ -134,13 +134,38 @@ pub(crate) fn terminate_process_group(child: &mut Child) -> io::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if child.try_wait()?.is_some() {
-            return Ok(());
+            break;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    // SAFETY: same owned process group, now beyond graceful timeout.
-    unsafe { libc::kill(process_group, libc::SIGKILL) };
-    child.wait().map(|_| ())
+    if child.try_wait()?.is_none() {
+        // SAFETY: same owned process group, now beyond graceful timeout.
+        unsafe { libc::kill(process_group, libc::SIGKILL) };
+        child.wait()?;
+    }
+    // The leader going is not the group going. A child forked while the
+    // SIGTERM was in flight never received it, and one that outlives its
+    // leader was only ever killed if the leader itself held on past the
+    // deadline -- so a stop returned with a server's workers still running.
+    // Signalling the group after the leader is reaped is safe: a process
+    // group id cannot be reused while any member of the group exists.
+    let group_deadline = deadline.max(Instant::now() + Duration::from_millis(500));
+    while group_exists(process_group) {
+        if Instant::now() >= group_deadline {
+            // SAFETY: the group still exists, so it is still ours.
+            unsafe { libc::kill(process_group, libc::SIGKILL) };
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
+}
+
+/// Whether any process of this (negated) group id is still alive.
+#[cfg(unix)]
+fn group_exists(process_group: i32) -> bool {
+    // SAFETY: signal 0 only checks existence and permission.
+    unsafe { libc::kill(process_group, 0) == 0 }
 }
 
 #[cfg(windows)]

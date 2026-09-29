@@ -29,7 +29,8 @@ concurrency:
 
 jobs:
   publish:
-    timeout-minutes: 30
+    # Build and verify, plus up to twenty minutes waiting for the SDK below.
+    timeout-minutes: 45
     runs-on: ubuntu-latest
 
     steps:
@@ -63,6 +64,14 @@ jobs:
       # and the rewrite pins lemma-sdk to a version not yet on PyPI.
       - name: Verify Python SDK and CLI
         uses: ./.github/actions/verify-python-sdk
+
+      # The same gate release-lemma-python runs. This workflow had none, so a
+      # tag whose components disagreed published a CLI anyway -- pinned to an
+      # SDK version the other workflow then refused to publish.
+      - name: Check version consistency across components
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
+        run: python scripts/check_version_consistency.py --expect "$RELEASE_VERSION"
 
       - name: Set package version from release tag
         shell: python
@@ -123,6 +132,43 @@ jobs:
       - name: Check distribution
         working-directory: lemma-cli
         run: python -m twine check dist/*
+
+      # The CLI pins lemma-sdk>=X,<next-minor, and release-lemma-python publishes
+      # that SDK in parallel with this run. Uploading first would put a CLI on
+      # PyPI that nobody can install until the SDK lands -- or ever, if the SDK
+      # publish fails, and a version cannot be re-cut once it is on an index. So
+      # the CLI waits for its own SDK, and publishes nothing if it never comes.
+      - name: Wait for the matching lemma-sdk on PyPI
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
+        shell: python
+        run: |
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v")
+          url = f"https://pypi.org/pypi/lemma-sdk/{version}/json"
+          deadline = time.monotonic() + 20 * 60
+          while True:
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      if response.status == 200:
+                          print(f"lemma-sdk {version} is on PyPI")
+                          break
+              except urllib.error.HTTPError as exc:
+                  if exc.code != 404:
+                      print(f"PyPI answered {exc.code}; retrying")
+              except urllib.error.URLError as exc:
+                  print(f"PyPI unreachable ({exc.reason}); retrying")
+              if time.monotonic() > deadline:
+                  raise SystemExit(
+                      f"lemma-sdk {version} did not reach PyPI within 20 minutes; "
+                      "not publishing a CLI that cannot be installed. Publish the "
+                      "SDK (release-lemma-python.yml), then re-run this workflow."
+                  )
+              time.sleep(20)
 
       - name: Publish package
         working-directory: lemma-cli

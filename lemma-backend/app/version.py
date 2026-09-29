@@ -36,4 +36,4 @@ release that never shipped told every user to upgrade to nothing.
 
 from __future__ import annotations
 
-API_VERSION = "0.8.0"
+API_VERSION = "0.9.0"

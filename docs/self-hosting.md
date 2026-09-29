@@ -252,7 +252,7 @@ already has it.
 ## Upgrades
 
 ```bash
-./bootstrap.sh --force --version 0.8.0   # writes new image digests into .env
+./bootstrap.sh --force --version 0.9.0   # writes new image digests into .env
 docker compose up -d
 ```
 
