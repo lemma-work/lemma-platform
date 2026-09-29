@@ -442,7 +442,7 @@ help:
 	@echo "    make quality            every gate the 'quality gates' CI job runs"
 	@echo "    make architecture       backend architecture ratchet + route inventory"
 	@echo "    make measure-clients    ADVISORY: size/complexity/typing in lemma-cli + lemma-python"
-	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
+	@echo "    make check              quality + frontend gates (CodeQL runs in CI and comments on the PR)"
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
 	@echo "    make local-domain-check the shell, capability and SDK know every base domain"
@@ -2168,8 +2168,12 @@ client-typecheck-record:
 # costing a category of surprise. One list.
 pre-push: quality
 
-# CodeQL, the same suites CI runs. Reports only what this branch changed;
-# `codeql-all` reports the repository's full backlog.
+# CodeQL, the same suites CI runs, on this machine. Opt-in and never part of
+# `check`: an analysis holds several cores and gigabytes of memory for
+# minutes, and CI already runs it on every pull request and posts what it
+# finds on the lines you changed as a PR comment. Use these to reproduce a
+# finding locally. Reports only what this branch changed; `codeql-all` reports
+# the repository's full backlog.
 codeql:
 	@./scripts/run_codeql.sh
 
@@ -2211,8 +2215,9 @@ quality-frontend:
 	@echo "→ Frontend lint, types, design audit, education anchors…"
 	@cd $(FRONTEND_DIR) && npm run --silent check
 
-# Everything a PR is judged on, short of the test suites themselves.
-check: quality quality-frontend codeql
+# Everything a PR is judged on locally, short of the test suites themselves.
+# CodeQL is not in it: it runs in CI and reports on the pull request.
+check: quality quality-frontend
 
 # ── Migrations ────────────────────────────────────────────────────────────────
 
