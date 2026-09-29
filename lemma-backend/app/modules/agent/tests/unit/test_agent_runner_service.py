@@ -22,9 +22,9 @@ from app.modules.agent.services.run_finalizer import (
     rejected_run_error_message,
 )
 from app.modules.agent.services.run_identity import RunIdentity
+from app.modules.agent.services.run_input_settings import run_input_text
 from app.modules.agent.services.agent_runner_service import (
     AgentRunnerService,
-    _run_input_text,
 )
 from app.modules.test_support.fakes import FakeUnitOfWork
 
@@ -259,19 +259,19 @@ def test_run_input_text_is_the_turn_that_started_the_run():
         _message(MessageRole.USER.value, MessageKind.TEXT, "what changed?"),
         _message(MessageRole.TOOL.value, MessageKind.TOOL_RETURN, "tool output"),
     ]
-    assert _run_input_text(messages) == "what changed?"
+    assert run_input_text(messages) == "what changed?"
 
 
 def test_run_input_text_skips_non_textual_and_blank_user_messages():
-    assert _run_input_text([]) is None
+    assert run_input_text([]) is None
     assert (
-        _run_input_text(
+        run_input_text(
             [_message(MessageRole.ASSISTANT.value, MessageKind.TEXT, "only the agent")]
         )
         is None
     )
     assert (
-        _run_input_text(
+        run_input_text(
             [
                 _message(MessageRole.USER.value, MessageKind.TEXT, "the real prompt"),
                 _message(MessageRole.USER.value, MessageKind.TEXT, "   "),

@@ -30,6 +30,14 @@ from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 
 logger = get_logger(__name__)
 
+# The database work around a platform call, plus the platform family itself. A
+# live-message verb that lets either escape takes the run's delivery down with
+# it: the observer's callbacks run once, and the answer is sent by the last one.
+_PROGRESS_ERRORS: tuple[type[BaseException], ...] = (
+    SQLAlchemyError,
+    *PLATFORM_TRANSPORT_ERRORS,
+)
+
 
 class SurfaceProgress:
     """The live-message half of egress."""
@@ -107,10 +115,14 @@ class SurfaceProgress:
                     text=text,
                     metadata=metadata,
                 )
-        except SQLAlchemyError:
+        except _PROGRESS_ERRORS:
+            # Debug on purpose: a dropped delta loses nothing, since the final
+            # answer is delivered whole, and a dead platform would otherwise
+            # warn once per flush.
             logger.debug(
                 "agent_surfaces.egress.progress_append_failed.diagnostic",
                 conversation_id=conversation_id,
+                exc_info=True,
             )
             return StreamAppendResult(handle=progress_handle, appended=False)
 
@@ -150,10 +162,15 @@ class SurfaceProgress:
                     message=clean_message,
                     metadata=message_metadata,
                 )
-            except SQLAlchemyError:
-                logger.debug(
-                    "agent_surfaces.egress.progress_finish_failed.diagnostic",
-                    conversation_id=conversation_id,
+            except _PROGRESS_ERRORS:
+                # Slack answers here with a timeout as readily as with a
+                # `SlackApiError`, and the stream is now in an unknown state. The
+                # caller falls back to a plain message, so what is lost without
+                # this line is only the reason it had to.
+                logger.warning(
+                    "agent_surfaces.egress.progress_finish_failed.degraded",
+                    conversation_id=str(conversation_id),
+                    exc_info=True,
                 )
                 return False
 

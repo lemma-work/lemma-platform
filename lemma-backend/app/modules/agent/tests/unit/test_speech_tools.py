@@ -194,6 +194,47 @@ async def test_say_honors_explicit_output_path(monkeypatch):
     assert file_service.created["name"] == "answer.mp3"
 
 
+@pytest.mark.parametrize(
+    ("platform", "delivered", "success", "message_part"),
+    [
+        # On a surface and it arrived: the model may say it was spoken.
+        ("TELEGRAM", True, True, "delivered the voice note"),
+        # On a surface and it did not: `success=True` used to tell the model the
+        # person had heard it, and the audio was billed and saved for nobody.
+        ("TELEGRAM", False, False, None),
+        # Not a surface run at all: nobody to deliver to, and that is not a
+        # failure -- the path is the answer.
+        (None, False, True, "Generated speech audio."),
+    ],
+)
+async def test_say_reports_whether_the_person_could_hear_it(
+    monkeypatch, platform, delivered, success, message_part
+):
+    from unittest.mock import AsyncMock
+
+    file_service = _FakeFileService()
+    monkeypatch.setattr(
+        speech_module, "get_speech_provider", lambda *a, **k: _StubProvider()
+    )
+    monkeypatch.setattr(speech_module, "pod_services", _fake_pod_services(file_service))
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.contracts.egress.deliver_voice_note",
+        AsyncMock(return_value=delivered),
+    )
+    deps = SimpleNamespace(
+        pod_id=uuid4(), surface_platform=platform, conversation_id=uuid4()
+    )
+
+    result = await speech_module.say_internal(deps, SayRequest(text="Hello"))
+
+    assert result.success is success
+    assert result.audio_file_path, "the path stays, so the model can offer it"
+    if success:
+        assert message_part in (result.message or "")
+    else:
+        assert "have not heard it" in (result.error or "")
+
+
 async def test_say_requires_text():
     result = await speech_module.say_internal(
         SimpleNamespace(pod_id=uuid4()), SayRequest(text="   ")

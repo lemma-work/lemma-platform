@@ -34,6 +34,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
     SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.services.credential_resolver import (
+    arrival_number,
     native_credentials,
 )
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
@@ -103,7 +104,7 @@ async def fan_in_candidates(
             platform,
             pod_ids=pod_ids,
             system_credentials_only=True,
-            surface_identity_id=parsed.reply_target.get("phone_number_id"),
+            surface_identity_id=arrival_number(parsed),
         ),
         resolved_user,
         pod_ids,

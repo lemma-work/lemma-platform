@@ -282,7 +282,7 @@ def build_doubles(
 
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = existing_link
-    conversation_link_repository.create.side_effect = lambda link: link
+    conversation_link_repository.create.side_effect = lambda link, **_: link
     conversation_link_repository.update_last_event.side_effect = lambda **kwargs: (
         existing_link
     )
@@ -424,6 +424,8 @@ def build_ingress_service(
         event_dedup_store=SimpleNamespace(
             claim_message=AsyncMock(return_value=True),
             claim_stranger_reply=AsyncMock(return_value=True),
+            release_message=AsyncMock(),
+            release_stranger_reply=AsyncMock(),
         ),
     )
 
@@ -613,6 +615,8 @@ def build_turn_starter(
         event_dedup_store=SimpleNamespace(
             claim_message=AsyncMock(return_value=True),
             claim_stranger_reply=AsyncMock(return_value=True),
+            release_message=AsyncMock(),
+            release_stranger_reply=AsyncMock(),
         ),
         file_ingest_service=file_ingest_service
         or SimpleNamespace(

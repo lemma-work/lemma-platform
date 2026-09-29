@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -12,14 +13,12 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.common import (
     ProviderFailure,
     SurfaceFileAttachment,
-    attachment_tool_hint,
     channel_author_label,
     coerce_attachments,
     platform_webhook_url,
     provider_failure,
     render_attachment_prompt_block,
     render_attachment_summary_suffix,
-    select_attachment,
 )
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
@@ -296,7 +295,7 @@ async def test_whatsapp_final_answer_contract(fake_whatsapp, message_store):
     assert payload["text"] == {"body": "Contract reply"}
 
 
-async def test_chat_surfaces_skip_outbound_when_credentials_are_missing(
+async def test_chat_surfaces_refuse_outbound_when_credentials_are_missing(
     fake_slack,
     fake_whatsapp,
     message_store,
@@ -314,8 +313,12 @@ async def test_chat_surfaces_skip_outbound_when_credentials_are_missing(
         }
     )
 
-    await slack.send_message(event=_slack_event(), message="should not send")
-    await whatsapp.send_message(event=_whatsapp_event(), message="should not send")
+    # A send that cannot happen says so: a quiet return was recorded as
+    # delivered, and nothing ever told the person or the model otherwise.
+    with pytest.raises(AgentSurfaceValidationError):
+        await slack.send_message(event=_slack_event(), message="should not send")
+    with pytest.raises(AgentSurfaceValidationError):
+        await whatsapp.send_message(event=_whatsapp_event(), message="should not send")
 
     assert message_store.get_all("SLACK") == []
     assert message_store.get_all("WHATSAPP") == []
@@ -394,62 +397,12 @@ def test_coerce_attachments_normalizes_models_dicts_and_mixed_types():
     assert normalized[2].name == "raw.txt"
 
 
-def test_select_attachment_by_download_url_name_and_fallbacks():
-    attachments = [
-        SurfaceFileAttachment(
-            id="a1", name="Report.pdf", download_url="https://example.test/a1"
-        ),
-        SurfaceFileAttachment(
-            id="a2", name="notes.txt", download_url="https://example.test/a2"
-        ),
-    ]
-
-    by_ref = select_attachment(attachments, ref="a1")
-    assert by_ref is not None
-    assert by_ref.id == "a1"
-
-    by_url = select_attachment(attachments, download_url="https://example.test/a2")
-    assert by_url is not None
-    assert by_url.id == "a2"
-
-    by_name = select_attachment(attachments, name="report.pdf")
-    assert by_name is not None
-    assert by_name.id == "a1"
-
-    ambiguous = select_attachment(
-        [
-            SurfaceFileAttachment(id="b1", name="dup.txt"),
-            SurfaceFileAttachment(id="b2", name="dup.txt"),
-        ],
-        name="dup.txt",
-    )
-    assert ambiguous is None
-
-    single = select_attachment([attachments[0]])
-    assert single is attachments[0]
-
-    unresolvable = select_attachment(attachments)
-    assert unresolvable is None
-
-
-def test_attachment_tool_hint_covers_every_platform_and_unknown():
-    assert attachment_tool_hint("SLACK") is not None
-    assert "slack_download_file" in attachment_tool_hint("SLACK")
-    assert "teams_download_file" in attachment_tool_hint("TEAMS")
-    assert "whatsapp_download_file" in attachment_tool_hint("WHATSAPP")
-    assert "telegram_download_file" in attachment_tool_hint("TELEGRAM")
-    # Email has no download tool: an inbound attachment is already ingested into
-    # pod files by the time the agent sees the message.
-    assert attachment_tool_hint("RESEND") is None
-    assert attachment_tool_hint("SOME_UNKNOWN_PLATFORM") is None
-
-
 def test_channel_author_label_falls_back_to_none_when_unattributed():
     assert channel_author_label(None, None) is None
     assert channel_author_label("Jane", None) == "Jane (other participant)"
 
 
-def test_render_attachment_prompt_block_permalink_hint_and_skips_invalid():
+def test_render_attachment_prompt_block_permalink_and_skips_invalid():
     attachments = [
         {"size": "not-a-number"},  # fails model validation -> skipped
         42,  # neither a model nor a dict -> skipped
@@ -461,13 +414,12 @@ def test_render_attachment_prompt_block_permalink_hint_and_skips_invalid():
         ),
     ]
 
-    prompt = render_attachment_prompt_block(
-        attachments, platform="SLACK", include_hint=True
-    )
+    prompt = render_attachment_prompt_block(attachments, platform="SLACK")
 
     assert "via-permalink.pdf" in prompt
     assert "permalink=https://example.test/permalink" in prompt
-    assert "slack_download_file" in prompt
+    # The per-platform `*_download_file` tools do not exist, so no hint names one.
+    assert "_download_file" not in prompt
 
     assert render_attachment_prompt_block([], platform="SLACK") == ""
 
@@ -664,67 +616,6 @@ def test_render_email_content_html_and_markdown_fallback(monkeypatch):
     # Even the fallback is wrapped, so a deployment without the optional
     # dependency still gets a readable width and font rather than the client's.
     assert html_md.startswith("<div style=")
-
-
-def test_render_email_content_appends_display_resource_plans():
-    from app.modules.agent_surfaces.domain.models import (
-        SurfaceDisplayAction,
-        SurfaceDisplayRenderPlan,
-    )
-    from app.modules.agent_surfaces.platforms.email_render import render_email_content
-
-    plan = SurfaceDisplayRenderPlan(
-        resource_type="record",
-        title="Weekly Report",
-        summary="Everything is on track.",
-        detail_lines=["Revenue: $10k", "Churn: 2%"],
-        actions=[SurfaceDisplayAction(label="Open report", url="https://e2e.test/r")],
-    )
-
-    plain, html = render_email_content(
-        content="See the attached update.",
-        content_type="text",
-        display_resource_plans=[plan],
-    )
-
-    assert "See the attached update." in plain
-    assert "Weekly Report" in plain
-    assert html is not None
-    assert "Weekly Report" in html
-    assert "Everything is on track." in html
-    assert "Revenue: $10k" in html
-    assert "Open report" in html
-    assert "https://e2e.test/r" in html
-
-
-def test_coerce_display_resource_plans_normalizes_mixed_input():
-    from pydantic import BaseModel
-
-    from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
-    from app.modules.agent_surfaces.platforms.email_render import (
-        coerce_display_resource_plans,
-    )
-
-    class _ForeignPlan(BaseModel):
-        resource_type: str
-        title: str
-
-    assert coerce_display_resource_plans(None) == []
-
-    matching = SurfaceDisplayRenderPlan(resource_type="record", title="Direct")
-    foreign = _ForeignPlan(resource_type="record", title="Foreign")
-    invalid_dict = {"title": "missing resource_type"}
-    not_a_plan = 12345
-
-    plans = coerce_display_resource_plans([matching, foreign, invalid_dict, not_a_plan])
-
-    assert len(plans) == 2
-    assert plans[0] is matching
-    assert plans[1].title == "Foreign"
-
-    # A single non-list value is wrapped, not rejected.
-    single = coerce_display_resource_plans(matching)
-    assert single == [matching]
 
 
 def test_parse_email_identity_and_read_helpers_handle_unrecognized_shapes():

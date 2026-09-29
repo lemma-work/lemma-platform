@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from html import escape
 from typing import Any
 
 import httpx
@@ -14,12 +13,14 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
+from app.modules.agent_surfaces.platforms.telegram import outbound
 from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
     resolve_attachment_name_and_mime,
 )
@@ -32,7 +33,10 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
 from app.modules.agent_surfaces.platforms import common
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
-from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
+from app.modules.agent_surfaces.platforms.common import (
+    PLATFORM_TRANSPORT_ERRORS,
+    assert_safe_api_base,
+)
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TELEGRAM_MESSAGE_LIMIT,
     TelegramClient,
@@ -47,8 +51,6 @@ from app.modules.agent_surfaces.platforms.telegram.message_experience import (
     stream_progress as stream_telegram_progress,
 )
 from app.modules.agent_surfaces.platforms.telegram.models import (
-    TelegramCurrentChatParams,
-    TelegramCurrentChatResult,
     TelegramFileAttachment,
 )
 from app.core.config import settings
@@ -189,14 +191,26 @@ class TelegramPlatformService:
                 payload["reply_parameters"] = reply_parameters
             if index == 0 and isinstance(reply_markup, dict):
                 payload["reply_markup"] = reply_markup
-            await self._send_chunk(payload, raw_chunk)
+            try:
+                await self._send_chunk(payload, raw_chunk)
+            except PLATFORM_TRANSPORT_ERRORS:
+                if index:
+                    # Earlier chunks are already in the chat. The caller only
+                    # sees "not delivered", so say what actually happened.
+                    logger.warning(
+                        "agent_surfaces.telegram.message_partially_delivered.degraded",
+                        sent_chunks=index,
+                        total_chunks=len(raw_chunks),
+                        exc_info=True,
+                    )
+                raise
 
     async def _render_choices(
         self,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> bool | PartDelivery:
         """Render ask_user questions as native inline keyboards.
 
         One message per question; each option is a button whose ``callback_data``
@@ -212,7 +226,7 @@ class TelegramPlatformService:
             return False
         if any(q.multi_select for q in question_plan.questions):
             return False
-        for question in question_plan.questions:
+        for index, question in enumerate(question_plan.questions):
             rows: list[list[dict[str, str]]] = []
             for option in question.options:
                 token = await put_callback_token(
@@ -234,11 +248,36 @@ class TelegramPlatformService:
             rows.append(
                 [{"text": "✏️ Other (type a reply)", "callback_data": other_token}]
             )
-            await self.send_message(
-                event,
-                question.question,
-                metadata={"reply_markup": {"inline_keyboard": rows}},
-            )
+            try:
+                await self.send_message(
+                    event,
+                    outbound.question_with_option_notes(question),
+                    metadata={"reply_markup": {"inline_keyboard": rows}},
+                )
+            except PLATFORM_TRANSPORT_ERRORS:
+                if not index:
+                    # Nothing went out: the caller's fallback sends every
+                    # question as text, and none of them is a duplicate.
+                    raise
+                # The earlier questions are already in the chat with buttons.
+                # Raising made the caller resend all of them as text, so the
+                # first question appeared twice. Ask only what is left.
+                logger.warning(
+                    "agent_surfaces.telegram.questions_partially_delivered.degraded",
+                    sent_questions=index,
+                    total_questions=len(question_plan.questions),
+                    exc_info=True,
+                )
+                await self.send_message(
+                    event,
+                    question_plan.model_copy(
+                        update={"questions": question_plan.questions[index:]}
+                    ).to_plain_text(),
+                )
+                # Delivered, but not all of it as controls: reporting True says
+                # every question is tappable, and nothing then accepts a typed
+                # answer to the ones that arrived as words.
+                return PartDelivery.DEGRADED
         return True
 
     async def _render_decision(
@@ -324,14 +363,20 @@ class TelegramPlatformService:
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
+        """Send a resource as a message; True when it carries a real link button.
+
+        A resource with no action is a formatted message and nothing more, and
+        reporting that as a card is what left ``receipt.degraded`` unable to
+        name it.
+        """
         del metadata
         chat_id = event.reply_target.get("chat_id") or event.external_channel_id
         reply_parameters = telegram_reply_parameters(event)
 
         payload: dict[str, Any] = {
             "chat_id": chat_id,
-            "text": _telegram_display_resource_text(render_plan),
+            "text": outbound.display_resource_text(render_plan),
             "parse_mode": "HTML",
         }
         if reply_parameters is not None:
@@ -345,7 +390,7 @@ class TelegramPlatformService:
                 "inline_keyboard": [
                     [
                         {
-                            "text": _truncate_telegram_button_text(action.label),
+                            "text": outbound.button_text(action.label),
                             "url": action.url,
                         }
                     ]
@@ -353,6 +398,7 @@ class TelegramPlatformService:
             }
 
         await self._call_with_retry("sendMessage", payload)
+        return action is not None
 
     async def send_file_bytes(
         self,
@@ -368,26 +414,17 @@ class TelegramPlatformService:
         Returns True on success; False when the chat/credentials are missing so
         the caller can fall back to delivering a URL link.
         """
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        if not self._bot_token or not chat_id:
+        data = self._upload_fields(event, caption)
+        if not self._bot_token or data is None:
             return False
-        send_type = _resolve_telegram_send_type(
-            delivery_mode="auto", mime_type=mime_type
+        await outbound.send_file(
+            self._client,
+            self._retry_policy,
+            data=data,
+            file_name=file_name,
+            content=file_bytes,
+            mime_type=mime_type,
         )
-        method_name, file_field = _telegram_method_for_send_type(send_type)
-        data: dict[str, Any] = {"chat_id": chat_id}
-        if caption:
-            data["caption"] = caption
-        thread_id = self._message_thread_id(event)
-        if thread_id is not None:
-            data["message_thread_id"] = thread_id
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{self._client.base_url}/{method_name}",
-                data=data,
-                files={file_field: (file_name, file_bytes, mime_type)},
-            )
-            response.raise_for_status()
         return True
 
     async def send_voice_bytes(
@@ -404,23 +441,35 @@ class TelegramPlatformService:
         Returns True on success; False when the chat/credentials are missing so
         the caller can fall back to a normal file attachment.
         """
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        if not self._bot_token or not chat_id:
+        data = self._upload_fields(event, caption)
+        if not self._bot_token or data is None:
             return False
+        await outbound.upload(
+            self._client,
+            self._retry_policy,
+            "sendVoice",
+            "voice",
+            data=data,
+            file_name=file_name,
+            content=audio_bytes,
+            mime_type=mime_type or "audio/ogg",
+        )
+        return True
+
+    def _upload_fields(
+        self, event: ParsedInboundSurfaceEvent, caption: str | None
+    ) -> dict[str, Any] | None:
+        """The form fields an upload carries, or ``None`` when there is no chat."""
+        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        if not chat_id:
+            return None
         data: dict[str, Any] = {"chat_id": chat_id}
         if caption:
-            data["caption"] = caption
+            data["caption"] = outbound.caption(caption)
         thread_id = self._message_thread_id(event)
         if thread_id is not None:
             data["message_thread_id"] = thread_id
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{self._client.base_url}/sendVoice",
-                data=data,
-                files={"voice": (file_name, audio_bytes, mime_type or "audio/ogg")},
-            )
-            response.raise_for_status()
-        return True
+        return data
 
     async def add_processing_indicator(
         self,
@@ -433,13 +482,11 @@ class TelegramPlatformService:
         thread_id = self._message_thread_id(event)
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
-        # Best-effort: a failed typing indicator must never break the run.
-        try:
-            await self._client.call("sendChatAction", payload)
-        except Exception:
-            logger.debug(
-                "agent_surfaces.service.telegram_typing_indicator_best_effort.observed"
-            )
+        # Not swallowed: every caller already treats a failure as best-effort
+        # (`show_typing` answers False and the refresh loop stops), and this
+        # catch made `show_typing` unable to ever answer False -- on a dead API
+        # the loop ran its full fifteen minutes, one failed call every 4 s.
+        await self._client.call("sendChatAction", payload)
 
     async def stream_progress(
         self,
@@ -509,33 +556,6 @@ class TelegramPlatformService:
         )
         return content, file_name, mime_type
 
-    async def get_current_chat(
-        self,
-        *,
-        ctx: RunContext[ConversationContext],
-        request: TelegramCurrentChatParams,
-    ) -> TelegramCurrentChatResult:
-        del request
-        metadata = self._telegram_metadata(ctx)
-        attachment_names = [
-            attachment.name
-            for attachment in self._current_message_attachments(ctx)
-            if attachment.name
-        ]
-        return TelegramCurrentChatResult(
-            success=True,
-            message="Resolved current Telegram chat details.",
-            chat_id=ctx.deps.external_channel_id,
-            chat_type=metadata.chat_type if metadata is not None else None,
-            message_thread_id=metadata.message_thread_id
-            if metadata is not None
-            else None,
-            is_topic_message=metadata.is_topic_message
-            if metadata is not None
-            else False,
-            attachment_names=attachment_names,
-        )
-
     def _telegram_metadata(
         self,
         ctx: RunContext[ConversationContext],
@@ -553,48 +573,3 @@ class TelegramPlatformService:
         if metadata is None:
             return []
         return common.coerce_attachments(metadata.attachments, TelegramFileAttachment)
-
-
-def _resolve_telegram_send_type(*, delivery_mode: str, mime_type: str) -> str:
-    requested = str(delivery_mode or "auto").lower()
-    if requested != "auto":
-        return requested
-    if mime_type.startswith("image/"):
-        return "photo"
-    if mime_type.startswith("audio/"):
-        return "audio"
-    if mime_type.startswith("video/"):
-        return "video"
-    return "document"
-
-
-def _telegram_method_for_send_type(send_type: str) -> tuple[str, str]:
-    normalized = str(send_type).lower()
-    if normalized == "photo":
-        return "sendPhoto", "photo"
-    if normalized == "audio":
-        return "sendAudio", "audio"
-    if normalized == "video":
-        return "sendVideo", "video"
-    return "sendDocument", "document"
-
-
-def _telegram_display_resource_text(render_plan: SurfaceDisplayRenderPlan) -> str:
-    parts = [f"<b>{escape(render_plan.title)}</b>"]
-    if render_plan.summary:
-        parts.append(escape(render_plan.summary))
-    for line in render_plan.detail_lines[:5]:
-        parts.append(f"<blockquote>{escape(line)}</blockquote>")
-    if render_plan.preview_block:
-        parts.append(f"<pre>{escape(render_plan.preview_block)}</pre>")
-    action = render_plan.primary_action
-    if action is not None:
-        parts.append(
-            f'<a href="{escape(action.url, quote=True)}">{escape(action.label)}</a>'
-        )
-    return "\n\n".join(parts)
-
-
-def _truncate_telegram_button_text(value: str) -> str:
-    text = " ".join(str(value or "").split()) or "Open"
-    return text if len(text) <= 64 else text[:63].rstrip() + "..."

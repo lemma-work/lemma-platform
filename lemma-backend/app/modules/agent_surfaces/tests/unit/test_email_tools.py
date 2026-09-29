@@ -5,12 +5,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.domain.models import (
-    SurfaceDisplayAction,
-    SurfaceDisplayRenderPlan,
-)
-from app.modules.agent_surfaces.platforms.email_render import render_email_content
-
 
 class _FakeHttpResponse:
     def __init__(self, *, json_data=None) -> None:
@@ -110,33 +104,6 @@ async def test_ask_user_still_pauses_on_chat_surface():
     )
     with pytest.raises(AgentInputRequired):
         await ask_user(_email_ctx("WHATSAPP"), request)
-
-
-def test_render_email_content_adds_display_resource_html_card():
-    plain, html = render_email_content(
-        content="I prepared the report.",
-        content_type="text",
-        display_resource_plans=[
-            SurfaceDisplayRenderPlan(
-                resource_type="FILE",
-                title="report.pdf",
-                summary="PDF · 2.3 MB",
-                actions=[
-                    SurfaceDisplayAction(
-                        label="Open file",
-                        url="https://app.example.test/pod/p/files?file=/me/report.pdf",
-                    )
-                ],
-            )
-        ],
-    )
-
-    assert "I prepared the report." in plain
-    assert "report.pdf" in plain
-    assert "PDF · 2.3 MB" in plain
-    assert html is not None
-    assert "Open file" in html
-    assert "https://app.example.test" in html
 
 
 def _email_event(platform: str, **reply_target):

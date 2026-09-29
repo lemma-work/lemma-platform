@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Protocol
 from uuid import UUID
 from pydantic_ai.output import OutputSpec
@@ -23,7 +22,6 @@ from app.core.observability.telemetry import (
 )
 from app.modules.agent.config import agent_settings
 from app.modules.agent.services.context_budget import (
-    ContextBudget,
     context_budget_for,
 )
 from app.modules.agent.services.conversation_access import (
@@ -40,8 +38,6 @@ from app.modules.agent.domain.value_objects import (
     ConversationType,
     HarnessKind,
     JsonObject,
-    MessageKind,
-    MessageRole,
 )
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.capabilities import build_lemma_harness_tooling
@@ -64,8 +60,7 @@ from app.modules.agent.services.run_phase_spans import (
 )
 from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
-    bound_runtime_history,
-    runtime_full_run_ids,
+    assemble_runtime_history,
     select_runtime_history,
 )
 from app.modules.agent.services.run_context_builder import build_run_context
@@ -95,6 +90,11 @@ from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFacto
 from app.modules.agent.tools.final_answer import get_final_answer_tool
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.core.crypto import get_secret_cipher
+from app.modules.agent.services.run_input_settings import (
+    profile_model_settings,
+    run_input_text,
+    with_reply_budget,
+)
 
 logger = get_logger(__name__)
 
@@ -102,72 +102,6 @@ logger = get_logger(__name__)
 # takes and comfortably inside the worker's shutdown grace period, so a healthy
 # run always finalizes and a wedged one still lets the process exit.
 _FINALIZATION_TIMEOUT_SECONDS = 8.0
-
-
-def _run_input_text(messages: Sequence[Message]) -> str | None:
-    """The prompt this run is answering: the last thing the user said.
-
-    The harness is handed the whole selected history, but a trace's input is the
-    turn, not the transcript -- the earlier turns are already their own traces in
-    the same session. Tool returns and thinking blocks are skipped for the same
-    reason: they are rows in the run, not the thing that started it.
-    """
-    for message in reversed(messages):
-        if message.role is not MessageRole.USER:
-            continue
-        if message.kind is not MessageKind.TEXT:
-            continue
-        text = (message.text or "").strip()
-        if text:
-            return text
-    return None
-
-
-def _profile_model_settings(
-    runtime_profile_snapshot: dict[str, object | None] | None,
-) -> JsonObject | None:
-    """Pull the model_settings dict out of a resolved runtime profile snapshot."""
-    if not isinstance(runtime_profile_snapshot, dict):
-        return None
-    config = runtime_profile_snapshot.get("config")
-    if not isinstance(config, dict):
-        return None
-    model_settings = config.get("model_settings")
-    return (
-        model_settings if isinstance(model_settings, dict) and model_settings else None
-    )
-
-
-def _with_reply_budget(
-    model_settings: JsonObject | None, budget: ContextBudget
-) -> JsonObject | None:
-    """Tell the model how much room it has to answer in.
-
-    Nothing set `max_tokens`, so every request used whatever the provider
-    defaults to. That is survivable on a model that answers in prose and fatal
-    on one that thinks first: thinking tokens are output tokens, a small
-    default is spent on them before any content exists, and the provider stops
-    the response at the cap. pydantic-ai treats a length-stopped response with
-    no actionable part as `UnexpectedModelBehavior` and ends the run, so the
-    work is lost rather than shortened.
-
-    The number is the window minus the ceiling everything else is held under,
-    which is the room the budget had already set aside for exactly this and
-    never spent.
-
-    An operator who set `max_tokens` on the runtime profile outranks this: they
-    know something about their model that a fraction of a window does not. Any
-    value they set counts, including a zero -- a provider will reject that and
-    say so, which is a better answer than quietly substituting a number they
-    did not choose and leaving them to wonder why their setting did nothing.
-    Absent and explicitly null both mean unset, and are filled.
-    """
-    if model_settings and model_settings.get("max_tokens") is not None:
-        return model_settings
-    reply = budget.reply_token_budget
-    if reply <= 0:
-        return model_settings
-    return {**(model_settings or {}), "max_tokens": reply}
 
 
 class AgentRunObserver(Protocol):
@@ -293,7 +227,7 @@ class AgentRunnerService:
             harness_capabilities: list[AgentCapability[ConversationContext]] = []
             harness_model_settings: JsonObject | None = None
             if resolved_runtime.harness_kind == HarnessKind.LEMMA:
-                harness_model_settings = _profile_model_settings(
+                harness_model_settings = profile_model_settings(
                     runtime_profile_snapshot
                 )
                 # The in-process harness realizes every tool surface as a
@@ -332,7 +266,7 @@ class AgentRunnerService:
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
                 capabilities=harness_capabilities,
-                model_settings=_with_reply_budget(
+                model_settings=with_reply_budget(
                     harness_model_settings, context_budget
                 ),
                 usage_limits=enforced_usage_limits,
@@ -380,10 +314,11 @@ class AgentRunnerService:
                         resolved_runtime.model_name_for_harness,
                     )
                     # Trace summaries let operators identify a turn without opening it.
-                    record_span_input(span, _run_input_text(messages))
+                    record_span_input(span, run_input_text(messages))
                     observer_started = await notify_run_started(
                         observer, conversation, ctx, agent_run_id
                     )
+                    raised = False
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
@@ -410,12 +345,19 @@ class AgentRunnerService:
                                 conversation=conversation,
                                 ctx=ctx,
                             )
+                    except Exception:
+                        raised = True
+                        raise
                     finally:
                         # In `finally`, because a run that failed or was
                         # cancelled part-way is the one worth reading, and it
                         # still has whatever the model produced before it went.
                         record_span_output(span, outcome.output_data)
-                        if observer_started:
+                        # Not announced as finished when it threw: the failure
+                        # path below announces that, and "finished" would first
+                        # send whatever narration the model buffered as though
+                        # it were the answer.
+                        if observer_started and not raised:
                             await notify_run_finished(
                                 observer, conversation, ctx, agent_run_id
                             )
@@ -548,19 +490,11 @@ class AgentRunnerService:
                     agent_repository=AgentRepository(uow),
                     agent_name=agent_name,
                 )
-                # The trim decides which runs need every message, and it can
-                # keep an old-but-active run while dropping newer ones -- so it
-                # runs before the messages are asked for, and only what survives
-                # it gets them. Attaching to the untrimmed list meant a long
-                # conversation read hundreds of runs it then discarded.
-                bounded, dropped_runs = bound_runtime_history(
-                    runs, conversation, total_runs=window.total_runs
-                )
-                await repo.attach_runtime_history_messages(
-                    bounded, full_run_ids=runtime_full_run_ids(bounded, conversation)
-                )
-                messages = self._select_runtime_history(
-                    bounded, conversation, already_dropped=dropped_runs
+                messages = await assemble_runtime_history(
+                    repo,
+                    window,
+                    conversation_id=agent_run.conversation_id,
+                    run_id=agent_run.id,
                 )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
@@ -568,13 +502,10 @@ class AgentRunnerService:
     def _select_runtime_history(
         self,
         runs: list[AgentRun],
-        conversation: Conversation | None = None,
         *,
         already_dropped: int = 0,
     ) -> list[Message]:
-        return select_runtime_history(
-            runs, conversation, already_dropped=already_dropped
-        )
+        return select_runtime_history(runs, already_dropped=already_dropped)
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation

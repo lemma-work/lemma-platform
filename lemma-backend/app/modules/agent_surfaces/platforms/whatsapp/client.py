@@ -22,7 +22,11 @@ from typing import Any
 import httpx
 
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
-from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
+from app.modules.agent_surfaces.platforms.delivery import (
+    DeliveryClassification,
+    RetryPolicy,
+    with_retry,
+)
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
@@ -68,8 +72,12 @@ class WhatsAppApiError(Exception):
 
 
 class WhatsAppClient:
-    """Thin WhatsApp Cloud API caller. One attempt per method; best-effort retry
-    is the caller's concern (delivery is never allowed to fail a run)."""
+    """Thin WhatsApp Cloud API caller.
+
+    Message sends retry transient failures (429, 5xx, network) with bounded
+    backoff, through the same ``with_retry`` Telegram and Slack use. WhatsApp was
+    the one platform without it, so a single 503 from Meta lost the answer.
+    """
 
     def __init__(
         self,
@@ -78,11 +86,13 @@ class WhatsAppClient:
         phone_number_id: str = "",
         api_base: str | None = None,
         timeout: float = 60.0,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
         self._access_token = access_token
         self._phone_number_id = phone_number_id
         self._api_base = (api_base or _WHATSAPP_API_BASE).rstrip("/")
         self._timeout = timeout
+        self._retry_policy = retry_policy or RetryPolicy()
 
     @classmethod
     def from_credentials(
@@ -225,12 +235,25 @@ class WhatsAppClient:
         phone_number_id: str,
         payload: dict[str, Any],
     ) -> str | None:
-        """POST a fully-formed ``/messages`` payload; return first message id."""
-        data = await self._post_json(
-            f"{self._api_base}/{phone_number_id}/messages",
-            json=payload,
-            method="messages",
+        """POST a fully-formed ``/messages`` payload; return first message id.
+
+        Retried on transient failures, except for the two payloads that are
+        indicators rather than messages: a keep-alive that fails is replaced by
+        the next one, and a retry there would only delay the caller waiting on
+        a typing bubble.
+        """
+        url = f"{self._api_base}/{phone_number_id}/messages"
+        is_indicator = payload.get("status") == "read" or payload.get("type") == (
+            "reaction"
         )
+        if not is_indicator:
+            data = await with_retry(
+                lambda: self._post_json(url, json=payload, method="messages"),
+                policy=self._retry_policy,
+                classify=classify_whatsapp_error,
+            )
+        else:
+            data = await self._post_json(url, json=payload, method="messages")
         messages = (data or {}).get("messages") or []
         first = messages[0] if messages else {}
         if not isinstance(first, dict):

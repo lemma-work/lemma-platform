@@ -58,55 +58,8 @@ def _stream_fakes(monkeypatch) -> dict[str, list[dict]]:
     return calls
 
 
-async def test_progress_opens_a_stream_and_appends_each_step(monkeypatch):
-    """Steps are additive task chunks, not a message edited in place.
-
-    Each new step completes the one in flight and opens the next, so Slack
-    renders a timeline of what the agent did rather than a single line that
-    overwrites its own history.
-    """
-    calls = _stream_fakes(monkeypatch)
-    stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
-    event = _event()
-
-    handle = await stream.stream_progress(event, "Searching the web")
-    assert handle["ts"] == "200.5"
-    assert handle["stream"] is True
-    assert handle["task_seq"] == 1
-    assert calls["start"][0]["thread_ts"] == "100.0"
-    assert calls["start"][0]["task_display_mode"] == "timeline"
-    assert calls["append"][0]["chunks"] == [
-        {
-            "type": "task_update",
-            "id": "step-1",
-            "title": "Searching the web",
-            "status": "in_progress",
-        }
-    ]
-
-    handle2 = await stream.stream_progress(event, "Reading results", handle)
-    assert handle2["task_seq"] == 2
-    # The step in flight is completed, and the next opened, in one append.
-    assert calls["append"][1]["chunks"] == [
-        {
-            "type": "task_update",
-            "id": "step-1",
-            "title": "Searching the web",
-            "status": "complete",
-        },
-        {
-            "type": "task_update",
-            "id": "step-2",
-            "title": "Reading results",
-            "status": "in_progress",
-        },
-    ]
-    # Nothing is posted or deleted along the way — it is all one message.
-    assert calls["post"] == []
-
-
 async def test_finish_progress_closes_the_stream_with_the_answer(monkeypatch):
-    """The steps and the answer they produced end up as one message.
+    """The streamed text and the answer end up as one message.
 
     The answer is *appended* and the stream then closed. Slack rejects a
     stopStream that tries to introduce the body itself — verified against a
@@ -117,8 +70,10 @@ async def test_finish_progress_closes_the_stream_with_the_answer(monkeypatch):
     stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
 
-    handle = await stream.stream_progress(event, "Searching the web")
-    delivered = await stream.finish_progress(event, handle, "## Answer\n\nAll done.")
+    opened = await stream.append_stream_text(event, None, "Searching")
+    delivered = await stream.finish_progress(
+        event, opened.handle, "## Answer\n\nAll done."
+    )
 
     assert delivered is True
     # The body rides append, not stop.
@@ -128,13 +83,7 @@ async def test_finish_progress_closes_the_stream_with_the_answer(monkeypatch):
     # markdown_text is what Slack rejects as streaming_mode_mismatch.
     assert "markdown_text" not in answer_append
     assert answer_append["chunks"] == [
-        {
-            "type": "task_update",
-            "id": "step-1",
-            "title": "Searching the web",
-            "status": "complete",
-        },
-        {"type": "markdown_text", "text": "## Answer\n\nAll done."},
+        {"type": "markdown_text", "text": "## Answer\n\nAll done."}
     ]
     # stop only finalises — it carries no text of its own.
     stop = calls["stop"][0]
@@ -160,9 +109,9 @@ async def test_finish_progress_spills_an_oversized_answer_into_messages(monkeypa
     stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
 
-    handle = await stream.stream_progress(event, "Working")
+    opened = await stream.append_stream_text(event, None, "")
     body = "\n\n".join(["word " * 400] * 12)
-    assert await stream.finish_progress(event, handle, body) is True
+    assert await stream.finish_progress(event, opened.handle, body) is True
 
     assert len(calls["stop"]) == 1
     # The overflow continues as ordinary markdown messages rather than vanishing.
@@ -189,11 +138,10 @@ async def test_end_progress_disposes_of_a_stream_with_no_answer(monkeypatch):
 
     stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
-    handle = await stream.stream_progress(event, "Searching the web")
-    await stream.end_progress(event, handle)
+    opened = await stream.append_stream_text(event, None, "")
+    await stream.end_progress(event, opened.handle)
 
     assert calls["stop"][0]["ts"] == "200.5"
-    assert calls["stop"][0]["chunks"][0]["status"] == "complete"
     assert deletes == [{"channel": "C1", "ts": "200.5"}]
 
 
@@ -269,8 +217,8 @@ async def test_slack_send_file_bytes_retries_without_customized_identity(monkeyp
 async def test_streamed_text_is_a_chunk_not_top_level_markdown(monkeypatch):
     """Regression for a live `streaming_mode_mismatch`.
 
-    A Slack stream is chunk-based or plain-text for its whole life. The step
-    timeline makes it chunk-based, so model text has to arrive as a
+    A Slack stream is chunk-based or plain-text for its whole life. It opens
+    chunk-based, so model text has to arrive as a
     markdown_text chunk — sending top-level markdown_text on the same stream
     was rejected on every single append against a real workspace.
     """
@@ -281,7 +229,7 @@ async def test_streamed_text_is_a_chunk_not_top_level_markdown(monkeypatch):
     first = await stream.append_stream_text(event, None, "Hello ")
     second = await stream.append_stream_text(event, first.handle, "world")
 
-    # Opened in the same mode the step timeline uses.
+    # Opened in chunk mode, the one the markdown chunks require.
     assert calls["start"][0]["task_display_mode"] == "timeline"
     for append in calls["append"]:
         assert "markdown_text" not in append
@@ -312,7 +260,6 @@ async def test_failed_stream_append_is_reported_and_can_be_retried(monkeypatch):
         "ts": "200.5",
         "channel": "C1",
         "stream": True,
-        "task_seq": 0,
     }
 
     failed = await stream.append_stream_text(_event(), handle, "kept")

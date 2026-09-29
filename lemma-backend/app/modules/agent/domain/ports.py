@@ -279,6 +279,15 @@ class ConversationRepository(Protocol):
         full_run_ids: set[UUID],
     ) -> list[AgentRun]: ...
 
+    async def load_unattached_notifications(
+        self,
+        conversation_id: UUID,
+        *,
+        after_sequence: int | None,
+        before_sequence: int | None,
+        limit: int,
+    ) -> list[Message]: ...
+
     async def append_message(
         self,
         *,

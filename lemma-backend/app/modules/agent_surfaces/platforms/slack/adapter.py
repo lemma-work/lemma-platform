@@ -60,12 +60,11 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        await self._service(credentials)._render_resource(
+        return await self._service(credentials)._render_resource(
             event=event,
             render_plan=render_plan,
             metadata=metadata,
         )
-        return True
 
     async def add_processing_indicator(
         self,
@@ -77,19 +76,6 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         await self._service(credentials).add_processing_indicator(
             event=event,
             metadata=metadata,
-        )
-
-    async def stream_progress(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
-        return await self._stream(credentials).stream_progress(
-            event, progress_text, progress_handle, metadata
         )
 
     async def end_progress(

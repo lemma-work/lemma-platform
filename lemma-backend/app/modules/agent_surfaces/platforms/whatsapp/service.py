@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import mimetypes
 from typing import Any
 
 from pydantic_ai.tools import RunContext
@@ -13,6 +12,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -23,20 +23,20 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     WhatsAppSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms import common
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.send_guard import unsendable
+from app.modules.agent_surfaces.platforms.whatsapp import media
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
+    resolve_api_base,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.models import (
-    WhatsAppCurrentContactParams,
-    WhatsAppCurrentContactResult,
     WhatsAppFileAttachment,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     build_whatsapp_approval_interactive,
     build_whatsapp_interactive,
-    filename_from_url,
-    resolve_whatsapp_send_type,
     whatsapp_cta_url_payload,
     whatsapp_display_resource_text,
     flow_with_message,
@@ -45,13 +45,10 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     truncate_whatsapp_text,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
-    to_plain_text,
     to_whatsapp_text,
 )
 
 logger = get_logger(__name__)
-
-_WHATSAPP_API_BASE = "https://graph.facebook.com/v21.0"
 
 
 class WhatsAppPlatformService:
@@ -59,10 +56,9 @@ class WhatsAppPlatformService:
         self.credentials = credentials
         self._access_token = credentials.get("access_token") or ""
         self._phone_number_id = credentials.get("phone_number_id") or ""
-        # Resolve the base here (honoring a credential override, else the module
-        # constant that tests monkeypatch) and hand it to the typed client so all
-        # transport goes through one place.
-        self._api_base = credentials.get("api_base_url") or _WHATSAPP_API_BASE
+        # Resolve the base here (honoring a credential override) and hand it to
+        # the typed client so all transport goes through one place.
+        self._api_base = resolve_api_base(credentials)
         self._client = WhatsAppClient(
             access_token=self._access_token,
             phone_number_id=self._phone_number_id,
@@ -115,12 +111,12 @@ class WhatsAppPlatformService:
         if not sender_wa_id or not phone_number_id or not self._access_token:
             if (metadata or {}).get("private_onboarding"):
                 raise RuntimeError("WhatsApp cannot deliver private onboarding")
-            logger.debug(
-                "agent_surfaces.service.whatsapp_send_message_skipped_due.diagnostic",
+            raise unsendable(
+                "WhatsApp",
+                access_token=self._access_token,
                 phone_number_id=phone_number_id,
-                sender_wa_id=sender_wa_id,
+                recipient=sender_wa_id,
             )
-            return
 
         flow = (metadata or {}).get("onboarding_flow")
         if event.is_dm and flow:
@@ -130,16 +126,31 @@ class WhatsAppPlatformService:
                 interactive=flow_with_message(flow, message),
             )
             return
-        for body in whatsapp_message_bodies(message):
-            await self._client.send_message_payload(
-                phone_number_id=phone_number_id,
-                payload={
-                    "messaging_product": "whatsapp",
-                    "to": sender_wa_id,
-                    "type": "text",
-                    "text": {"body": body},
-                },
-            )
+        bodies = whatsapp_message_bodies(message)
+        for index, body in enumerate(bodies):
+            try:
+                await self._client.send_message_payload(
+                    phone_number_id=phone_number_id,
+                    payload={
+                        "messaging_product": "whatsapp",
+                        "to": sender_wa_id,
+                        "type": "text",
+                        "text": {"body": body},
+                    },
+                )
+            except PLATFORM_TRANSPORT_ERRORS:
+                if index:
+                    # The person already has the first part. The caller sees
+                    # this as "not delivered" and there is no rung below plain
+                    # text to fall back to, so what it cannot say is that half
+                    # the answer is on their phone.
+                    logger.warning(
+                        "agent_surfaces.service.whatsapp_message_partially_delivered.degraded",
+                        sent_parts=index,
+                        total_parts=len(bodies),
+                        exc_info=True,
+                    )
+                raise
 
     async def acknowledge_interaction(
         self,
@@ -234,7 +245,7 @@ class WhatsAppPlatformService:
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> bool | PartDelivery:
         """Render ask_user questions as native interactive replies.
 
         ≤3 options → reply buttons, 4–10 → a list; multi-select or anything that
@@ -248,14 +259,9 @@ class WhatsAppPlatformService:
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not sender_wa_id or not phone_number_id or not self._access_token:
-            # Missing credentials/target — the caller's text fallback hits the same
-            # guard in send_message, so log here to make the double-skip diagnosable
-            # instead of a silent swallow.
-            logger.debug(
-                "agent_surfaces.service.whatsapp_send_questions_skipped_missing.diagnostic",
-                phone_number_id=phone_number_id,
-                sender_wa_id=sender_wa_id,
-            )
+            # Nothing can be sent. Declining here lets the caller's text fallback
+            # try, and that hits the raising guard in `send_message`, so the
+            # missing part is named there rather than in a debug line here.
             return False
         if any(q.multi_select for q in question_plan.questions):
             return False
@@ -267,12 +273,38 @@ class WhatsAppPlatformService:
             if interactive is None:
                 return False
             interactives.append(interactive)
-        for interactive in interactives:
-            await self._client.send_interactive(
-                phone_number_id=phone_number_id,
-                to=sender_wa_id,
-                interactive=interactive,
-            )
+        for index, interactive in enumerate(interactives):
+            try:
+                await self._client.send_interactive(
+                    phone_number_id=phone_number_id,
+                    to=sender_wa_id,
+                    interactive=interactive,
+                )
+            except PLATFORM_TRANSPORT_ERRORS:
+                if not index:
+                    # Nothing went out: the caller's fallback sends every
+                    # question as text, and none of them is a duplicate.
+                    raise
+                # Earlier questions are already on the person's phone as
+                # buttons. Letting this raise made the caller resend *all* of
+                # them as text, so the first question appeared twice. Ask only
+                # what has not been asked.
+                logger.warning(
+                    "agent_surfaces.service.whatsapp_questions_partially_delivered.degraded",
+                    sent_questions=index,
+                    total_questions=len(interactives),
+                    exc_info=True,
+                )
+                await self.send_message(
+                    event,
+                    question_plan.model_copy(
+                        update={"questions": question_plan.questions[index:]}
+                    ).to_plain_text(),
+                )
+                # Delivered, but not all of it as controls: reporting True says
+                # every question is tappable, and nothing then accepts a typed
+                # answer to the ones that arrived as words.
+                return PartDelivery.DEGRADED
         return True
 
     async def _render_decision(
@@ -309,18 +341,25 @@ class WhatsAppPlatformService:
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
+        """Send a resource card; True when it went as one, False when as text.
+
+        The bool is what lets a delivery receipt tell a card from a sentence. It
+        answered ``None`` -- which the adapter turned into ``True`` -- so every
+        resource read as delivered natively whichever way it actually arrived.
+        """
         del metadata
         phone_number_id = (
             event.reply_target.get("phone_number_id") or self._phone_number_id
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
-        if not phone_number_id or not sender_wa_id:
-            logger.debug(
-                "agent_surfaces.service.whatsapp_send_display_resource_skipped.diagnostic",
+        if not phone_number_id or not sender_wa_id or not self._access_token:
+            raise unsendable(
+                "WhatsApp",
+                access_token=self._access_token,
                 phone_number_id=phone_number_id,
+                recipient=sender_wa_id,
             )
-            return
         action = render_plan.primary_action
         if action is None:
             await self._client.send_message_payload(
@@ -331,7 +370,7 @@ class WhatsAppPlatformService:
                     preview_url=False,
                 ),
             )
-            return
+            return False
 
         try:
             await self._client.send_message_payload(
@@ -360,6 +399,8 @@ class WhatsAppPlatformService:
                     preview_url=True,
                 ),
             )
+            return False
+        return True
 
     async def add_processing_indicator(
         self,
@@ -432,31 +473,7 @@ class WhatsAppPlatformService:
     ) -> tuple[bytes, str, str] | None:
         """Download a single inbound WhatsApp attachment (no RunContext)."""
         del event
-        if not self._access_token:
-            return None
-        media_id = str(attachment.get("id") or "").strip()
-        if not media_id:
-            return None
-        media_info = await self._client.get_media_info(media_id)
-        if not media_info:
-            return None
-        download_url = str(media_info.get("url") or "").strip()
-        if not download_url:
-            return None
-        file_name = (
-            str(attachment.get("name") or "").strip()
-            or filename_from_url(download_url)
-            or "whatsapp_file"
-        )
-        content = await self._client.download_media(download_url)
-        mime_type = (
-            str(
-                attachment.get("mime_type") or media_info.get("mime_type") or ""
-            ).strip()
-            or mimetypes.guess_type(file_name)[0]
-            or "application/octet-stream"
-        )
-        return content, file_name, mime_type
+        return await media.download_attachment(self._client, attachment)
 
     async def send_file_bytes(
         self,
@@ -469,8 +486,7 @@ class WhatsAppPlatformService:
     ) -> bool:
         """Upload + send raw file bytes to the inbound chat (egress, no RunContext).
 
-        Returns True on success; False (or on an unsupported-media error raised by
-        the upload) so the caller falls back to a URL link.
+        Returns True on success; False so the caller falls back to a URL link.
         """
         phone_number_id = (
             event.reply_target.get("phone_number_id") or self._phone_number_id
@@ -478,66 +494,14 @@ class WhatsAppPlatformService:
         recipient_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not self._access_token or not phone_number_id or not recipient_wa_id:
             return False
-        send_type = resolve_whatsapp_send_type(
-            delivery_mode="auto", mime_type=mime_type
-        )
-        try:
-            media_id = await self._client.upload_media(
-                phone_number_id=phone_number_id,
-                file_name=file_name,
-                file_bytes=file_bytes,
-                mime_type=mime_type,
-            )
-        except WhatsAppApiError as exc:
-            # Unsupported media / rejected upload — caller falls back to a link,
-            # so the person still gets the file. Raised from `debug` for the
-            # same reason as the two above: it carried the status code and the
-            # traceback already, and `LOG_LEVEL=INFO` threw both away.
-            logger.warning(
-                "surface.whatsapp.media_upload_rejected.degraded",
-                mime_type=mime_type,
-                status_code=exc.status_code,
-                exc_info=True,
-            )
-            return False
-        if not media_id:
-            return False
-        message_id = await self._client.send_media(
+        return await media.send_file(
+            self._client,
             phone_number_id=phone_number_id,
-            to=recipient_wa_id,
-            media_id=media_id,
-            send_type=send_type,
+            recipient_wa_id=recipient_wa_id,
             file_name=file_name,
-            caption=to_plain_text(caption) if caption else None,
-        )
-        return bool(message_id)
-
-    async def get_current_contact(
-        self,
-        *,
-        ctx: RunContext[ConversationContext],
-        request: WhatsAppCurrentContactParams,
-    ) -> WhatsAppCurrentContactResult:
-        del request
-        metadata = self._whatsapp_metadata(ctx)
-        contacts = list(metadata.contacts) if metadata is not None else []
-        first_contact = contacts[0] if contacts else {}
-        display_name = None
-        if isinstance(first_contact, dict):
-            display_name = (first_contact.get("profile") or {}).get("name")
-        attachment_names = [
-            attachment.name
-            for attachment in self._current_message_attachments(ctx)
-            if attachment.name
-        ]
-        return WhatsAppCurrentContactResult(
-            success=True,
-            message="Resolved current WhatsApp contact details.",
-            wa_id=self._resolve_recipient_wa_id(ctx),
-            display_name=display_name,
-            phone_number_id=self._resolve_phone_number_id(ctx),
-            waba_id=metadata.waba_id if metadata is not None else None,
-            attachment_names=attachment_names,
+            file_bytes=file_bytes,
+            mime_type=mime_type,
+            caption=caption,
         )
 
     def _whatsapp_metadata(

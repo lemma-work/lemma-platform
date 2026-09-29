@@ -39,7 +39,6 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
     _handled_slack_modal,
     _published_whatsapp_verification,
     _redacted_headers,
-    _surface_source_event_id,
     _verify_inbound_request,
 )
 from app.modules.agent_surfaces.api.controllers.webhook_rejections import (
@@ -47,6 +46,7 @@ from app.modules.agent_surfaces.api.controllers.webhook_rejections import (
     record_whatsapp_signature_rejected,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.source_event_ids import webhook_source_event_id
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.onboarding_slack_modal import (
     open_onboarding_modal,
@@ -160,7 +160,7 @@ async def handle_platform_webhook(
     ):
         return Response(status_code=200)
 
-    source_event_id = _surface_source_event_id(
+    source_event_id = webhook_source_event_id(
         platform, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
     )
     event = SurfaceWebhookReceivedEvent(
@@ -312,8 +312,8 @@ async def handle_whatsapp_number_webhook(
 
     # The number is the receiver, not `SHARED_PLATFORM_RECEIVER`: this URL has
     # one per pooled number, and the content-hash fallback in
-    # `_surface_source_event_id` is only unique per receiver.
-    source_event_id = _surface_source_event_id(
+    # `webhook_source_event_id` is only unique per receiver.
+    source_event_id = webhook_source_event_id(
         "whatsapp", payload, raw_body, receiver=phone_number_id
     )
     event = SurfaceWebhookReceivedEvent(
@@ -361,7 +361,7 @@ async def handle_surface_webhook(
     # Named by the surface, not just the platform: a Telegram ``update_id`` is a
     # per-bot counter, so every bot's first update is 1 and two of them would
     # otherwise share one inbox row.
-    source_event_id = _surface_source_event_id(
+    source_event_id = webhook_source_event_id(
         source, payload, raw_body, receiver=str(surface.id)
     )
     event = SurfaceWebhookReceivedEvent(

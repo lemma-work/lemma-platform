@@ -30,6 +30,7 @@ from app.modules.datastore.api.dependencies import (
     build_table_service,
     get_schema_manager,
 )
+from app.modules.datastore.domain.errors import DatastoreFileNotFoundError
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.services.table_context import TableContext
 
@@ -171,6 +172,7 @@ async def run_readonly_query(
 
 
 __all__ = [
+    "DatastoreFileNotFoundError",
     "TableRows",
     "create_pod_file",
     "download_pod_file",

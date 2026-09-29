@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 from datetime import datetime, timezone
-from uuid import UUID
 
 
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -140,11 +139,10 @@ async def write_inbound_message(
     """
     if context.pod_id is None:
         raise ValueError("Surface chat context requires a pod")
-    external_id = context.message_external_message_id or ""
-    if external_id.startswith("onboarding:"):
+    if context.onboarding_handoff_id is not None:
         pending = await uow.session.get(
             PendingChatOnboarding,
-            UUID(external_id.removeprefix("onboarding:")),
+            context.onboarding_handoff_id,
             with_for_update=True,
         )
         if (

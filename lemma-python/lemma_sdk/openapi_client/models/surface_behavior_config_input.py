@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 
@@ -23,7 +23,9 @@ class SurfaceBehaviorConfigInput:
     """
     Attributes:
         channels (list[SurfaceChannelRouteInput] | Unset):
-        dm_conversation_reset_after_hours (int | Unset):  Default: 24.
+        dm_conversation_reset_after_hours (int | None | Unset): Ignored. The DM reset window is a deployment-wide
+            setting (SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so existing pod bundles and clients keep
+            working.
         identity (SurfaceIdentityConfigInput | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
         slack (SurfaceSlackConfigInput | Unset): The Slack settings a caller owns.
@@ -31,7 +33,7 @@ class SurfaceBehaviorConfigInput:
     """
 
     channels: list[SurfaceChannelRouteInput] | Unset = UNSET
-    dm_conversation_reset_after_hours: int | Unset = 24
+    dm_conversation_reset_after_hours: int | None | Unset = UNSET
     identity: SurfaceIdentityConfigInput | Unset = UNSET
     send_policy: SurfaceSendPolicyConfig | Unset = UNSET
     slack: SurfaceSlackConfigInput | Unset = UNSET
@@ -45,7 +47,11 @@ class SurfaceBehaviorConfigInput:
                 channels_item = channels_item_data.to_dict()
                 channels.append(channels_item)
 
-        dm_conversation_reset_after_hours = self.dm_conversation_reset_after_hours
+        dm_conversation_reset_after_hours: int | None | Unset
+        if isinstance(self.dm_conversation_reset_after_hours, Unset):
+            dm_conversation_reset_after_hours = UNSET
+        else:
+            dm_conversation_reset_after_hours = self.dm_conversation_reset_after_hours
 
         identity: dict[str, Any] | Unset = UNSET
         if not isinstance(self.identity, Unset):
@@ -101,8 +107,17 @@ class SurfaceBehaviorConfigInput:
 
                 channels.append(channels_item)
 
-        dm_conversation_reset_after_hours = d.pop(
-            "dm_conversation_reset_after_hours", UNSET
+        def _parse_dm_conversation_reset_after_hours(
+            data: object,
+        ) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        dm_conversation_reset_after_hours = _parse_dm_conversation_reset_after_hours(
+            d.pop("dm_conversation_reset_after_hours", UNSET)
         )
 
         _identity = d.pop("identity", UNSET)

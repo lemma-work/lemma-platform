@@ -8,6 +8,7 @@ came before built an eight-mixin ingress service and then reassigned
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -638,3 +639,193 @@ async def test_a_refused_typing_indicator_does_not_cost_the_answer():
 
     assert shown is False
     adapter.add_processing_indicator.assert_awaited_once()
+
+
+# --- a prompt that reached nobody is not delivered ---------------------------
+
+
+async def _approval_egress(adapter):
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    link = await _ask_user_link(surface, conversation_id, _slack_event())
+    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
+    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
+        link
+    )
+    return egress, conversation_id
+
+
+async def test_narration_that_lands_without_its_question_is_not_delivered():
+    """The worst outcome there is: "let me check with you", and nothing to answer.
+
+    The narration went out, the buttons and the plain-text fallback both failed,
+    and `deliver_envelope` still said True because *something* had arrived -- so
+    the run stayed WAITING on a question nobody could see.
+    """
+    adapter = _delivering_adapter()
+    adapter._render_choices.return_value = False
+    adapter.send_message.side_effect = [None, TimeoutError("slack is down")]
+    egress, conversation_id = await _approval_egress(adapter)
+    agent_conversations.pending_question.return_value = _pending(
+        "ask_user", tool_call_id="tool-1", tool_args=_ASK_USER_TOOL_ARGS
+    )
+
+    sent = await egress.send_questions_for_conversation(
+        conversation_id=conversation_id,
+        tool_call_id="tool-1",
+        narration="Let me check with you first.",
+    )
+
+    assert sent is False
+    assert adapter.send_message.await_count == 2
+
+
+async def test_a_prompt_that_landed_only_as_text_is_still_delivered():
+    """Degraded is delivery. Only a prompt that reached nobody is not."""
+    adapter = _delivering_adapter()
+    adapter._render_choices.return_value = False
+    egress, conversation_id = await _approval_egress(adapter)
+    agent_conversations.pending_question.return_value = _pending(
+        "ask_user", tool_call_id="tool-1", tool_args=_ASK_USER_TOOL_ARGS
+    )
+
+    assert await egress.send_questions_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-1"
+    )
+
+
+async def test_a_lost_question_can_be_asked_again_in_plain_words():
+    adapter = _delivering_adapter()
+    egress, conversation_id = await _approval_egress(adapter)
+    agent_conversations.pending_question.return_value = _pending(
+        "ask_user", tool_call_id="tool-1", tool_args=_ASK_USER_TOOL_ARGS
+    )
+
+    sent = await egress.send_prompt_as_text_for_conversation(
+        conversation_id=conversation_id, kind="ask_user", tool_call_id="tool-1"
+    )
+
+    assert sent is True
+    adapter._render_choices.assert_not_awaited()
+    message = adapter.send_message.await_args.kwargs["message"]
+    assert "couldn't show the buttons" in message
+    assert "Pick a color" in message
+    # The typed reply is what answers it, so it has to be recorded as such.
+    agent_conversations.set_conversation_metadata_value.assert_awaited_once()
+    assert (
+        agent_conversations.set_conversation_metadata_value.await_args.args[-1]
+        == "tool-1"
+    )
+
+
+async def test_a_lost_approval_can_be_asked_again_in_plain_words():
+    adapter = _delivering_adapter()
+    egress, conversation_id = await _approval_egress(adapter)
+    agent_conversations.pending_approval.return_value = _pending(
+        "request_approval",
+        tool_call_id="tool-2",
+        tool_args=_REQUEST_APPROVAL_TOOL_ARGS,
+    )
+
+    sent = await egress.send_prompt_as_text_for_conversation(
+        conversation_id=conversation_id, kind="request_approval", tool_call_id="tool-2"
+    )
+
+    assert sent is True
+    message = adapter.send_message.await_args.kwargs["message"]
+    assert "Write a record" in message
+    assert '"approve"' in message
+
+
+async def test_a_sign_in_prompt_has_no_plain_words_fallback():
+    adapter = _delivering_adapter()
+    egress, conversation_id = await _approval_egress(adapter)
+
+    assert not await egress.send_prompt_as_text_for_conversation(
+        conversation_id=conversation_id, kind="browser_sign_in"
+    )
+    adapter.send_message.assert_not_awaited()
+
+
+# --- an approval card shows what is being approved ---------------------------
+
+
+async def test_the_approval_card_previews_the_arguments_being_approved():
+    adapter = _delivering_adapter()
+    adapter._render_decision.return_value = True
+    egress, conversation_id = await _approval_egress(adapter)
+    agent_conversations.pending_approval.return_value = _pending(
+        "request_approval",
+        tool_call_id="tool-2",
+        tool_args=_REQUEST_APPROVAL_TOOL_ARGS,
+    )
+
+    await egress.send_approval_prompt_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-2"
+    )
+
+    summary = adapter._render_decision.await_args.kwargs["approval_plan"].action_summary
+    assert summary.startswith("pod_write_record(")
+    assert "table_id=tbl-1" in summary
+    assert '{"col":"val"}' in summary
+
+
+def _summary(args, tool_name="exec_command"):
+    from app.modules.agent_surfaces.services.approval_preview import (
+        approval_action_summary,
+    )
+
+    return approval_action_summary(tool_name, args)
+
+
+async def test_the_approval_preview_redacts_secrets_and_stays_short():
+    # Assembled from pieces: whole, these fixtures are shaped like real
+    # credentials and a secret scanner cannot tell a redaction test from a leak.
+    api_secret = "not-a-real" + "-value-" + "1" * 6
+    bearer = "not" + "." + "a" + "." + "token"
+    header = "Authorization" + ": Bearer " + bearer
+    summary = _summary(
+        {
+            "api_key": api_secret,
+            "cmd": "curl -H '" + header + "' https://x.test " + "y" * 500,
+            "note": "`ticks` and\nnewlines",
+        }
+    )
+    assert api_secret not in summary
+    assert bearer not in summary
+    assert "api_key=***" in summary
+    assert "`" not in summary and "\n" not in summary
+    assert len(summary) < 300
+
+
+async def test_the_approval_preview_falls_back_to_the_tool_name():
+    assert _summary({}) == "exec_command"
+    assert _summary(None) == "exec_command"
+    assert _summary("not a dict") == "exec_command"
+
+
+async def test_a_file_that_cannot_be_read_is_not_replaced_by_a_link_card():
+    """The read fails, so there is nothing true to say about the file.
+
+    `surface_conversation` answers a person here, and the authorization service
+    behind the double uow cannot build a context for them -- which is exactly a
+    read that fails. It used to fall back to a link card the recipient often
+    cannot open, and log nothing.
+    """
+    adapter = _delivering_adapter()
+    egress, conversation_id = await _approval_egress(adapter)
+    agent_conversations.surface_conversation.return_value = SimpleNamespace(
+        id=conversation_id, user_id=uuid4(), pod_id=uuid4()
+    )
+
+    sent = await egress.send_display_resource_for_conversation(
+        conversation_id=conversation_id,
+        request=DisplayResourceRequest(
+            type=DisplayResourceType.FILE, path="/me/gone.pdf"
+        ),
+        tool_call_id="tool-9",
+    )
+
+    assert sent is False
+    adapter.send_message.assert_not_awaited()
+    adapter._render_resource.assert_not_awaited()

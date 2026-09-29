@@ -58,3 +58,59 @@ async def test_teardown_releases_clients_without_closing_the_shared_pool(
 
     assert client.close_count == 0
     assert cache._redis is None
+
+
+def _cache_over_fakeredis() -> RedisJsonCache[str]:
+    import fakeredis
+
+    cache = RedisJsonCache[str]("redis://unused", "ordered", 60)
+    cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
+    return cache
+
+
+async def test_an_ordered_set_keeps_insertion_order_and_ignores_repeats() -> None:
+    cache = _cache_over_fakeredis()
+
+    for member in ("c", "a", "b", "a"):
+        assert await cache.ordered_set_add("k", member, limit=10)
+
+    assert await cache.ordered_set_members("k") == ["c", "a", "b"]
+
+
+async def test_an_ordered_set_refuses_what_does_not_fit_and_keeps_what_does() -> None:
+    cache = _cache_over_fakeredis()
+
+    results = [await cache.ordered_set_add("k", str(i), limit=3) for i in range(5)]
+
+    assert results == [True, True, True, False, False]
+    assert await cache.ordered_set_members("k") == ["0", "1", "2"]
+    # A member already held still counts as taken when the set is full.
+    assert await cache.ordered_set_add("k", "1", limit=3)
+
+
+async def test_concurrent_adds_to_an_ordered_set_all_land_exactly_once() -> None:
+    import asyncio
+
+    cache = _cache_over_fakeredis()
+
+    results = await asyncio.gather(
+        *(cache.ordered_set_add("k", str(i % 12), limit=50) for i in range(48))
+    )
+
+    assert all(results)
+    assert sorted(await cache.ordered_set_members("k")) == sorted(
+        str(i) for i in range(12)
+    )
+
+
+async def test_removing_from_an_ordered_set_leaves_later_additions() -> None:
+    cache = _cache_over_fakeredis()
+    await cache.ordered_set_add("k", "a", limit=5)
+    await cache.ordered_set_add("k", "b", limit=5)
+
+    await cache.ordered_set_remove("k", ["a"])
+    await cache.ordered_set_add("k", "c", limit=5)
+
+    assert await cache.ordered_set_members("k") == ["b", "c"]
+    await cache.ordered_set_clear("k")
+    assert await cache.ordered_set_members("k") == []

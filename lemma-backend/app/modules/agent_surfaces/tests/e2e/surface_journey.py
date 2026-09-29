@@ -546,7 +546,7 @@ async def stage_surface(
         sender_id = str(telegram_payloads.SENDER_ID)
     else:
         monkeypatch.setattr(
-            "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+            "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
             f"{fake.api_base}/v21.0",
         )
         monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")

@@ -59,13 +59,8 @@ EXPECTED = [
         3600,
     ),
     (
-        "surface_runtime_history_max_messages",
-        "SURFACE_RUNTIME_HISTORY_MAX_MESSAGES",
-        40,
-    ),
-    (
-        "surface_runtime_history_window_hours",
-        "SURFACE_RUNTIME_HISTORY_WINDOW_HOURS",
+        "surface_dm_conversation_reset_after_hours",
+        "SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS",
         24,
     ),
     ("enable_telegram_polling_mode", "ENABLE_TELEGRAM_POLLING_MODE", False),

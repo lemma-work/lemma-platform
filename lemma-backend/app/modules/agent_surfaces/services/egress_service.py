@@ -56,17 +56,22 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_ask_user_render_plan,
     build_display_resource_render_plan,
 )
+from app.modules.agent_surfaces.services.approval_preview import (
+    approval_action_summary,
+    redact_card_text,
+)
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
+from app.modules.agent_surfaces.services.free_text_answer import (
+    remember_free_text_answer_wanted,
+    tool_call_id_of,
+)
 from app.modules.agent_surfaces.services.one_reply_attachments import (
-    files_held_for_one_reply,
+    held_files_for_run,
+    release_held_files,
 )
-from app.modules.agent_surfaces.services.pending_interaction_resume import (
-    # Re-exported: ``_ask_user_request_dict`` still has a caller here (the
-    # native-interaction path) and a unit test that imports it from this module.
-    _ask_user_request_dict,
-)
-from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
+from app.modules.agent_surfaces.services.pending_envelope import RunFiles
+from app.modules.agent.contracts.interaction_replies import ask_user_request_dict
 from app.modules.agent_surfaces.services.surface_sign_in import (
     sign_in_prompt_envelope,
 )
@@ -86,9 +91,13 @@ def _approval_plan(
     return build_approval_render_plan(
         conversation_id=conversation_id,
         tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
-        title=str(tool_args.get("title") or "Action requires your approval"),
-        reason=str(tool_args.get("reason") or "") or None,
-        tool_name=str(tool_args.get("tool_name") or "") or None,
+        title=redact_card_text(
+            str(tool_args.get("title") or "Action requires your approval")
+        ),
+        reason=redact_card_text(str(tool_args.get("reason") or "")) or None,
+        tool_name=approval_action_summary(
+            str(tool_args.get("tool_name") or ""), tool_args.get("args")
+        ),
         allow_session=bool(isinstance(permission_ids, list) and permission_ids),
     )
 
@@ -160,7 +169,13 @@ class SurfaceEgress:
         conversation_id: UUID,
         message: str,
         metadata: dict[str, Any] | None = None,
+        attach_files_of: RunFiles | None = None,
     ) -> bool:
+        """Send a message; ``attach_files_of`` names the run whose held files ride it.
+
+        Left out, nothing is attached: a notification or a nudge is not the reply
+        those files were shown for, and one run's files are never another's.
+        """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return False
@@ -170,15 +185,33 @@ class SurfaceEgress:
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
             return False
-        return await self.delivery.deliver_envelope(
+        # A failure notice is not the reply the files were shown for. Attaching
+        # them to it sent a person a half-finished run's files under an apology,
+        # and -- since held files were drained on read -- spent them on it.
+        files, held = (
+            ([], [])
+            if (metadata or {}).get("retry_action") or attach_files_of is None
+            else await held_files_for_run(
+                uow=self.uow,
+                target=target,
+                conversation_id=conversation_id,
+                run=attach_files_of,
+            )
+        )
+        delivered = await self.delivery.deliver_envelope(
             target,
-            envelope=SurfaceEnvelope(
-                text=clean_message,
-                files=await self._held_files(target, conversation_id),
-            ),
+            envelope=SurfaceEnvelope(text=clean_message, files=files),
             metadata=await self.delivery.egress_metadata(target, metadata),
             conversation_id=conversation_id,
         )
+        if delivered and held and attach_files_of is not None:
+            await release_held_files(
+                uow=self.uow,
+                conversation_id=conversation_id,
+                run=attach_files_of,
+                paths=held,
+            )
+        return delivered
 
     async def send_display_resource_for_conversation(
         self,
@@ -226,6 +259,12 @@ class SurfaceEgress:
                 caption=None,
                 page_preview=True,
             )
+            if resolved.facts.unreadable:
+                # The read failed and said why in its own log line. A link card
+                # for a file that could not be opened is a card the recipient
+                # usually cannot open either, so report that it was not shown
+                # and let the tool tell the model, instead of sending it.
+                return False
             if resolved.files:
                 # A PDF's page image and the document itself are one envelope,
                 # so they arrive in that order rather than as two sends racing
@@ -276,6 +315,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         tool_call_id: str | None = None,
         narration: str | None = None,
+        attach_files_of: RunFiles | None = None,
     ) -> bool:
         """Render the conversation's pending ``ask_user`` questions on its surface.
 
@@ -299,19 +339,81 @@ class SurfaceEgress:
             conversation_id=conversation_id,
             tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
         )
-        return await self.delivery.deliver_envelope(
+        files, held = await held_files_for_run(
+            uow=self.uow,
+            target=target,
+            conversation_id=conversation_id,
+            run=attach_files_of,
+        )
+        delivered = await self.delivery.deliver_envelope(
             target,
             # The lead-in and the question are one thing the person receives.
             # Sent as two, they arrive as two on a chat surface and as two
             # emails on a surface that only gets one.
-            envelope=SurfaceEnvelope(
-                text=narration,
-                choices=plan,
-                files=await self._held_files(target, conversation_id),
-            ),
+            envelope=SurfaceEnvelope(text=narration, choices=plan, files=files),
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
+        if delivered and held and attach_files_of is not None:
+            await release_held_files(
+                uow=self.uow,
+                conversation_id=conversation_id,
+                run=attach_files_of,
+                paths=held,
+            )
+        return delivered
+
+    async def send_prompt_as_text_for_conversation(
+        self,
+        *,
+        conversation_id: UUID,
+        kind: str,
+        tool_call_id: str | None = None,
+    ) -> bool:
+        """Ask a paused run's question or approval as a plain message.
+
+        For a prompt whose native render did not arrive: the run is parked on an
+        answer, and a person who was shown nothing cannot give one. The words
+        say why the reply is typed, and the typed reply is then treated as the
+        answer -- the same record a tapped "Other" leaves.
+        """
+        target = await self.delivery.resolve_egress_target(conversation_id)
+        if target is None:
+            return False
+        if kind == "ask_user":
+            request = await self._pending_ask_user(conversation_id)
+            if request is None:
+                return False
+            pending, validated = request
+            plan = build_ask_user_render_plan(
+                request=validated,
+                conversation_id=conversation_id,
+                tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
+            )
+            lead = "I need your answer to go on, but I couldn't show the buttons. Reply here with it."
+        elif kind == "request_approval":
+            pending = await agent_conversations.pending_approval(
+                self.uow, conversation_id
+            )
+            if pending is None or not pending.is_approval:
+                return False
+            plan = _approval_plan(pending, conversation_id, tool_call_id)
+            lead = "I need your approval to go on, but I couldn't show the buttons. Reply here to answer."
+        else:
+            return False
+        delivered = await self.delivery.deliver_envelope(
+            target,
+            envelope=SurfaceEnvelope(text=f"{lead}\n\n{plan.to_plain_text()}"),
+            metadata=await self.delivery.egress_metadata(target),
+            conversation_id=conversation_id,
+        )
+        if delivered:
+            await remember_free_text_answer_wanted(
+                self.uow,
+                conversation_id=conversation_id,
+                tool_call_id=tool_call_id_of(plan),
+            )
+        return delivered
 
     async def _pending_ask_user(
         self, conversation_id: UUID
@@ -320,7 +422,7 @@ class SurfaceEgress:
         pending = await agent_conversations.pending_question(self.uow, conversation_id)
         if pending is None:
             return None
-        raw_request = _ask_user_request_dict(pending.tool_args)
+        raw_request = ask_user_request_dict(pending.tool_args)
         if raw_request is None:
             return None
         try:
@@ -378,6 +480,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         tool_call_id: str | None = None,
         narration: str | None = None,
+        attach_files_of: RunFiles | None = None,
     ) -> bool:
         """Render a pending ``request_approval`` on the surface.
 
@@ -405,16 +508,30 @@ class SurfaceEgress:
             )
             return False
         # Native buttons, then a text prompt, then admit it reached nobody.
-        return await self.delivery.deliver_envelope(
+        files, held = await held_files_for_run(
+            uow=self.uow,
+            target=target,
+            conversation_id=conversation_id,
+            run=attach_files_of,
+        )
+        delivered = await self.delivery.deliver_envelope(
             target,
             envelope=SurfaceEnvelope(
                 text=narration,
                 decision=_approval_plan(pending, conversation_id, tool_call_id),
-                files=await self._held_files(target, conversation_id),
+                files=files,
             ),
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
+        if delivered and held and attach_files_of is not None:
+            await release_held_files(
+                uow=self.uow,
+                conversation_id=conversation_id,
+                run=attach_files_of,
+                paths=held,
+            )
+        return delivered
 
     async def send_voice_note_for_conversation(
         self,
@@ -441,9 +558,11 @@ class SurfaceEgress:
             path=path,
         )
         if loaded is None:
-            logger.debug(
-                "agent_surfaces.egress.voice_note_not_fetched.diagnostic",
-                conversation_id=conversation_id,
+            # A warning: `say` reads this False as "the person did not hear it".
+            logger.warning(
+                "agent_surfaces.egress.voice_note_not_fetched.degraded",
+                conversation_id=str(conversation_id),
+                path=path,
             )
             return False
         entity, content = loaded
@@ -475,15 +594,4 @@ class SurfaceEgress:
             ),
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
-        )
-
-    async def _held_files(self, target: SurfaceEgressTarget, conversation_id: UUID):
-        """Pod files a one-reply surface has been holding for this very message.
-
-        Drained, not copied: whichever envelope goes out first takes them, which
-        is why an apology for a lost decision deliberately does not call any of
-        the verbs above.
-        """
-        return await files_held_for_one_reply(
-            uow=self.uow, target=target, conversation_id=conversation_id
         )

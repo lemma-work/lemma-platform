@@ -45,7 +45,7 @@ async def test_shared_whatsapp_without_a_surface_provisions_and_replays(
     async_client, db_session, fake_whatsapp, message_store, monkeypatch, native
 ):
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
@@ -317,7 +317,7 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
     from app.modules.test_support.fakes import PassthroughEventInbox
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
@@ -454,7 +454,7 @@ async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
     from datetime import datetime, timezone
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
@@ -561,7 +561,7 @@ async def test_whatsapp_signup_joins_the_pod_they_were_invited_to(
     from app.modules.pod.infrastructure.models.pod_models import Pod
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")

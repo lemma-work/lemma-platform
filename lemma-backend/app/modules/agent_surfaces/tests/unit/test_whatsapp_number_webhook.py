@@ -236,7 +236,7 @@ async def test_a_delivery_is_verified_with_the_secret_the_path_selected(monkeypa
 
     The receiver on the event is the number rather than ``shared``: this URL has
     one receiver per pooled number, and the content-hash fallback in
-    ``_surface_source_event_id`` is only unique within a receiver.
+    ``webhook_source_event_id`` is only unique within a receiver.
     """
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "settings-secret")
@@ -259,7 +259,7 @@ async def test_a_delivery_is_verified_with_the_secret_the_path_selected(monkeypa
     # fake this test hands in.
     (event,) = publish.events
     assert event.source == "whatsapp"
-    # A WhatsApp body carries no id `_surface_source_event_id` recognises -- the
+    # A WhatsApp body carries no id `webhook_source_event_id` recognises -- the
     # `wamid` is buried under entry/changes/value/messages -- so it falls to the
     # content hash, exactly as it does on the shared endpoint. What matters here
     # is the half this route decides: the receiver.

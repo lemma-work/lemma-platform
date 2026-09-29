@@ -30,35 +30,6 @@ def markdown_block(text: str) -> dict[str, Any]:
     return {"type": "markdown", "text": text}
 
 
-def feedback_actions_block(callback_id: str) -> dict[str, Any]:
-    """Thumbs up/down on an agent's answer.
-
-    ``action_id`` carries the callback id so the ``block_actions`` parser can
-    attribute the rating to the run that produced the answer.
-    """
-    return {
-        "type": "context_actions",
-        "elements": [
-            {
-                "type": "feedback_buttons",
-                "action_id": f"{FEEDBACK_ACTION_PREFIX}{callback_id}",
-                "positive_button": {
-                    "text": {"type": "plain_text", "text": "Good response"},
-                    "accessibility_label": "Good response",
-                    "value": "good",
-                },
-                "negative_button": {
-                    "text": {"type": "plain_text", "text": "Bad response"},
-                    "accessibility_label": "Bad response",
-                    "value": "bad",
-                },
-            }
-        ],
-    }
-
-
-FEEDBACK_ACTION_PREFIX = "lemma_feedback:"
-
 # Tapping this opens the "who answers here?" modal. The value carries the
 # channel so the modal knows what it is configuring.
 CHANNEL_SETUP_ACTION_ID = "lemma_channel_setup"

@@ -4,8 +4,13 @@ Telegram caps ``callback_data`` at 64 bytes, but an ask_user answer needs the
 full callback id (``conversation_id|tool_call_id``), the question header and the
 chosen value — well over 64 bytes. So each button carries only a short opaque
 token; the real payload is stored in Redis under that token and resolved when
-the user taps. TTL matches the ask_user pause window. Redis being unavailable
-degrades to the formatted-text fallback (the put/get just fail softly).
+the user taps. Redis being unavailable degrades to the formatted-text fallback
+(the put/get just fail softly).
+
+The TTL is a week, not an hour. It used to match a pause window that does not
+exist: a run parked on a question or an approval waits as long as the person
+takes, and a tap after the token expired resolved to nothing -- the button was
+still on their screen and did nothing. Each entry is a few hundred bytes.
 """
 
 from __future__ import annotations
@@ -16,6 +21,8 @@ from typing import Any
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 
+_CALLBACK_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
+
 _token_store: RedisJsonCache | None = None
 
 
@@ -25,7 +32,7 @@ def _store() -> RedisJsonCache:
         _token_store = RedisJsonCache(
             redis_url=settings.redis_url,
             key_prefix="surface:telegram-cb",
-            ttl_seconds=3600,
+            ttl_seconds=_CALLBACK_TOKEN_TTL_SECONDS,
         )
     return _token_store
 

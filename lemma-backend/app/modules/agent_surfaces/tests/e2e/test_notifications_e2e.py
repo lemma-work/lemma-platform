@@ -462,6 +462,26 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
     assert threaded is not None, "the reply did not land in the notification's thread"
     assert (threaded.get("metadata") or {}).get("notification_id") == created["id"]
 
+    # The link records the agent the mailbox belongs to. Inbound compares it to
+    # the agent the reply routes to, and a link naming nobody reads as the pod's
+    # own assistant -- so another agent's mailbox opened a new conversation for
+    # the very first reply.
+    from sqlalchemy import select
+
+    from app.modules.agent_surfaces.infrastructure.models import (
+        AgentSurfaceConversationLinkModel,
+    )
+
+    surface_row = await db_session.get(AgentSurface, _UUID(surface["id"]))
+    link = (
+        await db_session.execute(
+            select(AgentSurfaceConversationLinkModel).where(
+                AgentSurfaceConversationLinkModel.external_thread_id == seed
+            )
+        )
+    ).scalar_one()
+    assert link.routed_agent_id == surface_row.agent_id
+
 
 async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
     authenticated_client: AsyncClient,

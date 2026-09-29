@@ -36,6 +36,14 @@ from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
 # Meta's hard ceiling on a text message body.
 WHATSAPP_TEXT_LIMIT = 4096
 
+#: Meta's cap on an interactive message's body text. A flow whose body is
+#: longer is rejected outright, which would lose the form as well as the words.
+INTERACTIVE_BODY_LIMIT = 1024
+
+# What an approval card may spend on the action line. The rest of the body is
+# the title and the model's reason, which gives way first.
+_APPROVAL_ACTION_LIMIT = 400
+
 
 # Separator for encoding ask_user routing into a WhatsApp button/list ``id``
 # (``callback_id~header~value``). The callback id itself uses ``|``, so ``~``
@@ -60,7 +68,7 @@ def build_whatsapp_interactive(
     # header contains the separator (rare; header is model-authored).
     if WHATSAPP_INTERACTION_SEP in (question.header or ""):
         return None
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, str, str]] = []
     for option in question.options:
         button_id = (
             f"{callback_id}{WHATSAPP_INTERACTION_SEP}{question.header}"
@@ -68,33 +76,72 @@ def build_whatsapp_interactive(
         )
         if len(button_id.encode("utf-8")) > 256:
             return None
-        rows.append((button_id, option.label))
+        rows.append((button_id, option.label, option.description or ""))
     # The question is model-authored, so it arrives as Markdown like every other
     # outbound string and needs the same translation the message body gets.
-    body = {"text": to_whatsapp_text(question.question or "")[:1024] or "Please choose"}
+    question_text = to_whatsapp_text(question.question or "")
     if 1 <= len(rows) <= 3:
+        # A reply button has a title and nothing else, so what each option means
+        # goes in the body -- otherwise "Refund" and "Credit" are all the person
+        # gets to choose between, and the explanation the agent wrote is dropped.
+        body = {"text": _body_with_option_notes(question_text, rows)}
         return {
             "type": "button",
             "body": body,
             "action": {
                 "buttons": [
                     {"type": "reply", "reply": {"id": rid, "title": title[:20]}}
-                    for rid, title in rows
+                    for rid, title, _description in rows
                 ]
             },
         }
     if 4 <= len(rows) <= 10:
+        body = {"text": question_text[:INTERACTIVE_BODY_LIMIT] or "Please choose"}
         return {
             "type": "list",
             "body": body,
             "action": {
                 "button": "Choose",
                 "sections": [
-                    {"rows": [{"id": rid, "title": title[:24]} for rid, title in rows]}
+                    {
+                        "rows": [
+                            {
+                                "id": rid,
+                                "title": title[:24],
+                                # A list row has a line of its own for this; Meta
+                                # caps it at 72 characters.
+                                **(
+                                    {"description": truncate_whatsapp_text(desc, 72)}
+                                    if desc.strip()
+                                    else {}
+                                ),
+                            }
+                            for rid, title, desc in rows
+                        ]
+                    }
                 ],
             },
         }
     return None
+
+
+def _body_with_option_notes(
+    question_text: str, rows: list[tuple[str, str, str]]
+) -> str:
+    """The question, then one line per option that has something to say.
+
+    Fits Meta's 1024-character body: the notes are cut before the question is,
+    because the question is what the buttons answer.
+    """
+    notes = [
+        f"- {title}: {to_whatsapp_text(desc)}" for _rid, title, desc in rows if desc
+    ]
+    question_text = question_text.strip() or "Please choose"
+    if not notes:
+        return question_text[:INTERACTIVE_BODY_LIMIT]
+    question_part = truncate_whatsapp_text(question_text, INTERACTIVE_BODY_LIMIT - 200)
+    room = INTERACTIVE_BODY_LIMIT - len(question_part) - 2
+    return f"{question_part}\n\n" + truncate_whatsapp_text("\n".join(notes), room)
 
 
 def build_whatsapp_approval_interactive(
@@ -118,13 +165,29 @@ def build_whatsapp_approval_interactive(
         return None
     # The title is wrapped in bold here, so its own markers are stripped first —
     # a ``*`` inside it would close the wrapper early and leave the rest literal.
-    body_parts = [f"*{to_plain_text(plan.title)}*"]
-    if plan.reason:
-        body_parts.append(to_whatsapp_text(plan.reason))
-    if plan.action_summary:
-        body_parts.append(f"Action: {to_whatsapp_text(plan.action_summary)}")
+    title_part = f"*{to_plain_text(plan.title)}*"
+    # The action is the thing being approved, so it is the last line to go: the
+    # reason is written by the model and can run to paragraphs, and cutting the
+    # tail of a 1024-character body used to drop the action first.
+    action_part = (
+        truncate_whatsapp_text(
+            f"Action: {to_whatsapp_text(plan.action_summary)}", _APPROVAL_ACTION_LIMIT
+        )
+        if plan.action_summary
+        else ""
+    )
+    reason_room = (
+        INTERACTIVE_BODY_LIMIT - len(title_part) - len(action_part) - 4  # separators
+    )
+    reason_part = (
+        truncate_whatsapp_text(to_whatsapp_text(plan.reason), max(reason_room, 0))
+        if plan.reason and reason_room > 0
+        else ""
+    )
     body_text = balance_whatsapp_delimiters(
-        "\n\n".join(part for part in body_parts if part.strip())[:1024]
+        "\n\n".join(
+            part for part in (title_part, reason_part, action_part) if part.strip()
+        )[:INTERACTIVE_BODY_LIMIT]
     ).strip()
     body_text = body_text or "Approval needed"
     return {
@@ -146,11 +209,6 @@ def resolve_whatsapp_send_type(*, delivery_mode: str, mime_type: str) -> str:
     if requested != "auto":
         return requested
     return media_kind_for_mime(mime_type).value
-
-
-#: Meta's cap on an interactive message's body text. A flow whose body is
-#: longer is rejected outright, which would lose the form as well as the words.
-INTERACTIVE_BODY_LIMIT = 1024
 
 
 def flow_with_message(flow: dict[str, JsonValue], message: str) -> dict[str, JsonValue]:

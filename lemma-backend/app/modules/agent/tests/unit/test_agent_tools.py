@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -1822,79 +1822,6 @@ def test_runner_keeps_last_five_agent_runs_in_full_and_elides_older_runs():
 
     for recent_run in runs[-FULL_HISTORY_AGENT_RUN_COUNT:]:
         assert len(grouped[recent_run.id]) == 5
-
-
-def _surface_conversation():
-    return Conversation(
-        pod_id=uuid4(),
-        user_id=uuid4(),
-        metadata={"surface_platform": "WHATSAPP"},
-    )
-
-
-def _run_with_age(*, run_index: int, hours_ago: float, message_count: int = 5):
-    run = _agent_run_with_messages(run_index, message_count=message_count)
-    stamp = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
-    for message in run.messages:
-        message.created_at = stamp
-    return run
-
-
-def test_surface_history_window_trims_by_message_count(monkeypatch):
-    # Small budget so only the most recent run fits (5 msgs each, budget 6).
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
-        lambda: (6, 0),
-    )
-    runs = [_agent_run_with_messages(i) for i in range(4)]
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
-
-    selected = runner._select_runtime_history(runs, _surface_conversation())
-    grouped = _messages_by_run(selected)
-
-    # Only the most recent run survives the count budget.
-    assert set(grouped) == {runs[-1].id}
-    # Its own five messages. The sixth is the notice saying the older runs were
-    # dropped -- the cap announces itself rather than trimming in silence.
-    real = [m for m in grouped[runs[-1].id] if m.kind is not MessageKind.NOTIFICATION]
-    assert len(real) == 5
-    assert any(
-        (m.metadata or {}).get("summary_kind") == "conversation_runs_dropped"
-        for m in grouped[runs[-1].id]
-    )
-
-
-def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
-        lambda: (40, 24),
-    )
-    old = _run_with_age(run_index=0, hours_ago=48)
-    recent = _run_with_age(run_index=1, hours_ago=1)
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
-
-    selected = runner._select_runtime_history(
-        runs=[old, recent], conversation=_surface_conversation()
-    )
-    grouped = _messages_by_run(selected)
-
-    # The 48h-old run is outside the 24h window; only the recent run remains.
-    assert set(grouped) == {recent.id}
-
-
-def test_surface_history_window_ignored_for_non_surface_conversation(monkeypatch):
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
-        lambda: (6, 0),
-    )
-    runs = [_agent_run_with_messages(i) for i in range(4)]
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
-
-    # A plain (non-surface) conversation is unaffected by the surface window.
-    non_surface = Conversation(pod_id=uuid4(), user_id=uuid4())
-    selected = runner._select_runtime_history(runs, non_surface)
-    grouped = _messages_by_run(selected)
-    assert len(grouped) == 4
 
 
 def test_history_processors_compact_then_enforce_a_hard_ceiling():

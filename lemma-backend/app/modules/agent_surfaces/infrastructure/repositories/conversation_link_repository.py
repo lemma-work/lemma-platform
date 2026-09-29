@@ -16,19 +16,54 @@ Every index these reads need is named by the query in
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Collection, Sequence
 from typing import Any
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.domain.uow import IUnitOfWork
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
+from app.modules.agent_surfaces.domain.notification import (
+    NotificationDeliveryStatus,
+    NotificationStatus,
+)
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceConversationLinkModel,
+    NotificationModel,
 )
+
+
+def _thread_lock_key(
+    surface_id: UUID,
+    platform: str,
+    external_channel_id: str | None,
+    external_thread_id: str,
+    external_user_id: str | None,
+) -> int:
+    """A stable signed 64-bit lock key for one exact chat on one surface.
+
+    A missing channel or user is not the same as an empty one, so each part is
+    tagged rather than joined bare. Hashed for the same reason
+    `surface_repository._identity_claim_lock_key` is: the key says nothing about
+    the chat it locks, and a long id cannot overflow the space.
+    """
+    parts = [
+        str(surface_id),
+        platform,
+        "-" if external_channel_id is None else f"+{external_channel_id}",
+        external_thread_id,
+        "-" if external_user_id is None else f"+{external_user_id}",
+    ]
+    digest = hashlib.blake2b(
+        "\x00".join(parts).encode(), digest_size=8, person=b"lemma-thread"
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
 
 
 class SurfaceConversationLinkRepository:
@@ -215,30 +250,112 @@ class SurfaceConversationLinkRepository:
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
+    async def lock_thread(
+        self,
+        *,
+        surface_id: UUID,
+        platform: str,
+        external_channel_id: str | None,
+        external_thread_id: str,
+        external_user_id: str | None,
+    ) -> None:
+        """Serialise first messages on one chat until this transaction ends.
+
+        Two rapid first messages both read "no link yet" and both went on to open
+        a conversation, so the second insert either hit the unique index or --
+        with a missing channel or user, which a plain unique index treats as
+        always distinct -- quietly made a second link that every later read of
+        the chat then failed on. Taking this before the *second* read makes the
+        loser wait for the winner's commit and then find its link, without
+        having opened a conversation it would have to throw away.
+        """
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {
+                "lock_key": _thread_lock_key(
+                    surface_id,
+                    platform,
+                    external_channel_id,
+                    external_thread_id,
+                    external_user_id,
+                )
+            },
+        )
+        # Released at commit, so a connection-scope release in between would drop
+        # it mid-bind; the mark is what stops that.
+        mark_transaction_scoped_lock(self.session)
+
     async def create(
         self,
         link: AgentSurfaceConversationLink,
+        *,
+        locked: bool = False,
     ) -> AgentSurfaceConversationLink:
-        model = AgentSurfaceConversationLinkModel(
-            id=link.id,
-            created_at=link.created_at,
-            updated_at=link.updated_at,
+        """Insert the link, or return the one that beat this to it.
+
+        Takes the thread lock itself, because this is also reached from
+        notification delivery, which does not go through the binder. The lock is
+        what makes "at most one link per chat" true: the unique index treats a
+        missing channel or user as always distinct, so for a direct chat it
+        cannot say so, and the lock is held to commit so a loser sees the
+        winner's row when it re-reads. ``locked`` says the caller has already
+        taken it and read, so neither is repeated. ``ON CONFLICT DO NOTHING`` still covers
+        the chats that do have every part of the key.
+        """
+        if not locked:
+            await self.lock_thread(
+                surface_id=link.surface_id,
+                platform=link.platform,
+                external_channel_id=link.external_channel_id,
+                external_thread_id=link.external_thread_id,
+                external_user_id=link.external_user_id,
+            )
+            existing = await self.get_by_external_thread(
+                surface_id=link.surface_id,
+                platform=link.platform,
+                external_channel_id=link.external_channel_id,
+                external_thread_id=link.external_thread_id,
+                external_user_id=link.external_user_id,
+            )
+            if existing is not None:
+                return existing
+        statement = (
+            pg_insert(AgentSurfaceConversationLinkModel)
+            .values(
+                id=link.id,
+                created_at=link.created_at,
+                updated_at=link.updated_at,
+                surface_id=link.surface_id,
+                conversation_id=link.conversation_id,
+                platform=link.platform,
+                external_channel_id=link.external_channel_id,
+                external_thread_id=link.external_thread_id,
+                external_user_id=link.external_user_id,
+                routed_agent_id=link.routed_agent_id,
+                conversation_kind=link.conversation_kind,
+                route_key=link.route_key,
+                last_event=link.last_event,
+                last_message_id=link.last_message_id,
+                last_inbound_at=link.last_inbound_at,
+            )
+            .on_conflict_do_nothing()
+            .returning(AgentSurfaceConversationLinkModel)
+        )
+        inserted = (await self.session.execute(statement)).scalar_one_or_none()
+        if inserted is not None:
+            return inserted.to_entity()
+        existing = await self.get_by_external_thread(
             surface_id=link.surface_id,
-            conversation_id=link.conversation_id,
             platform=link.platform,
             external_channel_id=link.external_channel_id,
             external_thread_id=link.external_thread_id,
             external_user_id=link.external_user_id,
-            routed_agent_id=link.routed_agent_id,
-            conversation_kind=link.conversation_kind,
-            route_key=link.route_key,
-            last_event=link.last_event,
-            last_message_id=link.last_message_id,
-            last_inbound_at=link.last_inbound_at,
         )
-        self.session.add(model)
-        await self.session.flush()
-        return model.to_entity()
+        if existing is None:
+            raise RuntimeError(
+                "conversation link insert conflicted but no link exists for the thread"
+            )
+        return existing
 
     async def update_last_event(
         self,
@@ -260,12 +377,55 @@ class SurfaceConversationLinkRepository:
         await self.session.flush()
         return model.to_entity()
 
+    async def conversation_holds_notification(
+        self,
+        conversation_id: UUID,
+        *,
+        delivered_since: datetime | None = None,
+    ) -> bool:
+        """Is this conversation where a notification's answer is expected?
+
+        Two things make it so. A notification that asked a question and is still
+        open, however old: the recipient's agent is only told which request a
+        reply answers (and given the id to record it against) through the
+        conversation the request was delivered into, so a reply that lands
+        anywhere else can never close it. And, when ``delivered_since`` is given,
+        any notification delivered into it since then -- a report or a reminder
+        the person answers with "yes" has to be read against the thing it
+        answers.
+
+        Read from the notification's own delivery columns rather than from the
+        conversation's messages: the message is written before the send and the
+        row afterwards, so only the row says the person was actually reached.
+        Answered by ``ix_notifications_delivery_conversation``.
+        """
+        reasons = [
+            and_(
+                NotificationModel.status == NotificationStatus.OPEN.value,
+                NotificationModel.expects_response.is_(True),
+            )
+        ]
+        if delivered_since is not None:
+            reasons.append(NotificationModel.delivered_at >= delivered_since)
+        stmt = (
+            select(NotificationModel.id)
+            .where(
+                NotificationModel.delivery_conversation_id == conversation_id,
+                NotificationModel.delivery_status
+                == NotificationDeliveryStatus.DELIVERED.value,
+                or_(*reasons),
+            )
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).first() is not None
+
     async def repoint_conversation_for_outbound(
         self,
         *,
         link_id: UUID,
         conversation_id: UUID,
         expected_conversation_id: UUID,
+        routed_agent_id: UUID | None = None,
     ) -> AgentSurfaceConversationLink | None:
         """Point a thread at a newly opened conversation, without faking inbound.
 
@@ -280,11 +440,20 @@ class SurfaceConversationLinkRepository:
         stealing it back would split one thread across two conversations. Losing
         that race returns None and the caller delivers into the conversation the
         inbound created.
+
+        ``routed_agent_id`` is the agent the new conversation was opened under.
+        The link carries the agent its conversation belongs to, and the reply is
+        routed to the surface's *current* agent: left at whatever the previous
+        conversation had, the two disagree for a surface whose agent was changed
+        since, and the reply is cut into a fresh conversation the notification
+        never reached.
         """
         model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
         if model is None or model.conversation_id != expected_conversation_id:
             return None
         model.conversation_id = conversation_id
+        if routed_agent_id is not None:
+            model.routed_agent_id = routed_agent_id
         await self.session.flush()
         return model.to_entity()
 

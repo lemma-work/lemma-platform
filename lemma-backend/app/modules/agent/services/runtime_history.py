@@ -1,14 +1,15 @@
 """What history reaches the model, and how much of a run survives the trip.
 
-Two policies live here. Surface conversations (Slack, Telegram, WhatsApp, ...)
-bound prior history by age and message count, trimmed whole runs at a time so a
-tool call never gets separated from its return. Everything older than the most
-recent few runs is then elided to its first and last message with a notice in
-between saying how many were dropped.
+Two policies live here, and both apply to every conversation the same way --
+where a conversation came from (web, task, Slack, WhatsApp, ...) never changes
+what the model is shown. Only the newest ``MAX_HISTORY_AGENT_RUNS`` runs are
+carried at all, and everything older than the most recent few is collapsed to
+what still matters (every user message, the closing answer) with a notice saying
+how many runs were dropped.
 
-Both read a run's size through ``AgentRun.message_count`` rather than counting
-what is loaded: the runtime history loader deliberately fetches older runs down
-to two messages, so ``len(run.messages)`` is not how big the run was.
+Runs are read through ``AgentRun.message_count`` rather than by counting what is
+loaded: the runtime history loader deliberately fetches older runs down to two
+messages, so ``len(run.messages)`` is not how big the run was.
 
 Extracted from the runner because it is policy about the prompt rather than
 mechanics of executing a run -- and because the runner is at the architecture
@@ -19,15 +20,15 @@ from __future__ import annotations
 
 import json
 
-from datetime import datetime, timedelta, timezone
+from typing import Protocol
 from uuid import UUID
 
 from app.modules.agent.domain.entities import (
     AgentRun,
-    Conversation,
     Message,
     MessageKind,
     MessageRole,
+    RuntimeHistoryWindow,
 )
 
 #: Opens every message this module synthesizes. Two jobs: the model reads it as
@@ -40,111 +41,30 @@ FULL_HISTORY_AGENT_RUN_COUNT = 5
 
 #: The oldest runs a conversation carries at all, elided ones included.
 #:
-#: Surface conversations have always had an age and message-count window. Every
-#: other kind -- the web UI, tasks, sub-agents -- had none, so a long-lived
-#: conversation loaded *every* run it had ever had: a 400-turn one arrives as
-#: ~400 elided runs before compaction has seen a single message, and pays for
-#: the notice on each of them every turn. Elision bounds a run's size; nothing
-#: bounded how many runs there were.
+#: Without a ceiling a long-lived conversation loads *every* run it ever had: a
+#: 400-turn one arrives as ~400 elided runs before compaction has seen a single
+#: message, and pays for the notice on each of them every turn. Elision bounds a
+#: run's size; this bounds how many runs there are.
+#:
+#: This is deliberately the only bound on history count. A message-count budget
+#: over raw messages was tried for surface conversations and lost context: a
+#: tool-heavy run is ~100 messages, so one such run exhausted the budget and the
+#: model saw only the current message -- while the elision below would have
+#: reduced that same run to its user messages and its answer.
 MAX_HISTORY_AGENT_RUNS = 60
 
 
-def _newest_message_time(run: AgentRun) -> datetime | None:
-    """The newest message ``created_at`` in a run as an aware UTC datetime, or
-    None when the run has no timestamped messages. Naive timestamps are treated
-    as UTC (matching the DM-reset window handling).
-
-    Prefers the run's own ``newest_message_at`` when it has one, because a run
-    loaded as a digest carries the timestamp without carrying the messages --
-    and a run reduced to its first and last message would otherwise answer from
-    the two it kept.
-    """
-    if run.newest_message_at is not None:
-        recorded = run.newest_message_at
-        return (
-            recorded.replace(tzinfo=timezone.utc)
-            if recorded.tzinfo is None
-            else recorded
-        )
-    newest: datetime | None = None
-    for message in run.messages:
-        created = getattr(message, "created_at", None)
-        if created is None:
-            continue
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        if newest is None or created > newest:
-            newest = created
-    return newest
-
-
-def _capped_run_count(runs: list[AgentRun]) -> list[AgentRun]:
+def cap_history_runs(runs: list[AgentRun]) -> list[AgentRun]:
     """The newest runs, however many the conversation actually has.
 
-    Applies to every conversation, surface or not: the oldest runs are the least
-    useful and nothing else put a ceiling on how many of them there could be.
+    Cuts whole runs, so a tool call and its return -- which live in the same
+    run -- are never separated. The most recent run is always kept.
     """
     return runs[-MAX_HISTORY_AGENT_RUNS:]
 
 
-def apply_surface_history_window(
-    runs: list[AgentRun], conversation: Conversation | None
-) -> list[AgentRun]:
-    """Bound how much history a conversation carries.
-
-    Every conversation is capped at ``MAX_HISTORY_AGENT_RUNS`` runs. Surface
-    conversations are bounded further, by age + message count.
-
-    Trims at run granularity (a tool-call and its return live in the same run,
-    so whole-run trimming never splits a pair) and always keeps at least the
-    most recent run. No-op for non-surface conversations or when a limit is
-    disabled. Runs are assumed chronologically ordered.
-    """
-    if not runs:
-        return runs
-    runs = _capped_run_count(runs)
-    metadata = (conversation.metadata or {}) if conversation is not None else {}
-    if not metadata.get("surface_platform"):
-        return runs
-
-    from app.modules.agent_surfaces.contracts.platforms import surface_history_limits
-
-    max_messages, window_hours = surface_history_limits()
-
-    trimmed = list(runs)
-    # Age window: drop whole runs whose newest message predates the window,
-    # keeping the most recent run regardless.
-    if window_hours > 0 and len(trimmed) > 1:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
-        kept: list[AgentRun] = []
-        for index, run in enumerate(trimmed):
-            is_last = index == len(trimmed) - 1
-            newest = _newest_message_time(run)
-            if is_last or newest is None or newest >= cutoff:
-                kept.append(run)
-        trimmed = kept or trimmed[-1:]
-
-    # Message-count budget: keep the most recent whole runs that fit, always
-    # keeping the most recent run.
-    if max_messages > 0:
-        result: list[AgentRun] = []
-        total = 0
-        for run in reversed(trimmed):
-            # The run's real size, not how much of it was loaded: an older
-            # run arrives holding only its first and last message.
-            count = run.message_count
-            if result and total + count > max_messages:
-                break
-            result.insert(0, run)
-            total += count
-        trimmed = result or trimmed[-1:]
-
-    return trimmed
-
-
 def bound_runtime_history(
     runs: list[AgentRun],
-    conversation: Conversation | None = None,
     *,
     total_runs: int | None = None,
 ) -> tuple[list[AgentRun], int]:
@@ -162,24 +82,17 @@ def bound_runtime_history(
     for a caller whose ``runs`` is already a window: without it the count starts
     from the window and the notice under-reports by everything the window took.
     """
-    bounded = apply_surface_history_window(runs, conversation)
+    bounded = cap_history_runs(runs)
     return bounded, (len(runs) if total_runs is None else total_runs) - len(bounded)
 
 
-def runtime_full_run_ids(
-    runs: list[AgentRun], conversation: Conversation | None = None
-) -> set[UUID]:
+def runtime_full_run_ids(runs: list[AgentRun]) -> set[UUID]:
     """Which runs need every message, decided the same way the prompt decides.
 
-    Applies the caller's trims first and takes the most recent runs of what
-    survives, because the age window is a filter rather than a truncation: a run
-    created long ago whose newest message is recent outlives runs created after
-    it. Selecting by position on the untrimmed list picks a different set, and
-    the run it wrongly elides is then sent short with no notice, because a
-    shortened list never reaches the elision branch.
+    Caps first and takes the most recent runs of what survives, so the set is
+    picked from the runs the prompt will actually carry.
     """
-    trimmed = apply_surface_history_window(runs, conversation)
-    return {run.id for run in trimmed[-FULL_HISTORY_AGENT_RUN_COUNT:]}
+    return {run.id for run in cap_history_runs(runs)[-FULL_HISTORY_AGENT_RUN_COUNT:]}
 
 
 def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
@@ -207,21 +120,118 @@ def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
     )
 
 
+#: How many run-less notifications ride along with the history. They are short
+#: and rarely stack up, so this is a backstop rather than a budget.
+MAX_UNATTACHED_NOTIFICATIONS = 20
+
+
+def oldest_carried_sequence(runs: list[AgentRun]) -> int | None:
+    """The sequence of the oldest message the prompt will carry, if any."""
+    sequences = [message.sequence for run in runs for message in run.messages]
+    return min(sequences) if sequences else None
+
+
+def first_sequence_of_run(runs: list[AgentRun], run_id: UUID) -> int | None:
+    """Where the run being executed begins, if it is among ``runs``."""
+    for run in runs:
+        if run.id == run_id and run.messages:
+            return min(message.sequence for message in run.messages)
+    return None
+
+
+def unattached_notification_window(
+    runs: list[AgentRun],
+    run_id: UUID,
+    *,
+    dropped_runs: int,
+) -> tuple[int | None, int | None]:
+    """``(after, before)`` sequences bounding the run-less notifications to carry.
+
+    The lower bound exists to keep a notification that is older than the
+    history out of it, so it applies only when history *was* cut. Applied
+    unconditionally it is the oldest message the prompt carries, and for a
+    conversation a notification opened that is the first run's own first
+    message -- the notification precedes it, so the person's first reply to a
+    report or a reminder was read against nothing.
+
+    The upper bound is the turn being answered, whether or not anything was cut.
+    """
+    after = oldest_carried_sequence(runs) if dropped_runs > 0 else None
+    return after, first_sequence_of_run(runs, run_id)
+
+
+class RuntimeHistorySource(Protocol):
+    """The two reads history assembly makes, and nothing else of a repository."""
+
+    async def attach_runtime_history_messages(
+        self, runs: list[AgentRun], *, full_run_ids: set[UUID]
+    ) -> list[AgentRun]: ...
+
+    async def load_unattached_notifications(
+        self,
+        conversation_id: UUID,
+        *,
+        after_sequence: int | None,
+        before_sequence: int | None,
+        limit: int,
+    ) -> list[Message]: ...
+
+
+async def assemble_runtime_history(
+    source: RuntimeHistorySource,
+    window: RuntimeHistoryWindow,
+    *,
+    conversation_id: UUID,
+    run_id: UUID,
+) -> list[Message]:
+    """Every message the model is shown for ``run_id``, in the order it reads them.
+
+    One place for the whole recipe so the runner and anything that wants to know
+    what a turn will see cannot drift apart on it -- the notification bounds in
+    particular are a decision about *this* history, and were made inline where
+    nothing could exercise them without a database.
+    """
+    # The trim decides which runs need every message, and it can keep an
+    # old-but-active run while dropping newer ones -- so it runs before the
+    # messages are asked for, and only what survives it gets them. Attaching to
+    # the untrimmed list meant a long conversation read hundreds of runs it then
+    # discarded.
+    bounded, dropped_runs = bound_runtime_history(
+        window.runs, total_runs=window.total_runs
+    )
+    await source.attach_runtime_history_messages(
+        bounded, full_run_ids=runtime_full_run_ids(bounded)
+    )
+    messages = select_runtime_history(bounded, already_dropped=dropped_runs)
+    # Belong to no run, so the run-keyed reads above never see them; sequences
+    # are conversation-wide, so the harness places them.
+    after_sequence, before_sequence = unattached_notification_window(
+        bounded, run_id, dropped_runs=dropped_runs
+    )
+    messages.extend(
+        await source.load_unattached_notifications(
+            conversation_id,
+            after_sequence=after_sequence,
+            before_sequence=before_sequence,
+            limit=MAX_UNATTACHED_NOTIFICATIONS,
+        )
+    )
+    return messages
+
+
 def select_runtime_history(
     runs: list[AgentRun],
-    conversation: Conversation | None = None,
     *,
     already_dropped: int = 0,
 ) -> list[Message]:
-    # Surface (Slack/Telegram/WhatsApp/…) conversations bound how much prior
-    # history reaches the model by age + count. Trim at run granularity first
-    # so tool-call/tool-return pairs (which live within a run) stay intact.
+    # Cap at run granularity first so tool-call/tool-return pairs (which live
+    # within a run) stay intact.
     #
     # `already_dropped` is what a caller that trimmed before loading messages
-    # (see `bound_runtime_history`) took out. The window below is idempotent, so
+    # (see `bound_runtime_history`) took out. The cap below is idempotent, so
     # such a list loses nothing here and would silently lose its notice too.
     original_count = len(runs) + already_dropped
-    runs = apply_surface_history_window(runs, conversation)
+    runs = cap_history_runs(runs)
     prefix: list[Message] = []
     if runs and len(runs) < original_count:
         prefix = [_dropped_runs_notice(runs[0], original_count - len(runs))]

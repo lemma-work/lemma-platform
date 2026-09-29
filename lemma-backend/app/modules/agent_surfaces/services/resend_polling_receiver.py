@@ -30,11 +30,14 @@ from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.domain.source_event_ids import resend_source_event_id
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound,
-    resend_source_event_id,
 )
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
+from app.modules.agent_surfaces.services.resend_recipients import (
+    surface_for_recipients,
+)
 from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
     receiver_key,
@@ -169,16 +172,10 @@ class ResendPollingReceiverRunner:
         if not recipients:
             return
 
-        surface = None
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-            repository = SurfaceRepository(uow)
-            for address in recipients:
-                surface = await repository.get_active_by_address(
-                    platform="RESEND", address=address
-                )
-                if surface is not None:
-                    normalized["to"] = address
-                    break
+            surface = await surface_for_recipients(
+                SurfaceRepository(uow), normalized, recipients
+            )
         if surface is None:
             logger.debug(
                 "agent_surfaces.resend_polling_receiver.resend_polling_no_surface_for_address.diagnostic"
@@ -221,8 +218,11 @@ async def _load_resend_cursor(key: str) -> str | None:
             return None
         return raw.decode() if isinstance(raw, bytes) else str(raw)
     except Exception:
-        logger.debug(
-            "agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.observed",
+        # Warning, and it matters more than it looks: no cursor means "seed
+        # silently", so a Redis failure here makes the poller skip every email
+        # that arrived while it was unable to say where it had got to.
+        logger.warning(
+            "agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.degraded",
             exc_info=True,
         )
         return None
@@ -233,7 +233,7 @@ async def _store_resend_cursor(key: str, cursor: str) -> None:
     try:
         await redis.set(_resend_cursor_key(key), cursor)
     except Exception:
-        logger.debug(
-            "agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.observed",
+        logger.warning(
+            "agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.degraded",
             exc_info=True,
         )

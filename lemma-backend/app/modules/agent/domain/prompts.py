@@ -269,7 +269,7 @@ def build_agent_instructions(
         sections.append(load_agent_base_prompt())
 
     # Unconditional, on both harness paths: reply discipline is not a toolset.
-    # A surface run narrows this further -- ``platform_agent_guidance`` appends
+    # A surface run narrows this further -- ``surface_platform_guidance`` appends
     # its own ``soft_char_limit`` below -- but a run with no surface platform
     # would otherwise be told nothing at all about length or narration.
     sections.append(load_replies_prompt())
@@ -283,17 +283,17 @@ def build_agent_instructions(
 
         # Per-platform surface guidance for remote harnesses (which have no
         # capability layer). The in-process LEMMA harness passes
-        # include_toolset_prompts=False and gets this from SurfacePlatformCapability
-        # instead, so this never double-injects. Imported where it is used so the
-        # prompt layer, which every run loads, does not carry the platform tables
-        # a surface run needs.
+        # include_toolset_prompts=False and gets the same text from
+        # SurfacePlatformCapability instead, so this never double-injects.
+        # Imported where it is used so the prompt layer, which every run loads,
+        # does not carry the platform tables a surface run needs.
         surface_platform = getattr(ctx, "surface_platform", None)
         if surface_platform:
-            from app.modules.agent_surfaces.contracts.platforms import (
-                platform_agent_guidance,
+            from app.modules.agent.domain.surface_prompts import (
+                surface_platform_guidance,
             )
 
-            fragment = platform_agent_guidance(surface_platform)
+            fragment = surface_platform_guidance(surface_platform)
             if fragment:
                 sections.append(fragment)
 

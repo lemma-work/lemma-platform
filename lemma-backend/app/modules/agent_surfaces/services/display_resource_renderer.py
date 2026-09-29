@@ -150,15 +150,6 @@ def merge_other_answers(values: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in merged.items() if v not in (None, "", [])}
 
 
-def render_questions_as_text(plan: SurfaceQuestionRenderPlan) -> str:
-    """Deprecated alias for ``SurfaceQuestionRenderPlan.to_plain_text``.
-
-    The degradation moved onto the plan so a delivery can ask any part for its
-    text without knowing which part it is holding.
-    """
-    return plan.to_plain_text()
-
-
 def build_display_resource_render_plan(
     *,
     pod_id: UUID,

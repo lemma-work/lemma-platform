@@ -256,6 +256,7 @@ class EnvelopeDeliveryMixin:
                 "agent_surfaces.delivery.part_reached_nobody.degraded",
                 platform=self.platform,
                 part=part,
+                exc_info=True,
             )
             return PartDelivery.UNDELIVERED
         return PartDelivery.DEGRADED
@@ -277,6 +278,7 @@ class EnvelopeDeliveryMixin:
                 "agent_surfaces.delivery.part_reached_nobody.degraded",
                 platform=self.platform,
                 part="text",
+                exc_info=True,
             )
             return PartDelivery.UNDELIVERED
         # Plain text is not a degradation of anything; it is what was asked for.
@@ -293,17 +295,30 @@ class EnvelopeDeliveryMixin:
         plan = envelope.choices
         assert plan is not None
         try:
-            if await self._render_choices(
+            rendered = await self._render_choices(
                 credentials=credentials,
                 event=event,
                 question_plan=plan,
                 metadata=metadata,
-            ):
+            )
+            if rendered is PartDelivery.DEGRADED:
+                # Some questions are buttons and the rest were already sent as
+                # words. Reporting NATIVE here is what left the run waiting on
+                # an answer nothing was armed to accept: the receipt is where
+                # "the person has words to answer, not only buttons" is
+                # recorded, so a typed reply resolves the pause.
+                return PartDelivery.DEGRADED
+            if rendered:
                 return PartDelivery.NATIVE
         except PLATFORM_TRANSPORT_ERRORS:
-            logger.debug(
-                "agent_surfaces.delivery.native_choices_unavailable.diagnostic",
+            # A warning with the traceback: the text fallback below usually
+            # serves the person, which is exactly why a native render that keeps
+            # failing (a rejected payload, a dead callback store) goes unnoticed
+            # at debug.
+            logger.warning(
+                "agent_surfaces.delivery.native_choices_unavailable.degraded",
                 platform=self.platform,
+                exc_info=True,
             )
         return await self._send_text_fallback(
             credentials=credentials,
@@ -332,9 +347,10 @@ class EnvelopeDeliveryMixin:
             ):
                 return PartDelivery.NATIVE
         except PLATFORM_TRANSPORT_ERRORS:
-            logger.debug(
-                "agent_surfaces.delivery.native_decision_unavailable.diagnostic",
+            logger.warning(
+                "agent_surfaces.delivery.native_decision_unavailable.degraded",
                 platform=self.platform,
+                exc_info=True,
             )
         return await self._send_text_fallback(
             credentials=credentials,
@@ -360,6 +376,11 @@ class EnvelopeDeliveryMixin:
                 metadata=metadata,
             )
         except PLATFORM_TRANSPORT_ERRORS:
+            logger.warning(
+                "agent_surfaces.delivery.native_resource_unavailable.degraded",
+                platform=self.platform,
+                exc_info=True,
+            )
             return await self._send_text_fallback(
                 credentials=credentials,
                 event=event,
@@ -394,6 +415,7 @@ class EnvelopeDeliveryMixin:
             logger.debug(
                 "agent_surfaces.delivery.native_attachment_unavailable.diagnostic",
                 platform=self.platform,
+                exc_info=True,
             )
         if attachment.fallback is not None:
             # The link card is the real second rung, not a consolation line:
@@ -440,6 +462,7 @@ class EnvelopeDeliveryMixin:
             logger.debug(
                 "agent_surfaces.delivery.native_voice_unavailable.diagnostic",
                 platform=self.platform,
+                exc_info=True,
             )
         # A platform with no voice notes still has an audio player: the same
         # bytes as an ordinary attachment are a real delivery, not a mention

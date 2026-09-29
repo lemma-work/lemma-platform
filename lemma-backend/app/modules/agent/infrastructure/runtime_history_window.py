@@ -1,7 +1,7 @@
 """The slice of a conversation's runs a prompt can possibly carry.
 
-``runtime_history`` caps every conversation at ``MAX_HISTORY_AGENT_RUNS`` runs
-and then trims surface conversations further by age and message count. The cap
+``runtime_history`` caps every conversation at ``MAX_HISTORY_AGENT_RUNS`` runs.
+The cap
 was applied with ``runs[-60:]`` -- after every run of the conversation had been
 read, and after a ``GROUP BY`` over every message in all of them had produced a
 digest for each. A four-hundred-turn conversation paid for four hundred runs on

@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.platforms.common import (
     payload_text,
 )
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
+from app.modules.agent_surfaces.platforms.send_guard import unsendable
 
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     MARKDOWN_BLOCK_CHAR_LIMIT,
@@ -34,11 +35,15 @@ from app.modules.agent_surfaces.platforms.slack.channel_reads import (
 from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     _approval_blocks,
     _display_resource_blocks,
-    _progress_status_text,
+    PROCESSING_LOADING_TEXT,
+    PROCESSING_STATUS_TEXT,
     _question_blocks,
     slack_acknowledgement_body,
 )
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
+from app.modules.agent_surfaces.platforms.slack.streaming import (
+    remove_processing_reaction,
+)
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
     classify_slack_error,
@@ -187,10 +192,10 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 raise RuntimeError(
                     "Slack installation cannot deliver private onboarding"
                 )
-            logger.debug(
-                "agent_surfaces.service.slack_send_message_skipped_due.diagnostic"
-            )
-            return
+            # Raised, not logged and returned: the caller records whatever does
+            # not raise as delivered, so a send with no token or no channel
+            # reported NATIVE having sent nothing. Telegram and Resend raise.
+            raise unsendable("Slack", access_token=token, channel=channel)
 
         client = await build_slack_client(self.credentials)
         thread_ts = event.reply_target.get("thread_ts")
@@ -202,7 +207,6 @@ class SlackPlatformService(SlackChannelReadsMixin):
         # Slack caps markdown blocks at 12,000 characters *per payload*, so a
         # long answer becomes several messages rather than one truncated one.
         chunks = chunk_text(message, limit=MARKDOWN_BLOCK_CHAR_LIMIT) or [message]
-        feedback_callback_id = str((metadata or {}).get("feedback_callback_id") or "")
         # Empty for a normal channel post; `_post_message` decides on it.
         ephemeral_user = _ephemeral_target(metadata)
         try:
@@ -210,7 +214,6 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 blocks = reply_blocks(
                     chunk,
                     metadata,
-                    feedback_callback_id,
                     is_dm=event.is_dm,
                     is_last=index == len(chunks) - 1,
                 )
@@ -230,6 +233,8 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 exc_info=True,
             )
             raise
+        if not ephemeral_user:
+            await remove_processing_reaction(self.credentials, event)
 
     async def acknowledge_interaction(
         self,
@@ -278,14 +283,12 @@ class SlackPlatformService(SlackChannelReadsMixin):
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
+        """Post a resource as a Block Kit card. Always a card, so always True."""
         token = slack_access_token(self.credentials)
         channel = event.reply_target.get("channel")
         if not token or not channel:
-            logger.debug(
-                "agent_surfaces.service.slack_send_display_resource_skipped.diagnostic"
-            )
-            return
+            raise unsendable("Slack", access_token=token, channel=channel)
 
         client = await build_slack_client(self.credentials)
         try:
@@ -303,6 +306,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 slack_customized_message_kwargs(
                     self.credentials,
                     (metadata or {}).get("agent_display_name"),
+                    (metadata or {}).get("agent_icon_url"),
                 )
             )
             await self._post_message(client, payload)
@@ -312,6 +316,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 exc_info=True,
             )
             raise
+        return True
 
     async def _render_choices(
         self,
@@ -336,7 +341,9 @@ class SlackPlatformService(SlackChannelReadsMixin):
             payload["thread_ts"] = thread_ts
         payload.update(
             slack_customized_message_kwargs(
-                self.credentials, (metadata or {}).get("agent_display_name")
+                self.credentials,
+                (metadata or {}).get("agent_display_name"),
+                (metadata or {}).get("agent_icon_url"),
             )
         )
         await self._post_message(client, payload)
@@ -365,7 +372,9 @@ class SlackPlatformService(SlackChannelReadsMixin):
             payload["thread_ts"] = thread_ts
         payload.update(
             slack_customized_message_kwargs(
-                self.credentials, (metadata or {}).get("agent_display_name")
+                self.credentials,
+                (metadata or {}).get("agent_display_name"),
+                (metadata or {}).get("agent_icon_url"),
             )
         )
         await self._post_message(client, payload)
@@ -377,6 +386,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        del metadata  # Part of the adapter interface; the bubble text is fixed.
         token = slack_access_token(self.credentials)
         channel = event.reply_target.get("channel")
         timestamp = event.external_message_id
@@ -394,13 +404,12 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 and thread_ts
                 and "assistant:write" in slack_scopes(self.credentials)
             ):
-                status_text, loading_text = _progress_status_text(metadata)
                 try:
                     await client.assistant_threads_setStatus(
                         channel_id=str(channel),
                         thread_ts=str(thread_ts),
-                        status=status_text,
-                        loading_messages=[loading_text],
+                        status=PROCESSING_STATUS_TEXT,
+                        loading_messages=[PROCESSING_LOADING_TEXT],
                     )
                     return
                 except SlackApiError as exc:

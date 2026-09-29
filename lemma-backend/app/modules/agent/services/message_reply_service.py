@@ -45,9 +45,10 @@ REPLY_SOURCE = "message_replies"
 # in the model's own history next to the `message_user` calls that produced them,
 # and `check_messages` already reads exactly the ones it is given.
 REPLIES_ARRIVED = (
-    "Everyone you messaged has now replied. Read them with `check_messages`, "
-    "using the notification ids from your earlier `message_user` calls, then "
-    "carry on with what you were doing."
+    "Everyone you messaged has now replied, or their time to reply has run "
+    "out. Read where each stands with `check_messages`, using the notification "
+    "ids from your earlier `message_user` calls, then carry on with what you "
+    "were doing."
 )
 
 

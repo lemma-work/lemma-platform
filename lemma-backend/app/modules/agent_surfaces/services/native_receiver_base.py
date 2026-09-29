@@ -7,11 +7,10 @@ coordinator — which imports the runners, so the reverse would be a cycle.
 
 from __future__ import annotations
 
-import json
-
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.source_event_ids import native_source_event_id
 
 import hashlib
 import hmac
@@ -81,19 +80,9 @@ async def _publish_native_receiver_event(
     headers = {"x-lemma-surface-event-mode": "native_receiver"}
     if receiver_key:
         headers["x-lemma-surface-receiver-key"] = receiver_key
-    provider_id = (
-        payload.get("event_id")
-        or payload.get("update_id")
-        or payload.get("id")
-        or hashlib.sha256(
-            json.dumps(payload, sort_keys=True, default=str).encode()
-        ).hexdigest()
-    )
-    # The receiver is part of the identity, because `provider_id` is only unique
-    # within one. A Telegram `update_id` is a per-bot counter starting at 1, so
-    # two polled bots both produce update 1 -- and the durable inbox would claim
-    # one row for the pair, answer the first person and silently drop the second.
-    source_event_id = f"{source}:native:{receiver_key or 'unkeyed'}:{provider_id}"
+    # The receiver is part of the identity, because a provider's id is only
+    # unique within one.
+    source_event_id = native_source_event_id(source, payload, receiver_key=receiver_key)
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),
         source=source,

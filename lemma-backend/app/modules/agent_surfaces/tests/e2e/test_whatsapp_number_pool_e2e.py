@@ -779,7 +779,6 @@ async def test_the_config_the_caller_sent_survives_taking_a_number(
             "config": {
                 "send_policy": {"allow_send": True},
                 "identity": {"allowed_domains": ["acme.test"]},
-                "dm_conversation_reset_after_hours": 6,
             },
         },
     )
@@ -792,7 +791,6 @@ async def test_the_config_the_caller_sent_survives_taking_a_number(
         "allocation, and the API reported success anyway"
     )
     assert body["config"]["identity"]["allowed_domains"] == ["acme.test"]
-    assert body["config"]["dm_conversation_reset_after_hours"] == 6
 
 
 async def test_the_setup_panel_names_this_numbers_own_callback_and_token(

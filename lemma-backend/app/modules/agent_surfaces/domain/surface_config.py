@@ -111,7 +111,6 @@ class SurfaceConfig(BaseModel):
     dedicated entity fields, never in here.
     """
 
-    dm_conversation_reset_after_hours: int = 24
     identity: SurfaceIdentityPolicy = Field(default_factory=SurfaceIdentityPolicy)
     channels: list[SurfaceChannelRoute] = Field(default_factory=list)
     send_policy: SurfaceSendPolicy = Field(default_factory=SurfaceSendPolicy)

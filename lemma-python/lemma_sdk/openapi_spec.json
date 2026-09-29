@@ -13551,9 +13551,17 @@
             "type": "array"
           },
           "dm_conversation_reset_after_hours": {
-            "default": 24,
-            "title": "Dm Conversation Reset After Hours",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Ignored. The DM reset window is a deployment-wide setting (SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so existing pod bundles and clients keep working.",
+            "title": "Dm Conversation Reset After Hours"
           },
           "identity": {
             "$ref": "#/components/schemas/SurfaceIdentityConfigInput"
@@ -13638,11 +13646,6 @@
             },
             "title": "Channels",
             "type": "array"
-          },
-          "dm_conversation_reset_after_hours": {
-            "default": 24,
-            "title": "Dm Conversation Reset After Hours",
-            "type": "integer"
           },
           "identity": {
             "$ref": "#/components/schemas/SurfaceIdentityConfigResponse"

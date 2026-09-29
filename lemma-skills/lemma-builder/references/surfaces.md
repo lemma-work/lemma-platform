@@ -73,7 +73,6 @@ agent row like every other agent.
     account, then finish the platform-side step: paste the webhook/redirect URL Lemma
     gives you, and for Teams obtain tenant admin consent.
 - **`config`** — user-editable behavior:
-  - `dm_conversation_reset_after_hours` (default 24) — see *Thread shape* below.
   - `identity` — `allowed_domains` / `allowed_email_addresses`; empty means everyone.
   - `channels` — Slack/Teams allow-list of `{channel_id, channel_name}`. A route is a
     **place**, not a choice of agent; it no longer carries `agent_name`, because the
@@ -124,12 +123,14 @@ never wire.)
 
 ## Thread shape — what the reset window actually resets
 
-`dm_conversation_reset_after_hours` cuts a **DM** into conversations, because one
-permanent DM thread id would otherwise carry every conversation you will ever have
-there. A **channel thread or an email thread is already bounded to one topic**, so the
+The DM reset window cuts a **DM** into conversations, because one permanent DM
+thread id would otherwise carry every conversation you will ever have there. It is a
+deployment-wide setting (`SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS`, default 24 hours
+since the person's last message), not a per-surface field; a surface config that still
+sends `dm_conversation_reset_after_hours` is accepted and ignored. A **channel thread or an email thread is already bounded to one topic**, so the
 window does not apply to it — a reply a day later continues the same conversation, with
-its history, which is what the person sees on the platform. Set the window for DM
-hygiene; don't reach for it to control channel or email threading.
+its history, which is what the person sees on the platform. Agent memory carries
+across the cut; don't reach for the window to control channel or email threading.
 
 ## Setup flow
 
@@ -161,9 +162,9 @@ there's nothing left to do. When a surface is `ACTIVE`, the system is already re
 and handling inbound messages.
 
 ```bash
-# DM surface with a reset policy
+# DM surface that only answers people from one domain
 lemma surfaces upsert slack --agent triage-agent --account <account-id> \
-  --data '{"config": {"dm_conversation_reset_after_hours": 24}}'
+  --data '{"config": {"identity": {"allowed_domains": ["example.com"]}}}'
 
 # Email: the surface already exists, named after its agent. Find it, then configure it.
 lemma surfaces list                                   # -> resend-inbox-agent, …
@@ -189,7 +190,7 @@ First-class flags on `upsert`: `--agent/--agent-name`, `--account/--account-id`,
 ```bash
 lemma surfaces list
 lemma surfaces get slack
-lemma surfaces upsert slack --data '{"config": {"dm_conversation_reset_after_hours": 48}}'
+lemma surfaces upsert slack --data '{"config": {"send_policy": {"allow_send": true}}}'
 lemma surfaces enable slack / lemma surfaces disable slack    # toggle without deleting
 lemma surfaces setup slack                                    # what's still missing?
 lemma surfaces delete slack --yes                             # frees the account for another pod
@@ -198,8 +199,8 @@ lemma surfaces delete slack --yes                             # frees the accoun
 ## Patterns
 
 - **DM assistant.** A `DM` surface maps one external identity to one pod
-  conversation until the reset window — always set `dm_conversation_reset_after_hours`
-  so threads don't grow forever.
+  conversation until the deployment's DM reset window passes, so threads don't grow
+  forever.
 - **Channel triage (Slack/Teams).** `config.channels` is the allow-list of
   channels this surface's agent answers in; the agent replies in-thread where the
   platform supports it. A specialist agent for `#billing` needs its **own bot** —
@@ -237,7 +238,6 @@ it one):
   "account_id": "${slack_account}",
   "is_enabled": true,
   "config": {
-    "dm_conversation_reset_after_hours": 24,
     "channels": [{ "channel_id": "C123", "channel_name": "support" }],
     "identity": { "allowed_domains": ["example.com"] }
   }

@@ -91,8 +91,6 @@ type SurfaceModalStep =
     | 'setup'
     | 'message';
 
-const DEFAULT_DM_RESET_HOURS = 24;
-
 export interface SurfaceModalTarget {
     platform: SurfacePlatformValue;
     /** Present when configuring an existing surface. */
@@ -358,7 +356,6 @@ export function SurfaceModal({
                     name: newSurfaceName,
                     default_agent_name: agentName,
                     is_enabled: true,
-                    config: { dm_conversation_reset_after_hours: DEFAULT_DM_RESET_HOURS },
                 },
             });
             setSetupId(setup.setup_id);
@@ -397,7 +394,6 @@ export function SurfaceModal({
                     is_enabled: true,
                     credential_mode: mode as SurfaceCredentialMode,
                     ...(boundAccountId ? { account_id: boundAccountId } : {}),
-                    config: { dm_conversation_reset_after_hours: DEFAULT_DM_RESET_HOURS },
                 },
             })) as AssistantSurface;
 
@@ -460,7 +456,6 @@ export function SurfaceModal({
         if (!existingSurface) return;
         setError(null);
         const config: SurfaceBehaviorConfigInput = {
-            dm_conversation_reset_after_hours: DEFAULT_DM_RESET_HOURS,
             ...(definition.capabilities.channelRoutes
                 ? {
                       channels: draft.channels

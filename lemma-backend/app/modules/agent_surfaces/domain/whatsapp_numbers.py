@@ -82,17 +82,6 @@ class WhatsAppNumberEntity(Entity):
     #: is reserved for, why it was retired.
     notes: str | None = None
 
-    @property
-    def is_allocatable(self) -> bool:
-        """Free to be handed to an organisation that does not already hold it.
-
-        Only ``status``, because there is nothing else to ask. A number that is
-        not retired may be offered to any organisation not already holding it,
-        including one already held elsewhere -- several organisations holding
-        one number is the design, not a collision.
-        """
-        return self.status is WhatsAppNumberStatus.AVAILABLE
-
     def credential_overrides(self) -> dict[str, str]:
         """What this number answers with, for laying over the settings defaults.
 

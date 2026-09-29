@@ -47,12 +47,14 @@ pytestmark = pytest.mark.e2e
 COMMENTS = ["Searching the web", "Reading the results"]
 FINAL = "Here is the answer."
 
-#: The platform tool each script calls. The tool is incidental — the progress
-#: comment is read off the persisted event, not off what the tool returns — but
-#: it has to be one the platform actually offers.
+#: The tool each script calls. The tool is incidental — the progress comment is
+#: read off the persisted event, not off what the tool returns — but it has to be
+#: one the platform actually offers. Telegram has no platform toolset of its own
+#: (its only tool echoed event metadata and was removed), so it uses a tool every
+#: run has.
 CONTEXT_TOOL = {
     SurfacePlatform.SLACK: "slack_get_recent_channel_messages",
-    SurfacePlatform.TELEGRAM: "telegram_get_current_chat",
+    SurfacePlatform.TELEGRAM: "display_resource",
     SurfacePlatform.TEAMS: "teams_get_recent_channel_messages",
 }
 

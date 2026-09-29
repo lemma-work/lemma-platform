@@ -82,6 +82,8 @@ class EventInboxPort(Protocol):
         consumer: str,
         event: BaseModel | Mapping[str, Any],
         handler: Callable[[], Awaitable[None]],
+        *,
+        max_attempts: int | None = None,
     ) -> bool: ...
 
 
@@ -158,7 +160,15 @@ class InboxConsumer:
         consumer: str,
         event: BaseModel | Mapping[str, Any],
         handler: Callable[[], Awaitable[None]],
+        *,
+        max_attempts: int | None = None,
     ) -> bool:
+        """Run ``handler`` once for this delivery, classifying how it ended.
+
+        ``max_attempts`` lets a consumer whose work is expensive or visible to
+        people (a message sent to someone) cap its own retries below the
+        default, without changing it for every other consumer.
+        """
         payload = normalized_event_payload(event)
         carrier = {
             key: str(payload[key])
@@ -241,6 +251,7 @@ class InboxConsumer:
                             event_type,
                             attempt,
                             as_stray_cancellation(exc),
+                            max_attempts,
                         )
                     except ValidationError as exc:
                         await self._finish(
@@ -259,7 +270,12 @@ class InboxConsumer:
                     except DomainError as exc:
                         if exc.status_code == 503:
                             return await self._retry_or_dead_letter(
-                                consumer, event_id, event_type, attempt, exc
+                                consumer,
+                                event_id,
+                                event_type,
+                                attempt,
+                                exc,
+                                max_attempts,
                             )
                         await self._finish(
                             consumer,
@@ -270,7 +286,7 @@ class InboxConsumer:
                         return True
                     except Exception as exc:
                         return await self._retry_or_dead_letter(
-                            consumer, event_id, event_type, attempt, exc
+                            consumer, event_id, event_type, attempt, exc, max_attempts
                         )
 
             await self._finish(consumer, event_id, InboxStatus.COMPLETED)
@@ -350,8 +366,9 @@ class InboxConsumer:
         event_type: str,
         attempt: int,
         exc: Exception,
+        max_attempts: int | None = None,
     ) -> bool:
-        terminal = attempt >= self.max_attempts
+        terminal = attempt >= (max_attempts or self.max_attempts)
         status = InboxStatus.DEAD_LETTER if terminal else InboxStatus.RETRYING
         await self._finish(
             consumer,

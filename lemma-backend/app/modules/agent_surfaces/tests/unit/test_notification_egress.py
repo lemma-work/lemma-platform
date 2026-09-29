@@ -270,6 +270,10 @@ async def test_a_cold_email_leaves_a_link_the_reply_will_match():
     # They have not written to us; claiming otherwise would let an outbound
     # masquerade as inbound activity when ranking someone's channels.
     assert created.last_inbound_at is None
+    # The agent the conversation was opened under, which the reply is compared
+    # against -- see `test_notification_journey` for what it costs to omit it.
+    assert created.routed_agent_id == surface.agent_id
+    assert created.route_key == "email"
 
 
 async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
