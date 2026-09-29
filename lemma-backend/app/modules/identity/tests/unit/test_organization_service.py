@@ -830,29 +830,110 @@ async def test_revoke_invitation_updates_status(
     assert update_arg.status == OrganizationInvitationStatus.REVOKED
 
 
+MEMBER, EDITOR, OWNER = (
+    OrganizationRole.ORG_MEMBER,
+    OrganizationRole.ORG_EDITOR,
+    OrganizationRole.ORG_OWNER,
+)
+
+
+@pytest.mark.parametrize(
+    ("actor", "current", "new", "allowed"),
+    [
+        # Nobody below an editor manages people at all.
+        (MEMBER, MEMBER, MEMBER, False),
+        (MEMBER, MEMBER, EDITOR, False),
+        # An editor confers what an editor holds, and no more.
+        (EDITOR, MEMBER, EDITOR, True),
+        (EDITOR, EDITOR, MEMBER, True),
+        (EDITOR, MEMBER, OWNER, False),
+        # ...and does not reach over somebody who holds more than they do.
+        (EDITOR, OWNER, MEMBER, False),
+        (EDITOR, OWNER, EDITOR, False),
+        # Nor promote themselves past their own role.
+        (EDITOR, EDITOR, OWNER, False),
+        # An owner holds everything.
+        (OWNER, MEMBER, OWNER, True),
+        (OWNER, EDITOR, MEMBER, True),
+        (OWNER, OWNER, EDITOR, True),
+    ],
+)
 @pytest.mark.asyncio
-async def test_update_member_role_requires_owner(
+async def test_update_member_role_is_bounded_by_what_the_actor_holds(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
+    actor: OrganizationRole,
+    current: OrganizationRole,
+    new: OrganizationRole,
+    allowed: bool,
 ):
+    """PS-ONB-040: an editor may change roles, up to their own and no further."""
     member = OrganizationMemberEntity(
         user_id=uuid4(),
         organization_id=uuid4(),
-        role=OrganizationRole.ORG_MEMBER,
+        role=current,
     )
     organization_repository_mock.get_member_by_id.return_value = member
     organization_repository_mock.get_member.return_value = _member(
         user_id=uuid4(),
         organization_id=member.organization_id,
-        role=OrganizationRole.ORG_EDITOR,
+        role=actor,
     )
+    organization_repository_mock.update_member.side_effect = lambda entity: entity
+    # Another owner exists, so the last-owner guard is not what is under test.
+    organization_repository_mock.count_members_with_role_for_update.return_value = 2
 
-    with pytest.raises(IdentityAccessDeniedError):
-        await organization_service.update_member_role(
-            member.id,
-            OrganizationRole.ORG_EDITOR,
-            requester_user_id=uuid4(),
-        )
+    change = organization_service.update_member_role(
+        member.id, new, requester_user_id=uuid4()
+    )
+    if allowed:
+        assert (await change).role == new
+    else:
+        with pytest.raises(IdentityAccessDeniedError):
+            await change
+        organization_repository_mock.update_member.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("actor", "offered", "allowed"),
+    [
+        (EDITOR, MEMBER, True),
+        (EDITOR, EDITOR, True),
+        (EDITOR, OWNER, False),
+        (OWNER, OWNER, True),
+        (MEMBER, MEMBER, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_create_invitation_is_bounded_by_what_the_inviter_holds(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+    actor: OrganizationRole,
+    offered: OrganizationRole,
+    allowed: bool,
+):
+    """PS-ONB-020: the role an invitation offers is chosen by its author."""
+    org = OrganizationEntity(name="Acme", slug="acme")
+    invitation = OrganizationInvitationEntity(
+        email="test+new@example.com",
+        organization_id=org.id,
+        role=offered,
+    )
+    organization_repository_mock.get.return_value = org
+    organization_repository_mock.get_member.return_value = _member(
+        user_id=uuid4(), organization_id=org.id, role=actor
+    )
+    organization_repository_mock.get_member_by_email.return_value = None
+    organization_repository_mock.get_invitation_by_email.return_value = None
+    organization_repository_mock.add_invitation.side_effect = lambda entity: entity
+
+    invite = organization_service.create_invitation(invitation, inviter_user_id=uuid4())
+    if allowed:
+        assert (await invite).role == offered
+    else:
+        with pytest.raises(IdentityAccessDeniedError):
+            await invite
+        organization_repository_mock.add_invitation.assert_not_awaited()
 
 
 @pytest.mark.asyncio

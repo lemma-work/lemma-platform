@@ -210,6 +210,9 @@ are shown with a retry action rather than an indefinite loading message.
   create a pending invitation for that email and notify it.
 - When the invited person accepts, the system shall make them a member with
   exactly the role the invitation offered.
+- If an inviter attempts to offer a role carrying permissions they do not hold
+  themselves, then the system shall refuse. An editor may therefore invite an
+  editor or a member, and may not invite an owner.
 - When someone joins an organization, the system shall record
   `organization.member_joined`.
 - If a person attempts to accept an invitation addressed to a different email,
@@ -223,6 +226,10 @@ are shown with a retry action rather than an indefinite loading message.
 - Where an invitation names a pod, accepting it shall make the person both a
   member of the organization and a member of that pod, with the pod role the
   invitation offered.
+- If an inviter attempts to offer a pod role they could not confer by adding the
+  person to that pod themselves — because they do not manage that pod's members,
+  or the role carries permissions they do not hold there — then the system shall
+  refuse. An invitation is a pod grant that lands later, not a way around one.
 - If the pod named by an invitation cannot be granted — because it was deleted
   after the invitation was sent, for example — then the system shall refuse the
   acceptance and shall say which pod it could not grant, leaving the invitation
@@ -312,16 +319,20 @@ are shown with a retry action rather than an indefinite loading message.
 
 ## Capability: Change and remove membership
 
-### PS-ONB-040 — An owner changes what a member may do
+### PS-ONB-040 — Whoever manages people changes what a member may do
 **Status:** covered
 
-- When an owner changes a member's role, the system shall apply it immediately
-  to every later request that member makes.
-- If a member who is not an owner attempts to change any role, then the system
-  shall refuse.
-- If a person who is not an owner attempts to grant the owner or editor role
-  through any path, then the system shall refuse — including paths that grant
-  roles as a side effect, such as approving a request to join.
+- When an owner or editor changes a member's role, the system shall apply it
+  immediately to every later request that member makes.
+- If a member who is neither owner nor editor attempts to change any role, then
+  the system shall refuse.
+- If a person attempts to give anyone a role carrying permissions they do not
+  hold themselves — themselves included — then the system shall refuse. An
+  editor may therefore make an editor or a member, and may not make an owner.
+  This holds through every path that grants a role, including those that grant
+  one as a side effect, such as approving a request to join.
+- If an editor attempts to change the role of an owner, then the system shall
+  refuse: nobody may take away authority they do not hold either.
 
 **Contracts:** `org.member.update_role`, `org.member.list`
 
@@ -344,7 +355,7 @@ are shown with a retry action rather than an indefinite loading message.
 
 - When an owner removes any member, the system shall remove them.
 - When an editor removes a member who is not an owner, the system shall remove
-  them.
+  them. An editor may remove another editor.
 - If an editor attempts to remove an owner, then the system shall refuse.
 - If a member who is neither owner nor editor attempts to remove anyone other
   than themselves, then the system shall refuse.

@@ -119,3 +119,73 @@ async def test_approving_cannot_confer_unheld_pod_permissions(world, run):
         f"an editor conferred a role carrying permissions they do not hold "
         f"({refused.status_code})"
     )
+
+
+@scenario("An organization editor who does not run a pod cannot mint its administrator")
+@proves("PS-POD-021", "PS-POD-022")
+@covers(
+    "pod.join_request.create",
+    "pod.join_request.approve",
+    "pod.join_request.list",
+    "pod.member.list",
+)
+async def test_an_organization_editor_cannot_make_themselves_a_pod_administrator(
+    world, run
+):
+    """Managing the organization's people is not authority inside a pod.
+
+    Daniel is an organization editor and belongs to none of this pod. Approving
+    requests answers to the same authority as adding a member, so he cannot
+    decide anyone's -- his own included. Without that he could ask to join any
+    pod in the organization and approve himself as its administrator.
+    """
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    daniel = await world.person("daniel")
+
+    request = await daniel.requests_to_join(pod)
+
+    await daniel.is_refused_approving(
+        request, for_pod=pod, org_role="ORG_MEMBER", pod_role="POD_ADMIN"
+    )
+    await daniel.is_refused_pod(pod)
+    members = {str(m.get("user_id")) for m in await alice.members_of_pod(pod)}
+    assert str(daniel.user_id) not in members, (
+        "an organization editor became a member of a pod they do not run by "
+        "approving their own request"
+    )
+
+
+@scenario("An invitation cannot carry a pod role its author could not confer")
+@proves("PS-ONB-021", "PS-POD-022")
+@covers("org.invitation.invite", "pod.member.list")
+@open_signup
+async def test_an_invitation_cannot_smuggle_a_pod_administrator(world, run):
+    alice = await world.person("priya")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    daniel = await world.person("daniel")
+    ghost = await world.new_person("ghost")
+
+    await daniel.is_refused_inviting(
+        ghost, to=alice.organization, pod=pod, pod_role="POD_ADMIN"
+    )
+    await alice.invites(ghost, to=alice.organization, pod=pod, pod_role="POD_USER")
+
+
+@scenario("An organization owner adds people to a pod they do not belong to")
+@proves("PS-POD-010")
+@covers("pod.member.add", "pod.member.update_roles", "pod.member.remove")
+async def test_an_organization_owner_administers_a_pod_they_are_not_in(world, run):
+    """The owner reaches every pod in the organization; adding is part of reach."""
+    priya = await world.person("priya")
+    pod = await priya.creates_a_pod(named=run.name("pod"))
+    # Somebody other than the creator, holding no role in the pod.
+    daniel = await world.person("daniel")
+    await priya.adds(daniel, to_pod=pod, as_role="POD_ADMIN")
+    await priya.removes_member(await priya.membership_of(priya, in_pod=pod), from_pod=pod)
+
+    sofia = await world.person("sofia")
+    await priya.adds(sofia, to_pod=pod, as_role="POD_VIEWER")
+
+    members = {str(m.get("user_id")) for m in await priya.members_of_pod(pod)}
+    assert str(sofia.user_id) in members

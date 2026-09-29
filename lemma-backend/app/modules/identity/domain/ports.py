@@ -212,6 +212,17 @@ class PodMembershipPort(Protocol):
 
     async def is_pod_member(self, *, pod_id: UUID, user_id: UUID) -> bool: ...
 
+    async def refuse_pod_role_beyond_inviter(
+        self,
+        *,
+        pod_id: UUID,
+        inviter_user_id: UUID,
+        inviter_is_org_owner: bool,
+        pod_role: str,
+    ) -> None:
+        """Raise unless the inviter may put someone in this pod with this role."""
+        ...
+
     async def add_member_to_pod(
         self,
         *,

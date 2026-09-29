@@ -29,7 +29,9 @@ from app.modules.identity.domain.errors import (
     OrganizationConflictError,
 )
 from app.modules.identity.domain.organization_entities import (
+    can_act_on_org_member,
     can_grant_org_role,
+    OrganizationInvitationEntity,
     OrganizationMemberEntity,
     OrganizationRole,
 )
@@ -78,21 +80,72 @@ async def resolve_pod_grant(
     return PodGrant(pod_id=pod_id, pod_role=pod_role or DEFAULT_POD_ROLE)
 
 
-def refuse_unconferrable_org_role(
-    inviter: OrganizationMemberEntity, offered: OrganizationRole
-) -> None:
-    """Refuse an invitation offering a role its author may not confer.
+async def resolve_invited_pod(
+    *,
+    pod_membership_port: object | None,
+    invitation: OrganizationInvitationEntity,
+    inviter: OrganizationMemberEntity,
+) -> tuple[str | None, str | None]:
+    """The pod an invitation names -- its name and description -- or nothing.
 
-    The bound belongs on the invitation because that is where the role is
-    chosen -- the same place ``approve_join_request`` applies it. It was absent,
-    and acceptance happened to mask that by assigning ORG_MEMBER whatever the
-    invitation said. Now that acceptance honours the invited role (PS-ONB-020),
-    an unbounded invite would be an editor's route to minting an owner.
+    Refuses a pod that is gone or belongs to another organization, and refuses a
+    pod role its author could not confer. An invitation naming a pod is a pod
+    grant that lands later, so it is bounded exactly as adding the member
+    directly is: the inviter must be able to manage that pod's members, with the
+    role inside what they hold. Without that, an organization editor -- who
+    reaches no pod they are not a member of -- could invite a second address to
+    any pod as its administrator.
     """
-    if can_grant_org_role(inviter.role, offered):
+    if invitation.pod_id is None or pod_membership_port is None:
+        return None, None
+    details = await pod_membership_port.get_pod_invitation_details(invitation.pod_id)
+    pod_organization_id = details[2] if details else None
+    if pod_organization_id is None:
+        raise IdentityValidationError("Pod not found")
+    if pod_organization_id != invitation.organization_id:
+        raise IdentityValidationError("Pod does not belong to this organization")
+    await pod_membership_port.refuse_pod_role_beyond_inviter(
+        pod_id=invitation.pod_id,
+        inviter_user_id=inviter.user_id,
+        inviter_is_org_owner=inviter.role == OrganizationRole.ORG_OWNER,
+        pod_role=invitation.pod_role or DEFAULT_POD_ROLE,
+    )
+    return details[0], details[1]
+
+
+def refuse_unconferrable_org_role(
+    actor: OrganizationMemberEntity, offered: OrganizationRole, *, verb: str
+) -> None:
+    """Refuse handing out an organization role its author does not fully hold.
+
+    The bound belongs where the role is chosen -- an invitation, a role change,
+    the approval of a join request -- and all three ask the same question of
+    :func:`can_grant_org_role`: is every permission ``offered`` carries one the
+    actor carries? An editor may therefore make an editor, and may not make an
+    owner, and may not make themselves one either.
+    """
+    if can_grant_org_role(actor.role, offered):
         return
     raise IdentityAccessDeniedError(
-        "Only owners can invite someone as an owner or editor"
+        f"You may not {verb} {offered.value}: it carries permissions you do not "
+        "hold. Ask someone who holds them to make this change."
+    )
+
+
+def refuse_reaching_over_org_member(
+    actor: OrganizationMemberEntity, member: OrganizationMemberEntity, *, verb: str
+) -> None:
+    """Refuse acting on a member who holds authority the actor lacks.
+
+    Removing or demoting somebody is the mirror of granting them a role, and
+    gets the same bound: an editor cannot remove or demote an owner, however
+    the rest of the request is shaped (PS-ONB-042).
+    """
+    if can_act_on_org_member(actor.role, member.role):
+        return
+    raise IdentityAccessDeniedError(
+        f"You may not {verb} a member who is {member.role.value}: "
+        "they hold permissions you do not."
     )
 
 
