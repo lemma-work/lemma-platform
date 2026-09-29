@@ -25,8 +25,12 @@ from app.modules.agent_surfaces.composition import (
     build_surface_connection_resolver,
     build_surface_service,
     build_surface_webhook_security_service,
+    build_telegram_link_service,
     build_telegram_manager_service,
     build_user_surfaces_service,
+)
+from app.modules.agent_surfaces.services.telegram_link_service import (
+    TelegramLinkService,
 )
 from app.modules.agent_surfaces.services.member_reach import MemberReach
 from app.modules.agent_surfaces.services.notification_service import (
@@ -81,7 +85,16 @@ def get_telegram_manager_service(
     return build_telegram_manager_service(uow_factory)
 
 
+def get_telegram_link_service(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> TelegramLinkService:
+    return build_telegram_link_service(uow_factory)
+
+
 SurfaceServiceDep = Annotated[AgentSurfaceService, Depends(get_surface_service)]
+TelegramLinkServiceDep = Annotated[
+    TelegramLinkService, Depends(get_telegram_link_service)
+]
 SurfaceConnectionResolverDep = Annotated[
     SurfaceConnectionResolver, Depends(get_surface_connection_resolver)
 ]

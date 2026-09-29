@@ -13,6 +13,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.available` | GET | `/pods/{pod_id}/available-surfaces` | List Available Surfaces |
 | `agent.surface.channels` | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | List Surface Channels |
 | `agent.surface.create` | POST | `/pods/{pod_id}/surfaces` | Create Surface |
+| `agent.surface.create_telegram_link` | POST | `/surfaces/me/telegram-link` | Create My Telegram Link |
 | `agent.surface.delete` | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | Delete Surface |
 | `agent.surface.get` | GET | `/pods/{pod_id}/surfaces/{surface_name}` | Get Surface |
 | `agent.surface.list` | GET | `/pods/{pod_id}/surfaces` | List Surfaces |
@@ -23,6 +24,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.setup_guide` | GET | `/pods/{pod_id}/surface-setup/{platform}` | Get Surface Setup Guide |
 | `agent.surface.slack_manifest` | GET | `/surface-setup/slack/manifest` | Get Slack App Manifest |
 | `agent.surface.teams_admin_consent_callback` | GET | `/surfaces/teams/admin-consent/callback` | Teams Admin Consent Callback |
+| `agent.surface.telegram_link_options` | GET | `/surfaces/me/telegram-link` | Get My Telegram Link Options |
 | `agent.surface.telegram_managed.get` | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | Get Telegram Managed Bot Setup |
 | `agent.surface.telegram_managed.start` | POST | `/pods/{pod_id}/telegram-bot-setups` | Start Telegram Managed Bot Setup |
 | `agent.surface.update` | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | Update Surface |

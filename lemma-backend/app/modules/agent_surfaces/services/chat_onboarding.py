@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from uuid import UUID
 
 
-from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -34,8 +32,19 @@ from app.modules.agent_surfaces.services.onboarding_outcomes import (
 )
 from app.modules.agent_surfaces.services.onboarding_replies import (
     initial_prompt_for,
+    ready_message,
     room_notice,
     say_privately,
+)
+from app.modules.agent_surfaces.services.onboarding_row_writes import (
+    advance_if_delivered,
+)
+from app.modules.agent_surfaces.services.telegram_chat_link import (
+    TelegramChatLinker,
+    link_token_in,
+)
+from app.modules.agent_surfaces.services.telegram_link_tokens import (
+    TelegramLinkTokenStore,
 )
 from app.modules.agent_surfaces.services.onboarding_pod_choice import (
     offer_text,
@@ -72,39 +81,6 @@ from app.modules.agent_surfaces.services.onboarding_sender import (
 
 logger = get_logger(__name__)
 
-#: What "done" sounds like. Both completion paths used to say nothing at all:
-#: the only sign of success was the replayed request coming back answered, and
-#: `replay_onboarding` has several raises that dead-letter after their retries
-#: -- so a failure there left somebody who had just proved their email with no
-#: acknowledgement and no answer, and nothing to tell that apart from being
-#: ignored. The confirmation is cheap and it is sent before the replay, so the
-#: flow is never silent even when the replay is.
-READY_MESSAGE = "You're all set. Picking up your message now."
-
-
-def ready_message(invited_pod_name: str | None = None) -> str:
-    """The confirmation, plus the one thing it never said.
-
-    An account made here has a single login method and it is passwordless.
-    Everything on the web that a person would reach for first -- a password,
-    "forgot password", Continue with Google -- is refused for exactly that
-    reason, and the only door that opens is a code sent to this same address.
-    Nobody was ever told that, so signing up on WhatsApp and then trying the
-    website looked like an account that did not work.
-
-    Composed rather than folded into `READY_MESSAGE` so the constant stays the
-    literal confirmation sentence that the recovery test matches on, and so the
-    URL is read when the message is sent rather than when the module is
-    imported.
-    """
-    joined = f"You were invited to {invited_pod_name}, and you're in it now.\n\n"
-    return (
-        f"{joined if invited_pod_name else ''}{READY_MESSAGE}\n\n"
-        f"To use Lemma on the web, go to {settings.frontend_url.rstrip('/')}/login "
-        "and enter this same email address. We'll send you a sign-in code -- "
-        "there's no password to remember."
-    )
-
 
 class ChatOnboardingCoordinator:
     def __init__(
@@ -113,11 +89,29 @@ class ChatOnboardingCoordinator:
         *,
         challenges: EmailChallengeService | None = None,
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
+        email_deliverable: Callable[[], bool] | None = None,
+        link_tokens: TelegramLinkTokenStore | None = None,
     ) -> None:
         self._uows = uow_factory
         self._adapters = SurfacePlatformAdapterRegistry()
         self._challenges = challenges
         self._event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
+        self._email_deliverable = email_deliverable
+        self._link_tokens = link_tokens or TelegramLinkTokenStore()
+
+    def _can_email(self) -> bool:
+        """Whether a code sent now would reach anybody's inbox.
+
+        A challenge service handed in brings its own delivery, which is what a
+        test injecting one is for; otherwise it is the installation's mail
+        settings, where a filesystem spool counts as undelivered because
+        nobody in a chat can read it.
+        """
+        from app.core.email.email_sender import email_delivery_configured
+
+        if self._email_deliverable is not None:
+            return self._email_deliverable()
+        return self._challenges is not None or email_delivery_configured()
 
     @property
     def _outcomes(self) -> OnboardingOutcomes:
@@ -150,6 +144,14 @@ class ChatOnboardingCoordinator:
 
     async def _advance(self, transport: OnboardingTransport) -> OnboardingIngressResult:
         event = transport.event
+        link_token = link_token_in(event)
+        if link_token is not None:
+            return await TelegramChatLinker(
+                uows=self._uows,
+                adapters=self._adapters,
+                outcomes=self._outcomes,
+                tokens=self._link_tokens,
+            ).link(transport, link_token)
         state = await self._state(transport.binding_key)
         if (
             state is None
@@ -213,6 +215,15 @@ class ChatOnboardingCoordinator:
         await self._outcomes.expired(transport, state, destination)
         return OnboardingIngressResult(True)
 
+    async def _no_email(
+        self,
+        transport: OnboardingTransport,
+        state: PendingState,
+        destination: ParsedInboundSurfaceEvent,
+    ) -> OnboardingIngressResult:
+        await self._outcomes.email_unavailable(transport, state, destination)
+        return OnboardingIngressResult(True)
+
     async def _refused(
         self,
         transport: OnboardingTransport,
@@ -236,6 +247,8 @@ class ChatOnboardingCoordinator:
         """
         try:
             if state.step == OnboardingStep.AWAITING_EMAIL:
+                if not self._can_email():
+                    return await self._no_email(transport, state, destination)
                 return await self._email(transport, state, destination)
             if state.step == OnboardingStep.AWAITING_CODE:
                 return await self._code(transport, state, destination)
@@ -251,6 +264,12 @@ class ChatOnboardingCoordinator:
             # refusals that are *not* like that -- the ones with no next message
             # that could help -- are caught where they arise, in `_complete` and
             # `_pod`, because only there is it known that they are permanent.
+            logger.info(
+                "agent_surfaces.chat_onboarding.answer_rejected.observed",
+                platform=state.platform,
+                step=state.step,
+                reason=error.message,
+            )
             await self._reply(transport, destination, error.message, step=state.step)
         except RateLimitExceeded:
             await self._reply(
@@ -309,43 +328,14 @@ class ChatOnboardingCoordinator:
         )
         return OnboardingIngressResult(True)
 
-    async def _write(self, state_id: UUID, values: dict[str, object]) -> None:
-        async with self._uows() as uow:
-            row = await uow.session.get(PendingChatOnboarding, state_id)
-            assert row is not None
-            for column, value in values.items():
-                setattr(row, column, value)
-
     async def _advance_if_delivered(
         self,
         state: PendingState,
         advanced: dict[str, object],
         send: Callable[[], Awaitable[None]],
     ) -> None:
-        """Move the row on, and move it back if the person is never told.
-
-        Every step here writes before it sends, and it has to: the private
-        destination and the step are what `native_prompt_metadata` reads to
-        build the native form the message carries. So the write cannot wait for
-        the send, and the only honest alternative is to undo it.
-
-        Without that, a reply that failed left the row on a step the person had
-        never been asked to answer -- sitting on AWAITING_CODE with no idea a
-        code was wanted, their next message read as a wrong code. The inbox
-        retries the delivery, and a retry is only worth anything if it re-runs
-        the step from the top, prompt included.
-
-        `finally` rather than `except` so a cancellation counts too.
-        """
-        before = {column: getattr(state, column) for column in advanced}
-        await self._write(state.id, advanced)
-        delivered = False
-        try:
-            await send()
-            delivered = True
-        finally:
-            if not delivered:
-                await self._write(state.id, before)
+        """See `onboarding_row_writes.advance_if_delivered`."""
+        await advance_if_delivered(self._uows, state, advanced, send)
 
     async def _reply(
         self,
@@ -411,6 +401,12 @@ class ChatOnboardingCoordinator:
             destination = destination.model_copy(
                 update={"sender_email": original.sender_email}
             )
+        if not self._can_email():
+            # Before the contact share as well as the address. A share can only
+            # finish signup by matching a number already verified here, which
+            # an installation that cannot mail codes has almost no way to have
+            # -- so asking would cost a stranger their number for a refusal.
+            return await self._no_email(transport, state, destination)
         step = (
             OnboardingStep.AWAITING_PHONE
             if event.platform == SurfacePlatform.TELEGRAM
@@ -468,6 +464,8 @@ class ChatOnboardingCoordinator:
             assert state is not None
             await self._complete(transport, state, destination)
             return OnboardingIngressResult(True)
+        if not self._can_email():
+            return await self._no_email(transport, state, destination)
         await self._reply(
             transport,
             destination,

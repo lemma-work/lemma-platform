@@ -7,6 +7,7 @@ one pod has configured.
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -42,6 +43,39 @@ class UserSurfacePlatformGroup(BaseModel):
 
 class UserSurfacesResponse(BaseModel):
     groups: list[UserSurfacePlatformGroup]
+
+
+class TelegramLinkPod(BaseModel):
+    id: UUID
+    name: str
+
+
+class TelegramLinkOptionsResponse(BaseModel):
+    """What a link to the shared Telegram bot would connect, before minting one."""
+
+    bot_username: str
+    #: Every pod the chat could answer from.
+    pods: list[TelegramLinkPod]
+    #: The pod it answers from when none is chosen: the one this person's
+    #: Telegram already reaches, or else the first listed. None with no pods,
+    #: when redeeming the link makes them a workspace as signup would.
+    pod_id: UUID | None = None
+
+
+class TelegramLinkRequest(BaseModel):
+    pod_id: UUID | None = None
+
+
+class TelegramLinkResponse(BaseModel):
+    """A one-time link that connects whoever opens it in Telegram to this user.
+
+    Single use and short-lived; open it straight away rather than sharing it.
+    """
+
+    url: str
+    bot_username: str
+    expires_at: datetime
+    pod_id: UUID | None = None
 
 
 class SetDefaultSurfaceRequest(BaseModel):

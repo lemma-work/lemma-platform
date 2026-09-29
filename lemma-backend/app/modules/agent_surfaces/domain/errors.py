@@ -225,6 +225,30 @@ class TelegramManagerNotConfiguredError(AgentSurfaceError):
         )
 
 
+class TelegramSystemBotUnavailableError(AgentSurfaceError):
+    """There is no working shared Telegram bot to link a chat to.
+
+    409 rather than 503: nothing is down, the installation is simply not set
+    up for it, and the answer is a setting its owner changes.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            code="TELEGRAM_SYSTEM_BOT_UNAVAILABLE",
+            status_code=409,
+        )
+
+
+class TelegramLinkPodUnavailableError(AgentSurfaceError):
+    def __init__(self):
+        super().__init__(
+            message="That pod is not one you can connect a chat to",
+            code="TELEGRAM_LINK_POD_UNAVAILABLE",
+            status_code=403,
+        )
+
+
 class TelegramManagedBotSetupNotFoundError(AgentSurfaceError):
     def __init__(self, setup_id: str):
         super().__init__(

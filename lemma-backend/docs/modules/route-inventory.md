@@ -60,6 +60,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
+| GET | `/surfaces/me/telegram-link` | `agent.surface.telegram_link_options` | Get My Telegram Link Options |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
 | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.verify_whatsapp_number` | Verify a pooled WhatsApp number's own callback URL |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
@@ -73,6 +74,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
+| POST | `/surfaces/me/telegram-link` | `agent.surface.create_telegram_link` | Create My Telegram Link |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
