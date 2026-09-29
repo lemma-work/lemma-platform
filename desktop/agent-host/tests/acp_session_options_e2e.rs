@@ -6,14 +6,17 @@
 //! the host to delivering them: Claude Code's in the session's `_meta` (on a
 //! new session and a resumed one alike), Codex's and `OpenCode`'s in the
 //! process environment, and nothing of the kind when the person chose the
-//! agent's own skills and settings.
+//! agent's own skills and settings. With a fake home holding a marker in every
+//! personal place, each agent is pointed only at Lemma's own folders, and
+//! still has Lemma's MCP server and Lemma's sign-in.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
+use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
+use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver, AgentHomes};
 use lemma_agent_host::adapters::{AdapterSpec, ResolvedAdapter};
 use lemma_agent_host::permissions::PermissionGate;
 use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec};
@@ -92,6 +95,7 @@ fn request(
         adapter,
         agent_environment: BTreeMap::default(),
         own_settings,
+        agent_homes: None,
         steer: lemma_agent_host::acp::SteerInbox::default(),
         run_spec: RunSpec {
             agent_run_id: Uuid::new_v4(),
@@ -333,4 +337,162 @@ async fn lemmas_cli_goes_first_on_the_agents_path() {
     assert_eq!(first, std::fs::canonicalize(&cli).unwrap().join("bin"));
     // Behind it, the adapter's own wiring, which is how the agent is found.
     assert!(std::env::split_paths(&path).count() > 1, "{path}");
+}
+
+const MARKER: &str = "PERSONAL_MARKER";
+
+fn write(path: &Path, contents: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, contents).unwrap();
+}
+
+/// A home with the person's own instructions, MCP servers and settings for
+/// every agent, each carrying `MARKER`.
+fn personal_home(home: &Path) {
+    write(&home.join(".codex/AGENTS.md"), MARKER);
+    write(&home.join(".codex/auth.json"), r#"{"auth_mode":"apikey"}"#);
+    write(
+        &home.join(".codex/config.toml"),
+        &format!("model = \"gpt-test\"\n[mcp_servers.{MARKER}]\ncommand = \"{MARKER}\"\n"),
+    );
+    write(&home.join(".claude/CLAUDE.md"), MARKER);
+    write(
+        &home.join(".claude/settings.json"),
+        &json!({ "apiKeyHelper": "key-helper", "hooks": { "Stop": [MARKER] } }).to_string(),
+    );
+    write(
+        &home.join(".claude.json"),
+        &json!({ "mcpServers": { MARKER: { "command": MARKER } } }).to_string(),
+    );
+    write(&home.join(".config/opencode/AGENTS.md"), MARKER);
+    write(
+        &home.join(".config/opencode/opencode.json"),
+        &json!({ "model": "corp/model", "mcp": { MARKER: { "type": "local" } } }).to_string(),
+    );
+}
+
+/// Every file under `folder`, not following links out of it.
+fn files_under(folder: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(folder).unwrap().filter_map(Result::ok) {
+        let kind = entry.file_type().unwrap();
+        if kind.is_dir() {
+            found.extend(files_under(&entry.path()));
+        } else if kind.is_file() {
+            found.push(entry.path());
+        }
+    }
+    found
+}
+
+/// What each agent's run is given when the person has not chosen their own
+/// setup: Lemma's folders, Lemma's MCP server and Lemma's sign-in, and nothing
+/// that leads back to the person's own instructions or servers.
+#[cfg(unix)]
+#[tokio::test]
+async fn each_agent_is_pointed_only_at_lemmas_folders_and_keeps_lemmas_tools() {
+    let directory = TempDir::new().unwrap();
+    let home = directory.path().join("home");
+    personal_home(&home);
+    let lemmas = directory.path().join("agent-homes");
+    let homes = AgentHomes::of_person(&home).in_folder(lemmas.clone());
+    let lemma = BTreeMap::from([
+        ("LEMMA_TOKEN".to_owned(), "run-token".to_owned()),
+        ("LEMMA_BASE_URL".to_owned(), "http://127.0.0.1:1".to_owned()),
+    ]);
+
+    for agent in ["codex", "claude-code", "opencode"] {
+        let log = directory.path().join(format!("{agent}.jsonl"));
+        let mut run = request(
+            adapter(agent, &log, BTreeMap::new()),
+            directory.path().join(format!("cwd-{agent}")),
+            false,
+            Value::Null,
+        );
+        run.agent_homes = Some(homes.clone());
+        run.agent_environment.clone_from(&lemma);
+        run.mcp_server = Some(McpServer::Stdio(McpServerStdio::new(
+            "lemma",
+            PathBuf::from("lemma-agent-host"),
+        )));
+        AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+
+        let traffic = read_traffic(&log);
+        let environment = recorded_environment(&traffic);
+        assert_eq!(environment["LEMMA_TOKEN"], json!("run-token"), "{agent}");
+        assert_eq!(
+            environment["LEMMA_BASE_URL"],
+            json!("http://127.0.0.1:1"),
+            "{agent}"
+        );
+        let session = sessions(&traffic)[0];
+        let servers = session["params"]["mcpServers"].as_array().unwrap();
+        assert!(
+            servers.iter().any(|server| server["name"] == "lemma"),
+            "{agent}: {session}"
+        );
+        // Nothing the agent was sent names the person's own setup.
+        for line in &traffic {
+            assert!(!line.to_string().contains(MARKER), "{agent}: {line}");
+        }
+
+        match agent {
+            "codex" => {
+                let codex_home = PathBuf::from(environment["CODEX_HOME"].as_str().unwrap());
+                assert!(codex_home.starts_with(&lemmas), "{}", codex_home.display());
+                assert_eq!(
+                    std::fs::read_link(codex_home.join("auth.json")).unwrap(),
+                    home.join(".codex/auth.json"),
+                    "the person's sign-in"
+                );
+                assert!(
+                    std::fs::read_to_string(codex_home.join("config.toml"))
+                        .unwrap()
+                        .contains("gpt-test")
+                );
+                for file in files_under(&codex_home) {
+                    let text = std::fs::read_to_string(&file).unwrap_or_default();
+                    assert!(!text.contains(MARKER), "{}: {text}", file.display());
+                }
+            }
+            "claude-code" => {
+                let options = &session["params"]["_meta"]["claudeCode"]["options"];
+                assert_eq!(options["settingSources"], json!(["project", "local"]));
+                assert_eq!(options["strictMcpConfig"], json!(true));
+                assert_eq!(options["plugins"], json!([]));
+                assert_eq!(options["settings"], json!({ "apiKeyHelper": "key-helper" }));
+            }
+            _ => {
+                let config = PathBuf::from(environment["XDG_CONFIG_HOME"].as_str().unwrap());
+                assert!(config.starts_with(&lemmas), "{}", config.display());
+                assert!(!config.join("opencode/AGENTS.md").exists());
+                let written: Value = serde_json::from_str(
+                    &std::fs::read_to_string(config.join("opencode/opencode.json")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(written["model"], json!("corp/model"));
+                assert!(!written.to_string().contains(MARKER), "{written}");
+            }
+        }
+    }
+
+    // With their own setup chosen, each is left where the person keeps it.
+    for agent in ["codex", "opencode"] {
+        let log = directory.path().join(format!("{agent}-own.jsonl"));
+        let mut run = request(
+            adapter(agent, &log, BTreeMap::new()),
+            directory.path().join(format!("cwd-own-{agent}")),
+            true,
+            Value::Null,
+        );
+        run.agent_homes = Some(homes.clone());
+        AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+        let traffic = read_traffic(&log);
+        let environment = recorded_environment(&traffic);
+        assert!(!environment.contains_key("CODEX_HOME"), "{environment:?}");
+        assert!(
+            !environment.contains_key("XDG_CONFIG_HOME"),
+            "{environment:?}"
+        );
+    }
 }

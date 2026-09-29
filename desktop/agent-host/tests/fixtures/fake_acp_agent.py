@@ -45,8 +45,9 @@ for raw_line in sys.stdin:
                 "environment": {
                     name: value
                     for name, value in os.environ.items()
-                    if name in {"CODEX_CONFIG", "PATH"}
-                    or name.startswith(("OPENCODE_", "CLAUDE_CODE_"))
+                    if name
+                    in {"CODEX_CONFIG", "CODEX_HOME", "PATH", "XDG_CONFIG_HOME"}
+                    or name.startswith(("OPENCODE_", "CLAUDE_CODE_", "LEMMA_"))
                 }
             }
         )
