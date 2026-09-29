@@ -2,7 +2,6 @@
 import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
 import { settingsFromQuery } from "@/site/legacy-address";
 
-import { PageLoading } from "@/ui/loading";
 import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { Library, TableView } from "@/library/library";
 import { readableName } from "@/library/reading";
@@ -81,7 +80,7 @@ function readJson<T>(key: string, fallback: T): T {
     }
 }
 
-export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRevision?: number } = {}) {
+export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
@@ -225,18 +224,28 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     const [reaching, setReaching] = useState(() => incoming.get('reach') === '1');
 
     // Only the explicitly labelled, isolated product-tour document accepts this prop.
-    // These are the same UI states reached by the shell's own buttons.
+    // These are the same UI states reached by the shell's own buttons. Each step
+    // puts back everything a visitor could have moved while exploring, so the
+    // screen matches the copy beside it; the sidebar folds away once the
+    // teammate is hired, leaving the space to what the step is about.
     useEffect(() => {
         if (!preview || demoStep === undefined) return;
         setPreviewPod("kit");
+        setSelection(previous => previous.id === null ? previous : { id: null, generation: previous.generation + 1 });
         setSettings(null);
         setSearching(false);
         setMobileOpen(false);
         setHeaderHidden(false);
+        setSidebarHidden(false);
+        setCollapsed(demoStep >= 1);
+        setExpandedTab(null);
+        setExtraTabs({});
+        setOpenAgentName(null);
         setHiring(demoStep === 0);
         setAddingPeople(demoStep === 1);
         setReaching(demoStep === 4);
         setTabs(previous => ({ ...previous, kit: previewTabForStep(demoStep) }));
+        for (const frame of Object.values(appFrames.current)) frame?.contentWindow?.postMessage({ type: "lemma-tour:step", step: demoStep }, window.location.origin);
     }, [demoStep, demoRevision, preview]);
 
     const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000 });
@@ -647,6 +656,22 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
         }
     }, [activeTab, rightTab, pod]);
 
+    /* The landing tour: the page keeps its placeholder up until there is a
+       teammate and a conversation list to show, and once the visitor is in
+       the tour the teammate's app loads out of sight, so the step that opens
+       it does not open onto a blank frame. */
+    useEffect(() => {
+        if (preview && pod && history.isSuccess) onPreviewPainted?.();
+    }, [preview, pod, history.isSuccess, onPreviewPainted]);
+    useEffect(() => {
+        if (!preview || !pod || demoStep === undefined || demoStep < 0) return;
+        for (const tab of allTabs) {
+            if (tab.kind !== "app") continue;
+            const key = pod.id + "|" + tab.id;
+            setOpenedApps(previous => previous[key] ? previous : { ...previous, [key]: tab.url });
+        }
+    }, [preview, pod, demoStep, allTabs]);
+
     /** An organization with nobody in it opens on the hiring floor.
      *
      *  Once per organization, and that is the whole of the care needed here:
@@ -727,7 +752,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
     useEffect(() => { if (pod && (activeTab?.kind === "library" || rightTab?.kind === "library")) setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind, rightTab?.kind]);
 
     if (orgs.isPending) {
-        return preview ? <PageLoading label="Opening sample workspace" /> : <WorkspaceLoading />;
+        return <WorkspaceLoading />;
     }
 
     /* A 401 has already told `SessionGate` to show the door; this component is
@@ -953,7 +978,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                     } : undefined}
                     hidden={Boolean(hiring || huddle.expanded || stranger)}
                 >
-                {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? (preview ? <PageLoading label="Opening sample workspace" /> : <WorkspaceLoading embedded />) :
+                {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
                     access.state === "error" || access.state === "missing" ? (
                         <div className="screen"><div className="screen__inner">
                             <h2>{access.state === "missing" ? "We couldn’t find this teammate" : "We couldn’t open this teammate"}</h2>
@@ -1239,7 +1264,7 @@ export function AppShell({ demoStep, demoRevision }: { demoStep?: number; demoRe
                             ))}
                             {isVisible("profile") && (<div className="pane" {...paneProps("profile")}>
                                 <ProfilePane
-                                    key={pod.id}
+                                    key={preview ? pod.id + "|" + demoRevision : pod.id}
                                     initialSection={preview && demoStep === 2 ? "skills" : entrySection}
                                     openAgentName={openAgentName}
                                     onOpenAgentName={setOpenAgentName}
