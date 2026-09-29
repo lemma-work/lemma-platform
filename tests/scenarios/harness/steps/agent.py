@@ -62,6 +62,16 @@ SETTLED = FINISHED | PAUSED_FOR_A_PERSON
 _AFFIRMATIVE = ("yes", "approve", "proceed", "confirm", "go ahead", "delete", "do it")
 
 
+#: Words that turn an option into a refusal, wherever they appear: "Do not
+#: delete" contains "delete" and must never be what an approving person picks.
+_NEGATIVE = ("no", "not", "don't", "dont", "cancel", "deny", "keep", "stop", "skip")
+
+
+def _is_a_refusal(label: str) -> bool:
+    words = label.lower().replace("’", "'").split()
+    return any(word.strip(".,!?") in _NEGATIVE for word in words)
+
+
 def _response_to(approval: JSON, allow: bool) -> JSON:
     """What a person answering this request actually says.
 
@@ -85,7 +95,7 @@ def _response_to(approval: JSON, allow: bool) -> JSON:
                 label
                 for word in _AFFIRMATIVE
                 for label in options
-                if word in label.lower() and not label.lower().startswith(("no", "don"))
+                if word in label.lower() and not _is_a_refusal(label)
             ),
             None,
         )

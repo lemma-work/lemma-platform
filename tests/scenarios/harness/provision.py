@@ -301,7 +301,7 @@ async def _pod(owner: Person, standing: tenant.StandingPod, ledger: Ledger) -> J
             f"{len(tenant.STANDING_PODS)} standing pods plus headroom for the "
             f"pods each run makes. Put the scenario organizations on a plan "
             f"without a pod cap — a deployment that meters pods can do that "
-            f"from a `scenarios_prepare_tenant` hook (see tests/scenarios/README.md). "
+            f"from a `pytest_scenarios_prepare_tenant` hook (see tests/scenarios/README.md). "
             f"Pods earlier runs leaked count too; `--reset` clears those first.\n\n"
             f"{refused}"
         ) from refused

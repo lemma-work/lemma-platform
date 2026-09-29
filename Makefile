@@ -1754,6 +1754,7 @@ SPLIT_LANES := not sandbox and not live
 scenarios-split:
 	@test -n "$(TARGET)" || { echo "set TARGET=https://your-lemma (or SCENARIOS_BASE_URL)"; exit 1; }
 	@set +e; mkdir -p $(SCENARIOS_DIR)/artifacts; \
+	rm -f $(SCENARIOS_DIR)/artifacts/disposable-results.xml $(SCENARIOS_DIR)/artifacts/deployment-results.xml; \
 	echo "→ Sign-up scenarios on a disposable Compose stack…"; \
 	(cd $(SCENARIOS_DIR) && uv run pytest -q --stack compose -m "open_signup and $(SPLIT_LANES)" \
 	  --junitxml=artifacts/disposable-results.xml $(SCENARIOS_ARGS)); disposable=$$?; \

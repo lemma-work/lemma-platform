@@ -471,9 +471,19 @@ def _reap_abandoned_projects() -> None:
         return
     for project in projects:
         name = str(project.get("Name") or "")
-        if not name.startswith(COMPOSE_PREFIX):
+        # `--stack compose` names its projects with a longer prefix; check it
+        # first so its pid is what is left.
+        prefix = next(
+            (
+                p
+                for p in (f"{COMPOSE_PREFIX}compose-", COMPOSE_PREFIX)
+                if name.startswith(p)
+            ),
+            None,
+        )
+        if prefix is None:
             continue
-        owner = name.removeprefix(COMPOSE_PREFIX)
+        owner = name.removeprefix(prefix)
         if not owner.isdigit() or _alive(int(owner)):
             continue
         _compose(name, "down", "--volumes", "--remove-orphans")
