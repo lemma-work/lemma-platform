@@ -1761,6 +1761,9 @@ scenarios-split:
 	echo "→ Everything else against $(TARGET)…"; \
 	(cd $(SCENARIOS_DIR) && uv run pytest -q --base-url "$(TARGET)" -m "not open_signup and $(SPLIT_LANES)" \
 	  --junitxml=artifacts/deployment-results.xml $(SCENARIOS_ARGS)); deployment=$$?; \
+	for report in disposable-results.xml deployment-results.xml; do \
+	  test -f $(SCENARIOS_DIR)/artifacts/$$report || { echo "no $$report was written"; exit 1; }; \
+	done; \
 	python3 scripts/report_scenarios_to_slack.py $(SCENARIOS_DIR)/artifacts/disposable-results.xml \
 	  $(SCENARIOS_DIR)/artifacts/deployment-results.xml --lane split \
 	  --markdown-out $(SCENARIOS_DIR)/artifacts/report.md; \

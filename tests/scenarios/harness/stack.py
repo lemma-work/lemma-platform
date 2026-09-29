@@ -458,11 +458,17 @@ def _reap_abandoned_projects() -> None:
     carries the pid that owned it, so a project whose process is gone is safe
     to remove, and one whose process is alive (a parallel run) is left alone.
     """
-    listed = subprocess.run(
-        ["docker", "compose", "ls", "--all", "--format", "json"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        listed = subprocess.run(
+            ["docker", "compose", "ls", "--all", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise StackError(
+            "`docker compose ls` did not answer in 30s; is the daemon healthy?"
+        ) from error
     if listed.returncode != 0:
         return
     try:
@@ -486,7 +492,28 @@ def _reap_abandoned_projects() -> None:
         owner = name.removeprefix(prefix)
         if not owner.isdigit() or _alive(int(owner)):
             continue
-        _compose(name, "down", "--volumes", "--remove-orphans")
+        # By project name alone, not through a Compose file: a project from
+        # `--stack compose` was built from another file, and Compose finds a
+        # project's containers, networks and volumes by its labels.
+        try:
+            subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "-p",
+                    name,
+                    "down",
+                    "--volumes",
+                    "--remove-orphans",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise StackError(
+                f"taking down the abandoned project {name!r} did not finish in 120s"
+            ) from error
 
 
 def _alive(pid: int) -> bool:

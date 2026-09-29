@@ -47,6 +47,7 @@ from harness.stack import (
     StackError,
     StackSpec,
     _free_port,
+    _reap_abandoned_projects,
     _wait_http,
     require_docker,
 )
@@ -93,6 +94,7 @@ def start_compose_stack(
 ) -> Iterator[Stack]:
     """Bring up `deploy/compose` from images, yield it, and take it away."""
     require_docker()
+    _reap_abandoned_projects()
     project = f"lemma-scenarios-compose-{os.getpid()}"
     log_path = Path(tempfile.gettempdir()) / f"lemma-scenarios-{project}.log"
     work = Path(tempfile.mkdtemp(prefix="lemma-scenarios-compose-"))
