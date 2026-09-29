@@ -29,7 +29,8 @@ from app.modules.agent_surfaces.domain.errors import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.pod.infrastructure.pod_repositories import PodRepository
+from app.modules.pod.contracts.agent_access import pod_organization_id
+from app.modules.pod.contracts.members import pod_name as pod_name_of
 
 router = APIRouter(
     prefix="/pods/{pod_id}/telegram-bot-setups",
@@ -93,9 +94,8 @@ async def start_telegram_managed_bot_setup(
         action=Permissions.AGENT_UPDATE,
     )
 
-    pod_repository = PodRepository(uow)
-    organization_id = await pod_repository.get_organization_id(pod_id)
-    pod_name = await pod_repository.get_name(pod_id)
+    organization_id = await pod_organization_id(uow, pod_id)
+    pod_name = await pod_name_of(uow.session, pod_id)
     if organization_id is None or pod_name is None:
         raise ValueError(f"Pod {pod_id} not found")
 

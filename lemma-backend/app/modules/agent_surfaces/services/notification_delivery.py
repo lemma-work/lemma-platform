@@ -232,10 +232,6 @@ class DeliveryChannel:
     def platform(self) -> SurfacePlatform:
         return self.surface.surface_type
 
-    @property
-    def is_cold_open(self) -> bool:
-        return self.link is None
-
 
 def reply_window_open(
     *,

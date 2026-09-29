@@ -25,6 +25,9 @@ from app.modules.agent_surfaces.domain.adapter_port import (
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
 )
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    has_shared_system_bot,
+)
 from app.modules.agent_surfaces.platforms.email_authentication import (
     EmailAuthenticationVerdict,
 )
@@ -117,10 +120,7 @@ def _can_disclose_pod_access_link(surface: AgentSurfaceEntity) -> bool:
         return True
     if surface.account_id is not None:
         return True
-    return surface.surface_type not in {
-        SurfacePlatform.TELEGRAM,
-        SurfacePlatform.WHATSAPP,
-    }
+    return not has_shared_system_bot(surface.surface_type)
 
 
 def _reply_context(

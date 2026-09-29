@@ -12,6 +12,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     VerifiedSurfaceIdentity,
 )
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    has_shared_system_bot,
+)
 from app.modules.agent_surfaces.services.onboarding_transport import (
     platform_binding_key,
 )
@@ -45,7 +48,7 @@ async def resolve_shared_verified_identity(
         identity.revoked_at is not None
         or user is None
         or (
-            event.platform in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM)
+            has_shared_system_bot(event.platform)
             and (
                 not identity.verified_phone
                 or identity.verified_phone != user.mobile_number

@@ -1,8 +1,6 @@
 from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
-from datetime import datetime, timezone
-from sqlalchemy import false, update
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
@@ -39,8 +37,8 @@ from app.modules.agent_surfaces.domain.events import (
     SurfaceOnboardingReadyEvent,
     SurfaceEvents,
 )
-from app.modules.agent_surfaces.infrastructure.onboarding_models import (
-    VerifiedSurfaceIdentity,
+from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (  # noqa: E501
+    VerifiedSurfaceIdentityRepository,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceIngressRequest,
@@ -133,8 +131,8 @@ async def handle_surface_webhook(
         [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
     ] = Depends(provide_onboarding_handler),
 ) -> None:
-    # ``surface_events`` also carries ``surface.connected`` and
-    # ``surface.message.answered``, which exist for the analytics projections.
+    # ``surface_events`` also carries ``surface.connected``, which exists for the
+    # analytics projections.
     # Only the webhook belongs here, so the parameter stays untyped and the
     # event is parsed after the tag check -- declaring
     # ``SurfaceWebhookReceivedEvent`` here instead moves validation ahead of the
@@ -408,23 +406,8 @@ async def on_identity_event(
         phone = await current_verified_phone(uow_factory, parsed.user_id)
         async with uow_factory() as uow:
             await ExternalSurfaceUserRepository(uow).clear_resolved_user(parsed.user_id)
-            # Every phone-bound identity goes when the account no longer has a
-            # verified number; otherwise only the ones bound to the old one. The
-            # `phone is None` arm has to be written as a SQL literal -- a plain
-            # Python bool inside `or_` reads as SQL and is not.
-            still_bound = (
-                VerifiedSurfaceIdentity.verified_phone == phone
-                if phone is not None
-                else false()
-            )
-            await uow.session.execute(
-                update(VerifiedSurfaceIdentity)
-                .where(
-                    VerifiedSurfaceIdentity.user_id == parsed.user_id,
-                    VerifiedSurfaceIdentity.verified_phone.isnot(None),
-                    ~still_bound,
-                )
-                .values(revoked_at=datetime.now(timezone.utc))
+            await VerifiedSurfaceIdentityRepository(uow).revoke_phone_bound_except(
+                parsed.user_id, phone
             )
 
     await inbox.process("agent-surfaces.identity", event, process)

@@ -28,6 +28,7 @@ from app.modules.agent_surfaces.platforms.whatsapp import media
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
+    resolve_api_base,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.models import (
     WhatsAppFileAttachment,
@@ -48,18 +49,15 @@ from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
 
 logger = get_logger(__name__)
 
-_WHATSAPP_API_BASE = "https://graph.facebook.com/v21.0"
-
 
 class WhatsAppPlatformService:
     def __init__(self, credentials: dict[str, Any]):
         self.credentials = credentials
         self._access_token = credentials.get("access_token") or ""
         self._phone_number_id = credentials.get("phone_number_id") or ""
-        # Resolve the base here (honoring a credential override, else the module
-        # constant that tests monkeypatch) and hand it to the typed client so all
-        # transport goes through one place.
-        self._api_base = credentials.get("api_base_url") or _WHATSAPP_API_BASE
+        # Resolve the base here (honoring a credential override) and hand it to
+        # the typed client so all transport goes through one place.
+        self._api_base = resolve_api_base(credentials)
         self._client = WhatsAppClient(
             access_token=self._access_token,
             phone_number_id=self._phone_number_id,

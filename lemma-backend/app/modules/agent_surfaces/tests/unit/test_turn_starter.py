@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.modules.agent.contracts import (
@@ -530,6 +531,41 @@ async def test_telegram_help_does_not_claim_unavailable_local_app_button(monkeyp
     assert handled is True
     sent = adapter.send_message.await_args.kwargs
     assert "app button beside the message field" not in sent["message"]
+
+
+@pytest.mark.parametrize("command", ["/start", "/retry"])
+async def test_a_failed_command_reply_does_not_fail_the_turn(command):
+    """The command has been acted on; a lost confirmation must not undo it.
+
+    Raising would fail the queued turn, and its retry would run the command a
+    second time -- a second `/retry` then reports there is nothing to retry.
+    """
+    surface = _telegram_surface()
+    adapter = AsyncMock()
+    adapter.send_message.side_effect = httpx.ConnectError("no route")
+    starter = build_turn_starter(adapter=adapter, surfaces=[surface])
+    context = SurfaceChatContext(
+        platform=SurfacePlatform.TELEGRAM,
+        pod_id=surface.pod_id,
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        surface_id=surface.id,
+        surface_config=surface.config,
+        message_text=command,
+        message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
+        message_user_id=uuid4(),
+        event=_telegram_event(chat_id="42", message_id="7"),
+    )
+
+    handled = await handle_telegram_command(
+        context=context,
+        adapter=adapter,
+        credentials={"bot_token": "secret"},
+        uow_factory=starter.uow_factory,
+    )
+
+    assert handled is True
+    adapter.send_message.assert_awaited_once()
 
 
 async def test_telegram_app_command_is_not_a_special_command():

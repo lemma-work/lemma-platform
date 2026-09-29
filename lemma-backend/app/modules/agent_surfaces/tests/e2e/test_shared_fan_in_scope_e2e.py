@@ -106,7 +106,7 @@ def _shared_surface(pod_id: UUID, organization_id: UUID) -> AgentSurface:
 @pytest.fixture
 async def shared_bot(db_session, fake_whatsapp, monkeypatch):
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")

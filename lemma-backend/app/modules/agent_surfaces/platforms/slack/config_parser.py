@@ -177,10 +177,3 @@ class SlackConfigurationParserMixin:
             return {}
         decoded = json.loads(raw_value)
         return decoded if isinstance(decoded, dict) else {}
-
-    @staticmethod
-    def _selected_value(values: dict[str, Any], block_id: str, action_id: str):
-        return (
-            ((values.get(block_id) or {}).get(action_id) or {}).get("selected_option")
-            or {}
-        ).get("value")

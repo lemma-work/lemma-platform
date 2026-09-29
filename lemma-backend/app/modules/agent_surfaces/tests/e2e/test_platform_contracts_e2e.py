@@ -19,7 +19,6 @@ from app.modules.agent_surfaces.platforms.common import (
     provider_failure,
     render_attachment_prompt_block,
     render_attachment_summary_suffix,
-    select_attachment,
 )
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
@@ -319,9 +318,7 @@ async def test_chat_surfaces_refuse_outbound_when_credentials_are_missing(
     with pytest.raises(AgentSurfaceValidationError):
         await slack.send_message(event=_slack_event(), message="should not send")
     with pytest.raises(AgentSurfaceValidationError):
-        await whatsapp.send_message(
-            event=_whatsapp_event(), message="should not send"
-        )
+        await whatsapp.send_message(event=_whatsapp_event(), message="should not send")
 
     assert message_store.get_all("SLACK") == []
     assert message_store.get_all("WHATSAPP") == []
@@ -398,44 +395,6 @@ def test_coerce_attachments_normalizes_models_dicts_and_mixed_types():
     assert normalized[1].name == "foreign.txt"
     assert normalized[1].download_url == "https://example.test/foreign"
     assert normalized[2].name == "raw.txt"
-
-
-def test_select_attachment_by_download_url_name_and_fallbacks():
-    attachments = [
-        SurfaceFileAttachment(
-            id="a1", name="Report.pdf", download_url="https://example.test/a1"
-        ),
-        SurfaceFileAttachment(
-            id="a2", name="notes.txt", download_url="https://example.test/a2"
-        ),
-    ]
-
-    by_ref = select_attachment(attachments, ref="a1")
-    assert by_ref is not None
-    assert by_ref.id == "a1"
-
-    by_url = select_attachment(attachments, download_url="https://example.test/a2")
-    assert by_url is not None
-    assert by_url.id == "a2"
-
-    by_name = select_attachment(attachments, name="report.pdf")
-    assert by_name is not None
-    assert by_name.id == "a1"
-
-    ambiguous = select_attachment(
-        [
-            SurfaceFileAttachment(id="b1", name="dup.txt"),
-            SurfaceFileAttachment(id="b2", name="dup.txt"),
-        ],
-        name="dup.txt",
-    )
-    assert ambiguous is None
-
-    single = select_attachment([attachments[0]])
-    assert single is attachments[0]
-
-    unresolvable = select_attachment(attachments)
-    assert unresolvable is None
 
 
 def test_channel_author_label_falls_back_to_none_when_unattributed():

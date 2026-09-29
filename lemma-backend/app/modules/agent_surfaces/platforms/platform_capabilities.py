@@ -377,6 +377,17 @@ def get_platform_capabilities(platform: str | None) -> PlatformCapabilities | No
     return PLATFORM_CAPABILITIES.get(str(platform).upper())
 
 
+def has_shared_system_bot(platform: str | None) -> bool:
+    """Does an inbound platform-wide webhook here arrive on Lemma's shared bot?
+
+    The single answer to "may this webhook be narrowed to system-credential
+    surfaces", so no caller keeps its own list of platforms. An unknown platform
+    has none.
+    """
+    capabilities = get_platform_capabilities(platform)
+    return capabilities is not None and capabilities.has_shared_system_bot
+
+
 def system_credential_claim_applies(
     platform: str | None, *, holds_own_identity: bool
 ) -> bool:

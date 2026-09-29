@@ -34,7 +34,6 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
     arrival_number,
 )
-from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.entities import (
     platform_value_for_source,
     AgentSurfaceEntity,
@@ -48,11 +47,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.domain.ingress_context import (
     AgentSurfaceContext,
-    SurfaceChatContext,
     SurfaceReplyContext,
-)
-from app.modules.agent_surfaces.domain.models import (
-    SurfaceMessageMetadata,
 )
 from app.modules.agent_surfaces.domain.adapter_port import (
     SurfacePlatformAdapterPort,
@@ -65,8 +60,12 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
     unresolved_sender_context,
 )
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    has_shared_system_bot,
+)
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
+from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 
 
@@ -100,26 +99,6 @@ async def release_ingress_claim(
         external_thread_id=context.event.external_thread_id,
         external_message_id=context.event.external_message_id,
     )
-
-
-def _has_shared_system_bot(platform: str) -> bool:
-    """Whether a platform-wide webhook for this platform arrives on shared credentials.
-
-    Only where that is true may a shared webhook be narrowed to system-credential
-    surfaces. Custom or bound bots on those platforms have to come with
-    `receiver_surface_ids` (a native receiver) or over a direct surface webhook;
-    without the narrowing, continuity for the same external user or thread can
-    pull a system-bot message into a custom-bot conversation.
-
-    Applying it to every platform instead would delete the Slack own-app path,
-    where an org signs with its own secret and its surface is legitimately not on
-    system credentials. The list is the whole rule, which is why it stays here
-    rather than moving into the statement that consumes it.
-    """
-    return platform in {
-        SurfacePlatform.TELEGRAM.value,
-        SurfacePlatform.WHATSAPP.value,
-    }
 
 
 def _needs_mention_verification(
@@ -209,7 +188,7 @@ class SurfaceInboundMixin:
         # per-sender below, and narrowed to shared credentials where the
         # platform has a shared bot at all.
         receiver_surface_ids = request.receiver_surface_ids
-        fan_in = receiver_surface_ids is None and _has_shared_system_bot(platform)
+        fan_in = receiver_surface_ids is None and has_shared_system_bot(platform)
         surfaces: list[AgentSurfaceEntity] = []
         resolved_user: ResolvedSurfaceUser | None = None
         user_pod_ids: set[UUID] | None = None
@@ -433,32 +412,7 @@ class SurfaceInboundMixin:
         if self.router.is_self_addressed(surface=surface, parsed=parsed):
             return None
 
-        # Claimed only with the message in hand: claiming earlier burns it on an
-        # attempt that had no body, so the retry is discarded as a duplicate.
-        # Enrichment also changes the ids this keys on.
-        # Replay re-runs a message the claim already burned, so it asks for the
-        # claim to be skipped; every live delivery still takes it.
-        if claim_delivery:
-            # The connection goes back for the claim itself: it is a Redis round
-            # trip, and only reads have happened by here -- the identity upsert
-            # and the conversation link are below, so this release is real
-            # rather than a `safe_to_release` no-op.
-            async with connection_released(self.uow.session):
-                claimed = await self.event_dedup_store.claim_message(
-                    surface_installation_id=surface.id,
-                    platform=surface.surface_type,
-                    external_channel_id=parsed.external_channel_id,
-                    external_thread_id=parsed.external_thread_id,
-                    external_message_id=parsed.external_message_id,
-                )
-        else:
-            claimed = True
-        if not claimed:
-            logger.debug(
-                "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed",
-                surface_type=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-            )
+        if claim_delivery and not await self._claim_delivery(surface, parsed):
             return None
 
         # The claim is spent, and everything from here can still fail (sender
@@ -481,15 +435,51 @@ class SurfaceInboundMixin:
             return context
         finally:
             if claim_delivery and not prepared:
-                # Redis: the connection goes back where nothing was written.
-                async with connection_released(self.uow.session):
-                    await self.event_dedup_store.release_message(
-                        surface_installation_id=surface.id,
-                        platform=surface.surface_type,
-                        external_channel_id=parsed.external_channel_id,
-                        external_thread_id=parsed.external_thread_id,
-                        external_message_id=parsed.external_message_id,
-                    )
+                await self._release_delivery(surface, parsed)
+
+    async def _claim_delivery(
+        self, surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
+    ) -> bool:
+        """Take the delivery claim, or say this message was already taken.
+
+        Claimed only with the message in hand: claiming earlier burns it on an
+        attempt that had no body, so the retry is discarded as a duplicate.
+        Enrichment also changes the ids this keys on. Replay re-runs a message
+        the claim already burned, so it asks for the claim to be skipped; every
+        live delivery still takes it.
+        """
+        # The connection goes back for the claim itself: it is a Redis round
+        # trip, and only reads have happened by here -- the identity upsert and
+        # the conversation link come after, so this release is real rather than
+        # a `safe_to_release` no-op.
+        async with connection_released(self.uow.session):
+            claimed = await self.event_dedup_store.claim_message(
+                surface_installation_id=surface.id,
+                platform=surface.surface_type,
+                external_channel_id=parsed.external_channel_id,
+                external_thread_id=parsed.external_thread_id,
+                external_message_id=parsed.external_message_id,
+            )
+        if not claimed:
+            logger.debug(
+                "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed",
+                surface_type=surface.surface_type,
+                external_channel_id=parsed.external_channel_id,
+            )
+        return claimed
+
+    async def _release_delivery(
+        self, surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
+    ) -> None:
+        # Redis: the connection goes back where nothing was written.
+        async with connection_released(self.uow.session):
+            await self.event_dedup_store.release_message(
+                surface_installation_id=surface.id,
+                platform=surface.surface_type,
+                external_channel_id=parsed.external_channel_id,
+                external_thread_id=parsed.external_thread_id,
+                external_message_id=parsed.external_message_id,
+            )
 
     async def _prepare_claimed_surface_context(
         self,
@@ -515,19 +505,71 @@ class SurfaceInboundMixin:
                 credentials=credentials,
                 installation_id=surface.account_id or surface.id,
             )
+        user_id = resolved_user.internal_user_id
+        refusal = await self._sender_refusal(
+            surface=surface,
+            parsed=parsed,
+            adapter=adapter,
+            resolved_user=resolved_user,
+            agent_display_name=fallback_agent_display_name,
+        )
+        # A sender with no internal user always gets a refusal, so the second
+        # arm is only there to narrow the type for what follows.
+        if refusal is not None or user_id is None:
+            return refusal
+
+        route = await self.router.resolve_route(surface=surface, parsed=parsed)
+        if route is None:
+            return surface_setup_context(
+                surface=surface,
+                parsed=parsed,
+                agent_display_name=fallback_agent_display_name,
+            )
+
+        link, created_conversation_title = await self.binder.bind_conversation(
+            surface=surface,
+            parsed=parsed,
+            resolved_user=resolved_user,
+            route=route,
+        )
+        return build_chat_context(
+            surface=surface,
+            parsed=parsed,
+            resolved_user=resolved_user,
+            user_id=user_id,
+            route=route,
+            conversation_id=link.conversation_id,
+            created_conversation_title=created_conversation_title,
+        )
+
+    async def _sender_refusal(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        adapter: SurfacePlatformAdapterPort,
+        resolved_user: ResolvedSurfaceUser,
+        agent_display_name: str,
+    ) -> AgentSurfaceContext | None:
+        """The reply owed to a sender who cannot start a run here, else ``None``.
+
+        A stranger, a sender who only needed to confirm a link, someone outside
+        the pod, and someone the surface's email policy excludes each get a
+        direct reply instead of a conversation.
+        """
         if resolved_user.internal_user_id is None:
             return unresolved_sender_context(
                 surface=surface,
                 parsed=parsed,
                 adapter=adapter,
-                agent_display_name=fallback_agent_display_name,
+                agent_display_name=agent_display_name,
             )
         confirmation = adapter.linked_sender_confirmation(parsed)
         if confirmation is not None:
             return identity_confirmation_context(
                 surface=surface,
                 parsed=parsed,
-                agent_display_name=fallback_agent_display_name,
+                agent_display_name=agent_display_name,
                 confirmation=confirmation,
             )
         if (
@@ -546,55 +588,12 @@ class SurfaceInboundMixin:
             return nonmember_context(
                 surface=surface,
                 parsed=parsed,
-                agent_display_name=fallback_agent_display_name,
+                agent_display_name=agent_display_name,
             )
         if not surface.config.identity.allows_email(resolved_user.email):
             return surface_setup_context(
                 surface=surface,
                 parsed=parsed,
-                agent_display_name=fallback_agent_display_name,
+                agent_display_name=agent_display_name,
             )
-
-        route = await self.router.resolve_route(surface=surface, parsed=parsed)
-        if route is None:
-            return surface_setup_context(
-                surface=surface,
-                parsed=parsed,
-                agent_display_name=fallback_agent_display_name,
-            )
-
-        link, created_conversation_title = await self.binder.bind_conversation(
-            surface=surface,
-            parsed=parsed,
-            resolved_user=resolved_user,
-            route=route,
-        )
-
-        return SurfaceChatContext(
-            created_conversation_title=created_conversation_title,
-            platform=surface.surface_type,
-            pod_id=surface.pod_id,
-            agent_name=route.agent_name,
-            conversation_id=link.conversation_id,
-            user_id=resolved_user.internal_user_id,
-            surface_id=surface.id,
-            surface_name=surface.name,
-            surface_account_id=surface.account_id,
-            surface_config=surface.config,
-            agent_display_name=route.agent_display_name,
-            message_text=parsed.message_text,
-            message_metadata=SurfaceMessageMetadata(
-                surface_platform=surface.surface_type,
-                sender_display_name=resolved_user.display_name,
-                sender_email=resolved_user.email,
-                sender_phone=resolved_user.phone,
-                conversation_kind=route.conversation_kind,
-                external_channel_id=parsed.external_channel_id,
-                channel_name=configured_channel_name(surface, parsed),
-                event_metadata=parsed.metadata,
-            ),
-            message_user_id=resolved_user.internal_user_id,
-            message_external_user_id=resolved_user.external_user_id,
-            message_external_message_id=parsed.external_message_id,
-            event=parsed,
-        )
+        return None

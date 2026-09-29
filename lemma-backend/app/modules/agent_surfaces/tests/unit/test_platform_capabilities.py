@@ -5,6 +5,7 @@ import pytest
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
     get_platform_capabilities,
+    has_shared_system_bot,
 )
 
 
@@ -88,6 +89,21 @@ def test_the_shared_system_bot_platforms():
     """One shared bot / number per deployment: the platforms a shared webhook may narrow."""
     shared = {p for p, c in PLATFORM_CAPABILITIES.items() if c.has_shared_system_bot}
     assert shared == {"TELEGRAM", "WHATSAPP"}
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("telegram", True),
+        ("WHATSAPP", True),
+        ("SLACK", False),
+        ("RESEND", False),
+        ("DISCORD", False),
+        (None, False),
+    ],
+)
+def test_has_shared_system_bot_is_answered_from_the_registry(platform, expected):
+    assert has_shared_system_bot(platform) is expected
 
 
 @pytest.mark.parametrize("platform", sorted(PLATFORM_CAPABILITIES))

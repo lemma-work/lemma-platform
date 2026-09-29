@@ -2,8 +2,7 @@
 
 Resend is a system-credentialed email surface: outbound mail goes to the Resend
 REST API, inbound mail arrives via a webhook (parsed by ``ResendInboundParser``).
-Rendering and attachment handling reuse the shared email modules so Resend behaves like
-Gmail/Outlook for the agent, but over native HTTP rather than Composio.
+Rendering and attachment handling reuse the shared email modules.
 """
 
 from __future__ import annotations
@@ -21,13 +20,9 @@ from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
-    SurfaceDisplayRenderPlan,
     SurfaceSenderProfile,
 )
-from app.modules.agent_surfaces.platforms.email_render import (
-    coerce_display_resource_plans,
-    render_email_content,
-)
+from app.modules.agent_surfaces.platforms.email_render import render_email_content
 from app.modules.agent_surfaces.platforms.email_sender_identity import (
     sender_display_name,
 )
@@ -124,9 +119,6 @@ class ResendPlatformService:
             content=message,
             content_type="markdown",
             attachments=list((metadata or {}).get("attachments") or []),
-            display_resource_plans=coerce_display_resource_plans(
-                (metadata or {}).get("display_resource_plans")
-            ),
             from_name=self._sender_name(metadata),
         )
 
@@ -270,9 +262,6 @@ class ResendPlatformService:
             content=message,
             content_type="markdown",
             attachments=[],
-            display_resource_plans=coerce_display_resource_plans(
-                (metadata or {}).get("display_resource_plans")
-            ),
             is_reply=False,
             from_name=self._sender_name(metadata),
         )
@@ -285,25 +274,6 @@ class ResendPlatformService:
                 # Keeps a follow-up we send before they reply on the same thread.
                 "references": [thread_seed_id],
             },
-        )
-
-    async def _render_resource(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        render_plan: SurfaceDisplayRenderPlan,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await self._send_email(
-            recipient_email=str(event.reply_target.get("recipient_email") or ""),
-            subject=event.reply_target.get("subject"),
-            in_reply_to=str(event.reply_target.get("in_reply_to") or "").strip()
-            or None,
-            references=[str(r) for r in (event.reply_target.get("references") or [])],
-            content="",
-            content_type="markdown",
-            attachments=[],
-            display_resource_plans=[render_plan],
-            from_name=self._sender_name(metadata),
         )
 
     async def add_processing_indicator(
@@ -324,7 +294,6 @@ class ResendPlatformService:
         content: str,
         content_type: str,
         attachments: list[tuple[str, bytes, str]],
-        display_resource_plans: list[SurfaceDisplayRenderPlan] | None = None,
         is_reply: bool = True,
         from_name: str | None = None,
     ) -> dict[str, Any]:
@@ -334,7 +303,6 @@ class ResendPlatformService:
         plain_text, html_body = render_email_content(
             content=content,
             content_type=content_type,  # type: ignore[arg-type]
-            display_resource_plans=display_resource_plans,
         )
         # ``formataddr``, never an f-string. The display name now carries an
         # agent name, which is 255 characters of unvalidated free text: an agent

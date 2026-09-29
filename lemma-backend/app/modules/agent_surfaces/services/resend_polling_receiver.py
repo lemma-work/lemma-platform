@@ -30,11 +30,14 @@ from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.domain.source_event_ids import resend_source_event_id
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound,
-    resend_source_event_id,
 )
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
+from app.modules.agent_surfaces.services.resend_recipients import (
+    surface_for_recipients,
+)
 from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
     receiver_key,
@@ -169,16 +172,10 @@ class ResendPollingReceiverRunner:
         if not recipients:
             return
 
-        surface = None
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-            repository = SurfaceRepository(uow)
-            for address in recipients:
-                surface = await repository.get_active_by_address(
-                    platform="RESEND", address=address
-                )
-                if surface is not None:
-                    normalized["to"] = address
-                    break
+            surface = await surface_for_recipients(
+                SurfaceRepository(uow), normalized, recipients
+            )
         if surface is None:
             logger.debug(
                 "agent_surfaces.resend_polling_receiver.resend_polling_no_surface_for_address.diagnostic"

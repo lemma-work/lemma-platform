@@ -75,25 +75,21 @@ _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
 
 
 # Email recipients get one composed reply, not a stream of chat messages, and
-# the observer is the only thing that sends it. There used to be a reply tool
-# the agent called instead, with this path as its fallback -- two senders
-# reading two different stores for the same threading headers, and a silent new
-# conversation whenever they drifted. Which platforms count as email is decided
-# by `is_email` in the capability registry, read through
-# `platforms/common.py::email_reply_instruction`.
+# the observer is the only thing that sends it. Which platforms count as email
+# is decided by `is_email` in the capability registry.
 class SurfaceAgentRunProgressObserver(
     ProgressWaitingMixin, ProgressDisplayMixin, TokenStreamMixin
 ):
     """Reflect agent run progress through platform-native surface indicators.
 
-    A surface conversation should receive exactly one content message per run:
-    the agent's final answer. The agent's intermediate narration, reasoning
-    (``ThinkingContent``) and tool activity (``ToolCallContent`` /
-    ``ToolReturnContent``) must never be delivered as chat messages — they only
-    drive progress indicators. To achieve this the observer buffers assistant
-    text during the run and delivers the final answer once on
-    ``on_run_finished``, resetting the buffer whenever a tool runs so only the
-    post-final-tool text survives.
+    The agent's final answer is delivered once, on ``on_run_finished``. Its
+    intermediate narration, reasoning (``ThinkingContent``) and tool activity
+    (``ToolCallContent`` / ``ToolReturnContent``) are never delivered as chat
+    messages — they only drive progress indicators. To achieve this the observer
+    buffers assistant text during the run and resets the buffer whenever a tool
+    runs, so only the post-final-tool text survives. Other things a run sends
+    on purpose (a question, an approval, a file, a display resource, a WhatsApp
+    progress post) travel their own paths and are not part of this rule.
 
     What "progress indicator" means is the platform's ``ProgressStyle``: Slack
     streams the answer as it is written, Telegram and Teams keep one live message

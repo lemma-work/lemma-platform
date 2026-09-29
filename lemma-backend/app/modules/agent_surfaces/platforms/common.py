@@ -8,6 +8,9 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    has_shared_system_bot,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
@@ -121,10 +124,7 @@ def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
     if not public_https_api_url_available():
         return None
     base = settings.api_url.rstrip("/")
-    if (
-        surface.surface_type in (SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP)
-        and surface.account_id is not None
-    ):
+    if has_shared_system_bot(surface.surface_type) and surface.account_id is not None:
         return f"{base}/surfaces/{surface.id}/webhook"
     # A pooled number receives on a callback of its own, because the handshake
     # carries nothing that could select a token on the shared URL -- so the path
@@ -183,42 +183,6 @@ def coerce_attachments(
         else:
             normalized.append(model_cls.model_validate(attachment))
     return normalized
-
-
-def select_attachment(
-    attachments: list[AttachmentT],
-    *,
-    ref: str | None = None,
-    name: str | None = None,
-    download_url: str | None = None,
-    ref_attr: str = "id",
-) -> AttachmentT | None:
-    """Pick the attachment a tool request refers to.
-
-    An explicit identifier (``ref``, matched against ``ref_attr``) wins, then an
-    exact ``download_url``, then a unique case-insensitive ``name`` match. With
-    no selector, only an unambiguous single attachment is returned.
-    """
-    if ref:
-        return next(
-            (a for a in attachments if getattr(a, ref_attr, None) == ref),
-            None,
-        )
-    if download_url:
-        for attachment in attachments:
-            if attachment.download_url == download_url:
-                return attachment
-    if name:
-        needle = name.strip().lower()
-        matches = [
-            attachment
-            for attachment in attachments
-            if (attachment.name or "").strip().lower() == needle
-        ]
-        return matches[0] if len(matches) == 1 else None
-    if len(attachments) == 1:
-        return attachments[0]
-    return None
 
 
 def channel_author_label(

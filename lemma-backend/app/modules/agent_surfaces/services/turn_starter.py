@@ -23,6 +23,7 @@ from typing import Any
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_context import (
     AgentSurfaceContext,
@@ -135,54 +136,9 @@ class SurfaceTurnStarter:
                 },
             )
 
-        # Auto-ingest any user-provided files into the pod datastore (/me/{platform})
-        # so surface files behave like web uploads; failures never block the run.
-        ingest = AttachmentIngest()
-        if context.pod_id is not None:
-            try:
-                ingest = await self.file_ingest_service.ingest_attachments(
-                    pod_id=context.pod_id,
-                    platform=context.platform,
-                    user_id=context.user_id,
-                    parsed=context.event,
-                    credentials=credentials,
-                )
-            except Exception as exc:
-                # `ingest_attachments` reports a per-file failure itself, so
-                # reaching here is the whole call coming apart. This was a
-                # `suppress`, which left `ingest` empty -- indistinguishable
-                # downstream from a message that carried no files, which is the
-                # one thing `failed_files` below exists to prevent. The run
-                # still goes ahead: losing the photo is not a reason to lose
-                # the question that came with it.
-                logger.warning(
-                    "agent_surfaces.ingress_service.attachment_ingest_failed.degraded",
-                    error_type=type(exc).__name__,
-                    surface_id=str(context.surface_id) if context.surface_id else None,
-                )
-                ingest = every_attachment_failed(
-                    context.event, reason="Lemma could not receive this file"
-                )
+        ingest = await self._ingest_files(context, credentials)
         ingested: list[IngestedAttachment] = ingest.saved
-
-        metadata = context.message_metadata.as_message_metadata()
-        metadata.update(
-            {
-                "source": "agent_surfaces",
-                "surface_id": str(context.surface_id) if context.surface_id else None,
-                "external_user_id": context.message_external_user_id,
-                "external_message_id": context.message_external_message_id,
-            }
-        )
-        if ingested:
-            metadata["ingested_files"] = [item.path for item in ingested]
-        if ingest.failed:
-            # The agent has to be able to tell "they sent nothing" from "they
-            # sent something I never received" — otherwise it answers the text
-            # alone and looks like it ignored the photo.
-            metadata["failed_files"] = [
-                {"name": item.name, "reason": item.reason} for item in ingest.failed
-            ]
+        metadata = _message_metadata(context, ingest)
 
         # Group/channel continuity: each user has a separate conversation, so fetch
         # the last few thread/channel messages fresh for THIS run and hand them to
@@ -201,34 +157,12 @@ class SurfaceTurnStarter:
             original_text=context.message_text,
             metadata=metadata,
         )
+        await self._name_new_thread(adapter, credentials, context)
+
         # The only DB writes happen here, AFTER all the external I/O above — so
         # in worker (factory) mode a pooled connection is held just for this
         # short tail, not across the platform/file/transcription calls.
-        # A brand-new conversation is the one moment worth naming the thread on
-        # the platform, so Slack's own DM history reads as a list of topics
-        # rather than a stack of identical bot threads. Best-effort by
-        # construction: the adapter returns False where it is unsupported.
-        if context.created_conversation_title:
-            try:
-                await adapter.set_thread_title(
-                    credentials=credentials,
-                    event=context.event,
-                    title=context.created_conversation_title,
-                )
-            except PLATFORM_TRANSPORT_ERRORS:
-                # A platform call, so a platform failure. It caught
-                # `SQLAlchemyError` -- the wrong family entirely, and nothing
-                # here touches the database: Slack's implementation catches only
-                # `SlackApiError`, so a timeout or a dropped connection while
-                # naming the thread escaped, `start_agent_chat` exited before
-                # `write_inbound_message`, and the person's *first* message on a
-                # brand-new conversation was silently dropped along with the run
-                # it should have started.
-                logger.debug(
-                    "agent_surfaces.ingress_service.surface_thread_title_set.diagnostic",
-                    conversation_id=context.conversation_id,
-                )
-
+        #
         # No acknowledgement for a message that lands mid-run. One message is
         # routinely several webhooks on a chat surface, so "I'll get to this"
         # was mostly the agent talking to itself about its own plumbing -- and
@@ -236,6 +170,75 @@ class SurfaceTurnStarter:
         # into the run already going, which answers all of them at once.
         async with self.uow_factory() as uow:
             await write_inbound_message(context, message_text, metadata, uow)
+
+    async def _ingest_files(
+        self, context: SurfaceChatContext, credentials: dict[str, Any]
+    ) -> AttachmentIngest:
+        """Auto-ingest user-provided files into the pod datastore (/me/{platform}).
+
+        Surface files behave like web uploads; failures never block the run.
+        """
+        if context.pod_id is None:
+            return AttachmentIngest()
+        try:
+            return await self.file_ingest_service.ingest_attachments(
+                pod_id=context.pod_id,
+                platform=context.platform,
+                user_id=context.user_id,
+                parsed=context.event,
+                credentials=credentials,
+            )
+        except Exception as exc:
+            # `ingest_attachments` reports a per-file failure itself, so
+            # reaching here is the whole call coming apart. This was a
+            # `suppress`, which left `ingest` empty -- indistinguishable
+            # downstream from a message that carried no files, which is the
+            # one thing `failed_files` exists to prevent. The run still goes
+            # ahead: losing the photo is not a reason to lose the question that
+            # came with it.
+            logger.warning(
+                "agent_surfaces.ingress_service.attachment_ingest_failed.degraded",
+                error_type=type(exc).__name__,
+                surface_id=str(context.surface_id) if context.surface_id else None,
+            )
+            return every_attachment_failed(
+                context.event, reason="Lemma could not receive this file"
+            )
+
+    async def _name_new_thread(
+        self,
+        adapter: SurfacePlatformAdapterPort,
+        credentials: dict[str, Any],
+        context: SurfaceChatContext,
+    ) -> None:
+        """Name the thread on the platform when this turn created the conversation.
+
+        A brand-new conversation is the one moment worth naming the thread, so
+        Slack's own DM history reads as a list of topics rather than a stack of
+        identical bot threads. Best-effort by construction: the adapter returns
+        False where it is unsupported.
+        """
+        if not context.created_conversation_title:
+            return
+        try:
+            await adapter.set_thread_title(
+                credentials=credentials,
+                event=context.event,
+                title=context.created_conversation_title,
+            )
+        except PLATFORM_TRANSPORT_ERRORS:
+            # A platform call, so a platform failure. It caught
+            # `SQLAlchemyError` -- the wrong family entirely, and nothing here
+            # touches the database: Slack's implementation catches only
+            # `SlackApiError`, so a timeout or a dropped connection while naming
+            # the thread escaped, `start_agent_chat` exited before
+            # `write_inbound_message`, and the person's *first* message on a
+            # brand-new conversation was silently dropped along with the run it
+            # should have started.
+            logger.debug(
+                "agent_surfaces.ingress_service.surface_thread_title_set.diagnostic",
+                conversation_id=context.conversation_id,
+            )
 
     async def _validate_personal_context(self, context: SurfaceChatContext) -> None:
         if context.personal_dm_route_id is not None:
@@ -292,3 +295,28 @@ class SurfaceTurnStarter:
                 surface=None,
                 arrived_on=arrival_number(context.event),
             )
+
+
+def _message_metadata(
+    context: SurfaceChatContext, ingest: AttachmentIngest
+) -> dict[str, Any]:
+    """What the run learns about this message beyond its text."""
+    metadata = context.message_metadata.as_message_metadata()
+    metadata.update(
+        {
+            "source": "agent_surfaces",
+            "surface_id": str(context.surface_id) if context.surface_id else None,
+            "external_user_id": context.message_external_user_id,
+            "external_message_id": context.message_external_message_id,
+        }
+    )
+    if ingest.saved:
+        metadata["ingested_files"] = [item.path for item in ingest.saved]
+    if ingest.failed:
+        # The agent has to be able to tell "they sent nothing" from "they
+        # sent something I never received" — otherwise it answers the text
+        # alone and looks like it ignored the photo.
+        metadata["failed_files"] = [
+            {"name": item.name, "reason": item.reason} for item in ingest.failed
+        ]
+    return metadata

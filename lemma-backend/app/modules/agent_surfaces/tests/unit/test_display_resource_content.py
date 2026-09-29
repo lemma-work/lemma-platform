@@ -231,6 +231,24 @@ async def test_a_file_that_cannot_be_read_is_reported_not_replaced_by_a_card(
     assert "PermissionError" in str(unreadable[0].getMessage())
 
 
+async def test_a_file_that_does_not_exist_keeps_its_link_card(pod_files):
+    """No such file is not a failed read: the card still links to where it would be."""
+    from app.modules.datastore.contracts.surfaces import DatastoreFileNotFoundError
+
+    pod_files.read_pod_file.side_effect = DatastoreFileNotFoundError("gone")
+
+    resolved = await resolve_pod_file_parts(
+        uow=SimpleNamespace(session=None),
+        target=_target(AsyncMock()),
+        conversation_id=CONVERSATION_ID,
+        path="/me/missing.pdf",
+        caption="missing.pdf",
+    )
+
+    assert resolved.files == []
+    assert resolved.facts == PodFileDelivery(delivered=False)
+
+
 async def test_a_table_that_cannot_be_read_still_lets_the_card_go_out(
     conversation_owner,
 ):

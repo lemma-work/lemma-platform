@@ -35,7 +35,8 @@ from app.modules.agent_surfaces.platforms.slack.channel_reads import (
 from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     _approval_blocks,
     _display_resource_blocks,
-    _progress_status_text,
+    PROCESSING_LOADING_TEXT,
+    PROCESSING_STATUS_TEXT,
     _question_blocks,
     slack_acknowledgement_body,
 )
@@ -206,7 +207,6 @@ class SlackPlatformService(SlackChannelReadsMixin):
         # Slack caps markdown blocks at 12,000 characters *per payload*, so a
         # long answer becomes several messages rather than one truncated one.
         chunks = chunk_text(message, limit=MARKDOWN_BLOCK_CHAR_LIMIT) or [message]
-        feedback_callback_id = str((metadata or {}).get("feedback_callback_id") or "")
         # Empty for a normal channel post; `_post_message` decides on it.
         ephemeral_user = _ephemeral_target(metadata)
         try:
@@ -214,7 +214,6 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 blocks = reply_blocks(
                     chunk,
                     metadata,
-                    feedback_callback_id,
                     is_dm=event.is_dm,
                     is_last=index == len(chunks) - 1,
                 )
@@ -387,6 +386,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        del metadata  # Part of the adapter interface; the bubble text is fixed.
         token = slack_access_token(self.credentials)
         channel = event.reply_target.get("channel")
         timestamp = event.external_message_id
@@ -404,13 +404,12 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 and thread_ts
                 and "assistant:write" in slack_scopes(self.credentials)
             ):
-                status_text, loading_text = _progress_status_text(metadata)
                 try:
                     await client.assistant_threads_setStatus(
                         channel_id=str(channel),
                         thread_ts=str(thread_ts),
-                        status=status_text,
-                        loading_messages=[loading_text],
+                        status=PROCESSING_STATUS_TEXT,
+                        loading_messages=[PROCESSING_LOADING_TEXT],
                     )
                     return
                 except SlackApiError as exc:

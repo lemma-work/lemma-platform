@@ -12,13 +12,15 @@ from starlette.requests import Request
 
 from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     _redacted_headers,
-    _surface_source_event_id,
     handle_platform_webhook,
     handle_surface_webhook,
 )
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.platforms.resend.inbound import (
+from app.modules.agent_surfaces.domain.source_event_ids import (
     resend_source_event_id,
+    webhook_source_event_id,
+)
+from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
@@ -90,7 +92,7 @@ def _reserved_whatsapp_message() -> bytes:
 )
 def test_source_event_id_prefers_stable_provider_identifiers(payload, expected):
     assert (
-        _surface_source_event_id("telegram", payload, b"body", receiver="a-surface")
+        webhook_source_event_id("telegram", payload, b"body", receiver="a-surface")
         == f"telegram:a-surface:{expected}"
     )
 
@@ -100,7 +102,7 @@ def test_source_event_id_hashes_content_when_provider_has_no_identifier():
     expected = hashlib.sha256(raw).hexdigest()
 
     assert (
-        _surface_source_event_id(
+        webhook_source_event_id(
             "custom", {"data": "not-a-dict"}, raw, receiver="a-surface"
         )
         == f"custom:a-surface:content-sha256:{expected}"
@@ -111,9 +113,9 @@ def test_two_receivers_sharing_a_provider_id_are_two_events():
     """Telegram's ``update_id`` counts per bot, so every bot has an update 1."""
     an_update = {"update_id": 1}
 
-    assert _surface_source_event_id(
+    assert webhook_source_event_id(
         "telegram", an_update, b"body", receiver="surface-a"
-    ) != _surface_source_event_id("telegram", an_update, b"body", receiver="surface-b")
+    ) != webhook_source_event_id("telegram", an_update, b"body", receiver="surface-b")
 
 
 def test_webhook_headers_are_redacted_before_event_serialization():

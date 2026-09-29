@@ -33,6 +33,7 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.file_types import is_untyped_mime, sniff_media_mime
 from app.core.log.log import get_logger
 from app.modules.datastore.contracts.surfaces import (
+    DatastoreFileNotFoundError,
     TableRows,
     download_pod_file,
     read_pod_file,
@@ -394,6 +395,10 @@ async def _load_pod_file(
             path=path,
             require_inline_fit=require_inline_fit,
         )
+    except DatastoreFileNotFoundError:
+        # No such file: the card still links to where it would be, so this is not
+        # a failed read.
+        return None
     except Exception:
         # Broad because the read crosses authorization, the datastore and object
         # storage, and every one of them means the same thing to the caller.

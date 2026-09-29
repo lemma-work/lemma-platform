@@ -41,7 +41,7 @@ async def test_whatsapp_built_in_dm_surface_handles_payload_and_replies(
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")

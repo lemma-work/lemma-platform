@@ -5,22 +5,54 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
+from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     TelegramMiniApp,
     resolve_telegram_mini_app,
 )
 
+logger = get_logger(__name__)
+
+
+async def _reply(
+    *,
+    adapter: SurfacePlatformAdapterPort,
+    credentials: dict[str, Any],
+    context: SurfaceChatContext,
+    message: str,
+) -> None:
+    """Answer a command, and never let the answer's failure undo the command.
+
+    A command is complete once it has been acted on; the message only reports it.
+    Raising here would fail the whole queued turn, and the retry would act on
+    the command a second time -- a second ``/retry`` reads "nothing to retry".
+    """
+    try:
+        await adapter.send_message(
+            credentials=credentials, event=context.event, message=message
+        )
+    except PLATFORM_TRANSPORT_ERRORS:
+        logger.warning(
+            "agent_surfaces.telegram_command.reply_failed.degraded",
+            conversation_id=str(context.conversation_id),
+            exc_info=True,
+        )
+
 
 async def handle_telegram_command(
     *,
-    context,
-    adapter,
+    context: SurfaceChatContext,
+    adapter: SurfacePlatformAdapterPort,
     credentials: dict[str, Any],
-    uow_factory,
+    uow_factory: UnitOfWorkFactory,
 ) -> bool:
     if context.platform is not SurfacePlatform.TELEGRAM:
         return False
@@ -40,9 +72,10 @@ async def handle_telegram_command(
             if mini_app and mini_app.url
             else "A pod owner can connect a Mini App from this bot’s surface settings"
         )
-        await adapter.send_message(
+        await _reply(
+            adapter=adapter,
             credentials=credentials,
-            event=context.event,
+            context=context,
             message=(
                 f"Hi — I’m **{agent_name}**.\n\n"
                 "Send me a message, voice note, photo, or file. "
@@ -53,9 +86,10 @@ async def handle_telegram_command(
         )
         return True
     retried = await _retry_failed_conversation(context, uow_factory=uow_factory)
-    await adapter.send_message(
+    await _reply(
+        adapter=adapter,
         credentials=credentials,
-        event=context.event,
+        context=context,
         message=(
             "Retrying the last failed request."
             if retried
@@ -66,7 +100,7 @@ async def handle_telegram_command(
 
 
 async def _telegram_mini_app_for_context(
-    context, *, uow_factory
+    context: SurfaceChatContext, *, uow_factory: UnitOfWorkFactory
 ) -> TelegramMiniApp | None:
     if context.pod_id is None or context.surface_config is None:
         return None
@@ -79,7 +113,9 @@ async def _telegram_mini_app_for_context(
         )
 
 
-async def _retry_failed_conversation(context, *, uow_factory) -> bool:
+async def _retry_failed_conversation(
+    context: SurfaceChatContext, *, uow_factory: UnitOfWorkFactory
+) -> bool:
     """``/retry``, reported as a sentence rather than raised.
 
     The narrow handler is the whole of what this adds over the published

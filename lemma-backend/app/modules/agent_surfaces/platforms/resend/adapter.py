@@ -9,7 +9,6 @@ from httpx import HTTPError
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
-    SurfaceDisplayRenderPlan,
     SurfaceSenderProfile,
 )
 from app.core.log.log import get_logger
@@ -143,19 +142,6 @@ class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
             thread_seed_id=thread_seed_id,
             metadata=metadata,
         )
-
-    async def _render_resource(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        render_plan: SurfaceDisplayRenderPlan,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool:
-        await ResendPlatformService(credentials)._render_resource(
-            event, render_plan, metadata
-        )
-        return True
 
     async def add_processing_indicator(
         self,

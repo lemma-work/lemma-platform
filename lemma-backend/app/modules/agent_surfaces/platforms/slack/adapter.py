@@ -78,19 +78,6 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             metadata=metadata,
         )
 
-    async def stream_progress(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
-        return await self._stream(credentials).stream_progress(
-            event, progress_text, progress_handle, metadata
-        )
-
     async def end_progress(
         self,
         *,

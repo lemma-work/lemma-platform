@@ -88,7 +88,7 @@ async def recognised_sender(
     way a hand-rolled hash would.
     """
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
@@ -510,7 +510,7 @@ async def test_a_workspace_that_cannot_carry_the_bot_asks_for_another(
     could not get past this sentence.
     """
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
@@ -623,7 +623,7 @@ async def test_a_sender_with_no_organization_can_still_name_a_workspace(
     hold, and this is the policy the web signup would have run a minute earlier.
     """
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
@@ -958,7 +958,7 @@ async def test_a_pod_they_were_invited_to_is_offered(
     )
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
