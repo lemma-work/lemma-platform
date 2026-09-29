@@ -25,17 +25,21 @@ use super::*;
 fn an_idle_workspace_port_does_not_accept_connections() {
     use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 
-    // A port the OS has just handed back, so nothing else is on it.
-    let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = probe.local_addr().unwrap().port();
-    drop(probe);
-    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-
-    // What it does now. First, because a completed connection leaves the
-    // port in TIME_WAIT, and a reservation deliberately sets no
-    // SO_REUSEADDR -- so demonstrating the old behaviour first would make
-    // this half fail to bind for a reason that is not the point.
-    let held = bind_idle_port(port).expect("the port is free to hold");
+    // What it does now. `bind_idle_port` takes a port number, so the test has
+    // to pick one: ask the OS for a free port, release it, and hold it. In a
+    // parallel suite something else can take the port in between -- another
+    // test's listener, or an outgoing connection's source port -- so a lost
+    // race is retried with a fresh port rather than failing the test. The
+    // assertions below only ever run on a port this test holds.
+    let (held, address) = (0..50)
+        .find_map(|_| {
+            let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).ok()?;
+            let port = probe.local_addr().ok()?.port();
+            drop(probe);
+            let held = bind_idle_port(port).ok()?;
+            Some((held, SocketAddr::from((Ipv4Addr::LOCALHOST, port))))
+        })
+        .expect("a free loopback port to hold");
     assert!(
         TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err(),
         "a held port has to look like an idle one to anything asking \
@@ -45,10 +49,13 @@ fn an_idle_workspace_port_does_not_accept_connections() {
     assert!(TcpListener::bind(address).is_err());
     drop(held);
 
-    // What holding it used to do.
-    let listening = TcpListener::bind(address).unwrap();
+    // What holding it used to do. A port of its own, bound directly: reusing
+    // the one above would race anything that grabbed it after the drop, and a
+    // closed connection would leave it in TIME_WAIT besides.
+    let listening = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let listening_address = listening.local_addr().unwrap();
     assert!(
-        TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok(),
+        TcpStream::connect_timeout(&listening_address, Duration::from_secs(2)).is_ok(),
         "a listening socket nobody accepts on still completes the handshake, \
          which is what turned 'the backend is not running' into a timeout"
     );

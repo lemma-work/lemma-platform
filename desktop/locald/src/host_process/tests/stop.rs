@@ -159,6 +159,74 @@ fn a_parallel_stop_takes_every_services_whole_tree() {
     }
 }
 
+/// The leader exiting is not the stop's finish line. Here the leader dies on
+/// SIGTERM at once while its child ignores it -- the same shape as a child
+/// forked while the SIGTERM was in flight, which never receives it. The stop
+/// used to return the moment the leader was reaped and leave the child running.
+#[cfg(unix)]
+#[test]
+fn a_stop_kills_a_child_that_outlives_its_leader() {
+    let mut service_def = service("backend", &[]);
+    service_def.command = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "(trap '' TERM; exec /bin/sleep 30) & wait".into(),
+    ];
+    let mut frontend = service("frontend", &[]);
+    frontend.command = vec!["/bin/sleep".into(), "30".into()];
+    let root = tempdir().unwrap();
+    let mut value = manifest(vec![service_def, frontend]);
+    value.setup[0].command = vec!["/usr/bin/true".into()];
+    let manager = manager_in(&root, value);
+    manager.start_all().unwrap();
+    let group = manager
+        .status()
+        .iter()
+        .find(|process| process.id == "backend")
+        .and_then(|process| process.pid)
+        .map(|pid| i32::try_from(pid).unwrap())
+        .unwrap();
+    // Let the shell fork the child before the stop, so this tests the child
+    // that survives, not the race.
+    let forked = std::time::Instant::now() + Duration::from_secs(5);
+    while !child_of_group_running(group) {
+        assert!(
+            std::time::Instant::now() < forked,
+            "the child never started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    manager.stop_all_timed().0.unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while unsafe { libc::kill(-group, 0) } == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child ignoring SIGTERM outlived the stop"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+fn child_of_group_running(group: i32) -> bool {
+    std::process::Command::new("/bin/ps")
+        .args(["-o", "pid=,pgid=,comm="])
+        .args(["-A"])
+        .output()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout).lines().any(|line| {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                fields.len() >= 3
+                    && fields[1] == group.to_string()
+                    && fields[0] != group.to_string()
+                    && fields[2].ends_with("sleep")
+            })
+        })
+        .unwrap_or(false)
+}
+
 #[cfg(unix)]
 #[test]
 fn a_stop_request_interrupts_an_inflight_service_health_wait() {
