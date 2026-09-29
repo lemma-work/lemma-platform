@@ -157,7 +157,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `covered` | `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
 | `PS-ONB-023` Inviting someone already inside is refused clearly | `covered` | `test_inviting_an_existing_member_is_refused` |
-| `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_a_person_sees_their_invitations`, `test_an_owner_sees_sent_invitations` |
+| `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_an_unproven_address_is_not_shown_its_invitations`, `test_an_owner_sees_sent_invitations` |
 | `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
 | `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join`, `test_an_open_organization_admits_anyone_as_a_member`, `test_joining_again_changes_nothing` |
 | `PS-ONB-040` An owner changes what a member may do | `covered` | `test_an_owner_changes_a_role`, `test_a_member_cannot_change_roles` |

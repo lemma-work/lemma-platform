@@ -370,6 +370,12 @@ async def test_lemma_system_default_requires_configured_env_credentials(
     )
     assert response.status_code == 400
     assert response.json()["code"] == "CONNECTOR_VALIDATION_ERROR"
+    # Machine-readable as well as worded, and the same shape as the Composio
+    # refusal, so a client can tell "no credentials behind this" from any other
+    # validation failure without matching the sentence.
+    assert response.json()["details"] == {
+        "reason": "system_default_oauth_not_configured"
+    }
 
     monkeypatch.setenv(client_id_env, "system-client-id")
     monkeypatch.setenv(client_secret_env, "system-client-secret")

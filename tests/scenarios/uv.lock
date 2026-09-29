@@ -91,7 +91,7 @@ wheels = [
 [[package]]
 name = "lemma-scenarios"
 version = "0.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "psycopg", extra = ["binary"] },

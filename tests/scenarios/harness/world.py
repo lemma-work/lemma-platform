@@ -190,6 +190,9 @@ class World:
 
     base_url: str
     sessions: Sessions = field(default_factory=Sessions)
+    #: Whether this scenario is marked `open_signup`, when a scenario is asking.
+    #: None outside one — provisioning, a script — where nothing is enforced.
+    may_sign_up: bool | None = None
     _clients: list[httpx.AsyncClient] = field(default_factory=list)
     _people: dict[str, Person] = field(default_factory=dict)
     #: Re-entrancy guard: the lookup asks for a person, and that asks to look up.
@@ -206,6 +209,18 @@ class World:
             raise AssertionError(
                 f"this scenario already has a person called {label!r}; "
                 f"give the second one a different label"
+            )
+        if sign_up and self.may_sign_up is False:
+            # Enforced here, where it cannot be missed, rather than by reading
+            # the source: a fixture that signs somebody up counts as much as
+            # the scenario. The mark is what lets a run send exactly the
+            # sign-up scenarios to a stack whose gates are off and everything
+            # else to a deployment whose gates are on (`-m open_signup`).
+            raise AssertionError(
+                f"this scenario signs {label!r} up but is not marked "
+                f"`open_signup`. Add `open_signup` to it (or to the module's "
+                f"pytestmark), or use world.person() for somebody who already "
+                f"works here."
             )
         person = self.arriving(label, f"{label}-{uuid4().hex[:12]}@{EMAIL_DOMAIN}")
         if sign_up:

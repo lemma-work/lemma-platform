@@ -105,12 +105,22 @@ async def test_approving_runs_the_described_action(pod_with_two_records):
     # Every approval, not the first: an agent told to ask before it changes
     # anything asks before *each* thing, and how many that turns out to be is
     # the model's business rather than the product's.
-    await alice.answers_every_approval(conversation, allow=True, in_pod=pod)
+    asked = await alice.answers_every_approval(conversation, allow=True, in_pod=pod)
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
+    # Asked at all, first. An agent that asks in prose rather than with its
+    # approval tool pauses nothing, the loop above answers nothing, and the row
+    # is left alone — which read exactly like "approving did not run the action"
+    # while the scenario had never approved anything.
+    transcript = await alice.transcript_of(conversation, in_pod=pod)
+    assert asked >= 1, (
+        f"the agent never asked for approval, so there was nothing to approve:\n"
+        f"{transcript[-3000:]}"
+    )
     remaining = await _titles_in(alice, table, pod)
     assert remaining == {"second"}, (
-        f"approving deleted the wrong thing, or nothing: {remaining}"
+        f"approving deleted the wrong thing, or nothing: {remaining}\n"
+        f"{transcript[-3000:]}"
     )
 
 

@@ -99,16 +99,29 @@ def public_site() -> Iterator[PublicWebsite]:
         "NEXT_PUBLIC_SITE_URL": "https://example.test",
         "NEXT_TELEMETRY_DISABLED": "1",
     }
-    subprocess.run(
+    if not (FRONTEND / "node_modules" / ".bin" / "next").exists():
+        # The same shape as the TypeScript SDK's scenario: without the
+        # frontend's dependencies there is nothing to build, and `npm run build`
+        # exits 127 with its reason thrown away. Say what to run instead.
+        pytest.skip(
+            "lemma-frontend's dependencies are not installed; run `npm ci` in "
+            "lemma-frontend to get the public website scenarios"
+        )
+    built = subprocess.run(
         ["npm", "run", "build"],
         cwd=FRONTEND,
         env=environment,
-        check=True,
+        check=False,
         timeout=300,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
     )
+    if built.returncode != 0:
+        raise AssertionError(
+            f"building the public website failed ({built.returncode}):\n"
+            f"{built.stdout[-4000:]}"
+        )
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
