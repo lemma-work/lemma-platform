@@ -169,10 +169,45 @@ async def add_pod_member(
     )
 
 
+async def refuse_pod_role_beyond_inviter(
+    uow,
+    *,
+    pod_id: UUID,
+    inviter_user_id: UUID,
+    inviter_is_org_owner: bool,
+    pod_role: str,
+) -> None:
+    """Refuse an invitation offering a pod role its author could not confer.
+
+    An invitation that names a pod is a pod-membership grant that happens later,
+    and it is bounded exactly as adding the member directly is: the inviter must
+    be able to manage that pod's members, and the role must sit inside what they
+    hold. Without this an organization editor -- who reaches no pod they are not
+    a member of -- could invite a second address to any pod as its administrator.
+
+    The role is resolved as :func:`add_pod_member` will resolve it, so the bound
+    is put to the role the invitee would actually receive rather than to a
+    spelling that would be quietly downgraded to ``USER``.
+    """
+    from app.modules.pod.services.pod_role_service import PodRoleService
+
+    try:
+        resolved_role = PodRole(pod_role)
+    except ValueError:
+        resolved_role = PodRole.USER
+    await PodRoleService(uow).require_role_manager_bounds(
+        pod_id=pod_id,
+        requester_user_id=inviter_user_id,
+        target_roles=[resolved_role],
+        requester_is_org_owner=inviter_is_org_owner,
+    )
+
+
 __all__ = [
     "add_pod_member",
     "pod_invitation_details",
     "pod_member_id",
     "pod_name",
     "pod_organization_id",
+    "refuse_pod_role_beyond_inviter",
 ]

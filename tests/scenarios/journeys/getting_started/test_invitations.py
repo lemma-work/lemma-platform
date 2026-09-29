@@ -32,6 +32,23 @@ async def test_an_invited_person_joins_with_the_offered_role(world, owner):
     assert await bob.own_role_in(owner.organization) == "ORG_EDITOR"
 
 
+@scenario("An editor invites up to their own level, and no further")
+@proves("PS-ONB-020")
+@covers("org.invitation.invite", "org.invitation.accept")
+async def test_an_editor_invites_up_to_their_own_level(world, owner):
+    dan = await world.new_person("dan")
+    await dan.accepts(
+        await owner.invites(dan, to=owner.organization, as_role="ORG_EDITOR")
+    )
+    bob = await world.new_person("bob")
+    carol = await world.new_person("carol")
+
+    await bob.accepts(await dan.invites(bob, to=owner.organization, as_role="ORG_EDITOR"))
+    assert await bob.own_role_in(owner.organization) == "ORG_EDITOR"
+
+    await dan.is_refused_inviting(carol, to=owner.organization, as_role="ORG_OWNER")
+
+
 @scenario("An invitation is only usable by the person it was addressed to")
 @proves("PS-ONB-020")
 @covers("org.invitation.accept")

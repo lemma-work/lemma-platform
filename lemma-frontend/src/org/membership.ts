@@ -36,6 +36,17 @@ export function canSetRole(myRole: string | null | undefined, target: Role): boo
     return canManage(myRole);
 }
 
+/** Whether somebody with this role may change or remove a member who holds that
+ *  one. Nobody reaches over a person who holds authority they lack, so an editor
+ *  is offered no controls on an owner's row — the server would refuse them all.
+ *
+ *  This is the same question as `canSetRole`: taking a role away is the mirror
+ *  of handing it out.
+ */
+export function canActOn(myRole: string | null | undefined, memberRole: string | null | undefined): boolean {
+    return canSetRole(myRole, (memberRole ?? "ORG_MEMBER") as Role);
+}
+
 export interface Member {
     id: string;
     role?: string | null;

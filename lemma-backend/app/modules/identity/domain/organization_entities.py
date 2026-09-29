@@ -5,6 +5,10 @@ from uuid import UUID
 from pydantic import Field
 from pydantic import field_validator
 
+from app.core.authorization.permissions import (
+    equivalent_permission_ids,
+    SYSTEM_ROLE_PERMISSIONS,
+)
 from app.core.domain.aggregate import AggregateRoot
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.user_entities import UserEntity
@@ -18,32 +22,65 @@ class OrganizationRole(str, Enum):
     ORG_MEMBER = "ORG_MEMBER"
 
 
-# Organization roles ordered from least to most privileged. Mirrors the implicit
-# hierarchy already relied on in organization_service (e.g. an editor cannot
-# remove an owner).
-ORG_ROLE_HIERARCHY: dict["OrganizationRole", int] = {
-    OrganizationRole.ORG_MEMBER: 1,
-    OrganizationRole.ORG_EDITOR: 2,
-    OrganizationRole.ORG_OWNER: 3,
-}
+def org_role_permission_ids(role: "OrganizationRole") -> frozenset[str]:
+    """What an organization role lets its holder do.
+
+    Read from the same table the authorization layer resolves a request's
+    ``Context`` from, so the answer here cannot drift from what the role
+    actually carries. ``ORG_OWNER`` is ``ORG_EDITOR`` plus billing, and
+    ``ORG_EDITOR`` is ``ORG_MEMBER`` plus everything that manages people.
+    """
+    return SYSTEM_ROLE_PERMISSIONS[role.value]
+
+
+def org_role_holds(role: "OrganizationRole", permission_id: str) -> bool:
+    """Whether ``role`` carries ``permission_id``, implied permissions included."""
+    return bool(
+        equivalent_permission_ids(permission_id) & org_role_permission_ids(role)
+    )
 
 
 def can_grant_org_role(
     approver_role: "OrganizationRole", target_role: "OrganizationRole"
 ) -> bool:
-    """Whether ``approver_role`` may grant ``target_role`` to another member.
+    """Whether ``approver_role`` may hand ``target_role`` to somebody.
 
-    Only an ORG_OWNER may grant an elevated role (ORG_OWNER/ORG_EDITOR); every
-    lesser approver is capped at ORG_MEMBER. This blocks an editor — or a pod
-    admin who is only an org member — from minting an org owner/editor through a
-    side channel such as approving a join request.
+    Nobody confers a permission they do not hold (PS-ACCESS-010), so the test is
+    a comparison of permission *sets*: every permission ``target_role`` carries
+    must be one ``approver_role`` carries. An owner confers anything; an editor
+    confers editor and member but not owner, whose only extra is billing; a
+    member confers member.
+
+    This was a rank cap that let only owners hand out anything above member,
+    which kept editors from doing the one job the role exists for. It also
+    covers the side channels -- approving a join request, inviting -- because
+    they all ask this one question.
     """
-    if approver_role == OrganizationRole.ORG_OWNER:
-        return True
-    return (
-        ORG_ROLE_HIERARCHY[target_role]
-        <= ORG_ROLE_HIERARCHY[OrganizationRole.ORG_MEMBER]
+    # Ownership is more than the permissions the catalog lists for it: the
+    # authorizer reaches every pod in the organization on the *name* ORG_OWNER,
+    # and changing the organization itself is owner-only. Neither is a
+    # permission a set comparison can see, so the comparison alone would stop
+    # protecting ownership the day some permission moved from owner to editor.
+    if target_role == OrganizationRole.ORG_OWNER:
+        return approver_role == OrganizationRole.ORG_OWNER
+    held = org_role_permission_ids(approver_role)
+    return all(
+        equivalent_permission_ids(permission_id) & held
+        for permission_id in org_role_permission_ids(target_role)
     )
+
+
+def can_act_on_org_member(
+    actor_role: "OrganizationRole", member_role: "OrganizationRole"
+) -> bool:
+    """Whether ``actor_role`` may change or remove a member holding ``member_role``.
+
+    Nobody reaches over a person who holds authority they lack: an editor cannot
+    demote or remove an owner. Stated as the same comparison as granting,
+    because taking away a permission you do not hold is the mirror of giving it
+    (PS-ONB-042).
+    """
+    return can_grant_org_role(actor_role, member_role)
 
 
 class OrganizationJoinPolicy(str, Enum):

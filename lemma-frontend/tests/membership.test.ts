@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-    alreadyKnown, canManage, canSetRole, inviteProblem, isLastOwner, linkOnlyOpensHere,
+    alreadyKnown, canActOn, canManage, canSetRole, inviteProblem, isLastOwner, linkOnlyOpensHere,
     memberEmail, memberName, roleLabel, unsentInvitation, type Member,
 } from "../src/org/membership.ts";
 
@@ -33,6 +33,15 @@ test("only an owner may hand out ownership", () => {
     assert.equal(canSetRole("ORG_EDITOR", "ORG_OWNER"), false);
     assert.equal(canSetRole("ORG_OWNER", "ORG_OWNER"), true);
     assert.equal(canSetRole("ORG_MEMBER", "ORG_MEMBER"), false);
+});
+
+test("nobody is offered controls on a person who holds more than they do", () => {
+    // An editor may act on editors and members, never on an owner.
+    assert.equal(canActOn("ORG_EDITOR", "ORG_MEMBER"), true);
+    assert.equal(canActOn("ORG_EDITOR", "ORG_EDITOR"), true);
+    assert.equal(canActOn("ORG_EDITOR", "ORG_OWNER"), false);
+    assert.equal(canActOn("ORG_OWNER", "ORG_OWNER"), true);
+    assert.equal(canActOn("ORG_MEMBER", "ORG_MEMBER"), false);
 });
 
 test("the last owner cannot be removed, because nobody could change anything after", () => {

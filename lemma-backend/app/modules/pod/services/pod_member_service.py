@@ -80,7 +80,6 @@ class PodMemberService:
                 pod_id=entity.pod_id,
                 requester_user_id=requester_user_id,
                 target_roles=target_roles,
-                target_user_id=None,
                 requester_is_org_owner=(
                     requester_org_member.role == OrganizationRole.ORG_OWNER
                 ),
@@ -351,7 +350,21 @@ class PodMemberService:
         if not requester_org_member:
             raise PodAccessDeniedError("Requester is not a member of the organization")
 
-        if requester_org_member.role != OrganizationRole.ORG_OWNER:
+        if self.pod_role_service is not None:
+            # The same bound adding and re-roling apply, so the three doors onto
+            # one rule cannot disagree: a custom role carrying
+            # ``pod.member.manage`` may remove, and may not remove somebody who
+            # holds more than it does.
+            await self.pod_role_service.require_role_manager_bounds(
+                pod_id=pod_member.pod_id,
+                requester_user_id=requester_user_id,
+                target_roles=[],
+                target_current_roles=normalize_role_list(pod_member.roles),
+                requester_is_org_owner=(
+                    requester_org_member.role == OrganizationRole.ORG_OWNER
+                ),
+            )
+        elif requester_org_member.role != OrganizationRole.ORG_OWNER:
             requester_pod_member = (
                 await self.pod_member_repository.get_by_pod_and_org_member(
                     pod_member.pod_id, requester_org_member.id
@@ -435,10 +448,6 @@ class PodMemberService:
         if not requester_org_member:
             raise PodAccessDeniedError("Requester is not a member of the organization")
 
-        org_member = await self.organization_repository.get_member_by_id(
-            pod_member.organization_member_id
-        )
-        target_user_id = org_member.user_id if org_member else None
         normalized_roles = normalize_role_list(roles)
 
         if self.pod_role_service is not None:
@@ -446,7 +455,7 @@ class PodMemberService:
                 pod_id=pod_member.pod_id,
                 requester_user_id=requester_user_id,
                 target_roles=normalized_roles,
-                target_user_id=target_user_id,
+                target_current_roles=normalize_role_list(pod_member.roles),
                 requester_is_org_owner=(
                     requester_org_member.role == OrganizationRole.ORG_OWNER
                 ),

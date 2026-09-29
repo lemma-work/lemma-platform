@@ -28,7 +28,8 @@ from app.modules.pod.domain.ports import (
     PodRepositoryPort,
 )
 from app.modules.pod.services.pod_role_service import PodRoleService
-from app.modules.pod.domain.visibility import roles_allow_required
+from app.modules.pod.domain.visibility import normalize_role_list
+from app.core.authorization.permissions import Permissions
 
 
 class PodJoinRequestService:
@@ -59,23 +60,29 @@ class PodJoinRequestService:
         if not requester_org_member:
             raise PodAccessDeniedError("Requester is not a member of the organization")
 
-        if requester_org_member.role in [
-            OrganizationRole.ORG_OWNER,
-            OrganizationRole.ORG_EDITOR,
-        ]:
+        if requester_org_member.role == OrganizationRole.ORG_OWNER:
             return requester_org_member
 
+        # By permission, as adding a member is: deciding a request *is* adding
+        # a member, and what may add one is ``pod.member.manage``. An
+        # organization editor used to pass here on their organization role
+        # alone, for a pod they could not open, and then skipped the bound below
+        # -- so they could approve their own request as POD_ADMIN.
         requester_pod_member = (
             await self.pod_member_repository.get_by_pod_and_org_member(
                 pod_id, requester_org_member.id
             )
         )
-        if not requester_pod_member or not roles_allow_required(
-            requester_pod_member.roles,
-            PodRole.ADMIN,
+        if not requester_pod_member or not (
+            await self.pod_member_repository.roles_grant_permission(
+                pod_id,
+                normalize_role_list(requester_pod_member.roles),
+                Permissions.POD_MEMBER_MANAGE,
+            )
         ):
             raise PodAccessDeniedError(
-                "Only org owners/editors or pod admins can manage join requests"
+                "Only organization owners or people who manage this pod's "
+                "members can manage join requests"
             )
 
         return requester_org_member
@@ -373,10 +380,7 @@ class PodJoinRequestService:
                 f"Join request is already {join_request.status.value.lower()}"
             )
 
-        approver_is_org_manager = approver.role in (
-            OrganizationRole.ORG_OWNER,
-            OrganizationRole.ORG_EDITOR,
-        )
+        approver_is_org_owner = approver.role == OrganizationRole.ORG_OWNER
 
         target_org_member = await self.organization_repository.get_member(
             join_request.user_id,
@@ -402,6 +406,18 @@ class PodJoinRequestService:
             )
         )
         if not existing_pod_member:
+            # Decided before anything is written, as removal does: a refusal
+            # leaves the aggregate as it found it. Every approver but an
+            # organization owner may only confer pod roles within their own
+            # bounds (PS-POD-022); being an organization editor is no exception,
+            # as it confers no authority inside a pod they are not a member of.
+            if self.pod_role_service is not None:
+                await self.pod_role_service.require_role_manager_bounds(
+                    pod_id=pod_id,
+                    requester_user_id=requester_user_id,
+                    target_roles=[pod_role],
+                    requester_is_org_owner=approver_is_org_owner,
+                )
             pod_member = PodMemberEntity(
                 pod_id=pod_id,
                 organization_member_id=target_org_member.id,
@@ -409,17 +425,6 @@ class PodJoinRequestService:
             )
             created_member = await self.pod_member_repository.create(pod_member)
             if self.pod_role_service is not None:
-                # A pod-admin approver (not an org-level manager) may only confer
-                # pod roles within their own bounds. Org owners/editors manage the
-                # pod with org authority and are not pod members, so they skip the
-                # pod-membership-based bounds check.
-                if not approver_is_org_manager:
-                    await self.pod_role_service.require_role_manager_bounds(
-                        pod_id=pod_id,
-                        requester_user_id=requester_user_id,
-                        target_roles=[pod_role],
-                        target_user_id=join_request.user_id,
-                    )
                 await self.pod_role_service.sync_member_roles(
                     pod_id=pod_id,
                     pod_member_id=created_member.id,

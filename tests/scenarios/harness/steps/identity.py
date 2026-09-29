@@ -314,6 +314,32 @@ class IdentitySteps:
             json=body,
         )
 
+    async def is_refused_inviting(
+        self,
+        person: "Any",
+        *,
+        to: JSON,
+        as_role: str = "ORG_MEMBER",
+        pod: JSON | None = None,
+        pod_role: str | None = None,
+    ) -> int:
+        """Attempt an invitation the system should refuse, and return the status."""
+        body: JSON = {"email": person.email, "role": as_role}
+        if pod is not None:
+            body["pod_id"] = str(pod["id"])
+            if pod_role:
+                body["pod_role"] = pod_role
+        response = await self.api.call(
+            "POST", f"/organizations/{to['id']}/invitations", json=body
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused inviting {person.label} "
+                f"as {as_role}, but the invitation was created "
+                f"({response.status_code})"
+            )
+        return response.status_code
+
     async def invitations(self) -> list[JSON]:
         return items_of(await self.api.get("/organizations/invitations"))
 
@@ -359,6 +385,22 @@ class IdentitySteps:
             json={"role": to},
         )
 
+    async def is_refused_changing_role(
+        self, person: Any, *, to: str, in_organization: JSON
+    ) -> int:
+        member = await self.org_membership_of(person, in_organization=in_organization)
+        response = await self.api.call(
+            "PATCH",
+            f"/organizations/{in_organization['id']}/members/{member['id']}/role",
+            json={"role": to},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused making {person.label} "
+                f"a {to}, but the role changed ({response.status_code})"
+            )
+        return response.status_code
+
     async def org_membership_of(self, person: Any, *, in_organization: JSON) -> JSON:
         """Someone's membership row in an organization.
 
@@ -379,6 +421,21 @@ class IdentitySteps:
             f"/organizations/{organization['id']}/members/{member['id']}",
             what=f"{self.label} removing {person.label} from the organization",
         )
+
+    async def is_refused_removing_from_organization(
+        self, person: Any, *, organization: JSON
+    ) -> int:
+        member = await self.org_membership_of(person, in_organization=organization)
+        response = await self.api.call(
+            "DELETE", f"/organizations/{organization['id']}/members/{member['id']}"
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused removing {person.label} "
+                f"from the organization, but they were removed "
+                f"({response.status_code})"
+            )
+        return response.status_code
 
     async def removes_membership(self, member: JSON, *, from_organization: JSON) -> None:
         """Remove a membership row, without needing the person behind it.

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
+from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import slugify
 from app.modules.identity.domain.email_domains import work_domain_from_email
 from app.modules.identity.services.invitation_acceptance import (
@@ -11,7 +12,9 @@ from app.modules.identity.services.invitation_acceptance import (
 )
 from app.modules.identity.services.membership_rules import (
     refuse_if_last_owner,
+    refuse_reaching_over_org_member,
     refuse_unconferrable_org_role,
+    resolve_invited_pod,
     resolve_pod_grant,
 )
 from app.modules.identity.domain.errors import (
@@ -37,6 +40,7 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationJoinPolicy,
     OrganizationMemberEntity,
     OrganizationRole,
+    org_role_holds,
 )
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.domain.ports import (
@@ -94,12 +98,23 @@ class OrganizationService:
         user_id: UUID,
         organization_id: UUID,
         allowed_roles: Sequence[OrganizationRole] | None = None,
+        permission: str | None = None,
         denied_message: str,
     ) -> OrganizationMemberEntity:
+        """The requester's membership, or a refusal.
+
+        ``permission`` is the question worth asking -- it is what the role
+        catalog advertises, so a role that gains or loses the permission is
+        answered here without a second list to edit. ``allowed_roles`` remains
+        for the few rules that are about *being* an owner rather than holding
+        something an owner happens to hold.
+        """
         member = await self.organization_repository.get_member(user_id, organization_id)
         # One refusal for both halves: "you are not in this organization" and
         # "you are in it but not as one of these roles" must not read apart.
         if member is None or (allowed_roles and member.role not in allowed_roles):
+            raise IdentityAccessDeniedError(denied_message)
+        if permission is not None and not org_role_holds(member.role, permission):
             raise IdentityAccessDeniedError(denied_message)
         return member
 
@@ -337,10 +352,12 @@ class OrganizationService:
         inviter = await self._require_member(
             user_id=inviter_user_id,
             organization_id=entity.organization_id,
-            allowed_roles=[OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR],
-            denied_message="Only owners and editors can invite members",
+            permission=Permissions.ORG_INVITATION_MANAGE,
+            denied_message="You may not invite members to this organization",
         )
-        refuse_unconferrable_org_role(inviter, entity.role)
+        refuse_unconferrable_org_role(
+            inviter, entity.role, verb="invite someone with the role"
+        )
 
         existing_member = await self.organization_repository.get_member_by_email(
             entity.organization_id,
@@ -365,22 +382,12 @@ class OrganizationService:
                     "An invitation already exists for this email"
                 )
 
-        pod_name: str | None = None
-        pod_description: str | None = None
-        if entity.pod_id is not None and self.pod_membership_port is not None:
-            pod_details = await self.pod_membership_port.get_pod_invitation_details(
-                entity.pod_id
-            )
-            pod_org_id = pod_details[2] if pod_details else None
-            if pod_org_id is None:
-                raise IdentityValidationError("Pod not found")
-            if pod_org_id != entity.organization_id:
-                raise IdentityValidationError(
-                    "Pod does not belong to this organization"
-                )
-            pod_name, pod_description, _ = pod_details
-            entity.pod_name = pod_name
-            entity.pod_description = pod_description
+        pod_name, pod_description = await resolve_invited_pod(
+            pod_membership_port=self.pod_membership_port,
+            invitation=entity,
+            inviter=inviter,
+        )
+        entity.pod_name, entity.pod_description = pod_name, pod_description
 
         inviter_email = (
             inviter.user.email if inviter.user else "organization-member@lemma.local"
@@ -411,8 +418,8 @@ class OrganizationService:
         await self._require_member(
             user_id=requester_user_id,
             organization_id=organization_id,
-            allowed_roles=[OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR],
-            denied_message="Only owners and editors can view invitations",
+            permission=Permissions.ORG_INVITATION_MANAGE,
+            denied_message="You may not view this organization's invitations",
         )
 
         (
@@ -484,11 +491,8 @@ class OrganizationService:
             await self._require_member(
                 user_id=requester_user_id,
                 organization_id=invitation.organization_id,
-                allowed_roles=[
-                    OrganizationRole.ORG_OWNER,
-                    OrganizationRole.ORG_EDITOR,
-                ],
-                denied_message="Only invitee, owners, or editors can view invitations",
+                permission=Permissions.ORG_INVITATION_MANAGE,
+                denied_message="Only the invitee or someone who manages invitations can view this",
             )
 
         return await self._enrich_invitation_display_fields(invitation)
@@ -565,8 +569,8 @@ class OrganizationService:
         await self._require_member(
             user_id=requester_user_id,
             organization_id=invitation.organization_id,
-            allowed_roles=[OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR],
-            denied_message="Only owners and editors can revoke invitations",
+            permission=Permissions.ORG_INVITATION_MANAGE,
+            denied_message="You may not revoke this organization's invitations",
         )
 
         if invitation.status != OrganizationInvitationStatus.PENDING:
@@ -591,12 +595,14 @@ class OrganizationService:
         if organization_id and member.organization_id != organization_id:
             raise IdentityValidationError("Member does not belong to organization")
 
-        await self._require_member(
+        requester = await self._require_member(
             user_id=requester_user_id,
             organization_id=member.organization_id,
-            allowed_roles=[OrganizationRole.ORG_OWNER],
-            denied_message="Only owners can change roles",
+            permission=Permissions.ORG_MEMBER_MANAGE,
+            denied_message="You may not change roles in this organization",
         )
+        refuse_reaching_over_org_member(requester, member, verb="change the role of")
+        refuse_unconferrable_org_role(requester, new_role, verb="give someone the role")
 
         if new_role != OrganizationRole.ORG_OWNER:
             await refuse_if_last_owner(
@@ -624,19 +630,10 @@ class OrganizationService:
             requester_member = await self._require_member(
                 user_id=requester_user_id,
                 organization_id=member.organization_id,
-                allowed_roles=[
-                    OrganizationRole.ORG_OWNER,
-                    OrganizationRole.ORG_EDITOR,
-                ],
-                denied_message="Only owners and editors can remove members",
+                permission=Permissions.ORG_MEMBER_MANAGE,
+                denied_message="You may not remove members from this organization",
             )
-            if (
-                requester_member.role == OrganizationRole.ORG_EDITOR
-                and member.role == OrganizationRole.ORG_OWNER
-            ):
-                raise IdentityAccessDeniedError(
-                    "Editors cannot remove organization owners"
-                )
+            refuse_reaching_over_org_member(requester_member, member, verb="remove")
 
         # The self-removal path runs through here too: "leave organization"
         # reads as harmless, which is exactly why it is the easier way to
