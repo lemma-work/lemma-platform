@@ -1,0 +1,195 @@
+---
+title: 0.9.0
+description: A new workspace, a sandbox browser you can watch and take over, agents that wait and ask before running on, and approved actions that run as the person who approved them.
+published: 2026-09-29
+tags:
+  - release
+---
+
+## What changes for API, SDK and CLI users
+
+This is what makes 0.9 a minor rather than a patch: a few responses change
+shape, one protocol moves, and an approval changes whose authority an agent
+acts with.
+
+**An approved action runs as the person who approved it.** When an agent asks to
+do something and gets a yes, the call runs with the authority of the person the
+agent works for — what they can reach, it can reach, and nothing more. Only that
+person can approve, on every surface, including a colleague typing "approve" in
+a shared channel. Anyone else is refused with `403 APPROVAL_NOT_OWNED`.
+
+**A revoked connection says so.** When a provider reports that an OAuth grant
+has been withdrawn, or an expired token has nothing to refresh with, the call
+fails with `409 CONNECTOR_REAUTH_REQUIRED`, naming the account to reconnect. It
+used to be a `502`, which read as an outage worth retrying. A provider that is
+actually unreachable is still a `502 OAUTH_FLOW_ERROR`.
+
+**Spending limits are a percentage.**
+`GET /usage/organizations/{organization_id}/limits` no longer returns
+`limit_usd` or `remaining_usd`; each window carries `used_percent`, as
+`/usage/me/limits` already did. `used_usd` and `reserved_usd` stay. What a plan
+includes can be retuned, and a dollar allowance invited planning against a
+number Lemma does not promise.
+
+**Agent Host speaks protocol 3.** The host's HTTP device API — the long poll,
+event batches, harness publishing, pairing and self-revoke — is replaced by one
+WebSocket link, including the two colon aliases 0.8.0 kept for hosts already in
+the field. A 0.8 Desktop paired to a hosted server is not stranded: it shows
+"Needs updating", keeps its pairing, and updating it is all it takes. Anything
+else calling the old routes gets `410 AGENT_HOST_UPGRADE_REQUIRED`.
+
+**No CLI version is refused.** `/health` reports `latest_cli_version`, a
+response to an older `lemma` carries an `X-Lemma-Latest-CLI` header, and the CLI
+turns that into a one-line hint at most once a day. `LEMMA_UPDATE_CHECK=0` turns
+it off.
+
+Smaller things you may meet. Conversations list by last activity rather than by
+when they began, each carries `last_activity_at`, and the list takes `search`.
+App releases and function revisions page with `limit` and `page_token`. The
+`SNOOZE` toolset is gone: `wait_for` replaces the `snooze` tool and is always
+available. An existing agent or an imported pod bundle that names `SNOOZE`
+simply drops it, but creating or updating an agent with it is refused as an
+unknown toolset, so remove it from those requests. `dm_conversation_reset_after_hours`
+leaves the surface response and is ignored if sent. `lemma chat` exits non-zero
+when the run fails on the server, so a script that trusted exit code 0 will now
+see the failure. The datastore changes socket rejects a bad session with a
+`4401` close, which the current SDKs and `lemma datastore watch` answer by
+refreshing once and reconnecting. A deployment that sells plans can refuse a new
+pod or member with `POD_LIMIT_REACHED` or `MEMBER_LIMIT_REACHED`; the
+open-source build has no plans. A shared file link lasts 24 hours by default and
+up to seven days, up from three hours and one day.
+
+If you use `lemma-sdk` for Python or TypeScript, or the `lemma` CLI, upgrade the
+package; the generated clients carry every field above.
+
+If you host Lemma yourself: `E2B_ALLOW_PUBLIC_TRAFFIC` is gone, and sandboxes
+are always created closed to the internet. A deleted pod's datastore tables are
+dropped by a daily cleanup 30 days after the pod goes;
+`DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` changes the window and `0` turns it
+off. The chat inactivity reset is one deployment setting,
+`SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS`.
+
+## A new workspace
+
+The workspace the September development updates described is now the app, and
+Desktop serves it too. The operator app remains as Lemma Harness.
+
+Resources open beside the conversation, on a divider you can drag, and as a
+sheet over it on a phone. Apps take the whole view, because squeezed into half
+of it they were cramped. History is ordered by what was answered last, pages
+all the way back, and can be searched. A pod shows who has access to it, and
+adding someone by email invites them to the organization if they are not in it
+yet, landing them in the pod when they accept. Installing from GitHub walks
+through choose, review and install, with the plan in plain words. Billing and
+organization settings live in the workspace, and a per-seat plan shows what the
+whole team would pay rather than one seat.
+
+"Teammate" now names the kind of thing you hire and nothing else. An agent that
+is acting is called by its name, and humans are people.
+
+## Signing in, and arriving
+
+Sign-in asks for your address first and answers with the one door it opens: a
+password, a provider button, or a code already on its way. An account made on
+WhatsApp is passwordless, and the web used to offer it a password, Google and a
+reset email that never arrived. It gets its code now.
+
+A new account is asked once for a name and, where the deployment can verify
+one, a phone proved by sending a single WhatsApp message, so no unproved number
+is trusted. Someone who messages on WhatsApp before they have an account can
+make one there, and a pending pod invitation is accepted on the way rather than
+producing a new organization. `lemma auth login` works against the new
+workspace, and asks which account you are handing over before it does. A
+session whose refresh keeps failing stops, rather than refreshing every second
+and a half for ever.
+
+## A browser you can watch, and take over
+
+The sandbox has a browser the agent drives and you can see, now streamed over
+VNC: a click lands where you clicked, and copy and paste work both ways. You can
+take the wheel, pop it out into its own window, or go full screen. When a site
+needs a person to sign in, the agent asks in the conversation and you answer
+there. The login is the browser's own, so it survives a suspend and a
+reconnect, and you can make it forget a site. An agent can record what it did,
+and a page a bot check blocked is told apart from a real one. The file explorer
+is a tree, rooted where the files actually are, and reaches files over eight
+megabytes.
+
+On hosted Lemma, an update no longer wipes a workspace. Lemma's own code was
+baked into the sandbox image, so a release that touched it replaced the image
+and the disk that came with it. That code is now installed into the running
+sandbox, and the image changes only when the machine underneath does.
+
+## Agents that wait, stop, and say what failed
+
+`wait_for` is the one way an agent waits — on a time, a process in its sandbox,
+or a sub-agent — and it costs nothing while it waits, where before it was
+`sleep` in a shell or a poll that gave up after about half a minute. A run that
+goes on very long, or keeps failing, pauses and asks whether to carry on through
+the same approval that reaches Slack, Teams, Telegram and email. That is a
+backstop set well above ordinary work, not a schedule.
+
+A model that thinks before it answers is told how much room it has, so a run no
+longer dies after a dozen tool calls with nothing to show. A tool that failed is
+reported as a failure, where it was often read as a success, and a pause for a
+person no longer counts as one.
+
+Widgets are files the agent writes and then displays, so fixing one is editing
+a few lines rather than retyping all of it. A widget can hand you your next
+question, and fits what it shows. The pod's own agent knows its name, what it
+may do, and its schedules, apps and channels, and reaches pod data through its
+tools rather than shelling out. On a plan with a spending limit, that agent
+could not be priced because of how it searched its tools, and so could not run.
+It can.
+
+## Connectors and channels
+
+Any file argument on any connector takes a pod file,
+`{"pod_path": "/me/q3.pdf"}`, read with your access and handed to the provider
+in the form it wants. Native Gmail can send a message and create a draft.
+Shopify connects with OAuth and asks for the store's subdomain, instead of a
+pasted token that expired and could not be refreshed. Eight Composio toolkits
+that could only ever fail on connect now say they need the organization's own
+OAuth app. A connector your organization had not set up yet no longer fails to
+connect from the workspace.
+
+A Slack app two people connected answers as one bot. A threaded reply is
+answered only in a thread the agent is in, so two colleagues talking under
+somebody else's message no longer start a run each. WhatsApp numbers come from
+a pool, each answering with its own credentials. A WhatsApp conversation keeps
+its history: the channel had been trimming it to the last forty messages, tool
+chatter included, before the agent ever saw it. A private chat stays one
+conversation when the number or surface it arrives on changes, and when a
+message reaches nobody, the reason is recorded instead of lost.
+
+## Desktop
+
+Desktop's settings live in the workspace, under This Mac. A coding agent there —
+Claude Code, Codex or OpenCode — can be talked to while it works: a message is
+steered into the running turn where the agent supports it, and delivered next
+where it does not. It can be allowed to run commands on the Mac itself,
+confined, and you can pick its model and effort. Server setup configures the
+local server's model, email and keys, with a button that tests each. Sharing an
+install asks natively before anyone else is let in, and walls their sandboxes
+off from the Mac.
+
+The in-app updater had refused every install over a data check that nothing
+ever recorded. Only a Postgres major-version change stops an update now, an
+update downloads only the parts of the runtime that changed, and quitting takes
+seconds rather than seventeen.
+
+## Under the floor
+
+The API drops a step that took about 36 seconds on every boot, because pod
+schemas are readable from the moment they are created. The backend stops
+growing in steps it never gave back: a statement cache kept a new entry for
+every size of bulk write. A worker lane that died no longer leaves the worker
+reporting healthy while a Redis stream grows until memory runs out, and streams
+have a hard ceiling. One pod's bulk import can no longer hold up every other
+pod's record triggers, and twelve places that held the event loop or a database
+connection across slow work no longer do.
+
+Organization editors can invite, re-role and remove people, up to their own
+level and never an owner. An editor could make themselves admin of a pod they
+had no access to, and cannot now. A personal agent is no longer named to
+everyone on the organization page.
