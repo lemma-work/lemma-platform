@@ -8,7 +8,9 @@ from typing import Any
 
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.quarantine import dead_letter_stream
+from app.core.infrastructure.events.stream_budget import active_readers
 from app.core.infrastructure.events.stream_subscriber import registered_stream_groups
+from app.core.infrastructure.jobs.lanes import Lane, lane_queue_name
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
 
@@ -38,8 +40,6 @@ def _streaq_lane_queues() -> set[str]:
     make a bulk-lane backlog — exactly the thing lanes exist to contain —
     invisible on dashboards.
     """
-    from app.core.infrastructure.jobs.streaq_runtime import Lane, lane_queue_name
-
     return {f"streaq:{lane_queue_name(lane)}:queues:normal" for lane in Lane}
 
 
@@ -198,14 +198,14 @@ async def _snapshot_stream(
             stream,
             _value(group, "name"),
         )
-        active_consumer_idle_ms = (
-            event_transport_settings.redis_stream_stale_consumer_seconds * 1000
-        )
-        active_consumers = sum(
-            1
-            for consumer in consumer_info
-            if int(_value(consumer, "idle", active_consumer_idle_ms + 1) or 0)
-            <= active_consumer_idle_ms
+        # Readers only, and by when they last *read* something. A reclaimer's
+        # XAUTOCLAIM poll refreshes its idle time every minute whether or not
+        # anything is being consumed, so counting it kept a group whose reader
+        # had died looking active for hours.
+        active_consumers = active_readers(
+            consumer_info,
+            within_ms=event_transport_settings.redis_stream_stale_consumer_seconds
+            * 1000,
         )
         caught_up = pending == 0 and _last_delivered_id(group) == stream_last_id
         consumers = int(_value(group, "consumers", 0) or 0)

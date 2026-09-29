@@ -25,16 +25,15 @@ the shared API/SDK minor compatibility line. After 1.0, breaking changes bump th
 shared major compatibility line.
 
 Use a normal MAJOR.MINOR.PATCH string.
+
+Because releases are mono-version, this is also the newest ``lemma`` CLI the
+server knows of. It is only ever a suggestion: ``/health`` reports it as
+``latest_cli_version``, and a request from an older CLI gets it back in an
+``X-Lemma-Latest-CLI`` response header. No CLI version is ever refused -- a
+floor would have to name a release before it ships, and one that named a
+release that never shipped told every user to upgrade to nothing.
 """
 
 from __future__ import annotations
 
 API_VERSION = "0.8.0"
-
-#: The oldest ``lemma`` CLI this server fully supports. The first release
-#: after v0.8.0 is the first to contain #804 ("Let connector operations take
-#: pod files as attachments"): an older CLI does not send ``pod_id`` with
-#: connector executions, so pod-file inputs are refused. Requests from an
-#: older CLI get an ``X-Lemma-Client-Outdated`` response header naming this
-#: version, and ``/health`` reports it as ``min_cli_version``.
-MIN_CLI_VERSION = "0.8.1"

@@ -21,6 +21,7 @@ import { ThisMacSharing } from "./this-mac-sharing";
 import { ThisMacServerSetup } from "./this-mac-setup";
 import { SearchReadinessRow } from "./search-readiness";
 import { DiskUsageRows } from "./disk-usage";
+import { downloadedSoFar } from "./sandbox-images";
 import { needsSetup, capabilityStatus, CAPABILITIES } from "./server-setup";
 
 /** Settings → This Mac: the settings a person changes about their own
@@ -136,7 +137,7 @@ function Overview() {
                                 {healthDetail(data)} Quit and reopen Lemma to restart it, or use Lemma → Recovery… in the menu bar.
                             </p>
                         )}
-                        <SettingRow name="Start at login" consequence={`Lemma opens when you sign in to ${noun}, so teammates and channels keep answering.`}>
+                        <SettingRow name="Start at login" consequence={`Lemma opens when you sign in to ${noun}, so conversations and channels keep answering.`}>
                             <input
                                 type="checkbox"
                                 className="thismac-switch"
@@ -200,7 +201,7 @@ function StartupWarnings({ warnings, onLogs }: { warnings: StartupWarning[]; onL
 
 /** One line for Overview: what is still needed, or how much is set up. */
 export function setupSummary(snapshot: ThisMacSnapshot): string {
-    if (needsSetup(snapshot).length) return "Needs an AI model before teammates can work.";
+    if (needsSetup(snapshot).length) return "Needs an AI model before any work can start.";
     const ready = CAPABILITIES.filter((one) => capabilityStatus(snapshot, one.id).state === "ready").length;
     return `AI model ready · ${ready} of ${CAPABILITIES.length} capabilities set up.`;
 }
@@ -242,13 +243,18 @@ function CodingAgents() {
                 <ThisComputerAgents />
             </ThisComputerCard>
             <p className="thismac-foot">
-                Choose which of its agents teammates can use in{" "}
+                Choose which of its agents to allow in{" "}
                 <button className="linkish" onClick={() => openSettings("models")}>Models</button>.
             </p>
             <HostExecution />
             <Loading snapshot={snapshot}>
                 {(data) => {
-                    const wording = sandboxWording(data.sandbox_images?.state, noun);
+                    const images = data.sandbox_images;
+                    const wording = sandboxWording(
+                        images?.state,
+                        noun,
+                        images ? downloadedSoFar({ doneMb: images.done_mb, totalMb: images.total_mb }) : null,
+                    );
                     return (
                         <SettingRow name="Workspace sandbox" consequence={wording.text}>
                             {wording.offer && (

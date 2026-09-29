@@ -10,6 +10,10 @@ from e2b import Template, default_build_logger, wait_for_port
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 UV_VERSION = "0.11.31"
+#: The interpreter `Dockerfile.workspace`'s `python:3.14.6-slim` carries. The
+#: overlay is built `--no-deps` against one third-party closure, so the two
+#: fabrics' interpreters should be the same release, not merely the same minor.
+PYTHON_VERSION = "3.14.6"
 UV_LINUX_X64_SHA256 = "8cc1cd82d434ec565376f98bd938d4b715b5791a80ff2d3aa78821cf85091b4b"
 NODE_VERSION = "24.18.0"
 NODE_LINUX_X64_SHA256 = (
@@ -179,11 +183,6 @@ def workspace_template():
             "pnpm store prune",
             user="root",
         )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/lemma-node-tool",
-            "/usr/local/lib/lemma-node-tool",
-            mode=0o755,
-        )
         .run_cmd(
             "ln -sf /usr/local/lib/lemma-node-tool "
             "/usr/local/bin/agent-browser && "
@@ -192,10 +191,6 @@ def workspace_template():
             "/usr/local/bin/liteparse && "
             "ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/pnpm",
             user="root",
-        )
-        .run_cmd(
-            "LEMMA_NODE_BINARY=/opt/node24/bin/node agent-browser install",
-            user="user",
         )
         .copy(
             "lemma-backend/sandbox-images/templates/workspace-node/lemma-profile.sh",
@@ -211,89 +206,6 @@ def workspace_template():
             "lemma-backend/sandbox-images/templates/workspace-github/lemma-profile.sh",
             "/etc/profile.d/lemma-github.sh",
             mode=0o644,
-        )
-        .copy(
-            # Takes the name on PATH, with the real binary at
-            # `/usr/local/lib/lemma-uv-bin`. See `_install_uv_command`.
-            "lemma-backend/sandbox-images/scripts/lemma-uv",
-            "/usr/local/bin/uv",
-            mode=0o755,
-        )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/set-display-size.sh",
-            "/usr/local/bin/set-display-size",
-            mode=0o755,
-        )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh",
-            "/usr/local/bin/lemma-ensure-display",
-            mode=0o755,
-        )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/start-browser.sh",
-            "/usr/local/bin/start-browser",
-            mode=0o755,
-        )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/start-browser-relay.sh",
-            "/usr/local/bin/start-browser-relay",
-            mode=0o755,
-        )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/browser-is-live.sh",
-            "/usr/local/bin/browser-is-live",
-            mode=0o755,
-        )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh",
-            "/usr/local/bin/start-vnc-bridge",
-            mode=0o755,
-        )
-        # The browser relay, and the package files it needs to be importable.
-        #
-        # This template deliberately ships no workspace runtime -- an E2B
-        # sandbox serves no HTTP of its own, and exec and files go through the
-        # provider SDK. The relay is the exception, and it is why it was built
-        # as a separate process: a browser channel that lived in the runtime
-        # existed on Docker and nowhere else, which is the whole reason this
-        # exists.
-        #
-        # `tasks.py` is here because `browser_relay.app` and
-        # `browser_relay.stream_proxy` both import it, and it was not: the
-        # comment said "the two package files it needs" while the relay needed
-        # three, so every workspace sandbox shipped a relay that raised
-        # `ModuleNotFoundError` on its first line and left no log. Counting
-        # them by hand is what `test_e2b_templates_ship_what_they_import` now
-        # does instead.
-        .copy(
-            "lemma-backend/sandbox_runtime/__init__.py",
-            "/app/sandbox_runtime/__init__.py",
-        )
-        .copy(
-            "lemma-backend/sandbox_runtime/tasks.py",
-            "/app/sandbox_runtime/tasks.py",
-        )
-        .copy(
-            "lemma-backend/sandbox_runtime/paths.py",
-            "/app/sandbox_runtime/paths.py",
-        )
-        .copy(
-            "lemma-backend/sandbox_runtime/sandbox_memory.py",
-            "/app/sandbox_runtime/sandbox_memory.py",
-        )
-        .copy(
-            "lemma-backend/sandbox_runtime/browser_relay",
-            "/app/sandbox_runtime/browser_relay",
-        )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/save-webpage.sh",
-            "/usr/local/bin/save-webpage",
-            mode=0o755,
-        )
-        .copy(
-            "lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs",
-            "/opt/lemma-node/webpage-to-markdown.mjs",
-            mode=0o755,
         )
         # Real Chrome, not the testing build.
         #
@@ -355,12 +267,12 @@ def workspace_template():
             "/build/lemma-backend/sandbox-images/templates/workspace-python",
         )
         .run_cmd(
-            "UV_PYTHON_INSTALL_DIR=/opt/python uv python install 3.14 && "
+            f"UV_PYTHON_INSTALL_DIR=/opt/python uv python install {PYTHON_VERSION} && "
             "UV_PYTHON_INSTALL_DIR=/opt/python "
             "UV_PROJECT_ENVIRONMENT=/opt/lemma-python "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
             "uv sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
-            "--python 3.14 "
+            f"--python {PYTHON_VERSION} "
             "--locked --no-dev --no-editable && "
             "printf '%s\\n' "
             "'import sys; "
@@ -368,6 +280,15 @@ def workspace_template():
             "sys.path.insert(0, p) if p not in sys.path else None' "
             "> /opt/lemma-python/lib/python3.14/site-packages/"
             "lemma-workspace-overlay.pth && "
+            # `/app` for the `sandbox_runtime` floor and the user's own
+            # site-packages, through a `.pth` rather than `PYTHONPATH`, exactly
+            # as `Dockerfile.workspace` does and for its reason: `PYTHONPATH`
+            # reaches every interpreter, virtualenvs included, and lands ahead
+            # of a venv's own packages. A `.pth` is read only by the
+            # interpreter whose site-packages holds it.
+            "printf '/app\\n/home/user/.python/lib/python3.14/site-packages\\n' "
+            "> /opt/lemma-python/lib/python3.14/site-packages/"
+            "lemma-workspace-paths.pth && "
             # Where the backend installs the first-party code this image also
             # carries. The copy below is a *floor*, not the shipped version: the
             # overlay supersedes it, so a Lemma code change no longer needs a
@@ -405,16 +326,124 @@ def workspace_template():
             "test -x /opt/lemma-python/bin/lemma && "
             "ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma && "
             "/usr/local/bin/lemma --version && "
-            "mkdir -p /root/.local/share/jupyter/kernels/python3 && "
-            "printf '%s\\n' "
-            '\'{"argv":["/opt/lemma-python/bin/python","-m",'
-            '"ipykernel_launcher","-f","{connection_file}"],'
-            '"display_name":"Python 3.14","language":"python",'
-            '"metadata":{"debugger":true}}\' '
-            "> /root/.local/share/jupyter/kernels/python3/kernel.json && "
             "uv cache clean && "
             "rm -rf /build/lemma-python /build/lemma-pod-bundle "
             "/build/lemma-cli /build/lemma-skills /build/lemma-backend",
+            user="root",
+        )
+        # Everything below is the floor: the first-party code this template
+        # carries so a sandbox works before the backend has installed the
+        # runtime overlay into it, and keeps working if an install fails. The
+        # overlay supersedes all of it -- its `site-packages` first on
+        # `sys.path`, its `bin` first on `PATH` -- which is what lets a Lemma
+        # code change ship without a template, and a template rebuild is what
+        # destroys workspaces on this fabric.
+        #
+        # Last, because it is the part that changes with Lemma's own code.
+        #
+        # The same `sandbox_runtime` list the overlay carries
+        # (`RUNTIME_SOURCES` in `scripts/build_runtime_bundle.py`) and
+        # `Dockerfile.workspace` bakes, all of it although no workspace runtime
+        # serves HTTP here: one list, held to the other two by
+        # `test_the_images_bake_the_overlay_floor`, is worth more than the few
+        # hundred kilobytes a shorter one would save. A shorter one is also how
+        # the relay once shipped without the `tasks.py` it imports.
+        .copy(
+            "lemma-backend/sandbox_runtime/__init__.py",
+            "/app/sandbox_runtime/__init__.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/contracts.py",
+            "/app/sandbox_runtime/contracts.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/errors.py",
+            "/app/sandbox_runtime/errors.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/host_fallback.py",
+            "/app/sandbox_runtime/host_fallback.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/paths.py",
+            "/app/sandbox_runtime/paths.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/protocol.py",
+            "/app/sandbox_runtime/protocol.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/sandbox_memory.py",
+            "/app/sandbox_runtime/sandbox_memory.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/tasks.py",
+            "/app/sandbox_runtime/tasks.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/browser_relay",
+            "/app/sandbox_runtime/browser_relay",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/workspace",
+            "/app/sandbox_runtime/workspace",
+        )
+        # The scripts, under the names the overlay's `bin` gives them too
+        # (`SCRIPT_NAMES` in `scripts/build_runtime_bundle.py`).
+        .copy(
+            "lemma-backend/sandbox-images/scripts/lemma-node-tool",
+            "/usr/local/lib/lemma-node-tool",
+            mode=0o755,
+        )
+        .copy(
+            # Takes the name on PATH, with the real binary at
+            # `/usr/local/lib/lemma-uv-bin`. See `_install_uv_command`.
+            "lemma-backend/sandbox-images/scripts/lemma-uv",
+            "/usr/local/bin/uv",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/set-display-size.sh",
+            "/usr/local/bin/set-display-size",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh",
+            "/usr/local/bin/lemma-ensure-display",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-browser.sh",
+            "/usr/local/bin/start-browser",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-browser-relay.sh",
+            "/usr/local/bin/start-browser-relay",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/browser-is-live.sh",
+            "/usr/local/bin/browser-is-live",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh",
+            "/usr/local/bin/start-vnc-bridge",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/save-webpage.sh",
+            "/usr/local/bin/save-webpage",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs",
+            "/opt/lemma-node/webpage-to-markdown.mjs",
+            mode=0o755,
+        )
+        .run_cmd(
+            "/opt/lemma-python/bin/python -m compileall -q /app/sandbox_runtime",
             user="root",
         )
         .set_envs(
@@ -444,22 +473,18 @@ def workspace_template():
                 "NODE_PATH": "/opt/lemma-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
                 "PIP_PREFIX": "/home/user/.python",
-                # Deliberately *not* the user's own site-packages. A path
-                # already on PYTHONPATH is already on sys.path, so
-                # `lemma-workspace-overlay.pth`'s "insert unless present" guard
-                # does nothing -- and the runtime overlay, which has no such
-                # competition, lands in front of it. That inverts the one
-                # ordering this design promises: a package the agent installed
-                # itself must outrank the one we ship. Docker dropped PYTHONPATH
-                # for the same class of reason and says so in its own comment.
-                "PYTHONPATH": (
-                    "/opt/lemma-python/lib/python3.14/site-packages:"
-                    # Where the browser relay package lives.
-                    "/app"
-                ),
+                # No PYTHONPATH: `lemma-workspace-paths.pth` above gives the
+                # Lemma interpreter `/app` and the user's site-packages, and
+                # nothing else. See `Dockerfile.workspace`.
+                #
+                # The overlay's commands ahead of the image's copies of the
+                # same scripts, as on Docker. Login shells get the same order
+                # from `lemma-python.sh`, since this environment does not reach
+                # them.
                 "PATH": (
                     "/home/user/.python/bin:/home/user/.local/share/pnpm:"
                     "/home/user/.local/bin:"
+                    "/opt/lemma-runtime/current/bin:"
                     "/opt/lemma-python/bin:"
                     "/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"

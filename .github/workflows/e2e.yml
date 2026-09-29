@@ -137,7 +137,6 @@ jobs:
               'lemma-python/**',
               'lemma-pod-bundle/**',
               'lemma-cli/**',
-              'lemma-typescript/**',
               'lemma-skills/**'
             ) }}" >> "$GITHUB_OUTPUT"
       # `lookup-only`, so a warm cache costs a HEAD request rather than pulling

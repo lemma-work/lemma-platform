@@ -338,24 +338,12 @@ impl<E: Engine + 'static> GuestService<E> {
     /// the day someone changes how these paths are built is the day it starts
     /// mattering. The comment used to credit it with the symlink defence, which
     /// is the wrong line to trust.
+    ///
+    /// Counts homes. The runtime overlays beside them go too, uncounted: they
+    /// belong to sandboxes that no longer exist.
     pub(crate) fn remove_all_workspaces(&self) -> Result<usize, GuestError> {
-        let root = self.state_root.join("workspaces");
-        let Ok(entries) = fs::read_dir(&root) else {
-            return Ok(0);
-        };
-        let mut removed = 0;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.parent() != Some(root.as_path()) {
-                return Err(GuestError::invalid("workspace escaped managed root"));
-            }
-            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            fs::remove_dir_all(&path).map_err(|error| GuestError::engine(error.to_string()))?;
-            removed += 1;
-        }
-        Ok(removed)
+        remove_every_sandbox_directory(&self.state_root.join("runtime"))?;
+        remove_every_sandbox_directory(&self.state_root.join("workspaces"))
     }
 
     /// Stop everything, giving each container a grace period that matches what
@@ -547,4 +535,23 @@ pub(crate) fn data_disk_space(root: &Path) -> Option<(u64, u64)> {
         u64::from(measured.f_bavail as u32).saturating_mul(block),
         u64::from(measured.f_blocks as u32).saturating_mul(block),
     ))
+}
+
+fn remove_every_sandbox_directory(root: &Path) -> Result<usize, GuestError> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Ok(0);
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.parent() != Some(root) {
+            return Err(GuestError::invalid("workspace escaped managed root"));
+        }
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        fs::remove_dir_all(&path).map_err(|error| GuestError::engine(error.to_string()))?;
+        removed += 1;
+    }
+    Ok(removed)
 }

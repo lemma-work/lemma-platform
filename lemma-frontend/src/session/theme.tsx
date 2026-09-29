@@ -156,7 +156,7 @@ export function AppearancePanel() {
                 </div>
                 <p className="appearance__hint">Message and composer text. Saved in this browser.</p>
                 <div className="appearance__chat-preview" aria-label="Chat text preview">
-                    <span>Your teammate</span>
+                    <span>Kit</span>
                     <p>The draft is ready. Take a look and tell me what you’d like to change.</p>
                 </div>
             </div>

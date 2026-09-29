@@ -42,6 +42,7 @@ from __future__ import annotations
 from redis.exceptions import RedisError
 
 from app.core.infrastructure.redis.client import get_redis
+from app.core.infrastructure.redis.counters import incr_with_ttl
 from app.core.log.log import get_logger
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.errors import OperationExecutionCircuitOpenError
@@ -191,9 +192,7 @@ async def record_failure(scope: str) -> None:
     window = connector_settings.connector_breaker_failure_window_seconds
     try:
         redis = get_redis()
-        failures = await redis.incr(fail_key)
-        if failures == 1:
-            await redis.expire(fail_key, window)
+        failures = await incr_with_ttl(redis, fail_key, window)
         if failures < threshold:
             return
         await redis.set(open_key, "1", ex=cooldown)

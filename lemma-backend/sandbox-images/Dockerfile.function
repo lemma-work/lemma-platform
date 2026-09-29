@@ -8,25 +8,52 @@
 # the same release as an image change is what makes a rename here safe.
 # The workspace image's bootstrap credential does not apply -- a function
 # runtime is reached through the gateway and authenticates per invocation.
+#
+# Rebuilt every release, unlike the workspace image: it bakes
+# `sandbox_runtime.function` and no overlay reaches it. The layers are ordered
+# so that a release which changed only Lemma's own code changes only the small
+# ones at the end, and the build is reproducible (pinned bases,
+# `SOURCE_DATE_EPOCH`), so the layers below them come out as the same bytes and
+# a machine that has the previous image downloads only the top.
 
-ARG PYTHON_IMAGE=python:3.14.6-slim
-ARG UV_VERSION=0.11.31
+# Pinned by digest, as in `Dockerfile.workspace`, and for its reason.
+ARG PYTHON_IMAGE=python:3.14.6-slim@sha256:7bec7ddcddeff7975d6ba9b4be7dd6f6b2f55e7491539145e2978f7f97ce9144
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.31@sha256:ecd4de2f060c64bea0ff8ecb182ddf46ba3fcccdc8a60cfdbaf20d1a047d7437
 
-FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
+FROM ${UV_IMAGE} AS uv-runtime
 
+# The third-party closure alone; see `Dockerfile.workspace`'s `python-runtime`.
 FROM ${PYTHON_IMAGE} AS python-runtime
+ARG SOURCE_DATE_EPOCH
 ENV UV_PROJECT_ENVIRONMENT=/opt/lemma-function \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 COPY --from=uv-runtime /uv /usr/local/bin/uv
 COPY lemma-backend/sandbox-images/templates/function-python/pyproject.toml /build/lemma-backend/sandbox-images/templates/function-python/pyproject.toml
 COPY lemma-backend/sandbox-images/templates/function-python/uv.lock /build/lemma-backend/sandbox-images/templates/function-python/uv.lock
-COPY lemma-python /build/lemma-python
 RUN uv sync \
         --project /build/lemma-backend/sandbox-images/templates/function-python \
-        --locked \
+        --frozen \
         --no-dev \
         --no-editable \
+        --no-install-package lemma-sdk \
+    && uv cache clean
+
+# The SDK on its own, laid over the closure as a small layer of its own.
+# `uv_cache.json` is uv's record of when it built the wheel, so it and its
+# `RECORD` line go: they are the only bytes two builds of one source disagree on.
+FROM python-runtime AS python-floor
+ARG SOURCE_DATE_EPOCH
+COPY lemma-python /build/lemma-python
+RUN uv lock --locked \
+        --project /build/lemma-backend/sandbox-images/templates/function-python \
+    && uv pip install \
+        --no-deps \
+        --python /opt/lemma-function/bin/python \
+        --prefix /opt/lemma-function-sdk \
+        /build/lemma-python \
+    && find /opt/lemma-function-sdk -name uv_cache.json -delete \
+    && sed -i '/uv_cache\.json/d' /opt/lemma-function-sdk/lib/python3.14/site-packages/*.dist-info/RECORD \
     && uv cache clean
 
 FROM ${PYTHON_IMAGE}
@@ -37,22 +64,27 @@ ENV PYTHONUNBUFFERED=1 \
     HOME=/home/appuser \
     PATH=/opt/lemma-function/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# The logs go with the lists: they record when the install ran, which is the
+# one thing two builds of the same inputs disagree about.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates tini \
-    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log \
     && groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 --home-dir /home/appuser --create-home appuser \
     && mkdir -p /app/sandbox_runtime/function \
     && chown -R 10001:10001 /app /home/appuser
 
 COPY --from=python-runtime /opt/lemma-function /opt/lemma-function
+COPY --from=python-floor /opt/lemma-function-sdk/ /opt/lemma-function/
 
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_runtime/__init__.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/function /app/sandbox_runtime/function
-COPY lemma-backend/sandbox-images/scripts/lemma-function-runtime /usr/local/bin/lemma-function-runtime
-RUN chmod 0755 /usr/local/bin/lemma-function-runtime \
-    && python -m compileall -q /app/sandbox_runtime
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/lemma-function-runtime /usr/local/bin/lemma-function-runtime
+# Here rather than at the top of the stage, so the layers above do not key
+# their cache on it. Hash-validated bytecode; see `Dockerfile.workspace`.
+ARG SOURCE_DATE_EPOCH
+RUN python -m compileall -q /app/sandbox_runtime
 
 WORKDIR /tmp
 USER 10001:10001

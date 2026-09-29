@@ -428,15 +428,23 @@ async def maybe_resume_pending_interaction(
         decision, response = settled
 
         recording = True
-        recorded = await agent_conversations.resolve_pending_interaction(
-            uow,
-            conversation_id=context.conversation_id,
-            approval_id=pending.tool_call_id,
-            user_id=context.user_id,
-            pod_id=context.pod_id,
-            decision=decision,
-            response=response,
-        )
+        try:
+            recorded = await agent_conversations.resolve_pending_interaction(
+                uow,
+                conversation_id=context.conversation_id,
+                approval_id=pending.tool_call_id,
+                user_id=context.user_id,
+                pod_id=context.pod_id,
+                decision=decision,
+                response=response,
+            )
+        except agent_conversations.ApprovalNotOwnedError:
+            # An approved call runs with the owner's authority, so only the
+            # owner can approve it -- the rule the buttons apply too
+            # (`interaction_sender_matches`). Somebody else in a shared thread
+            # typing "approve" is just saying something, and nothing was
+            # recorded: it goes on as an ordinary message.
+            return ResumeOutcome.NOT_A_DECISION
         # The conversation was deleted between the lookup and the write. Nothing
         # was recorded and there is no pause left to deny, so the caller may
         # carry on -- which is what it did for this case before, when the

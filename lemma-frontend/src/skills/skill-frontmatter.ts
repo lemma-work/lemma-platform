@@ -61,7 +61,7 @@ export function readFrontmatter(text: string, folder?: string): SkillFront {
        ever list — does not.) */
     const windows = text.startsWith("---\r\n");
     if (!text.startsWith("---\n") && !windows) {
-        return { ...blank, problem: "This file does not open with a `---` frontmatter block, so the teammate cannot load it." };
+        return { ...blank, problem: "This file does not open with a `---` frontmatter block, so it will not load." };
     }
 
     const lines = text.split(/\r\n|\r|\n/);
@@ -70,7 +70,7 @@ export function readFrontmatter(text: string, folder?: string): SkillFront {
         if (lines[index].trim() === "---") { close = index; break; }
     }
     if (close === -1) {
-        return { ...blank, problem: "The frontmatter block is never closed with a second `---`, so the teammate cannot load it." };
+        return { ...blank, problem: "The frontmatter block is never closed with a second `---`, so it will not load." };
     }
 
     const fields: Record<string, string> = {};
@@ -94,16 +94,16 @@ export function readFrontmatter(text: string, folder?: string): SkillFront {
     const name = fields.name ?? "";
     const description = fields.description ?? "";
 
-    if (!name) return { name, description, problem: "The frontmatter has no `name`, which the loader requires, so the teammate cannot load it." };
-    if (!description) return { name, description, problem: "The frontmatter has no `description`, which the loader requires, so the teammate cannot load it." };
+    if (!name) return { name, description, problem: "The frontmatter has no `name`, which the loader requires, so it will not load." };
+    if (!description) return { name, description, problem: "The frontmatter has no `description`, which the loader requires, so it will not load." };
     if (!NAME_SHAPE.test(name) || name.includes("--")) {
-        return { name, description, problem: "The name `" + name + "` is not lowercase letters, digits and single hyphens, so the teammate cannot load it." };
+        return { name, description, problem: "The name `" + name + "` is not lowercase letters, digits and single hyphens, so it will not load." };
     }
     if (folder && folder !== name) {
-        return { name, description, problem: "The frontmatter calls this `" + name + "` but the folder is `" + folder + "`. They have to match, so the teammate cannot load it." };
+        return { name, description, problem: "The frontmatter calls this `" + name + "` but the folder is `" + folder + "`. They have to match, so it will not load." };
     }
     if (windows) {
-        return { name, description, problem: "This file has Windows line endings. The loader reads a pod's own SKILL.md byte for byte and will not accept them, so the teammate cannot load it." };
+        return { name, description, problem: "This file has Windows line endings. The loader reads a pod's own SKILL.md byte for byte and will not accept them, so it will not load." };
     }
 
     return { name, description, problem: null };

@@ -311,6 +311,42 @@ def _refuse_loopback_while_shared(
         raise ValueError(_SHARED_LOOPBACK_ERROR)
 
 
+def _unresolvable_host_allowed() -> bool:
+    """Whether a name that resolves nowhere may pass, which is only under test.
+
+    The product scenarios point a provider at a reserved name that their egress
+    proxy answers for, as they do for connectors, whose guard
+    (``app.core.net.url_guard``) makes the same allowance. What the guard
+    refuses is unchanged: an address literal, and a name that resolves into
+    private space, are still checked. Not in ``local``, where a name that
+    resolves nowhere is a typo, and saying so beats saving a provider that no
+    run can reach.
+    """
+    return settings.environment == "testing"
+
+
+async def _addresses_of(host: str) -> list[str] | None:
+    """The addresses to check for ``host``; ``None`` when there are none to check.
+
+    ``None`` only for a name that resolves nowhere where that is allowed -- see
+    `_unresolvable_host_allowed`. An address literal is its own answer.
+    """
+    try:
+        ipaddress.ip_address(host)
+        return [host]
+    except ValueError:
+        pass
+    try:
+        infos = await run_blocking(
+            socket.getaddrinfo, host, None, limiter="external_http"
+        )
+    except OSError as exc:
+        if _unresolvable_host_allowed():
+            return None
+        raise ValueError(_PUBLIC_URL_ERROR) from exc
+    return [str(info[4][0]) for info in infos]
+
+
 async def _validate_public_base_url(url: str) -> None:
     """Reject SSRF targets before issuing a server-side request to ``url``.
 
@@ -329,18 +365,9 @@ async def _validate_public_base_url(url: str) -> None:
         raise ValueError(_PUBLIC_URL_ERROR)
     host = parsed.hostname
     allow_loopback = _loopback_allowed_for(parsed)
-    candidates: list[str] = []
-    try:
-        ipaddress.ip_address(host)
-        candidates.append(host)
-    except ValueError:
-        try:
-            infos = await run_blocking(
-                socket.getaddrinfo, host, None, limiter="external_http"
-            )
-        except OSError as exc:
-            raise ValueError(_PUBLIC_URL_ERROR) from exc
-        candidates.extend(str(info[4][0]) for info in infos)
+    candidates = await _addresses_of(host)
+    if candidates is None:
+        return
     if not candidates:
         raise ValueError(_PUBLIC_URL_ERROR)
     for addr in candidates:

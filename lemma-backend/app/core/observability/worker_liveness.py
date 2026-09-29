@@ -39,6 +39,7 @@ import time
 from redis.exceptions import RedisError
 
 from app.core.log.log import get_logger
+from app.core.observability.process_health import process_unhealthy_reason
 
 logger = get_logger(__name__)
 
@@ -166,10 +167,16 @@ async def worker_readiness_state(
 
 
 async def worker_liveness_loop(redis_client) -> None:
-    """Background task: keep the two keys fresh for as long as the loop turns."""
+    """Background task: keep the two keys fresh for as long as the loop turns.
+
+    And for as long as the process has not given up: a worker that knows it is
+    no longer consuming (see ``process_health``) lets ``alive`` expire, so
+    readiness reports it stalled instead of vouching for it.
+    """
     while True:
         try:
-            await publish_worker_liveness(redis_client)
+            if process_unhealthy_reason() is None:
+                await publish_worker_liveness(redis_client)
         except RedisError, OSError, asyncio.TimeoutError:
             # Not fatal -- the heartbeat file and the `worker.heartbeat` event
             # still report this process. What is lost is the API's ability to

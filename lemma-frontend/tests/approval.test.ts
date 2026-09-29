@@ -125,7 +125,7 @@ test("a heading the agent wrote survives both states", () => {
 
 test("a nameless approval still says approval, and never leaves a blank where a name goes", () => {
     assert.equal(interactionHeading("approval", "", "Blogger", false), "Blogger needs your approval");
-    assert.equal(interactionHeading("approval", "", "  ", false), "Your teammate needs your approval");
+    assert.equal(interactionHeading("approval", "", "  ", false), "It needs your approval");
 });
 
 /* A coding agent's permission request, as the backend writes it. */

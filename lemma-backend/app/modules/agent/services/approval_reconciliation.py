@@ -257,6 +257,7 @@ async def execute_approved_tool_as_user(
     deps: BaseAgentContext,
     tool_name: str,
     args: dict[str, object],
+    approval_id: str | None = None,
 ) -> dict[str, object]:
     """Run an approved tool outside the database transaction; never raise."""
     # Lazy to avoid importing the tool registry back through ConversationService.
@@ -274,6 +275,7 @@ async def execute_approved_tool_as_user(
             deps=deps,
             tool_name=tool_name,
             args=args,
+            approval_id=approval_id,
         )
         value = to_json_value(result)
         if isinstance(value, dict) and value.get("success") is False:

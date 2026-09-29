@@ -389,8 +389,28 @@ mod locald_events {
 
         assert_eq!(ui.sandbox_images, "downloading");
         assert_eq!(ui.sandbox_images_detail, "Downloading the workspace image");
+        assert_eq!(ui.sandbox_images_done_mb, None);
         assert!(ui.ready && ui.running);
         assert_eq!((ui.phase.as_str(), ui.progress), ("Lemma is ready", 100));
+
+        // How far it has got rides along, and does not survive into a state
+        // that says nothing about it.
+        apply_locald_event(
+            &mut ui,
+            "sandbox-images",
+            &json!({"state": "downloading", "detail": "", "done_mb": 120, "total_mb": 700}),
+        );
+        assert_eq!(
+            (ui.sandbox_images_done_mb, ui.sandbox_images_total_mb),
+            (Some(120), Some(700))
+        );
+        apply_locald_event(
+            &mut ui,
+            "sandbox-images",
+            &json!({"state": "ready", "detail": "", "done_mb": null, "total_mb": null}),
+        );
+        assert_eq!(ui.sandbox_images_done_mb, None);
+        assert!(ui.ready && ui.running);
     }
 
     /// A Windows runtime that is prepared starts the stack, in local mode.

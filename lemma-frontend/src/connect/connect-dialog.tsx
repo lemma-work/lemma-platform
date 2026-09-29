@@ -15,7 +15,7 @@ import { Fields } from "./fields";
 import { blank, fields, payload, problems, type Values } from "./schema";
 import {
     canBringOwnApp, canInstallWithDefaults, connectorProblem, connectRoute, connectSchema, freshInstallName, installSchema, kindFor,
-    kindNamed, needsOwnApp, oauthAppMissing, type CatalogEntry, type Install,
+    isStaleDefault, kindNamed, needsOwnApp, oauthAppMissing, type CatalogEntry, type Install,
 } from "./install";
 
 /** The redirect URI the app being registered must allow, copyable. It is the
@@ -111,7 +111,7 @@ export function ConnectDialog({
 
     /* Nothing to connect against, and Lemma cannot make it alone: the
        organization's own app, or whatever else the install needs, comes first. */
-    const ownApp = !against && (needsOwnApp(kind) || !canInstallWithDefaults(kind));
+    const ownApp = (!against || isStaleDefault(against, kind)) && (needsOwnApp(kind) || !canInstallWithDefaults(kind));
     const [bringingApp, setBringingApp] = useState(false);
     const showingApp = ownApp || bringingApp;
 

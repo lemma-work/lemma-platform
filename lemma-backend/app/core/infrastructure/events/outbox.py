@@ -6,6 +6,7 @@ import asyncio
 import os
 import random
 import socket
+import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -49,6 +50,10 @@ class ClaimedEvent:
     request_id: str | None = None
 
 
+#: How often a dispatcher paused for Redis memory re-checks the flag.
+_MEMORY_PAUSE_POLL_SECONDS = 5.0
+
+
 class OutboxDispatcher:
     def __init__(
         self,
@@ -81,6 +86,7 @@ class OutboxDispatcher:
             else event_transport_settings.outbox_idle_poll_max_seconds,
         )
         self.owner = owner or f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+        self._paused_since: float | None = None
         self._dispatch_incident = DependencyIncident("outbox.database", logger=logger)
         self._publish_incident = DependencyIncident("outbox.message_bus", logger=logger)
 
@@ -103,11 +109,35 @@ class OutboxDispatcher:
             await self._mark_failed(event, error)
         return len(claimed)
 
+    async def _paused_for_memory(self) -> bool:
+        """Whether Redis is too full to publish into, as the stream guard judges.
+
+        Pausing here is lossless -- every event stays in PostgreSQL until it is
+        published -- and it is the one lever that keeps working when a stream
+        cannot be trimmed fast enough: stop adding to Redis at all.
+        """
+        check = getattr(self._message_bus, "memory_pressure_critical", None)
+        if check is None or await check() is not True:
+            if self._paused_since is not None:
+                logger.info(
+                    "infrastructure.outbox.resumed_after_redis_memory_pressure",
+                    paused_seconds=round(time.monotonic() - self._paused_since, 1),
+                )
+                self._paused_since = None
+            return False
+        if self._paused_since is None:
+            self._paused_since = time.monotonic()
+            logger.warning("infrastructure.outbox.paused_for_redis_memory.degraded")
+        return True
+
     async def run(self) -> None:
         infrastructure_failures = 0
         idle_delay = self.poll_seconds
         while True:
             try:
+                if await self._paused_for_memory():
+                    await asyncio.sleep(_MEMORY_PAUSE_POLL_SECONDS)
+                    continue
                 dispatched = await self.dispatch_once()
                 infrastructure_failures = 0
             except asyncio.CancelledError:

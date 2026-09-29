@@ -52,5 +52,5 @@ returning the full response. `details(scope, names?)` fetches several schemas at
 - For server-side calls (a function/agent acting for the user), the same operation
   runs through the in-function SDK with a granted connector — see `functions.md`.
 
-> Exact surface: `cat /sdk/lemma-typescript/src/namespaces/connectors.ts`; the org
+> Exact surface: `cat node_modules/lemma-sdk/dist/namespaces/connectors.d.ts`; the org
 > auth-config names come from `lemma connectors overview`.

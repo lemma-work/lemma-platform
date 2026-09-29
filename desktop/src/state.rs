@@ -59,6 +59,9 @@ pub(crate) struct UiState {
     /// `failed`.
     pub(crate) sandbox_images: String,
     pub(crate) sandbox_images_detail: String,
+    /// How far that download has got, when the guest can measure it.
+    pub(crate) sandbox_images_done_mb: Option<u64>,
+    pub(crate) sandbox_images_total_mb: Option<u64>,
     /// What the daemon's start found that someone has to act on -- an update
     /// that stopped mid-migration, settings writes switched off. From the
     /// handshake, so the splash can say it before anything else loads.

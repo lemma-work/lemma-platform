@@ -508,7 +508,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
         setVision((was) => (was.includes(model) ? was.filter((one) => one !== model) : [...was, model]));
 
     return (
-        <Modal title="Connect a key" subtitle="Billed to you, shared with every teammate here" narrow onClose={onClose}>
+        <Modal title="Connect a key" subtitle="Billed to you, shared across this organization" narrow onClose={onClose}>
             <div className="presets" role="group" aria-label="Provider">
                 {presets.map((one) => (
                     <button
@@ -762,9 +762,9 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                         <div className="getapp" role="status">
                             <span className="getapp__mark"><KeyIcon size={18} /></span>
                             <span className="getapp__body">
-                                <b>Teammates need a model to think with</b>
+                                <b>Add a model to get answers</b>
                                 <span>
-                                    Until one is added here, every message to a teammate comes back unanswered.
+                                    Until one is added here, every message comes back unanswered.
                                     Connect a provider&rsquo;s API key, or run a model yourself with{" "}
                                     <a href="https://ollama.com/download" target="_blank" rel="noreferrer">Ollama</a> or{" "}
                                     <a href="https://lmstudio.ai" target="_blank" rel="noreferrer">LM Studio</a>
@@ -786,9 +786,9 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                         <div className="getapp" role="status">
                             <span className="getapp__mark"><KeyIcon size={18} /></span>
                             <span className="getapp__body">
-                                <b>Use {offer.name} for all teammates?</b>
+                                <b>Use {offer.name} as the default?</b>
                                 <span>
-                                    Teammates that don&rsquo;t name a model will run on it. You can change this on any key.
+                                    Anything that doesn&rsquo;t name a model will run on it. You can change this on any key.
                                 </span>
                                 {useOffer.isError && (
                                     <span className="reachrow__error">
@@ -861,7 +861,7 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                         <div className="getapp">
                             <span className="getapp__mark"><TerminalIcon size={18} /></span>
                             <span className="getapp__body">
-                                <b>Run Claude Code or Codex as this teammate</b>
+                                <b>Run on Claude Code or Codex</b>
                                 <span>
                                     They already live on your machine. Install the Lemma app there and sign in —
                                     it connects itself, and the agents it finds appear here.
@@ -881,7 +881,7 @@ export function ModelsSection({ orgId }: { orgId: string }) {
 
                     {troubled > 0 && (
                         <p className="connectors__note">
-                            <WarningIcon size={13} /> A teammate pinned to something unavailable stops answering
+                            <WarningIcon size={13} /> Anything pinned to something unavailable stops answering
                             until that computer is back or you point it somewhere else.
                         </p>
                     )}

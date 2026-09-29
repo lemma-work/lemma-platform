@@ -24,7 +24,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS, running_runtime_version
 from sandbox_runtime.protocol import ByteRange, ProcessState
 from sandbox_runtime.tasks import create_inherited_task
 
@@ -32,6 +32,7 @@ from .models import (
     OutputChannel,
     RuntimeCreatePythonSessionRequest,
     RuntimeExecutePythonRequest,
+    RUNTIME_VERSION_HEADER,
     RuntimeHealthResponse,
     RuntimeFileListResponse,
     RuntimeFileStatResponse,
@@ -54,6 +55,14 @@ from .browser_guard import shed_browser_if_starved
 from .process_manager import ManagedProcess, OutputChunk, ProcessManager
 from .python_session_manager import PythonSessionManager
 from .quiescer import WorkspaceQuiescer
+
+
+#: Which code this server is running: the overlay's version, or the floor's.
+#: Taken once, when the server imports this module, because that is when its
+#: code was chosen -- an overlay installed afterwards changes what `current`
+#: names but not what this process runs. The backend compares it with the
+#: overlay it installed to decide whether the server needs one restart.
+RUNTIME_VERSION = running_runtime_version()
 
 
 _CHANNEL_IDS = {
@@ -209,7 +218,10 @@ def create_app(
         return JSONResponse(status_code=404, content={"detail": str(error)})
 
     @app.get("/health", response_model=RuntimeHealthResponse)
-    async def health(_auth: None = Depends(authenticate)) -> RuntimeHealthResponse:
+    async def health(
+        response: Response, _auth: None = Depends(authenticate)
+    ) -> RuntimeHealthResponse:
+        response.headers[RUNTIME_VERSION_HEADER] = RUNTIME_VERSION
         return RuntimeHealthResponse(
             status="ok",
             managed_processes=len(await manager.list()),

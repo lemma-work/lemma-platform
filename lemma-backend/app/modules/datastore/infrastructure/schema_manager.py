@@ -17,6 +17,10 @@ from app.modules.datastore.infrastructure.session import (
     get_datastore_engine,
     get_datastore_session_maker,
 )
+from app.modules.datastore.infrastructure.pod_schema_catalog import (
+    bootstrap_pod_schema,
+    lock_schema_bootstrap,
+)
 from app.modules.datastore.infrastructure.query_role import QueryRoleGrants
 from app.modules.datastore.infrastructure.record_indexes import (
     ensure_record_index,
@@ -48,11 +52,19 @@ class SchemaManager:
             4096, name="datastore.ensured_record_indexes"
         )
 
-    async def ensure_query_role(self) -> None:
-        return await self._query_role.ensure_role()
+    async def ensure_query_role(self) -> bool:
+        """Best-effort; see ``QueryRoleGrants.try_ensure_role``."""
+        return await self._query_role.try_ensure_role()
 
-    async def backfill_query_role_grants(self) -> None:
-        return await self._query_role.backfill_grants()
+    async def heal_query_role_access(self, schema_name: str) -> bool:
+        """Grant a legacy pod schema's missing access if it is missing.
+
+        Two catalog reads when nothing is missing, which is the common answer:
+        the query that led here usually named a table that does not exist.
+        """
+        if not await self._query_role.missing_access(schema_name):
+            return False
+        return await self._query_role.heal_schema(schema_name)
 
     def _get_schema_name(self, pod_id: UUID) -> str:
         return f"pod_{str(pod_id).replace('-', '_')}"
@@ -152,31 +164,15 @@ class SchemaManager:
 
     @staticmethod
     async def _lock_schema_bootstrap(conn, schema_name: str) -> None:
-        """Serialize every creator of one pod schema across processes.
-
-        PostgreSQL's ``CREATE SCHEMA IF NOT EXISTS`` is not race-free: two
-        concurrent transactions can both observe the namespace as absent and
-        one later fails the ``pg_namespace.nspname`` unique index. The pod
-        provisioner and first table write use separate transactions/processes,
-        so they must share this transaction-scoped advisory lock.
-        """
-        await conn.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:schema_name))"),
-            {"schema_name": schema_name},
-        )
+        """Kept on the class: the record indexes take their lock from here,
+        and the search service's own copy of the key is tested against it."""
+        await lock_schema_bootstrap(conn, schema_name)
 
     async def create_datastore_schema(self, pod_id: UUID) -> None:
         schema_name = self._get_schema_name(pod_id)
+        grant = await self._query_role.try_ensure_role()
         async with self._engine.begin() as conn:
-            await self._lock_schema_bootstrap(conn, schema_name)
-            await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
-
-        # The schema's own ACL belongs to the schema, not to whichever table
-        # happens to be created first. Without this a pod provisioned after the
-        # last API start has no USAGE at all, and every ad-hoc query against it
-        # fails with "permission denied for schema" until a table is created or
-        # the process restarts into `backfill_query_role_grants`.
-        await self._query_role.try_grant(schema_name)
+            await bootstrap_pod_schema(conn, schema_name, grant=grant)
 
     async def datastore_schema_exists(self, pod_id: UUID) -> bool:
         schema_name = self._get_schema_name(pod_id)
@@ -289,10 +285,10 @@ class SchemaManager:
             f'CREATE TABLE "{schema_name}"."{table_name}" ({", ".join(column_defs)})'
         )
 
+        grant = await self._query_role.try_ensure_role()
         try:
             async with self._engine.begin() as conn:
-                await self._lock_schema_bootstrap(conn, schema_name)
-                await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
+                await bootstrap_pod_schema(conn, schema_name, grant=grant)
                 await conn.execute(text(create_table_sql))
 
                 if enable_rls:
@@ -337,14 +333,6 @@ class SchemaManager:
                 exc=exc,
                 table_name=table_name,
             ) from exc
-
-        # Best-effort, outside the table-creation transaction: let ad-hoc queries
-        # (run under the RLS-subject role) read this table. Never block table
-        # creation on role/grant issues — queries fail closed and the startup
-        # backfill or a retry repairs missing grants. The schema's USAGE is
-        # granted at schema creation; re-granting it here is idempotent and
-        # covers schemas that predate that.
-        await self._query_role.try_grant(schema_name, table_name)
 
     async def drop_table(self, pod_id: UUID, table_name: str) -> None:
         schema_name = self._get_schema_name(pod_id)

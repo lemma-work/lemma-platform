@@ -3,7 +3,7 @@
 `PS-DATA-021` promises the facility reports itself unavailable rather than
 failing each query as though the person had written a bad one. The state is
 real and not exotic: ad-hoc SQL runs as a dedicated Postgres role
-(``datastore_query_role``, see ``record_repository._execute_readonly``), and a
+(``datastore_query_role``, see ``readonly_query``), and a
 managed Postgres that never provisioned it — or an app role without the power
 to create it — leaves every query with nowhere to run.
 
@@ -36,10 +36,14 @@ class TestQueryingWhenTheRoleIsAbsent:
         the problem — they will rewrite it, and rewrite it again. The answer
         has to name the facility.
         """
+        # The role is ensured lazily, and this suite's app role may create
+        # roles -- so an ordinary missing name would simply be created. `pg_`
+        # names are reserved: PostgreSQL refuses to create one, which is what
+        # an app role without CREATEROLE meets for any name.
         monkeypatch.setattr(
             datastore_settings,
             "datastore_query_role",
-            "lemma_datastore_query_that_was_never_created",
+            "pg_lemma_datastore_query_that_cannot_be_created",
         )
 
         response = await pod_api.request(

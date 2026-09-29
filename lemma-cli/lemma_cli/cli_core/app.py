@@ -263,11 +263,9 @@ def main() -> None:
     import sys
 
     from .errors import report_cli_error
+    from .versions import declare_client
 
-    # Say what we are on every request. The SDK cannot tell a CLI invocation
-    # apart from any other program using it, and "a person ran a command" is a
-    # different fact from "something called the API".
-    os.environ.setdefault("LEMMA_CLIENT", "lemma-cli")
+    declare_client(os.environ)
 
     command = _invoked_command(sys.argv[1:])
     exit_status = "ok"

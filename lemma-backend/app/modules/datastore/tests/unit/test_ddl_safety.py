@@ -15,6 +15,8 @@ from uuid import uuid4
 
 import pytest
 
+from sqlalchemy.exc import DBAPIError
+
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreDataType,
@@ -154,66 +156,84 @@ def test_enum_check_clause_quotes_options_safely() -> None:
     assert manager._enum_check_clause(non_enum) == ""
 
 
+def _provisioning_connection(*, schema_exists: bool = False) -> SimpleNamespace:
+    """A connection on a provisioned deployment, and a catalog without the schema."""
+    return SimpleNamespace(
+        execute=AsyncMock(return_value=_CatalogResult()),
+        scalar=AsyncMock(return_value=schema_exists),
+    )
+
+
+def _manager_on(connection: SimpleNamespace) -> SchemaManager:
+    @asynccontextmanager
+    async def begin():
+        yield connection
+
+    return SchemaManager(engine=SimpleNamespace(begin=begin), session_factory=object())
+
+
+def _statements(connection: SimpleNamespace) -> list[str]:
+    return [str(call.args[0]) for call in connection.execute.await_args_list]
+
+
 @pytest.mark.asyncio
 async def test_schema_provisioning_takes_shared_bootstrap_lock_before_create() -> None:
-    connection = SimpleNamespace(execute=AsyncMock(return_value=_CatalogResult()))
-
-    @asynccontextmanager
-    async def begin():
-        yield connection
-
-    manager = SchemaManager(
-        engine=SimpleNamespace(begin=begin),
-        session_factory=object(),
-    )
+    connection = _provisioning_connection()
+    manager = _manager_on(connection)
     pod_id = uuid4()
 
     await manager.create_datastore_schema(pod_id)
 
-    lock_call, create_call = connection.execute.await_args_list[:2]
-    assert "pg_advisory_xact_lock" in str(lock_call.args[0])
+    statements = _statements(connection)
+    lock = next(i for i, s in enumerate(statements) if "pg_advisory_xact_lock" in s)
+    create = next(i for i, s in enumerate(statements) if "CREATE SCHEMA" in s)
+    assert lock < create
+    lock_call = connection.execute.await_args_list[lock]
     assert lock_call.args[1] == {"schema_name": manager.get_schema_name(pod_id)}
-    assert "CREATE SCHEMA IF NOT EXISTS" in str(create_call.args[0])
 
 
 @pytest.mark.asyncio
-async def test_schema_provisioning_grants_usage_to_the_query_role() -> None:
-    """A pod schema carries its own ACL from birth.
+async def test_a_new_schema_is_readable_by_the_query_role_from_birth() -> None:
+    """Access rides the creating transaction, so no schema exists without it.
 
-    Without this the grant only arrived as a side effect of creating the first
-    table, so a pod provisioned after the last API start answered every ad-hoc
-    query with "permission denied for schema".
+    The grant used to follow in a transaction of its own, best-effort, and a
+    boot-time sweep over every pod schema repaired what it missed.
     """
-    connection = SimpleNamespace(execute=AsyncMock(return_value=_CatalogResult()))
-
-    @asynccontextmanager
-    async def begin():
-        yield connection
-
-    manager = SchemaManager(
-        engine=SimpleNamespace(begin=begin),
-        session_factory=object(),
-    )
+    connection = _provisioning_connection()
+    manager = _manager_on(connection)
     pod_id = uuid4()
 
     await manager.create_datastore_schema(pod_id)
 
-    statements = [str(call.args[0]) for call in connection.execute.await_args_list]
+    statements = _statements(connection)
     schema_name = manager.get_schema_name(pod_id)
+    create = next(i for i, s in enumerate(statements) if "CREATE SCHEMA" in s)
+    after_create = statements[create + 1 :]
+    assert any(f'GRANT USAGE ON SCHEMA "{schema_name}"' in s for s in after_create)
     assert any(
-        f'GRANT USAGE ON SCHEMA "{schema_name}"' in statement
-        for statement in statements
+        f'IN SCHEMA "{schema_name}" GRANT SELECT ON TABLES' in s for s in after_create
     )
-    # Nothing to grant SELECT on yet — the schema has no tables.
-    assert not any("GRANT SELECT" in statement for statement in statements)
 
 
 @pytest.mark.asyncio
-async def test_schema_provisioning_survives_a_failed_grant() -> None:
+async def test_an_existing_schema_is_not_granted_again() -> None:
+    """Every table creation passes through the bootstrap; only the first writes."""
+    connection = _provisioning_connection(schema_exists=True)
+
+    await _manager_on(connection).create_datastore_schema(uuid4())
+
+    statements = _statements(connection)
+    assert not any("CREATE SCHEMA" in s for s in statements)
+    assert not any("GRANT USAGE ON SCHEMA" in s for s in statements)
+
+
+@pytest.mark.asyncio
+async def test_schema_provisioning_survives_a_role_that_cannot_be_created() -> None:
     """Grant failures must never block pod provisioning.
 
     On a deployment whose app role cannot create or grant roles, the schema
-    still has to exist; queries fail closed and the startup backfill repairs.
+    still has to exist -- without the ACL, which it would fail to grant to a
+    role that is not there. Queries fail closed until the role is provisioned.
     """
     calls: list[str] = []
 
@@ -221,25 +241,21 @@ async def test_schema_provisioning_survives_a_failed_grant() -> None:
         def scalar(self) -> None:
             return None
 
+    class _Denied(DBAPIError):
+        def __init__(self, statement: str):
+            super().__init__(statement, {}, Exception("insufficient privilege"))
+
     async def execute(statement, *args):
         calls.append(str(statement))
         if "GRANT" in str(statement) or "CREATE ROLE" in str(statement):
-            raise PermissionError("insufficient privilege")
+            raise _Denied(str(statement))
         # Neither the role nor the membership exists, and neither can be
         # established: the deployment this test is named for.
         return _Missing()
 
-    connection = SimpleNamespace(execute=execute)
+    connection = SimpleNamespace(execute=execute, scalar=AsyncMock(return_value=False))
 
-    @asynccontextmanager
-    async def begin():
-        yield connection
-
-    manager = SchemaManager(
-        engine=SimpleNamespace(begin=begin),
-        session_factory=object(),
-    )
-
-    await manager.create_datastore_schema(uuid4())
+    await _manager_on(connection).create_datastore_schema(uuid4())
 
     assert any("CREATE SCHEMA IF NOT EXISTS" in statement for statement in calls)
+    assert not any("GRANT USAGE ON SCHEMA" in statement for statement in calls)

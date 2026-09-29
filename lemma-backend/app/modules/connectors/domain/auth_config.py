@@ -45,9 +45,13 @@ COMPOSIO_SYSTEM_CREDENTIALS_ONLY = (
 )
 COMPOSIO_ORG_CUSTOM_REASON = "org_custom_not_supported_for_composio"
 
+# Never "needs an OAuth app": the frontend's `oauthAppMissing` matches that
+# wording for the native case, whose fix is a different one.
 COMPOSIO_ORG_CREDENTIALS_REQUIRED = (
-    "Composio has no managed credentials for this toolkit, so it cannot be "
-    "installed with Lemma's defaults. Supply the app's own credentials."
+    "Composio has no managed OAuth credentials for this toolkit, so it cannot "
+    "be installed with Lemma's defaults. Your organization has to supply its "
+    "own OAuth app: register one with the provider and enter its client ID and "
+    "client secret."
 )
 COMPOSIO_SYSTEM_DEFAULT_REASON = "system_default_not_available_for_composio"
 

@@ -361,3 +361,18 @@ async def test_a_message_that_is_no_decision_still_falls_through() -> None:
 
     assert outcome is ResumeOutcome.NOT_A_DECISION
     resolve.assert_not_awaited()
+
+
+async def test_an_approval_typed_by_someone_else_is_just_a_message() -> None:
+    """An approved call runs with the owner's authority, so only the owner can
+    approve it (the rule the buttons apply too). Somebody else in a shared
+    thread typing "approve" records nothing and goes on as an ordinary message
+    -- not as a failure the person is told about."""
+    from app.modules.agent.contracts.conversations_for_surfaces import (
+        ApprovalNotOwnedError,
+    )
+
+    outcome, resolve = await _resume("approve", resolve_raises=ApprovalNotOwnedError())
+
+    assert outcome is ResumeOutcome.NOT_A_DECISION
+    assert resolve.await_count == 1

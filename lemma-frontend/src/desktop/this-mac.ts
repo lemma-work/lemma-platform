@@ -151,7 +151,7 @@ export interface ThisMacSnapshot {
         readiness: Record<string, string>;
     };
     sharing: Sharing | null;
-    sandbox_images: { state: string; detail: string } | null;
+    sandbox_images: { state: string; detail: string; done_mb?: number | null; total_mb?: number | null } | null;
     paths: { locald: string; logs: string } | null;
     /** What Lemma takes on this disk; null from a shell that predates it. */
     disk_usage: DiskUsage | null;
@@ -241,7 +241,14 @@ export function readSnapshot(payload: unknown): ThisMacSnapshot {
             readiness: Object.fromEntries(Object.entries(record(operator.readiness)).map(([key, value]) => [key, text(value)])),
         },
         sharing,
-        sandbox_images: raw.sandbox_images ? { state: text(images.state, "unknown"), detail: text(images.detail) } : null,
+        sandbox_images: raw.sandbox_images
+            ? {
+                  state: text(images.state, "unknown"),
+                  detail: text(images.detail),
+                  done_mb: typeof images.done_mb === "number" ? images.done_mb : null,
+                  total_mb: typeof images.total_mb === "number" ? images.total_mb : null,
+              }
+            : null,
         paths: raw.paths ? { locald: text(paths.locald), logs: text(paths.logs) } : null,
         disk_usage: readDiskUsage(raw.disk_usage),
         warnings: readStartupWarnings(raw.warnings),
@@ -367,7 +374,7 @@ export type SetupService = "composio" | "telegram" | "slack" | "deepgram" | "bra
 
 /** What turning the switch on means, for the computer it is on. */
 export function hostExecutionConsequence(noun = "this Mac"): string {
-    return `Commands run on ${noun} inside a sandbox: they can read most files, write only to the conversation folder and caches, and use your gh/git logins. Teammates’ runs stay in the VM.`;
+    return `Commands run on ${noun} inside a sandbox: they can read most files, write only to the conversation folder and caches, and use your gh/git logins. Everything else still runs in the VM.`;
 }
 
 export interface HostExecutionRow {
@@ -531,12 +538,16 @@ export function healthLine(snapshot: ThisMacSnapshot, update: AppUpdateStatus | 
 /** What the sandbox row says, and whether the download is worth offering.
  *  `not-prepared` and `failed` are the only states where the button does
  *  anything useful. */
-export function sandboxWording(state: string | null | undefined, noun: string): { text: string; offer: boolean } {
+export function sandboxWording(
+    state: string | null | undefined,
+    noun: string,
+    downloaded: string | null = null,
+): { text: string; offer: boolean } {
     switch (state) {
         case "ready":
             return { text: `Downloaded. Pods can run code, shells and browsers on ${noun}.`, offer: false };
         case "downloading":
-            return { text: "Downloading…", offer: false };
+            return { text: downloaded ? `Downloading… ${downloaded}` : "Downloading…", offer: false };
         case "failed":
             return { text: "The last download did not finish. The first task that needs it will try again, or try now.", offer: true };
         case "unsupported":
@@ -746,36 +757,36 @@ export const CREDENTIAL_FORMS: CredentialFormSpec[] = [
     { form: "slack-app", group: "connectors", title: "Slack connector", use: "Lets each person connect their own Slack account to read and post as themselves.", redirect: true,
         fields: [{ key: "slack_client_id", label: "Client ID" }, { key: "integrations.slack_client_secret", label: "Client secret", secret: true }],
         hint: { steps: "At api.slack.com/apps, create an app, add the redirect URL below under OAuth & Permissions, and copy the client ID and secret from Basic Information.", url: "https://api.slack.com/apps", label: "Open Slack apps" } },
-    { form: "telegram", group: "channels", title: "Telegram", use: "Lets teammates answer in Telegram. Works without a public link.",
+    { form: "telegram", group: "channels", title: "Telegram", use: "Answer in Telegram. Works without a public link.",
         fields: [{ key: "surfaces.telegram_bot_token", label: "Bot token", secret: true }],
         hint: { steps: "Message @BotFather in Telegram, send /newbot, and paste the token it gives you.", url: "https://t.me/BotFather", label: "Open BotFather" },
         test: { service: "telegram", field: "surfaces.telegram_bot_token" } },
-    { form: "slack", group: "channels", title: "Slack bot", use: "Lets teammates answer in Slack. Works without a public link, through Socket Mode.",
+    { form: "slack", group: "channels", title: "Slack bot", use: "Answer in Slack. Works without a public link, through Socket Mode.",
         fields: [{ key: "surfaces.slack_app_token", label: "App-level token (xapp-…)", secret: true },
             { key: "surfaces.slack_signing_secret", label: "Signing secret (only with Public sharing)", secret: true }],
         hint: { steps: "Uses the Slack connector app above: set that up first, then at api.slack.com/apps turn on Socket Mode for the same app, which creates the app-level token (scope connections:write). Install the bot from a pod’s Reach settings.", url: "https://api.slack.com/apps", label: "Open Slack apps" },
         test: { service: "slack", field: "surfaces.slack_app_token" } },
-    { form: "resend", group: "channels", title: "Email in", use: "Lets teammates receive and answer email at their own address.",
+    { form: "resend", group: "channels", title: "Email in", use: "Receive and answer email, each at its own address.",
         fields: [{ key: "resend_inbound_domain", label: "Inbound domain" },
             { key: "surfaces.resend_signing_secret", label: "Webhook signing secret (only with Public sharing)", secret: true }],
         hint: { steps: "Uses the Resend key from Email above. In Resend, add a receiving domain and point its MX record at Resend; Lemma collects the mail itself, so no webhook is needed unless Lemma is shared publicly.", url: "https://resend.com/domains", label: "Open Resend domains" } },
-    { form: "whatsapp", group: "channels", title: "WhatsApp Business", use: "Lets teammates answer on WhatsApp.", needsPublicLink: true,
+    { form: "whatsapp", group: "channels", title: "WhatsApp Business", use: "Answer on WhatsApp.", needsPublicLink: true,
         fields: [{ key: "whatsapp_phone_number_id", label: "Phone number ID" }, { key: "whatsapp_waba_id", label: "Business account ID" },
             { key: "surfaces.whatsapp_access_token", label: "Access token", secret: true },
             { key: "surfaces.whatsapp_verify_token", label: "Verify token", secret: true },
             { key: "surfaces.whatsapp_app_secret", label: "App secret", secret: true }],
         hint: { steps: "Needs Public sharing: Meta delivers messages to a webhook on the internet. In Meta for Developers, add WhatsApp to an app and copy the IDs and a permanent access token.", url: "https://developers.facebook.com/apps", label: "Open Meta for Developers" } },
-    { form: "teams", group: "channels", title: "Microsoft Teams", use: "Lets teammates answer in Teams.", needsPublicLink: true,
+    { form: "teams", group: "channels", title: "Microsoft Teams", use: "Answer in Teams.", needsPublicLink: true,
         fields: [{ key: "teams_app_id", label: "Bot app ID" }, { key: "teams_tenant_id", label: "Tenant ID" },
             { key: "surfaces.teams_app_password", label: "App password", secret: true }],
         hint: { steps: "Needs Public sharing: Teams delivers messages to a webhook on the internet. Create an Azure Bot, and copy its app ID, tenant and a client secret.", url: "https://portal.azure.com/#create/Microsoft.AzureBot", label: "Create an Azure Bot" } },
-    { form: "deepgram", group: "voice", title: "Deepgram", use: "Turns teammates’ replies into voice notes, and voice notes they are sent into text.",
+    { form: "deepgram", group: "voice", title: "Deepgram", use: "Turns replies into voice notes, and incoming voice notes into text.",
         fields: [{ key: "integrations.deepgram_api_key", label: "API key", secret: true }],
         hint: { steps: "Sign up at Deepgram and create an API key in the console. New accounts come with free credit.", url: "https://console.deepgram.com", label: "Open Deepgram console" },
         test: { service: "deepgram", field: "integrations.deepgram_api_key" } },
-    { form: "voice-calls", group: "voice", title: "Voice calls", use: "Lets people talk to teammates live, in a call. Needs both keys.",
+    { form: "voice-calls", group: "voice", title: "Voice calls", use: "Lets people talk live, in a call. Needs both keys.",
         fields: [{ key: "integrations.gemini_api_key", label: "Gemini API key (the voice)", secret: true },
-            { key: "integrations.typesafe_api_key", label: "TypeSafe API key (routes what is said to the right teammate)", secret: true }],
+            { key: "integrations.typesafe_api_key", label: "TypeSafe API key (routes each call to the right place)", secret: true }],
         hint: { steps: "Create a Gemini API key in Google AI Studio, and a TypeSafe key for call routing. Saving restarts Lemma’s workspace server, which is the one that carries calls.", url: "https://aistudio.google.com/apikey", label: "Open Google AI Studio" },
         test: { service: "gemini", field: "integrations.gemini_api_key" } },
     { form: "brave", group: "search", title: "Brave Search", use: "Better, fresher web results than the built-in search. Optional.",

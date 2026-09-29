@@ -62,5 +62,5 @@ directly — `lemma file child /knowledge/report.pdf/pages/page_0003.jpg page3.j
 then view it; or `lemma file cat /knowledge/report.pdf --mode markdown --pages 3-7`
 for the text of a page range. See `files.md` and the `lemma-user` skill.
 
-> Exact fields: `cat /sdk/lemma-typescript/src/react/{useFileSearch,useFilePreview,useUploadFile}.ts`
-> and `src/namespaces/files.ts`.
+> Exact fields: `cat node_modules/lemma-sdk/dist/react/{useFileSearch,useFilePreview,useUploadFile}.d.ts`
+> and `dist/namespaces/files.d.ts`.

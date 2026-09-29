@@ -72,6 +72,12 @@ class _FakeRedis:
     async def expire(self, key: str, ttl: int) -> None:
         return None
 
+    async def eval(self, script, numkeys, key, ttl):
+        """``incr_with_ttl``'s script: increment, and expire if not expiring."""
+        count = await self.incr(key)
+        await self.expire(key, ttl)
+        return count
+
 
 def _link_for(surface: AgentSurfaceEntity) -> AgentSurfaceConversationLink:
     """A thread this person has written to, recently enough to still be open."""

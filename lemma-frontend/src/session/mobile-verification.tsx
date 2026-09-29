@@ -129,7 +129,7 @@ function Transaction({
                             teammate's own WhatsApp number a few rows away, and
                             two WhatsApp numbers that look alike is exactly the
                             confusion worth spending a line on. */}
-                        <small>Lemma&rsquo;s verification number, not a teammate&rsquo;s.</small>
+                        <small>Lemma&rsquo;s verification number, not one you chat with.</small>
                     </div>
                     <div className="verify__line">
                         <span className="verify__label">Message to send</span>
@@ -323,8 +323,8 @@ export function KnownSender() {
             </div>
             <code className="verify__code">{wa.message}</code>
             <p>
-                It goes to {wa.transaction.display_number} — Lemma&rsquo;s verification number, not this
-                teammate. Whichever phone sends it becomes the number you are known by here.
+                It goes to {wa.transaction.display_number} — Lemma&rsquo;s verification number, not one
+                you chat with. Whichever phone sends it becomes the number you are known by here.
             </p>
             <div className="verify__acts">
                 <OpenWhatsApp url={wa.transaction.whatsapp_url} />

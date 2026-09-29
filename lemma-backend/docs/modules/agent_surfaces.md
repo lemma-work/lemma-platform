@@ -165,6 +165,14 @@ email provider metadata, timestamp windows, and challenge responses. Identity
 policy controls whether unknown external senders are rejected, linked, or
 represented as contacts. Redis dedup guards repeat provider deliveries.
 
+A pooled WhatsApp number answers with its own pool row's credentials for
+everything done to a message that arrived on it -- the read receipt, the typing
+indicator, the media download, the fallback and the reply -- through
+`SurfaceCredentialResolver`'s `arrived_on`. A delivery the per-number webhook
+refuses logs `whatsapp_number_signature_rejected.denied` (the number, why, and
+which secret was tried, never the secret) or `whatsapp_number_mismatch.denied`,
+and counts on `lemma.surface.webhook.rejected` by `platform` and `reason`.
+
 ## Tests and operations
 
 The large unit/e2e matrix uses real payload fixtures and mock provider servers

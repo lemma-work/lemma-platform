@@ -33,6 +33,7 @@ from sandbox_runtime.protocol import (
 from app.modules.workspace.domain.host_execution import is_host_sandbox_id
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.runtime_client import RuntimeState
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     ProviderCreateSpec,
@@ -200,6 +201,16 @@ class HostRoutingProvider:
             grace_seconds=grace_seconds,
             deadline_at=deadline_at,
         )
+
+    async def runtime_state(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> RuntimeState | None:
+        """The routed provider's answer, or None where it has no HTTP runtime."""
+        provider = self.for_name(instance.name)
+        read = getattr(provider, "runtime_state", None)
+        if read is None:
+            return None
+        return await read(instance, deadline_at=deadline_at)
 
     async def list_processes(
         self, instance: ProviderInstance, *, deadline_at: datetime

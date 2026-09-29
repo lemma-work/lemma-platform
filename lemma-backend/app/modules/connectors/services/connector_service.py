@@ -34,6 +34,7 @@ from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
     ConnectorNotFoundError,
+    ConnectorReauthRequiredError,
     ConnectorValidationError,
     CredentialsNotFoundError,
     OAuthWorkflowError,
@@ -59,6 +60,10 @@ from app.modules.connectors.infrastructure.repositories.auth_config_repository i
 from app.modules.connectors.services.account_credentials import (
     validated_account_credentials,
     validated_connection_fields,
+)
+from app.modules.connectors.services.credential_refresh_failure import (
+    raise_refresh_failure,
+    reauth_required,
 )
 from app.modules.connectors.services.upstream_error_details import (
     upstream_error_details,
@@ -956,18 +961,13 @@ class ConnectorService:
                         user_id=account.user_id,
                     )
                 except Exception as exc:
-                    # An expired token we cannot refresh means the account is
-                    # unusable until the user reconnects.
-                    if is_expired:
+                    # An expired token we cannot refresh, or a withdrawn grant:
+                    # the account is unusable until the user reconnects.
+                    if is_expired or isinstance(exc, ConnectorReauthRequiredError):
                         await self._persist_account_status(
                             account, AccountStatus.REAUTH_REQUIRED
                         )
-                        if isinstance(exc, DomainError):
-                            raise
-                        raise OAuthWorkflowError(
-                            "Unable to refresh connector credentials.",
-                            details=self._exception_details(exc),
-                        ) from exc
+                        raise_refresh_failure(account, exc)
                     if isinstance(exc, DomainError):
                         raise
                     # The stored token has not expired yet, so the account
@@ -995,9 +995,7 @@ class ConnectorService:
                 await self._persist_account_status(
                     account, AccountStatus.REAUTH_REQUIRED
                 )
-                raise OAuthWorkflowError(
-                    "Credentials are expired and cannot be refreshed for this account."
-                )
+                raise reauth_required(account, "expired_without_refresh")
 
         return self._to_oauth_credentials(credentials)
 

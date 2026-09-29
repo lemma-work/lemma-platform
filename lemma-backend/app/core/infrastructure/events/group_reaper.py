@@ -3,10 +3,12 @@
 Nothing removes a Redis consumer group when the code that consumed it is
 deleted. `surface-schedule-events` outlived PR #509 by months: zero active
 consumers, a last-delivered-id frozen at the commit that deleted its subscriber,
-and -- because `stream_budget._safe_minid` takes the minimum across *observed*
+and -- because the byte-budget trim then took the minimum across *observed*
 groups -- an XTRIM MINID watermark that could never advance past it.
 `schedule_events` reached 825MB against a 256MB budget, and Redis hit `maxmemory`
-twice, which took login down with it.
+twice, which took login down with it. (The budget now trims past such a group
+when it must; see ``stream_budget``. Reaping still matters: until it happens,
+every guard pass that needs the room records a gap for a group nobody reads.)
 
 The hard part is not destroying the group. It is knowing that it is dead.
 
