@@ -14,10 +14,11 @@ cast are colleagues with settled roles, and they sign **in** rather than up —
 which is what lets the same suite run against a deployment whose registration
 gates are on, because signing in passes none of them.
 
-Five people is not an arbitrary number. It is the smallest cast that can express
-every permission promise the specification makes: proving the last owner may not
-leave needs somebody who is genuinely the last owner, and proving an outsider is
-refused needs somebody who genuinely works somewhere else.
+Five of them are not an arbitrary number. They are the smallest cast that can
+express every permission promise the specification makes: proving the last owner
+may not leave needs somebody who is genuinely the last owner, and proving an
+outsider is refused needs somebody who genuinely works somewhere else. The sixth,
+Bea, holds no permission anybody asserts on; she is there to pay.
 
 Nothing here is machinery. This module is the *declaration* — provisioning reads
 it to build the tenant, and teardown reads it to put the tenant back — so the
