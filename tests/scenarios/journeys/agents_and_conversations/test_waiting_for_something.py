@@ -76,8 +76,11 @@ async def test_a_waiting_agent_ends_its_turn_and_returns(world):
     # Then: nobody does anything, and it comes back anyway.
     async def has_answered() -> bool:
         messages = await alice.messages_in(conversation, in_pod=pod)
+        # `text`: a message's words are there. This read `content`, which the
+        # API never sends, so the scenario could not pass whatever the agent did.
         return any(
-            "checked again" in str(message.get("content") or "").lower()
+            message.get("role") == "assistant"
+            and "checked again" in str(message.get("text") or "").lower()
             for message in messages
         )
 

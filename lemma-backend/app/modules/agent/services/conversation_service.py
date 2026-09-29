@@ -14,6 +14,7 @@ from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
+from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.services.conversation_access import (
@@ -118,6 +119,7 @@ class ConversationService:
         require_execute_grant: bool = True,
     ) -> Conversation:
         organization_id = await self._get_pod_organization_id(pod_id)
+        agent_name = _named_agent(agent_name)
         agent = (
             await resolve_agent_for_path(
                 self.agent_repository, pod_id=pod_id, agent_name=agent_name
@@ -525,3 +527,20 @@ class ConversationService:
     def wait_repository(self) -> AgentConversationWaitRepository:
         """The conversation wait store, reached through the turn coordinator."""
         return self.turns.wait_repository
+
+
+def _named_agent(agent_name: str | None) -> str | None:
+    """The agent a conversation names, or None for the pod's own assistant.
+
+    Blank means "no agent named", and so does the `POD_DEFAULT` selector the
+    list endpoint already accepts, which is not any agent's name. Treating `""`
+    as a name looked up an agent called nothing and answered 404 -- which every
+    CLI chat without `--agent` sent. (`pod_default`, the assistant's stored
+    name, already resolves to it by name.)
+    """
+    if agent_name is None:
+        return None
+    name = agent_name.strip()
+    if not name or name == POD_DEFAULT_AGENT_SELECTOR:
+        return None
+    return name

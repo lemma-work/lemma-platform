@@ -38,9 +38,17 @@ app = typer.Typer(
 
 
 def _split_remote_target(local: Path, remote: str | None) -> tuple[str, str]:
+    """The folder and name an upload lands at.
+
+    A target ending in `/` is a folder: the file keeps its own name inside it,
+    as `cp note.md /me/` would. Stripping that slash made `/me/` a file named
+    `me` at the root instead.
+    """
     target = remote or f"/me/{local.name}"
     clean = api_path(target)
-    parent, _, name = clean.rstrip("/").rpartition("/")
+    if target.endswith("/"):
+        return clean.rstrip("/") or "/", local.name
+    parent, _, name = clean.rpartition("/")
     return parent or "/", name or local.name
 
 
