@@ -115,6 +115,9 @@ it is asked, not skipped.
   themselves, and shall treat neither a username nor a typed number as proof.
 - Where the sender is still unknown after that, the system shall verify their
   mailbox with an email code before provisioning anything.
+- Where the deployment cannot deliver email to an inbox, the system shall ask
+  the sender for neither a phone nor an address, and shall tell them the bot
+  belongs to a private Lemma whose owner can connect them.
 - A bot connected with a customer's own credentials shall keep its existing pod
   access boundaries, and inbound email shall not create an account.
 
@@ -170,6 +173,30 @@ it is asked, not skipped.
 > replayed request carries.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.conversation.get`
+
+### PS-SURF-007 — A signed-in person links their Telegram chat from the app
+**Status:** manual
+
+- When a signed-in person asks the app to chat on the shared Telegram bot, the
+  system shall give them a link that opens the bot, and pressing Start with it
+  shall link that Telegram chat to their account and to the pod they chose,
+  without an email or a phone.
+- The link shall work once, within ten minutes, and only in a private chat.
+- The first reply shall name the account the chat is now linked to, and the
+  pod's agent shall then greet them and answer what they send next.
+- Where the chat is already linked, pressing the button again shall relink it
+  or move it to another pod they can use; a Telegram account live on another
+  person's Lemma account shall not be taken over.
+- Where the deployment has no working shared Telegram bot, the system shall say
+  so rather than offer a link.
+
+> **Verified by:** module e2e, not the scenario suite, for the reason under
+> PS-SURF-004. `test_telegram_chat_link_e2e.py` mints a link through the API,
+> redeems it from a new chat, and follows the next message to the pod's agent;
+> it also holds the no-email refusal PS-SURF-004 promises.
+
+**Contracts:** `agent.surface.telegram_link_options`,
+`agent.surface.create_telegram_link`, `surface.webhook.handle_platform`
 
 ---
 
