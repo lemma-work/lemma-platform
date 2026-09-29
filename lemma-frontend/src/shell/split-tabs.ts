@@ -9,6 +9,18 @@ export function layoutForTab(selected: string, expanded: boolean, origin = "conv
     return { main: origin, right: selected };
 }
 
+/** Where a phone's resource sheet comes to rest when a drag on its bar lets go.
+ *
+ *  Two positions, and no half: a half-height sheet over a half-height
+ *  conversation is the letterbox this replaced. A short, slow drag is a
+ *  change of mind and goes back; a long one, or a flick, goes where it was
+ *  heading. `travel` is how far down the bar moved, `speed` px/ms. */
+export function settleSheet(peeked: boolean, travel: number, speed: number): boolean {
+    if (travel > 64 || speed > 0.5) return true;
+    if (travel < -64 || speed < -0.5) return false;
+    return peeked;
+}
+
 export function clampPaneWidth(value: unknown): number {
     return typeof value === "number" && Number.isFinite(value) ? Math.min(65, Math.max(35, value)) : 52;
 }

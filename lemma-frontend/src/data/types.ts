@@ -14,6 +14,10 @@ export type MemberKind = "person" | "teammate";
 export interface Member {
     id: string;
     name: string;
+    /** Their address, when the source knows it. Not the name: a person with a
+     *  profile is called by it, and "is this me" has to be asked of something
+     *  that does not change when they fill one in. */
+    email?: string;
     initials: string;
     kind: MemberKind;
     role: string;

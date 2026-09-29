@@ -1,17 +1,14 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
-import type { Pod } from "@/data";
+import { MANAGE_MEMBERS, POD_ROLES, type Pod } from "@/data";
 import { isLandingPreview } from "@/marketing/preview-mode";
-import { canManage, inviteProblem, unsentInvitation, type InvitationForInviter } from "@/org/membership";
+import { inviteProblem, unsentInvitation, type InvitationForInviter } from "@/org/membership";
 import { CopyLink } from "@/org/people";
 
-const ROLES = [
-    { value: "POD_EDITOR", label: "Can edit" },
-    { value: "POD_USER", label: "Can use" },
-    { value: "POD_VIEWER", label: "Can read" },
-    { value: "POD_ADMIN", label: "Admin" },
-];
+/** The picker's order: the common grant first, the one that hands over the
+ *  membership itself last. */
+const ROLES = [...POD_ROLES.slice(1), POD_ROLES[0]];
 
 interface Listish {
     items?: unknown[];
@@ -28,19 +25,50 @@ function itemsOf(value: unknown): unknown[] {
     return (value as Listish)?.items ?? [];
 }
 
-/** One field for both ways somebody gets into a pod.
+/** Whether the server lets the signed-in person add people to this pod.
  *
- *  Somebody already in the organization is added straight away —
- *  `podMembers.add` takes an `organization_member_id`. Somebody who is not is
- *  sent an organization invitation that names this pod, its role and this
- *  pod's address, so accepting it joins both and lands them here. Which of the
- *  two happened is ours to know; the person typing only knows an address.
+ *  Asked of `podPermissions.me` — whether this person holds
+ *  `pod.member.manage` here — rather than guessed from a role. `allowed` is
+ *  false until the server has said yes; `answered` is whether it has said
+ *  anything, so a "you can't" line is not drawn while the question is in
+ *  flight. One query key, so the dialog and the profile ask once between
+ *  them. */
+export function useCanManageMembers(podId: string): { allowed: boolean; answered: boolean } {
+    const preview = isLandingPreview();
+    const permissions = useQuery({
+        queryKey: ["pod-permissions", podId],
+        queryFn: () => lemma(podId).podPermissions.me(podId),
+        enabled: !preview,
+        staleTime: 60_000,
+    });
+    if (preview) return { allowed: true, answered: true };
+    return {
+        allowed: (permissions.data?.actions ?? []).includes(MANAGE_MEMBERS),
+        answered: permissions.isSuccess,
+    };
+}
+
+/** Who has access to a pod, and — for whoever may change that — the way to
+ *  add more.
  *
- *  Only an organization owner or editor may invite, and the server refuses
- *  anybody else. For them the field stays a search over the organization, and
- *  says who to ask, rather than offering a button that always fails. */
-export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | null; onDone: () => void }) {
-    const [role, setRole] = useState(ROLES[0].value);
+ *  The list comes first because it is the question the header's faces ask.
+ *  It is readable by anybody in the pod, and an empty dialog that only
+ *  offered to add people answered "who has access" with nothing.
+ *
+ *  "With access", not "in": the pod is a teammate, and people are not in a
+ *  teammate. It is also what the profile calls the same list.
+ *
+ *  Adding is one field for both ways somebody gets into a pod. Somebody already
+ *  in the organization is added straight away — `podMembers.add` takes an
+ *  `organization_member_id`. Somebody who is not is sent an organization
+ *  invitation that names this pod, its role and this pod's address, so
+ *  accepting it joins both and lands them here.
+ *
+ *  Whether the field is offered at all is `useCanManageMembers`. Unknown
+ *  counts as no — nothing is offered that the server has not said it will
+ *  allow. */
+export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
+    const [role, setRole] = useState<string>(ROLES[0].value);
     const [query, setQuery] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -48,6 +76,17 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
     const [unsent, setUnsent] = useState<ReturnType<typeof unsentInvitation>>(null);
     const queryClient = useQueryClient();
     const preview = isLandingPreview();
+
+    const permissions = useCanManageMembers(pod.id);
+    const canAdd = permissions.allowed;
+
+    const me = useQuery({
+        queryKey: ["current-user"],
+        queryFn: () => lemma().users.current(),
+        enabled: !preview,
+        staleTime: 5 * 60_000,
+    });
+    const myEmail = (me.data?.email ?? "").toLowerCase();
 
     const orgMembers = useQuery({
         queryKey: ["org-members", orgId],
@@ -58,35 +97,18 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
             }
             return lemma().organizations.members.list(orgId as string, { limit: 100 });
         },
-        enabled: Boolean(orgId),
+        enabled: canAdd && Boolean(orgId),
     });
-
-    const me = useQuery({
-        queryKey: ["current-user"],
-        queryFn: () => lemma().users.current(),
-        enabled: !preview,
-        staleTime: 5 * 60_000,
-    });
-
-    /* My own role is only knowable by finding myself in the members list, the
-       way the People settings find it. Unknown counts as no: nothing is offered
-       on a guess. */
-    const myRole = useMemo(() => {
-        const mine = itemsOf(orgMembers.data)
-            .map((raw) => raw as { user_id?: string; role?: string })
-            .find((member) => member.user_id && member.user_id === me.data?.id);
-        return mine?.role ?? null;
-    }, [orgMembers.data, me.data?.id]);
-    const mayInvite = !preview && canManage(myRole);
 
     const invitations = useQuery({
         queryKey: ["org-invitations", orgId],
         queryFn: () => lemma().organizations.invitations.list(orgId as string, { limit: 50 }),
-        enabled: mayInvite && Boolean(orgId),
+        enabled: canAdd && !preview && Boolean(orgId),
     });
 
-    /* Invitations already waiting on this pod, shown in the list so nobody
-       invites the same address twice wondering whether the first one went. */
+    /* Invitations already waiting on this pod, listed with the people here so
+       nobody invites the same address twice wondering whether the first one
+       went. */
     const pendingHere = useMemo(
         () =>
             (itemsOf(invitations.data) as PodInvite[]).filter(
@@ -95,9 +117,13 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
         [invitations.data, pod.id],
     );
 
+    const people = useMemo(() => pod.members.filter((member) => member.kind === "person"), [pod.members]);
+
+    /* By address, which is what an organization member is known by here. The
+       name is the fallback only for a source that has no address to give. */
     const alreadyIn = useMemo(
-        () => new Set(pod.members.map((member) => member.name.toLowerCase())),
-        [pod.members],
+        () => new Set(people.map((member) => (member.email ?? member.name).toLowerCase())),
+        [people],
     );
 
     const candidates = useMemo(() => {
@@ -122,7 +148,7 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
        agree. */
     const action: "add" | "invite" | null = exact
         ? "add"
-        : looksLikeEmail && mayInvite && !inPod && !pendingMatch
+        : looksLikeEmail && !preview && !inPod && !pendingMatch
           ? "invite"
           : null;
 
@@ -132,8 +158,8 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
         ? "They’re already in this pod."
         : pendingMatch
           ? "They’ve already been invited here."
-          : looksLikeEmail && !exact && !mayInvite && !preview
-            ? "They aren’t in this organization yet. Ask an organization owner or editor to invite them."
+          : !typed && orgMembers.isSuccess && candidates.length === 0 && pendingHere.length === 0
+            ? "Everyone in this organization is already here. Add someone new by email."
             : null;
 
     async function add(memberId: string) {
@@ -143,15 +169,19 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
             if (preview) {
                 const { addPreviewMember } = await import("@/marketing/preview-source");
                 addPreviewMember(pod.id, memberId, ROLES.find(option => option.value === role)?.label ?? role);
-                await queryClient.invalidateQueries({ queryKey: ["pod-detail", pod.id] });
             } else {
                 await lemma(pod.id).podMembers.add(pod.id, {
                     organization_member_id: memberId,
                     roles: [role],
                 });
             }
-            await queryClient.invalidateQueries({ queryKey: ["pods"] });
-            onDone();
+            setQuery("");
+            /* Stays open: the list is right here, and the person just added
+               appearing in it is the confirmation. */
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["pod-detail", pod.id] }),
+                queryClient.invalidateQueries({ queryKey: ["pods"] }),
+            ]);
         } catch (problem) {
             setError(problem instanceof Error ? problem.message : "Couldn’t add this person.");
         } finally {
@@ -197,38 +227,40 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
 
     return (
         <div className="addpeople addpeople--modal">
-            <form
-                className="addpeople__bar"
-                onSubmit={(event) => {
-                    event.preventDefault();
-                    submit();
-                }}
-            >
-                <input
-                    className="addpeople__email"
-                    type="text"
-                    inputMode="email"
-                    autoComplete="off"
-                    autoFocus
-                    aria-label={mayInvite ? "Email address or name" : "Search this organization"}
-                    placeholder={mayInvite ? "Add by email" : "Search this organization"}
-                    value={query}
-                    onChange={(event) => {
-                        setQuery(event.target.value);
-                        setError(null);
+            {canAdd && (
+                <form
+                    className="addpeople__bar"
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        submit();
                     }}
-                />
-                <select aria-label="Access level" className="addpeople__role" value={role} onChange={(event) => setRole(event.target.value)}>
-                    {ROLES.map((option) => (
-                        <option key={option.value} value={option.value}>
-                            {option.label}
-                        </option>
-                    ))}
-                </select>
-                <button className="btn btn--primary" type="submit" disabled={busy !== null || action === null}>
-                    {busy === "invite" ? "Sending…" : action === "invite" ? "Invite" : "Add"}
-                </button>
-            </form>
+                >
+                    <input
+                        className="addpeople__email"
+                        type="text"
+                        inputMode="email"
+                        autoComplete="off"
+                        autoFocus
+                        aria-label="Email address or name"
+                        placeholder="Add by email"
+                        value={query}
+                        onChange={(event) => {
+                            setQuery(event.target.value);
+                            setError(null);
+                        }}
+                    />
+                    <select aria-label="Access level" className="addpeople__role" value={role} onChange={(event) => setRole(event.target.value)}>
+                        {ROLES.map((option) => (
+                            <option key={option.value} value={option.value}>
+                                {option.label}
+                            </option>
+                        ))}
+                    </select>
+                    <button className="btn btn--primary" type="submit" disabled={busy !== null || action === null}>
+                        {busy === "invite" ? "Sending…" : action === "invite" ? "Invite" : "Add"}
+                    </button>
+                </form>
+            )}
 
             {(error || hint) && (
                 <p className="addpeople__hint" role={error ? "alert" : undefined} data-bad={Boolean(error)}>
@@ -258,36 +290,88 @@ export function AddPeople({ pod, orgId, onDone }: { pod: Pod; orgId: string | nu
                 </div>
             )}
 
-            {orgMembers.isPending && <p className="empty-row">Reading your organization…</p>}
-            {orgMembers.isError && <p className="empty-row">Couldn’t load organization members.</p>}
-            {orgMembers.isSuccess && !typed && candidates.length === 0 && pendingHere.length === 0 && (
-                <p className="empty-row">
-                    {mayInvite ? "Everyone in this organization is already here. Add someone new by email." : "Everyone in this organization is already here."}
-                </p>
-            )}
-
-            <div className="addpeople__list">
-                {shown.map((candidate) => (
-                    <button
-                        key={candidate.id}
-                        type="button"
-                        className="addpeople__row"
-                        disabled={busy !== null}
-                        onClick={() => void add(candidate.id)}
-                    >
-                        <span className="addpeople__name">{candidate.label}</span>
-                        <span className="addpeople__org">{candidate.orgRole}</span>
-                        <span className="addpeople__go">{busy === candidate.id ? "Adding…" : "Add"}</span>
-                    </button>
-                ))}
-                {!typed &&
-                    pendingHere.map((invite) => (
-                        <div key={invite.id} className="addpeople__row addpeople__row--pending">
-                            <span className="addpeople__name">{invite.email}</span>
-                            <span className="addpeople__org">invited</span>
-                        </div>
+            {typed ? (
+                /* Typing is a search over who could be added, so the answer
+                   replaces the list rather than being buried under it. */
+                <div className="addpeople__list">
+                    {shown.map((candidate) => (
+                        <CandidateRow key={candidate.id} candidate={candidate} busy={busy} onAdd={add} />
                     ))}
-            </div>
+                </div>
+            ) : (
+                <>
+                    <div className="addpeople__list" aria-label={"People with access to " + pod.name}>
+                        {people.map((member) => {
+                            const mine = Boolean(myEmail) && (member.email ?? "").toLowerCase() === myEmail;
+                            return (
+                                <div key={member.id} className="addpeople__row addpeople__row--member" title={member.email}>
+                                    <span className="face" aria-hidden="true">{member.initials}</span>
+                                    <span className="addpeople__name">
+                                        {member.name}
+                                        {mine && <span className="addpeople__you"> · you</span>}
+                                    </span>
+                                    <span className="addpeople__access">{member.can}</span>
+                                </div>
+                            );
+                        })}
+                        {pendingHere.map((invite) => (
+                            <div key={invite.id} className="addpeople__row addpeople__row--member addpeople__row--pending">
+                                <span className="face" aria-hidden="true">@</span>
+                                <span className="addpeople__name">{invite.email}</span>
+                                <span className="addpeople__access">Invited</span>
+                            </div>
+                        ))}
+                    </div>
+
+                    {canAdd && orgMembers.isPending && <p className="empty-row">Reading your organization…</p>}
+                    {canAdd && orgMembers.isError && <p className="empty-row">Couldn’t load organization members.</p>}
+                    {canAdd && candidates.length > 0 && (
+                        <>
+                            <p className="addpeople__section">Also in this organization</p>
+                            <div className="addpeople__list">
+                                {candidates.map((candidate) => (
+                                    <CandidateRow key={candidate.id} candidate={candidate} busy={busy} onAdd={add} />
+                                ))}
+                            </div>
+                        </>
+                    )}
+                    {permissions.answered && !canAdd && (
+                        <p className="addpeople__hint">Only admins of {pod.name} can add people.</p>
+                    )}
+                </>
+            )}
         </div>
+    );
+}
+
+/** The way into the dialog from anywhere but the header — the profile's
+ *  roster. Nothing at all for somebody the server will not let add, for the
+ *  reason the dialog hides its field. */
+export function AddPeopleButton({ podId, onOpen }: { podId: string; onOpen: () => void }) {
+    const { allowed } = useCanManageMembers(podId);
+    if (!allowed) return null;
+    return (
+        <button type="button" className="btn btn--small" onClick={onOpen}>
+            Add people
+        </button>
+    );
+}
+
+function CandidateRow({ candidate, busy, onAdd }: {
+    candidate: { id: string; label: string; orgRole: string };
+    busy: string | null;
+    onAdd: (memberId: string) => void;
+}) {
+    return (
+        <button
+            type="button"
+            className="addpeople__row"
+            disabled={busy !== null}
+            onClick={() => onAdd(candidate.id)}
+        >
+            <span className="addpeople__name">{candidate.label}</span>
+            <span className="addpeople__org">{candidate.orgRole}</span>
+            <span className="addpeople__go">{busy === candidate.id ? "Adding…" : "Add"}</span>
+        </button>
     );
 }

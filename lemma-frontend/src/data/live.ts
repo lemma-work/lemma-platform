@@ -4,6 +4,7 @@ import { NEW_CONVERSATION } from "./types";
 import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
 import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
+import { readPodRoles } from "./pod-roles";
 import {
     agentChanges,
     agentRows,
@@ -96,16 +97,16 @@ async function membersOf(podId: string): Promise<Member[]> {
     try {
         const listed = (await lemma(podId).podMembers.list(podId)) as Listish;
         return itemsOf(listed).map((raw) => {
-            const m = raw as { id?: string; user_id?: string; name?: string; email?: string; role?: string };
-            const name = m.name ?? m.email ?? "Member";
-            const role = m.role ?? "MEMBER";
+            const m = raw as { pod_member_id?: string; user_id?: string; user_name?: string | null; email?: string; user_email?: string; roles?: string[] };
+            const email = m.email ?? m.user_email ?? "";
+            const name = m.user_name?.trim() || email || "Member";
             return {
-                id: m.id ?? m.user_id ?? name,
+                id: m.pod_member_id ?? m.user_id ?? name,
                 name,
+                email: email || undefined,
                 initials: initialsOf(name),
                 kind: "person" as const,
-                role: role.charAt(0) + role.slice(1).toLowerCase(),
-                can: role === "OWNER" ? "everything" : "—",
+                ...readPodRoles(m.roles),
             };
         });
     } catch {
@@ -114,7 +115,7 @@ async function membersOf(podId: string): Promise<Member[]> {
 }
 
 function subtitleFor(members: Member[], email: string | null): string {
-    const others = members.filter((m) => m.name !== email).map((m) => m.name.replace(/@.*$/, ""));
+    const others = members.filter((m) => (m.email ?? m.name) !== email).map((m) => m.name.replace(/@.*$/, ""));
     if (others.length === 0) return "just you";
     if (others.length === 1) return "with " + others[0] + " and you";
     if (others.length === 2) return "with " + others[0] + ", " + others[1] + " and you";
