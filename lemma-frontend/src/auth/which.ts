@@ -11,7 +11,7 @@
  *  somebody else is already holding.
  */
 
-export type Screen = "sign-in" | "sign-up" | "reset" | "verify" | "callback" | "desktop" | "unknown";
+export type Screen = "sign-in" | "sign-up" | "reset" | "verify" | "callback" | "desktop" | "cli" | "unknown";
 
 export function screenFor(path: string[] | undefined, search = ""): Screen {
     const segments = (path ?? []).filter(Boolean);
@@ -42,6 +42,10 @@ export function screenFor(path: string[] | undefined, search = ""): Screen {
             /* Ours, not somebody else's: where a browser signing in for the
                desktop app hands the session back. See `desktop/auth-handoff.ts`. */
             return segments.length === 1 ? "desktop" : "unknown";
+        case "cli":
+            /* Opened by `lemma auth login` in every CLI already installed
+               (`lemma_sdk/auth.py`). See `cli-login.ts`. */
+            return segments.length === 2 && segments[1] === "login" ? "cli" : "unknown";
         default:
             return "unknown";
     }

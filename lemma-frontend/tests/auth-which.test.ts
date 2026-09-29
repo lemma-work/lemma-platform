@@ -38,3 +38,10 @@ test("anything deeper than the grammar is unknown, not a near miss", () => {
     assert.equal(screenFor(["callback", "google", "extra"]), "unknown");
     assert.equal(screenFor(["nonsense"]), "unknown");
 });
+
+test("the CLI's login link resolves", () => {
+    // `lemma_sdk/auth.py` opens `/auth/cli/login` from every CLI already installed.
+    assert.equal(screenFor(["cli", "login"], "?callback=http%3A%2F%2F127.0.0.1%3A51210%2Fcallback&state=x"), "cli");
+    assert.equal(screenFor(["cli"]), "unknown");
+    assert.equal(screenFor(["cli", "login", "extra"]), "unknown");
+});

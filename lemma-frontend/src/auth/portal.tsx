@@ -7,6 +7,7 @@ import { Session, startAuth } from "./supertokens";
 import { screenFor } from "./which";
 import { Callback, Reset, SignInUp } from "./screens";
 import { Verify } from "./verification-screen";
+import { CliLogin } from "./cli-login-screen";
 import { PORTAL_PATH, asksForSignUp } from "./config";
 import { hasApiUrl } from "@/session/client";
 import { holdRequestId, requestIdFromSearch, shouldUseBrowserHandoff } from "@/desktop/auth-handoff";
@@ -73,6 +74,7 @@ export function Portal({ path }: { path?: string[] }) {
         case "reset": return <Reset />;
         case "verify": return <Verify />;
         case "callback": return <Callback />;
+        case "cli": return <CliLogin />;
         default:
             return (
                 <div className="screen"><div className="screen__inner auth">
