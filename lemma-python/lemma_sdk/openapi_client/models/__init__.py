@@ -455,6 +455,10 @@ _NAME_TO_MODULE = {
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
     'TableListResponse': 'table_list_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TelegramLinkOptionsResponse': 'telegram_link_options_response',
+    'TelegramLinkPod': 'telegram_link_pod',
+    'TelegramLinkRequest': 'telegram_link_request',
+    'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
     'Update': 'update',
@@ -991,6 +995,10 @@ if TYPE_CHECKING:
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
     from .table_list_response import TableListResponse
     from .table_summary_response import TableSummaryResponse
+    from .telegram_link_options_response import TelegramLinkOptionsResponse
+    from .telegram_link_pod import TelegramLinkPod
+    from .telegram_link_request import TelegramLinkRequest
+    from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
     from .update import Update
@@ -1540,6 +1548,10 @@ __all__ = [
     'TableDetailResponseConfigType0',
     'TableListResponse',
     'TableSummaryResponse',
+    'TelegramLinkOptionsResponse',
+    'TelegramLinkPod',
+    'TelegramLinkRequest',
+    'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
     'Update',

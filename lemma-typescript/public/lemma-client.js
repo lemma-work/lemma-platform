@@ -16083,6 +16083,41 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Get My Telegram Link Options
+     * The shared Telegram bot's username and the pods a chat with it could
+     * answer from, for offering a link before minting one. 409 when this
+     * deployment has no working shared Telegram bot.
+     * @returns TelegramLinkOptionsResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceTelegramLinkOptions() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/surfaces/me/telegram-link"
+      });
+    }
+    /**
+     * Create My Telegram Link
+     * Mint a one-time ``t.me`` link that connects the Telegram chat opening it
+     * to the current user, answered by ``pod_id``'s agent (or the suggested pod
+     * when omitted). Expires after ten minutes and works once. 403 for a pod the
+     * user cannot attach a chat to; 409 when there is no shared Telegram bot.
+     * @param requestBody
+     * @returns TelegramLinkResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceCreateTelegramLink(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surfaces/me/telegram-link",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/user-surfaces.ts
@@ -16098,6 +16133,16 @@ var LemmaClient = (() => {
     setDefault(payload) {
       return this.client.request(
         () => AgentSurfacesMeService.agentSurfaceSetMyDefault(payload)
+      );
+    }
+    /** The shared Telegram bot, and the pods a chat linked to me could answer from. */
+    telegramLinkOptions() {
+      return this.client.request(() => AgentSurfacesMeService.agentSurfaceTelegramLinkOptions());
+    }
+    /** A one-time `t.me` link that connects the Telegram chat opening it to me. */
+    createTelegramLink(payload = {}) {
+      return this.client.request(
+        () => AgentSurfacesMeService.agentSurfaceCreateTelegramLink(payload)
       );
     }
   };

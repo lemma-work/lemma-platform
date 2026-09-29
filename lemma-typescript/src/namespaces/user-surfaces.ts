@@ -1,5 +1,6 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { SetDefaultSurfaceRequest } from "../openapi_client/models/SetDefaultSurfaceRequest.js";
+import type { TelegramLinkRequest } from "../openapi_client/models/TelegramLinkRequest.js";
 import { AgentSurfacesMeService } from "../openapi_client/services/AgentSurfacesMeService.js";
 
 /**
@@ -20,6 +21,18 @@ export class UserSurfacesNamespace {
   setDefault(payload: SetDefaultSurfaceRequest) {
     return this.client.request(() =>
       AgentSurfacesMeService.agentSurfaceSetMyDefault(payload),
+    );
+  }
+
+  /** The shared Telegram bot, and the pods a chat linked to me could answer from. */
+  telegramLinkOptions() {
+    return this.client.request(() => AgentSurfacesMeService.agentSurfaceTelegramLinkOptions());
+  }
+
+  /** A one-time `t.me` link that connects the Telegram chat opening it to me. */
+  createTelegramLink(payload: TelegramLinkRequest = {}) {
+    return this.client.request(() =>
+      AgentSurfacesMeService.agentSurfaceCreateTelegramLink(payload),
     );
   }
 }
