@@ -346,7 +346,7 @@ def _window_store():
 
 
 async def test_a_failed_send_gives_the_stranger_window_back(caplog):
-    adapter = SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError("boom")))
+    adapter = SimpleNamespace(deliver=AsyncMock(side_effect=RuntimeError("boom")))
     store = _window_store()
     context = _fallback_context()
 
@@ -366,7 +366,7 @@ async def test_a_failed_send_gives_the_stranger_window_back(caplog):
 
 
 async def test_a_delivered_reply_keeps_the_window():
-    adapter = SimpleNamespace(send_message=AsyncMock(return_value=None))
+    adapter = SimpleNamespace(deliver=AsyncMock(return_value=None))
     store = _window_store()
 
     await deliver_fallback_reply(

@@ -96,8 +96,8 @@ async def test_execute_chat_sends_direct_replies():
     await starter.execute_chat(signup_context)
     await starter.execute_chat(direct_context)
 
-    assert adapter.send_message.await_count == 2
-    assert adapter.send_message.await_args.kwargs["metadata"]["reply_markup"] == {
+    assert adapter.deliver.await_count == 2
+    assert adapter.deliver.await_args.kwargs["metadata"]["reply_markup"] == {
         "remove_keyboard": True
     }
 
@@ -127,7 +127,7 @@ async def test_execute_chat_names_the_surface_that_cannot_answer_a_stranger(capl
     with caplog.at_level("WARNING"):
         await starter.execute_chat(context)
 
-    adapter.send_message.assert_not_awaited()
+    adapter.deliver.assert_not_awaited()
     assert "surface_fallback_no_credentials" in caplog.text
     assert str(surface_id) in caplog.text
 
@@ -135,7 +135,7 @@ async def test_execute_chat_names_the_surface_that_cannot_answer_a_stranger(capl
 async def test_execute_chat_logs_delivery_failure_without_secret(monkeypatch):
     parsed_event = _telegram_event(chat_id="123", message_id="failed-delivery")
     adapter = AsyncMock()
-    adapter.send_message.side_effect = RuntimeError("provider exposed secret-token")
+    adapter.deliver.side_effect = RuntimeError("provider exposed secret-token")
     starter = build_turn_starter(adapter=adapter)
     starter._credentials_for = AsyncMock(return_value={"bot_token": "secret-token"})
     incident = Mock()
@@ -214,7 +214,7 @@ async def test_a_message_arriving_mid_run_is_not_acknowledged():
     for _ in range(3):
         await starter.execute_chat(_slack_chat_context(surface, conversation, "photo"))
 
-    adapter.send_message.assert_not_awaited()
+    adapter.deliver.assert_not_awaited()
 
 
 async def test_execute_chat_holds_no_session_during_io(monkeypatch):
@@ -484,11 +484,12 @@ async def test_telegram_help_points_to_bound_mini_app_button(command, monkeypatc
     )
 
     assert handled is True
-    sent = adapter.send_message.await_args.kwargs
+    sent = adapter.deliver.await_args.kwargs
     assert (
-        "Open Field Log from the app button beside the message field" in sent["message"]
+        "Open Field Log from the app button beside the message field"
+        in sent["envelope"].text
     )
-    assert "metadata" not in sent
+    assert sent["metadata"] is None
 
 
 async def test_telegram_help_does_not_claim_unavailable_local_app_button(monkeypatch):
@@ -529,8 +530,8 @@ async def test_telegram_help_does_not_claim_unavailable_local_app_button(monkeyp
     )
 
     assert handled is True
-    sent = adapter.send_message.await_args.kwargs
-    assert "app button beside the message field" not in sent["message"]
+    sent = adapter.deliver.await_args.kwargs
+    assert "app button beside the message field" not in sent["envelope"].text
 
 
 @pytest.mark.parametrize("command", ["/start", "/retry"])
@@ -542,7 +543,7 @@ async def test_a_failed_command_reply_does_not_fail_the_turn(command):
     """
     surface = _telegram_surface()
     adapter = AsyncMock()
-    adapter.send_message.side_effect = httpx.ConnectError("no route")
+    adapter.deliver.side_effect = httpx.ConnectError("no route")
     starter = build_turn_starter(adapter=adapter, surfaces=[surface])
     context = SurfaceChatContext(
         platform=SurfacePlatform.TELEGRAM,
@@ -565,7 +566,7 @@ async def test_a_failed_command_reply_does_not_fail_the_turn(command):
     )
 
     assert handled is True
-    adapter.send_message.assert_awaited_once()
+    adapter.deliver.assert_awaited_once()
 
 
 async def test_telegram_app_command_is_not_a_special_command():
@@ -594,4 +595,4 @@ async def test_telegram_app_command_is_not_a_special_command():
     )
 
     assert handled is False
-    adapter.send_message.assert_not_awaited()
+    adapter.deliver.assert_not_awaited()

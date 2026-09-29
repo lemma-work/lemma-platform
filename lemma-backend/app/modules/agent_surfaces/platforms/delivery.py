@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeVar
 
+from app.modules.agent_surfaces.domain.delivery_limits import MAX_DELIVERY_ATTEMPTS
+
 T = TypeVar("T")
 
 
@@ -28,7 +30,7 @@ class DeliveryClassification(Enum):
 
 @dataclass(frozen=True)
 class RetryPolicy:
-    max_attempts: int = 3
+    max_attempts: int = MAX_DELIVERY_ATTEMPTS
     base_delay: float = 0.5
     max_delay: float = 8.0
 

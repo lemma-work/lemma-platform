@@ -64,6 +64,8 @@ from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
 from app.core.log.log import get_logger
 
+from app.modules.agent_surfaces.domain.delivery_limits import CONSUMER_ATTEMPTS
+
 logger = get_logger(__name__)
 
 router = RedisRouter()
@@ -102,7 +104,9 @@ async def handle_onboarding_ready(
             ready.pending_id, uow_factory=uow_factory, job_queue=job_queue
         )
 
-    await inbox.process("agent-surfaces.onboarding", event, process)
+    await inbox.process(
+        "agent-surfaces.onboarding", event, process, max_attempts=CONSUMER_ATTEMPTS
+    )
 
 
 def provide_onboarding_handler(
@@ -157,7 +161,9 @@ async def handle_surface_webhook(
             onboarding_handler=onboarding_handler,
         )
 
-    await inbox.process("agent-surfaces.webhook", received, process)
+    await inbox.process(
+        "agent-surfaces.webhook", received, process, max_attempts=CONSUMER_ATTEMPTS
+    )
 
 
 async def _context_for_delivery(
@@ -382,7 +388,12 @@ async def on_pod_deleted(
         async with uow_factory() as uow:
             await build_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
 
-    await inbox.process("agent-surfaces.pod-deletion", event, process)
+    await inbox.process(
+        "agent-surfaces.pod-deletion",
+        event,
+        process,
+        max_attempts=CONSUMER_ATTEMPTS,
+    )
 
 
 @reliable_redis_stream_subscriber(
@@ -410,10 +421,14 @@ async def on_identity_event(
                 parsed.user_id, phone
             )
 
-    await inbox.process("agent-surfaces.identity", event, process)
+    await inbox.process(
+        "agent-surfaces.identity", event, process, max_attempts=CONSUMER_ATTEMPTS
+    )
 
 
-@streaq_task(name="process_surface_message")
+# Bounded by `delivery_limits`: a send that failed is already terminal here, so
+# this only retries what happens before one.
+@streaq_task(name="process_surface_message", max_tries=CONSUMER_ATTEMPTS)
 async def process_surface_message(
     payload: dict,
 ):

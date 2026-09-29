@@ -266,6 +266,6 @@ async def test_the_fallback_reply_goes_out_with_the_arriving_numbers_token():
 
     await starter.execute_chat(context)
 
-    sent = adapter.send_message.await_args.kwargs["credentials"]
+    sent = adapter.deliver.await_args.kwargs["credentials"]
     assert sent["access_token"] == "token-for-b"
     assert sent["phone_number_id"] == _POOLED

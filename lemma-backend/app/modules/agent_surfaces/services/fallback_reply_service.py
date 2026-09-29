@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.domain.adapter_port import (
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
 )
+from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     has_shared_system_bot,
 )
@@ -385,7 +386,8 @@ async def deliver_fallback_reply(
         )
         return
     try:
-        await adapter.send_message(
+        await reply_text(
+            adapter=adapter,
             credentials=credentials,
             event=context.event,
             message=context.reply_message or signup_message(),

@@ -125,7 +125,7 @@ async def test_the_fallback_reply_logs_what_the_platform_said(caplog):
         body_excerpt='{"error":{"message":"Invalid OAuth access token"}}',
     )
     adapter = AsyncMock()
-    adapter.send_message = AsyncMock(side_effect=refused)
+    adapter.deliver = AsyncMock(side_effect=refused)
     dedup = AsyncMock()
     dedup.claim_stranger_reply = AsyncMock(return_value=True)
 
