@@ -301,28 +301,24 @@ impl Daemon {
         Ok(())
     }
 
-    /// Say where the sandbox image stands, without fetching anything.
+    /// Fetch the sandbox images behind the workspace, or say where they stand.
     ///
-    /// After `ready`, never before it, and it no longer starts a download.
-    /// Fetching on every start spent several hundred megabytes of someone
-    /// else's connection on a capability they may never use: the coding agents
-    /// run natively on this computer, and a person using only those has no pod
-    /// workload to put in a sandbox. They still got the download, and a toast
-    /// announcing it, for something they had not asked for.
+    /// After `ready`, never before it: the workspace opens first and the
+    /// download runs behind it, with its progress in a notice.
     ///
-    /// So this reports and stops. `sandbox.prepare` is how a fetch starts now,
-    /// and Settings is where it is offered. A pod that runs something before
-    /// then still works -- `sandbox.ensure` pulls what it needs on first use,
-    /// exactly as it did before any of this existed; it is slower once.
+    /// It fetches on the first start of an install and on the first start of
+    /// a release whose images this computer does not have yet. Nearly every
+    /// conversation needs the sandbox -- the browser a coding agent drives
+    /// runs in it too -- so leaving the download to the first Wake up only
+    /// made someone wait on it at the moment they needed it. See
+    /// `claim_unasked_sandbox_image_fetch`: once per release, so a failure is
+    /// offered in Settings rather than retried on every start, and
+    /// `sandbox.ensure` still pulls what it needs on first use either way.
     ///
-    /// Both states here are terminal, because the workspace polls until it
-    /// hears an answer that cannot change; silence left it asking every two
-    /// seconds for the rest of the session.
-    ///
-    /// The exception is an update, for someone who has fetched the images
-    /// before: then this start fetches the new release's, behind the workspace,
-    /// so the download is not waiting for them at the next Wake up. See
-    /// `claim_unasked_sandbox_image_fetch`.
+    /// Otherwise it reports and stops. Both states it reports are terminal,
+    /// because the workspace polls until it hears an answer that cannot
+    /// change; silence left it asking every two seconds for the rest of the
+    /// session.
     pub(super) fn announce_sandbox_images(self: &Arc<Self>) {
         if self
             .managed_runtime
