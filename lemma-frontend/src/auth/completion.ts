@@ -37,3 +37,15 @@ export async function completeAuth(search = window.location.search): Promise<voi
     if (access === "signed-out") throw new Error("Your session could not be confirmed. Please sign in again.");
     window.location.replace(completionDestination(access, search));
 }
+
+/** The account this browser is signed in as, for a confirmation to name. */
+export async function signedInEmail(fetcher: typeof fetch = fetch): Promise<string | null> {
+    try {
+        const response = await fetcher(onApi("/users/me"), { credentials: "include", cache: "no-store" });
+        if (!response.ok) return null;
+        const body = (await response.json()) as { email?: unknown };
+        return typeof body.email === "string" ? body.email : null;
+    } catch {
+        return null;
+    }
+}
