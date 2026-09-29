@@ -64,12 +64,11 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        await WhatsAppPlatformService(credentials)._render_resource(
+        return await WhatsAppPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,
         )
-        return True
 
     async def _render_choices(
         self,

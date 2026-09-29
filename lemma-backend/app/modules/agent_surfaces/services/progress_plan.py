@@ -26,8 +26,6 @@ is, and the step it is on.
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 
 from app.modules.agent.contracts import (
@@ -36,13 +34,7 @@ from app.modules.agent.contracts import (
     MessageDraft,
     MessageKind,
 )
-
-#: The planning tool from ``app.modules.agent.capabilities.todo``.
-TODO_TOOL_NAME = "write_todos"
-
-# ``write_todos`` returns its list already rendered as markdown checklist lines
-# ("- [x] Fetch the Q3 report"), which is what we parse back.
-_RENDERED_TODO_RE = re.compile(r"^\s*(?:[-*]\s+)?\[(?P<mark>[ xX*])\]\s*(?P<text>.+)$")
+from app.modules.agent.contracts.progress_tools import todo_plan_from_tool_return
 
 _DONE_MARK = "✅"
 _ACTIVE_MARK = "⏳"
@@ -88,31 +80,29 @@ class SurfacePlan:
 def plan_from_event(event: AgentEvent) -> SurfacePlan | None:
     """Read the current plan out of a ``write_todos`` tool return.
 
-    The *return* is used rather than the call arguments because the tool merges
-    a single check-off line into the stored list before answering: the arguments
-    can be one line ("- [x] step three"), while the return is always the whole
-    list. Rendering the arguments would show a one-item plan every time an item
-    was ticked off.
+    Reading the tool's schema is the agent's job
+    (`agent.contracts.progress_tools`); this only draws what it finds. The
+    *return* is what carries the plan rather than the call arguments, because
+    the tool merges a single check-off line into the stored list before
+    answering -- rendering the arguments would show a one-item plan every time
+    an item was ticked off.
     """
     if event.type != AgentEventType.MESSAGE:
         return None
     data = event.data
     if not isinstance(data, MessageDraft):
         return None
-    if data.kind is not MessageKind.TOOL_RETURN or data.tool_name != TODO_TOOL_NAME:
+    if data.kind is not MessageKind.TOOL_RETURN:
         return None
-    lines = _rendered_lines(data.tool_result)
-    if lines is None:
-        return None
-    items = tuple(
-        PlanItem(text=parsed[0], done=parsed[1])
-        for parsed in (_parse_rendered_line(line) for line in lines)
-        if parsed is not None
-    )
+    steps = todo_plan_from_tool_return(data.tool_name, data.tool_result)
     # An empty list is a real state ("the plan was cleared"), but there is
     # nothing to show for it, and sending a blank update is worse than sending
     # none.
-    return SurfacePlan(items=items) if items else None
+    if steps is None:
+        return None
+    return SurfacePlan(
+        items=tuple(PlanItem(text=step.text, done=step.done) for step in steps)
+    )
 
 
 def render_plan(plan: SurfacePlan) -> str:
@@ -195,34 +185,3 @@ def _clip(text: str) -> str:
     if len(collapsed) <= _MAX_ITEM_CHARS:
         return collapsed
     return collapsed[: _MAX_ITEM_CHARS - 1].rstrip() + "…"
-
-
-def _rendered_lines(tool_result: object) -> list[str] | None:
-    """Pull the ``todos`` list out of a tool return, dict or JSON string.
-
-    Harnesses differ on whether a tool return arrives decoded: the in-process
-    one hands over the dict the tool built, while a remote harness relaying over
-    MCP can deliver the same payload as a JSON string.
-    """
-    result = tool_result
-    if isinstance(result, str):
-        try:
-            result = json.loads(result)
-        except ValueError:
-            return None
-    if not isinstance(result, dict):
-        return None
-    todos = result.get("todos")
-    if not isinstance(todos, list):
-        return None
-    return [line for line in todos if isinstance(line, str)]
-
-
-def _parse_rendered_line(line: str) -> tuple[str, bool] | None:
-    match = _RENDERED_TODO_RE.match(line)
-    if match is None:
-        return None
-    text = match.group("text").strip()
-    if not text:
-        return None
-    return text, match.group("mark") in ("x", "X", "*")

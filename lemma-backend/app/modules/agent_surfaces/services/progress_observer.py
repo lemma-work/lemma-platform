@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.platforms.rendering import (
     ThinkingStreamFilter,
 )
@@ -51,6 +52,13 @@ from app.modules.agent_surfaces.services.progress_events import (
 )
 
 logger = get_logger(__name__)
+
+# What a platform call can raise that must not stop the answer being delivered
+# another way: the transport family, plus the database work around it.
+_DELIVERY_ERRORS: tuple[type[BaseException], ...] = (
+    SQLAlchemyError,
+    *PLATFORM_TRANSPORT_ERRORS,
+)
 
 _TYPING_REFRESH_INTERVAL_SECONDS = {
     SurfacePlatform.TELEGRAM.value: 4.0,
@@ -227,8 +235,8 @@ class SurfaceAgentRunProgressObserver(
                 self._buffered_text = _join_text(self._buffered_text, assistant_text)
             return
 
-        # display_resource is delivered by the tool (chat) or shared via the email
-        # reply tool's attachments (email); the observer no longer routes it.
+        # display_resource is delivered by the tool (chat) or held for the one
+        # reply that carries it (email); the observer no longer routes it.
         # Thinking / tool-call / tool-return content is never a content message.
         # A tool run means any buffered text was intermediate narration, so the
         # next assistant text starts a fresh (final) answer block.
@@ -277,9 +285,16 @@ class SurfaceAgentRunProgressObserver(
                     message=message,
                     already_streamed=bool(self._streamed_text),
                 )
-        except SQLAlchemyError:
-            logger.debug(
-                "agent_surfaces.progress_observer.surface_finish_stream_conversation.diagnostic"
+        except _DELIVERY_ERRORS:
+            # Not debug: this is the step that turns a live stream into the
+            # answer, and a timeout here used to escape `on_run_finished`
+            # before `_deliver_final_answer` ran -- the stream was left open and
+            # the answer was never sent. Returning False sends the caller down
+            # the plain-message path instead.
+            logger.warning(
+                "agent_surfaces.progress_observer.finish_stream_failed.degraded",
+                conversation_id=str(conversation.id),
+                exc_info=True,
             )
             return False
         if not delivered:
@@ -293,11 +308,20 @@ class SurfaceAgentRunProgressObserver(
             return
         handle = self._progress_handle
         self._progress_handle = None
-        async with self.uow_factory() as uow:
-            service = self.egress_factory(uow)
-            await service.progress.clear_progress(
-                conversation_id=conversation_id,
-                progress_handle=handle,
+        try:
+            async with self.uow_factory() as uow:
+                service = self.egress_factory(uow)
+                await service.progress.clear_progress(
+                    conversation_id=conversation_id,
+                    progress_handle=handle,
+                )
+        except _DELIVERY_ERRORS:
+            # Clearing is cosmetic and the answer that follows it is not, so a
+            # failure here must never be the reason the answer is not sent.
+            logger.warning(
+                "agent_surfaces.progress_observer.clear_progress_failed.degraded",
+                conversation_id=str(conversation_id),
+                exc_info=True,
             )
 
     async def on_run_finished(
@@ -315,12 +339,23 @@ class SurfaceAgentRunProgressObserver(
             except asyncio.CancelledError:
                 # Expected after task.cancel(); delivery cleanup must continue.
                 pass
-        if not await self._finish_stream_with_answer(conversation):
+        try:
+            finished = await self._finish_stream_with_answer(conversation)
+        except _DELIVERY_ERRORS:
+            # The flush before the close is outside the guarded call above. Either
+            # way the answer still has to go out, and that is the next line.
+            logger.warning(
+                "agent_surfaces.progress_observer.finish_stream_failed.degraded",
+                conversation_id=str(conversation.id),
+                exc_info=True,
+            )
+            finished = False
+        if not finished:
             await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)
         # Anything display_resource held for a single reply belongs to this run.
         # Left behind, it would attach itself to whatever reply came next.
-        discard_display_paths(conversation.id)
+        await discard_display_paths(conversation.id)
 
     async def on_run_failed(
         self,
@@ -348,7 +383,7 @@ class SurfaceAgentRunProgressObserver(
         # to this run. A run that died still held it, and the entry outlived the
         # run -- attaching itself to whatever reply came next, or to nothing at
         # all while the process kept the bytes.
-        discard_display_paths(conversation.id)
+        await discard_display_paths(conversation.id)
 
     async def _deliver_final_answer(self, conversation: Conversation) -> None:
         """Deliver the single final answer once the run has finished.
@@ -365,8 +400,8 @@ class SurfaceAgentRunProgressObserver(
         """
         if self._final_delivered:
             return
-        self._final_delivered = True
         if self._run_errored:
+            self._final_delivered = True
             await self._deliver_run_error(conversation)
             return
         message = (self._final_answer_text or self._buffered_text or "").strip()
@@ -381,15 +416,31 @@ class SurfaceAgentRunProgressObserver(
                 "Ask me again and I'll give it another go."
             )
         if not message:
+            self._final_delivered = True
             return
+        # Marked delivered only once it was, not before the send: latching first
+        # meant a send that failed still counted as the answer having gone out,
+        # and nothing that read the flag afterwards could tell the difference.
         try:
-            await self._send_agent_message(
+            delivered = await self._send_agent_message(
                 conversation_id=conversation.id,
                 message=message,
             )
         except Exception:
+            logger.warning(
+                "agent_surfaces.progress_observer.final_answer_not_delivered.degraded",
+                conversation_id=str(conversation.id),
+                exc_info=True,
+            )
+            return
+        if delivered:
+            self._final_delivered = True
+        else:
+            # The send path says why -- no surface link, a platform refusal --
+            # so this only records that the answer did not go out.
             logger.debug(
-                "agent_surfaces.progress_observer.surface_final_answer_delivery_conversation.diagnostic"
+                "agent_surfaces.progress_observer.final_answer_unsent.diagnostic",
+                conversation_id=str(conversation.id),
             )
 
     async def _deliver_run_error(self, conversation: Conversation) -> None:
@@ -404,7 +455,7 @@ class SurfaceAgentRunProgressObserver(
         if self._error_delivered:
             return
         try:
-            await self._send_agent_message(
+            delivered = await self._send_agent_message(
                 conversation_id=conversation.id,
                 message=(
                     self._run_error_text
@@ -412,11 +463,15 @@ class SurfaceAgentRunProgressObserver(
                 ),
                 metadata={"retry_action": True},
             )
-            self._error_delivered = True
         except Exception:
-            logger.debug(
-                "agent_surfaces.progress_observer.surface_error_delivery.diagnostic"
+            logger.warning(
+                "agent_surfaces.progress_observer.run_error_not_delivered.degraded",
+                conversation_id=str(conversation.id),
+                exc_info=True,
             )
+            return
+        if delivered:
+            self._error_delivered = True
 
     async def _refresh_typing_loop(
         self,

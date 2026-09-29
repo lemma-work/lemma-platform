@@ -461,6 +461,46 @@ class SurfaceInboundMixin:
             )
             return None
 
+        # The claim is spent, and everything from here can still fail (sender
+        # resolution, routing, the binder, the commit after). Left spent, the
+        # inbox's retry reads a "duplicate" and drops the message, and a
+        # `DomainError` is terminal and never retried. So it is kept only once
+        # preparation has returned -- a `finally`, so cancellation counts too.
+        # A replay took no claim, so it has none to give back.
+        prepared = False
+        try:
+            context = await self._prepare_claimed_surface_context(
+                surface=surface,
+                parsed=parsed,
+                adapter=adapter,
+                credentials=credentials,
+                resolved_user=resolved_user,
+                fallback_agent_display_name=fallback_agent_display_name,
+            )
+            prepared = True
+            return context
+        finally:
+            if claim_delivery and not prepared:
+                # Redis: the connection goes back where nothing was written.
+                async with connection_released(self.uow.session):
+                    await self.event_dedup_store.release_message(
+                        surface_installation_id=surface.id,
+                        platform=surface.surface_type,
+                        external_channel_id=parsed.external_channel_id,
+                        external_thread_id=parsed.external_thread_id,
+                        external_message_id=parsed.external_message_id,
+                    )
+
+    async def _prepare_claimed_surface_context(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        adapter: SurfacePlatformAdapterPort,
+        credentials: dict[str, object],
+        resolved_user: ResolvedSurfaceUser | None,
+        fallback_agent_display_name: str,
+    ) -> AgentSurfaceContext | None:
         attachment_count = len(parsed.metadata.get("attachments") or [])
         logger.debug(
             "agent_surfaces.ingress_service.agent_surface_prepared_inbound_event.observed",

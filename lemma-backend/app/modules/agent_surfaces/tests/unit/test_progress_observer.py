@@ -61,6 +61,8 @@ class _SurfaceProgress:
 
     async def finish_with_answer(self, **kwargs):
         self.egress.finished.append(kwargs)
+        if self.egress.finish_error is not None:
+            raise self.egress.finish_error
         return self.egress.finish_result
 
 
@@ -74,11 +76,21 @@ class _SurfaceService:
         self.streamed = []
         self.send_result = send_result
         self.finish_result = finish_result
+        self.finish_error: BaseException | None = None
+        self.send_error: BaseException | None = None
+        self.text_fallback_result = True
+        self.text_fallbacks: list[dict] = []
         self.progress = _SurfaceProgress(self)
 
     async def send_agent_message_for_conversation(self, **kwargs):
         self.messages.append(kwargs)
+        if self.send_error is not None:
+            raise self.send_error
         return self.send_result
+
+    async def send_prompt_as_text_for_conversation(self, **kwargs):
+        self.text_fallbacks.append(kwargs)
+        return self.text_fallback_result
 
     async def send_display_resource_for_conversation(self, **kwargs):
         self.messages.append({"display_resource": kwargs})
@@ -1201,3 +1213,218 @@ async def test_a_pause_this_surface_does_not_render_is_left_alone():
     )
 
     assert service.messages == []
+
+
+# --- an answer that cannot be sent is not an answer that was sent ------------
+
+
+def _events_named(caplog, name: str) -> list:
+    return [record for record in caplog.records if name in str(record.getMessage())]
+
+
+async def test_a_timeout_closing_the_stream_does_not_cost_the_answer(caplog):
+    """The finish step raised a `TimeoutError` and took `on_run_finished` with it.
+
+    `_finish_stream_with_answer` caught `SQLAlchemyError` only, so a Slack
+    timeout escaped before `_deliver_final_answer` ran, and the runner swallows
+    an observer exception at debug: the stream was left open and the answer was
+    never sent. It is a warning with a traceback now, and the answer goes out as
+    an ordinary message.
+    """
+    service = _SurfaceService()
+    service.finish_error = TimeoutError("slack did not answer")
+    observer = _observer(service)
+    observer._progress_handle = {"ts": "1.0", "channel": "C1", "stream": True}
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    await observer.on_event(
+        _assistant(MessageDraft.of_text("The answer is 42.")),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert [m["message"] for m in service.messages] == ["The answer is 42."]
+    assert observer._final_delivered is True
+    assert service.cleared, "the stream that could not be closed is disposed of"
+    failed = _events_named(caplog, "finish_stream_failed")
+    assert failed and failed[0].levelname == "WARNING"
+    assert "TimeoutError" in failed[0].getMessage()
+
+
+async def test_a_failure_clearing_the_stream_does_not_cost_the_answer(caplog):
+    service = _SurfaceService()
+
+    async def broken_clear(**kwargs):
+        raise TimeoutError("cannot delete the stream")
+
+    service.progress.clear_progress = broken_clear
+    observer = _observer(service)
+    observer._progress_handle = {"ts": "1.0", "channel": "C1", "stream": True}
+    service.finish_result = False
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    await observer.on_event(
+        _assistant(MessageDraft.of_text("Still here.")), conversation, SimpleNamespace()
+    )
+
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert [m["message"] for m in service.messages] == ["Still here."]
+    assert _events_named(caplog, "clear_progress_failed")
+
+
+async def test_an_answer_that_did_not_send_is_not_marked_delivered():
+    service = _SurfaceService(send_result=False)
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
+    await observer.on_event(
+        _assistant(MessageDraft.of_text("Final answer.")),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert len(service.messages) == 1
+    assert observer._final_delivered is False
+
+
+async def test_an_answer_whose_send_raised_is_logged_and_not_marked_delivered(caplog):
+    service = _SurfaceService()
+    service.send_error = TimeoutError("telegram is down")
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
+    await observer.on_event(
+        _assistant(MessageDraft.of_text("Final answer.")),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert observer._final_delivered is False
+    lost = _events_named(caplog, "final_answer_not_delivered")
+    assert lost and lost[0].levelname == "WARNING"
+    assert "TimeoutError" in lost[0].getMessage(), "with the traceback, not at debug"
+
+
+async def test_a_delivered_answer_is_marked_delivered_once():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
+    await observer.on_event(
+        _assistant(MessageDraft.of_text("Final answer.")),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    await observer.on_run_finished(conversation, SimpleNamespace())
+    await observer._deliver_final_answer(conversation)
+
+    assert len(service.messages) == 1
+    assert observer._final_delivered is True
+
+
+async def test_a_run_error_that_could_not_be_sent_is_logged_and_retried(caplog):
+    service = _SurfaceService()
+    service.send_error = TimeoutError("telegram is down")
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
+
+    await observer.on_run_failed(conversation, RuntimeError("boom"))
+
+    assert observer._error_delivered is False
+    lost = _events_named(caplog, "run_error_not_delivered")
+    assert lost and lost[0].levelname == "WARNING"
+
+    service.send_error = None
+    await observer._deliver_run_error(conversation)
+    assert observer._error_delivered is True
+
+
+# --- a prompt that did not arrive is asked again, in words --------------------
+
+
+def _waiting(kind: str = "ask_user", tool_call_id: str = "ask-1") -> AgentEvent:
+    return AgentEvent(
+        type=AgentEventType.WAITING,
+        data={"kind": kind, "tool_call_id": tool_call_id},
+    )
+
+
+async def test_a_prompt_that_did_not_arrive_is_asked_again_in_plain_words(caplog):
+    service = _SurfaceService(send_result=False)
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+    )
+
+    await observer.on_event(_waiting(), conversation, SimpleNamespace())
+
+    assert service.text_fallbacks == [
+        {
+            "conversation_id": conversation.id,
+            "kind": "ask_user",
+            "tool_call_id": "ask-1",
+        }
+    ]
+    assert _events_named(caplog, "waiting_prompt_not_delivered")[0].levelname == (
+        "WARNING"
+    )
+    # Asked in words, so a repeat of the same WAITING event is not asked again.
+    await observer.on_event(_waiting(), conversation, SimpleNamespace())
+    assert len(service.text_fallbacks) == 1
+
+
+async def test_a_prompt_that_cannot_be_asked_even_in_words_can_be_tried_again():
+    service = _SurfaceService(send_result=False)
+    service.text_fallback_result = False
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+    )
+
+    await observer.on_event(_waiting(), conversation, SimpleNamespace())
+    await observer.on_event(_waiting(), conversation, SimpleNamespace())
+
+    assert len(service.text_fallbacks) == 2, "the key was given back"
+
+
+async def test_a_prompt_that_raised_is_logged_and_asked_in_words(caplog):
+    service = _SurfaceService()
+
+    async def broken(**kwargs):
+        raise TimeoutError("whatsapp is down")
+
+    service.send_approval_prompt_for_conversation = broken
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+    )
+
+    await observer.on_event(
+        _waiting("request_approval", "call-1"), conversation, SimpleNamespace()
+    )
+
+    failed = _events_named(caplog, "waiting_prompt_failed")
+    assert failed and failed[0].levelname == "WARNING"
+    assert service.text_fallbacks[0]["kind"] == "request_approval"
+
+
+async def test_a_web_conversation_that_pauses_is_not_asked_about_anywhere():
+    """The observer is attached to every run, and most are not on a surface."""
+    service = _SurfaceService(send_result=False)
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={})
+
+    await observer.on_event(_waiting(), conversation, SimpleNamespace())
+
+    assert service.text_fallbacks == []

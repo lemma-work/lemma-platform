@@ -486,9 +486,3 @@ class ConversationMCPService:
 
 
 conversation_mcp_service = ConversationMCPService()
-
-
-def _surface_platform(conversation: Conversation) -> str | None:
-    metadata = conversation.metadata or {}
-    platform = metadata.get("surface_platform") if isinstance(metadata, dict) else None
-    return str(platform) if platform else None

@@ -152,10 +152,14 @@ observer renders them on the surface and a submission resumes the run.
   over conversation continuity** → continuity → oldest-tiebreak. A stale default
   (pointing at a pod the user left) is cleared and ignored.
 - **DM reset window.** A DM starts a fresh Lemma conversation after
-  `dm_conversation_reset_after_hours` of inactivity.
-- **Runtime history window.** For surface conversations, prior history passed to
-  the model is bounded by `surface_runtime_history_{max_messages,window_hours}`,
-  trimmed at agent-run granularity so tool-call/return pairs stay intact.
+  `SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS` (default 24) of inactivity, measured
+  from the last *inbound* message. It is deployment-wide; the old per-surface
+  `dm_conversation_reset_after_hours` field is accepted and ignored.
+  This is the only place a surface decides which conversation a message joins.
+- **History is not the surface's.** A surface never trims or reshapes what the
+  model sees. Once a message is bound to a conversation, the agent module alone
+  decides how much history the run carries (run cap, whole recent runs,
+  collapsed older runs, token compaction).
 
 ## Authorization and security
 

@@ -49,6 +49,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
 from app.modules.agent_surfaces.domain.onboarding_state import OnboardingIngressResult
+from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
 )
@@ -204,6 +205,7 @@ async def _release_claim_for_retry(
     context: AgentSurfaceContext,
     *,
     event: SurfaceWebhookReceivedEvent,
+    event_dedup_store: SurfaceEventDedupStorePort,
 ) -> None:
     """Say the delivery reached no job, then hand its claim back.
 
@@ -227,9 +229,7 @@ async def _release_claim_for_retry(
         # traceback is the whole reason an operator can act on this line.
         exc_info=True,  # noqa: LOG014
     )
-    await release_ingress_claim(
-        context, event_dedup_store=get_surface_event_dedup_store()
-    )
+    await release_ingress_claim(context, event_dedup_store=event_dedup_store)
 
 
 async def _process_surface_webhook(
@@ -242,6 +242,9 @@ async def _process_surface_webhook(
         [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
     ]
     | None = None,
+    # The process-wide store unless a caller has its own to hand: what a failed
+    # enqueue gives its claim back to has to be the store the claim came from.
+    event_dedup_store: SurfaceEventDedupStorePort | None = None,
 ) -> None:
 
     if event.surface_id:
@@ -289,20 +292,40 @@ async def _process_surface_webhook(
         )
 
         onboarding_handler = ChatOnboardingCoordinator(uow_factory).handle
-    contexts: list[tuple[int, AgentSurfaceContext | None]] = []
-    for index, part in enumerate(deliveries):
-        contexts.append(
-            (
-                index,
-                await _context_for_delivery(
-                    part,
-                    onboarding_handler=onboarding_handler,
-                    uow_factory=uow_factory,
-                ),
-            )
-        )
+    await _enqueue_deliveries(
+        deliveries,
+        event,
+        onboarding_handler=onboarding_handler,
+        uow_factory=uow_factory,
+        job_queue=job_queue,
+        event_dedup_store=event_dedup_store,
+    )
 
-    for index, context in contexts:
+
+async def _enqueue_deliveries(
+    deliveries: list[SurfaceIngressRequest],
+    event: SurfaceWebhookReceivedEvent,
+    *,
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ],
+    uow_factory: UnitOfWorkFactory,
+    job_queue: SharedStreaqJobQueue,
+    event_dedup_store: SurfaceEventDedupStorePort | None,
+) -> None:
+    for index, part in enumerate(deliveries):
+        # Each part is enqueued as soon as it is prepared, not after every part
+        # has been. Preparing them all first spent every part's delivery claim
+        # up front, so an enqueue that failed on part N left the claims of
+        # parts N+1.. spent with no job behind them -- and the inbox's retry then
+        # read each of those as a duplicate and dropped it for good. This way at
+        # most one claim is ever held without a job, and a failure before a part
+        # is prepared leaves the later ones untouched for the retry.
+        context = await _context_for_delivery(
+            part,
+            onboarding_handler=onboarding_handler,
+            uow_factory=uow_factory,
+        )
         if not context:
             continue
         # `prepare_ingress` spent the delivery claim above, and the work that
@@ -332,7 +355,12 @@ async def _process_surface_webhook(
             enqueued = True
         finally:
             if not enqueued:
-                await _release_claim_for_retry(context, event=event)
+                await _release_claim_for_retry(
+                    context,
+                    event=event,
+                    event_dedup_store=event_dedup_store
+                    or get_surface_event_dedup_store(),
+                )
 
 
 @reliable_redis_stream_subscriber(

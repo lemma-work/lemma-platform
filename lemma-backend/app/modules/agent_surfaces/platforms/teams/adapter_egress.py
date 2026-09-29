@@ -28,7 +28,10 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
+from app.modules.agent_surfaces.platforms.rendering import chunk_text
+from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_approval_card,
@@ -41,6 +44,12 @@ logger = get_logger(__name__)
 #: One Bot Framework activity body: a ``type`` plus whichever of ``text``,
 #: ``summary``, ``attachments`` and ``replyToId`` the call carries.
 type BotFrameworkActivity = dict[str, object]
+
+# Teams rejects a message whose body runs past roughly 28 KB, and the Connector
+# answers with a 4xx that loses the whole reply rather than a truncated one.
+# Well under it, in characters, so multi-byte text and the markdown that
+# formatting adds still clear it.
+_TEAMS_TEXT_LIMIT = 20_000
 
 
 class TeamsSurfaceEgress(BaseSurfaceAdapter):
@@ -94,51 +103,71 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         original incoming activity.
         """
         del credentials
-        tenant_id = event.tenant_id
-        if not tenant_id:
-            if (metadata or {}).get("private_onboarding"):
-                raise RuntimeError("Teams installation has no tenant")
-            return
-
-        token = await self._get_bot_token(tenant_id)
-        if not token:
-            if (metadata or {}).get("private_onboarding"):
-                raise RuntimeError(
-                    "Teams installation cannot deliver private onboarding"
-                )
-            return
-
-        conversation_id = event.reply_target.get("conversation_id")
+        url, token = await self._activities_endpoint(event, metadata)
         reply_to_id = event.reply_target.get("reply_to_id")
-        if not conversation_id:
-            if (metadata or {}).get("private_onboarding"):
-                raise RuntimeError("Teams installation has no personal conversation")
-            return
-
-        url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
-            f"/v3/conversations/{quote(str(conversation_id))}/activities"
-        )
-        body: dict[str, Any] = {
-            "type": "message",
-            "text": message,
-            # Teams only renders Markdown when the Bot Framework activity
-            # explicitly declares Markdown text.
-            "textFormat": "markdown",
-        }
-        if reply_to_id:
-            body["replyToId"] = reply_to_id
-
         card = (metadata or {}).get("onboarding_card")
-        if event.is_dm and card:
-            body["attachments"] = [
-                {
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": card,
-                }
-            ]
+        chunks = chunk_text(message, limit=_TEAMS_TEXT_LIMIT) or [message]
+        for index, chunk in enumerate(chunks):
+            body: dict[str, Any] = {
+                "type": "message",
+                "text": chunk,
+                # Teams only renders Markdown when the Bot Framework activity
+                # explicitly declares Markdown text.
+                "textFormat": "markdown",
+            }
+            if reply_to_id:
+                body["replyToId"] = reply_to_id
+            if index == 0 and event.is_dm and card:
+                body["attachments"] = [
+                    {
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": card,
+                    }
+                ]
+            try:
+                await self._post_activity(url, token=token, body=body)
+            except PLATFORM_TRANSPORT_ERRORS:
+                if index:
+                    logger.warning(
+                        "agent_surfaces.adapter.teams_message_partially_delivered.degraded",
+                        sent_chunks=index,
+                        total_chunks=len(chunks),
+                        exc_info=True,
+                    )
+                raise
 
-        await self._post_activity(url, token=token, body=body)
+    async def _activities_endpoint(
+        self, event: ParsedInboundSurfaceEvent, metadata: dict[str, Any] | None
+    ) -> tuple[str, str]:
+        """Where this reply is posted and the token to post it with, or raise.
+
+        Raises rather than returning: a send with no tenant, token or
+        conversation used to return quietly and the caller recorded whatever
+        does not raise as delivered. Telegram and Resend raise here.
+        """
+        tenant_id = event.tenant_id
+        token = await self._get_bot_token(tenant_id) if tenant_id else None
+        conversation_id = event.reply_target.get("conversation_id")
+        if tenant_id and token and conversation_id:
+            url = (
+                f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+                f"/v3/conversations/{quote(str(conversation_id))}/activities"
+            )
+            return url, token
+        if (metadata or {}).get("private_onboarding"):
+            raise RuntimeError(
+                "Teams installation has no tenant"
+                if not tenant_id
+                else "Teams installation cannot deliver private onboarding"
+                if not token
+                else "Teams installation has no personal conversation"
+            )
+        raise unsendable(
+            "Teams",
+            tenant_id=tenant_id,
+            bot_token=token,
+            conversation_id=conversation_id,
+        )
 
     async def _render_resource(
         self,
@@ -147,25 +176,16 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
+        """Post a resource as an Adaptive Card. Always a card, so always True.
+
+        It answered ``None``, which the delivery ladder reads as "not native":
+        every resource on Teams was recorded DEGRADED even when the card
+        rendered.
+        """
         del credentials, metadata
-        tenant_id = event.tenant_id
-        if not tenant_id:
-            return
-
-        token = await self._get_bot_token(tenant_id)
-        if not token:
-            return
-
-        conversation_id = event.reply_target.get("conversation_id")
+        url, token = await self._activities_endpoint(event, None)
         reply_to_id = event.reply_target.get("reply_to_id")
-        if not conversation_id:
-            return
-
-        url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
-            f"/v3/conversations/{quote(str(conversation_id))}/activities"
-        )
         # The adaptive card carries the title/summary and the "Open file" button,
         # so no inline ``text`` (which would dump the raw URL next to the card).
         # ``summary`` is the Bot Framework notification field — shown in toasts,
@@ -184,6 +204,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             body["replyToId"] = reply_to_id
 
         await self._post_activity(url, token=token, body=body)
+        return True
 
     async def _render_choices(
         self,

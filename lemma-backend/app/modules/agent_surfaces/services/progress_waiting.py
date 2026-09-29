@@ -14,6 +14,7 @@ from app.modules.agent.contracts import Conversation
 from app.modules.agent.contracts import (
     AgentEvent,
 )
+from app.modules.agent_surfaces.services.progress_events import _surface_platform
 
 logger = get_logger(__name__)
 
@@ -91,12 +92,12 @@ class ProgressWaitingMixin:
         rendered_key: tuple[str, str] | None,
         narration: str | None = None,
     ) -> None:
-        """Send the questions or the approval prompt, and un-dedupe on failure.
+        """Send the questions or the approval prompt; on failure, ask in words.
 
         A stuck WAITING run must never be silent -- this is the swallow class
-        that hid the ask_user bug -- so anything that does not reach the user
-        gives its rendered-key back, letting a later WAITING event for the same
-        tool call try again instead of being deduped away.
+        that hid the ask_user bug. A prompt that does not arrive is asked again
+        as plain text, and only if that fails too does it give its rendered-key
+        back so a later WAITING event for the same tool call is not deduped away.
         """
         async with self.uow_factory() as uow:
             service = self.egress_factory(uow)
@@ -123,16 +124,61 @@ class ProgressWaitingMixin:
                         tool_call_id=tool_call_id or None,
                         narration=narration,
                     )
-                if not delivered:
-                    # Nothing reached the user; the send method logs the precise
-                    # reason, so this only has to say that it happened.
-                    self._allow_waiting_retry(rendered_key)
-                    logger.debug(
-                        "agent_surfaces.progress_observer.surface_s_waiting_but_nothing.diagnostic",
-                        tool_call_id=tool_call_id,
-                    )
             except Exception:
+                # Said out loud: this used to give the key back and log nothing,
+                # so a prompt that raised left a run parked on a question nobody
+                # was shown, with no trace of why.
+                logger.warning(
+                    "agent_surfaces.progress_observer.waiting_prompt_failed.degraded",
+                    conversation_id=str(conversation.id),
+                    kind=kind,
+                    exc_info=True,
+                )
+                delivered = False
+            if delivered:
+                return
+            if _surface_platform(conversation) is None:
+                # Not a surface conversation -- somebody is in the web app, where
+                # the pause renders itself. Nothing to say and nobody to say it
+                # to; the key goes back so the event is not treated as handled.
                 self._allow_waiting_retry(rendered_key)
+                return
+            # A person on a chat surface is now waited on for an answer that
+            # cannot come: the run is parked, and nothing re-emits the WAITING
+            # event for a later attempt to use the key we give back. So ask again
+            # in plain words -- a message is far likelier to land than the
+            # control that just failed -- and only if even that fails does the
+            # key go back.
+            logger.warning(
+                "agent_surfaces.progress_observer.waiting_prompt_not_delivered.degraded",
+                conversation_id=str(conversation.id),
+                kind=kind,
+                tool_call_id=tool_call_id,
+            )
+            if await self._ask_in_plain_words(
+                service, conversation, kind, tool_call_id
+            ):
+                return
+            self._allow_waiting_retry(rendered_key)
+
+    async def _ask_in_plain_words(
+        self, service, conversation: Conversation, kind: str, tool_call_id: str
+    ) -> bool:
+        """Last resort for a prompt whose native form did not arrive."""
+        try:
+            return await service.send_prompt_as_text_for_conversation(
+                conversation_id=conversation.id,
+                kind=kind,
+                tool_call_id=tool_call_id or None,
+            )
+        except Exception:
+            logger.warning(
+                "agent_surfaces.progress_observer.waiting_prompt_fallback_failed.degraded",
+                conversation_id=str(conversation.id),
+                kind=kind,
+                exc_info=True,
+            )
+            return False
 
     def _allow_waiting_retry(self, rendered_key: tuple[str, str] | None) -> None:
         """Let a later WAITING event for this tool call render again."""

@@ -12,7 +12,6 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.common import (
     ProviderFailure,
     SurfaceFileAttachment,
-    attachment_tool_hint,
     channel_author_label,
     coerce_attachments,
     platform_webhook_url,
@@ -432,24 +431,12 @@ def test_select_attachment_by_download_url_name_and_fallbacks():
     assert unresolvable is None
 
 
-def test_attachment_tool_hint_covers_every_platform_and_unknown():
-    assert attachment_tool_hint("SLACK") is not None
-    assert "slack_download_file" in attachment_tool_hint("SLACK")
-    assert "teams_download_file" in attachment_tool_hint("TEAMS")
-    assert "whatsapp_download_file" in attachment_tool_hint("WHATSAPP")
-    assert "telegram_download_file" in attachment_tool_hint("TELEGRAM")
-    # Email has no download tool: an inbound attachment is already ingested into
-    # pod files by the time the agent sees the message.
-    assert attachment_tool_hint("RESEND") is None
-    assert attachment_tool_hint("SOME_UNKNOWN_PLATFORM") is None
-
-
 def test_channel_author_label_falls_back_to_none_when_unattributed():
     assert channel_author_label(None, None) is None
     assert channel_author_label("Jane", None) == "Jane (other participant)"
 
 
-def test_render_attachment_prompt_block_permalink_hint_and_skips_invalid():
+def test_render_attachment_prompt_block_permalink_and_skips_invalid():
     attachments = [
         {"size": "not-a-number"},  # fails model validation -> skipped
         42,  # neither a model nor a dict -> skipped
@@ -461,13 +448,12 @@ def test_render_attachment_prompt_block_permalink_hint_and_skips_invalid():
         ),
     ]
 
-    prompt = render_attachment_prompt_block(
-        attachments, platform="SLACK", include_hint=True
-    )
+    prompt = render_attachment_prompt_block(attachments, platform="SLACK")
 
     assert "via-permalink.pdf" in prompt
     assert "permalink=https://example.test/permalink" in prompt
-    assert "slack_download_file" in prompt
+    # The per-platform `*_download_file` tools do not exist, so no hint names one.
+    assert "_download_file" not in prompt
 
     assert render_attachment_prompt_block([], platform="SLACK") == ""
 

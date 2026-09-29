@@ -29,6 +29,7 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 
+from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -102,7 +103,7 @@ def should_start_a_new_conversation(
     )
     if shape is not ThreadShape.MULTIPLEXED:
         return False
-    reset_hours = surface.config.dm_conversation_reset_after_hours
+    reset_hours = surface_settings.surface_dm_conversation_reset_after_hours
     if reset_hours <= 0:
         return False
     # Inbound activity, NOT ``updated_at``: an outbound notification also
@@ -161,6 +162,26 @@ class ConversationBinder:
             external_thread_id=parsed.external_thread_id,
             external_user_id=external_user_id,
         )
+        if link is None:
+            # Two rapid first messages both read "no link" above. Serialise on
+            # the chat and read again: the loser then finds the winner's link
+            # instead of opening a second conversation and inserting a second
+            # link. The lock is held to commit, so the winner's row is visible
+            # by the time the loser gets past it.
+            await self.conversation_link_repository.lock_thread(
+                surface_id=surface.id,
+                platform=surface.surface_type.value,
+                external_channel_id=parsed.external_channel_id,
+                external_thread_id=parsed.external_thread_id,
+                external_user_id=external_user_id,
+            )
+            link = await self.conversation_link_repository.get_by_external_thread(
+                surface_id=surface.id,
+                platform=surface.surface_type.value,
+                external_channel_id=parsed.external_channel_id,
+                external_thread_id=parsed.external_thread_id,
+                external_user_id=external_user_id,
+            )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
             if should_start_a_new_conversation(
@@ -229,6 +250,11 @@ class ConversationBinder:
                 last_inbound_at=datetime.now(timezone.utc),
             )
         )
+        if created_link.conversation_id != conversation.id:
+            # Beaten to the insert despite the lock -- another writer does not
+            # take it -- so the row that stands is theirs, and no conversation
+            # was started on this turn from the platform's point of view.
+            return created_link, None
         return created_link, conversation.title
 
     async def _create_surface_conversation(

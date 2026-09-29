@@ -22,8 +22,8 @@ from app.modules.agent_surfaces.platforms.slack.message_blocks import (
 from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_display_resource_card,
 )
-from app.modules.agent_surfaces.platforms.telegram.service import (
-    _telegram_display_resource_text,
+from app.modules.agent_surfaces.platforms.telegram.outbound import (
+    display_resource_text as _telegram_display_resource_text,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     whatsapp_display_resource_text,

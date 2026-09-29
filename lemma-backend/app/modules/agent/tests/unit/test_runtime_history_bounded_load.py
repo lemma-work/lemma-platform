@@ -16,7 +16,6 @@ messages, with the same counts.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from app.modules.agent.domain.entities import (
@@ -29,17 +28,13 @@ from app.modules.agent.domain.entities import (
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
 from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
-from app.modules.agent.services.runtime_history import (
-    apply_surface_history_window,
-)
 from app.modules.agent.services.runtime_history import bound_runtime_history
+from app.modules.agent.services.runtime_history import cap_history_runs
+from app.modules.agent.services.runtime_history import first_sequence_of_run
+from app.modules.agent.services.runtime_history import oldest_carried_sequence
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
 from app.modules.agent.services.runtime_history import select_runtime_history
 
-# Relative to now, not a fixed date: the surface age window is measured against
-# `datetime.now()`, so a hard-coded base silently stops exercising the window a
-# day after it is written -- every shape collapses to one or two runs and the
-# comparison still passes while testing nothing.
 _BASE = datetime.now(timezone.utc) - timedelta(hours=1)
 
 
@@ -69,7 +64,7 @@ def _run(conversation_id: UUID, run_index: int, message_count: int) -> AgentRun:
     )
 
 
-def _as_bounded(runs: list[AgentRun], conversation=None) -> list[AgentRun]:
+def _as_bounded(runs: list[AgentRun]) -> list[AgentRun]:
     """What the two-phase load returns.
 
     Mirrors production: digests first (sizes and newest-message times, no
@@ -82,19 +77,11 @@ def _as_bounded(runs: list[AgentRun], conversation=None) -> list[AgentRun]:
             update={
                 "messages": [],
                 "total_message_count": len(run.messages),
-                "newest_message_at": max(
-                    (
-                        message.created_at
-                        for message in run.messages
-                        if message.created_at is not None
-                    ),
-                    default=None,
-                ),
             }
         )
         for run in runs
     ]
-    full_ids = runtime_full_run_ids(digests, conversation)
+    full_ids = runtime_full_run_ids(digests)
     bounded: list[AgentRun] = []
     for run, digest in zip(runs, digests):
         ordered = run.ordered_messages()
@@ -132,12 +119,6 @@ def _fingerprint(messages: list[Message]) -> list[tuple]:
     ]
 
 
-def _surface_conversation():
-    return SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "slack"}, is_pod_assistant=False
-    )
-
-
 def _shapes() -> list[list[AgentRun]]:
     conversation_id = uuid4()
     return [
@@ -167,64 +148,6 @@ def test_bounded_history_selects_what_the_full_load_selected() -> None:
         full = _fingerprint(runner._select_runtime_history(runs))
         bounded = _fingerprint(runner._select_runtime_history(_as_bounded(runs)))
         assert bounded == full, f"shape {index} diverged"
-
-
-def test_bounded_history_matches_on_surface_conversations(monkeypatch) -> None:
-    """The surface budget counts messages, so it must count unloaded ones too."""
-    import app.modules.agent_surfaces.contracts.platforms as surface_contract
-
-    monkeypatch.setattr(surface_contract, "surface_history_limits", lambda: (40, 24))
-    runner = _runner()
-    conversation = _surface_conversation()
-    for index, runs in enumerate(_shapes()):
-        full = _fingerprint(runner._select_runtime_history(runs, conversation))
-        bounded = _fingerprint(
-            runner._select_runtime_history(
-                _as_bounded(runs, conversation), conversation
-            )
-        )
-        assert bounded == full, f"surface shape {index} diverged"
-
-
-def test_an_old_run_that_is_still_active_keeps_all_of_its_messages(monkeypatch) -> None:
-    """The age window is a filter, not a truncation.
-
-    A run created long ago whose newest message is recent survives the window
-    while runs created after it do not, so the trimmed list is NOT a suffix of
-    the loaded one. Deciding which runs to load whole from position alone
-    therefore drops messages from a run the trim then keeps in full -- and
-    because the trimmed list is short, the elision branch never runs and no
-    notice is emitted. Silent loss, which is the part that matters.
-    """
-    import app.modules.agent_surfaces.contracts.platforms as surface_contract
-
-    monkeypatch.setattr(surface_contract, "surface_history_limits", lambda: (0, 24))
-    conversation_id = uuid4()
-    now = datetime.now(timezone.utc)
-
-    def _at(run_index: int, created_hours_ago: float, message_hours_ago: float):
-        run = _run(conversation_id, run_index, 6)
-        run.started_at = now - timedelta(hours=created_hours_ago)
-        for offset, message in enumerate(run.messages):
-            message.created_at = now - timedelta(
-                hours=message_hours_ago, seconds=-offset
-            )
-        return run
-
-    runs = [
-        _at(0, created_hours_ago=40, message_hours_ago=1),  # old run, still active
-        *[_at(i, created_hours_ago=39 - i, message_hours_ago=30) for i in range(1, 9)],
-        _at(9, created_hours_ago=0.1, message_hours_ago=0.1),
-    ]
-    conversation = _surface_conversation()
-    runner = _runner()
-
-    full = _fingerprint(runner._select_runtime_history(runs, conversation))
-    bounded = _fingerprint(
-        runner._select_runtime_history(_as_bounded(runs, conversation), conversation)
-    )
-
-    assert bounded == full
 
 
 def test_the_elision_notice_counts_messages_that_were_never_loaded() -> None:
@@ -322,7 +245,7 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
             _run(conversation_id, index, 2)
             for index in range(1, FULL_HISTORY_AGENT_RUN_COUNT + 1)
         ]
-        return select_runtime_history([old, *recent], None), old.id
+        return select_runtime_history([old, *recent]), old.id
 
     def test_the_unpaired_call_is_dropped_rather_than_kept(self):
         selected, old_run_id = self._history()
@@ -359,7 +282,7 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
             for index in range(1, FULL_HISTORY_AGENT_RUN_COUNT + 1)
         ]
 
-        selected = select_runtime_history([old, *recent], None)
+        selected = select_runtime_history([old, *recent])
 
         from_old = [m for m in selected if m.agent_run_id == old.id]
         assert len(from_old) == 3, from_old
@@ -516,9 +439,8 @@ class TestAPausingRunsAnswerSurvivesElision:
 
 
 class TestHistoryIsBoundedForEveryConversation:
-    """Surface conversations always had an age and count window. Nothing else
-    did — so the web UI, tasks and sub-agents loaded every run a conversation
-    had ever had. Elision bounds how big a run is; nothing bounded how many.
+    """Elision bounds how big a run is; the cap bounds how many there are.
+    Both apply the same way to every conversation, whatever surface it came from.
     """
 
     def _long_conversation(self, run_count: int) -> list[AgentRun]:
@@ -530,12 +452,12 @@ class TestHistoryIsBoundedForEveryConversation:
     def test_a_very_long_conversation_stops_growing(self) -> None:
         runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS * 3)
 
-        assert len(apply_surface_history_window(runs, None)) == MAX_HISTORY_AGENT_RUNS
+        assert len(cap_history_runs(runs)) == MAX_HISTORY_AGENT_RUNS
 
     def test_it_is_the_oldest_runs_that_go(self) -> None:
         runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 5)
 
-        kept = apply_surface_history_window(runs, None)
+        kept = cap_history_runs(runs)
 
         assert kept[-1] is runs[-1]
         assert runs[0] not in kept
@@ -543,11 +465,9 @@ class TestHistoryIsBoundedForEveryConversation:
     def test_an_ordinary_conversation_is_untouched(self) -> None:
         runs = self._long_conversation(3)
 
-        assert apply_surface_history_window(runs, None) == runs
+        assert cap_history_runs(runs) == runs
 
-    def test_the_cap_applies_before_the_surface_window(self) -> None:
-        """A surface conversation is bounded by both, not by whichever it
-        happens to hit first."""
+    def test_the_cap_holds_through_selection(self) -> None:
         runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS * 2)
 
         kept = select_runtime_history(_as_bounded(runs))
@@ -696,7 +616,7 @@ class TestTheWindowIsAppliedBeforeMessagesAreLoaded:
     def test_only_the_runs_that_survive_the_window_are_asked_for(self) -> None:
         runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
 
-        bounded, dropped = bound_runtime_history(runs, None)
+        bounded, dropped = bound_runtime_history(runs)
 
         assert len(bounded) == MAX_HISTORY_AGENT_RUNS
         assert dropped == 12
@@ -704,22 +624,20 @@ class TestTheWindowIsAppliedBeforeMessagesAreLoaded:
 
     def test_trimming_first_selects_what_trimming_last_selected(self) -> None:
         runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
-        bounded, dropped = bound_runtime_history(runs, None)
+        bounded, dropped = bound_runtime_history(runs)
 
         trimmed_first = select_runtime_history(
-            _as_bounded(bounded), None, already_dropped=dropped
+            _as_bounded(bounded), already_dropped=dropped
         )
-        trimmed_last = select_runtime_history(_as_bounded(runs), None)
+        trimmed_last = select_runtime_history(_as_bounded(runs))
 
         assert _fingerprint(trimmed_first) == _fingerprint(trimmed_last)
 
     def test_the_dropped_runs_are_still_announced(self) -> None:
         runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
-        bounded, dropped = bound_runtime_history(runs, None)
+        bounded, dropped = bound_runtime_history(runs)
 
-        selected = select_runtime_history(
-            _as_bounded(bounded), None, already_dropped=dropped
-        )
+        selected = select_runtime_history(_as_bounded(bounded), already_dropped=dropped)
 
         notices = [
             message
@@ -729,3 +647,57 @@ class TestTheWindowIsAppliedBeforeMessagesAreLoaded:
         ]
         assert len(notices) == 1
         assert notices[0].metadata["dropped_run_count"] == 12
+
+
+class TestLongToolHeavyRunsDoNotEraseThePast:
+    """The production incident: a WhatsApp conversation of ~100-message runs.
+
+    A message-count budget over raw messages let one such run exhaust it, so the
+    model saw only the current turn -- it forgot an email address it had been
+    given and what "Done" referred to. Whatever a run cost in tool calls, every
+    user message in the runs still carried must reach the model.
+    """
+
+    def test_every_user_message_of_earlier_long_runs_is_kept(self) -> None:
+        conversation_id = uuid4()
+        sizes = [85, 99, 54, 116, 111]
+        runs = [_run(conversation_id, i, size) for i, size in enumerate(sizes)]
+        # The current turn: a run that has only just started.
+        runs.append(_run(conversation_id, len(sizes), 1))
+
+        selected = select_runtime_history(_as_bounded(runs))
+
+        kept_users = {
+            message.text
+            for message in selected
+            if message.role == MessageRole.USER
+            and (message.metadata or {}).get("synthetic") is not True
+        }
+        assert {f"run {i} message 0" for i in range(len(runs))} <= kept_users
+        assert not [
+            message
+            for message in selected
+            if (message.metadata or {}).get("summary_kind")
+            == "conversation_runs_dropped"
+        ]
+
+
+class TestUnattachedNotificationBounds:
+    """Where a run-less notification may sit relative to the history."""
+
+    def test_the_oldest_carried_message_is_the_lower_bound(self) -> None:
+        runs = [_run(uuid4(), i, 3) for i in range(3)]
+
+        assert oldest_carried_sequence(runs) == min(
+            message.sequence for run in runs for message in run.messages
+        )
+        assert oldest_carried_sequence([]) is None
+
+    def test_the_current_run_start_is_the_upper_bound(self) -> None:
+        runs = [_run(uuid4(), i, 3) for i in range(3)]
+        current = runs[-1]
+
+        assert first_sequence_of_run(runs, current.id) == min(
+            message.sequence for message in current.messages
+        )
+        assert first_sequence_of_run(runs, uuid4()) is None

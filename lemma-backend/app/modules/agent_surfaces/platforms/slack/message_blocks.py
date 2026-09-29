@@ -71,6 +71,18 @@ def _question_select_element(question: SurfaceQuestion) -> dict[str, Any] | None
                 or "—",
             },
             "value": opt.label,
+            # An option object has a line for exactly this; without it the
+            # description the agent wrote never reached the person.
+            **(
+                {
+                    "description": {
+                        "type": "plain_text",
+                        "text": _truncate_slack_text(opt.description.strip(), 75),
+                    }
+                }
+                if opt.description and opt.description.strip()
+                else {}
+            ),
         }
         for opt in question.options[:100]
     ]

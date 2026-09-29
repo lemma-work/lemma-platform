@@ -221,8 +221,11 @@ async def _load_resend_cursor(key: str) -> str | None:
             return None
         return raw.decode() if isinstance(raw, bytes) else str(raw)
     except Exception:
-        logger.debug(
-            "agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.observed",
+        # Warning, and it matters more than it looks: no cursor means "seed
+        # silently", so a Redis failure here makes the poller skip every email
+        # that arrived while it was unable to say where it had got to.
+        logger.warning(
+            "agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.degraded",
             exc_info=True,
         )
         return None
@@ -233,7 +236,7 @@ async def _store_resend_cursor(key: str, cursor: str) -> None:
     try:
         await redis.set(_resend_cursor_key(key), cursor)
     except Exception:
-        logger.debug(
-            "agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.observed",
+        logger.warning(
+            "agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.degraded",
             exc_info=True,
         )

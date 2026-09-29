@@ -176,7 +176,7 @@ def _voice_note_format_for(platform: str | None) -> str:
     return voice_note_format(platform)
 
 
-async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
+async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool | None:
     """Get the audio to the person, however this surface delivers.
 
     Branching by the platform's delivery cardinality rather than by whether it
@@ -189,6 +189,11 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
     * not a surface run (web/app/subagent) — nothing to deliver to; the file
       path is the answer, and the player is in the workspace.
 
+    Returns ``None`` for that last case, because "nobody to deliver to" and
+    "tried, and it did not arrive" are different answers and `say` has to tell
+    the model which one it is: the second is a failure it must not report as a
+    success.
+
     That middle branch used to `return False` here, on the reasoning that "email
     composes one reply via the reply tool; the agent attaches the audio there".
     There is no reply tool any more — the run observer sends the one reply — so
@@ -198,7 +203,7 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
     platform = getattr(deps, "surface_platform", None)
     conversation_id = getattr(deps, "conversation_id", None)
     if not platform or not conversation_id:
-        return False
+        return None
     from app.modules.agent_surfaces.contracts.platforms import (
         platform_delivers_one_reply,
         platform_supports_chat_delivery,
@@ -211,22 +216,15 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
 
         # Attached to the reply rather than sent as a second one: a surface that
         # gets one message gets one message, audio included.
-        return hold_display_for_one_reply(conversation_id, path)
+        return await hold_display_for_one_reply(conversation_id, path)
     if not platform_supports_chat_delivery(platform):
-        return False
-    try:
-        from app.modules.agent_surfaces.contracts.egress import deliver_voice_note
+        return None
+    from app.modules.agent_surfaces.contracts.egress import deliver_voice_note
 
-        return await deliver_voice_note(conversation_id=conversation_id, file_path=path)
-    except Exception:
-        # The caller falls back to text, so the user still hears back -- but a
-        # surface that has stopped accepting voice notes is worth seeing.
-        logger.warning(
-            "agent.speech.voice_note_delivery_failed.degraded",
-            platform=str(platform),
-            exc_info=True,
-        )
-        return False
+    # No try/except: `deliver_voice_note` never raises, it logs the failure at
+    # warning with the traceback and answers False. The block that used to
+    # wrap it here could not be reached.
+    return await deliver_voice_note(conversation_id=conversation_id, file_path=path)
 
 
 async def say_internal(deps: BaseAgentContext, request: SayRequest) -> SayResponse:
@@ -264,6 +262,24 @@ async def say_internal(deps: BaseAgentContext, request: SayRequest) -> SayRespon
         return SayResponse(success=False, error=f"Could not save audio: {exc}")
 
     delivered = await _deliver_voice_note(deps, entity.path)
+    if delivered is False:
+        # On a surface, and it did not arrive. `success=True` here told the model
+        # the person had heard it, so it carried on as if they had -- and the
+        # audio was synthesized, billed and saved for nobody. The path stays on
+        # the response so the model can still offer it another way.
+        logger.warning(
+            "agent.speech.voice_note_not_delivered.degraded",
+            platform=str(getattr(deps, "surface_platform", None)),
+        )
+        return SayResponse(
+            success=False,
+            audio_file_path=entity.path,
+            error=(
+                f"The audio was generated at {entity.path} but could not be "
+                "delivered to the person, so they have not heard it. Say what "
+                "you meant in text instead, or try display_resource on that file."
+            ),
+        )
     return SayResponse(
         success=True,
         audio_file_path=entity.path,

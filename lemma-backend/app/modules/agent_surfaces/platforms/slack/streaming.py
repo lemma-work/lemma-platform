@@ -14,6 +14,7 @@ from slack_sdk.errors import SlackApiError
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 
 from app.modules.agent_surfaces.platforms.slack.blocks import (
@@ -28,9 +29,54 @@ from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
     slack_access_token,
     slack_customized_message_kwargs,
+    slack_scopes,
 )
 
 logger = get_logger(__name__)
+
+
+def _slack_error_code(exc: BaseException) -> str:
+    """Slack's own error code when it sent one, else the exception's class."""
+    if isinstance(exc, SlackApiError):
+        return str((exc.response or {}).get("error") or "unknown")
+    return type(exc).__name__
+
+
+async def remove_processing_reaction(
+    credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+) -> None:
+    """Take the "eyes" back off the message the agent has now answered.
+
+    ``add_processing_indicator`` puts the reaction on the inbound message as a
+    "working on it" sign wherever the assistant status API is not available (any
+    channel, and DMs without the scope). Nothing ever removed it, so every
+    message the agent had answered stayed marked as being looked at. Best-effort:
+    a reaction that is already gone, or a scope that was revoked, is not worth
+    failing the reply that has just been delivered.
+    """
+    token = slack_access_token(credentials)
+    channel = event.reply_target.get("channel")
+    timestamp = event.external_message_id
+    if not token or not channel or not timestamp:
+        return
+    if (
+        event.is_dm
+        and event.reply_target.get("thread_ts")
+        and "assistant:write" in slack_scopes(credentials)
+    ):
+        # The status bubble clears itself when a message is posted; there was
+        # no reaction to remove.
+        return
+    try:
+        client = await build_slack_client(credentials)
+        await client.reactions_remove(
+            channel=str(channel), name="eyes", timestamp=str(timestamp)
+        )
+    except PLATFORM_TRANSPORT_ERRORS:
+        logger.debug(
+            "agent_surfaces.service.slack_processing_reaction_not_removed.diagnostic",
+            exc_info=True,
+        )
 
 
 class SlackStreamSurface:
@@ -114,7 +160,14 @@ class SlackStreamSurface:
                 "task_seq": 1,
                 "task_title": title,
             }
-        except SlackApiError:
+        except PLATFORM_TRANSPORT_ERRORS:
+            # Not just `SlackApiError`: a timeout here is as likely, and the
+            # steps are best-effort either way. The prior handle is kept so the
+            # next step, or the answer, can still use the stream.
+            logger.debug(
+                "agent_surfaces.service.slack_stream_progress_failed.diagnostic",
+                exc_info=True,
+            )
             return progress_handle
 
     async def append_stream_text(
@@ -160,10 +213,11 @@ class SlackStreamSurface:
                 handle={**progress_handle, "streamed_text": True},
                 appended=True,
             )
-        except SlackApiError as exc:
+        except PLATFORM_TRANSPORT_ERRORS as exc:
             logger.debug(
                 "agent_surfaces.service.slack_append_stream_text.diagnostic",
-                error_code=str((exc.response or {}).get("error") or "unknown"),
+                error_code=_slack_error_code(exc),
+                exc_info=True,
             )
             return StreamAppendResult(handle=progress_handle, appended=False)
 
@@ -228,6 +282,7 @@ class SlackStreamSurface:
         if not await self._close_stream(handle, channel=channel, chunks=chunks):
             return False
         await self._send_overflow(event, chunks[1:], metadata=metadata)
+        await remove_processing_reaction(self.credentials, event)
         return True
 
     def _closable_stream_channel(
@@ -264,12 +319,16 @@ class SlackStreamSurface:
             if combined:
                 await client.chat_appendStream(channel=channel, ts=ts, chunks=combined)
             await client.chat_stopStream(channel=channel, ts=ts)
-        except SlackApiError as exc:
-            # Say which Slack error it was: this path silently falls back to a
-            # plain message, so without the code a failure here is invisible.
-            logger.debug(
-                "agent_surfaces.service.slack_finish_progress_stop_stream.diagnostic",
-                error_code=str((exc.response or {}).get("error") or "unknown"),
+        except PLATFORM_TRANSPORT_ERRORS as exc:
+            # Say which Slack error it was: this path falls back to a plain
+            # message, so without the code a failure here is invisible. A
+            # warning, because the fallback is what puts the answer in front of
+            # the person and it is not guaranteed to work either. Widened past
+            # `SlackApiError`: a timeout escaped from here and skipped delivery.
+            logger.warning(
+                "agent_surfaces.service.slack_finish_progress_stop_stream.degraded",
+                error_code=_slack_error_code(exc),
+                exc_info=True,
             )
             return False
         return True
@@ -336,7 +395,8 @@ class SlackStreamSurface:
             await client.chat_delete(
                 channel=str(channel), ts=str(progress_handle["ts"])
             )
-        except SlackApiError:
+        except PLATFORM_TRANSPORT_ERRORS:
             logger.debug(
-                "agent_surfaces.service.slack_end_progress_delete_channel.diagnostic"
+                "agent_surfaces.service.slack_end_progress_delete_channel.diagnostic",
+                exc_info=True,
             )

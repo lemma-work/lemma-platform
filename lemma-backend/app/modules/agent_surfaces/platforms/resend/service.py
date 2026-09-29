@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 from email.utils import formataddr
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -30,9 +31,46 @@ from app.modules.agent_surfaces.platforms.email_render import (
 from app.modules.agent_surfaces.platforms.email_sender_identity import (
     sender_display_name,
 )
+from app.modules.agent_surfaces.platforms.delivery import (
+    DeliveryClassification,
+    RetryPolicy,
+    with_retry,
+)
 from app.modules.agent_surfaces.platforms.email_text import reply_subject
 
 _RESEND_API_BASE = "https://api.resend.com"
+
+# A send can carry attachments of ~37 MB once base64-encoded (the platform cap is
+# 40 MB on the wire), and httpx's default is five seconds for the whole request.
+# The other Resend calls here use 30 s for a small JSON body; a send has to be
+# given time to upload, or a large attachment timed out and the reply was lost.
+_SEND_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
+
+
+def classify_resend_error(exc: Exception) -> DeliveryClassification:
+    """Transient for 429 / 5xx / network errors; permanent for other 4xx.
+
+    The same rule as the other platforms, over ``httpx`` -- Resend is a plain
+    REST API, so a failed send arrives as ``HTTPStatusError`` from
+    ``raise_for_status``.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status == 429 or status >= 500:
+            return DeliveryClassification.TRANSIENT
+        return DeliveryClassification.PERMANENT
+    if isinstance(exc, httpx.RequestError):
+        return DeliveryClassification.TRANSIENT
+    return DeliveryClassification.PERMANENT
+
+
+def _resend_retry_after(exc: Exception) -> float | None:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    try:
+        return float(exc.response.headers.get("retry-after") or "") or None
+    except ValueError:
+        return None
 
 
 class ResendPlatformService:
@@ -41,6 +79,7 @@ class ResendPlatformService:
         self._from_address = str(credentials.get("from_address") or "")
         self._from_name = str(credentials.get("from_name") or "Lemma")
         self._api_base = str(credentials.get("api_base_url") or _RESEND_API_BASE)
+        self._retry_policy = RetryPolicy()
 
     def _sender_name(self, metadata: dict[str, Any] | None) -> str:
         """The display name for this send, from whatever the caller knew.
@@ -332,14 +371,28 @@ class ResendPlatformService:
             ]
 
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self._api_base.rstrip('/')}/emails",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
-            return resp.json() if resp.content else {}
+        # One key for every attempt of this send. A retry after a timeout may be
+        # retrying a request Resend already accepted, and without the key that
+        # is a second email; with it Resend returns the first one's result.
+        idempotency_key = str(uuid4())
+
+        async def post_email_once() -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=_SEND_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{self._api_base.rstrip('/')}/emails",
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": idempotency_key,
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json() if resp.content else {}
+
+        return await with_retry(
+            post_email_once,
+            policy=self._retry_policy,
+            classify=classify_resend_error,
+            retry_after=_resend_retry_after,
+        )

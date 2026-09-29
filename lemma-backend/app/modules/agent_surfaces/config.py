@@ -223,20 +223,15 @@ class SurfaceSettings(BaseSettings):
             "short enough that coming back later still gets an answer."
         ),
     )
-    surface_runtime_history_max_messages: int = Field(
-        default=40,
-        description=(
-            "Maximum prior persisted messages to pass to the model for external "
-            "agent-surface conversations. The latest inbound message is passed "
-            "separately as the user prompt."
-        ),
-    )
-    surface_runtime_history_window_hours: int = Field(
+    surface_dm_conversation_reset_after_hours: int = Field(
         default=24,
         description=(
-            "Maximum age, in hours, of prior persisted messages passed to the model "
-            "for external agent-surface conversations. Set to 0 to disable the "
-            "time window."
+            "Hours since a person's last inbound DM after which their next "
+            "message opens a fresh Lemma conversation instead of continuing the "
+            "old one. This is the only way a surface decides which conversation "
+            "a message joins; what the agent then sees of that conversation is "
+            "the agent module's business. Set to 0 to never start a fresh DM "
+            "conversation on inactivity."
         ),
     )
 

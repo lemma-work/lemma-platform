@@ -24,8 +24,10 @@ from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
-from app.modules.agent_surfaces.platforms.common import (
+from app.modules.agent.contracts.surface_prompts import (
     background_channel_context_note,
+)
+from app.modules.agent_surfaces.platforms.common import (
     channel_author_label,
     payload_section,
     payload_text,

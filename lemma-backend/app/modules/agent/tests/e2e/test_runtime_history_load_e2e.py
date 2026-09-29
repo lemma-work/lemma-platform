@@ -95,7 +95,7 @@ async def _load(db_session, agent_run_id, *, limit=MAX_HISTORY_AGENT_RUNS):
     if not window.runs:
         return window.runs
     return await repo.attach_runtime_history_messages(
-        window.runs, full_run_ids=runtime_full_run_ids(window.runs, None)
+        window.runs, full_run_ids=runtime_full_run_ids(window.runs)
     )
 
 
@@ -244,3 +244,52 @@ async def test_the_digest_read_does_not_grow_with_the_conversation(
     assert len(short.runs) == 6
     assert len(long.runs) == MAX_HISTORY_AGENT_RUNS
     assert long.total_runs == 90
+
+
+async def test_a_notification_that_belongs_to_no_run_is_still_loaded(
+    db_session, scenario
+):
+    """A proactive message is written outside any run, so reading by run id
+    never finds it -- and the person's "yes" reached an agent that could not see
+    what had been asked."""
+    await scenario.create_org_with_pod(name_prefix="History")
+    run_ids = await _seed(db_session, scenario, runs=2, messages_per_run=3)
+    conversation_id = (await db_session.get(AgentRunModel, run_ids[0])).conversation_id
+    for sequence, text, run_id in (
+        (500, "your report is ready", None),
+        (501, "an ordinary message with no run", None),
+    ):
+        db_session.add(
+            MessageModel(
+                id=uuid4(),
+                conversation_id=conversation_id,
+                agent_run_id=run_id,
+                sequence=sequence,
+                role="assistant" if sequence == 500 else "user",
+                kind="NOTIFICATION" if sequence == 500 else "TEXT",
+                text=text,
+                created_at=_BASE + timedelta(minutes=30),
+            )
+        )
+    await db_session.flush()
+
+    loaded = await _repo(db_session).load_unattached_notifications(
+        conversation_id, after_sequence=None, before_sequence=None, limit=20
+    )
+
+    assert [message.text for message in loaded] == ["your report is ready"]
+
+    # Bounded on both sides: older than the history, or arriving after the turn
+    # being answered, it stays out.
+    assert (
+        await _repo(db_session).load_unattached_notifications(
+            conversation_id, after_sequence=500, before_sequence=None, limit=20
+        )
+        == []
+    )
+    assert (
+        await _repo(db_session).load_unattached_notifications(
+            conversation_id, after_sequence=None, before_sequence=500, limit=20
+        )
+        == []
+    )

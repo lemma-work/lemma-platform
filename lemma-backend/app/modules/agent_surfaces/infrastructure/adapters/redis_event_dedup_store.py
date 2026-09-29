@@ -134,6 +134,25 @@ class RedisSurfaceEventDedupStore:
         )
         return bool(claimed)
 
+    async def release_stranger_reply(
+        self,
+        *,
+        platform: str,
+        surface_installation_id: UUID | None,
+        sender_external_user_id: str | None,
+    ) -> None:
+        if not sender_external_user_id:
+            return
+
+        redis = await self._get_redis()
+        await redis.delete(
+            self._stranger_key(
+                platform=platform,
+                surface_installation_id=surface_installation_id,
+                sender_external_user_id=sender_external_user_id,
+            )
+        )
+
     async def release_message(
         self,
         *,

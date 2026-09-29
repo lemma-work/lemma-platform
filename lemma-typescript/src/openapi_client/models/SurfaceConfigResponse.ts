@@ -12,7 +12,6 @@ import type { SurfaceTelegramConfigInput } from './SurfaceTelegramConfigInput.js
  */
 export type SurfaceConfigResponse = {
     channels?: Array<SurfaceChannelRouteResponse>;
-    dm_conversation_reset_after_hours?: number;
     identity?: SurfaceIdentityConfigResponse;
     send_policy?: SurfaceSendPolicyConfig;
     slack?: SurfaceSlackConfigResponse;

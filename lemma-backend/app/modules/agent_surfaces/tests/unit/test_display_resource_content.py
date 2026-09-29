@@ -198,7 +198,16 @@ async def test_an_oversize_file_comes_back_described_rather_than_sent(pod_files)
     assert plan.summary == "ZIP · 64.0 MB — too large to send in this chat"
 
 
-async def test_a_file_that_cannot_be_read_leaves_the_card_alone(pod_files):
+async def test_a_file_that_cannot_be_read_is_reported_not_replaced_by_a_card(
+    pod_files, caplog
+):
+    """The file is the message, so this is not enrichment that may fail quietly.
+
+    It used to fall back to a link card at debug level, sending the recipient
+    something they usually cannot open and recording nothing. It says so now:
+    the facts carry ``unreadable`` (the caller reports failure) and the read
+    failure is logged at warning with its traceback.
+    """
     pod_files.read_pod_file.side_effect = PermissionError("nope")
     adapter = AsyncMock()
 
@@ -211,9 +220,15 @@ async def test_a_file_that_cannot_be_read_leaves_the_card_alone(pod_files):
     )
 
     assert resolved.files == []
-    assert resolved.facts == PodFileDelivery(delivered=False)
+    assert resolved.facts == PodFileDelivery(delivered=False, unreadable=True)
+    # Nothing to describe: the card would only be able to guess.
     plan = _file_plan()
     assert apply_file_facts(plan, resolved.facts) is plan
+    unreadable = [
+        r for r in caplog.records if "pod_file_unreadable" in str(r.getMessage())
+    ]
+    assert unreadable and unreadable[0].levelname == "WARNING"
+    assert "PermissionError" in str(unreadable[0].getMessage())
 
 
 async def test_a_table_that_cannot_be_read_still_lets_the_card_go_out(

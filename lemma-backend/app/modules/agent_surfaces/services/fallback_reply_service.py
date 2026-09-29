@@ -260,26 +260,42 @@ async def prepare_unrouted_context(
         )
         return None
 
-    identity_reply = adapter.unresolved_sender_reply(parsed)
-    confirmation = adapter.linked_sender_confirmation(parsed)
-    reply, reply_kind = _unrouted_reply(
-        resolved_user=resolved_user,
-        identity_reply=identity_reply,
-        confirmation=confirmation,
-    )
-    logger.debug(
-        "agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed",
-        reply_kind=reply_kind,
-    )
-    return _reply_context(
-        platform=platform,
-        surface=surface,
-        parsed=parsed,
-        agent_display_name=agent_display_name,
-        reply=reply,
-        reply_kind=reply_kind,
-        include_surface_id=False,
-    )
+    # The claim above is only worth keeping for a reply that is handed back: a
+    # failure here would otherwise make the redelivery read as a duplicate and
+    # leave this person with no answer at all.
+    built = False
+    try:
+        identity_reply = adapter.unresolved_sender_reply(parsed)
+        confirmation = adapter.linked_sender_confirmation(parsed)
+        reply, reply_kind = _unrouted_reply(
+            resolved_user=resolved_user,
+            identity_reply=identity_reply,
+            confirmation=confirmation,
+        )
+        logger.debug(
+            "agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed",
+            reply_kind=reply_kind,
+        )
+        context = _reply_context(
+            platform=platform,
+            surface=surface,
+            parsed=parsed,
+            agent_display_name=agent_display_name,
+            reply=reply,
+            reply_kind=reply_kind,
+            include_surface_id=False,
+        )
+        built = True
+        return context
+    finally:
+        if not built:
+            await event_dedup_store.release_message(
+                surface_installation_id=None,
+                platform=platform,
+                external_channel_id=parsed.external_channel_id,
+                external_thread_id=parsed.external_thread_id,
+                external_message_id=parsed.external_message_id,
+            )
 
 
 def _unrouted_reply(
@@ -399,5 +415,15 @@ async def deliver_fallback_reply(
             exc_info=True,
         )
         _fallback_incident.record_failure(error_type=type(exc).__name__)
+        # The window was claimed before the send, so a send that never reached
+        # the person must not use it up: the next message from them would find
+        # the window held and be met with silence for the rest of the hour,
+        # having been told nothing.
+        if context.reply_kind != "identity_link":
+            await event_dedup_store.release_stranger_reply(
+                platform=str(context.platform),
+                surface_installation_id=context.surface_id,
+                sender_external_user_id=context.event.sender_external_user_id,
+            )
     else:
         _fallback_incident.record_success()

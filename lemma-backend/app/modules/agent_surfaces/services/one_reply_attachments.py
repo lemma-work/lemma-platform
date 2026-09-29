@@ -20,27 +20,24 @@ from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
 from app.modules.agent_surfaces.services.display_resource_content import (
     resolve_pod_file_parts,
 )
-from app.modules.agent_surfaces.services.pending_envelope import take_display_paths
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 
-__all__ = ["files_held_for_one_reply"]
+__all__ = ["files_for_held_paths"]
 
 
-async def files_held_for_one_reply(
+async def files_for_held_paths(
     *,
     uow: Any,
     target: SurfaceEgressTarget,
     conversation_id: UUID,
+    paths: list[str],
 ) -> list[EnvelopeFile]:
-    """Files ``display_resource`` queued for a surface that replies once.
+    """The attachments for the pod files ``display_resource`` queued.
 
-    Empty everywhere else: a chat surface delivered them when they were shown.
+    The caller reads the paths (from Redis, outside any connection) and releases
+    them once the reply has actually gone out, so a send that fails leaves the
+    files for the next one instead of losing them.
     """
-    if not target.adapter._delivers_one_reply():
-        return []
-    paths = take_display_paths(conversation_id)
-    if not paths:
-        return []
     files: list[EnvelopeFile] = []
     for path in paths:
         resolved = await resolve_pod_file_parts(

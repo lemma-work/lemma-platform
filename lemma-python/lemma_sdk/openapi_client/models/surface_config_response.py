@@ -25,7 +25,6 @@ class SurfaceConfigResponse:
 
     Attributes:
         channels (list[SurfaceChannelRouteResponse] | Unset):
-        dm_conversation_reset_after_hours (int | Unset):  Default: 24.
         identity (SurfaceIdentityConfigResponse | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
         slack (SurfaceSlackConfigResponse | Unset): Slack settings as read back.
@@ -33,7 +32,6 @@ class SurfaceConfigResponse:
     """
 
     channels: list[SurfaceChannelRouteResponse] | Unset = UNSET
-    dm_conversation_reset_after_hours: int | Unset = 24
     identity: SurfaceIdentityConfigResponse | Unset = UNSET
     send_policy: SurfaceSendPolicyConfig | Unset = UNSET
     slack: SurfaceSlackConfigResponse | Unset = UNSET
@@ -47,8 +45,6 @@ class SurfaceConfigResponse:
             for channels_item_data in self.channels:
                 channels_item = channels_item_data.to_dict()
                 channels.append(channels_item)
-
-        dm_conversation_reset_after_hours = self.dm_conversation_reset_after_hours
 
         identity: dict[str, Any] | Unset = UNSET
         if not isinstance(self.identity, Unset):
@@ -71,10 +67,6 @@ class SurfaceConfigResponse:
         field_dict.update({})
         if channels is not UNSET:
             field_dict["channels"] = channels
-        if dm_conversation_reset_after_hours is not UNSET:
-            field_dict["dm_conversation_reset_after_hours"] = (
-                dm_conversation_reset_after_hours
-            )
         if identity is not UNSET:
             field_dict["identity"] = identity
         if send_policy is not UNSET:
@@ -108,10 +100,6 @@ class SurfaceConfigResponse:
 
                 channels.append(channels_item)
 
-        dm_conversation_reset_after_hours = d.pop(
-            "dm_conversation_reset_after_hours", UNSET
-        )
-
         _identity = d.pop("identity", UNSET)
         identity: SurfaceIdentityConfigResponse | Unset
         if isinstance(_identity, Unset):
@@ -142,7 +130,6 @@ class SurfaceConfigResponse:
 
         surface_config_response = cls(
             channels=channels,
-            dm_conversation_reset_after_hours=dm_conversation_reset_after_hours,
             identity=identity,
             send_policy=send_policy,
             slack=slack,

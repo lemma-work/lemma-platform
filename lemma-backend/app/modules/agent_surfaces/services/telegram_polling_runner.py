@@ -140,16 +140,21 @@ class TelegramPollingReceiverRunner:
             "agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed",
             update_id=update_id,
         )
-        if isinstance(update_id, int):
-            offset = update_id + 1
-            if self._candidate.surface_ids:
-                await _store_telegram_offset(self._candidate.key, offset)
         await _publish_native_receiver_event(
             source="telegram",
             payload=update,
             receiver_key=self._candidate.key,
             surface_ids=self._candidate.surface_ids,
         )
+        if isinstance(update_id, int):
+            offset = update_id + 1
+            if self._candidate.surface_ids:
+                # After the publish, not before. Stored first, a crash between
+                # the two meant the restart resumed past an update that had
+                # never been published, and nothing ever replayed it. Stored
+                # last, the same crash replays it and the durable inbox --
+                # keyed on the update id -- treats the second as a duplicate.
+                await _store_telegram_offset(self._candidate.key, offset)
         return offset
 
     async def _recover(
@@ -221,8 +226,11 @@ async def _load_telegram_offset(key: str) -> int | None:
         raw = await redis.get(_telegram_offset_key(key))
         return int(raw) if raw else None
     except Exception:
-        logger.debug(
-            "agent_surfaces.event_receiver_service.could_not_load_telegram_polling.observed",
+        # Warning: an offset that cannot be read makes polling resume from
+        # whatever Telegram still holds, which is how a restart re-delivers or
+        # skips updates -- and at debug nobody could see that it had happened.
+        logger.warning(
+            "agent_surfaces.event_receiver_service.could_not_load_telegram_polling.degraded",
             exc_info=True,
         )
         return None
@@ -233,7 +241,7 @@ async def _store_telegram_offset(key: str, offset: int) -> None:
     try:
         await redis.set(_telegram_offset_key(key), str(offset))
     except Exception:
-        logger.debug(
-            "agent_surfaces.event_receiver_service.could_not_store_telegram_polling.observed",
+        logger.warning(
+            "agent_surfaces.event_receiver_service.could_not_store_telegram_polling.degraded",
             exc_info=True,
         )

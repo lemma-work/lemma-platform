@@ -692,8 +692,8 @@ async def test_prepare_webhook_ignores_duplicate_external_message():
 
 
 async def test_ask_user_request_dict_accepts_both_shapes():
-    from app.modules.agent_surfaces.services.pending_interaction_resume import (
-        _ask_user_request_dict,
+    from app.modules.agent.contracts.interaction_replies import (
+        ask_user_request_dict as _ask_user_request_dict,
     )
 
     assert _ask_user_request_dict(_ASK_USER_TOOL_ARGS_FLAT) == {

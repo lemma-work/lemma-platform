@@ -424,6 +424,8 @@ def build_ingress_service(
         event_dedup_store=SimpleNamespace(
             claim_message=AsyncMock(return_value=True),
             claim_stranger_reply=AsyncMock(return_value=True),
+            release_message=AsyncMock(),
+            release_stranger_reply=AsyncMock(),
         ),
     )
 
@@ -613,6 +615,8 @@ def build_turn_starter(
         event_dedup_store=SimpleNamespace(
             claim_message=AsyncMock(return_value=True),
             claim_stranger_reply=AsyncMock(return_value=True),
+            release_message=AsyncMock(),
+            release_stranger_reply=AsyncMock(),
         ),
         file_ingest_service=file_ingest_service
         or SimpleNamespace(

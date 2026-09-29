@@ -47,70 +47,6 @@ def _conversation_for_surface(surface: AgentSurfaceEntity) -> Conversation:
 
 
 @pytest.mark.asyncio
-async def test_platform_tool_factory_uses_native_whatsapp_credentials(
-    monkeypatch,
-):
-    surface = AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.WHATSAPP,
-        pod_id=uuid4(),
-        agent_id=uuid4(),
-        config=SurfaceConfig(),
-    )
-    factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
-
-    async def fake_get(self, surface_id):
-        assert surface_id == surface.id
-        return surface
-
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory.SurfaceRepository.get",
-        fake_get,
-    )
-    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "native-wa-token")
-    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "phone-123")
-    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-123")
-
-    toolsets = await factory.build_toolsets(
-        conversation=_conversation_for_surface(surface)
-    )
-
-    assert len(toolsets) == 1
-    assert "whatsapp_get_current_contact" in toolsets[0].tools
-    assert "whatsapp_send_file" not in toolsets[0].tools
-
-
-@pytest.mark.asyncio
-async def test_platform_tool_factory_uses_native_telegram_env_credentials(
-    monkeypatch,
-):
-    surface = AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.TELEGRAM,
-        pod_id=uuid4(),
-        agent_id=uuid4(),
-        config=SurfaceConfig(),
-    )
-    factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
-
-    async def fake_get(self, surface_id):
-        assert surface_id == surface.id
-        return surface
-
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory.SurfaceRepository.get",
-        fake_get,
-    )
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram-token")
-
-    toolsets = await factory.build_toolsets(
-        conversation=_conversation_for_surface(surface)
-    )
-
-    assert len(toolsets) == 1
-    assert "telegram_get_current_chat" in toolsets[0].tools
-    assert "telegram_send_file" not in toolsets[0].tools
-
-
-@pytest.mark.asyncio
 async def test_platform_tool_factory_adds_native_whatsapp_tools_for_default_agent_conversation(
     monkeypatch,
 ):
@@ -130,9 +66,7 @@ async def test_platform_tool_factory_adds_native_whatsapp_tools_for_default_agen
 
     toolsets = await factory.build_toolsets(conversation=conversation)
 
-    assert len(toolsets) == 1
-    assert "whatsapp_get_current_contact" in toolsets[0].tools
-    assert "whatsapp_send_file" not in toolsets[0].tools
+    assert toolsets == []
 
 
 async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypatch):
@@ -173,12 +107,18 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
     assert credentials["from_address"] == "ops.acme@ops.lemma.work"
 
 
-@pytest.mark.parametrize("platform", ["RESEND"])
-async def test_an_email_surface_builds_no_platform_toolset(platform):
-    """Their only tool was the reply, and the observer sends that now.
+@pytest.mark.parametrize("platform", ["RESEND", "WHATSAPP", "TELEGRAM"])
+async def test_a_surface_with_nothing_platform_specific_builds_no_platform_toolset(
+    platform,
+):
+    """Email's only tool was the reply, and the observer sends that now.
 
-    Not an oversight to be filled in later: an email surface has nothing left
-    for a platform toolset to carry.
+    WhatsApp and Telegram's only tools were `whatsapp_get_current_contact` and
+    `telegram_get_current_chat`, which echoed event metadata the agent already
+    reads off the message while costing schema tokens on every turn.
+
+    Not an oversight to be filled in later: these surfaces have nothing left for
+    a platform toolset to carry.
     """
     from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
         _TOOLSET_BUILDERS,
@@ -276,3 +216,43 @@ async def test_a_pooled_surfaces_tools_are_built_with_that_numbers_credentials(
         "went out as a number the recipient has never seen"
     )
     assert built[0]["phone_number_id"] == "pool-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "platform", [SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM]
+)
+async def test_a_chat_surface_without_a_toolset_still_gets_send_when_allowed(
+    monkeypatch, platform
+):
+    """Dropping the metadata tools must not drop `surface_send_message` with them.
+
+    The send tool used to be appended to whatever the platform builder returned,
+    and a platform with no builder short-circuited to nothing.
+    """
+    surface = AgentSurfaceEntity.create(
+        surface_type=platform,
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        config=SurfaceConfig(send_policy={"allow_send": True}),
+    )
+
+    async def fake_get(self, surface_id):
+        return surface
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory.SurfaceRepository.get",
+        fake_get,
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "native-wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "phone-123")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-123")
+    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram-token")
+
+    factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
+    toolsets = await factory.build_toolsets(
+        conversation=_conversation_for_surface(surface)
+    )
+
+    assert len(toolsets) == 1
+    assert list(toolsets[0].tools) == ["surface_send_message"]
