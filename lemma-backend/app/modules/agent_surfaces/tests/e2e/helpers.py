@@ -548,10 +548,17 @@ async def _set_user_mobile_number(
     user_id: str,
     mobile_number: str,
     telegram_username: str | None = None,
+    verified: bool = True,
 ) -> None:
+    """Give the user a number the sender can be matched to.
+
+    Verified by default, because routing only matches a number its owner proved;
+    an unverified one is a claim anybody can make about somebody else's number.
+    """
     user = await db_session.get(User, UUID(user_id))
     assert user is not None
     user.mobile_number = mobile_number
+    user.mobile_verified_at = datetime.now(timezone.utc) if verified else None
     if telegram_username is not None:
         user.telegram_username = telegram_username
     await db_session.commit()

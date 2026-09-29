@@ -52,6 +52,7 @@ def _service(
     member_pod_ids,
     default_surface_id,
     default_surface_pod_id=None,
+    person_continuity_id=None,
 ):
     """A selector over doubles.
 
@@ -62,7 +63,16 @@ def _service(
     candidate list instead is the bug these doubles exist to keep out.
     """
     link_repo = SimpleNamespace(
-        find_surface_id_for_external_thread=AsyncMock(return_value=continuity_id)
+        find_surface_id_for_external_thread=AsyncMock(return_value=continuity_id),
+        # The same person's most recent private-chat link on a candidate
+        # surface, whatever address it was delivered to.
+        find_latest_dm_link_for_person=AsyncMock(
+            return_value=(
+                SimpleNamespace(surface_id=person_continuity_id)
+                if person_continuity_id is not None
+                else None
+            )
+        ),
     )
     membership = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=list(member_pod_ids)),
@@ -349,3 +359,161 @@ async def test_continuity_is_the_freshest_thread_among_the_candidates():
     # The tiebreak still answers, and it is the member candidate — the point is
     # that nothing outside the candidate set was consulted to get there.
     assert chosen is not None and chosen.id == theirs.id
+
+
+async def test_a_dm_whose_delivery_address_changed_stays_on_the_surface_it_was_on():
+    """The exact chat key names an address, and the address is a delivery detail.
+
+    On WhatsApp it embeds the number the message arrived on, so a reassigned
+    number misses the exact lookup; without a person-level fallback the tiebreak
+    answers from whichever pod sorts first -- not the one holding the
+    conversation the person is still looking at.
+    """
+    pod_a, pod_b = uuid4(), uuid4()
+    surf_a = _surface(pod_a, uuid4())
+    surf_b = _surface(pod_b, uuid4())
+    service = _service(
+        continuity_id=None,
+        member_pod_ids={pod_a, pod_b},
+        default_surface_id=None,
+        person_continuity_id=surf_b.id,
+    )
+    chosen = await service.select_surface(
+        candidates=[surf_a, surf_b],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=uuid4(), external_user_id="tg-user-1"
+        ),
+        parsed=_event(),
+        platform="TELEGRAM",
+    )
+    assert chosen is surf_b
+    asked = service.conversation_link_repository.find_latest_dm_link_for_person
+    assert asked.await_args.kwargs["surface_ids"] == [surf_a.id, surf_b.id]
+    assert asked.await_args.kwargs["external_user_id"] == "tg-user-1"
+
+
+async def test_the_saved_default_still_outranks_a_persons_dm_continuity():
+    pod_a, pod_b = uuid4(), uuid4()
+    surf_a = _surface(pod_a, uuid4())
+    surf_b = _surface(pod_b, uuid4())
+    service = _service(
+        continuity_id=None,
+        member_pod_ids={pod_a, pod_b},
+        default_surface_id=surf_a.id,
+        person_continuity_id=surf_b.id,
+    )
+    chosen = await service.select_surface(
+        candidates=[surf_a, surf_b],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=uuid4(), external_user_id="tg-user-1"
+        ),
+        parsed=_event(),
+        platform="TELEGRAM",
+    )
+    assert chosen is surf_a
+
+
+async def test_a_group_message_has_no_person_level_continuity():
+    """A group is somebody else's room; "the same person" does not pick it."""
+    pod_a, pod_b = uuid4(), uuid4()
+    surf_a = _surface(pod_a, uuid4())
+    surf_b = _surface(pod_b, uuid4())
+    service = _service(
+        continuity_id=None,
+        member_pod_ids={pod_a, pod_b},
+        default_surface_id=None,
+        person_continuity_id=surf_b.id,
+    )
+    group = _event().model_copy(update={"is_dm": False})
+    chosen = await service.select_surface(
+        candidates=[surf_a, surf_b],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=uuid4(), external_user_id="tg-user-1"
+        ),
+        parsed=group,
+        platform="TELEGRAM",
+    )
+    assert chosen is surf_a
+    asked = service.conversation_link_repository.find_latest_dm_link_for_person
+    asked.assert_not_awaited()
+
+
+# --- the saved default, asked by the personal route ---------------------------
+#
+# A verified personal route answers a DM before selection runs, so the saved
+# default -- which selection alone consulted -- never reached it. The probe below
+# is how the route asks the same question selection would answer, on the same
+# predicate, so the two cannot disagree about who a message belongs to.
+
+
+async def test_a_default_this_delivery_could_be_routed_to_is_reported():
+    pod = uuid4()
+    chosen_surface = _surface(pod, uuid4())
+    service = _service(
+        continuity_id=None,
+        member_pod_ids={pod},
+        default_surface_id=chosen_surface.id,
+        default_surface_pod_id=pod,
+    )
+    found = await service.deliverable_default(
+        user_id=uuid4(), parsed=_event(), receiver_surface_ids=None
+    )
+    assert found is not None and found.id == chosen_surface.id
+
+
+async def test_no_saved_default_reports_none():
+    service = _service(
+        continuity_id=None, member_pod_ids={uuid4()}, default_surface_id=None
+    )
+    found = await service.deliverable_default(
+        user_id=uuid4(), parsed=_event(), receiver_surface_ids=None
+    )
+    assert found is None
+
+
+async def test_a_default_in_a_pod_the_user_left_is_not_deliverable_and_not_cleared():
+    """A probe reads. Clearing is selection's, which owns the one write here."""
+    left_pod = uuid4()
+    surface = _surface(left_pod, uuid4())
+    service = _service(
+        continuity_id=None,
+        member_pod_ids={uuid4()},
+        default_surface_id=surface.id,
+        default_surface_pod_id=left_pod,
+    )
+    found = await service.deliverable_default(
+        user_id=uuid4(), parsed=_event(), receiver_surface_ids=None
+    )
+    assert found is None
+    service._test_membership.clear_user_default_surface_id.assert_not_awaited()
+
+
+async def test_a_default_on_a_surface_that_is_gone_is_not_deliverable():
+    pod = uuid4()
+    service = _service(
+        continuity_id=None,
+        member_pod_ids={pod},
+        default_surface_id=uuid4(),
+        default_surface_pod_id=None,
+    )
+    found = await service.deliverable_default(
+        user_id=uuid4(), parsed=_event(), receiver_surface_ids=None
+    )
+    assert found is None
+
+
+async def test_a_default_another_bot_serves_is_not_deliverable_on_this_one():
+    """Two installations can share a workspace; only the receiver's own count."""
+    pod = uuid4()
+    surface = _surface(pod, uuid4())
+    service = _service(
+        continuity_id=None,
+        member_pod_ids={pod},
+        default_surface_id=surface.id,
+        default_surface_pod_id=pod,
+    )
+    found = await service.deliverable_default(
+        user_id=uuid4(), parsed=_event(), receiver_surface_ids=[uuid4()]
+    )
+    assert found is None
+    service._test_membership.clear_user_default_surface_id.assert_not_awaited()

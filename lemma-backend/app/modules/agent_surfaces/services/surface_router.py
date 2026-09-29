@@ -3,6 +3,26 @@
 Resolution: given an event and the surfaces configured for it, pick one, name
 the agent that answers, and identify who sent it.
 
+**Who decides where a private message goes.** A surface is ingress, an agent
+module and egress; routing only answers *which* pod, surface, agent and
+conversation a message belongs to, and it answers by one precedence, highest
+first:
+
+1. **Membership.** Only pods the sender belongs to are eligible.
+2. **The saved default** (``/surfaces/me``) -- the person's explicit choice, so
+   it outranks everything below it, including a verified personal route and an
+   existing conversation elsewhere.
+3. **A verified personal route** -- the pod the person chose for private chat
+   through an installation; it answers before ordinary selection runs, and
+   steps aside for a default via `deliverable_default`.
+4. **Continuity** -- the surface the person's conversation already lives on.
+5. **The oldest candidate**, so the answer is at least deterministic.
+
+Two functions enforce it -- `select_surface` for 2, 4 and 5, and
+`deliverable_default` for the personal route's check of 2 -- and they share one
+predicate, so a message cannot be routed to a default by one path and to a
+personal pod by the other.
+
 One write, and it is deliberate: a saved default that no longer stands is
 cleared where it is found, because the alternative is routing reading it and
 declining to honour it on every message from then on. Everything else here is a
@@ -53,6 +73,10 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
+from app.modules.agent_surfaces.services.saved_surface_default import (
+    deliverable_default,
+    default_still_stands,
+)
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     warn_if_tied_on_one_bot,
 )
@@ -71,6 +95,36 @@ logger = get_logger(__name__)
 def _addressed(parsed: ParsedInboundSurfaceEvent) -> bool:
     """Whether a group message is for the bot: an @mention, or a reply in its thread."""
     return bool(parsed.mentioned_agent or parsed.metadata.get("is_thread_reply"))
+
+
+def _channel_route_key(
+    surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
+) -> str | None:
+    """The conversation key for a Slack or Teams channel message, or None.
+
+    None means the bot does not answer here: the channel is not one it is wired
+    to, or nobody addressed it. The route is an allow-list entry -- it says this
+    channel is a place the bot answers -- and channels always require an @mention
+    or a reply inside a bot thread, with no per-route opt-out.
+    """
+    route = surface.channel_route_for(
+        channel_id=parsed.external_channel_id,
+        channel_name=parsed.metadata.get("channel_name"),
+    )
+    if (
+        route is None
+        and surface.external_channel_id
+        and surface.external_channel_id == parsed.external_channel_id
+    ):
+        # Surface bound directly to one channel without explicit routes.
+        route = SurfaceChannelRoute(channel_id=surface.external_channel_id)
+    if route is None or not _addressed(parsed):
+        return None
+    return (
+        f"channel:{parsed.external_channel_id}"
+        if parsed.external_channel_id
+        else f"channel-name:{route.channel_name}"
+    )
 
 
 class SurfaceRouter:
@@ -108,9 +162,6 @@ class SurfaceRouter:
     ) -> AgentSurfaceEntity | None:
         """Return the first surface whose pod the resolved user is a member of."""
         if resolved_user is None or resolved_user.internal_user_id is None:
-            return None
-
-        if not self.pod_membership_port:
             return None
 
         user_pod_ids = set(
@@ -163,22 +214,13 @@ class SurfaceRouter:
     ) -> AgentSurfaceEntity | None:
         """Pick which candidate surface an inbound event belongs to.
 
-        Deterministic precedence — this is what makes a sender reachable via a
-        shared system bot/number across pods in multiple orgs route consistently:
-
-        1. **Pod membership** — only surfaces whose pod the sender belongs to are
-           eligible.
-        2. **User default (authoritative)** — a valid saved
-           ``users.preferences.default_surfaces[platform]`` wins over everything
-           else, including an existing conversation on another pod, so changing
-           the default re-routes new messages to the chosen pod (starting a fresh
-           conversation there). A *stale* default (pointing at a pod the user left)
-           is cleared and ignored.
-        3. **Continuity** — otherwise reuse the surface an existing conversation
-           for this exact chat already lives on, so a returning chat doesn't bounce
-           between pods.
-        4. **Deterministic tiebreak** — the first member candidate (``candidates``
-           is ordered by ``created_at, id``).
+        The module docstring's precedence, applied to ordinary delivery --
+        deterministic, which is what makes a sender reachable via a shared bot
+        across pods in several orgs route consistently: membership, the saved
+        default (a *stale* one, pointing at a pod the user left, is cleared and
+        ignored), continuity, then the first member candidate (``candidates`` is
+        ordered by ``created_at, id``). A verified personal route is decided
+        before this runs.
 
         For an unresolved sender (or one who belongs to no candidate pod), fall
         back to continuity alone. Membership is still re-validated downstream in
@@ -186,37 +228,15 @@ class SurfaceRouter:
         appropriate), so this only decides *which* candidate — never bypasses the
         access check.
         """
-        # Resolve continuity once — it is both a fallback for unresolved senders
-        # and the tie-decider when no valid default is set.
-        #
-        # Narrowed to the candidates, which changes an answer and not just a
-        # cost. Unnarrowed this returns the freshest link for this chat anywhere
-        # on the platform, and the `next(...)` below then keeps it only if it is
-        # a candidate — so a *fresher link on a non-candidate surface* returned
-        # an id that was immediately discarded, and the person's real ongoing
-        # conversation on a candidate surface was never looked for. The chat
-        # fell through to the tiebreak and was answered by a different pod. See
-        # `find_surface_id_for_external_thread`.
+        # Resolved once -- it is both a fallback for unresolved senders and the
+        # tie-decider when no valid default is set.
         candidates_by_id = {surface.id: surface for surface in candidates}
-        continuity_id = (
-            await self.conversation_link_repository.find_surface_id_for_external_thread(
-                platform=platform,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_user_id=parsed.sender_external_user_id,
-                surface_ids=list(candidates_by_id),
-            )
-        )
-        continuity_surface = (
-            candidates_by_id.get(continuity_id) if continuity_id is not None else None
+        continuity_surface = await self._continuity_surface(
+            candidates_by_id, parsed=parsed, platform=platform
         )
 
-        # Unresolved / no-membership-port senders: continuity is all we have.
-        if (
-            resolved_user is None
-            or resolved_user.internal_user_id is None
-            or not self.pod_membership_port
-        ):
+        # An unresolved sender: continuity is all we have.
+        if resolved_user is None or resolved_user.internal_user_id is None:
             return continuity_surface
 
         user_id = resolved_user.internal_user_id
@@ -253,6 +273,72 @@ class SurfaceRouter:
         warn_if_tied_on_one_bot(member_candidates, platform=platform)
         return member_candidates[0]
 
+    async def _continuity_surface(
+        self,
+        candidates_by_id: dict[UUID, AgentSurfaceEntity],
+        *,
+        parsed: ParsedInboundSurfaceEvent,
+        platform: str,
+    ) -> AgentSurfaceEntity | None:
+        """The candidate this chat already lives on, if any.
+
+        Narrowed to the candidates, which changes an answer and not just a cost.
+        Unnarrowed the lookup returns the freshest link for this chat anywhere on
+        the platform, and the caller then keeps it only if it is a candidate -- so
+        a fresher link on a non-candidate surface returned an id that was
+        immediately discarded, and the person's real ongoing conversation on a
+        candidate surface was never looked for. The chat fell through to the
+        tiebreak and was answered by a different pod. See
+        `find_surface_id_for_external_thread`.
+
+        The exact key names a delivery address, which for a private chat is not
+        what makes it the same conversation, so a miss falls back to the same
+        person's latest private chat on a candidate -- see
+        `find_latest_dm_link_for_person`.
+        """
+        links = self.conversation_link_repository
+        surface_ids = list(candidates_by_id)
+        found = await links.find_surface_id_for_external_thread(
+            platform=platform,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+            external_user_id=parsed.sender_external_user_id,
+            surface_ids=surface_ids,
+        )
+        person = parsed.sender_external_user_id
+        if found is None and surface_ids and parsed.is_dm and person:
+            if not parsed.platform.is_email:
+                earlier = await links.find_latest_dm_link_for_person(
+                    platform=platform, external_user_id=person, surface_ids=surface_ids
+                )
+                found = earlier.surface_id if earlier is not None else None
+        return candidates_by_id.get(found) if found is not None else None
+
+    async def deliverable_default(
+        self,
+        *,
+        user_id: UUID,
+        parsed: ParsedInboundSurfaceEvent,
+        receiver_surface_ids: list[UUID] | None,
+    ) -> AgentSurfaceEntity | None:
+        """The saved default, if ordinary selection could route this delivery to it.
+
+        A verified personal route answers a private message before selection
+        runs, so without this the saved default -- which the docs call
+        authoritative -- was consulted only for people with no personal route,
+        and a person who had set one was answered by the other. The route asks
+        this and steps aside when it returns a surface; where it returns None
+        selection would not pick the default either, so the personal route -- the
+        next thing the person chose -- stands. It asks and never writes.
+        """
+        return await deliverable_default(
+            membership=self.pod_membership_port,
+            surfaces=self.surface_repository,
+            user_id=user_id,
+            parsed=parsed,
+            receiver_surface_ids=receiver_surface_ids,
+        )
+
     async def _default_surface(
         self,
         *,
@@ -275,17 +361,19 @@ class SurfaceRouter:
         time a different bot on the same platform received a message, which is
         the ordinary case in any deployment running more than one.
         """
-        get_default = getattr(
-            self.pod_membership_port, "get_user_default_surface_id", None
+        default_id = await self.pod_membership_port.get_user_default_surface_id(
+            user_id, platform
         )
-        if get_default is None:
-            return None
-        default_id = await get_default(user_id, platform)
         if default_id is None:
             return None
         if default_id in member_by_id:
             return member_by_id[default_id]
-        if await self._default_still_stands(default_id, platform, user_pod_ids):
+        if await default_still_stands(
+            self.surface_repository,
+            surface_id=default_id,
+            platform=platform,
+            user_pod_ids=user_pod_ids,
+        ):
             # Valid, just not on this delivery's list. Routing falls through to
             # continuity and the tiebreak; the saved choice is left alone.
             return None
@@ -298,31 +386,12 @@ class SurfaceRouter:
         await self._clear_stale_default(user_id, platform)
         return None
 
-    async def _default_still_stands(
-        self, surface_id: UUID, platform: str, user_pod_ids: set[UUID]
-    ) -> bool:
-        """Is this saved surface one the person could still be sent to?
-
-        The candidate query asked of one id and nothing else -- so liveness
-        means here exactly what it means there (ACTIVE, in a pod that has not
-        been deleted), and the difference is only that none of the *delivery's*
-        narrowings apply. Pod membership is checked separately because
-        ``get_user_pod_ids`` answers for deleted pods too.
-        """
-        live = await self.surface_repository.list_active_for_routing(
-            platform, surface_ids=[surface_id]
-        )
-        return any(surface.pod_id in user_pod_ids for surface in live)
-
     async def _clear_stale_default(self, user_id: UUID, platform: str) -> None:
         """Forget a default that no longer resolves, best-effort."""
-        clear_default = getattr(
-            self.pod_membership_port, "clear_user_default_surface_id", None
-        )
-        if clear_default is None:
-            return
         try:
-            await clear_default(user_id, platform)
+            await self.pod_membership_port.clear_user_default_surface_id(
+                user_id, platform
+            )
         except Exception:
             logger.debug(
                 "agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic",
@@ -384,97 +453,55 @@ class SurfaceRouter:
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
     ) -> ResolvedSurfaceRoute | None:
-        """Which agent answers this event, and under what conversation key."""
+        """Which agent answers this event, and under what conversation key.
+
+        Every shape is answered by the surface's own agent -- a channel route or
+        a Telegram group says *where* the bot answers, never *who*. What differs
+        is only the conversation kind and key, and whether the message is for us
+        at all, so that is all this decides.
+        """
         if parsed.is_dm or surface.surface_type.is_email:
-            return await self._direct_route(surface=surface, parsed=parsed)
+            is_email = surface.surface_type.is_email
+            return await self._route(
+                surface,
+                conversation_kind="EMAIL" if is_email else "DM",
+                route_key="email" if is_email else "dm",
+            )
         if surface.surface_type is SurfacePlatform.TELEGRAM:
-            return await self._telegram_group_route(surface=surface, parsed=parsed)
+            # Being added to the group by an admin is the authorization, so there
+            # is no per-group route config. The sender is still resolved and
+            # pod-membership checked upstream, so only pod members can invoke it.
+            if not _addressed(parsed):
+                return None
+            return await self._route(
+                surface,
+                conversation_kind="CHANNEL",
+                route_key=f"channel:{parsed.external_channel_id}",
+            )
         if surface.surface_type in {SurfacePlatform.SLACK, SurfacePlatform.TEAMS}:
-            return await self._channel_route(surface=surface, parsed=parsed)
+            route_key = _channel_route_key(surface, parsed)
+            if route_key is None:
+                return None
+            return await self._route(
+                surface, conversation_kind="CHANNEL", route_key=route_key
+            )
         return None
 
-    async def _direct_route(
+    async def _route(
         self,
-        *,
         surface: AgentSurfaceEntity,
-        parsed: ParsedInboundSurfaceEvent,
+        *,
+        conversation_kind: str,
+        route_key: str,
     ) -> ResolvedSurfaceRoute:
-        """A DM or an email: the surface's agent, which is the only one it has."""
-        agent_id = surface.agent_id
-        is_email = surface.surface_type.is_email
-        return ResolvedSurfaceRoute(
-            pod_id=surface.pod_id,
-            agent_id=agent_id,
-            agent_name=await self._agent_name_for_agent_id(agent_id),
-            agent_display_name=await self._agent_display_name(agent_id),
-            conversation_kind="EMAIL" if is_email else "DM",
-            route_key="email" if is_email else "dm",
-        )
-
-    async def _telegram_group_route(
-        self,
-        *,
-        surface: AgentSurfaceEntity,
-        parsed: ParsedInboundSurfaceEvent,
-    ) -> ResolvedSurfaceRoute | None:
-        """A Telegram group: the bot answers when addressed, on the surface default.
-
-        Being added to the group by an admin is the authorization, so there is no
-        per-group route config. The sender is still resolved and pod-membership
-        checked upstream, so only pod members can invoke it.
-        """
-        if not _addressed(parsed):
-            return None
         agent_id = surface.agent_id
         return ResolvedSurfaceRoute(
             pod_id=surface.pod_id,
             agent_id=agent_id,
             agent_name=await self._agent_name_for_agent_id(agent_id),
             agent_display_name=await self._agent_display_name(agent_id),
-            conversation_kind="CHANNEL",
-            route_key=f"channel:{parsed.external_channel_id}",
-        )
-
-    async def _channel_route(
-        self,
-        *,
-        surface: AgentSurfaceEntity,
-        parsed: ParsedInboundSurfaceEvent,
-    ) -> ResolvedSurfaceRoute | None:
-        """A Slack or Teams channel, routed to whichever agent it is wired to."""
-        route = surface.channel_route_for(
-            channel_id=parsed.external_channel_id,
-            channel_name=parsed.metadata.get("channel_name"),
-        )
-        if (
-            route is None
-            and surface.external_channel_id
-            and surface.external_channel_id == parsed.external_channel_id
-        ):
-            # Surface bound directly to one channel without explicit routes.
-            route = SurfaceChannelRoute(channel_id=surface.external_channel_id)
-        if route is None:
-            return None
-
-        # Channels always require an @mention (or a reply within a bot thread);
-        # there is no per-route opt-out.
-        if not _addressed(parsed):
-            return None
-
-        # `route` is an allow-list entry: it said this channel is a place the
-        # bot answers, not who answers in it. That is always the surface's agent.
-        agent_id = surface.agent_id
-        return ResolvedSurfaceRoute(
-            pod_id=surface.pod_id,
-            agent_id=agent_id,
-            agent_name=await self._agent_name_for_agent_id(agent_id),
-            agent_display_name=await self._agent_display_name(agent_id),
-            conversation_kind="CHANNEL",
-            route_key=(
-                f"channel:{parsed.external_channel_id}"
-                if parsed.external_channel_id
-                else f"channel-name:{route.channel_name}"
-            ),
+            conversation_kind=conversation_kind,
+            route_key=route_key,
         )
 
     async def _agent_display_name(self, agent_id: UUID | None) -> str:
@@ -540,11 +567,7 @@ class SurfaceRouter:
         self,
         resolved_user: ResolvedSurfaceUser,
     ) -> ResolvedSurfaceUser:
-        if (
-            resolved_user.internal_user_id is not None
-            and self.pod_membership_port is not None
-            and not resolved_user.email
-        ):
+        if resolved_user.internal_user_id is not None and not resolved_user.email:
             resolved_user.email = await self.pod_membership_port.get_user_email(
                 resolved_user.internal_user_id
             )
