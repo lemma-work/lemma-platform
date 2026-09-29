@@ -52,10 +52,11 @@ More body.
 """
 
 
-def _live(monkeypatch, *, pypi, npm, release):
+def _live(monkeypatch, *, pypi, npm, release, desktop=True):
     monkeypatch.setattr(report, "pypi_has", lambda package, version: pypi)
     monkeypatch.setattr(report, "npm_has", lambda package, version: npm)
     monkeypatch.setattr(report, "github_release_exists", lambda version: release)
+    monkeypatch.setattr(report, "desktop_is_live", lambda version: desktop)
 
 
 @pytest.fixture
@@ -94,7 +95,7 @@ def test_the_0_7_2_shape_is_reported_as_partly_published(monkeypatch, entry):
 
 
 def test_an_unreachable_index_is_never_reported_as_published(monkeypatch, entry):
-    _live(monkeypatch, pypi=None, npm=None, release=None)
+    _live(monkeypatch, pypi=None, npm=None, release=None, desktop=None)
     text, complete = report.compose("9.9.9")
     assert complete is False
     assert "could not verify" in text
@@ -149,3 +150,11 @@ def test_a_missing_webhook_does_not_fail_the_release(monkeypatch, capsys):
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
     report.post("anything")
     assert "No Slack webhook configured" in capsys.readouterr().out
+
+
+def test_a_release_without_desktop_is_not_complete(monkeypatch, entry):
+    """0.8.0 was announced complete with no DMG and a 404 update feed."""
+    _live(monkeypatch, pypi=True, npm=True, release=True, desktop=False)
+    text, complete = report.compose("9.9.9")
+    assert complete is False
+    assert "Desktop app and update feed" in text

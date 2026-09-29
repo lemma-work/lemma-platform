@@ -426,9 +426,17 @@ def _installed_tool_version(uv: str) -> str | None:
     import re
     import subprocess
 
-    proc = subprocess.run(
-        [uv, "tool", "list"], capture_output=True, text=True, check=False
-    )
+    try:
+        proc = subprocess.run(
+            [uv, "tool", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        # Unverified, not failed: the install itself already succeeded.
+        return None
     if proc.returncode != 0:
         return None
     match = re.search(rf"(?m)^{re.escape(DISTRIBUTION)} v(\S+)", proc.stdout or "")
