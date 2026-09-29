@@ -68,7 +68,6 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEMMA_REGISTRY_URL="https://lemma-work.github.io/lemma-platform/r/{name}.json"
 SHADCN_SCHEMA_URL="https://ui.shadcn.com/schema.json"
 
@@ -376,7 +375,6 @@ ensure_fresh_directory() {
 APP_ROOT=""
 SEARCH_BLOCK_ENABLED="false"
 ASSISTANT_BLOCK_ENABLED="false"
-ASSISTANT_PAGE_ENABLED="false"
 MEMBERS_BLOCK_ENABLED="false"
 APP_TITLE_JSON=""
 
@@ -586,11 +584,6 @@ if [[ "$ASSISTANT_ENABLED" == "true" ]]; then
   ASSISTANT_MODE="$(normalize_assistant_mode "$ASSISTANT_MODE")"
 
   ASSISTANT_BLOCK_ENABLED="true"
-  if [[ "$ASSISTANT_MODE" == "page" ]]; then
-    ASSISTANT_PAGE_ENABLED="true"
-  else
-    ASSISTANT_PAGE_ENABLED="false"
-  fi
   ASSISTANT_CONFIG_JSON="$(node -e 'const assistantName=process.argv[1]; const mode=process.argv[2]; const pageEnabled=mode === "page"; process.stdout.write(JSON.stringify({assistantName, mode, pageEnabled}));' "$ASSISTANT_NAME" "$ASSISTANT_MODE")"
 fi
 
@@ -607,8 +600,6 @@ if [[ "$MEMBERS_ENABLED" == "true" ]]; then
 fi
 
 APP_TITLE_JSON="$(json_string "$APP_TITLE")"
-POD_ID_JSON="$(json_string "$POD_ID")"
-ASSISTANT_NAME_JSON="$(json_string "$ASSISTANT_NAME")"
 SEARCH_CONFIG_TS="$SEARCH_CONFIG_JSON"
 ASSISTANT_CONFIG_TS="$ASSISTANT_CONFIG_JSON"
 

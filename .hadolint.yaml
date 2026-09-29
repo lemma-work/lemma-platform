@@ -1,0 +1,31 @@
+# Dockerfile lint, run by `make lint-docker` (hadolint).
+#
+# Warnings fail; info-level suggestions do not. Each rule below is off for the
+# whole repository, with the reason it does not apply here.
+failure-threshold: warning
+no-color: true
+
+ignored:
+  # Pin apt package versions. A Debian point release removes the old package
+  # versions from the mirror, so a pinned `apt-get install` breaks the build
+  # within weeks; the images that need to be reproducible pin their base image
+  # by digest instead.
+  - DL3008
+  # pipefail before a RUN with a pipe. The RUNs it flags start with `set -eu`
+  # or `set -eux` and pipe into a command whose failure is the one that
+  # matters; the images' own build and smoke tests are what catch a bad fetch.
+  - DL4006
+  # WORKDIR instead of `cd`. The flagged `cd` is inside a single RUN that
+  # builds in a scratch directory and leaves it, which WORKDIR cannot express.
+  - DL3003
+  # Copying a whole filesystem from another stage is how the guest image
+  # flattens its runtime stage into the final one.
+  - DL3067
+  # "Potentially sensitive data" in ENV: a heuristic on names such as
+  # SESSION_TOKEN_DOMAIN, which is a cookie domain, not a secret.
+  - DL3064
+  # Info-level, and printed on every run otherwise. The consecutive RUNs are
+  # separate cache layers on purpose, and a named runtime user (`appuser`,
+  # the base image's `node`) is one the image itself defines.
+  - DL3059
+  - DL3066
