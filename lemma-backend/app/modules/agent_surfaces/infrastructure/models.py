@@ -391,7 +391,10 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
         # per person via DISTINCT ON. The pair is the lookup; `last_inbound_at`
         # is carried because the recency it sorts by is
         # `coalesce(last_inbound_at, updated_at)`, so this covers the common
-        # case without claiming to serve the coalesce itself.
+        # case without claiming to serve the coalesce itself. Also
+        # `find_latest_dm_link_for_person`, which is always handed a surface list
+        # so that "this person's earlier private chat" is a lookup on this index
+        # rather than a scan of the platform.
         Index(
             "ix_agent_surface_link_surface_member",
             "surface_id",

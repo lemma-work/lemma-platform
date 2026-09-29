@@ -59,6 +59,11 @@ EXPECTED = [
         3600,
     ),
     (
+        "surface_allow_unverified_phone_match",
+        "SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH",
+        False,
+    ),
+    (
         "surface_dm_conversation_reset_after_hours",
         "SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS",
         24,

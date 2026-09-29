@@ -21,7 +21,10 @@ from sqlalchemy import select
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.composition import build_conversation_binder
+from app.modules.agent_surfaces.composition import (
+    build_conversation_binder,
+    build_surface_router,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
@@ -239,6 +242,29 @@ async def personal_dm_result(
     return OnboardingIngressResult(True, context)
 
 
+async def saved_default_outranks_route(
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, user_id: UUID
+) -> bool:
+    """Has this person chosen, through `/surfaces/me`, somewhere else to be answered?
+
+    A personal route answers a private message before ordinary selection runs,
+    and selection was the only place the saved default was ever read -- so the
+    default, which routing documents as authoritative, did nothing for anyone
+    with a route. Asked here, of the router's own predicate, the route steps
+    aside exactly when selection would have honoured the default.
+    """
+    async with uows() as uow:
+        default = await build_surface_router(uow).deliverable_default(
+            user_id=user_id,
+            parsed=transport.event,
+            receiver_surface_ids=transport.receiver_surface_ids,
+            # The same narrowing selection applies to an event that arrived on
+            # the shared system bot.
+            system_credentials_only=transport.surface is None,
+        )
+    return default is not None
+
+
 async def recognize_sender(
     uows: UnitOfWorkFactory,
     transport: OnboardingTransport,
@@ -251,6 +277,11 @@ async def recognize_sender(
         uows, transport.binding_key
     )
     if verified_user_id is not None and route is not None and event.is_dm:
+        if await saved_default_outranks_route(uows, transport, verified_user_id):
+            # Not handled here: ordinary ingestion selects by membership, the
+            # saved default and continuity, which is the order the router
+            # documents and the one the person asked for.
+            return OnboardingIngressResult(False)
         route_id = route.id
 
         async def prepare() -> SurfaceChatContext:
