@@ -387,6 +387,20 @@
 .productFrame { border: 1px solid rgb(255 254 250 / .3); border-radius: var(--radius-card); overflow: hidden; box-shadow: var(--shadow-float); background: var(--paper); }
 .productViewport { --preview-width: 900px; --preview-scale: 1; position: relative; height: min(calc(62vh + 84px),704px); min-height: 504px; overflow: hidden; background: var(--paper) }
 .productIframe { border: 0; display: block; width: var(--preview-width); height: calc(100% / var(--preview-scale)); transform: scale(var(--preview-scale)); transform-origin: top left }
+/* Drawn at the frame's own width and scale so its shapes land where the
+   workspace's will. Visibility outlasts the fade, then stops catching hits. */
+.productPoster { position: absolute; top: 0; left: 0; z-index: 1; width: var(--preview-width); height: calc(100% / var(--preview-scale)); transform: scale(var(--preview-scale)); transform-origin: top left; background: var(--paper); transition: opacity var(--motion-reveal) var(--ease), visibility var(--motion-reveal) }
+.productPoster :global(.workspace-loading) { height: 100% }
+.productViewport[data-revealed] .productPoster { opacity: 0; visibility: hidden }
+.productShield { position: absolute; inset: 0; z-index: 2; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 20px; cursor: pointer }
+.productShield span { font-size: 13px; line-height: 1; padding: 10px 16px; border-radius: 999px; background: var(--ink); color: var(--paper); box-shadow: var(--shadow-card); opacity: 0; transform: translateY(4px); transition: opacity var(--motion-fast), transform var(--motion-fast) }
+.productShield:hover span { opacity: 1; transform: none }
+.productViewport:not([data-revealed]) .productShield { cursor: default }
+.productViewport:not([data-revealed]) .productShield span { visibility: hidden }
+.productFrame { transition: outline-color var(--motion-fast); outline: 3px solid transparent; outline-offset: 4px }
+.productFrame[data-engaged] { outline-color: var(--paper) }
+@media (hover: none) { .productShield span { opacity: 1; transform: none } }
+@media (prefers-reduced-motion: reduce) { .productPoster, .productShield span, .productFrame { transition: none } }
 .realAppExample { display: flex; flex-direction: column; width: 100%; min-width: 0; gap: 12px }
 .realAppExample iframe { width: 100%; height: 560px; border: 0; border-radius: var(--radius-card); background: var(--paper) }
 .realAppExample > span { color: var(--ink-3); font-size: 12px }

@@ -1,5 +1,6 @@
 import { SunIcon, MoonIcon, SystemIcon } from "@/ui/icons";
 import { useEffect, useState } from "react";
+import { isLandingPreview } from "@/marketing/preview-mode";
 import { key } from "./storage";
 import { CHAT_TEXT_SIZES, readChatTextSize, type ChatTextSize } from "./chat-text";
 
@@ -34,12 +35,16 @@ export const CORNERS: { value: Corners; label: string }[] = [
     { value: "round", label: "Round" },
 ];
 
+/** The landing demo opens light, to match the page around it, rather than
+ *  following the visitor's system; so there "system" has to be written down
+ *  when chosen, since an empty key means light. */
 function readTheme(): Theme {
+    const fallback: Theme = isLandingPreview() ? "light" : "system";
     try {
         const stored = localStorage.getItem(THEME_KEY);
-        return stored === "light" || stored === "dark" ? stored : "system";
+        return stored === "light" || stored === "dark" || stored === "system" ? stored : fallback;
     } catch {
-        return "system";
+        return fallback;
     }
 }
 
@@ -99,7 +104,7 @@ export function useAppearance() {
     useEffect(() => {
         apply(theme, accent, corners, textSize);
         try {
-            if (theme === "system") localStorage.removeItem(THEME_KEY);
+            if (theme === "system" && !isLandingPreview()) localStorage.removeItem(THEME_KEY);
             else localStorage.setItem(THEME_KEY, theme);
             localStorage.setItem(ACCENT_KEY, accent);
             localStorage.setItem(CORNERS_KEY, corners);

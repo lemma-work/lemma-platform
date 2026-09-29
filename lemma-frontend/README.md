@@ -217,8 +217,11 @@ provider and conversation settings.
 Run `npm test` for catalog, configuration and setup rendering regressions.
 Provider consent and message delivery require a connected workspace to verify.
 
-Workspace skeletons are reserved for authenticated workspace data. Auth and demo
-transitions use contextual status messages. Settings omits the Help section and
+Workspace skeletons are reserved for workspace data that exists: an
+authenticated workspace, or the landing demo's sample one. Auth transitions use
+contextual status messages. The landing hero draws the skeleton itself, so it is
+there on first paint, and keeps it over the demo frame until the workspace
+reports it has a teammate and conversations to show. Settings omits the Help section and
 clips its sidebar to the panel corners. Message copy controls appear on hover or
 keyboard focus without reserving layout space: beside your bubble, and inside the
 top-right corner of a teammate's message. Neither straddles an edge.
