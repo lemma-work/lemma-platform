@@ -240,7 +240,7 @@ class SurfaceIdentityResolutionService:
         if known.external_user_id:
             external_user = await self._upsert(event, known)
             cached = await self._cached_resolution(
-                external_user, known, require_proven_identity
+                external_user, known, require_proven_identity, event
             )
             if cached is not None:
                 return cached
@@ -277,6 +277,7 @@ class SurfaceIdentityResolutionService:
         external_user: _CachedSender,
         known: "_KnownSender",
         require_proven_identity: bool,
+        event: ParsedInboundSurfaceEvent,
     ) -> ResolvedSurfaceUser | None:
         """The answer this sender resolved to before, if it still stands.
 
@@ -309,6 +310,8 @@ class SurfaceIdentityResolutionService:
         if require_proven_identity and not await self._cache_is_attested(
             known, external_user.resolved_user_id
         ):
+            return None
+        if await self._cache_rests_on_an_unverified_number(external_user, known, event):
             return None
         return ResolvedSurfaceUser(
             internal_user_id=external_user.resolved_user_id,
@@ -356,6 +359,54 @@ class SurfaceIdentityResolutionService:
                 if ids == [cached_user_id]:
                     return True
         return False
+
+    async def _cache_rests_on_an_unverified_number(
+        self,
+        external_user: _CachedSender,
+        known: "_KnownSender",
+        event: ParsedInboundSurfaceEvent,
+    ) -> bool:
+        """Was this cached resolution made on a number nobody verified, and only that?
+
+        The cache stores who a sender resolved to and not how, so a resolution
+        made while unverified numbers were accepted would outlive the setting
+        that allowed it: turning it off would change nothing for anyone already
+        matched. Where the deployment does not accept them, a cached resolution
+        is dropped when the *only* thing linking this sender to that user is an
+        unverified profile number -- and kept when anything else does: a verified
+        number, the profile email, the Telegram handle, or nothing about the
+        phone at all, which is how a managed bot's owner is bound.
+
+        Dropping it sends the sender through ordinary matching, which now
+        resolves nobody and clears the row.
+        """
+        if surface_settings.surface_allow_unverified_phone_match:
+            return False
+        if event.platform not in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM):
+            return False
+        cached_user_id = external_user.resolved_user_id
+        phone = known.phone or external_user.phone
+        candidates = _phone_lookup_candidates(phone) if phone else []
+        if cached_user_id is None or not candidates:
+            return False
+        unverified = await self._users.user_ids_by_mobile_numbers(
+            candidates, verified=False
+        )
+        if cached_user_id not in unverified:
+            return False
+        if await self._cache_is_attested(known, cached_user_id):
+            return False
+        verified = await self._users.user_ids_by_mobile_numbers(
+            candidates, verified=True
+        )
+        if cached_user_id in verified:
+            return False
+        handle = _telegram_username(event)
+        if handle and (
+            await self._match_user_by_telegram_username(handle) == cached_user_id
+        ):
+            return False
+        return True
 
     async def _match_proven_sender(
         self, event: ParsedInboundSurfaceEvent, known: _KnownSender

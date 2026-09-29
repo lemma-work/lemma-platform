@@ -176,7 +176,7 @@ observer renders them on the surface and a submission resumes the run.
   through signup instead. A deployment can accept that risk with
   `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH=true`: a number claimed by exactly one
   profile then routes to it, each such match is logged
-  (`unverified_phone_match_used`), and a number claimed by several never matches.
+  (`unverified_phone_match_used`). A verified owner always wins; a number claimed by several *unverified* profiles never matches.
 - **DM reset window.** A DM starts a fresh Lemma conversation after
   `SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS` (default 24) of inactivity, measured
   from the last *inbound* message. It is deployment-wide; the old per-surface

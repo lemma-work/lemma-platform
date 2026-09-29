@@ -461,6 +461,43 @@ async def test_a_default_this_delivery_could_be_routed_to_is_reported():
     assert found is not None and found.id == chosen_surface.id
 
 
+async def test_a_default_on_its_own_credentials_is_not_deliverable_to_the_shared_bot():
+    """Selection narrows a shared-bot event to surfaces on the system's credentials.
+
+    A saved default that runs on an account's own bot is not somewhere that event
+    can be answered, so the probe cannot report it either -- or the personal route
+    would step aside for a default selection then declines to pick.
+    """
+    pod = uuid4()
+    own_bot_default = _surface(pod, uuid4())
+    service = _service(
+        continuity_id=None,
+        member_pod_ids={pod},
+        default_surface_id=own_bot_default.id,
+        default_surface_pod_id=pod,
+    )
+
+    async def only_where_the_narrowing_allows(platform, **kwargs):
+        return [] if kwargs.get("system_credentials_only") else [own_bot_default]
+
+    service.surface_repository.list_active_for_routing.side_effect = (
+        only_where_the_narrowing_allows
+    )
+
+    on_shared_bot = await service.deliverable_default(
+        user_id=uuid4(),
+        parsed=_event(),
+        receiver_surface_ids=None,
+        system_credentials_only=True,
+    )
+    on_own_bot = await service.deliverable_default(
+        user_id=uuid4(), parsed=_event(), receiver_surface_ids=None
+    )
+
+    assert on_shared_bot is None
+    assert on_own_bot is not None
+
+
 async def test_no_saved_default_reports_none():
     service = _service(
         continuity_id=None, member_pod_ids={uuid4()}, default_surface_id=None

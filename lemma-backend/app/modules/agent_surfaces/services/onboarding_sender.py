@@ -258,6 +258,9 @@ async def saved_default_outranks_route(
             user_id=user_id,
             parsed=transport.event,
             receiver_surface_ids=transport.receiver_surface_ids,
+            # The same narrowing selection applies to an event that arrived on
+            # the shared system bot.
+            system_credentials_only=transport.surface is None,
         )
     return default is not None
 

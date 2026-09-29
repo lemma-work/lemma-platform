@@ -293,6 +293,83 @@ async def test_an_opted_in_deployment_still_prefers_the_verified_owner(
     assert resolved.internal_user_id == verified_id
 
 
+# --- a cached resolution outlives the policy that made it -------------------
+#
+# The cache stores who a sender resolved to, not how. A row written while
+# unverified numbers were accepted would keep routing after the deployment
+# stopped accepting them, so the setting would change nothing for anyone already
+# matched.
+
+
+@pytest.mark.parametrize(
+    "platform", [SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM]
+)
+async def test_a_resolution_made_on_an_unverified_number_is_dropped_when_it_stops_being_accepted(
+    platform,
+):
+    cached = uuid4()
+    users = _FakeUsers(by_unverified_phone_ids=[cached])
+    external = _FakeExternalRepo(cached_user_id=cached)
+
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=platform, phone="+1 555 0100")
+    )
+
+    assert resolved.internal_user_id is None
+    assert external.calls[-1]["resolved_user_id"] is None, (
+        "the stale row has to be cleared, or every later message re-reads it"
+    )
+
+
+async def test_that_same_resolution_stands_where_the_deployment_accepts_unverified_numbers(
+    allow_unverified_phone_match,
+):
+    cached = uuid4()
+    users = _FakeUsers(by_unverified_phone_ids=[cached])
+
+    resolved = await _service(users, _FakeExternalRepo(cached_user_id=cached)).resolve(
+        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
+    )
+
+    assert resolved.internal_user_id == cached
+
+
+async def test_a_resolution_the_number_was_verified_for_stands():
+    cached = uuid4()
+    users = _FakeUsers(by_phone_ids=[cached], by_unverified_phone_ids=[cached])
+
+    resolved = await _service(users, _FakeExternalRepo(cached_user_id=cached)).resolve(
+        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
+    )
+
+    assert resolved.internal_user_id == cached
+
+
+async def test_a_resolution_bound_by_something_other_than_the_phone_stands():
+    """A managed bot's owner is bound to their user with no number involved."""
+    cached = uuid4()
+    users = _FakeUsers()
+
+    resolved = await _service(users, _FakeExternalRepo(cached_user_id=cached)).resolve(
+        event=_event(platform=SurfacePlatform.TELEGRAM, phone=None)
+    )
+
+    assert resolved.internal_user_id == cached
+
+
+async def test_a_resolution_the_telegram_handle_still_backs_stands():
+    cached = uuid4()
+    users = _FakeUsers(by_unverified_phone_ids=[cached], by_telegram=cached)
+    event = _event(platform=SurfacePlatform.TELEGRAM, phone="+1 555 0100")
+    event = event.model_copy(update={"metadata": {"sender_username": "ada"}})
+
+    resolved = await _service(users, _FakeExternalRepo(cached_user_id=cached)).resolve(
+        event=event
+    )
+
+    assert resolved.internal_user_id == cached
+
+
 async def test_an_unverified_number_is_not_cached_as_a_resolution():
     """A follow-up message must not inherit a match the first one refused."""
     users = _FakeUsers(by_unverified_phone_ids=[uuid4()])

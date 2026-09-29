@@ -244,7 +244,7 @@ class SurfaceSettings(BaseSettings):
             "agent's reply, sent from the shared number -- goes to whoever wrote "
             "it. Turning it on trades that narrow impersonation risk for not "
             "turning away real users who typed their own number and never verified "
-            "it. A number claimed by more than one profile never matches either way."
+            "it. A verified owner always wins; among unverified claims, a number claimed by more than one profile never matches."
         ),
     )
 

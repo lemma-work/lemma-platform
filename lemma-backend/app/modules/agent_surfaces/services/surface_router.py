@@ -320,6 +320,7 @@ class SurfaceRouter:
         user_id: UUID,
         parsed: ParsedInboundSurfaceEvent,
         receiver_surface_ids: list[UUID] | None,
+        system_credentials_only: bool = False,
     ) -> AgentSurfaceEntity | None:
         """The saved default, if ordinary selection could route this delivery to it.
 
@@ -337,6 +338,7 @@ class SurfaceRouter:
             user_id=user_id,
             parsed=parsed,
             receiver_surface_ids=receiver_surface_ids,
+            system_credentials_only=system_credentials_only,
         )
 
     async def _default_surface(

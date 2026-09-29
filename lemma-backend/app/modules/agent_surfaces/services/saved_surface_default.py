@@ -48,12 +48,18 @@ async def deliverable_default(
     user_id: UUID,
     parsed: ParsedInboundSurfaceEvent,
     receiver_surface_ids: list[UUID] | None,
+    system_credentials_only: bool = False,
 ) -> AgentSurfaceEntity | None:
     """The saved default, if ordinary selection could route this delivery to it.
 
     Live, in a pod the person is still in, served by the bot that delivered this
     event, and willing to act on it. Where it says no, selection would not pick
     the default either. A read: clearing a stale default is selection's.
+
+    ``system_credentials_only`` is selection's own narrowing for an event that
+    arrived on the shared system bot: a surface running on its own account's
+    credentials is not somewhere that event can be answered, so a default that is
+    one is not deliverable either.
     """
     platform = parsed.platform.value
     default_id = await membership.get_user_default_surface_id(user_id, platform)
@@ -61,7 +67,11 @@ async def deliverable_default(
         return None
     if receiver_surface_ids is not None and default_id not in receiver_surface_ids:
         return None
-    live = await surfaces.list_active_for_routing(platform, surface_ids=[default_id])
+    live = await surfaces.list_active_for_routing(
+        platform,
+        surface_ids=[default_id],
+        system_credentials_only=system_credentials_only,
+    )
     surface = next((row for row in live if row.id == default_id), None)
     if surface is None or not surface.allows_inbound_event(parsed):
         return None
