@@ -234,6 +234,19 @@ class SurfaceSettings(BaseSettings):
             "conversation on inactivity."
         ),
     )
+    surface_allow_unverified_phone_match: bool = Field(
+        default=False,
+        description=(
+            "Route a WhatsApp/Telegram sender to the Lemma user whose profile "
+            "carries their phone number even when that number was never verified. "
+            "Off by default: anyone can write another person's number on their own "
+            "profile, and when that person messages the bot the message -- and the "
+            "agent's reply, sent from the shared number -- goes to whoever wrote "
+            "it. Turning it on trades that narrow impersonation risk for not "
+            "turning away real users who typed their own number and never verified "
+            "it. A verified owner always wins; among unverified claims, a number claimed by more than one profile never matches."
+        ),
+    )
 
     # Native receiver toggles (worker process)
     enable_telegram_polling_mode: bool = Field(

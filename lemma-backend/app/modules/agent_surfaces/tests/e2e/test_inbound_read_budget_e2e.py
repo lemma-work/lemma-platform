@@ -34,9 +34,16 @@ pytestmark = pytest.mark.e2e
 #: against each. Two budgets because the two messages do different work: the
 #: first creates the link, the external-user row and the conversation; the
 #: second finds them.
+#:
+#: A chat's first message is also where "is this somebody's earlier private chat
+#: under another delivery address" is asked, and it is asked once by selection
+#: (which surface) and once by the binder (adopt its link), which is why links
+#: carry two more than a later message and surfaces one more -- the binder reads
+#: the pod's own surfaces to bound its search. A later message finds its exact
+#: key first and asks neither.
 _FIRST_MESSAGE = {
-    "agent_surfaces": 6,
-    "agent_surface_conversation_links": 6,
+    "agent_surfaces": 7,
+    "agent_surface_conversation_links": 8,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
