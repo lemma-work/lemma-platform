@@ -136,7 +136,7 @@ class ChatScreen(Screen[None]):
                 if not self.conversation_id:
                     created = to_plain(
                         pod_sdk.conversations.create_for_agent(
-                            self.agent or "",
+                            self.agent,
                             title=self.conversation_title or "TUI chat",
                         )
                     )

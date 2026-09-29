@@ -72,12 +72,19 @@ async def test_a_waiting_agent_ends_its_turn_and_returns(world):
         describe="the agent to end its turn and wait",
         timeout=UNTIL_A_MODEL_ACTS,
     )
+    # What was said before the wait, so an answer given then cannot count as
+    # the agent coming back.
+    before = {str(m.get("id")) for m in await alice.messages_in(conversation, in_pod=pod)}
 
     # Then: nobody does anything, and it comes back anyway.
     async def has_answered() -> bool:
         messages = await alice.messages_in(conversation, in_pod=pod)
+        # `text`: a message's words are there. This read `content`, which the
+        # API never sends, so the scenario could not pass whatever the agent did.
         return any(
-            "checked again" in str(message.get("content") or "").lower()
+            str(message.get("id")) not in before
+            and message.get("role") == "assistant"
+            and "checked again" in str(message.get("text") or "").lower()
             for message in messages
         )
 

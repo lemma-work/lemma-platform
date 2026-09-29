@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pathlib import Path
 import typer
 from click import unstyle
 from types import SimpleNamespace
@@ -3957,3 +3958,19 @@ def test_init_says_when_the_picker_is_not_the_whole_list(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.stdout
     assert "more organizations" in " ".join(result.stderr.split())
+
+
+@pytest.mark.parametrize(
+    ("remote", "directory", "name"),
+    [
+        ("/me/", "/me", "report.pdf"),
+        ("/me/reports/", "/me/reports", "report.pdf"),
+        ("/pod/", "/", "report.pdf"),
+        ("/", "/", "report.pdf"),
+        ("/me/renamed.pdf", "/me", "renamed.pdf"),
+        (None, "/me", "report.pdf"),
+    ],
+)
+def test_an_upload_target_ending_in_a_slash_is_a_folder(remote, directory, name):
+    """`/me/` is the folder, not a file called `me` at the root."""
+    assert files._split_remote_target(Path("report.pdf"), remote) == (directory, name)

@@ -67,7 +67,7 @@ def _ensure_conversation(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).conversations.create_for_agent(
-            agent or "", title=title
+            agent, title=title
         ),
     )
     payload = to_plain(result)
