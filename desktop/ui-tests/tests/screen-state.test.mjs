@@ -187,6 +187,50 @@ test('an ordinary failure keeps Try again and nothing else', () => {
   assert.equal(screen.errorDetail, 'boom');
 });
 
+/**
+ * A VPN or DNS filter that blocks the VM while the Mac resolves fine used to
+ * reach this screen as "Something stopped." above "registry DNS lookup
+ * failed" -- true, and no help to anyone.
+ */
+test('a VM whose DNS is blocked says so, says what to do, and offers a retry', () => {
+  const raw = 'core.images failed: lookup registry-1.docker.io on 127.0.0.53:53: server misbehaving; registry DNS lookup failed';
+  const status = "Your Mac can reach the internet, but Lemma's VM can't look up names. A VPN or DNS " +
+    `filter such as Cloudflare WARP is likely blocking it. Pause it and press Try again, or allow Lemma's VM through it. (${raw})`;
+  const mac = deriveScreen({ error: true, errorCode: 'guest-dns-blocked', status }, {});
+  assert.equal(mac.headline, "Lemma's VM can't look up names.");
+  assert.match(mac.note, /^Your Mac can reach the internet/);
+  assert.match(mac.note, /Cloudflare WARP/);
+  assert.match(mac.note, /press Try again/);
+  assert.equal(mac.showRetry, true);
+  assert.equal(mac.showResetData, false);
+  // The note already says the sentence; the box keeps what the guest said.
+  assert.equal(mac.errorDetail, raw);
+  assert.equal(mac.logSource, 'vm');
+
+  const windows = deriveScreen({ error: true, errorCode: 'guest-dns-blocked', status }, { windows: true });
+  assert.match(windows.note, /^Your PC can reach the internet/);
+  assert.match(windows.note, /dnsTunneling/);
+  assert.doesNotMatch(windows.note, /Mac/);
+});
+
+test('a computer with no network is told that, not that a VPN is in the way', () => {
+  const screen = deriveScreen({
+    error: true,
+    errorCode: 'network-dns-failed',
+    status: "This computer can't reach the internet right now. Connect to a network, then press Try again. (registry DNS lookup failed)",
+  }, {});
+  assert.equal(screen.headline, "This computer isn't online.");
+  assert.match(screen.note, /can't reach the internet right now/);
+  assert.doesNotMatch(screen.note, /VPN/);
+  assert.equal(screen.showRetry, true);
+  assert.equal(screen.errorDetail, 'registry DNS lookup failed');
+  assert.equal(diagnosticSourceForState({ errorCode: 'network-dns-failed' }), 'vm');
+
+  // A status without the raw report on its end is shown whole.
+  const bare = deriveScreen({ error: true, errorCode: 'network-dns-failed', status: 'offline' }, {});
+  assert.equal(bare.errorDetail, 'offline');
+});
+
 test('an error with no status still says something', () => {
   assert.equal(deriveScreen({ error: true }, {}).errorDetail, 'startup failed');
 });

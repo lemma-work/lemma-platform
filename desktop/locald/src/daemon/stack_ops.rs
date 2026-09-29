@@ -76,7 +76,7 @@ impl Daemon {
                     }));
                 }
                 Err(error) => {
-                    let message = error.to_string();
+                    let message = super::dispatch::explain_runtime_failure(error.to_string());
                     let mut event = error_event(
                         runtime_operation_error_code(&message, "host-operation-failed"),
                         message.clone(),
@@ -156,7 +156,7 @@ impl Daemon {
                     }));
                 }
                 Err(error) => {
-                    let message = error.to_string();
+                    let message = super::dispatch::explain_runtime_failure(error.to_string());
                     daemon.broadcast(error_event(
                         runtime_operation_error_code(&message, "runtime-prepare-failed"),
                         message,

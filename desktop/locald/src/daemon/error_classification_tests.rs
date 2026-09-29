@@ -6,6 +6,7 @@
 
 use tempfile::tempdir;
 
+use super::dispatch::explain_dns_failure;
 use super::{error_diagnostic_source, runtime_operation_error_code};
 
 #[test]
@@ -115,6 +116,84 @@ fn startup_errors_select_the_relevant_diagnostic_log() {
     );
     assert_eq!(
         error_diagnostic_source("registry DNS lookup failed"),
+        ("infrastructure", "vm")
+    );
+}
+
+/// What guestd says when a pull could not resolve the registry.
+const GUEST_DNS: &str = "core.images failed: pull registry-1.docker.io/library/postgres: lookup \
+     registry-1.docker.io on 127.0.0.53:53: server misbehaving; registry DNS lookup failed: \
+     Lemma's VM could not look up registry-1.docker.io (asked 127.0.0.2, 192.168.64.1)";
+
+/// A guest that cannot resolve what this computer can is being blocked, most
+/// often by a VPN or DNS filter, and the person is told which.
+#[test]
+fn a_guest_dns_failure_this_computer_does_not_share_is_a_blocked_vm() {
+    let mac = explain_dns_failure(GUEST_DNS.to_owned(), false, || true);
+    assert!(
+        mac.starts_with("Your Mac can reach the internet, but Lemma's VM can't look up names."),
+        "{mac}"
+    );
+    assert!(mac.contains("Cloudflare WARP"), "{mac}");
+    assert!(mac.contains("press Try again"), "{mac}");
+    // The raw failure is kept, for the log and for support.
+    assert!(mac.ends_with(&format!("({GUEST_DNS})")), "{mac}");
+    assert_eq!(
+        runtime_operation_error_code(&mac, "host-operation-failed"),
+        "guest-dns-blocked"
+    );
+    assert_eq!(error_diagnostic_source(&mac), ("infrastructure", "vm"));
+
+    let windows = explain_dns_failure(GUEST_DNS.to_owned(), true, || true);
+    assert!(
+        windows.starts_with("Your PC can reach the internet"),
+        "{windows}"
+    );
+    assert!(windows.contains("dnsTunneling"), "{windows}");
+    assert!(!windows.contains("Mac"), "{windows}");
+    assert_eq!(
+        runtime_operation_error_code(&windows, "runtime-prepare-failed"),
+        "guest-dns-blocked"
+    );
+}
+
+/// When this computer cannot resolve the name either, the VM is not the
+/// problem, and saying "a VPN is blocking Lemma" would send somebody looking
+/// for one.
+#[test]
+fn a_dns_failure_this_computer_shares_is_no_network() {
+    for windows in [false, true] {
+        let offline = explain_dns_failure(GUEST_DNS.to_owned(), windows, || false);
+        assert!(
+            offline.starts_with("This computer can't reach the internet right now."),
+            "{offline}"
+        );
+        assert_eq!(
+            runtime_operation_error_code(&offline, "host-operation-failed"),
+            "network-dns-failed"
+        );
+        assert_eq!(error_diagnostic_source(&offline), ("infrastructure", "vm"));
+    }
+}
+
+/// Only a DNS failure costs a lookup on this computer, and a message is
+/// explained once however many times it passes through.
+#[test]
+fn other_failures_are_left_alone_and_nothing_is_explained_twice() {
+    let other = "backend health gate: timed out".to_owned();
+    let untouched = explain_dns_failure(other.clone(), false, || {
+        panic!("resolved a name for a failure that was not DNS")
+    });
+    assert_eq!(untouched, other);
+
+    let once = explain_dns_failure(GUEST_DNS.to_owned(), false, || true);
+    let twice = explain_dns_failure(once.clone(), false, || panic!("asked again"));
+    assert_eq!(twice, once);
+
+    // The guest's phrase alone, before any rewording, still opens the VM log,
+    // even when the raw text around it names the backend.
+    assert_eq!(
+        error_diagnostic_source(&format!("backend start: {GUEST_DNS}")),
         ("infrastructure", "vm")
     );
 }
