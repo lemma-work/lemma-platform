@@ -129,24 +129,24 @@ async def test_response_contains_exactly_one_normalized_request_id() -> None:
     assert ids == [b"ingress"]
 
 
-async def test_outdated_cli_is_told_the_minimum_version() -> None:
-    from app.version import MIN_CLI_VERSION
+async def test_older_cli_is_told_the_latest_release() -> None:
+    from app.version import API_VERSION
 
     _, headers = await _run([(b"x-lemma-client", b"lemma-cli/0.1.0")])
-    assert headers[b"x-lemma-client-outdated"] == MIN_CLI_VERSION.encode()
+    assert headers[b"x-lemma-latest-cli"] == API_VERSION.encode()
 
 
-async def test_current_cli_and_other_clients_get_no_outdated_header() -> None:
-    from app.version import MIN_CLI_VERSION
+async def test_current_cli_and_other_clients_get_no_latest_cli_header() -> None:
+    from app.version import API_VERSION
 
     for value in (
-        f"lemma-cli/{MIN_CLI_VERSION}".encode(),
+        f"lemma-cli/{API_VERSION}".encode(),
         b"lemma-cli/99.0.0",
         b"lemma-cli/not.a.version",
         b"lemma-sdk-py/0.1.0",
         b"lemma-web/0.1.0",
     ):
         _, headers = await _run([(b"x-lemma-client", value)])
-        assert b"x-lemma-client-outdated" not in headers, value
+        assert b"x-lemma-latest-cli" not in headers, value
     _, headers = await _run([])
-    assert b"x-lemma-client-outdated" not in headers
+    assert b"x-lemma-latest-cli" not in headers

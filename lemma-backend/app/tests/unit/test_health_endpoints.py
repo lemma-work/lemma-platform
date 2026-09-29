@@ -88,13 +88,14 @@ def test_liveness_states_the_api_version(client):
         assert client.get(path).json()["api_version"] == API_VERSION, path
 
 
-def test_liveness_states_min_cli_version_and_release(client, monkeypatch):
-    from app.version import MIN_CLI_VERSION
+def test_liveness_suggests_the_latest_cli_and_states_the_release(client, monkeypatch):
+    from app.version import API_VERSION
 
     monkeypatch.setattr(healthmod.settings, "release_sha", "a" * 40)
     for path in ("/health/live", "/livez", "/health"):
         body = client.get(path).json()
-        assert body["min_cli_version"] == MIN_CLI_VERSION, path
+        assert body["latest_cli_version"] == API_VERSION, path
+        assert "min_cli_version" not in body, path
         assert body["release"] == "a" * 40, path
 
 

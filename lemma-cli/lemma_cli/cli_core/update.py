@@ -2,22 +2,24 @@
 
 **What it checks against.** The server, not PyPI. Releases are mono-version
 (``RELEASING.md``): one tag publishes ``lemma-terminal``, ``lemma-sdk`` and the
-API together, so the ``api_version`` the server reports on ``/health`` — the
-same number ``lemma doctor`` already reads for skew — *is* the released version.
-Checking it adds no host the CLI was not already talking to, and no second
-opinion that can disagree with `doctor`.
+API together, so the release a server runs *is* the newest CLI it knows of. It
+says so two ways: ``/health`` reports it (``api_version``, the same number
+``lemma doctor`` reads for skew), and any response to a CLI older than that
+carries it in ``X-Lemma-Latest-CLI``, which the SDK records for us. Neither
+adds a host the CLI was not already talking to. The server only ever suggests;
+it never refuses an older CLI.
 
-**When it runs.** Never in front of a command. The check happens after the
-command has finished, on a daemon thread with a short timeout (telemetry's
-precedent, ``telemetry.py``), and all it does is record what it saw. The notice
-is printed on a *later* invocation from that stored result, so no command ever
+**When it runs.** Never in front of a command. The ``/health`` check happens
+after the command has finished, on a daemon thread with a short timeout
+(telemetry's precedent, ``telemetry.py``), and all it does is record what it
+saw. The notice is printed after the command too, from what was recorded or
+from the header the command's own requests brought back, so no command ever
 waits on the network to tell the user about an upgrade.
 
 **How loud it is.** One dim line on stderr — stderr because ``--output json``
-must stay pipeable — printed once per newly-released version, not once per day
-and not once per command. It is suppressed where `lemma update` could not act
-anyway (see ``install_kind``), because a hint that names a command that cannot
-work is worse than silence.
+must stay pipeable — at most once a day while an upgrade is available. It is
+suppressed where `lemma update` could not act anyway (see ``install_kind``),
+because a hint that names a command that cannot work is worse than silence.
 """
 
 from __future__ import annotations
@@ -33,10 +35,14 @@ from typing import Any, NamedTuple
 CONFIG_KEY = "update_check"
 _LAST_CHECKED = "last_checked"
 _LATEST_VERSION = "latest_version"
-_NOTIFIED_VERSION = "notified_version"
+_LAST_NOTIFIED = "last_notified"
 
 #: Check at most once a day. The version can only change when a release ships.
 CHECK_INTERVAL_SECONDS = 24 * 60 * 60
+
+#: Say it at most once a day: often enough that an upgrade is not forgotten,
+#: rarely enough that it is not noise on every command.
+NOTICE_INTERVAL_SECONDS = 24 * 60 * 60
 
 #: Same budget as telemetry: a CLI that pauses for a background HTTP call is a
 #: bug report, and this one runs after the command has already printed.
@@ -217,26 +223,46 @@ def maybe_check_in_background() -> None:
         return
 
 
+def _suggested_by_this_process() -> str | None:
+    """The release a response to this invocation suggested, if any."""
+    try:
+        from lemma_sdk.transport import suggested_cli_version
+
+        return suggested_cli_version()
+    except Exception:
+        return None
+
+
 def notify_if_available() -> None:
-    """Print the one-line notice, at most once per released version."""
+    """Print the one-line notice, at most once a day while one is due."""
     try:
         if not is_enabled():
             return
         from .versions import cli_version
 
+        current = cli_version()
         block = _read_block()
         latest = block.get(_LATEST_VERSION)
-        if not isinstance(latest, str) or not is_newer(latest, cli_version()):
+        if not isinstance(latest, str):
+            latest = None
+        suggested = _suggested_by_this_process()
+        if suggested and (latest is None or is_newer(suggested, latest)):
+            latest = suggested
+        if latest is None or not is_newer(latest, current):
             return
-        if block.get(_NOTIFIED_VERSION) == latest:
+        last = block.get(_LAST_NOTIFIED)
+        if (
+            isinstance(last, (int, float))
+            and (time.time() - last) < NOTICE_INTERVAL_SECONDS
+        ):
             return
         from .state import err_console
 
         err_console.print(
-            f"[dim]lemma {latest} is available (you have {cli_version()}). "
-            "Run [/dim][bold]lemma update[/bold][dim] to upgrade.[/dim]"
+            f"[dim]lemma {latest} is available (you have {current}) — run "
+            "[/dim][bold]lemma update[/bold]"
         )
-        _write_block({_NOTIFIED_VERSION: latest})
+        _write_block({_LAST_NOTIFIED: time.time(), _LATEST_VERSION: latest})
     except Exception:
         return
 

@@ -180,12 +180,10 @@ async def _delegated_context(deps: BaseAgentContext):
     """
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-    from app.modules.agent.tools.connectors.connector_access import (
-        build_delegated_context,
-    )
+    from app.modules.agent.tools.authority import tool_authorization_context
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        return await build_delegated_context(uow, deps)
+        return await tool_authorization_context(uow, deps)
 
 
 __all__ = ["SIGN_IN_TOOL_NAME", "sign_in_internal"]

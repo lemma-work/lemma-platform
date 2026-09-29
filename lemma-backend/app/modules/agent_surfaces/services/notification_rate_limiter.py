@@ -22,6 +22,7 @@ from uuid import UUID
 from redis.exceptions import RedisError
 
 from app.core.infrastructure.redis.client import get_redis
+from app.core.infrastructure.redis.counters import incr_with_ttl
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 
@@ -93,9 +94,7 @@ class NotificationRateLimiter:
         """
         client = self._redis or get_redis()
         try:
-            count = await client.incr(key)
-            if count == 1:
-                await client.expire(key, ttl)
+            count = await incr_with_ttl(client, key, ttl)
         except (RedisError, OSError) as exc:
             logger.warning(
                 "agent_surfaces.notification_rate_limiter.unavailable.degraded",

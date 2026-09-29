@@ -52,11 +52,91 @@ To iterate against a Lemma you are already running:
 cd tests/scenarios && uv run pytest --base-url http://localhost:8710
 ```
 
+## Where it runs
+
+One switch decides what the scenarios talk to:
+
+| | What it is | Sign-up scenarios | Use it for |
+|---|---|---|---|
+| `--stack local` (default) | This checkout's backend, as processes on this machine | run | Pull requests, writing a scenario |
+| `--stack compose` | `deploy/compose` from released images, gates off, removed afterwards | run | The images a deployment is about to run |
+| `--base-url URL` | Somebody's Lemma. Nothing is booted | skip — its gates are on | Dev, staging, a desktop install |
+
+Every scenario that signs a new person up is marked `open_signup` (and
+`world.new_person()` refuses to sign anybody up in one that is not). So one
+release can be proved on two targets at once: the sign-up journey on a
+throwaway stack, everything else on the deployment.
+
+```bash
+make scenarios-compose                          # everything, on a disposable stack
+make scenarios-split TARGET=https://api.lemma.example.com
+```
+
+`scenarios-split` is `--stack compose -m open_signup` followed by
+`--base-url TARGET -m "not open_signup"`, with both JUnit reports in
+`artifacts/`. Choose the compose images with `SCENARIOS_COMPOSE_VERSION`
+(a release) or `SCENARIOS_COMPOSE_MANIFEST` (a `lemma-local.json`), and replace
+just the backend with `SCENARIOS_BACKEND_IMAGE` — which is how a deployment's
+own image gets its sign-up scenarios. Sandbox images are not pulled unless
+`SCENARIOS_COMPOSE_SANDBOX=1`.
+
+**The images and the suite have to be the same version.** With neither setting,
+compose installs the latest *release*, and a suite checked out from `main`
+proves `main`'s promises against it: every behaviour changed since that release
+fails, correctly, and none of it is a regression. Point it at the images you
+mean — the ones a deployment is about to run — or run the suite from the
+release's own tag.
+
+## Extending the suite
+
+A deployment built on Lemma has promises of its own — lemma.work's billing is
+the first — and proves them with its own scenarios on this harness: the same
+`World`, the same cast, the same stacks. It does not copy the fixtures. It
+depends on this directory as a package and names the plugin:
+
+```toml
+# its pyproject.toml
+dependencies = ["lemma-scenarios"]
+[tool.uv.sources]
+lemma-scenarios = { path = "../../../lemma-platform/tests/scenarios", editable = true }
+```
+
+```python
+# its conftest.py
+pytest_plugins = ["harness.reporting", "harness.plugin", "my_suite.plugin"]
+```
+
+and implements whichever of the two hooks in
+[`harness/hookspecs.py`](harness/hookspecs.py) it needs:
+
+- **`pytest_scenarios_configure_stack(spec)`** — what a booted stack runs.
+  Point `spec.app`/`spec.worker`/`spec.python`/`spec.root` at its own
+  application, replace `spec.migrations`, add `spec.env`, start a stand-in
+  provider through `spec.sidecars`, leave addresses for its fixtures in
+  `spec.extras` (read back as `stack.extras`). A compose stack reads
+  `spec.images` instead.
+- **`pytest_scenarios_prepare_tenant(world, people, organizations, base_url)`**
+  — make the deployment able to hold the standing tenant, before any standing
+  pod is made. A deployment that caps pods per owner puts the two
+  organizations on a plan without the cap here; nobody else knows how.
+
+Provisioning a deployment by hand runs the same preparation:
+
+```bash
+uv run python -m harness.provision --base-url https://… --plugin my_suite.plugin
+```
+
+Its journeys follow [CONVENTIONS.md](CONVENTIONS.md) and the same guards; its
+promises live in its own `docs/product`.
+
 ## How it is put together
 
 | Piece | What it does |
 |---|---|
+| `harness/plugin.py` | The options, fixtures and hooks — this suite's `conftest.py` is one line naming it |
+| `harness/hookspecs.py` | What a suite built on this one may change |
 | `harness/stack.py` | Boots the system under test, using Docker Compose for disposable dependencies, and hands back a URL |
+| `harness/compose_stack.py` | `--stack compose`: a disposable install from released images |
 | `harness/environment.py` | Asks the target what it is configured to do, and whether this run may write to it |
 | `harness/tenant.py` | Who the standing cast are, and what they are to each other |
 | `harness/provision.py` | Builds that tenant on a deployment, or puts it back |

@@ -20,6 +20,7 @@ mod protocol;
 mod pull_progress;
 mod replacement;
 mod run_contract;
+mod runtime_overlay;
 mod sandbox_tunnel;
 
 use super::*;

@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 
-from sandbox_runtime.paths import HOME_ROOT
+from sandbox_runtime.paths import HOME_ROOT, RUNTIME_OVERLAY_ROOT
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxMount
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.docker_sizing import memory_bytes, nano_cpus
@@ -171,6 +171,8 @@ class DockerSandboxProvider(DockerOpsMixin):
         if spec.volume_name is not None:
             labels["workspace-storage-id"] = spec.volume_name
             binds.append(f"{spec.volume_name}:{HOME_ROOT}")
+            overlay = naming.runtime_volume_name(spec.volume_name)
+            binds.append(f"{overlay}:{RUNTIME_OVERLAY_ROOT}")
         binds.extend(_bind(mount) for mount in spec.mounts)
         return labels, binds
 
@@ -437,8 +439,10 @@ class DockerSandboxProvider(DockerOpsMixin):
         return created.name
 
     async def destroy_volume(self, name: str, *, deadline_at: datetime) -> None:
+        overlay = naming.runtime_volume_name(name)
         try:
             await self._engine.delete_volume(name, deadline_at=deadline_at)
+            await self._engine.delete_volume(overlay, deadline_at=deadline_at)
         except DockerEngineError as exc:
             raise ProviderRejected(str(exc)) from exc
 

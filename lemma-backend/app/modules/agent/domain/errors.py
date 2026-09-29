@@ -78,6 +78,21 @@ class UnknownApprovalError(AgentModuleError):
         super().__init__(message, code="UNKNOWN_APPROVAL", status_code=404)
 
 
+class ApprovalNotOwnedError(AgentModuleError):
+    """Only the person the agent works for may approve what it asked to do.
+
+    An approved call runs with the conversation owner's authority, so a
+    decision from anyone else -- a colleague in a shared channel typing
+    "approve" -- would lend authority that is not theirs to lend.
+    """
+
+    def __init__(
+        self,
+        message: str = "Only the person this agent is working for can approve this",
+    ):
+        super().__init__(message, code="APPROVAL_NOT_OWNED", status_code=403)
+
+
 class HarnessNotFoundError(AgentModuleError):
     """No harness is registered for the requested kind.
 

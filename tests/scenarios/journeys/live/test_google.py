@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 from harness.credentials import COMPOSIO, GOOGLE, needs
 
 pytestmark = [
@@ -42,6 +42,7 @@ CALENDAR_SCOPES = ("calendar", "userinfo.email")
 @scenario("A person is sent to Google with this deployment's own client and scopes")
 @proves("PS-CONN-011")
 @covers("connector.auth_config.create", "connector.connect_request.create")
+@open_signup
 async def test_the_google_connect_flow_is_configured(world):
     needs(GOOGLE)
     alice = await world.new_person("alice")
@@ -93,6 +94,7 @@ async def test_the_google_connect_flow_is_configured(world):
 @scenario("A deployment without Composio does not offer its toolkits")
 @proves("PS-CONN-001")
 @covers("connector.list")
+@open_signup
 async def test_the_catalogue_matches_what_is_configured(world):
     needs(COMPOSIO)
     alice = await world.new_person("alice")

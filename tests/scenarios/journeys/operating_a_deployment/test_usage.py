@@ -26,10 +26,11 @@ async def test_own_usage_is_readable(world):
     alice = await world.person("priya")
     organization = alice.organization
 
-    member = await world.person("hannah")
-    await member.accepts(
-        await alice.invites(member, to=organization, as_role="ORG_MEMBER")
-    )
+    # Somebody who is already a plain member, rather than an outsider invited
+    # in for the occasion. Inviting hannah left the suite's one outsider inside
+    # Vantage on every deployment it ran against, and the scenarios that need an
+    # outsider were then asking a member.
+    member = await world.person("sofia")
     mine = await member.own_usage_in(organization)
     assert mine is not None
     limits = await member.api.get(

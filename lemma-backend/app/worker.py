@@ -32,6 +32,16 @@ def main() -> None:
     except Exception:
         logger.error("worker.startup.failed", exc_info=True)
         raise SystemExit(1) from None
+    from app.core.infrastructure.jobs.lane_watchdog import (
+        FAIL_FAST_EXIT_CODE,
+        failed_fast,
+    )
+
+    if failed_fast():
+        # The shutdown was this process giving up, not being asked to stop. A
+        # zero status would read as a clean stop to a supervisor that only
+        # restarts failures.
+        raise SystemExit(FAIL_FAST_EXIT_CODE)
 
 
 if __name__ == "__main__":

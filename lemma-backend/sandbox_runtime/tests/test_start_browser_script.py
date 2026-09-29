@@ -52,8 +52,9 @@ def test_without_arguments_it_only_brings_the_display_up(tmp_path: Path) -> None
 
 def test_both_workspace_images_install_it() -> None:
     dockerfile = (BACKEND / "sandbox-images/Dockerfile.workspace").read_text()
-    assert f"COPY {SOURCE} /usr/local/bin/start-browser" in dockerfile
-    assert "/usr/local/bin/start-browser \\" in dockerfile, "not made executable"
+    assert f"COPY --chmod=0755 {SOURCE} /usr/local/bin/start-browser" in dockerfile, (
+        "not installed, or not made executable"
+    )
 
     builder = (BACKEND / "sandbox-images/templates/e2b/build_templates.py").read_text()
     assert f'"{SOURCE}",\n            "/usr/local/bin/start-browser",' in builder

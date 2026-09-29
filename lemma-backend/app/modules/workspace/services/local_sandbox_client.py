@@ -52,6 +52,7 @@ from app.modules.workspace.domain.sandbox import (
 )
 from app.modules.workspace.providers.base import ProviderInstance
 from app.modules.workspace.providers.profiles import FUNCTION_RUNTIME_PORT
+from app.modules.workspace.providers.runtime_client import RuntimeState
 from app.modules.workspace.services.port_access import PortAccessSigner, PortGrant
 from app.modules.workspace.services.local_sandbox_files import (
     LocalSandboxFilesMixin,
@@ -306,6 +307,21 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
             )
             for descriptor in running
         )
+
+    async def runtime_state(
+        self, workload_kind, logical_id: UUID
+    ) -> RuntimeState | None:
+        """What the sandbox's runtime is running, or None without an HTTP one.
+
+        None on a fabric whose sandboxes serve no runtime of their own (E2B, a
+        host sandbox): there is no server there to be stale.
+        """
+        del workload_kind
+        read = getattr(self._provider, "runtime_state", None)
+        if read is None:
+            return None
+        _, instance = await self._instance(logical_id)
+        return await read(instance, deadline_at=_deadline(30))
 
     @staticmethod
     def _process_id(logical_id: UUID, operation_id: UUID) -> str:

@@ -27,6 +27,22 @@ dependencies = [
     "telethon>=1.36",
 ]
 
+# Installable, so a suite built on this one depends on the harness rather than
+# reaching into this directory by path:
+#
+#     [tool.uv.sources]
+#     lemma-scenarios = { path = "../lemma-platform/tests/scenarios", editable = true }
+#
+# and names the plugin, `pytest_plugins = ["harness.plugin"]`. Editable, so it
+# is still the files in the tree that run. Only `harness` ships; the journeys
+# are this suite's own.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["harness"]
+
 [tool.pytest.ini_options]
 testpaths = ["journeys"]
 python_files = ["test_*.py"]
@@ -63,6 +79,8 @@ addopts = [
 # @pytest.mark.timeout(...) rather than here.
 timeout = 180
 
+# `open_signup`, `stack_lane` and `source_build` are registered by
+# harness/plugin.py, which acts on them, so a suite built on it has them too.
 markers = [
     "journey: the stretch of product this test belongs to",
     "capability: the coherent thing a person can do",
@@ -71,7 +89,6 @@ markers = [
     "covers: OpenAPI operation ids and analytics events exercised",
     "live: drives a real third party (Google, GitHub, Telegram, Composio) and needs credentials",
     "sandbox: needs a provisioned sandbox, so needs the workspace images built",
-    "stack_lane: needs a deployment configured to be broken in a particular way, so it can only run on one this suite booted",
 ]
 
 [tool.ruff]

@@ -318,7 +318,20 @@ impl Daemon {
     /// Both states here are terminal, because the workspace polls until it
     /// hears an answer that cannot change; silence left it asking every two
     /// seconds for the rest of the session.
+    ///
+    /// The exception is an update, for someone who has fetched the images
+    /// before: then this start fetches the new release's, behind the workspace,
+    /// so the download is not waiting for them at the next Wake up. See
+    /// `claim_unasked_sandbox_image_fetch`.
     pub(super) fn announce_sandbox_images(self: &Arc<Self>) {
+        if self
+            .managed_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.claim_unasked_sandbox_image_fetch())
+        {
+            self.warm_sandbox_images();
+            return;
+        }
         // Recorded as well as broadcast, so Settings -- which opens long after
         // this and reads the snapshot rather than the event -- is told the same
         // thing the workspace was.
@@ -353,6 +366,8 @@ impl Daemon {
                 "event": "sandbox-images",
                 "state": status.state,
                 "detail": status.detail,
+                "done_mb": status.done_mb,
+                "total_mb": status.total_mb,
             }));
         });
     }

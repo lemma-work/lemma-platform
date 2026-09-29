@@ -155,6 +155,33 @@ async def test_a_surface_holding_nothing_still_answers_from_settings(
     assert credentials["phone_number_id"] == "deployment-pn"
 
 
+async def test_the_worker_acts_on_a_message_with_the_number_it_arrived_on(
+    db_session, monkeypatch
+) -> None:
+    """Read receipts, typing and media downloads, with no surface row in hand.
+
+    The worker resolves credentials from the run's context alone, and the
+    platform lookup it uses ignored the pool: a message that came in on a
+    pooled number was marked read and had its media fetched with the settings
+    token, which belongs to another number.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "deployment-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "deployment-pn")
+    await _number(db_session, phone_number_id="pool-w", token="the-pools-token")
+    resolver = SurfaceCredentialResolver(uow=SqlAlchemyUnitOfWork(db_session))
+
+    pooled = await resolver.for_platform(
+        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on="pool-w"
+    )
+    unpooled = await resolver.for_platform(
+        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on="deployment-pn"
+    )
+
+    assert pooled["access_token"] == "the-pools-token"
+    assert pooled["phone_number_id"] == "pool-w"
+    assert unpooled["access_token"] == "deployment-token"
+
+
 async def test_a_number_whose_row_was_removed_keeps_the_surface_on_the_air(
     db_session, test_pod, monkeypatch
 ) -> None:

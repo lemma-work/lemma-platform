@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from datetime import datetime, timezone
 import struct
@@ -27,6 +28,7 @@ from sandbox_runtime.protocol import (
     TerminalSize,
 )
 from sandbox_runtime.workspace.models import (
+    RUNTIME_VERSION_HEADER,
     RuntimeCreatePythonSessionRequest,
     RuntimeExecutePythonRequest,
     RuntimeFileListResponse,
@@ -54,6 +56,19 @@ from app.modules.workspace.providers.runtime_errors import (  # noqa: E402
     WorkspaceRuntimeStartAmbiguous,
     WorkspaceRuntimeUnauthorized,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeState:
+    """What a workspace runtime is running, and whether anything depends on it.
+
+    `version` is None for a runtime that predates reporting one: unknown, not
+    stale.
+    """
+
+    version: str | None
+    running_processes: int
+    python_sessions: int
 
 
 class WorkspaceRuntimeClient:
@@ -96,6 +111,24 @@ class WorkspaceRuntimeClient:
     async def health(self, *, deadline_at: datetime) -> RuntimeHealthResponse:
         response = await self._request("GET", "/health", deadline_at=deadline_at)
         return RuntimeHealthResponse.model_validate(response.json())
+
+    async def runtime_state(self, *, deadline_at: datetime) -> RuntimeState:
+        """The running code's version, and the work a restart would end.
+
+        Processes are counted by state, not from the health payload: the
+        runtime keeps finished processes for their output, the installer that
+        just ran among them.
+        """
+        response = await self._request("GET", "/health", deadline_at=deadline_at)
+        health = RuntimeHealthResponse.model_validate(response.json())
+        processes = await self.list_processes(deadline_at=deadline_at)
+        return RuntimeState(
+            version=response.headers.get(RUNTIME_VERSION_HEADER) or None,
+            running_processes=sum(
+                1 for item in processes if item.state is ProcessState.RUNNING
+            ),
+            python_sessions=health.active_python_sessions,
+        )
 
     async def browser_targets(
         self, *, deadline_at: datetime

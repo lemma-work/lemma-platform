@@ -115,8 +115,7 @@ def patched(monkeypatch):
             return _AUTHORITY
 
         monkeypatch.setattr(
-            "app.modules.agent.tools.connectors.connector_access."
-            "build_delegated_context",
+            "app.modules.agent.tools.authority.tool_authorization_context",
             _authority,
         )
 

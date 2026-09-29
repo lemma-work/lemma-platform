@@ -234,10 +234,12 @@ async def test_execute_chat_holds_no_session_during_io(monkeypatch):
 
     # Stub credential resolution + auth so the short UoWs do no real DB work.
     class _StubResolver:
-        def __init__(self, *, uow) -> None:
+        def __init__(self, *, uow, pooled_numbers=None) -> None:
             pass
 
-        async def for_platform(self, platform, account_id, *, surface=None):
+        async def for_platform(
+            self, platform, account_id, *, surface=None, arrived_on=None
+        ):
             return {}
 
     monkeypatch.setattr(

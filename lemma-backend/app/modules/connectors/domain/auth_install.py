@@ -50,3 +50,8 @@ class ResolvedAuthInstall:
     # Brokered installs only: which Composio toolkit stands behind this
     # connector.
     composio_toolkit_slug: str | None = None
+    # Brokered installs only: whether Composio still holds credentials for that
+    # toolkit. Carried rather than checked at resolution, because resolving is
+    # also how an install is disconnected and deleted, and those have to keep
+    # working on an install whose toolkit Composio stopped managing.
+    composio_managed_auth: bool = True

@@ -33,6 +33,7 @@ SHELL := /bin/bash
         scenarios scenarios-all scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
         scenarios-standing-down \
         scenarios-deployment scenarios-provision scenarios-reset \
+        scenarios-compose scenarios-split \
         scenarios-desktop scenarios-desktop-provision \
         scenarios-record scenarios-replay \
         scenario-coverage scenarios-code-coverage \
@@ -420,6 +421,8 @@ help:
 	@echo "    make scenarios-live     scenarios against real Google, GitHub, Telegram"
 	@echo "    make scenarios-provision  build the standing tenant on a deployment"
 	@echo "    make scenarios-deployment run the suite against a deployment"
+	@echo "    make scenarios-compose  the suite on a disposable stack from released images"
+	@echo "    make scenarios-split TARGET=…  sign-up scenarios on a disposable stack, the rest on TARGET"
 	@echo "    make scenario-coverage  regenerate docs/product/coverage.md"
 	@echo "    make test-python        lemma-python SDK tests (non-integration)"
 	@echo ""
@@ -1732,6 +1735,40 @@ scenarios-deployment:
 	@echo "→ Product scenarios against $(TARGET)…"
 	@test -n "$(TARGET)" || { echo "set TARGET=https://your-lemma (or SCENARIOS_BASE_URL)"; exit 1; }
 	@cd $(SCENARIOS_DIR) && uv run pytest -q --base-url "$(TARGET)" --timeout=900
+
+# The suite on a disposable Lemma built from released images: deploy/compose
+# brought up with its sign-up gates off, driven, and removed with its volumes.
+# SCENARIOS_COMPOSE_VERSION or SCENARIOS_COMPOSE_MANIFEST choose the images;
+# SCENARIOS_BACKEND_IMAGE replaces just the backend. See
+# tests/scenarios/harness/compose_stack.py.
+scenarios-compose:
+	@echo "→ Product scenarios on a disposable Compose stack…"
+	@cd $(SCENARIOS_DIR) && uv run pytest -q --stack compose $(SCENARIOS_ARGS)
+
+# One release, two targets. A deployment keeps its sign-up gates on, so the
+# scenarios that sign somebody up (`open_signup`) run on a disposable Compose
+# stack instead, and everything else runs on TARGET. The `-m` repeats `not
+# sandbox and not live` because an explicit `-m` replaces the default one.
+# Both reports are kept, and read together.
+SPLIT_LANES := not sandbox and not live
+scenarios-split:
+	@test -n "$(TARGET)" || { echo "set TARGET=https://your-lemma (or SCENARIOS_BASE_URL)"; exit 1; }
+	@set +e; mkdir -p $(SCENARIOS_DIR)/artifacts; \
+	rm -f $(SCENARIOS_DIR)/artifacts/disposable-results.xml $(SCENARIOS_DIR)/artifacts/deployment-results.xml; \
+	echo "→ Sign-up scenarios on a disposable Compose stack…"; \
+	(cd $(SCENARIOS_DIR) && uv run pytest -q --stack compose -m "open_signup and $(SPLIT_LANES)" \
+	  --junitxml=artifacts/disposable-results.xml $(SCENARIOS_ARGS)); disposable=$$?; \
+	echo "→ Everything else against $(TARGET)…"; \
+	(cd $(SCENARIOS_DIR) && uv run pytest -q --base-url "$(TARGET)" -m "not open_signup and $(SPLIT_LANES)" \
+	  --junitxml=artifacts/deployment-results.xml $(SCENARIOS_ARGS)); deployment=$$?; \
+	for report in disposable-results.xml deployment-results.xml; do \
+	  test -f $(SCENARIOS_DIR)/artifacts/$$report || { echo "no $$report was written"; exit 1; }; \
+	done; \
+	python3 scripts/report_scenarios_to_slack.py $(SCENARIOS_DIR)/artifacts/disposable-results.xml \
+	  $(SCENARIOS_DIR)/artifacts/deployment-results.xml --lane split \
+	  --markdown-out $(SCENARIOS_DIR)/artifacts/report.md; \
+	echo "disposable stack exit=$$disposable, $(TARGET) exit=$$deployment"; \
+	test $$disposable -eq 0 -a $$deployment -eq 0
 
 # The suite against the Lemma Desktop install running on this machine.
 #

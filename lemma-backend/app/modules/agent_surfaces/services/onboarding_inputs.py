@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     OnboardingInputToken,
     PendingChatOnboarding,
 )
+from app.modules.agent_surfaces.services.credential_resolver import arrival_number
 from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     PrivateDeliveryUnavailable,
 )
@@ -126,10 +127,10 @@ async def _flow_id_for(
         if email_step
         else surface_settings.whatsapp_onboarding_code_flow_id
     )
-    arrived_on = destination.reply_target.get("phone_number_id")
+    arrived_on = arrival_number(destination)
     if platform is not SurfacePlatform.WHATSAPP or not arrived_on:
         return configured
-    number = await WhatsAppNumberRepository(uow).get_by_phone_number_id(str(arrived_on))
+    number = await WhatsAppNumberRepository(uow).get_by_phone_number_id(arrived_on)
     if number is None:
         return configured
     own = (

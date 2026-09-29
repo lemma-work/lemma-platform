@@ -55,18 +55,26 @@ async def pod_with_two_records(world, run):
             "not asked to."
         ),
     )
+    # What the instruction says, made true. A new agent holds no grants
+    # (PS-ACCESS-020), so without this even finding the row needs an approval,
+    # and these scenarios would be testing the grant model instead of what an
+    # approval does. Changing anything stays ungranted: that is what the
+    # approval is for.
+    await alice.replaces_agent_grants(
+        agent["name"],
+        grants=[
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table["name"],
+                "permission_ids": ["datastore.table.read", "datastore.record.read"],
+            }
+        ],
+        in_pod=pod,
+    )
     try:
         yield alice, pod, table, first, second, agent
     finally:
         await alice.deletes_pod(pod)
-
-
-def _delete(table: dict, record: dict) -> dict:
-    return {
-        "action": "delete",
-        "table_name": table["name"],
-        "record_id": str(record["id"]),
-    }
 
 
 async def _titles_in(person, table, pod) -> set[str]:
@@ -97,12 +105,22 @@ async def test_approving_runs_the_described_action(pod_with_two_records):
     # Every approval, not the first: an agent told to ask before it changes
     # anything asks before *each* thing, and how many that turns out to be is
     # the model's business rather than the product's.
-    await alice.answers_every_approval(conversation, allow=True, in_pod=pod)
+    asked = await alice.answers_every_approval(conversation, allow=True, in_pod=pod)
     await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
+    # Asked at all, first. An agent that asks in prose rather than with its
+    # approval tool pauses nothing, the loop above answers nothing, and the row
+    # is left alone — which read exactly like "approving did not run the action"
+    # while the scenario had never approved anything.
+    transcript = await alice.transcript_of(conversation, in_pod=pod)
+    assert asked >= 1, (
+        f"the agent never asked for approval, so there was nothing to approve:\n"
+        f"{transcript[-3000:]}"
+    )
     remaining = await _titles_in(alice, table, pod)
     assert remaining == {"second"}, (
-        f"approving deleted the wrong thing, or nothing: {remaining}"
+        f"approving deleted the wrong thing, or nothing: {remaining}\n"
+        f"{transcript[-3000:]}"
     )
 
 

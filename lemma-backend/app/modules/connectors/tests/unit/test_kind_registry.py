@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CREDENTIALS_REQUIRED,
     COMPOSIO_ORG_CUSTOM_REASON,
     COMPOSIO_SYSTEM_DEFAULT_REASON,
     AuthConfigSource,
@@ -378,3 +379,16 @@ class TestHttpDiscoveryWithoutASpec:
             spec=HttpKindSpec(),
         )
         assert await KindDispatcher(registry).discover(install, None) == []
+
+
+def test_the_unmanaged_refusal_names_the_oauth_app_to_bring():
+    """It said "supply the app's own credentials", which names neither kind.
+
+    What the org has to bring is an OAuth app's client ID and secret. And never
+    "needs an OAuth app": the frontend reads that phrase as the native case,
+    whose fix is different.
+    """
+    message = COMPOSIO_ORG_CREDENTIALS_REQUIRED.lower()
+    assert "oauth app" in message
+    assert "client id" in message and "client secret" in message
+    assert "needs an oauth app" not in message

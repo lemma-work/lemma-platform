@@ -39,6 +39,7 @@ from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.infrastructure.redis.counters import incr_with_ttl
 from app.modules.pod_bundle.domain.errors import BundleRateLimitExceededError
 
 logger = get_logger(__name__)
@@ -79,19 +80,15 @@ class BundleRateLimiter:
         """
         if limit <= 0:
             return
-        # Only an unknown count fails open. The TTL write used to share this
-        # block's early return, so an EXPIRE that failed after a successful INCR
-        # skipped the check entirely: the counter had answered, the caller was
-        # over the limit, and the guard let them through anyway. A key that
-        # misses its TTL only lingers — the day is in the key, so it is never
-        # read on another one.
+        # Only an unknown count fails open. The count and its expiry are one
+        # atomic script (`incr_with_ttl`), so there is no longer a half-written
+        # state -- an INCR that landed with an EXPIRE that did not -- for this
+        # guard to misread.
         count: int | None = None
         try:
             redis = await self._get_redis()
             key = self._key(operation, user_id)
-            count = await redis.incr(key)
-            if count == 1:
-                await redis.expire(key, _COUNTER_TTL_SECONDS)
+            count = await incr_with_ttl(redis, key, _COUNTER_TTL_SECONDS)
         except Exception:  # noqa: BLE001 — the cap is best-effort
             logger.warning(
                 "pod_bundle.rate_limiter.bundle_rate_limit_counter_unavailable.degraded",

@@ -78,8 +78,21 @@ class Run:
         return f"{what}_{uuid4().hex[:6]}{JOIN}{MARK}{self.id}"
 
     def made_this(self, name: str) -> bool:
-        """Did *this* run make it? What an assertion filters on."""
-        return name.endswith(f"{JOIN}{MARK}{self.id}")
+        """Did *this* run make it? What an assertion and the sweep filter on.
+
+        The same shape as `MADE_BY_A_RUN`, narrowed to this run's id. It used to
+        be a plain `endswith` on the join, so the end-of-run sweep — which asks
+        this, not the global pattern — never recognised an uploaded file
+        (`notes_…_scn7f3a1.txt`) or a slugified surface
+        (`resend-agent-…-scn7f3a1`), and only `make scenarios-reset` ever
+        cleared them.
+        """
+        return (
+            re.search(
+                rf"[{JOIN}-]{MARK}{re.escape(self.id)}(\.[A-Za-z0-9]{{1,8}})?$", name
+            )
+            is not None
+        )
 
     def mine(self, names: object) -> list[str]:
         """The names among these that this run made, in order."""

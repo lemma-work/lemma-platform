@@ -226,6 +226,52 @@ class OAuthWorkflowError(ConnectorValidationError):
         self.code = "OAUTH_FLOW_ERROR"
 
 
+#: What an OAuth token endpoint answers when the grant itself is gone -- revoked
+#: by the user, rotated out, or the app's credentials withdrawn (RFC 6749 5.2).
+#: None of these is an upstream outage, and retrying cannot help.
+REVOKED_GRANT_ERRORS: frozenset[str] = frozenset(
+    {"invalid_grant", "invalid_client", "unauthorized_client", "revoked"}
+)
+
+
+class ConnectorReauthRequiredError(ConnectorDomainError):
+    """The provider has withdrawn this account's grant; only reconnecting helps.
+
+    A 409 rather than `OAuthWorkflowError`'s 502: a 502 says the provider is
+    unwell and invites a retry, when the provider has answered clearly and the
+    fix is the person's -- sign in again. The account is marked
+    ``REAUTH_REQUIRED`` wherever this is raised with an account in hand, so the
+    connections page shows the same reconnect affordance the API asks for.
+
+    Raised by an auth provider without the ids, which it never holds, and
+    re-raised by the connector service with them.
+    """
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        account_id: object | None = None,
+        connector_id: str | None = None,
+    ):
+        details: dict[str, str] = {"reason": reason}
+        if account_id is not None:
+            details["account_id"] = str(account_id)
+        if connector_id:
+            details["connector_id"] = connector_id
+        subject = f"the {connector_id} account" if connector_id else "this account"
+        super().__init__(
+            message=(
+                f"Sign-in for {subject} has expired or was revoked. Reconnect "
+                "the account to keep using it."
+            ),
+            code="CONNECTOR_REAUTH_REQUIRED",
+            status_code=409,
+            details=details,
+        )
+        self.reason = reason
+
+
 class PodConnectorNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, alias: str):
         super().__init__(f"Pod connector '{alias}' not found")

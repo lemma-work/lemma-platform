@@ -52,6 +52,16 @@ class RuntimeTerminateRequest(StrictApiModel):
     grace_seconds: float = Field(default=5, ge=0, le=30)
 
 
+#: The response header `/health` names the running runtime version in.
+#:
+#: A header rather than a field because the body is `extra="forbid"` on both
+#: sides: a backend that predates the field would reject every health answer
+#: from a runtime that sent it -- a backend rolled back beside a sandbox that
+#: kept the newer overlay -- and read that as a runtime that never came up. An
+#: older runtime sends no header, which a newer backend reads as "unknown".
+RUNTIME_VERSION_HEADER = "X-Lemma-Runtime-Version"
+
+
 class RuntimeHealthResponse(StrictApiModel):
     status: str
     managed_processes: int = Field(ge=0)

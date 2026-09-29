@@ -205,7 +205,9 @@ async def test_an_agent_cannot_call_an_ungranted_connector(world, provider, run)
     await alice.connects_account(
         in_organization=organization,
         auth_config=auth_config,
-        credentials={"access_token": "alice-provider-token"},
+        credentials=await alice.credential_for(
+            auth_config, holding="alice-provider-token"
+        ),
     )
     pod = await alice.creates_a_pod(named=run.name("connectors"))
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["CONNECTORS"])

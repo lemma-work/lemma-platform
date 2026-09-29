@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import AsyncExitStack
 from datetime import datetime, timedelta, timezone
 import json
 from uuid import uuid4
@@ -13,6 +12,7 @@ from app.core.infrastructure.events.inbox import InboxConsumer
 from app.core.infrastructure.events.outbox import ClaimedEvent
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
+    _OpenClients,
     job_context_key,
 )
 from app.core.infrastructure.jobs.streaq_runtime import load_job_observability_context
@@ -101,7 +101,7 @@ class _Worker:
 
 def _connected_queue(worker: _Worker) -> SharedStreaqJobQueue:
     queue = SharedStreaqJobQueue(lambda: worker)  # type: ignore[arg-type]
-    queue._stack = AsyncExitStack()  # type: ignore[attr-defined]
+    queue._clients = _OpenClients(primary=worker, lanes={})  # type: ignore[arg-type]
     return queue
 
 
