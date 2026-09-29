@@ -24,3 +24,22 @@ test("the actual before-paint script restores chat size and isolates demo prefer
         assert.equal(dataset.chatTextSize, pathname === "/t" ? "large" : "small");
     }
 });
+
+test("the landing and its demo paint light before any script runs, whatever the app is set to", () => {
+    const layout = readFileSync(new URL("../src/app/layout.tsx", import.meta.url), "utf8");
+    const script = runInNewContext(layout.match(/const themeScript = (`[^`]+`);/)![1], { PREFIX: "lemma-app" }) as string;
+    const paint = (pathname: string, stored: Record<string, string>) => {
+        const dataset: Record<string, string> = {};
+        runInNewContext(script, { document: { documentElement: { dataset } }, location: { pathname }, localStorage: { getItem: (name: string) => stored[name] ?? null } });
+        return dataset.theme;
+    };
+    const appDark = { "lemma-app:theme": "dark" };
+    assert.equal(paint("/", appDark), "light");
+    assert.equal(paint("/demo/landing", appDark), "light");
+    assert.equal(paint("/demo/launch", {}), "light");
+    assert.equal(paint("/t", appDark), "dark");
+    assert.equal(paint("/t", {}), undefined);
+    // A choice made inside the demo is the demo's own, and "system" is honoured.
+    assert.equal(paint("/demo/landing", { "lemma-tour:theme": "dark" }), "dark");
+    assert.equal(paint("/demo/landing", { "lemma-tour:theme": "system" }), undefined);
+});

@@ -23,11 +23,13 @@ test("page transitions announce their purpose without implying a conversation ex
     }
 });
 
+// The landing demo is exempt: its sample conversation exists, so the
+// skeleton describes what is coming rather than promising a session.
 test("public and pre-session boundaries do not depend on the workspace skeleton", () => {
     for (const path of [
         "auth/portal.tsx", "app/auth/portal-host.tsx", "app/connect/page.tsx",
         "app/sign-in-to-site/sign-in-host.tsx", "app/t/workspace.tsx",
-        "session/session.tsx", "marketing/workspace-preview.tsx", "app/(marketing)/hero.tsx",
+        "session/session.tsx",
     ]) {
         const source = readFileSync(new URL("../src/" + path, import.meta.url), "utf8");
         assert.doesNotMatch(source, /WorkspaceLoading|workspace-loading/, path);

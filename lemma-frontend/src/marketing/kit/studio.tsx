@@ -1,8 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { approveAsset, blockers, editAsset, initialStudio, isDirty, saveAsset, type Asset, type AssetId, type Copy, type Studio } from "./model";
+import { useEffect, useRef, useState } from "react";
+import { readTourStep } from "../preview-mode";
+import { approveAsset, blockers, editAsset, initialStudio, isDirty, nextStep, saveAsset, type Asset, type AssetId, type Copy, type Studio } from "./model";
 import "./studio.css";
+
+function launchDate(date: string) {
+    if (!date) return "Date not set";
+    const day = new Date(date + "T00:00");
+    return Number.isNaN(day.getTime()) ? "Date not set" : "Target " + day.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
 
 const STORE = "lemma-demo:kit-studio:v1";
 const glyphs: Record<AssetId, string> = { landing: "▤", announcement: "✉", storyboard: "▷", story: "¶" };
@@ -25,7 +32,8 @@ function AssetCanvas({ asset, copy, anonymous, shot, setShot, narrow = false }: 
 export function KitStudio() {
     const [studio, setStudio] = useState<Studio>(restore);
     const [selected, setSelected] = useState<AssetId>("landing");
-    const [page, setPage] = useState<"assets" | "release">("assets");
+    const [page, setPage] = useState<"assets" | "release">("release");
+    const root = useRef<HTMLElement>(null);
     const [mode, setMode] = useState<"Preview" | "Edit copy" | "Compare">("Preview");
     const [mobile, setMobile] = useState(false);
     const [shot, setShot] = useState(0);
@@ -38,7 +46,20 @@ export function KitStudio() {
     const old = asset.versions.find(version => version.number === compare) ?? asset.versions[0];
     const problems = blockers(studio, asset);
     const ready = studio.assets.filter(item => item.review === "Approved" && blockers(studio, item).length === 0).length;
+    const upNext = studio.assets.find(item => item.review !== "Approved" && blockers(studio, item).length === 0) ?? studio.assets.find(item => item.review !== "Approved");
     useEffect(() => { try { sessionStorage.setItem(STORE, JSON.stringify(studio)); } catch { setStorageError(true); } }, [studio]);
+    /* The landing tour steps through the workspace this studio sits in. Each
+       step brings it back to its first screen; the visitor's edits and
+       reviews stay, only where they were looking is reset. */
+    useEffect(() => {
+        const listen = (event: MessageEvent) => {
+            if (event.origin !== window.location.origin || window.parent === window || event.source !== window.parent || readTourStep(event.data) === null) return;
+            setPage("release"); setSelected("landing"); setMode("Preview"); setMobile(false); setShot(0); setComment(""); setMessage(""); setCompare(2);
+            root.current?.scrollTo({ top: 0 });
+        };
+        window.addEventListener("message", listen);
+        return () => window.removeEventListener("message", listen);
+    }, []);
     function choose(id: AssetId) { setSelected(id); setPage("assets"); setMode("Preview"); setComment(""); setMessage(""); setCompare(2); }
     function update(patch: Partial<Copy>) { setStudio(previous => editAsset(previous, selected, patch)); setMessage(""); }
     function addComment(requestChanges = false) {
@@ -51,10 +72,32 @@ export function KitStudio() {
         const blob = new Blob([`${asset.name} · ${isDirty(asset) ? "Unsaved draft" : `v${revision.number}`}\n\n${asset.draft.title}\n\n${asset.draft.body}\n\n${asset.draft.cta}`], { type: "text/plain" });
         const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `acme-${asset.id}-${isDirty(asset) ? "draft" : `v${revision.number}`}.txt`; anchor.click(); URL.revokeObjectURL(url); setMessage("Draft exported.");
     }
-    return <main className="kit-studio">
-        <nav className="kit-viewnav" aria-label="Studio views"><button aria-pressed={page === "assets"} onClick={() => setPage("assets")}>Assets</button><button aria-pressed={page === "release"} onClick={() => setPage("release")}>Release plan <span>{ready}/4</span></button></nav>
+    return <main className="kit-studio" ref={root}>
+        <nav className="kit-viewnav" aria-label="Studio views"><button aria-pressed={page === "release"} onClick={() => setPage("release")}>Release plan <span>{ready}/4</span></button><button aria-pressed={page === "assets"} onClick={() => setPage("assets")}>Assets</button></nav>
         {storageError && <p className="kit-notice" role="status">Browser storage is unavailable. Your changes remain here until this page closes.</p>}
-        {page === "release" ? <div className="kit-release"><header><span className="kit-kicker">RELEASE PLAN</span><h1>Ready when the work is.</h1><p>{ready} of 4 current assets approved. {ready === 4 ? "The sample launch package is ready for handoff." : "Review the remaining assets before handing off the launch."}</p><label>Target launch date<input type="date" value={studio.date} onChange={event => setStudio(previous => ({ ...previous, date: event.target.value }))}/></label></header><div className="kit-release__rows">{studio.assets.map(item => <button key={item.id} onClick={() => choose(item.id)}><span className="kit-release__glyph">{glyphs[item.id]}</span><span><strong>{item.name}</strong><small>{blockers(studio, item).join(" ") || `${item.owner} · v${item.versions.at(-1)!.number}`}</small></span><span className={`kit-status ${item.review === "Approved" ? "kit-status--approved" : ""}`}>{item.review}</span><span>↗</span></button>)}</div><section className="kit-history"><h2>Review history</h2>{studio.activity.map((entry, index) => <p key={index}><span>{String(studio.activity.length - index).padStart(2, "0")}</span>{entry}</p>)}</section><footer>Local sample. Reviews do not publish assets or send messages.</footer></div> : <div className="kit-body">
+        {page === "release" ? <div className="kit-release">
+            <header className="kit-release__head">
+                <div><span className="kit-kicker">RELEASE PLAN</span><h1>Import flow launch</h1><p>{launchDate(studio.date)} · {ready} of 4 approved</p></div>
+                <div className="kit-release__actions"><label>Target date<input type="date" value={studio.date} onChange={event => setStudio(previous => ({ ...previous, date: event.target.value }))}/></label><button className="kit-primary" disabled={!upNext} onClick={() => upNext && choose(upNext.id)}>{upNext ? `Review ${upNext.name.toLowerCase()} →` : "✓ All approved"}</button></div>
+            </header>
+            <div className="kit-progress" role="img" aria-label={`${ready} of 4 assets approved`}>{studio.assets.map(item => <span key={item.id} data-done={item.review === "Approved" || undefined} />)}</div>
+            <div className="kit-table">
+                <div className="kit-table__head" aria-hidden="true"><span>ASSET</span><span>OWNER</span><span>REVISION</span><span>STATUS</span><span>NEXT STEP</span><span /></div>
+                {studio.assets.map(item => {
+                    const next = nextStep(studio, item);
+                    const notes = item.comments.filter(entry => !entry.resolved).length;
+                    return <button key={item.id} className="kit-row" onClick={() => choose(item.id)}>
+                        <span className="kit-row__asset"><span className={`kit-thumb kit-thumb--${item.id} kit-row__thumb`} aria-hidden="true">{glyphs[item.id]}</span><span><strong>{item.name}</strong><small>{item.format}</small></span></span>
+                        <span className="kit-row__owner"><i aria-hidden="true">{item.owner[0]}</i>{item.owner}</span>
+                        <span className="kit-row__rev">v{item.versions.at(-1)!.number}{notes > 0 && <small>{notes} open {notes === 1 ? "note" : "notes"}</small>}</span>
+                        <span><span className={`kit-status ${item.review === "Approved" ? "kit-status--approved" : item.review === "Changes requested" ? "kit-status--changes" : ""}`}>{item.review}</span></span>
+                        <span className="kit-row__next" data-blocked={next.blocked || undefined}>{next.text}</span>
+                        <span className="kit-row__go" aria-hidden="true">›</span>
+                    </button>;
+                })}
+            </div>
+            <section className="kit-history"><h2>Review history</h2>{studio.activity.map((entry, index) => <p key={index}><span>{String(studio.activity.length - index).padStart(2, "0")}</span>{entry}</p>)}</section><footer>Local sample. Reviews do not publish assets or send messages.</footer>
+        </div> : <div className="kit-body">
             <aside className="kit-assets"><div className="kit-assets__title">LAUNCH ASSETS <span>4</span></div>{studio.assets.map(item => <button key={item.id} className="kit-asset" aria-pressed={selected === item.id} onClick={() => choose(item.id)}><div className={`kit-thumb kit-thumb--${item.id}`}><span>{glyphs[item.id]}</span><small>{item.id === "landing" ? "YOUR FIRST IMPORT." : item.id === "announcement" ? "A NOTE FROM ACME" : item.id === "storyboard" ? "00:36" : "FIELD NOTES / 01"}</small></div><strong>{item.name}</strong><small>{item.review === "Approved" ? "✓ Approved" : item.review} · v{item.versions.at(-1)!.number}{isDirty(item) ? " · Edited" : ""}</small></button>)}<div className="kit-assets__date">TARGET RELEASE<br/><strong>{studio.date || "Date not set"}</strong></div></aside>
             <section className="kit-work"><header className="kit-work__head"><div><h1>{asset.name}</h1><small>{asset.format} · Owner: {asset.owner}</small></div><button onClick={exportDraft}>Export text ↗</button></header><div className="kit-toolbar"><div role="group" aria-label="Asset view">{(["Preview", "Edit copy", "Compare"] as const).map(value => <button key={value} aria-pressed={mode === value} onClick={() => setMode(value)}>{value}</button>)}</div>{asset.id === "landing" && mode !== "Compare" && <button aria-pressed={mobile} onClick={() => setMobile(value => !value)}>{mobile ? "Mobile · 375" : "Desktop"}</button>}<span>{isDirty(asset) ? "Unsaved changes" : `Saved · v${revision.number}`}</span></div>
                 {mode === "Edit copy" && <div className="kit-editor"><label>{asset.id === "announcement" ? "Subject" : "Headline"}<textarea rows={2} value={asset.draft.title} onChange={event => update({ title: event.target.value })}/></label><label>{asset.id === "storyboard" ? "Voiceover · one line per frame" : "Body copy"}<textarea rows={5} value={asset.draft.body} onChange={event => update({ body: event.target.value })}/></label><label>Call to action<input value={asset.draft.cta} onChange={event => update({ cta: event.target.value })}/></label><div><button className="kit-primary" disabled={!isDirty(asset)} onClick={() => { setStudio(previous => saveAsset(previous, selected)); setMessage("New revision saved. Ready for review."); }}>Save new revision</button><button disabled={!isDirty(asset)} onClick={() => { setStudio(previous => editAsset(previous, selected, revision.copy)); setMessage("Restored the last saved copy."); }}>Discard unsaved copy</button></div></div>}

@@ -23,6 +23,16 @@ The embedded hero opens on Conversation without a separate demo header, footer,
 or passive waiting summary below the composer. Keep the space for the workspace;
 full-screen access lives beside the tour steps.
 
+The embedded workspace takes the wheel only after a click. Until then a clear
+layer over it lets the page scroll, with a "Click to explore" hint on hover
+(always shown on touch). Once clicked, the frame is ringed; leaving it, clicking
+outside, or scrolling it mostly out of view hands scrolling back to the page.
+
+Touching the embedded workspace pauses the tour only for the current step.
+Scrolling into another step, or choosing one, restores that step's planned
+screen: conversation, tabs, dialogs, sidebar and the open app's first view.
+The workspace sidebar is open while hiring and collapsed for every later step.
+
 The four work examples follow Kit's Thursday launch: channel request, mobile
 follow-up, Launch studio review, and a scheduled readiness check. Messaging uses
 one phone-framed conversation; the surrounding copy names both supported channels.
