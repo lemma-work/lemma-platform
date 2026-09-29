@@ -168,11 +168,12 @@ decide without a container listing, skips any image a pull holds a claim on,
 and never passes `--force` to `rmi`, so the engine's own in-use refusal is a
 second guard. The next `sandbox.ensure` that needs a removed image pulls it.
 
-The sandbox images are fetched only when somebody asks (This Mac → Coding
-agents, `sandbox.prepare`), with one exception: an update. When this computer
-has fetched sandbox images before and the release pins different ones, locald
-fetches them after `ready`, behind the workspace, so the download is not
-waiting at the next Wake up. Once per release: `sandbox-images.json` in
+locald fetches the sandbox images after `ready`, behind the workspace, on the
+first start of an install and on the first start of a release whose images
+this computer does not have yet. Nearly every conversation needs the sandbox --
+the browser a coding agent drives runs in it too -- so the download is not
+left waiting at the first Wake up. This Mac → Coding agents (`sandbox.prepare`)
+fetches on demand as well. Once per release: `sandbox-images.json` in
 locald's state records the images last fetched and the ones last fetched
 unasked, written before the fetch starts, so a failure is offered in Settings
 rather than retried on every start. With the workspace image reused across
@@ -951,9 +952,54 @@ the guest's `lemma-service@<port>.socket` hands to `systemd-socket-proxyd` on
 the guest's loopback; guestd's control channel is vsock 42411; the backend
 reaches a sandbox's published ports through guestd's tunnel on vsock 42412
 (`sandbox_tunnel.rs`, `desktop_tunnel.py` in the backend); and the paired
-user's loopback relay comes back the other way on vsock 42413. None of these
-is a connection to a device on the local network, so none is subject to macOS
-Local Network privacy, which a background process cannot be prompted for.
+user's loopback relay comes back the other way on vsock 42413, and the
+guest's DNS queries on vsock 42414 (below). None of these is a connection to a
+device on the local network, so none is subject to macOS Local Network
+privacy, which a background process cannot be prompted for.
+
+### Guest DNS
+
+The guest has two name servers, both behind systemd-resolved's stub
+(`/etc/resolv.conf` links to `stub-resolv.conf`):
+
+1. **The host DNS relay**, resolved's global server
+   (`etc/systemd/resolved.conf.d/lemma.conf`, `DNS=127.0.0.2`). guestd's
+   `host_dns` listens on `127.0.0.2:53`, UDP and TCP, and forwards each query
+   over vsock 42414 to lemma-vz's `HostDNSBridge`, which answers it with
+   `DNSServiceQueryRecord` -- the Mac's own resolver, per-domain VPN
+   resolvers and local DNS proxies (Cloudflare WARP, Tailscale MagicDNS,
+   Zscaler) included.
+2. **The vmnet gateway**, which DHCP still supplies on the link
+   (`20-lemma.network`). vmnet forwards those queries itself, and when the
+   Mac's DNS is a loopback proxy that forwarding fails while the Mac resolves
+   the same names without trouble -- which is why the relay exists.
+
+resolved asks both and takes the first good answer, so a relay that is down,
+slow or answers SERVFAIL leaves the guest resolving exactly as it did through
+the gateway alone. No public resolver is configured, as a server or as a
+fallback: one would bypass split DNS and a company's DNS policy.
+
+On the wire, each query is one vsock stream framed as DNS over TCP: a two-byte
+big-endian length and the message, answered the same way, then closed. The
+bounds: a query is at most 4 KiB on both sides; lemma-vz serves at most 64
+queries at once, gives the stream two seconds each way and the Mac's resolver
+four seconds before answering SERVFAIL; guestd serves at most 64 queries per
+listener, gives the host five seconds, and answers SERVFAIL itself when the
+host does not. A UDP answer larger than the client advertised is truncated
+with TC set, so resolved retries over TCP. macOS follows CNAME chains itself,
+so the answer is returned under the name that was asked.
+
+Sandbox containers are in their own network namespaces and keep the gateway's
+DNS, which their firewall allows. WSL has no relay: `wsl.conf` has Windows
+generate `resolv.conf`, and DNS there is whatever Windows resolves (WSL's
+`dnsTunneling` is the setting that routes around a VPN).
+
+When an image pull fails on DNS, guestd says `registry DNS lookup failed`
+followed by the servers it asked and whether the relay could resolve the name.
+locald then resolves `registry-1.docker.io` on the host: if the host can, the
+error is `guest-dns-blocked` (a VPN or DNS filter is blocking the VM), and if
+it cannot, `network-dns-failed` (this computer is offline). The splash gives
+each its own headline and remedy, with the raw report in the error box.
 
 The guest still takes a DHCP lease from vmnet, and a sandbox's reported URL
 names that address -- the tunnel dials it from inside the guest. A guest with

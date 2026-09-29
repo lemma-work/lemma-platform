@@ -1,4 +1,5 @@
 use super::*;
+use std::net::ToSocketAddrs;
 
 impl Daemon {
     pub(super) fn dispatch(
@@ -263,9 +264,93 @@ impl Daemon {
     // shutdown.
 }
 
+/// What guestd says when an image pull failed because the registry's name did
+/// not resolve inside the guest.
+pub(super) const GUEST_DNS_FAILURE: &str = "registry DNS lookup failed";
+
+/// The phrase in `explain_dns_failure`'s wording for a guest whose lookups
+/// fail while this computer's succeed. Both platforms' sentences contain it.
+const GUEST_DNS_BLOCKED: &str = "Lemma's VM can't look up names";
+
+/// The phrase for a computer that cannot resolve the name either.
+const HOST_OFFLINE: &str = "can't reach the internet right now";
+
+/// The name every image pull starts with, and the one both sides are asked.
+const REGISTRY_HOST: &str = "registry-1.docker.io";
+
+/// A failed operation's message, reworded for a person when it was DNS.
+///
+/// guestd can only say that the guest could not resolve the registry. Whether
+/// that is a VPN or DNS filter standing between the VM and the network, or no
+/// network at all, is only knowable here: resolve the same name on this
+/// computer. The raw message stays on the end, for the log and for whoever is
+/// asked to read it.
+///
+/// The lookup runs on its own thread with a deadline: this is called while the
+/// operation still holds the lifecycle, and a resolver that hangs would keep
+/// every later operation answering `busy`. A lookup that does not finish in
+/// time is taken as this computer not resolving it either.
+pub(super) fn explain_runtime_failure(message: String) -> String {
+    explain_dns_failure(message, cfg!(windows), || {
+        host_resolves_within(REGISTRY_HOST, HOST_LOOKUP_DEADLINE)
+    })
+}
+
+/// How long the host's own lookup may take before it counts as a failure.
+const HOST_LOOKUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
+pub(super) fn host_resolves_within(host: &'static str, deadline: std::time::Duration) -> bool {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("lemma-dns-probe".into())
+        .spawn(move || {
+            let resolved = (host, 443)
+                .to_socket_addrs()
+                .is_ok_and(|mut addresses| addresses.next().is_some());
+            // The receiver is gone once the deadline passed; nothing to tell.
+            let _ = sender.send(resolved);
+        });
+    spawned.is_ok() && receiver.recv_timeout(deadline).unwrap_or(false)
+}
+
+pub(super) fn explain_dns_failure(
+    message: String,
+    windows: bool,
+    host_resolves: impl FnOnce() -> bool,
+) -> String {
+    let explained = message.contains(GUEST_DNS_BLOCKED) || message.contains(HOST_OFFLINE);
+    if !message.contains(GUEST_DNS_FAILURE) || explained {
+        return message;
+    }
+    let explanation = match (host_resolves(), windows) {
+        (true, false) => {
+            "Your Mac can reach the internet, but Lemma's VM can't look up names. A VPN \
+             or DNS filter such as Cloudflare WARP is likely blocking it. Pause it and \
+             press Try again, or allow Lemma's VM through it."
+        }
+        // WSL resolves through Windows, so the host relay is not involved;
+        // what is in the way is a VPN, and WSL's own DNS tunnelling is the
+        // setting that routes around it.
+        (true, true) => {
+            "Your PC can reach the internet, but Lemma's VM can't look up names. A VPN \
+             or DNS filter is likely blocking WSL. Pause it and press Try again, or set \
+             dnsTunneling=true under [wsl2] in your .wslconfig."
+        }
+        (false, _) => {
+            "This computer can't reach the internet right now. Connect to a network, \
+             then press Try again."
+        }
+    };
+    format!("{explanation} ({message})")
+}
+
 pub(super) fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'static str {
     if message.contains("Linux guest kernel crashed") {
         "guest-kernel-failed"
+    } else if message.contains(GUEST_DNS_BLOCKED) {
+        "guest-dns-blocked"
+    } else if message.contains(HOST_OFFLINE) {
+        "network-dns-failed"
     } else if message.contains("restart to finish enabling WSL 2") {
         "wsl-reboot-required"
     } else if message.contains("WSL 2 is required") {
@@ -300,7 +385,11 @@ pub(super) fn runtime_operation_error_code(message: &str, fallback: &'static str
 /// and nothing else can put them in the same room.
 pub fn error_diagnostic_source(message: &str) -> (&'static str, &'static str) {
     let message = message.to_ascii_lowercase();
-    if message.contains("guest kernel") {
+    // DNS first: the reworded message names neither the guest nor the
+    // registry, and the raw report on its end could mention anything.
+    let dns = message.contains(&GUEST_DNS_FAILURE.to_ascii_lowercase())
+        || message.contains("look up names");
+    if dns || message.contains("guest kernel") {
         ("infrastructure", "vm")
     } else if message.contains("migration") || message.contains("alembic") {
         ("migrations", "migrations")
