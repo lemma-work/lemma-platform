@@ -87,5 +87,5 @@ def test_the_lane_names_match_what_the_suite_actually_deselects() -> None:
     suite = REPO_ROOT / "tests" / "scenarios"
     selection = (suite / "pyproject.toml").read_text(encoding="utf-8")
     assert "not sandbox and not live" in selection
-    assert '"stack_lane"' in (suite / "conftest.py").read_text(encoding="utf-8")
+    assert '"stack_lane"' in (suite / "harness" / "plugin.py").read_text(encoding="utf-8")
     assert set(DESELECTED_LANES) == {"sandbox", "live", "stack_lane"}

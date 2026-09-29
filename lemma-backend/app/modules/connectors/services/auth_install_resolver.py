@@ -33,6 +33,7 @@ from app.modules.connectors.domain.auth_config import (
     COMPOSIO_ORG_CUSTOM_REASON,
     COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
     COMPOSIO_SYSTEM_DEFAULT_REASON,
+    SYSTEM_DEFAULT_OAUTH_NOT_CONFIGURED_REASON,
 )
 from app.modules.connectors.domain.errors import (
     ConnectorValidationError,
@@ -322,7 +323,8 @@ def validate_auth_config_request(
             raise ConnectorValidationError(
                 f"{_display_name(connector)} needs an OAuth app before "
                 "anyone can sign in to it. Register your organization's own app, "
-                "or ask whoever runs this server to add one."
+                "or ask whoever runs this server to add one.",
+                details={"reason": SYSTEM_DEFAULT_OAUTH_NOT_CONFIGURED_REASON},
             )
         return
 

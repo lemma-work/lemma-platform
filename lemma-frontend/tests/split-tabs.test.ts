@@ -1,6 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { layoutForTab } from "../src/shell/split-tabs.ts";
+import { layoutForTab, settleSheet } from "../src/shell/split-tabs.ts";
+
+test("a phone's sheet goes where a long drag or a flick was heading", () => {
+    assert.equal(settleSheet(false, 200, 0.1), true);
+    assert.equal(settleSheet(true, -200, -0.1), false);
+    assert.equal(settleSheet(false, 20, 0.9), true);
+    assert.equal(settleSheet(true, -20, -0.9), false);
+});
+
+test("a short, slow drag on the sheet is a change of mind", () => {
+    for (const peeked of [false, true]) {
+        assert.equal(settleSheet(peeked, 30, 0.1), peeked);
+        assert.equal(settleSheet(peeked, -30, -0.1), peeked);
+    }
+});
 
 test("every resource opens beside the conversation by default", () => {
     for (const tab of ["library", "file:brief.md", "table:tasks", "record:tasks:1", "computer", "history"]) {

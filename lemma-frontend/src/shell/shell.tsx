@@ -10,7 +10,7 @@ import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
 import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
-import { ExpandIcon, MinimizeIcon, ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, AppIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
+import { MinimizeIcon, ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, AppIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -58,6 +58,7 @@ import { ReconnectStrip } from "./reconnect-strip";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
 import { useVoiceConfigured } from "@/call/voice-config";
 import { PaneDivider } from "./pane-divider";
+import { RightPaneToolbar, usePhoneWidth } from "./pane-sheet";
 import { clampPaneWidth, layoutForTab } from "./split-tabs";
 import { AppFrameView } from "@/desktop/app-frame";
 
@@ -412,10 +413,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const layout = layoutForTab(activeTab?.id ?? "conversation", expanded,
         allTabs.some(tab => tab.id === origin) ? origin : "conversation");
     const rightTab = allTabs.find(tab => tab.id === layout.right);
+    /* On a phone the right pane is a sheet over the conversation, lowered to
+       its bar or raised. Kept per tab so opening a different resource, or
+       picking this one again, always brings it up. */
+    const phone = usePhoneWidth();
+    const bodyRef = useRef<HTMLDivElement>(null);
+    const [peekedTab, setPeekedTab] = useState<string | null>(null);
+    const sheetLowered = Boolean(phone && pod && rightTab && peekedTab === pod.id + "|" + rightTab.id);
     const isVisible = (id: string) => id === layout.main || id === layout.right;
     const paneProps = (id: string) => ({
         hidden: !isVisible(id),
         "data-side": id === layout.right ? "right" : "left",
+        inert: sheetLowered && id === layout.right,
     });
     const toggleExpanded = () => {
         if (pod && activeTab) setExpandedTab(expanded ? null : pod.id + "|" + activeTab.id);
@@ -431,6 +440,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             });
             setTabOrigins(previous => ({ ...previous, [pod.id + "|" + tab.id]: origin }));
             setExpandedTab(null);
+            setPeekedTab(null);
             setTabs(previous => ({ ...previous, [pod.id]: tab.id }));
         },
         [pod],
@@ -680,6 +690,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         (tabId: string) => {
             if (!pod) return;
             setExpandedTab(null);
+            setPeekedTab(null);
             setTabs((previous) => ({ ...previous, [pod.id]: tabId }));
         },
         [pod],
@@ -1027,8 +1038,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             <button
                                 className="head__faces"
                                 onClick={() => setAddingPeople((was) => !was)}
-                                title="People here"
-                                aria-label="People here"
+                                title="People with access"
+                                aria-label="People with access"
                             >
                                 {pod.members.slice(0, 4).map((member) => (
                                     <span
@@ -1135,17 +1146,20 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             {expanded && <button className="icon-button" title="Return to sidebar" aria-label="Return to sidebar" onClick={toggleExpanded}><MinimizeIcon size={18} /></button>}
                         </div>
 
-                        <div className={"body" + (rightTab ? " body--dual" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
+                        <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
                             {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
-                            {rightTab && <div className="right-pane-toolbar">
-                                <span>{rightTab.label}</span>
-                                <button className="icon-button" title="View in full" aria-label="View in full" onClick={toggleExpanded}><ExpandIcon size={17} /></button>
-                                <button className="icon-button" title="Close right pane" aria-label="Close right pane" onClick={() => {
+                            {rightTab && <RightPaneToolbar
+                                body={bodyRef}
+                                label={rightTab.label}
+                                peeked={sheetLowered}
+                                onPeek={lowered => setPeekedTab(lowered ? pod.id + "|" + rightTab.id : null)}
+                                onExpand={toggleExpanded}
+                                onClose={() => {
                                     const main = layout.main;
                                     pickTab(main);
                                     if (main !== "conversation") setExpandedTab(pod.id + "|" + main);
-                                }}><CloseIcon size={17} /></button>
-                            </div>}
+                                }}
+                            />}
                             {Object.entries(openedApps).map(([key, url]) => (
                                 <div className="pane app-pane" key={key} {...paneProps(key.startsWith(pod.id + "|") ? key.slice(pod.id.length + 1) : "")}>
                                 <AppFrameView
@@ -1273,6 +1287,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         setConversationId(null);
                                     }}
                                     onMessage={() => pickTab("conversation")}
+                                    onAddPeople={() => setAddingPeople(true)}
                                     onDiscussAgent={(name) => {
                                         void (async () => {
                                             const id = await discussion.open("agent", name);
@@ -1308,10 +1323,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
             {addingPeople && pod && (
                 <Modal
-                    title={"Add someone to " + pod.name}
+                    title={"People with access to " + pod.name}
                     onClose={() => setAddingPeople(false)}
                 >
-                    <AddPeople pod={pod} orgId={activeOrgId} onDone={() => setAddingPeople(false)} />
+                    <AddPeople pod={pod} orgId={activeOrgId} />
                 </Modal>
             )}
         </div>

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness import capability, covers, journey, proves, scenario
+from harness import capability, covers, journey, open_signup, proves, scenario
 from harness.credentials import needs
 from harness.environment import MODEL_IS_REAL, OPEN_SIGNUP
 from harness.steps.datastore import column
@@ -181,6 +181,7 @@ class TestModelProfiles:
     @scenario("Someone outside the organization cannot see its model profiles")
     @proves("PS-AGENT-004")
     @covers("agent.runtime.profiles.list")
+    @open_signup
     async def test_an_outsider_cannot_see_profiles(self, world, pod):
         alice, _the_pod = pod
         # Somebody in no organization at all, which is what this promise is

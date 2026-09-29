@@ -149,14 +149,24 @@ async def test_an_oauth_connector_needs_credentials(world):
         json={"connector_id": unconfigured[0], "name": a_name_for("no_creds")},
     )
 
-    assert response.status_code >= 400, (
+    assert response.status_code == 400, (
         f"installing {unconfigured[0]!r} answered {response.status_code}, but "
         f"the catalogue says it has no OAuth credentials behind it"
     )
-    body = response.text.lower()
-    assert "oauth" in body and "credential" in body, (
-        f"the refusal should name what is missing and what to do instead: "
-        f"{response.text[:300]}"
+    # The reason, not the sentence. Two paths refuse this — a native OAuth
+    # connector with no app behind it, and a Composio toolkit Composio holds no
+    # credentials for — and they are worded for a person, differently, and have
+    # both been reworded since this was first written. Matching words failed
+    # this scenario on a product that was right; the reason is the contract.
+    body = response.json()
+    assert body.get("code") == "CONNECTOR_VALIDATION_ERROR", response.text[:300]
+    assert (body.get("details") or {}).get("reason") in {
+        "system_default_oauth_not_configured",
+        "system_default_not_available_for_composio",
+    }, f"the refusal should say why in a way a client can read: {response.text[:300]}"
+    # And still tell the person what to do instead: supply their own.
+    assert "own" in str(body.get("message") or "").lower(), (
+        f"the refusal should say what to supply instead: {body.get('message')!r}"
     )
 
 
