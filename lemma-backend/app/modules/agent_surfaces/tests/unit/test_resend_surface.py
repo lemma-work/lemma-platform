@@ -808,7 +808,7 @@ def _starter_reading(monkeypatch, *, surface=None, repository=None, resolver):
 
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.turn_starter.SurfaceCredentialResolver",
-        lambda *, uow: resolver,
+        lambda *, uow, pooled_numbers=None: resolver,
     )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.turn_starter.SurfaceRepository",
@@ -857,6 +857,7 @@ async def test_an_email_reply_resolves_credentials_from_its_surface(monkeypatch)
         platform=SurfacePlatform.RESEND.value,
         surface_id=surface.id,
         surface_account_id=None,
+        event=None,
     )
 
     credentials = await starter._credentials_for(context)
@@ -879,6 +880,7 @@ async def test_chat_platforms_do_not_pay_for_an_extra_surface_read(monkeypatch):
         platform=SurfacePlatform.SLACK.value,
         surface_id=uuid4(),
         surface_account_id=None,
+        event=None,
     )
 
     await starter._credentials_for(context)

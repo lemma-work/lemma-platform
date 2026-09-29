@@ -2,11 +2,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional, Tuple
 from uuid import UUID
 
+from authlib.integrations.base_client import OAuthError
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
-from app.modules.connectors.domain.errors import ConnectorValidationError
+from app.modules.connectors.domain.errors import (
+    REVOKED_GRANT_ERRORS,
+    ConnectorReauthRequiredError,
+    ConnectorValidationError,
+)
 from app.modules.connectors.domain.ports import OAuthRedirectUriBuilderPort
 from app.modules.connectors.infrastructure.adapters.oauth_redirect_uri_builder import (
     OAuthRedirectUriBuilder,
@@ -169,10 +174,19 @@ class LemmaAuthProvider(AuthProviderInterface):
             client_secret=oauth_config.client_secret,
             token=credentials.raw_response,
         ) as oauth:
-            token_data = await oauth.refresh_token(
-                url=oauth_config.token_url,
-                refresh_token=credentials.refresh_token,
-            )
+            try:
+                token_data = await oauth.refresh_token(
+                    url=oauth_config.token_url,
+                    refresh_token=credentials.refresh_token,
+                )
+            except OAuthError as exc:
+                # authlib raises this only for an error the token endpoint
+                # *answered* with; a 5xx or a dropped connection is an httpx
+                # error and stays an upstream failure. Of the answers, only a
+                # withdrawn grant is the person's to fix.
+                if exc.error in REVOKED_GRANT_ERRORS:
+                    raise ConnectorReauthRequiredError(reason=exc.error) from exc
+                raise
 
         return await self._create_oauth_credentials(token_data, install)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
+from dataclasses import replace
 from decimal import Decimal
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -93,7 +94,7 @@ class MeteredModel(WrapperModel):
                     messages, model_settings, model_request_parameters
                 ) as dispatch:
                     response = await self.wrapped.request(
-                        messages, dispatch.settings, model_request_parameters
+                        messages, dispatch.settings, dispatch.parameters
                     )
                     dispatch.responded = True
                     if response.state == "complete":
@@ -123,7 +124,7 @@ class MeteredModel(WrapperModel):
                     async with self.wrapped.request_stream(
                         messages,
                         dispatch.settings,
-                        model_request_parameters,
+                        dispatch.parameters,
                         run_context,
                     ) as stream:
                         handed_to_consumer = True
@@ -171,17 +172,31 @@ class MeteredModel(WrapperModel):
         output_ceiling = (
             effective.get("max_tokens") or scope.settings.usage_request_output_ceiling
         )
-        _, prepared_parameters = self.wrapped.prepare_request(effective, parameters)
-        priceable = priceable_request(
-            messages,
-            prepared_parameters,
-            effective,
-            prices_images_as_text=pricing.prices_images_as_text,
-        ) and not _compound_billing(effective)
-        request_id, occurred_at, limited = await meter.before(priceable=priceable)
+
+        def priceable_as(candidate: ModelRequestParameters) -> bool:
+            _, prepared = self.wrapped.prepare_request(effective, candidate)
+            return priceable_request(
+                messages,
+                prepared,
+                effective,
+                prices_images_as_text=pricing.prices_images_as_text,
+            ) and not _compound_billing(effective)
+
+        priceable = priceable_as(parameters)
+        local_search = None if priceable else _with_local_tool_search(parameters)
+        if local_search is not None and not priceable_as(local_search):
+            local_search = None
+        # Admitted as the request it would be under a limit: the gateway only
+        # asks about priceability when one applies, and then it is the local
+        # shape that is sent.
+        request_id, occurred_at, limited = await meter.before(
+            priceable=priceable or local_search is not None
+        )
         if limited:
             effective["max_tokens"] = output_ceiling
-        dispatch = Dispatch(effective, request_id, occurred_at)
+            if local_search is not None:
+                parameters, priceable = local_search, True
+        dispatch = Dispatch(effective, request_id, occurred_at, parameters)
         try:
             yield dispatch
         except PROVIDER_ERRORS as exc:
@@ -198,11 +213,18 @@ class MeteredModel(WrapperModel):
 
 class Dispatch:
     def __init__(
-        self, settings: ModelSettings, request_id: UUID, occurred_at: datetime
+        self,
+        settings: ModelSettings,
+        request_id: UUID,
+        occurred_at: datetime,
+        parameters: ModelRequestParameters,
     ) -> None:
         self.settings = settings
         self.request_id = request_id
         self.occurred_at = occurred_at
+        #: What is sent, which a monetary limit can change -- see
+        #: `_with_local_tool_search`.
+        self.parameters = parameters
         self.usage: RequestUsage | None = None
         self.rejected = False
         self.responded = False
@@ -229,6 +251,38 @@ class Dispatch:
             counts=counts,
             cost=cost,
         )
+
+
+def _with_local_tool_search(
+    parameters: ModelRequestParameters,
+) -> ModelRequestParameters | None:
+    """This request with provider-native tool search left to the local fallback.
+
+    `None` when it carries no tool search that can be left out. Native tool
+    search is billed by the provider in a category the normalized receipt does
+    not report, so a request carrying it has no price and a monetary limit
+    would refuse it -- which refused every run of an agent with deferred tools
+    on Anthropic or OpenAI. The `ToolSearch` capability always adds a local
+    `search_tools` function beside the native tool, marked to be dropped when
+    the native one is sent; leaving out the native tool keeps the local one,
+    which costs ordinary tokens like any other tool call.
+
+    Only an *optional* tool search: that is the one the capability adds when it
+    may fall back. A named strategy is not optional and has no local
+    equivalent, so it stays and stays unpriceable, as it should. Matched by
+    `kind` because the tool's class is private to pydantic-ai.
+    """
+    kept = [
+        tool
+        for tool in parameters.native_tools
+        if not (tool.kind == _TOOL_SEARCH_KIND and tool.optional)
+    ]
+    if len(kept) == len(parameters.native_tools):
+        return None
+    return replace(parameters, native_tools=kept)
+
+
+_TOOL_SEARCH_KIND = "tool_search"
 
 
 def _compound_billing(settings: Mapping[str, object]) -> bool:

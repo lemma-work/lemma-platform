@@ -26,10 +26,11 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
-    WhatsAppNumberRepository,
+from app.modules.agent_surfaces.services.credential_resolver import (
+    SurfaceCredentialResolver,
+    arrival_number,
+    native_credentials,
 )
-from app.modules.agent_surfaces.services.credential_resolver import native_credentials
 from app.modules.agent_surfaces.services.onboarding_submissions import (
     parse_native_submission,
 )
@@ -205,9 +206,7 @@ async def _shared_transport(
         )
     ):
         return None
-    credentials = TypeAdapter(dict[str, JsonValue]).validate_python(
-        native_credentials(platform)
-    )
+    resolved = native_credentials(platform)
     if platform == SurfacePlatform.WHATSAPP:
         # Every pooled number is a system number and behaves like the one in
         # settings, so signup works on all of them. What the gate is actually
@@ -215,24 +214,23 @@ async def _shared_transport(
         # to answer that by comparing against the single configured one, and a
         # pool is the reason it no longer can.
         #
-        # The lookup matters for more than the gate: the reply has to go out
-        # from the number the person messaged. Handing the settings credentials
-        # to a signup that arrived on a pooled number would answer from a
-        # different number than the one they wrote to, which for a stranger
-        # being asked to trust us is the worst possible first impression.
-        arrived_on = parsed.reply_target.get("phone_number_id")
+        # The credentials come from the resolver every other inbound step asks,
+        # not from a merge of this module's own: the reply has to go out from
+        # the number the person messaged, and answering a stranger's signup
+        # from a different number than the one they wrote to is the worst
+        # possible first impression.
+        arrived_on = arrival_number(parsed)
         if not arrived_on:
             return None
-        if arrived_on != credentials.get("phone_number_id"):
-            async with uow_factory() as uow:
-                number = await WhatsAppNumberRepository(uow).get_by_phone_number_id(
-                    arrived_on
-                )
-            if number is None:
-                # Not a number this deployment owns. The signature check upstream
-                # proves Meta sent it; it does not prove it was meant for us.
-                return None
-            credentials = {**credentials, **number.credential_overrides()}
+        async with uow_factory() as uow:
+            resolved = await SurfaceCredentialResolver(uow=uow).for_platform(
+                platform, None, surface=None, arrived_on=arrived_on
+            )
+        if resolved.get("phone_number_id") != arrived_on:
+            # Neither the settings number nor a pool row. The signature check
+            # upstream proves Meta sent it; it does not prove it was meant for us.
+            return None
+    credentials = TypeAdapter(dict[str, JsonValue]).validate_python(resolved)
     return OnboardingTransport(
         parsed,
         None,

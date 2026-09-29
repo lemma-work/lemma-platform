@@ -21,11 +21,9 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-)
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent.tools.authority import tool_authorization_context
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
@@ -155,19 +153,8 @@ class SubAgentService:
         )
 
     async def _agent_ctx(self, uow, deps):
-        """Parent agent's delegated context (honors its agent.execute grant)."""
-        return await create_authorization_data_service(
-            uow
-        ).build_delegated_workload_context(
-            user_id=deps.user_id,
-            principal_type="AGENT",
-            principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
-            pod_id=deps.pod_id,
-            is_default_pod_agent=deps.is_pod_default_agent,
-            delegation_actor_name=deps.agent_name,
-            # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
-            delegation_session_id=str(deps.conversation_id),
-        )
+        """Parent agent's authorization context (honors its agent.execute grant)."""
+        return await tool_authorization_context(uow, deps)
 
     def _input_prompt(self, input_data: JsonObject | str) -> str:
         # A plain string is the sub-agent's task verbatim; a dict is structured

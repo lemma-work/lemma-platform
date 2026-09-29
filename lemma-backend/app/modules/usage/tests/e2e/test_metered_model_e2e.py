@@ -454,3 +454,67 @@ async def test_complete_response_without_provider_usage_is_not_reported_as_free(
             )
         ).one()
         assert counter.used_usd == 0
+
+
+async def test_an_agent_with_deferred_tools_runs_under_a_spend_limit(
+    db_manager: DatabaseManager, bounded_model_name: str
+) -> None:
+    """Native tool search has no price, so under a limit the search is local.
+
+    Against the real gateway: without the swap, the first request of the run
+    carries the provider's tool search, cannot be priced, and is refused
+    before the agent has done anything.
+    """
+    from pydantic_ai import Agent, Tool
+    from pydantic_ai.capabilities import ToolSearch
+    from pydantic_ai.messages import ToolCallPart
+
+    def get_weather(city: str) -> str:
+        """Today's weather in a city."""
+        return f"sunny in {city}"
+
+    native_kinds: list[list[str]] = []
+
+    async def provider(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        native_kinds.append(
+            [tool.kind for tool in info.model_request_parameters.native_tools]
+        )
+        if len(native_kinds) == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("search_tools", {"queries": ["weather"]})],
+                usage=RequestUsage(input_tokens=10, output_tokens=1),
+            )
+        return ModelResponse(
+            parts=[TextPart("done")],
+            usage=RequestUsage(input_tokens=10, output_tokens=1),
+        )
+
+    user_id = uuid4()
+    agent = Agent(
+        MeteredModel(
+            FunctionModel(provider),
+            {
+                "profile_id": "system:test",
+                "scope": "SYSTEM",
+                "model_name": bounded_model_name,
+            },
+        ),
+        tools=[Tool(get_weather, defer_loading=True)],
+        capabilities=[ToolSearch()],
+    )
+    async with metering_execution(
+        UsageExecutionContext(user_id=user_id, organization_id=None, pod_id=None),
+        factory=SessionUnitOfWorkFactory(db_manager.session_factory),
+    ):
+        result = await agent.run("what is the weather in Lisbon?")
+
+    assert result.output == "done"
+    assert native_kinds == [[], []], native_kinds
+    async with db_manager.session_factory() as session:
+        receipts = (
+            await session.scalars(
+                select(UsageRecord).where(UsageRecord.user_id == user_id)
+            )
+        ).all()
+    assert len(receipts) == 2
+    assert all(receipt.cost_amount is not None for receipt in receipts)

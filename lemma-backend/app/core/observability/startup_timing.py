@@ -25,13 +25,20 @@ logger = get_logger(__name__)
 # Lifespans in this process that froze the heap and have not released it.
 _frozen_holders = 0
 
+#: A startup step slower than this is reported as degraded. Every step is timed
+#: at info already; this is the line that says one of them should not be on the
+#: boot path at all -- the usual culprit being work that grows with data, which
+#: belongs in a migration or a worker job.
+SLOW_STEP_MS = 1000.0
+
 
 @asynccontextmanager
 async def startup_step(step: str, *, service: str) -> AsyncIterator[None]:
     """Log ``service.startup.step`` with the step's duration when it ends.
 
     Logged on failure too, with ``ok=False``: the step that raised is exactly
-    the one somebody reading a crash-looping boot needs to find.
+    the one somebody reading a crash-looping boot needs to find. A step over
+    ``SLOW_STEP_MS`` also logs ``service.startup.slow_step.degraded``.
     """
     started = time.monotonic()
     ok = False
@@ -39,13 +46,22 @@ async def startup_step(step: str, *, service: str) -> AsyncIterator[None]:
         yield
         ok = True
     finally:
+        duration_ms = round((time.monotonic() - started) * 1000, 1)
         logger.info(
             "service.startup.step",
             service=service,
             step=step,
             ok=ok,
-            duration_ms=round((time.monotonic() - started) * 1000, 1),
+            duration_ms=duration_ms,
         )
+        if duration_ms > SLOW_STEP_MS:
+            logger.warning(
+                "service.startup.slow_step.degraded",
+                service=service,
+                step=step,
+                duration_ms=duration_ms,
+                budget_ms=SLOW_STEP_MS,
+            )
 
 
 def finish_startup(boot_started: float) -> tuple[float, int]:
