@@ -1,7 +1,7 @@
 """Is this CLI out of date, and can it upgrade itself?
 
 **What it checks against.** The server, not PyPI. Releases are mono-version
-(``RELEASING.md``): one tag publishes ``lemma-terminal``, ``lemma-sdk`` and the
+(``docs/versioning.md``): one tag publishes ``lemma-terminal``, ``lemma-sdk`` and the
 API together, so the release a server runs *is* the newest CLI it knows of. It
 says so two ways: ``/health`` reports it (``api_version``, the same number
 ``lemma doctor`` reads for skew), and any response to a CLI older than that
@@ -392,11 +392,44 @@ def run_upgrade(version: str | None) -> dict[str, Any]:
             "error": detail or f"`{' '.join(command)}` exited {proc.returncode}.",
             "manual_command": manual_command(version),
         }
+    installed = _installed_tool_version(uv)
+    if not version and installed == current:
+        # The unpinned install succeeded and changed nothing: PyPI's newest is
+        # the one already here. That happens when a server suggests a release
+        # before its packages land, and it used to be reported as "upgraded".
+        return {
+            "ok": True,
+            "current": current,
+            "installed": installed,
+            "target": "latest",
+            "install": kind.kind,
+            "action": "no_newer_release",
+            "command": " ".join(command),
+        }
     return {
         "ok": True,
         "current": current,
+        "installed": installed,
         "target": version or "latest",
         "install": kind.kind,
         "action": "upgraded",
         "command": " ".join(command),
     }
+
+
+def _installed_tool_version(uv: str) -> str | None:
+    """The version of ``lemma-terminal`` uv now has installed, or None if unknown.
+
+    Asked of uv rather than of this process: this process is still running the
+    code it started with, whatever the install just replaced.
+    """
+    import re
+    import subprocess
+
+    proc = subprocess.run(
+        [uv, "tool", "list"], capture_output=True, text=True, check=False
+    )
+    if proc.returncode != 0:
+        return None
+    match = re.search(rf"(?m)^{re.escape(DISTRIBUTION)} v(\S+)", proc.stdout or "")
+    return match.group(1) if match else None

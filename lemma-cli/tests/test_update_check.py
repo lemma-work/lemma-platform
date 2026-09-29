@@ -346,27 +346,57 @@ def test_update_refuses_in_an_overlaid_image(monkeypatch, tmp_path):
     assert result.stdout == ""
 
 
-def test_update_runs_uv_tool_install(monkeypatch, tmp_path):
-    monkeypatch.setattr(update_mod, "install_kind", _updatable)
-    monkeypatch.setattr(update_mod, "_find_uv", lambda: "/usr/local/bin/uv")
-    calls: list[list[str]] = []
+def _uv_reporting(calls: list[list[str]], installed: str | None):
+    """A `subprocess.run` that records commands, and whose `uv tool list`
+    reports ``installed`` (or nothing, when None)."""
 
     class Completed:
         returncode = 0
-        stdout = ""
         stderr = ""
 
-    monkeypatch.setattr(
-        "subprocess.run", lambda command, **kw: (calls.append(command), Completed())[1]
-    )
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def run(command, **kw):
+        calls.append(command)
+        if command[1:3] == ["tool", "list"] and installed is not None:
+            return Completed(f"lemma-terminal v{installed}\n- lemma\n")
+        return Completed("")
+
+    return run
+
+
+@pytest.mark.parametrize(
+    ("installed", "action"),
+    [
+        (None, "upgraded"),
+        ("99.0.0", "upgraded"),
+        # A server can suggest a release minutes before its packages reach
+        # PyPI. The unpinned install then reinstalls this version, and that is
+        # not an upgrade.
+        ("current", "no_newer_release"),
+    ],
+)
+def test_update_runs_uv_tool_install_and_reports_the_result(
+    monkeypatch, tmp_path, installed, action
+):
+    if installed == "current":
+        installed = versions_mod.cli_version()
+    monkeypatch.setattr(update_mod, "install_kind", _updatable)
+    monkeypatch.setattr(update_mod, "_find_uv", lambda: "/usr/local/bin/uv")
+    calls: list[list[str]] = []
+    monkeypatch.setattr("subprocess.run", _uv_reporting(calls, installed))
 
     result = _invoke(["--json", "update"], tmp_path)
 
     assert result.exit_code == 0, result.output
     assert calls == [
-        ["/usr/local/bin/uv", "tool", "install", "--force", "lemma-terminal"]
+        ["/usr/local/bin/uv", "tool", "install", "--force", "lemma-terminal"],
+        ["/usr/local/bin/uv", "tool", "list"],
     ]
-    assert json.loads(result.stdout)["action"] == "upgraded"
+    payload = json.loads(result.stdout)
+    assert payload["action"] == action
+    assert payload["installed"] == installed
 
 
 def test_update_pins_an_explicit_version(monkeypatch, tmp_path):

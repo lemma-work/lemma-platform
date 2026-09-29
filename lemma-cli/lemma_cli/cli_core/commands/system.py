@@ -864,6 +864,12 @@ def run_update(ctx: typer.Context, *, version: str | None) -> None:
         return
     if result.get("action") == "already_current":
         console.print(f"[dim]already on {result['current']}; nothing to do.[/dim]")
+    elif result.get("action") == "no_newer_release":
+        console.print(
+            f"[dim]{result['current']} is still the newest lemma on PyPI. A new "
+            "release can be announced a few minutes before its packages land "
+            "— try again shortly.[/dim]"
+        )
     else:
         console.print(
             "[dim]Bundled skills are versioned with the CLI — re-run [/dim]"

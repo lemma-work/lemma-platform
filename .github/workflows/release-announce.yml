@@ -41,7 +41,8 @@ permissions:
 jobs:
   announce:
     name: Announce
-    timeout-minutes: 30
+    # Up to 45 minutes waiting for the release to finish landing, below.
+    timeout-minutes: 60
     # Only a real release. A failed run is the failure notifier's business, and
     # two messages for one event is how a channel stops being read. A
     # workflow_dispatch upstream is a re-run or a repair rather than a release,
@@ -81,7 +82,7 @@ jobs:
       # chosen by whatever that tag holds, rather than the reviewed one.
       #
       # Nothing is lost, because changelog entries accumulate here and are
-      # never removed: `lemma-harness/content/changelog/` on the default
+      # never removed: `lemma-frontend/content/changelog/` on the default
       # branch holds every past release, including the one being announced --
       # the release commit is what adds it. A version with no entry at all is
       # already reported as having none.
@@ -96,4 +97,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           VERSION: ${{ steps.resolve.outputs.version }}
         run: |
-          python3 scripts/report_release_to_slack.py "$VERSION" --wait-seconds 900
+          # 45 minutes: this starts when release-local-images finishes, which is
+          # also when it dispatches release-desktop, and the signed, notarized
+          # DMG and its update feed land about twenty minutes after that.
+          python3 scripts/report_release_to_slack.py "$VERSION" --wait-seconds 2700

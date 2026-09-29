@@ -253,7 +253,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    expected = args.expect.removeprefix("v").strip() if args.expect else None
+    # `is not None`, not truthiness: the release workflows pass `--expect
+    # "$RELEASE_VERSION"`, and when that expression resolved to nothing -- as it
+    # did on every v0.8.0 tag push -- an empty --expect read as "no tag given"
+    # and the gate passed the release it was meant to check.
+    expected = args.expect.removeprefix("v").strip() if args.expect is not None else None
     if expected is not None and not SEMVER.fullmatch(expected):
         print(f"error: --expect {args.expect!r} is not a semver version", file=sys.stderr)
         return 2
