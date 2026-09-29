@@ -246,6 +246,9 @@ class NotificationRepository:
         a workflow form is owed to its run, and resuming it is the workflow
         engine's job, not a waiting conversation's.
 
+        Only asks count: a notification sent with ``expects_response=False`` is
+        not something this conversation is owed.
+
         EXPIRED and CANCELLED count as settled, deliberately. They are not
         answers, but they are no longer outstanding, and an asker held asleep by
         a question nobody will ever answer is the worse failure.
@@ -257,6 +260,10 @@ class NotificationRepository:
                 NotificationModel.origin_kind == NotificationOriginKind.AGENT_RUN.value,
                 NotificationModel.origin_conversation_id == conversation_id,
                 NotificationModel.status == NotificationStatus.OPEN.value,
+                # An FYI is never answered -- `respond` refuses it -- and stays
+                # OPEN until its deadline. Counted, it keeps the asker asleep
+                # behind a message that asked for nothing.
+                NotificationModel.expects_response.is_(True),
             )
         )
         return int(result.scalar_one())

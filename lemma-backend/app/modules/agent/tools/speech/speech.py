@@ -216,7 +216,9 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool | None:
 
         # Attached to the reply rather than sent as a second one: a surface that
         # gets one message gets one message, audio included.
-        return await hold_display_for_one_reply(conversation_id, path)
+        return await hold_display_for_one_reply(
+            conversation_id, path, getattr(deps, "agent_run_id", None)
+        )
     if not platform_supports_chat_delivery(platform):
         return None
     from app.modules.agent_surfaces.contracts.egress import deliver_voice_note

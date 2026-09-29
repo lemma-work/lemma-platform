@@ -14,6 +14,7 @@ from app.modules.agent.contracts import Conversation
 from app.modules.agent.contracts import (
     AgentEvent,
 )
+from app.modules.agent_surfaces.services.pending_envelope import RunFiles
 from app.modules.agent_surfaces.services.progress_events import _surface_platform
 
 logger = get_logger(__name__)
@@ -21,6 +22,9 @@ logger = get_logger(__name__)
 
 class ProgressWaitingMixin:
     """Split out of :class:`SurfaceAgentRunProgressObserver`; see the module docstring."""
+
+    #: Whose held files the prompts it sends carry; set by the observer.
+    _run_files: RunFiles
 
     async def _handle_waiting_event(
         self,
@@ -107,6 +111,7 @@ class ProgressWaitingMixin:
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
                         narration=narration,
+                        attach_files_of=self._run_files,
                     )
                 elif kind == "browser_sign_in":
                     # A link, not buttons. A sign-in is not a yes/no: the person
@@ -123,6 +128,7 @@ class ProgressWaitingMixin:
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
                         narration=narration,
+                        attach_files_of=self._run_files,
                     )
             except Exception:
                 # Said out loud: this used to give the key back and log nothing,

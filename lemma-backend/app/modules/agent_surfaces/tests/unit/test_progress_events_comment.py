@@ -50,3 +50,16 @@ def test_a_comment_that_is_all_reasoning_yields_no_update() -> None:
     assert (
         _progress_text_from_event(_call({"comment": "<think>secret</think>"})) is None
     )
+
+
+def test_a_credential_quoted_in_the_comment_is_not_streamed_to_the_chat() -> None:
+    # Assembled from pieces so no line reads as a real credential.
+    secret = "not-a" + "-real-" + "value" + "-9f3"
+
+    shown = _progress_text_from_event(
+        _call({"comment": "Running curl with --token " + secret + " against the API"})
+    )
+
+    assert shown is not None
+    assert secret not in shown
+    assert "Running curl" in shown

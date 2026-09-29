@@ -22,15 +22,20 @@ from typing import Any
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.domain.uow import IUnitOfWork
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
+from app.modules.agent_surfaces.domain.notification import (
+    NotificationDeliveryStatus,
+    NotificationStatus,
+)
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceConversationLinkModel,
+    NotificationModel,
 )
 
 
@@ -372,12 +377,55 @@ class SurfaceConversationLinkRepository:
         await self.session.flush()
         return model.to_entity()
 
+    async def conversation_holds_notification(
+        self,
+        conversation_id: UUID,
+        *,
+        delivered_since: datetime | None = None,
+    ) -> bool:
+        """Is this conversation where a notification's answer is expected?
+
+        Two things make it so. A notification that asked a question and is still
+        open, however old: the recipient's agent is only told which request a
+        reply answers (and given the id to record it against) through the
+        conversation the request was delivered into, so a reply that lands
+        anywhere else can never close it. And, when ``delivered_since`` is given,
+        any notification delivered into it since then -- a report or a reminder
+        the person answers with "yes" has to be read against the thing it
+        answers.
+
+        Read from the notification's own delivery columns rather than from the
+        conversation's messages: the message is written before the send and the
+        row afterwards, so only the row says the person was actually reached.
+        Answered by ``ix_notifications_delivery_conversation``.
+        """
+        reasons = [
+            and_(
+                NotificationModel.status == NotificationStatus.OPEN.value,
+                NotificationModel.expects_response.is_(True),
+            )
+        ]
+        if delivered_since is not None:
+            reasons.append(NotificationModel.delivered_at >= delivered_since)
+        stmt = (
+            select(NotificationModel.id)
+            .where(
+                NotificationModel.delivery_conversation_id == conversation_id,
+                NotificationModel.delivery_status
+                == NotificationDeliveryStatus.DELIVERED.value,
+                or_(*reasons),
+            )
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).first() is not None
+
     async def repoint_conversation_for_outbound(
         self,
         *,
         link_id: UUID,
         conversation_id: UUID,
         expected_conversation_id: UUID,
+        routed_agent_id: UUID | None = None,
     ) -> AgentSurfaceConversationLink | None:
         """Point a thread at a newly opened conversation, without faking inbound.
 
@@ -392,11 +440,20 @@ class SurfaceConversationLinkRepository:
         stealing it back would split one thread across two conversations. Losing
         that race returns None and the caller delivers into the conversation the
         inbound created.
+
+        ``routed_agent_id`` is the agent the new conversation was opened under.
+        The link carries the agent its conversation belongs to, and the reply is
+        routed to the surface's *current* agent: left at whatever the previous
+        conversation had, the two disagree for a surface whose agent was changed
+        since, and the reply is cut into a fresh conversation the notification
+        never reached.
         """
         model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
         if model is None or model.conversation_id != expected_conversation_id:
             return None
         model.conversation_id = conversation_id
+        if routed_agent_id is not None:
+            model.routed_agent_id = routed_agent_id
         await self.session.flush()
         return model.to_entity()
 

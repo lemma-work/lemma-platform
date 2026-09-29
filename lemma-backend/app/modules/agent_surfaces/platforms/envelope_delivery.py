@@ -295,12 +295,20 @@ class EnvelopeDeliveryMixin:
         plan = envelope.choices
         assert plan is not None
         try:
-            if await self._render_choices(
+            rendered = await self._render_choices(
                 credentials=credentials,
                 event=event,
                 question_plan=plan,
                 metadata=metadata,
-            ):
+            )
+            if rendered is PartDelivery.DEGRADED:
+                # Some questions are buttons and the rest were already sent as
+                # words. Reporting NATIVE here is what left the run waiting on
+                # an answer nothing was armed to accept: the receipt is where
+                # "the person has words to answer, not only buttons" is
+                # recorded, so a typed reply resolves the pause.
+                return PartDelivery.DEGRADED
+            if rendered:
                 return PartDelivery.NATIVE
         except PLATFORM_TRANSPORT_ERRORS:
             # A warning with the traceback: the text fallback below usually

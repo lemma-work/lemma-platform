@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.services.progress_display import (
     ProgressDisplayMixin,
 )
 from app.modules.agent_surfaces.services.pending_envelope import (
+    RunFiles,
     discard_display_paths,
 )
 from app.modules.agent_surfaces.services.progress_plan import (
@@ -118,6 +119,12 @@ class SurfaceAgentRunProgressObserver(
         self._buffered_text: str | None = None
         self._reset_text_on_next = False
         self._final_delivered = False
+        # The reply was attempted and did not go out. The run's held files stay
+        # for the retry of that reply instead of being discarded with the run.
+        self._final_send_failed = False
+        # Whose held files this observer's replies carry; set from the run's
+        # context, which is the only place the run's id is known.
+        self._run_files = RunFiles(None)
         self._run_errored = False
         self._run_error_text: str | None = None
         self._error_delivered = False
@@ -156,7 +163,7 @@ class SurfaceAgentRunProgressObserver(
         conversation: Conversation,
         ctx: ConversationContext,
     ) -> None:
-        del ctx
+        self._run_files = RunFiles(ctx.agent_run_id)
         self._run_started_at = time.monotonic()
         platform = _surface_platform(conversation)
         if platform is None:
@@ -188,7 +195,7 @@ class SurfaceAgentRunProgressObserver(
         conversation: Conversation,
         ctx: ConversationContext,
     ) -> None:
-        del ctx
+        self._run_files = RunFiles(ctx.agent_run_id)
         if event.type in {AgentEventType.ERROR, AgentEventType.REJECTED}:
             self._run_errored = True
             self._run_error_text = _safe_run_error_text(event)
@@ -325,7 +332,7 @@ class SurfaceAgentRunProgressObserver(
         conversation: Conversation,
         ctx: ConversationContext,
     ) -> None:
-        del ctx
+        self._run_files = RunFiles(ctx.agent_run_id)
         task = self._typing_task
         self._typing_task = None
         if task is not None:
@@ -349,9 +356,13 @@ class SurfaceAgentRunProgressObserver(
         if not finished:
             await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)
-        # Anything display_resource held for a single reply belongs to this run.
-        # Left behind, it would attach itself to whatever reply came next.
-        await discard_display_paths(conversation.id)
+        # Anything display_resource held for a single reply belongs to this run,
+        # and is released with the reply that carried it. It is discarded here
+        # only when nothing is left to recover: a reply that failed to send keeps
+        # its files, under this run's key, for the retry of that same reply --
+        # no other run reads them, and they expire on their own.
+        if not self._final_send_failed:
+            await discard_display_paths(conversation.id, self._run_files)
 
     async def on_run_failed(
         self,
@@ -379,7 +390,7 @@ class SurfaceAgentRunProgressObserver(
         # to this run. A run that died still held it, and the entry outlived the
         # run -- attaching itself to whatever reply came next, or to nothing at
         # all while the process kept the bytes.
-        await discard_display_paths(conversation.id)
+        await discard_display_paths(conversation.id, self._run_files)
 
     async def _deliver_final_answer(self, conversation: Conversation) -> None:
         """Deliver the single final answer once the run has finished.
@@ -428,10 +439,12 @@ class SurfaceAgentRunProgressObserver(
                 conversation_id=str(conversation.id),
                 exc_info=True,
             )
+            self._final_send_failed = True
             return
         if delivered:
             self._final_delivered = True
         else:
+            self._final_send_failed = True
             # The send path says why -- no surface link, a platform refusal --
             # so this only records that the answer did not go out.
             logger.debug(
@@ -458,6 +471,7 @@ class SurfaceAgentRunProgressObserver(
                     or "I couldn’t finish that request. You can try it again."
                 ),
                 metadata={"retry_action": True},
+                carries_files=False,
             )
         except Exception:
             logger.warning(
@@ -518,6 +532,7 @@ class SurfaceAgentRunProgressObserver(
         conversation_id,
         message: str,
         metadata: dict[str, Any] | None = None,
+        carries_files: bool = True,
     ) -> bool:
         async with self.uow_factory() as uow:
             service = self.egress_factory(uow)
@@ -525,6 +540,10 @@ class SurfaceAgentRunProgressObserver(
                 "conversation_id": conversation_id,
                 "message": message,
             }
+            if carries_files:
+                # This run's reply, so it is the only one that carries this
+                # run's files. A failure notice is not that reply.
+                kwargs["attach_files_of"] = self._run_files
             if metadata:
                 kwargs["metadata"] = metadata
             return await service.send_agent_message_for_conversation(**kwargs)

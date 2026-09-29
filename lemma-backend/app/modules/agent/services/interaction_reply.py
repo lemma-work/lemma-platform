@@ -15,6 +15,7 @@ Pure functions over the persisted tool args, no I/O.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -197,34 +198,67 @@ def _ask_user_questions(tool_args: object) -> list[AskUserQuestion] | None:
         return None
 
 
+def _answer_for_question(text: str, question: AskUserQuestion) -> str:
+    """One question's answer from one typed piece: an option number or label, else the words."""
+    options = getattr(question, "options", None) or []
+    stripped = text.strip()
+    # Number → option by 1-based index
+    if stripped.isdigit():
+        idx = int(stripped) - 1
+        if 0 <= idx < len(options):
+            return options[idx].label
+    # Case-insensitive label match
+    lower = stripped.lower()
+    for opt in options:
+        if (getattr(opt, "label", "") or "").lower() == lower:
+            return opt.label
+    # Free-form Other
+    return stripped
+
+
+_LIST_NUMBERING = re.compile(r"^\s*\d+\s*[.)]\s+")
+
+
+def _one_piece_per_question(text: str, count: int) -> list[str] | None:
+    """The reply cut into exactly ``count`` pieces, or None when it does not cut so.
+
+    Tried by line first ("1. Small" on one line, "2. Blue" on the next), then by
+    comma or semicolon ("Small, Blue"). Empty pieces are dropped, so a stray
+    trailing comma does not add a question nobody asked. An answer that itself
+    contains a comma ("Portland, Oregon") simply yields a different count, and
+    that is why a count that does not match is not guessed at.
+    """
+    lines = [
+        _LIST_NUMBERING.sub("", line).strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+    if len(lines) == count:
+        return lines
+    pieces = [piece.strip() for piece in re.split(r"[,;]", text) if piece.strip()]
+    return pieces if len(pieces) == count else None
+
+
 def parse_ask_user_reply(text: str, questions: list[AskUserQuestion]) -> JsonObject:
     """Map a typed reply to an ask_user answers dict.
 
     Single question: tries to match the text as a 1-based number or an exact
     case-insensitive option label; falls back to the raw text (free-form Other).
-    Multiple questions: maps the raw text to every header — the agent receives
-    the same string for all questions, which is the best we can do with a single
-    unstructured reply.
+    Multiple questions: a reply with one piece per question ("Small, Blue", or a
+    line each) answers them in order; anything else maps the raw text to every
+    header, which is the best that can be done with one unstructured reply.
     """
     if not questions:
         return {"answer": text}
     if len(questions) == 1:
         q = questions[0]
-        options = getattr(q, "options", None) or []
-        stripped = text.strip()
-        # Number → option by 1-based index
-        if stripped.isdigit():
-            idx = int(stripped) - 1
-            if 0 <= idx < len(options):
-                return {q.header: options[idx].label}
-        # Case-insensitive label match
-        lower = stripped.lower()
-        for opt in options:
-            if (getattr(opt, "label", "") or "").lower() == lower:
-                return {q.header: opt.label}
-        # Free-form Other
-        return {q.header: stripped}
-    # Multiple questions — crude but the only option for a plain text reply
+        return {q.header: _answer_for_question(text, q)}
+    pieces = _one_piece_per_question(text, len(questions))
+    if pieces is not None:
+        return {
+            q.header: _answer_for_question(piece, q)
+            for q, piece in zip(questions, pieces, strict=True)
+        }
     return {q.header: text for q in questions}
 
 

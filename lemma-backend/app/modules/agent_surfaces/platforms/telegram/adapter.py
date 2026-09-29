@@ -8,6 +8,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceContextMessage,
@@ -140,7 +141,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> bool | PartDelivery:
         return await TelegramPlatformService(credentials)._render_choices(
             event, question_plan, metadata
         )

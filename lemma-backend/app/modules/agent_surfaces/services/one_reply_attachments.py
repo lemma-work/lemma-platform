@@ -16,13 +16,21 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.contracts.platforms import platform_delivers_one_reply
 from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
 from app.modules.agent_surfaces.services.display_resource_content import (
     resolve_pod_file_parts,
 )
+from app.modules.agent_surfaces.services.pending_envelope import (
+    RunFiles,
+    held_display_paths,
+    release_display_paths,
+)
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 
-__all__ = ["files_for_held_paths"]
+__all__ = ["files_for_held_paths", "held_files_for_run", "release_held_files"]
 
 
 async def files_for_held_paths(
@@ -49,3 +57,43 @@ async def files_for_held_paths(
         )
         files.extend(resolved.files)
     return files
+
+
+async def held_files_for_run(
+    *,
+    uow: SqlAlchemyUnitOfWork,
+    target: SurfaceEgressTarget,
+    conversation_id: UUID,
+    run: RunFiles | None,
+) -> tuple[list[EnvelopeFile], list[str]]:
+    """The attachments a run has been holding for a one-reply surface, and their paths.
+
+    Only the named run's: a later turn's reply never takes an earlier run's
+    files. ``run`` is None for a send that is not any run's reply, which carries
+    nothing. Empty everywhere but a surface that replies once: a chat surface
+    delivered them when they were shown.
+
+    Read, not drained: the caller releases the paths once the envelope has
+    actually been delivered, so a send that fails leaves them for the retry.
+    """
+    if run is None or not platform_delivers_one_reply(
+        target.surface.surface_type.value
+    ):
+        return [], []
+    # Redis, not the database, so no connection is held for it.
+    async with connection_released(uow.session):
+        paths = await held_display_paths(conversation_id, run)
+    if not paths:
+        return [], []
+    files = await files_for_held_paths(
+        uow=uow, target=target, conversation_id=conversation_id, paths=paths
+    )
+    return files, paths
+
+
+async def release_held_files(
+    *, uow: SqlAlchemyUnitOfWork, conversation_id: UUID, run: RunFiles, paths: list[str]
+) -> None:
+    """Forget the files a delivered reply carried; see `connection_released`."""
+    async with connection_released(uow.session):
+        await release_display_paths(conversation_id, run, paths)

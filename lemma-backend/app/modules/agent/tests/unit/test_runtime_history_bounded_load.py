@@ -34,6 +34,7 @@ from app.modules.agent.services.runtime_history import first_sequence_of_run
 from app.modules.agent.services.runtime_history import oldest_carried_sequence
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
 from app.modules.agent.services.runtime_history import select_runtime_history
+from app.modules.agent.services.runtime_history import unattached_notification_window
 
 _BASE = datetime.now(timezone.utc) - timedelta(hours=1)
 
@@ -701,3 +702,35 @@ class TestUnattachedNotificationBounds:
             message.sequence for message in current.messages
         )
         assert first_sequence_of_run(runs, uuid4()) is None
+
+
+class TestTheNotificationWindowFollowsWhetherHistoryWasCut:
+    """A notification older than the history stays out -- only if there was a cut.
+
+    The lower bound used to be the oldest message carried, always. For a
+    conversation a notification opened that is the first run's own first
+    message, and the notification precedes it: the person's first reply to a
+    report or a reminder was read against nothing.
+    """
+
+    def test_uncut_history_has_no_lower_bound(self) -> None:
+        runs = [_run(uuid4(), i, 3) for i in range(3)]
+
+        after, before = unattached_notification_window(
+            runs, runs[-1].id, dropped_runs=0
+        )
+
+        assert after is None, (
+            "nothing was dropped, so nothing is older than the history"
+        )
+        assert before == first_sequence_of_run(runs, runs[-1].id)
+
+    def test_cut_history_keeps_older_notifications_out(self) -> None:
+        runs = [_run(uuid4(), i, 3) for i in range(3)]
+
+        after, before = unattached_notification_window(
+            runs, runs[-1].id, dropped_runs=4
+        )
+
+        assert after == oldest_carried_sequence(runs)
+        assert before == first_sequence_of_run(runs, runs[-1].id)

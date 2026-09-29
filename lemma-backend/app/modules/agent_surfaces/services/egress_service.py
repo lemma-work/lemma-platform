@@ -25,7 +25,6 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from app.core.file_types import is_untyped_mime
-from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
@@ -59,6 +58,7 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
 )
 from app.modules.agent_surfaces.services.approval_preview import (
     approval_action_summary,
+    redact_card_text,
 )
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
@@ -67,15 +67,11 @@ from app.modules.agent_surfaces.services.free_text_answer import (
     tool_call_id_of,
 )
 from app.modules.agent_surfaces.services.one_reply_attachments import (
-    files_for_held_paths,
+    held_files_for_run,
+    release_held_files,
 )
-from app.modules.agent_surfaces.services.pending_envelope import (
-    held_display_paths,
-    release_display_paths,
-)
+from app.modules.agent_surfaces.services.pending_envelope import RunFiles
 from app.modules.agent.contracts.interaction_replies import ask_user_request_dict
-from app.modules.agent_surfaces.contracts.platforms import platform_delivers_one_reply
-from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 from app.modules.agent_surfaces.services.surface_sign_in import (
     sign_in_prompt_envelope,
 )
@@ -95,8 +91,10 @@ def _approval_plan(
     return build_approval_render_plan(
         conversation_id=conversation_id,
         tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
-        title=str(tool_args.get("title") or "Action requires your approval"),
-        reason=str(tool_args.get("reason") or "") or None,
+        title=redact_card_text(
+            str(tool_args.get("title") or "Action requires your approval")
+        ),
+        reason=redact_card_text(str(tool_args.get("reason") or "")) or None,
         tool_name=approval_action_summary(
             str(tool_args.get("tool_name") or ""), tool_args.get("args")
         ),
@@ -171,7 +169,13 @@ class SurfaceEgress:
         conversation_id: UUID,
         message: str,
         metadata: dict[str, Any] | None = None,
+        attach_files_of: RunFiles | None = None,
     ) -> bool:
+        """Send a message; ``attach_files_of`` names the run whose held files ride it.
+
+        Left out, nothing is attached: a notification or a nudge is not the reply
+        those files were shown for, and one run's files are never another's.
+        """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return False
@@ -186,8 +190,13 @@ class SurfaceEgress:
         # and -- since held files were drained on read -- spent them on it.
         files, held = (
             ([], [])
-            if (metadata or {}).get("retry_action")
-            else await self._held_files(target, conversation_id)
+            if (metadata or {}).get("retry_action") or attach_files_of is None
+            else await held_files_for_run(
+                uow=self.uow,
+                target=target,
+                conversation_id=conversation_id,
+                run=attach_files_of,
+            )
         )
         delivered = await self.delivery.deliver_envelope(
             target,
@@ -195,8 +204,13 @@ class SurfaceEgress:
             metadata=await self.delivery.egress_metadata(target, metadata),
             conversation_id=conversation_id,
         )
-        if delivered and held:
-            await self._release_held(conversation_id, held)
+        if delivered and held and attach_files_of is not None:
+            await release_held_files(
+                uow=self.uow,
+                conversation_id=conversation_id,
+                run=attach_files_of,
+                paths=held,
+            )
         return delivered
 
     async def send_display_resource_for_conversation(
@@ -301,6 +315,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         tool_call_id: str | None = None,
         narration: str | None = None,
+        attach_files_of: RunFiles | None = None,
     ) -> bool:
         """Render the conversation's pending ``ask_user`` questions on its surface.
 
@@ -324,7 +339,12 @@ class SurfaceEgress:
             conversation_id=conversation_id,
             tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
         )
-        files, held = await self._held_files(target, conversation_id)
+        files, held = await held_files_for_run(
+            uow=self.uow,
+            target=target,
+            conversation_id=conversation_id,
+            run=attach_files_of,
+        )
         delivered = await self.delivery.deliver_envelope(
             target,
             # The lead-in and the question are one thing the person receives.
@@ -334,8 +354,13 @@ class SurfaceEgress:
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
-        if delivered and held:
-            await self._release_held(conversation_id, held)
+        if delivered and held and attach_files_of is not None:
+            await release_held_files(
+                uow=self.uow,
+                conversation_id=conversation_id,
+                run=attach_files_of,
+                paths=held,
+            )
         return delivered
 
     async def send_prompt_as_text_for_conversation(
@@ -455,6 +480,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         tool_call_id: str | None = None,
         narration: str | None = None,
+        attach_files_of: RunFiles | None = None,
     ) -> bool:
         """Render a pending ``request_approval`` on the surface.
 
@@ -482,7 +508,12 @@ class SurfaceEgress:
             )
             return False
         # Native buttons, then a text prompt, then admit it reached nobody.
-        files, held = await self._held_files(target, conversation_id)
+        files, held = await held_files_for_run(
+            uow=self.uow,
+            target=target,
+            conversation_id=conversation_id,
+            run=attach_files_of,
+        )
         delivered = await self.delivery.deliver_envelope(
             target,
             envelope=SurfaceEnvelope(
@@ -493,8 +524,13 @@ class SurfaceEgress:
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
-        if delivered and held:
-            await self._release_held(conversation_id, held)
+        if delivered and held and attach_files_of is not None:
+            await release_held_files(
+                uow=self.uow,
+                conversation_id=conversation_id,
+                run=attach_files_of,
+                paths=held,
+            )
         return delivered
 
     async def send_voice_note_for_conversation(
@@ -559,34 +595,3 @@ class SurfaceEgress:
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
-
-    async def _release_held(self, conversation_id: UUID, held: list[str]) -> None:
-        """Forget the files a delivered reply carried.
-
-        Redis, not the database, so the connection is not held for it; see
-        `connection_released`.
-        """
-        async with connection_released(self.uow.session):
-            await release_display_paths(conversation_id, held)
-
-    async def _held_files(self, target: SurfaceEgressTarget, conversation_id: UUID):
-        """Pod files a one-reply surface has been holding, and where they came from.
-
-        Read, not drained: the caller releases the paths once the envelope has
-        actually been delivered, so a send that fails leaves them for the next
-        one. Whichever envelope goes out first takes them, which is why an
-        apology for a lost decision deliberately does not call any of the verbs
-        above. Empty everywhere but a surface that replies once: a chat surface
-        delivered them when they were shown.
-        """
-        if not platform_delivers_one_reply(target.surface.surface_type.value):
-            return [], []
-        # Redis, not the database, so no connection is held for it.
-        async with connection_released(self.uow.session):
-            paths = await held_display_paths(conversation_id)
-        if not paths:
-            return [], []
-        files = await files_for_held_paths(
-            uow=self.uow, target=target, conversation_id=conversation_id, paths=paths
-        )
-        return files, paths

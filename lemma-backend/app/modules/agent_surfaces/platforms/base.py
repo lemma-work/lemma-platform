@@ -12,6 +12,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
 from app.modules.agent_surfaces.platforms.envelope_delivery import (
     EnvelopeDeliveryMixin,
@@ -96,9 +97,15 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> bool | PartDelivery:
         """Render ask_user questions as native tappable choices. Default: not
-        supported → False so the caller falls back to a formatted text message."""
+        supported → False so the caller falls back to a formatted text message.
+
+        ``True`` is every question as native controls. ``PartDelivery.DEGRADED``
+        is the in-between a platform that sends one message per question can
+        land in: the earlier questions are controls and the rest were already
+        sent as words -- delivered, and answerable only by typing for those, which
+        the receipt has to say."""
         del credentials, event, question_plan, metadata
         return False
 

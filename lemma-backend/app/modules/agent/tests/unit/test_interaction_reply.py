@@ -163,6 +163,33 @@ def test_several_questions_all_get_the_same_reply() -> None:
     assert parse_ask_user_reply("both", questions) == {"a": "both", "b": "both"}
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["Small, Blue", "Small, Blue,", "small; blue", "1. Small\n2. Blue", "Small\nBlue"],
+)
+def test_one_piece_per_question_answers_them_in_order(text: str) -> None:
+    questions = [_question("size", "Small", "Large"), _question("color", "Red", "Blue")]
+
+    assert parse_ask_user_reply(text, questions) == {"size": "Small", "color": "Blue"}
+
+
+def test_a_piece_that_is_an_option_number_picks_that_option() -> None:
+    questions = [_question("size", "Small", "Large"), _question("color", "Red", "Blue")]
+
+    assert parse_ask_user_reply("2, 1", questions) == {"size": "Large", "color": "Red"}
+
+
+def test_a_reply_that_does_not_cut_into_one_piece_per_question_is_not_guessed_at() -> (
+    None
+):
+    questions = [_question("size", "Small", "Large"), _question("color", "Red", "Blue")]
+
+    assert parse_ask_user_reply("Small, Blue, and a bag", questions) == {
+        "size": "Small, Blue, and a bag",
+        "color": "Small, Blue, and a bag",
+    }
+
+
 def test_no_questions_is_a_bare_answer() -> None:
     assert parse_ask_user_reply("hello", []) == {"answer": "hello"}
 

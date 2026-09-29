@@ -36,17 +36,21 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
 )
 
 
-async def hold_display_for_one_reply(conversation_id: UUID, path: str) -> bool:
-    """Keep a displayed pod file until this surface's single reply goes out.
+async def hold_display_for_one_reply(
+    conversation_id: UUID, path: str, agent_run_id: UUID | None = None
+) -> bool:
+    """Keep a displayed pod file until this run's single reply goes out.
 
     Held in Redis, not in this process: a remote harness's tool calls execute in
-    an API replica while the reply is sent by the worker's run observer.
+    an API replica while the reply is sent by the worker's run observer. Held for
+    the run that showed it, so no other run's reply can carry it.
     """
     from app.modules.agent_surfaces.services.pending_envelope import (
+        RunFiles,
         remember_display_path,
     )
 
-    return await remember_display_path(conversation_id, path)
+    return await remember_display_path(conversation_id, RunFiles(agent_run_id), path)
 
 
 def parse_surface_event_metadata(

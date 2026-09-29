@@ -269,7 +269,9 @@ async def _hold_for_the_one_reply(
             "use display_resource only for files you want attached."
         )
         return
-    if not await hold_display_for_one_reply(deps.conversation_id, request.path):
+    if not await hold_display_for_one_reply(
+        deps.conversation_id, request.path, deps.agent_run_id
+    ):
         response.success = False
         response.message = None
         response.error = (

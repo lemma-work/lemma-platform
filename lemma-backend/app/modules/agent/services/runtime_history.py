@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 
+from typing import Protocol
 from uuid import UUID
 
 from app.modules.agent.domain.entities import (
@@ -27,6 +28,7 @@ from app.modules.agent.domain.entities import (
     Message,
     MessageKind,
     MessageRole,
+    RuntimeHistoryWindow,
 )
 
 #: Opens every message this module synthesizes. Two jobs: the model reads it as
@@ -135,6 +137,86 @@ def first_sequence_of_run(runs: list[AgentRun], run_id: UUID) -> int | None:
         if run.id == run_id and run.messages:
             return min(message.sequence for message in run.messages)
     return None
+
+
+def unattached_notification_window(
+    runs: list[AgentRun],
+    run_id: UUID,
+    *,
+    dropped_runs: int,
+) -> tuple[int | None, int | None]:
+    """``(after, before)`` sequences bounding the run-less notifications to carry.
+
+    The lower bound exists to keep a notification that is older than the
+    history out of it, so it applies only when history *was* cut. Applied
+    unconditionally it is the oldest message the prompt carries, and for a
+    conversation a notification opened that is the first run's own first
+    message -- the notification precedes it, so the person's first reply to a
+    report or a reminder was read against nothing.
+
+    The upper bound is the turn being answered, whether or not anything was cut.
+    """
+    after = oldest_carried_sequence(runs) if dropped_runs > 0 else None
+    return after, first_sequence_of_run(runs, run_id)
+
+
+class RuntimeHistorySource(Protocol):
+    """The two reads history assembly makes, and nothing else of a repository."""
+
+    async def attach_runtime_history_messages(
+        self, runs: list[AgentRun], *, full_run_ids: set[UUID]
+    ) -> list[AgentRun]: ...
+
+    async def load_unattached_notifications(
+        self,
+        conversation_id: UUID,
+        *,
+        after_sequence: int | None,
+        before_sequence: int | None,
+        limit: int,
+    ) -> list[Message]: ...
+
+
+async def assemble_runtime_history(
+    source: RuntimeHistorySource,
+    window: RuntimeHistoryWindow,
+    *,
+    conversation_id: UUID,
+    run_id: UUID,
+) -> list[Message]:
+    """Every message the model is shown for ``run_id``, in the order it reads them.
+
+    One place for the whole recipe so the runner and anything that wants to know
+    what a turn will see cannot drift apart on it -- the notification bounds in
+    particular are a decision about *this* history, and were made inline where
+    nothing could exercise them without a database.
+    """
+    # The trim decides which runs need every message, and it can keep an
+    # old-but-active run while dropping newer ones -- so it runs before the
+    # messages are asked for, and only what survives it gets them. Attaching to
+    # the untrimmed list meant a long conversation read hundreds of runs it then
+    # discarded.
+    bounded, dropped_runs = bound_runtime_history(
+        window.runs, total_runs=window.total_runs
+    )
+    await source.attach_runtime_history_messages(
+        bounded, full_run_ids=runtime_full_run_ids(bounded)
+    )
+    messages = select_runtime_history(bounded, already_dropped=dropped_runs)
+    # Belong to no run, so the run-keyed reads above never see them; sequences
+    # are conversation-wide, so the harness places them.
+    after_sequence, before_sequence = unattached_notification_window(
+        bounded, run_id, dropped_runs=dropped_runs
+    )
+    messages.extend(
+        await source.load_unattached_notifications(
+            conversation_id,
+            after_sequence=after_sequence,
+            before_sequence=before_sequence,
+            limit=MAX_UNATTACHED_NOTIFICATIONS,
+        )
+    )
+    return messages
 
 
 def select_runtime_history(

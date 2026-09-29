@@ -16,6 +16,7 @@ from app.modules.agent.contracts import (
     MessageRole,
 )
 from app.modules.agent.contracts.progress_tools import progress_comment_for_tool_call
+from app.modules.agent_surfaces.domain.display_redaction import redact_secrets_in_text
 from app.modules.agent_surfaces.platforms.rendering import (
     sanitize_user_visible_text,
     strip_thinking_tokens,
@@ -141,7 +142,9 @@ def _sanitize_progress_text(value: str) -> str:
     # Strip model reasoning BEFORE collapsing/truncating: a model that writes
     # ``<think>…</think>`` into a tool-call comment must never have it streamed
     # to the surface as a live progress update.
-    text = " ".join(sanitize_user_visible_text(value).split())
+    # A model-written status line can quote the command it is about to run;
+    # mask credentials before the line is cut, so none is split by the cut.
+    text = " ".join(redact_secrets_in_text(sanitize_user_visible_text(value)).split())
     if len(text) <= _MAX_PROGRESS_TEXT_LENGTH:
         return text
     return text[: _MAX_PROGRESS_TEXT_LENGTH - 1].rstrip() + "..."

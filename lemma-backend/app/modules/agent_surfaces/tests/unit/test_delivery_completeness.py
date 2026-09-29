@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
+from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalButton,
@@ -269,7 +270,9 @@ async def test_a_second_question_that_fails_does_not_resend_the_first(caplog):
         _question("color", "Which colour?", "Red", "Blue"),
     )
 
-    assert await service._render_choices(_wa_event(), plan) is True
+    # Delivered, but only the first as buttons: DEGRADED is what arms a typed
+    # answer to the rest, where True would say every question is tappable.
+    assert await service._render_choices(_wa_event(), plan) is PartDelivery.DEGRADED
 
     assert len(client.interactives) == 1
     assert len(client.payloads) == 1
@@ -518,7 +521,7 @@ async def test_a_telegram_second_question_that_fails_does_not_resend_the_first(
         _question("color", "Which colour?", "Red", "Blue"),
     )
 
-    assert await service._render_choices(_tg_event(), plan) is True
+    assert await service._render_choices(_tg_event(), plan) is PartDelivery.DEGRADED
 
     assert service.sent[0] == "Which size?"
     assert "Which colour?" in service.sent[1]

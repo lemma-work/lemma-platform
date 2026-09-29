@@ -60,11 +60,7 @@ from app.modules.agent.services.run_phase_spans import (
 )
 from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
-    MAX_UNATTACHED_NOTIFICATIONS,
-    bound_runtime_history,
-    first_sequence_of_run,
-    oldest_carried_sequence,
-    runtime_full_run_ids,
+    assemble_runtime_history,
     select_runtime_history,
 )
 from app.modules.agent.services.run_context_builder import build_run_context
@@ -494,29 +490,11 @@ class AgentRunnerService:
                     agent_repository=AgentRepository(uow),
                     agent_name=agent_name,
                 )
-                # The trim decides which runs need every message, and it can
-                # keep an old-but-active run while dropping newer ones -- so it
-                # runs before the messages are asked for, and only what survives
-                # it gets them. Attaching to the untrimmed list meant a long
-                # conversation read hundreds of runs it then discarded.
-                bounded, dropped_runs = bound_runtime_history(
-                    runs, total_runs=window.total_runs
-                )
-                await repo.attach_runtime_history_messages(
-                    bounded, full_run_ids=runtime_full_run_ids(bounded)
-                )
-                messages = self._select_runtime_history(
-                    bounded, already_dropped=dropped_runs
-                )
-                # Belong to no run, so the run-keyed reads above never see them;
-                # sequences are conversation-wide, so the harness places them.
-                messages.extend(
-                    await repo.load_unattached_notifications(
-                        agent_run.conversation_id,
-                        after_sequence=oldest_carried_sequence(bounded),
-                        before_sequence=first_sequence_of_run(bounded, agent_run.id),
-                        limit=MAX_UNATTACHED_NOTIFICATIONS,
-                    )
+                messages = await assemble_runtime_history(
+                    repo,
+                    window,
+                    conversation_id=agent_run.conversation_id,
+                    run_id=agent_run.id,
                 )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages

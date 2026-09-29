@@ -13,6 +13,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -209,7 +210,7 @@ class TelegramPlatformService:
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> bool | PartDelivery:
         """Render ask_user questions as native inline keyboards.
 
         One message per question; each option is a button whose ``callback_data``
@@ -273,7 +274,10 @@ class TelegramPlatformService:
                         update={"questions": question_plan.questions[index:]}
                     ).to_plain_text(),
                 )
-                return True
+                # Delivered, but not all of it as controls: reporting True says
+                # every question is tappable, and nothing then accepts a typed
+                # answer to the ones that arrived as words.
+                return PartDelivery.DEGRADED
         return True
 
     async def _render_decision(

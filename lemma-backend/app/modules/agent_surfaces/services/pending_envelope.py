@@ -18,6 +18,16 @@ observer that sends the reply runs in a worker. The file was held in one
 process and looked for in another, so the reply went out without it while the
 tool had told the model it was attached.
 
+**Held per run, not per conversation.** A file belongs to the run that showed it.
+Keyed by conversation alone, a run whose final reply failed to send left its
+files for whichever reply came next -- another turn's, or an apology's -- so a
+later turn could mail a person files it had never shown. Keyed by
+(conversation, run), only that run's own reply ever reads them.
+
+**No read-modify-write.** Each run's files are an insertion-ordered set in
+Redis, so two ``display_resource`` calls in one turn add concurrently and every
+path lands once; there is no lock to time out of.
+
 Nothing is drained until the reply that carries it has gone out. ``held`` reads
 without removing, ``release`` removes exactly what a successful send carried --
 so a send that failed leaves the files for the next attempt instead of losing
@@ -26,9 +36,7 @@ them, and a path held while the send was in flight is not released with it.
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from uuid import UUID
 
 from redis.exceptions import RedisError
@@ -43,17 +51,11 @@ logger = get_logger(__name__)
 # by the provider anyway. Bound it rather than letting the list grow.
 _MAX_PENDING_PATHS = 20
 
-# The entry only has to outlive one run. An observer that never fires (the
-# worker died) would otherwise leave it behind, so it expires on its own; six
+# The entry only has to outlive one run and the recovery of its reply. It is
+# discarded when the run ends with nothing left to recover, and expires on its
+# own otherwise (a worker that died, a final send that never succeeded); six
 # hours is longer than any run is allowed to take.
 _TTL_SECONDS = 6 * 60 * 60
-
-# Two ``display_resource`` calls in one turn run concurrently, and the list is
-# read, changed and written back. The lock is what stops the second write
-# erasing the first, which would drop an attachment without a word.
-_LOCK_TTL_SECONDS = 5
-_LOCK_ATTEMPTS = 40
-_LOCK_RETRY_SECONDS = 0.05
 
 _cache: RedisJsonCache | None = None
 
@@ -69,73 +71,38 @@ def _get_cache() -> RedisJsonCache:
     return _cache
 
 
-@asynccontextmanager
-async def _locked(cache: RedisJsonCache, conversation_id: UUID) -> AsyncIterator[None]:
-    """Serialise changes to one conversation's list, across processes."""
-    suffix = f"lock:{conversation_id}"
-    acquired = False
-    for _ in range(_LOCK_ATTEMPTS):
-        acquired = await cache.set_raw_if_absent(
-            suffix, "1", ttl_seconds=_LOCK_TTL_SECONDS
-        )
-        if acquired:
-            break
-        await asyncio.sleep(_LOCK_RETRY_SECONDS)
-    if not acquired:
-        # Proceed rather than refuse: the lock expires by itself, so whoever
-        # holds it is gone or slow, and an attachment held without it is better
-        # than one the model was told could not be.
-        logger.warning(
-            "agent_surfaces.pending_envelope.lock_not_acquired.degraded",
-            conversation_id=str(conversation_id),
-        )
-    try:
-        yield
-    finally:
-        if acquired:
-            await cache.delete(suffix)
+@dataclass(frozen=True)
+class RunFiles:
+    """Whose held files a send may carry: those of one run of one conversation.
+
+    ``agent_run_id`` is None for a context that has no run (a tool reached over a
+    bridge with none active); those files share one slot, which is still not
+    any other run's.
+    """
+
+    agent_run_id: UUID | None
 
 
-async def _read(cache: RedisJsonCache, conversation_id: UUID) -> list[str]:
-    stored = await cache.get_json(str(conversation_id))
-    if not isinstance(stored, list):
-        return []
-    return [item for item in stored if isinstance(item, str)]
+def _slot(conversation_id: UUID, run: RunFiles) -> str:
+    return f"{conversation_id}:{run.agent_run_id or 'no-run'}"
 
 
-async def _write(
-    cache: RedisJsonCache, conversation_id: UUID, paths: list[str]
-) -> None:
-    if paths:
-        await cache.set_json(str(conversation_id), paths)
-    else:
-        await cache.delete(str(conversation_id))
+async def remember_display_path(
+    conversation_id: UUID, run: RunFiles, path: str
+) -> bool:
+    """Hold a displayed pod file until the run's one reply goes out.
 
-
-async def remember_display_path(conversation_id: UUID, path: str) -> bool:
-    """Hold a displayed pod file until the one reply goes out.
-
-    Returns whether it was taken: a duplicate or an overflowing run is declined
-    rather than silently dropped, so the caller can tell the model the truth.
-    Redis being unreachable is a decline too, and says so in the log.
+    Returns whether it was taken: an overflowing run is declined rather than
+    silently dropped, so the caller can tell the model the truth. A file shown
+    twice is one attachment and is reported as taken. Redis being unreachable is
+    a decline too, and says so in the log.
     """
     if not path:
         return False
-    cache = _get_cache()
     try:
-        async with _locked(cache, conversation_id):
-            pending = await _read(cache, conversation_id)
-            if path in pending:
-                # Showing the same file twice is one attachment, not two.
-                return True
-            if len(pending) >= _MAX_PENDING_PATHS:
-                logger.warning(
-                    "agent_surfaces.pending_envelope.display_paths_overflowed.degraded",
-                    conversation_id=str(conversation_id),
-                    limit=_MAX_PENDING_PATHS,
-                )
-                return False
-            await _write(cache, conversation_id, [*pending, path])
+        taken = await _get_cache().ordered_set_add(
+            _slot(conversation_id, run), path, limit=_MAX_PENDING_PATHS
+        )
     except RedisError, OSError, TimeoutError, ValueError:
         logger.warning(
             "agent_surfaces.pending_envelope.hold_failed.degraded",
@@ -143,17 +110,23 @@ async def remember_display_path(conversation_id: UUID, path: str) -> bool:
             exc_info=True,
         )
         return False
-    return True
+    if not taken:
+        logger.warning(
+            "agent_surfaces.pending_envelope.display_paths_overflowed.degraded",
+            conversation_id=str(conversation_id),
+            limit=_MAX_PENDING_PATHS,
+        )
+    return taken
 
 
-async def held_display_paths(conversation_id: UUID) -> list[str]:
-    """What is waiting for the reply, in the order it was shown. Removes nothing.
+async def held_display_paths(conversation_id: UUID, run: RunFiles) -> list[str]:
+    """What this run has waiting for its reply, in the order shown. Removes nothing.
 
     Reading is separate from releasing so that a reply which fails to send does
     not take the files with it.
     """
     try:
-        return await _read(_get_cache(), conversation_id)
+        return await _get_cache().ordered_set_members(_slot(conversation_id, run))
     except RedisError, OSError, TimeoutError, ValueError:
         # Sent without them rather than not sent: the reply matters more than
         # its attachments, and the log is where the missing ones are explained.
@@ -165,7 +138,9 @@ async def held_display_paths(conversation_id: UUID) -> list[str]:
         return []
 
 
-async def release_display_paths(conversation_id: UUID, sent: list[str]) -> None:
+async def release_display_paths(
+    conversation_id: UUID, run: RunFiles, sent: list[str]
+) -> None:
     """Forget the paths a reply that has gone out carried.
 
     Only those: a file shown while the send was in flight belongs to the next
@@ -173,19 +148,11 @@ async def release_display_paths(conversation_id: UUID, sent: list[str]) -> None:
     """
     if not sent:
         return
-    cache = _get_cache()
     try:
-        released = set(sent)
-        async with _locked(cache, conversation_id):
-            remaining = [
-                path
-                for path in await _read(cache, conversation_id)
-                if path not in released
-            ]
-            await _write(cache, conversation_id, remaining)
+        await _get_cache().ordered_set_remove(_slot(conversation_id, run), sent)
     except RedisError, OSError, TimeoutError, ValueError:
         # The reply is out; the worst this does is attach the same file to the
-        # next one, until the run ends and discards the entry.
+        # run's next reply, until the entry is discarded or expires.
         logger.warning(
             "agent_surfaces.pending_envelope.release_failed.degraded",
             conversation_id=str(conversation_id),
@@ -193,10 +160,10 @@ async def release_display_paths(conversation_id: UUID, sent: list[str]) -> None:
         )
 
 
-async def discard_display_paths(conversation_id: UUID) -> None:
-    """Forget what was collected -- the run ended without a reply carrying it."""
+async def discard_display_paths(conversation_id: UUID, run: RunFiles) -> None:
+    """Forget a run's held files -- the run is over and no reply will carry them."""
     try:
-        await _get_cache().delete(str(conversation_id))
+        await _get_cache().ordered_set_clear(_slot(conversation_id, run))
     except RedisError, OSError, TimeoutError:
         logger.warning(
             "agent_surfaces.pending_envelope.discard_failed.degraded",
