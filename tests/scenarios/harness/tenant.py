@@ -179,6 +179,19 @@ CAST = (
         ),
     ),
     Colleague(
+        label="bea",
+        full_name="Bea Lindqvist",
+        mailbox="bea.lindqvist",
+        company=VANTAGE,
+        role="ORG_MEMBER",
+        exists_for=(
+            "the paying customer: a deployment with real billing has her buy a "
+            "plan with the payment provider's test card and cancels it again. "
+            "Nobody else's plan changes, so no other scenario's limits move "
+            "under it"
+        ),
+    ),
+    Colleague(
         label="hannah",
         full_name="Hannah Weber",
         mailbox="hannah.weber",
