@@ -168,11 +168,12 @@ decide without a container listing, skips any image a pull holds a claim on,
 and never passes `--force` to `rmi`, so the engine's own in-use refusal is a
 second guard. The next `sandbox.ensure` that needs a removed image pulls it.
 
-The sandbox images are fetched only when somebody asks (This Mac → Coding
-agents, `sandbox.prepare`), with one exception: an update. When this computer
-has fetched sandbox images before and the release pins different ones, locald
-fetches them after `ready`, behind the workspace, so the download is not
-waiting at the next Wake up. Once per release: `sandbox-images.json` in
+locald fetches the sandbox images after `ready`, behind the workspace, on the
+first start of an install and on the first start of a release whose images
+this computer does not have yet. Nearly every conversation needs the sandbox --
+the browser a coding agent drives runs in it too -- so the download is not
+left waiting at the first Wake up. This Mac → Coding agents (`sandbox.prepare`)
+fetches on demand as well. Once per release: `sandbox-images.json` in
 locald's state records the images last fetched and the ones last fetched
 unasked, written before the fetch starts, so a failure is offered in Settings
 rather than retried on every start. With the workspace image reused across
