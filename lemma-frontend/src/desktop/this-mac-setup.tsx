@@ -21,6 +21,7 @@ import {
 import { sendTestEmail } from "./server-setup-email";
 import { useThisMacAvailability, useThisMacSnapshot } from "./this-mac-settings";
 import { ThisMacDiagnostics } from "./this-mac-advanced";
+import { TelegramChatLink } from "./telegram-chat-link";
 
 /** Settings → This Mac → Server setup.
  *
@@ -357,7 +358,7 @@ function Email({ snapshot }: { snapshot: ThisMacSnapshot }) {
                     ))}
                 </div>
                 {draft.provider === "none" && (
-                    <p className="thismac-said">Mail stays on {noun}: invitations still work by sharing their link, but nobody is emailed.</p>
+                    <p className="thismac-said">Nobody is emailed from {noun}. Invitations still work by sharing their link, and your own Telegram chat connects from Channels without email.</p>
                 )}
                 {draft.provider !== "none" && <Hint {...EMAIL_HINTS[draft.provider]} />}
                 {draft.provider === "resend" && (
@@ -494,7 +495,7 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
 
     const configured = formConfigured(snapshot, spec.form);
     const testable = spec.test && (stored(snapshot, spec.test.field) || meaningfulIntent(secrets[spec.test.field])?.action === "replace");
-    return (
+    return <>
         <details className="thismac-form" ref={ref} open={open || unsaved || undefined} id={"this-mac-" + spec.form}>
             <summary>
                 <span className="thismac-row__text">
@@ -561,7 +562,10 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
                 <Said said={said} />
             </form>
         </details>
-    );
+        {/* Outside the drawer, so the way into a chat shows without opening
+            the token's form. The token is the server's shared bot. */}
+        {spec.form === "telegram" && <TelegramChatLink saved={stored(snapshot, "surfaces.telegram_bot_token")} unsaved={unsaved} />}
+    </>;
 }
 
 function Forms({ group, snapshot, focus }: { group: SetupGroup; snapshot: ThisMacSnapshot; focus: string | null }) {

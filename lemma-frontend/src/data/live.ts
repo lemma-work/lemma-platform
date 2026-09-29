@@ -287,6 +287,8 @@ function asSurface(raw: unknown, platform: string): Surface {
         reach?: { handle?: string | null; email?: string | null } | null;
         surface_identity_username?: string | null;
         surface_identity_email?: string | null;
+        credential_mode?: string | null;
+        account_id?: string | null;
     };
     return {
         id: String(made.id ?? ""),
@@ -297,6 +299,7 @@ function asSurface(raw: unknown, platform: string): Surface {
         handle: made.reach?.handle ?? made.surface_identity_username ?? made.surface_identity_email ?? "",
         email: made.reach?.email ?? made.surface_identity_email ?? undefined,
         active: true,
+        system: made.credential_mode === "SYSTEM" && !made.account_id,
     };
 }
 
@@ -537,6 +540,8 @@ export const liveSource: PodSource = {
                         surface_identity_username?: string | null;
                         surface_identity_email?: string | null;
                         reach?: { handle?: string | null; email?: string | null } | null;
+                        credential_mode?: string | null;
+                        account_id?: string | null;
                     },
             )
             .filter((surface) => Boolean(surface.id && surface.platform))
@@ -555,6 +560,7 @@ export const liveSource: PodSource = {
                 email: surface.reach?.email ?? surface.surface_identity_email ?? undefined,
                 active: (surface.status ?? "ACTIVE") === "ACTIVE",
                 status: surface.status ?? "ACTIVE",
+                system: surface.credential_mode === "SYSTEM" && !surface.account_id,
             }));
     },
 

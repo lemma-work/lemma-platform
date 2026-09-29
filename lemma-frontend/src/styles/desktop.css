@@ -286,6 +286,20 @@
 .setup-form__acts { display: flex; flex-wrap: wrap; gap: 10px; }
 .setup-form__acts .btn { display: inline-flex; align-items: center; gap: 6px; }
 .setup-hint { margin-top: 0; }
+
+/* Under a saved Telegram token: the bot, who answers, and the way in. */
+.telegram-chat { display: flex; flex-direction: column; gap: 8px; padding: 12px 0 16px; border-bottom: 1px solid var(--line); }
+.telegram-chat__title { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; font-weight: 500; color: var(--ink); }
+.telegram-chat__pod select {
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    padding: 8px 10px;
+    max-width: 100%;
+}
 .setup-hint .linkish { display: inline-flex; align-items: center; gap: 4px; }
 .setup-advanced { margin-top: 26px; }
 .setup-card .btn:disabled, .thismac-form .btn:disabled { opacity: .45; }

@@ -22,6 +22,9 @@ import { Mark } from "./mark";
 import { completionPath, hereWith, openAuthorization, useConnectOutcome } from "@/connect/round-trip";
 import { connectorProblem } from "@/connect/install";
 import { copyText } from "@/desktop/clipboard";
+import { openExternalWhenReady } from "@/desktop/open-external";
+import { linkProblem, mintTelegramLink } from "@/desktop/telegram-link";
+import { sayHi } from "./say-hi";
 
 /** Giving a teammate a way to be reached.
  *
@@ -44,15 +47,16 @@ import { copyText } from "@/desktop/clipboard";
  *  once rather than spelled as a condition in three. */
 const OWN_BOT = new Set(["SLACK"]);
 
-/** Where a person goes to actually say something. */
-function sayHi(surface: Surface): string | null {
-    const key = channelKey(surface.platform);
-    const handle = surface.handle.trim();
-    if (!handle) return null;
-    if (key === "TELEGRAM") return "https://t.me/" + handle.replace(/^@/, "");
-    if (key === "WHATSAPP") return "https://wa.me/" + handle.replace(/[^\d]/g, "");
-    if (key === "EMAIL") return "mailto:" + (surface.email || handle).trim().replace(/^(mailto:)+/i, "").replace(/\\@/g, "@");
-    return null;
+/** "Say hi" on the shared Telegram bot: a link minted for whoever is signed
+ *  in, so the bot already knows them and answers from this pod. */
+function SayHiOnTelegram({ podId }: { podId: string }) {
+    const open = useMutation({ mutationFn: () => openExternalWhenReady(mintTelegramLink(podId)) });
+    return <>
+        <button className="btn" disabled={open.isPending} onClick={() => open.mutate()}>
+            Say hi <ExternalIcon size={13} />
+        </button>
+        {open.isError && <span className="reachrow__note" role="alert">{linkProblem(open.error)}</span>}
+    </>;
 }
 
 function Handle({ surface }: { surface: Surface }) {
@@ -132,8 +136,9 @@ function ConnectedRow({ surface, pod, onDrop, onManage }: { surface: Surface; po
             </div>
             <div className="reachrow__acts">
                 <button className="btn" onClick={onManage}>Manage</button>
-                {open && surface.active && (
-                    <a className="btn" href={open} target={open.startsWith("mailto:") ? undefined : "_blank"} rel="noreferrer">
+                {open?.kind === "mint" && surface.active && <SayHiOnTelegram podId={pod.id} />}
+                {open?.kind === "href" && surface.active && (
+                    <a className="btn" href={open.url} target={open.url.startsWith("mailto:") ? undefined : "_blank"} rel="noreferrer">
                         Say hi <ExternalIcon size={13} />
                     </a>
                 )}
