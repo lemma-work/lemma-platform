@@ -464,6 +464,10 @@ help:
 	@echo "    make local-domain-check the shell, capability and SDK know every base domain"
 	@echo "    make local-auth-gate-check  make dev and the local stack relax the same auth gates"
 	@echo ""
+	@echo "  Disk"
+	@echo "    make dev-clean          dry run: what stale build output, worktrees and branches would go"
+	@echo "    make dev-clean-apply    remove them (GIT=1 also runs git gc)"
+	@echo ""
 	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
 	@echo ""
@@ -674,6 +678,7 @@ _ensure-frontend-env-keys:
 # ── Dev stack ─────────────────────────────────────────────────────────────────
 
 dev:
+	@$(MAKE) --no-print-directory _disk-hint
 	@echo "→ Starting Lemma dev stack…"
 	@$(MAKE) --no-print-directory _prepare-dev
 	@echo ""
@@ -699,6 +704,7 @@ dev:
 		wait
 
 dev-public:
+	@$(MAKE) --no-print-directory _disk-hint
 	@echo "→ Starting Lemma dev stack with a public Cloudflare API URL…"
 	@$(MAKE) --no-print-directory _prepare-dev
 	@$(MAKE) --no-print-directory _start-public-api-tunnel || { $(MAKE) --no-print-directory stop; exit 1; }
@@ -1018,6 +1024,7 @@ desktop-dev:
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@command -v node >/dev/null 2>&1 || \
 		(echo "  ✗ node not found — install Node.js $(NODE_VERSION) from https://nodejs.org"; exit 1)
+	@$(MAKE) --no-print-directory _disk-hint
 	@# locald runs $(WORKSPACE_DIR)'s server.mjs straight from the checkout, with
 	@# no npm in between -- so a missing install or an unbuilt SDK is not an
 	@# error message, it is a frontend health check that times out two minutes
@@ -2243,7 +2250,30 @@ quality-frontend:
 # CodeQL is not in it: it runs in CI and reports on the pull request.
 check: quality quality-frontend
 
-# ── Git hooks ─────────────────────────────────────────────────────────────────
+# ── Local disk and hooks ──────────────────────────────────────────────────────
+#
+# Every worktree carries its own build output -- a Rust dev target directory,
+# node_modules, a backend virtualenv -- and with many worktrees open, several
+# of them an agent's, that fills a laptop. `dev-clean` is a dry run that lists
+# what would go and why; `dev-clean-apply` does it. GIT=1 adds a git gc, which
+# is slow on a large repository. scripts/dev_disk_hygiene.py has the rules and
+# every threshold as a flag: DEV_CLEAN_FLAGS="--rust-idle-days 1" and so on.
+DEV_CLEAN = uv run --quiet --no-project python scripts/dev_disk_hygiene.py $(DEV_CLEAN_FLAGS)
+
+dev-clean:
+	@$(DEV_CLEAN)
+
+dev-clean-apply:
+	@$(DEV_CLEAN) --apply $(if $(filter 1,$(GIT)),--git)
+
+# A one-line nudge from the commands that are about to need disk. Below this,
+# a single Rust build plus an image pull can fail a dev session halfway in.
+DISK_HINT_GB ?= 30
+_disk-hint:
+	@free_kb=$$(df -Pk . 2>/dev/null | awk 'NR == 2 { print $$4 }'); \
+	if [ -n "$$free_kb" ] && [ "$$free_kb" -lt $$(( $(DISK_HINT_GB) * 1024 * 1024 )) ]; then \
+		echo "  ! $$(( free_kb / 1024 / 1024 )) GB free on this disk; run \`make dev-clean\` to see what can go"; \
+	fi
 
 # Opt-in git hooks, shared by every worktree of this clone: `pre-commit` runs
 # `make lint` on the staged files, `pre-push` runs `make quality`. SKIP_HOOKS=1
