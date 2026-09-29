@@ -478,6 +478,7 @@ async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
                 external_user_id="old-actor",
                 user_id=user_id,
                 verified_phone=user.mobile_number,
+                proof="phone",
             )
         )
     codes = []

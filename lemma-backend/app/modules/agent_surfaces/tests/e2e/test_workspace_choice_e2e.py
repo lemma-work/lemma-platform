@@ -890,6 +890,7 @@ async def test_changing_workspace_keeps_a_telegram_senders_phone_proof(
                 external_user_id=str(actor),
                 user_id=fixed_test_user["id"],
                 verified_phone=phone,
+                proof="phone",
             )
         )
         await session.commit()
