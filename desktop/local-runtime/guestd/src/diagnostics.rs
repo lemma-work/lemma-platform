@@ -107,7 +107,7 @@ pub(crate) fn network_diagnostics() -> Value {
             "5s",
             "/usr/bin/getent",
             "ahostsv4",
-            "registry-1.docker.io",
+            REGISTRY_HOST,
         ])
         .stdin(Stdio::null())
         .output();
@@ -160,8 +160,99 @@ pub(crate) fn network_diagnostics() -> Value {
     json!({
         "clock_epoch": clock_epoch,
         "dns_ok": !addresses.is_empty(),
+        "host_dns_relay": host_dns_relay_answers(),
+        "name_servers": name_servers(),
         "registry_addresses": addresses,
         "registry_http_status": registry_status,
         "registry_reachable": registry_reachable,
     })
+}
+
+/// The name Docker Hub's images are pulled from, and the one every DNS check
+/// here asks about.
+pub(crate) const REGISTRY_HOST: &str = "registry-1.docker.io";
+
+/// Whether the host DNS relay resolves the registry, asked directly rather
+/// than through resolved: the Mac's resolver's own view. `None` on WSL, which
+/// has no relay and resolves through Windows.
+fn host_dns_relay_answers() -> Option<bool> {
+    if crate::host_control::guest_is_wsl() {
+        return None;
+    }
+    let relay = crate::host_dns::HOST_DNS_ADDRESS.parse().ok()?;
+    Some(crate::host_dns::answers_address(
+        relay,
+        REGISTRY_HOST,
+        Duration::from_secs(3),
+    ))
+}
+
+/// The name servers the guest is using, as resolved reports them, or from
+/// `/etc/resolv.conf` where resolved is not running (WSL).
+fn name_servers() -> Vec<String> {
+    let resolved = Command::new("/usr/bin/timeout")
+        .args(["--signal=KILL", "3s", "resolvectl", "dns"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+    let resolv_conf = fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+    parse_name_servers(resolved.as_deref(), &resolv_conf)
+}
+
+/// Every address in `resolvectl dns` output ("Global: 127.0.0.2", "Link 2
+/// (enp0s1): 192.168.64.1"), or failing that the `nameserver` lines of
+/// resolv.conf. resolved's own stub is left out: it says nothing about where
+/// a lookup actually goes.
+pub(crate) fn parse_name_servers(resolvectl: Option<&str>, resolv_conf: &str) -> Vec<String> {
+    let mut servers: Vec<String> = Vec::new();
+    let mut add = |value: &str| {
+        let value = value.trim_end_matches(',');
+        if value.parse::<IpAddr>().is_ok()
+            && value != "127.0.0.53"
+            && !servers.iter().any(|seen| seen == value)
+        {
+            servers.push(value.to_owned());
+        }
+    };
+    match resolvectl {
+        Some(output) => {
+            for line in output.lines() {
+                let values = line.split_once(':').map_or("", |(_, values)| values);
+                values.split_whitespace().for_each(&mut add);
+            }
+        }
+        None => {
+            for line in resolv_conf.lines() {
+                if let Some(address) = line.trim().strip_prefix("nameserver") {
+                    add(address.trim());
+                }
+            }
+        }
+    }
+    servers
+}
+
+/// What an image pull that failed on DNS says about it, in plain words.
+///
+/// Starts with the phrase locald keys on (`registry DNS lookup failed`), then
+/// names the servers that were asked, and -- on macOS -- whether the Mac's own
+/// resolver, through the relay, could answer. That last fact is what tells a
+/// VPN or DNS filter blocking the VM apart from a computer with no network.
+pub(crate) fn dns_failure_hint(name_servers: &[String], relay: Option<bool>) -> String {
+    let asked = if name_servers.is_empty() {
+        "no name server is configured".to_owned()
+    } else {
+        format!("asked {}", name_servers.join(", "))
+    };
+    let relay = match relay {
+        Some(true) => "; the host DNS relay can resolve it, so the VM's resolver is not using it",
+        Some(false) => "; the host DNS relay could not resolve it either",
+        None => "",
+    };
+    format!(
+        "registry DNS lookup failed: Lemma's VM could not look up {REGISTRY_HOST} \
+         ({asked}{relay})"
+    )
 }

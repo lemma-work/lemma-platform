@@ -312,7 +312,7 @@ function renderState(s) {
   // workspace, so a state nothing handles leaves the bare static logo up for
   // good -- which is exactly what a stuck first run looked like. A state with
   // no phase is still a state, and `lastPhase` is how it keeps one.
-  const screen = deriveScreen(s, { lastPhase, sawSetup, isShuttingDown });
+  const screen = deriveScreen(s, { lastPhase, sawSetup, isShuttingDown, windows: IS_WINDOWS });
 
   if (screen.screen === "choosing") {
     showChooser();
