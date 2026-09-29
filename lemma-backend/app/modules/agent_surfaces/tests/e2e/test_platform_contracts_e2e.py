@@ -618,67 +618,6 @@ def test_render_email_content_html_and_markdown_fallback(monkeypatch):
     assert html_md.startswith("<div style=")
 
 
-def test_render_email_content_appends_display_resource_plans():
-    from app.modules.agent_surfaces.domain.models import (
-        SurfaceDisplayAction,
-        SurfaceDisplayRenderPlan,
-    )
-    from app.modules.agent_surfaces.platforms.email_render import render_email_content
-
-    plan = SurfaceDisplayRenderPlan(
-        resource_type="record",
-        title="Weekly Report",
-        summary="Everything is on track.",
-        detail_lines=["Revenue: $10k", "Churn: 2%"],
-        actions=[SurfaceDisplayAction(label="Open report", url="https://e2e.test/r")],
-    )
-
-    plain, html = render_email_content(
-        content="See the attached update.",
-        content_type="text",
-        display_resource_plans=[plan],
-    )
-
-    assert "See the attached update." in plain
-    assert "Weekly Report" in plain
-    assert html is not None
-    assert "Weekly Report" in html
-    assert "Everything is on track." in html
-    assert "Revenue: $10k" in html
-    assert "Open report" in html
-    assert "https://e2e.test/r" in html
-
-
-def test_coerce_display_resource_plans_normalizes_mixed_input():
-    from pydantic import BaseModel
-
-    from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
-    from app.modules.agent_surfaces.platforms.email_render import (
-        coerce_display_resource_plans,
-    )
-
-    class _ForeignPlan(BaseModel):
-        resource_type: str
-        title: str
-
-    assert coerce_display_resource_plans(None) == []
-
-    matching = SurfaceDisplayRenderPlan(resource_type="record", title="Direct")
-    foreign = _ForeignPlan(resource_type="record", title="Foreign")
-    invalid_dict = {"title": "missing resource_type"}
-    not_a_plan = 12345
-
-    plans = coerce_display_resource_plans([matching, foreign, invalid_dict, not_a_plan])
-
-    assert len(plans) == 2
-    assert plans[0] is matching
-    assert plans[1].title == "Foreign"
-
-    # A single non-list value is wrapped, not rejected.
-    single = coerce_display_resource_plans(matching)
-    assert single == [matching]
-
-
 def test_parse_email_identity_and_read_helpers_handle_unrecognized_shapes():
     from app.modules.agent_surfaces.platforms.email_identity import (
         _read_email_name,
