@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Installed by `make hooks`. Runs the pre-PR gate before anything leaves the
+# machine: `make quality`, plus `make quality-frontend` when this branch
+# touches the frontend packages, which `quality` does not look at.
+#
+# SKIP_HOOKS=1 git push ...   skips it once.
+set -euo pipefail
+
+if [[ "${SKIP_HOOKS:-}" == "1" ]]; then
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+make --no-print-directory quality
+
+base="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+if [[ -z "$base" ]] || git diff --name-only "$base" HEAD -- lemma-frontend lemma-harness lemma-typescript | grep -q .; then
+  make --no-print-directory quality-frontend
+fi

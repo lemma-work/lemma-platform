@@ -450,6 +450,7 @@ help:
 	@echo "    make lint-docker        hadolint"
 	@echo "    make lint-docs          typos, over every changed file"
 	@echo "    make lint-config        yamllint + TOML/JSON parse"
+	@echo "    make hooks              opt in to the git hooks: lint on commit, quality on push"
 	@echo ""
 	@echo "  Gates (what CI blocks on)"
 	@echo "    make quality            every gate the 'quality gates' CI job runs — before a PR"
@@ -2241,6 +2242,15 @@ quality-frontend:
 # Everything a PR is judged on locally, short of the test suites themselves.
 # CodeQL is not in it: it runs in CI and reports on the pull request.
 check: quality quality-frontend
+
+# ── Git hooks ─────────────────────────────────────────────────────────────────
+
+# Opt-in git hooks, shared by every worktree of this clone: `pre-commit` runs
+# `make lint` on the staged files, `pre-push` runs `make quality`. SKIP_HOOKS=1
+# skips both for one command; `git config --unset core.hooksPath` removes them.
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "  ✓ hooks installed from .githooks/ (pre-commit: make lint on staged files; pre-push: make quality)"
 
 # ── Migrations ────────────────────────────────────────────────────────────────
 
