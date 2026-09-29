@@ -406,6 +406,18 @@ class PodJoinRequestService:
             )
         )
         if not existing_pod_member:
+            # Decided before anything is written, as removal does: a refusal
+            # leaves the aggregate as it found it. Every approver but an
+            # organization owner may only confer pod roles within their own
+            # bounds (PS-POD-022); being an organization editor is no exception,
+            # as it confers no authority inside a pod they are not a member of.
+            if self.pod_role_service is not None:
+                await self.pod_role_service.require_role_manager_bounds(
+                    pod_id=pod_id,
+                    requester_user_id=requester_user_id,
+                    target_roles=[pod_role],
+                    requester_is_org_owner=approver_is_org_owner,
+                )
             pod_member = PodMemberEntity(
                 pod_id=pod_id,
                 organization_member_id=target_org_member.id,
@@ -413,16 +425,6 @@ class PodJoinRequestService:
             )
             created_member = await self.pod_member_repository.create(pod_member)
             if self.pod_role_service is not None:
-                # Every approver but an organization owner may only confer pod
-                # roles within their own bounds (PS-POD-022). Being an
-                # organization editor is not an exception: it confers no
-                # authority inside a pod the editor is not a member of.
-                await self.pod_role_service.require_role_manager_bounds(
-                    pod_id=pod_id,
-                    requester_user_id=requester_user_id,
-                    target_roles=[pod_role],
-                    requester_is_org_owner=approver_is_org_owner,
-                )
                 await self.pod_role_service.sync_member_roles(
                     pod_id=pod_id,
                     pod_member_id=created_member.id,

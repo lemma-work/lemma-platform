@@ -69,3 +69,37 @@ def test_an_editor_lacks_exactly_what_makes_an_owner():
     assert org_role_permission_ids(OWNER) - org_role_permission_ids(EDITOR) == {
         Permissions.ORG_BILLING_MANAGE
     }
+
+
+@pytest.mark.asyncio
+async def test_an_invitation_naming_a_pod_is_refused_when_the_pod_cannot_be_checked():
+    """Fail closed: unchecked, its pod grant would be honoured on acceptance."""
+    from uuid import uuid4
+
+    from app.modules.identity.domain.errors import IdentityConflictError
+    from app.modules.identity.domain.organization_entities import (
+        OrganizationInvitationEntity,
+        OrganizationMemberEntity,
+    )
+    from app.modules.identity.services.membership_rules import resolve_invited_pod
+
+    org_id = uuid4()
+    invitation = OrganizationInvitationEntity(
+        email="test+x@example.com",
+        organization_id=org_id,
+        role=MEMBER,
+        pod_id=uuid4(),
+        pod_role="POD_ADMIN",
+    )
+    inviter = OrganizationMemberEntity(
+        user_id=uuid4(), organization_id=org_id, role=EDITOR
+    )
+
+    with pytest.raises(IdentityConflictError):
+        await resolve_invited_pod(
+            pod_membership_port=None, invitation=invitation, inviter=inviter
+        )
+    invitation.pod_id = None
+    assert await resolve_invited_pod(
+        pod_membership_port=None, invitation=invitation, inviter=inviter
+    ) == (None, None)

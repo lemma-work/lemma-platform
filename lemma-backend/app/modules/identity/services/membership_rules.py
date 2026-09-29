@@ -96,8 +96,15 @@ async def resolve_invited_pod(
     reaches no pod they are not a member of -- could invite a second address to
     any pod as its administrator.
     """
-    if invitation.pod_id is None or pod_membership_port is None:
+    if invitation.pod_id is None:
         return None, None
+    if pod_membership_port is None:
+        # Fail closed: an invitation that keeps its pod grant unchecked would be
+        # honoured later by any service that does have a port.
+        raise IdentityConflictError(
+            "This invitation names a pod, but pod membership cannot be "
+            "checked right now"
+        )
     details = await pod_membership_port.get_pod_invitation_details(invitation.pod_id)
     pod_organization_id = details[2] if details else None
     if pod_organization_id is None:
