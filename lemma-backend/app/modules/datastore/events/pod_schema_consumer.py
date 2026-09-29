@@ -11,7 +11,7 @@ from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
 from app.core.log.log import get_logger
-from app.modules.datastore.infrastructure.schema_manager import SchemaManager
+from app.modules.datastore.api.dependencies import get_schema_manager
 from app.modules.pod.domain.events import PodCreatedEvent, PodEvents
 
 router = RedisRouter()
@@ -34,6 +34,8 @@ async def on_pod_created(
 
     async def process() -> None:
         parsed = PodCreatedEvent.model_validate(event)
-        await SchemaManager().create_datastore_schema(parsed.pod_id)
+        # The process singleton, not a fresh manager: it remembers that the
+        # query role is already ensured, so each pod costs no catalog probe.
+        await get_schema_manager().create_datastore_schema(parsed.pod_id)
 
     await inbox.process("datastore.pod-schema-bootstrap", event, process)

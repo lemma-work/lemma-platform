@@ -217,7 +217,6 @@ _SANDBOX_BUILD_INPUTS = (
     "lemma-python",
     "lemma-pod-bundle",
     "lemma-cli",
-    "lemma-typescript",
     "lemma-skills",
 )
 

@@ -8,11 +8,13 @@ downloading it -- is `desktop/src/artifact_install/tests/reuse.rs`.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 import re
 import subprocess
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -20,11 +22,18 @@ import pytest
 from scripts.runtime_artifacts import (
     GUEST_INPUTS,
     REPO_ROOT,
+    WORKSPACE_DOCKERFILE,
+    WORKSPACE_IMAGE_FLOOR,
+    WORKSPACE_IMAGE_INPUTS,
     ReusableGuest,
+    ReusableImage,
     guest_fingerprint,
     guest_sidecar,
     reusable_guest,
+    reusable_workspace_image,
     reuse_published_guest,
+    source_date_epoch,
+    workspace_image_fingerprint,
     write_deterministic_zip,
 )
 
@@ -291,10 +300,165 @@ def test_the_manifest_records_the_fingerprint_where_installed_apps_do_not_look()
     """Installed apps read artifact entries with unknown fields refused, so the
     fingerprint must live at the manifest's top level, never in an entry."""
     workflow = (REPO_ROOT / ".github/workflows/release-local-images.yml").read_text()
-    assert '"input_fingerprints": {"guest_runtimes": guest_fingerprints}' in workflow
+    assert '"guest_runtimes": guest_fingerprints,' in workflow
+    assert '"images": {"workspace": workspace_fingerprint},' in workflow
     entry = workflow[workflow.index("guest_runtimes[target] = {") :]
     entry = entry[: entry.index("}")]
     assert "fingerprint" not in entry
     mod = (REPO_ROOT / "desktop/src/artifact_install/mod.rs").read_text()
     reference = mod[mod.index("pub(crate) struct ArtifactRef") - 80 :]
     assert "deny_unknown_fields" in reference[:200]
+
+
+@pytest.fixture
+def image_sources(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    (root / "templates/python").mkdir(parents=True)
+    (root / "Dockerfile").write_text("FROM python@sha256:00\n")
+    (root / "templates/python/uv.lock").write_text("numpy 2.5\n")
+    (root / "floor").mkdir()
+    (root / "floor/lemma.py").write_text("print('floor')\n")
+    return root
+
+
+IMAGE_INPUTS = ("Dockerfile", "templates")
+
+
+def test_the_workspace_fingerprint_moves_with_its_inputs_and_only_them(
+    image_sources: Path,
+) -> None:
+    def fingerprint(epoch: str = "2026-09") -> str:
+        return workspace_image_fingerprint(
+            package_epoch=epoch, root=image_sources, inputs=IMAGE_INPUTS
+        )
+
+    before = fingerprint()
+    assert re.fullmatch(r"[0-9a-f]{64}", before)
+    assert fingerprint() == before
+
+    (image_sources / "floor/lemma.py").write_text("print('newer floor')\n")
+    assert fingerprint() == before, "the floor is not an input"
+
+    assert fingerprint("2026-10") != before
+    (image_sources / "templates/python/uv.lock").write_text("numpy 2.6\n")
+    changed_lock = fingerprint()
+    assert changed_lock != before
+    (image_sources / "Dockerfile").write_text("FROM python@sha256:01\n")
+    assert fingerprint() != changed_lock
+
+
+def test_the_build_epoch_is_the_first_second_of_the_package_month() -> None:
+    assert source_date_epoch("2026-09") == int(
+        datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp()
+    )
+    assert source_date_epoch("2026-12") < source_date_epoch("2027-01")
+
+
+def test_a_malformed_package_epoch_is_refused_before_any_lookup() -> None:
+    for epoch in ("2026-09-01", "2026", "2026-13", "26-09"):
+        with pytest.raises(ValueError, match="YYYY-MM"):
+            workspace_image_fingerprint(package_epoch=epoch)
+
+
+def _dockerfile_sources() -> set[str]:
+    """Every repository path `Dockerfile.workspace` copies into the image."""
+    text = (REPO_ROOT / WORKSPACE_DOCKERFILE).read_text()
+    sources = set()
+    for line in text.splitlines():
+        if not line.startswith("COPY ") or "--from=" in line:
+            continue
+        words = [word for word in line.split()[1:] if not word.startswith("--")]
+        sources.update(words[:-1])
+    return sources
+
+
+def test_everything_the_workspace_image_copies_is_hashed_or_floor() -> None:
+    """A file the image starts copying must be decided about.
+
+    Hashed, it rebuilds the image when it changes. Floor, it is Lemma code the
+    runtime overlay supersedes, and a change to it alone reuses the previous
+    image. Neither, and a change to it would ship in no image at all -- the
+    next release would reuse the old one and nobody would notice.
+    """
+    sources = _dockerfile_sources()
+    assert sources, "the Dockerfile copies nothing from the repository?"
+
+    def under(path: str, prefixes: tuple[str, ...]) -> bool:
+        return any(path == prefix or path.startswith(f"{prefix}/") for prefix in prefixes)
+
+    undecided = sorted(
+        path
+        for path in sources
+        if not under(path, WORKSPACE_IMAGE_INPUTS) and not under(path, WORKSPACE_IMAGE_FLOOR)
+    )
+    assert undecided == []
+    workspace_image_fingerprint(package_epoch="2026-09")  # every input exists
+
+
+def test_an_image_only_script_is_hashed_not_floor() -> None:
+    """A script the overlay does not ship has no newer copy to supersede it.
+
+    `start-workspace-runtime` is the container's command, run before any
+    overlay can have been delivered. Treated as floor, a change to it would
+    wait for the next unrelated image change to ship.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "build_runtime_bundle", REPO_ROOT / "lemma-backend/scripts/build_runtime_bundle.py"
+    )
+    assert spec is not None and spec.loader is not None
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    scripts = "lemma-backend/sandbox-images/scripts/"
+    image_only = {
+        path
+        for path in _dockerfile_sources()
+        if path.startswith(scripts) and path[len(scripts) :] in builder.IMAGE_ONLY_SCRIPTS
+    }
+
+    assert image_only, "the workspace image no longer starts from an image-only script?"
+    assert image_only <= set(WORKSPACE_IMAGE_INPUTS)
+
+
+def image_manifest(
+    fingerprint: str | None,
+    ref: str = "ghcr.io/lemma-work/lemma-workspace:v0.9.0",
+    digest: str = "sha256:" + "a" * 64,
+) -> dict[str, object]:
+    document: dict[str, object] = {"images": {"workspace": {"ref": ref, "digest": digest}}}
+    if fingerprint is not None:
+        document["input_fingerprints"] = {
+            "guest_runtimes": {},
+            "images": {"workspace": fingerprint},
+        }
+    return document
+
+
+def test_the_newest_image_with_the_same_fingerprint_is_reused_under_its_first_ref() -> None:
+    wanted = "1" * 64
+    releases = [
+        ("desktop-nightly-new", image_manifest("2" * 64)),
+        ("desktop-nightly-before-fingerprints", image_manifest(None)),
+        ("desktop-nightly-bad-digest", image_manifest(wanted, digest="sha256:nope")),
+        ("desktop-nightly-pinned-ref", image_manifest(wanted, ref="x@sha256:" + "b" * 64)),
+        (
+            "desktop-nightly-match",
+            image_manifest(wanted, ref="ghcr.io/lemma-work/lemma-workspace:test-0123456789ab"),
+        ),
+        ("v0.8.0", image_manifest(wanted)),
+    ]
+
+    assert reusable_workspace_image(releases, wanted) == ReusableImage(
+        tag="desktop-nightly-match",
+        ref="ghcr.io/lemma-work/lemma-workspace:test-0123456789ab",
+        digest="sha256:" + "a" * 64,
+    )
+    assert reusable_workspace_image(releases, "3" * 64) is None
+
+
+def test_the_release_workflow_reuses_the_workspace_image_by_fingerprint() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/release-local-images.yml").read_text()
+
+    assert "rebuild_workspace_image:" in workflow
+    assert "runtime_artifacts.py workspace-image" in workflow
+    assert "rewrite-timestamp=true" in workflow
+    assert "SOURCE_DATE_EPOCH=" in workflow

@@ -12,10 +12,11 @@ token). The CLI and TUI live in the sibling `lemma-cli` package.
 - import root: `lemma_sdk`
 - Python `>=3.14,<3.15` ([`uv`](https://docs.astral.sh/uv/) recommended)
 
-> **Reading the source.** In a Lemma sandbox the full SDK source is available at
-> `/sdk/lemma-python` (and the TypeScript SDK at `/sdk/lemma-typescript`). When you
-> need an exact signature or response shape, read it rather than guessing —
-> e.g. `cat /sdk/lemma-python/lemma_sdk/resources/data.py`.
+> **Reading the source.** In a Lemma sandbox the SDK is installed, and its source
+> is readable where the interpreter found it:
+> `python -c "import lemma_sdk; print(lemma_sdk.__path__[0])"`. When you need an
+> exact signature or response shape, read it rather than guessing — e.g.
+> `resources/data.py` under that directory.
 
 ## Install
 

@@ -91,5 +91,5 @@ user-facing answer is the `text` message with `metadata.is_final_answer === true
 In React use `useConversationMessages().finalOutputText`; raw shapes are in the SDK
 README.
 
-> Read `/sdk/lemma-typescript/src/react/{useAgentTask,useConversationMessages}.ts`
-> for exact return fields.
+> Read `node_modules/lemma-sdk/dist/react/{useAgentTask,useConversationMessages}.d.ts` in the
+> app project for exact return fields.

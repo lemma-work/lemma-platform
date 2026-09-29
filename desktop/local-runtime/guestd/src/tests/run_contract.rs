@@ -24,6 +24,7 @@ fn run_contract_uses_digest_env_file_private_gateway_and_all_app_ports() {
         &parameters,
         Some(Path::new("/var/lib/lemma/workspaces/box-1")),
         Some(Path::new("/var/lib/lemma/run/runtime-token-box-1/token")),
+        Some(Path::new("/var/lib/lemma/runtime/box-1")),
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
         Path::new(RELAY_DIRECTORY),
@@ -46,6 +47,7 @@ fn run_contract_uses_digest_env_file_private_gateway_and_all_app_ports() {
     assert!(joined.contains(r#""port":4850"#));
     assert!(joined.contains("/var/lib/lemma/run/runtime-token-box-1,dst=/run/lemma-bootstrap"));
     assert!(!joined.contains("lemma-bootstrap,readonly"));
+    assert!(joined.contains("type=bind,src=/var/lib/lemma/runtime/box-1,dst=/opt/lemma-runtime"));
     assert!(joined.ends_with("ghcr.io/lemma/workspace@sha256:abc"));
 }
 
@@ -92,6 +94,7 @@ fn function_contract_is_read_only_ephemeral_and_exposes_only_its_runtime() {
         &parameters,
         None,
         None,
+        None,
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
         Path::new(RELAY_DIRECTORY),
@@ -105,6 +108,10 @@ fn function_contract_is_read_only_ephemeral_and_exposes_only_its_runtime() {
     assert!(joined.contains("/run/lemma-function-cache:rw,exec"));
     assert!(joined.contains("0.0.0.0::8090"));
     assert!(!joined.contains("dst=/workspace"));
+    assert!(
+        !joined.contains("dst=/opt/lemma-runtime"),
+        "a function sandbox has no overlay to keep"
+    );
 }
 
 /// A sandbox cannot fill the guest's disk with its own log.
@@ -139,6 +146,7 @@ fn every_sandbox_runs_with_a_bounded_log() {
             &parameters,
             workspace.then_some(Path::new("/var/lib/lemma/workspaces/box-1")),
             workspace.then_some(Path::new("/var/lib/lemma/run/runtime-token-box-1/token")),
+            workspace.then_some(Path::new("/var/lib/lemma/runtime/box-1")),
             Path::new("/var/lib/lemma/run/private-env"),
             "192.168.64.1",
             Path::new(RELAY_DIRECTORY),
@@ -180,6 +188,7 @@ fn run_arguments(parameters: &EnsureParameters) -> Vec<String> {
         parameters,
         workspace.then_some(Path::new("/var/lib/lemma/workspaces/box-1")),
         workspace.then_some(Path::new("/var/lib/lemma/run/runtime-token-box-1/token")),
+        workspace.then_some(Path::new("/var/lib/lemma/runtime/box-1")),
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
         Path::new(RELAY_DIRECTORY),

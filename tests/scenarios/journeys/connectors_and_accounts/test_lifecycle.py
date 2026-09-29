@@ -58,23 +58,25 @@ async def installed(world, stack):
             server_url=served.base_url,
             spec_url=served.spec_url,
         )
-        # `access_token` is the key the HTTP executor turns into a bearer
-        # header, and the served spec declares no credential schema of its own.
-        credentials = {"access_token": "alice-provider-token"}
     else:
-        connector, credentials = await _a_connector_anyone_can_connect(alice)
         auth_config = await alice.installs_connector(
-            connector, in_organization=organization
+            await _a_connector_anyone_can_connect(alice),
+            in_organization=organization,
         )
     account = await alice.connects_account(
         in_organization=organization,
         auth_config=auth_config,
-        credentials=credentials,
+        # Shaped by the kind's own credential schema: the HTTP connector spends
+        # `access_token` as a bearer header, and a catalogue connector such as
+        # Telegram requires `bot_token` and refuses anything else.
+        credentials=await alice.credential_for(
+            auth_config, holding="alice-provider-token"
+        ),
     )
     return alice, organization, auth_config, account
 
 
-async def _a_connector_anyone_can_connect(alice) -> tuple[str, dict[str, str]]:
+async def _a_connector_anyone_can_connect(alice) -> str:
     """A connector from the catalogue this fixture can install unaided.
 
     Asked of the deployment rather than named here. Which connectors a
@@ -95,64 +97,26 @@ async def _a_connector_anyone_can_connect(alice) -> tuple[str, dict[str, str]]:
     operations picked `sql`, which needs `dialect`, `host` and `database`, and
     took eleven scenarios down with it. `test_an_operation_is_readable` asks the
     operations question for itself, where a lane can answer it.
-
-    Answers the connector *and* the credentials its account takes, because the
-    account is validated against the kind's `credential_schema`. Sending the
-    same `access_token` to every connector was fine while credentials were
-    stored unread; once they were checked, `telegram` refused it for wanting a
-    `bot_token` instead and took eleven scenarios down on setup.
     """
     catalogue = items_of(await alice.api.get("/connectors"))
-    connectable: dict[str, dict[str, str]] = {}
-    for connector in catalogue:
-        kinds = connector.get("kinds") or []
-        if len(kinds) != 1:
-            continue
-        kind = kinds[0]
-        if str(kind.get("auth_scheme", "")).upper() == "OAUTH2":
-            continue
-        if (kind.get("config_schema") or {}).get("required"):
-            continue
-        credentials = _credentials_satisfying(kind.get("credential_schema"))
-        if credentials is not None:
-            connectable[str(connector["id"])] = credentials
+    connectable = [
+        str(connector["id"])
+        for connector in catalogue
+        if len(connector.get("kinds") or []) == 1
+        and str((connector["kinds"][0]).get("auth_scheme", "")).upper() != "OAUTH2"
+        and not ((connector["kinds"][0]).get("config_schema") or {}).get("required")
+    ]
     for preferred in ("telegram",):
         if preferred in connectable:
-            return preferred, connectable[preferred]
+            return preferred
     if connectable:
-        return next(iter(connectable.items()))
+        return connectable[0]
     pytest.skip(
         "this deployment's catalogue has no single-kind connector that can be "
         "installed without configuration and connected without consent, so "
         "there is nothing to install that a scenario could also connect an "
         "account to"
     )
-
-
-def _credentials_satisfying(schema: dict | None) -> dict[str, str] | None:
-    """Placeholder credentials a kind's `credential_schema` will accept.
-
-    None when the schema asks for something a placeholder cannot honestly be —
-    an enum, a number, a URL — since guessing one would turn a setup step into
-    a scenario about validation. Nothing here is ever spent: the account is
-    stored, and only the scenarios with a stand-in provider run an operation.
-    """
-    if not schema:
-        return {"access_token": "alice-provider-token"}
-    properties = schema.get("properties") or {}
-    required = list(schema.get("required") or [])
-    wanted = required or list(properties)[:1]
-    credentials: dict[str, str] = {}
-    for name in wanted:
-        spec = properties.get(name) or {}
-        if spec.get("type", "string") != "string" or spec.get("enum"):
-            return None
-        if spec.get("format") not in (None, "password"):
-            return None
-        credentials[name] = f"alice-{name.replace('_', '-')}"
-    if not credentials and schema.get("additionalProperties", True) is not False:
-        return {"access_token": "alice-provider-token"}
-    return credentials
 
 
 def _a_provider_is_stood_in(stack) -> bool:
@@ -346,7 +310,9 @@ class TestConnectingAnAccount:
         reconnected = await alice.connects_account(
             in_organization=organization,
             auth_config=auth_config,
-            credentials={"access_token": "alice-new-token"},
+            credentials=await alice.credential_for(
+                auth_config, holding="alice-new-token"
+            ),
         )
 
         result = await alice.runs_operation(

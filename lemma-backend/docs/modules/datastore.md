@@ -16,16 +16,16 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | --- | --- |
 | API routers | Table, record, SQL query, file, signed/public file, and WebSocket change APIs |
 | Redis consumer | Queues file indexing from `datastore_events` |
-| streaq tasks | Process files, clean deleted storage paths, recover stale processing rows |
-| API lifespan | Backfills restricted query-role grants; closes datastore engine on app shutdown via core |
-| Worker lifespan | Closes the reindex queue |
+| streaq tasks | Process files, clean deleted storage paths, recover stale processing rows; nightly, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables) |
+| API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily, and the datastore outbox table is created by the first record write |
+| Worker lifespan | Runs the datastore outbox dispatcher; closes the reindex queue |
 
 ## Storage model
 
 | Storage | Meaning |
 | --- | --- |
 | `datastore_tables` | Registry and JSON column schema for each logical table |
-| Per-pod PostgreSQL schema | Physical record tables, constraints, indexes, and RLS policies |
+| Per-pod PostgreSQL schema | Physical record tables, constraints, indexes, and RLS policies. Born readable by the ad-hoc query role (schema `USAGE` plus a per-schema default privilege for its tables); a schema from before that heals on its first query |
 | `datastore_files` | Hierarchical metadata, ownership, processing status, Markdown/index metadata |
 | Object storage/local store | Original bytes, derived Markdown, images, and page renders |
 | `datastore_signed_links` | Durable `/s/{code}` capability grants: object key, expiry, hit ceiling, and revocation. Redis still serves every fetch and keeps the spend counter; the row is what makes a link's lifetime a promise rather than a function of how the operator deployed Redis |

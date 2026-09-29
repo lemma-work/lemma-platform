@@ -55,18 +55,26 @@ async def pod_with_two_records(world, run):
             "not asked to."
         ),
     )
+    # What the instruction says, made true. A new agent holds no grants
+    # (PS-ACCESS-020), so without this even finding the row needs an approval,
+    # and these scenarios would be testing the grant model instead of what an
+    # approval does. Changing anything stays ungranted: that is what the
+    # approval is for.
+    await alice.replaces_agent_grants(
+        agent["name"],
+        grants=[
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table["name"],
+                "permission_ids": ["datastore.table.read", "datastore.record.read"],
+            }
+        ],
+        in_pod=pod,
+    )
     try:
         yield alice, pod, table, first, second, agent
     finally:
         await alice.deletes_pod(pod)
-
-
-def _delete(table: dict, record: dict) -> dict:
-    return {
-        "action": "delete",
-        "table_name": table["name"],
-        "record_id": str(record["id"]),
-    }
 
 
 async def _titles_in(person, table, pod) -> set[str]:

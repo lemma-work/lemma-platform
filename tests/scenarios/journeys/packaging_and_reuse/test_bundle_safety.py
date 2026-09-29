@@ -43,7 +43,7 @@ async def test_an_exported_bundle_contains_no_credentials(world, provider, run):
     await alice.connects_account(
         in_organization=organization,
         auth_config=auth_config,
-        credentials={"access_token": SECRET},
+        credentials=await alice.credential_for(auth_config, holding=SECRET),
     )
     pod = await alice.creates_a_pod(named=run.name("pod"))
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])

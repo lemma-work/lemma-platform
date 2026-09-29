@@ -214,6 +214,7 @@ class ResumeToolReturnBuilder:
             agent_run_id=paused_agent_run_id,
             tool_name=inner_tool,
             args=dict(inner_args),
+            approval_id=tool_call_id,
         )
         if executed["ok"]:
             content = RequestApprovalResponse(
@@ -319,6 +320,7 @@ class ResumeToolReturnBuilder:
         agent_run_id: UUID,
         tool_name: str,
         args: dict[str, object],
+        approval_id: str | None = None,
     ) -> dict[str, object]:
         """Run an approved tool with the user's authority; never raise."""
         deps = await self._build_resume_context(
@@ -331,6 +333,7 @@ class ResumeToolReturnBuilder:
             deps=deps,
             tool_name=tool_name,
             args=args,
+            approval_id=approval_id,
         )
 
     async def _build_resume_context(

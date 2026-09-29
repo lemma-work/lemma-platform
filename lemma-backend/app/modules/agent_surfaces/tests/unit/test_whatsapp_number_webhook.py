@@ -22,6 +22,10 @@ from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     handle_whatsapp_number_webhook,
     verify_whatsapp_number_webhook,
 )
+from app.modules.agent_surfaces.api.controllers.webhook_rejections import (
+    whatsapp_secret_source,
+    whatsapp_signature_rejection,
+)
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.whatsapp_numbers import WhatsAppNumberEntity
 from app.modules.agent_surfaces.services.webhook_security_service import (
@@ -454,3 +458,74 @@ async def test_a_non_ascii_verify_token_is_a_403_and_not_a_500(monkeypatch):
         )
 
     assert raised.value.status_code == 403
+
+
+async def test_a_refused_signature_is_logged_without_the_secret(monkeypatch, caplog):
+    """A refusal is answered to Meta, which nobody here reads.
+
+    Without a line in our own log the only symptom of a mistyped secret on one
+    pooled number was that number going quiet. The line names the number and
+    never carries the secret or the signature it was checked against.
+    """
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    security = SurfaceWebhookSecurityService()
+
+    with caplog.at_level("WARNING"), pytest.raises(SurfaceWebhookAuthenticationError):
+        await handle_whatsapp_number_webhook(
+            _POOLED_NUMBER_ID,
+            _request(_message_for(_POOLED_NUMBER_ID)),
+            security,
+            pooled_number=_lookup(_pooled(app_secret="a-different-app-secret")),
+        )
+
+    (record,) = [
+        r for r in caplog.records if "whatsapp_number_signature_rejected" in r.message
+    ]
+    assert "'reason': 'invalid'" in record.message
+    assert "'verified_with': 'pool'" in record.message
+    assert _POOLED_NUMBER_ID in record.message
+    assert "a-different-app-secret" not in caplog.text
+    assert _POOLED_APP_SECRET not in caplog.text
+    assert "sha256=" not in caplog.text
+
+
+async def test_a_body_naming_another_number_is_logged(monkeypatch, caplog):
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    security = SurfaceWebhookSecurityService()
+
+    with caplog.at_level("WARNING"), pytest.raises(HTTPException):
+        await handle_whatsapp_number_webhook(
+            _POOLED_NUMBER_ID,
+            _request(_message_for("a-co-tenanted-number")),
+            security,
+            pooled_number=_lookup(_pooled()),
+            publish=_Publish(),
+        )
+
+    assert "whatsapp_number_mismatch" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("headers", "app_secret", "reason"),
+    [
+        ({"x-hub-signature-256": "sha256=00"}, None, "unconfigured"),
+        ({}, "configured", "missing"),
+        ({"x-hub-signature-256": "sha256=00"}, "configured", "invalid"),
+    ],
+)
+def test_a_refusal_says_which_of_the_three_checks_failed(headers, app_secret, reason):
+    """Each needs a different fix: set the secret, fix Meta's config, or the key."""
+    assert (
+        whatsapp_signature_rejection(headers=headers, app_secret=app_secret) == reason
+    )
+
+
+def test_a_refusal_says_which_secret_was_tried():
+    """A row with its own secret, a row falling back, and no row at all.
+
+    The third is worth telling apart from the second: a per-number URL for a
+    number the pool has never heard of is itself the likely misconfiguration.
+    """
+    assert whatsapp_secret_source(_pooled()) == "pool"
+    assert whatsapp_secret_source(_pooled(app_secret=None)) == "settings"
+    assert whatsapp_secret_source(None) == "not_in_pool"

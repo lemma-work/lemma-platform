@@ -168,6 +168,23 @@ decide without a container listing, skips any image a pull holds a claim on,
 and never passes `--force` to `rmi`, so the engine's own in-use refusal is a
 second guard. The next `sandbox.ensure` that needs a removed image pulls it.
 
+The sandbox images are fetched only when somebody asks (This Mac → Coding
+agents, `sandbox.prepare`), with one exception: an update. When this computer
+has fetched sandbox images before and the release pins different ones, locald
+fetches them after `ready`, behind the workspace, so the download is not
+waiting at the next Wake up. Once per release: `sandbox-images.json` in
+locald's state records the images last fetched and the ones last fetched
+unasked, written before the fetch starts, so a failure is offered in Settings
+rather than retried on every start. With the workspace image reused across
+releases this usually finds it already there. While it downloads,
+`core.sandbox_images_status` carries the MB done and in total across both
+images, and the workspace notice and the Settings row show them.
+
+A workspace sandbox's runtime overlay is bind-mounted from
+`runtime/<sandbox>` beside its home on the data disk, at `/opt/lemma-runtime`,
+so it survives the container being replaced; purging the sandbox's storage and a
+local-data reset remove it.
+
 This Mac → Overview shows the data disk's allocated size (blocks, never the
 24 GiB length), the pre-migration backup (§5), and the runtime releases, in
 `control.snapshot`'s `disk_usage` plus the releases the app adds; the
@@ -1140,6 +1157,38 @@ input forces a build.
 
 The host pack is not fingerprinted: its `release.json` names the version and
 the digests of images built in the same run, so it differs every release.
+
+#### The workspace image is reused across releases
+
+On Desktop the workspace image's digest is the sandbox's identity: the backend's
+profile digest is the image's own (`profiles._digest_for`), and guestd replaces a
+container whose `lemma.work/image-ref` differs. A new workspace image therefore
+replaced every sandbox and downloaded the whole image at the next Wake up. Lemma's
+own code no longer needs one -- it reaches every sandbox in the runtime overlay
+([sandbox layout](sandbox/README.md#one-layout-a-stable-image-a-floor-and-the-overlay))
+-- so the image is rebuilt only when what decides its content changes.
+
+`scripts/runtime_artifacts.py workspace-image` hashes those inputs:
+`Dockerfile.workspace` (which pins its base images by digest), the Python and
+Node lockfiles and profile scripts, the container's own start script, and the
+month, for the unpinned Debian archive. The floor -- Lemma's code the image also
+bakes -- is deliberately not an input, and a guard test fails when the
+Dockerfile starts copying a file that is neither hashed nor floor. The manifest
+records the result as `input_fingerprints.images.workspace`. When the newest
+published release with the same fingerprint has its image in the registry with
+both platforms, both architecture builds are skipped; `merge` tags that index
+with this release's name and the manifests point at its digest under the
+reference it was **first** published with, since a new tag on the same digest
+would still change the image reference guestd compares. The
+`rebuild_workspace_image` dispatch input forces a build.
+
+Both sandbox images are also built reproducibly -- digest-pinned bases,
+`SOURCE_DATE_EPOCH` from the fingerprint's month, `rewrite-timestamp`, and
+nothing left in a layer that records when it was built -- so a rebuild of the
+same inputs gives the same layers. The function image is still rebuilt every
+release, since it bakes `sandbox_runtime.function` and has no overlay; its
+layers are ordered so a release that changed only Lemma's code changes only the
+small ones at the top.
 
 `release-desktop.yml`:
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import threading
-
 import email.utils
 import json
 import time
@@ -54,6 +52,10 @@ _REPLAYABLE_METHODS = frozenset({"get", "head", "options"})
 # and read as a plain SDK call, which is the honest default -- an unknown caller
 # must never be counted as a person in a browser.
 _CLIENT_ENV_VAR = "LEMMA_CLIENT"
+# The declared client's own version. A CLI is its own release, not the SDK's:
+# the server compares the CLI's version with its own to suggest an upgrade, and
+# the SDK's version would answer a question nobody asked.
+_CLIENT_VERSION_ENV_VAR = "LEMMA_CLIENT_VERSION"
 _KNOWN_CLIENTS = frozenset({"lemma-cli", "lemma-desktop", "lemma-web", "lemma-app"})
 
 
@@ -73,7 +75,8 @@ def _client_header() -> str:
 
     declared = (os.environ.get(_CLIENT_ENV_VAR) or "").strip()
     if declared in _KNOWN_CLIENTS:
-        return f"{declared}/{ver}"
+        declared_version = (os.environ.get(_CLIENT_VERSION_ENV_VAR) or "").strip()
+        return f"{declared}/{declared_version or ver}"
     return f"lemma-sdk-py/{ver}"
 
 
@@ -94,35 +97,35 @@ def _refreshed_session(payload: object) -> tuple[str, str | None] | None:
     return access_token, rotated if isinstance(rotated, str) and rotated else None
 
 
-#: Set by the server on requests from a ``lemma`` CLI older than it supports;
-#: the value is the minimum version. Only the CLI is ever sent it.
-_OUTDATED_HEADER = "x-lemma-client-outdated"
-# Set once the outdated-CLI notice has been printed: once per process.
-_outdated_notice = threading.Event()
+#: Set by the server on requests from a ``lemma`` CLI older than its own
+#: release; the value is that release. Advice, never a refusal, and only the CLI
+#: is ever sent it.
+_LATEST_CLI_HEADER = "x-lemma-latest-cli"
+_suggested_cli: str | None = None
 
 
-def _warn_if_outdated(headers: Any) -> None:
-    """Tell the person, once per process and on stderr, that the CLI is stale.
+def _note_latest_cli(headers: Any) -> None:
+    """Remember the newest CLI release a server has suggested this process.
 
-    stderr so ``--json`` output on stdout stays parseable. Never raises: a
-    notice must not turn a successful call into a failure.
+    The SDK only records it: saying so is the CLI's job, because only the CLI
+    knows how often it has already said it and whether ``lemma update`` can act
+    here. Never raises -- a hint must not turn a successful call into a failure.
     """
-    if _outdated_notice.is_set() or not headers:
+    if not headers:
         return
     try:
-        minimum = headers.get(_OUTDATED_HEADER)
+        latest = headers.get(_LATEST_CLI_HEADER)
     except AttributeError:
         return
-    if not minimum:
+    if not latest:
         return
-    _outdated_notice.set()
-    import sys
+    global _suggested_cli
+    _suggested_cli = str(latest)
 
-    current = _client_header().partition("/")[2] or "unknown"
-    sys.stderr.write(
-        f"lemma: this CLI ({current}) is older than the server supports "
-        f"({minimum}). Run `lemma update` or reinstall.\n"
-    )
+
+def suggested_cli_version() -> str | None:
+    """The CLI release a server suggested during this process, if any."""
+    return _suggested_cli
 
 
 class LemmaTransport:
@@ -239,7 +242,7 @@ class LemmaTransport:
 
             status_code = int(response.status_code)
             headers = getattr(response, "headers", {}) or {}
-            _warn_if_outdated(headers)
+            _note_latest_cli(headers)
             # Short-circuit order matters: reading the verb rebuilds the
             # request, so it only happens on the rare path where a retry is
             # otherwise on the table.
@@ -301,7 +304,7 @@ class LemmaTransport:
         except httpx.TransportError as exc:
             raise LemmaConnectionError(str(exc) or "Network request failed") from exc
 
-        _warn_if_outdated(response.headers)
+        _note_latest_cli(response.headers)
         if response.status_code >= 400:
             content = response.read()
             response.close()
@@ -404,7 +407,7 @@ class LemmaTransport:
                 ) from exc
 
             status_code = response.status_code
-            _warn_if_outdated(response.headers)
+            _note_latest_cli(response.headers)
             if _should_retry(status_code, method) and attempt < self._max_retries:
                 time.sleep(_retry_delay(attempt, response.headers.get("retry-after")))
                 attempt += 1

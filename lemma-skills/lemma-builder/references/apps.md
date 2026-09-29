@@ -205,9 +205,9 @@ pass `appName` only to override that identity in local development. Prefer **hoo
 Plus **generated CRUD hooks** (`use<Resource>List/Get/Create/Update/Delete` for
 records/agents/tables/schedules/apps/functions/workflows) — TanStack-Query hooks
 where a write **auto-refreshes the matching list** (need a `QueryClientProvider`,
-which the scaffold mounts). The SDK source ships in the sandbox at
-**`/sdk/lemma-typescript`** — read it for exact signatures
-(`cat /sdk/lemma-typescript/src/react/useRecords.ts`).
+which the scaffold mounts). The scaffold depends on `lemma-sdk`, so its type
+declarations are in the app project's **`node_modules/lemma-sdk/dist/`** — read
+them for exact signatures (`cat node_modules/lemma-sdk/dist/react/useRecords.d.ts`).
 
 ## Calling the API well — fetch once, subscribe, don't re-render the world
 

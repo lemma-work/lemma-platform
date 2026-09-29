@@ -273,6 +273,30 @@ async def test_a_workspace_binds_its_volume_at_the_workspace_root() -> None:
     assert container.labels["workspace-storage-id"] == "ab-ws-adopted"
 
 
+async def test_a_workspace_keeps_its_runtime_overlay_in_a_volume_of_its_own() -> None:
+    """The overlay outlives the container, and is never taken for the user's disk."""
+    engine = FakeDockerEngine()
+    sandbox_id = uuid4()
+    await _provider(engine).create(_spec(sandbox_id, volume_name="lemma-vol-1"))
+
+    container = engine.containers[
+        naming.container_name(sandbox_id, SandboxKind.WORKSPACE, 1)
+    ]
+    assert "lemma-vol-1:/home/user" in container.binds
+    assert "lemma-vol-1-runtime:/opt/lemma-runtime" in container.binds
+    assert naming.parse_volume_name("lemma-vol-1-runtime") is None
+
+
+async def test_destroying_a_workspace_disk_destroys_its_overlay_volume() -> None:
+    engine = FakeDockerEngine()
+    for name in ("lemma-vol-1", "lemma-vol-1-runtime", "lemma-vol-2-runtime"):
+        engine.volumes[name] = DockerVolume.model_validate({"Name": name, "Labels": {}})
+
+    await _provider(engine).destroy_volume("lemma-vol-1", deadline_at=_deadline())
+
+    assert set(engine.volumes) == {"lemma-vol-2-runtime"}
+
+
 async def test_local_mounts_are_bound_alongside_the_volume() -> None:
     """Phase 3 rides on this: a bound host folder is just another bind."""
     engine = FakeDockerEngine()

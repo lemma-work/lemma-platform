@@ -386,15 +386,15 @@ async def _run_if_exact_match_already_approved(
     and made the identical sequence succeed, which is what made it look like
     magic rather than a bug.
     """
-    from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
     from app.core.authorization.session_approvals import (
         exact_command_permission_id,
         has_session_approval,
     )
+    from app.modules.agent.tools.authority import workload_actor_id as actor_of
 
-    workload_actor_id = (
-        f"agent:{getattr(deps, 'workload_id', None) or DEFAULT_POD_AGENT_ID}"
-    )
+    # The same key the agent's own delegated context carries, so an approval
+    # recorded for this agent is found by the same derivation that checks it.
+    workload_actor_id = actor_of(deps)
 
     # Every permission this call needs must ALREADY be granted -- the exact
     # command key on its own is not enough. `permission_ids` is a tool argument,

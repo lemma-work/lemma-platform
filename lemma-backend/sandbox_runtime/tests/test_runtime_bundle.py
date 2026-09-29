@@ -18,6 +18,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import subprocess
+import sys
 import zipfile
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -116,7 +118,14 @@ def test_console_scripts_name_the_sandbox_interpreter(payload: Path) -> None:
     does not exist. It also puts the build directory into the bundle's digest,
     so a laptop and CI would disagree about the version of identical code.
     """
-    scripts = sorted((payload / "bin").iterdir())
+    image_scripts = {
+        command
+        for commands in build_runtime_bundle.SCRIPT_NAMES.values()
+        for command in commands
+    }
+    scripts = sorted(
+        path for path in (payload / "bin").iterdir() if path.name not in image_scripts
+    )
 
     assert scripts, "the bundle ships no console scripts"
     assert not (payload / "site-packages" / "bin").exists(), (
@@ -269,3 +278,179 @@ def test_the_backend_image_builds_the_bundle_from_its_own_sources(
         assert f"COPY {project} /{project}" in dockerfile, (
             f"{project} is not beside the others in the builder stage"
         )
+
+
+#: Modules a sandbox process imports after the overlay is installed, beyond the
+#: ones the installer's own smoke test proves. Each is reached by a real
+#: process: the relay through `browser_relay.chrome`, `execute_python` through
+#: the Python worker, loopback fall-through through `host_fallback`.
+_IMPORTED_UNDER_THE_OVERLAY = (
+    "sandbox_runtime.paths",
+    "sandbox_runtime.browser_relay.chrome",
+    "sandbox_runtime.workspace.python_worker",
+    "sandbox_runtime.host_fallback",
+)
+
+
+def test_an_installed_overlay_leaves_every_sandbox_module_importable(
+    site_packages: Path,
+) -> None:
+    """The overlay sits at ``sys.path[0]`` and the image's own copy comes last.
+
+    ``sandbox_runtime`` is a regular package, so the first directory that has
+    it wins outright: Python never looks in the image's copy for a submodule
+    the overlay lacks. A bundle carrying part of the package therefore does
+    not add to the image's copy, it replaces it, and every module left out
+    stops existing the moment the overlay is installed.
+    """
+    program = (
+        "import importlib, sys\n"
+        f"sys.path.insert(0, {str(site_packages)!r})\n"
+        f"sys.path.append({str(_BACKEND)!r})\n"
+        "failed = []\n"
+        f"for name in {list(_IMPORTED_UNDER_THE_OVERLAY)!r}:\n"
+        "    try:\n"
+        "        importlib.import_module(name)\n"
+        "    except ImportError as exc:\n"
+        "        failed.append(f'{name}: {exc}')\n"
+        "sys.exit('; '.join(failed) if failed else 0)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", program],
+        capture_output=True,
+        text=True,
+        cwd=site_packages.parent,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _load_import_resolver():
+    path = Path(__file__).with_name("test_e2b_templates_ship_their_imports.py")
+    spec = spec_from_file_location("sandbox_import_resolver", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_runtime_bundle_import_closure(site_packages: Path) -> None:
+    """Every ``sandbox_runtime`` module the bundle ships finds its imports there.
+
+    Read from the built archive, not from ``RUNTIME_SOURCES``: the question is
+    what a sandbox gets, and a module the build dropped would be as missing as
+    one nobody listed.
+    """
+    resolver = _load_import_resolver()
+    shipped = {
+        path.relative_to(site_packages)
+        .with_suffix("")
+        .as_posix()
+        .replace("/", ".")
+        .removesuffix(".__init__")
+        for path in (site_packages / "sandbox_runtime").rglob("*.py")
+    }
+
+    missing = {
+        f"{module} -> {needed}"
+        for module in sorted(shipped)
+        for needed in resolver._imports_of(module)
+        if needed not in shipped
+    }
+
+    assert not missing, f"the bundle ships modules whose imports it does not: {missing}"
+
+
+def test_the_installer_proves_every_required_module_imports(
+    site_packages: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What ``runtime_install._smoke_test`` imports, with the overlay in front.
+
+    The same program the installer runs inside the sandbox, so a module named
+    in ``requires`` that cannot import from the bundle fails here first rather
+    than on every sandbox the release reaches. Run from an empty directory, as
+    the installer is: ``python -c`` puts the working directory ahead of
+    everything, and this checkout's own ``sandbox_runtime`` would win.
+    """
+    from sandbox_runtime import runtime_install
+
+    monkeypatch.chdir(tmp_path)
+    runtime_install._smoke_test(
+        site_packages, list(build_runtime_bundle.REQUIRED_IMPORTS)
+    )
+
+
+def test_every_workspace_side_module_is_in_the_bundle() -> None:
+    """A new module under ``sandbox_runtime`` is shipped or excluded on purpose.
+
+    Leaving one out is not a smaller bundle. The overlay replaces the image's
+    copy of the package, so the module stops existing in every sandbox that
+    has the overlay.
+    """
+    decided = {
+        *build_runtime_bundle.RUNTIME_SOURCES,
+        *build_runtime_bundle.RUNTIME_EXCLUDED,
+    }
+    present = {
+        path.relative_to(_BACKEND).as_posix()
+        for path in (_BACKEND / "sandbox_runtime").iterdir()
+        if path.name != "__pycache__"
+    }
+
+    assert present - decided == set()
+    assert decided - present == set()
+
+
+def test_the_image_scripts_travel_with_the_overlay(
+    payload: Path, built: tuple[dict, Path]
+) -> None:
+    """Under the names the images install them as, executable, with LF endings."""
+    _, out_dir = built
+    with zipfile.ZipFile(out_dir / "runtime-bundle.zip") as archive:
+        modes = {info.filename: info.external_attr >> 16 for info in archive.infolist()}
+    for name, commands in build_runtime_bundle.SCRIPT_NAMES.items():
+        source = _BACKEND / build_runtime_bundle.SCRIPTS_DIRECTORY / name
+        for command in commands:
+            shipped = payload / "bin" / command
+            assert shipped.is_file(), f"bin/{command} is missing"
+            assert modes[f"bin/{command}"] == 0o755, f"bin/{command} is not executable"
+            assert shipped.read_bytes() == source.read_bytes().replace(b"\r\n", b"\n")
+    for name in build_runtime_bundle.SCRIPT_LIBRARIES:
+        assert (payload / "lib" / name).is_file()
+    for name in build_runtime_bundle.IMAGE_ONLY_SCRIPTS:
+        assert not (payload / "bin" / name.removesuffix(".sh")).exists()
+
+
+def test_a_script_nobody_classified_stops_the_build(tmp_path: Path) -> None:
+    backend = tmp_path / "backend"
+    scripts = backend / build_runtime_bundle.SCRIPTS_DIRECTORY
+    scripts.mkdir(parents=True)
+    for name in (
+        *build_runtime_bundle.SCRIPT_NAMES,
+        *build_runtime_bundle.SCRIPT_LIBRARIES,
+        *build_runtime_bundle.IMAGE_ONLY_SCRIPTS,
+        "brand-new-helper.sh",
+    ):
+        (scripts / name).write_text("#!/bin/sh\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="brand-new-helper.sh"):
+        build_runtime_bundle._copy_scripts(tmp_path / "payload", backend)
+
+
+def test_a_crlf_checkout_ships_the_same_scripts(tmp_path: Path) -> None:
+    """A Windows checkout may have rewritten every line ending."""
+    backend = tmp_path / "backend"
+    scripts = backend / build_runtime_bundle.SCRIPTS_DIRECTORY
+    scripts.mkdir(parents=True)
+    for name in (
+        *build_runtime_bundle.SCRIPT_NAMES,
+        *build_runtime_bundle.SCRIPT_LIBRARIES,
+        *build_runtime_bundle.IMAGE_ONLY_SCRIPTS,
+    ):
+        (scripts / name).write_bytes(b"#!/bin/sh\r\necho ok\r\n")
+
+    build_runtime_bundle._copy_scripts(tmp_path / "payload", backend)
+
+    assert (tmp_path / "payload" / "bin" / "save-webpage").read_bytes() == (
+        b"#!/bin/sh\necho ok\n"
+    )
