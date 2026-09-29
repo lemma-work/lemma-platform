@@ -195,17 +195,23 @@ class PodSteps:
         )
 
     async def is_refused_approving(
-        self, join_request: JSON, *, for_pod: JSON, org_role: str = "ORG_OWNER"
+        self,
+        join_request: JSON,
+        *,
+        for_pod: JSON,
+        org_role: str = "ORG_OWNER",
+        pod_role: str = "POD_USER",
     ) -> int:
         response = await self.api.call(
             "POST",
             f"/pods/{for_pod['id']}/join-requests/{join_request['id']}/approve",
-            json={"pod_role": "POD_USER", "org_role": org_role},
+            json={"pod_role": pod_role, "org_role": org_role},
         )
         if response.status_code < 400:
             raise AssertionError(
-                f"{self.label} was expected to be refused approving with org role "
-                f"{org_role}, but it succeeded ({response.status_code})"
+                f"{self.label} was expected to be refused approving as "
+                f"{pod_role} with org role {org_role}, but it succeeded "
+                f"({response.status_code})"
             )
         return response.status_code
 

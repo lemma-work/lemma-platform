@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **186** |
 
-Scenario tests declaring a promise: 404.
+Scenario tests declaring a promise: 413.
 
 ## Contract coverage
 
@@ -105,13 +105,13 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-001` A member of an organization creates a pod and administers it | `covered` | `test_pod_creator_administers_it`, `test_outsider_cannot_create_a_pod` |
 | `PS-POD-002` A pod's name identifies it within its organization | `covered` | `test_pod_names_are_unique_within_an_organization`, `test_a_pod_name_is_scoped_to_its_organization`, `test_a_deleted_pods_name_is_reusable` |
 | `PS-POD-003` A pod carries the settings its work depends on | `covered` | `test_a_partial_update_leaves_the_rest_of_the_settings`, `test_an_icon_round_trips` |
-| `PS-POD-010` A pod admin adds an organization member to the pod | `covered` | `test_a_member_can_be_found`, `test_adding_an_existing_member_again_is_refused`, `test_a_pod_cannot_widen_its_organization`, `test_admin_adds_an_organization_member` |
+| `PS-POD-010` A pod admin adds an organization member to the pod | `covered` | `test_an_organization_owner_administers_a_pod_they_are_not_in`, `test_a_member_can_be_found`, `test_adding_an_existing_member_again_is_refused`, `test_a_pod_cannot_widen_its_organization`, `test_admin_adds_an_organization_member` |
 | `PS-POD-011` A person's pod role decides what they may do inside it | `covered` | `test_an_outsider_cannot_create_a_workflow`, `test_a_viewer_reads_but_does_not_write`, `test_a_role_change_applies_to_the_next_request` |
 | `PS-POD-012` A person can find out what they may do, before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
 | `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `covered` | `test_a_roles_permissions_can_change`, `test_a_role_can_be_described_and_removed`, `test_a_custom_role_is_created_and_assignable`, `test_a_role_cannot_exceed_its_creator`, `test_an_unknown_permission_is_refused_clearly` |
 | `PS-POD-020` A pod decides who may walk in | `covered` | `test_a_new_pod_is_invite_only`, `test_an_org_open_pod_admits_members`, `test_an_outsider_cannot_join_an_org_open_pod` |
-| `PS-POD-021` A person asks for access and an admin decides | `covered` | `test_a_person_sees_their_own_request`, `test_a_join_request_is_approved` |
-| `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions` |
+| `PS-POD-021` A person asks for access and an admin decides | `covered` | `test_an_organization_editor_cannot_make_themselves_a_pod_administrator`, `test_a_person_sees_their_own_request`, `test_a_join_request_is_approved` |
+| `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions`, `test_an_organization_editor_cannot_make_themselves_a_pod_administrator`, `test_an_invitation_cannot_smuggle_a_pod_administrator` |
 | `PS-POD-030` A person sees exactly the pods they may open | `covered` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
 | `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
@@ -153,16 +153,16 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
-| `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_invitation_is_addressed` |
-| `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `covered` | `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
+| `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_editor_invites_up_to_their_own_level`, `test_an_invitation_is_addressed` |
+| `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `covered` | `test_an_invitation_cannot_smuggle_a_pod_administrator`, `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
 | `PS-ONB-023` Inviting someone already inside is refused clearly | `covered` | `test_inviting_an_existing_member_is_refused` |
 | `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_an_unproven_address_is_not_shown_its_invitations`, `test_an_owner_sees_sent_invitations` |
 | `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
 | `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join`, `test_an_open_organization_admits_anyone_as_a_member`, `test_joining_again_changes_nothing` |
-| `PS-ONB-040` An owner changes what a member may do | `covered` | `test_an_owner_changes_a_role`, `test_a_member_cannot_change_roles` |
+| `PS-ONB-040` Whoever manages people changes what a member may do | `covered` | `test_an_owner_changes_a_role`, `test_a_member_cannot_change_roles`, `test_an_editor_changes_roles_up_to_their_own_level`, `test_an_editor_cannot_make_an_owner`, `test_an_editor_cannot_reach_over_an_owner`, `test_a_member_manages_nobody` |
 | `PS-ONB-041` An organization always has at least one owner | `covered` | `test_the_last_owner_cannot_step_down` |
-| `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_removing_a_member_takes_their_access` |
+| `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_an_editor_cannot_reach_over_an_owner`, `test_an_editor_removes_members_and_editors`, `test_a_member_manages_nobody`, `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
 | `PS-ONB-060` A visitor can learn about Lemma without signing in | `covered` | `test_public_guides_and_company_pages` |

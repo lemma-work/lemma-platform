@@ -12,7 +12,7 @@ import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import { isLocalDeployment } from "@/site/config";
 import {
-    ROLES, alreadyKnown, canManage, canSetJoinPolicy, canSetRole, inviteProblem, isLastOwner,
+    ROLES, alreadyKnown, canActOn, canManage, canSetJoinPolicy, canSetRole, inviteProblem, isLastOwner,
     linkOnlyOpensHere, memberEmail, memberName, roleLabel, unsentInvitation, type Member, type Role,
 } from "./membership";
 import { WhoCanJoinOrg } from "./who-can-join-org";
@@ -261,6 +261,7 @@ export function PeopleSection({ orgId }: { orgId: string }) {
                     {people.map((member) => {
                         const mine = member.user_id === me.data?.id;
                         const last = isLastOwner(people, member.id);
+                        const reachable = canActOn(myRole, member.role);
                         const email2 = memberEmail(member);
                         return (
                             <li className="person" key={member.id}>
@@ -268,7 +269,7 @@ export function PeopleSection({ orgId }: { orgId: string }) {
                                     <strong>{memberName(member)}{mine && <span className="person__you">you</span>}</strong>
                                     {email2 && <small>{email2}</small>}
                                 </div>
-                                {manage && !last ? (
+                                {manage && !last && reachable ? (
                                     <select
                                         className="person__role"
                                         value={member.role ?? "ORG_MEMBER"}
@@ -287,8 +288,8 @@ export function PeopleSection({ orgId }: { orgId: string }) {
                                 )}
                                 {/* Removing the last owner would leave an
                                     organization nobody can ever change again. */}
-                                {(!manage || last || mine) && <span className="person__gap" aria-hidden="true" />}
-                                {manage && !last && !mine && (
+                                {(!manage || last || mine || !reachable) && <span className="person__gap" aria-hidden="true" />}
+                                {manage && !last && !mine && reachable && (
                                     <button
                                         className="person__remove"
                                         title={"Remove " + memberName(member)}

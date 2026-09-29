@@ -22,6 +22,7 @@ from app.modules.pod.contracts.members import (
     pod_invitation_details,
     pod_member_id,
     pod_organization_id,
+    refuse_pod_role_beyond_inviter,
 )
 
 
@@ -57,5 +58,21 @@ class SqlAlchemyPodMembershipAdapter(PodMembershipPort):
             user_id=user_id,
             user_email=user_email,
             user_name=user_name,
+            pod_role=pod_role,
+        )
+
+    async def refuse_pod_role_beyond_inviter(
+        self,
+        *,
+        pod_id: UUID,
+        inviter_user_id: UUID,
+        inviter_is_org_owner: bool,
+        pod_role: str,
+    ) -> None:
+        await refuse_pod_role_beyond_inviter(
+            self._uow,
+            pod_id=pod_id,
+            inviter_user_id=inviter_user_id,
+            inviter_is_org_owner=inviter_is_org_owner,
             pod_role=pod_role,
         )
