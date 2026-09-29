@@ -1,11 +1,15 @@
 """Visitors can discover Lemma and keep following their existing links."""
 
-from harness import capability, journey, proves, scenario
+from harness import capability, journey, proves, scenario, source_build
 from harness.public_site import PublicWebsite
 
 pytest_plugins = ["harness.public_site"]
 
-pytestmark = [journey("Getting started"), capability("Explore the public website")]
+pytestmark = [
+    journey("Getting started"),
+    capability("Explore the public website"),
+    source_build("builds lemma-frontend from this checkout and serves it locally"),
+]
 
 
 @scenario("A visitor can read every indexed guide without signing in")

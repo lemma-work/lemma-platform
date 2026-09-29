@@ -55,6 +55,12 @@ COMPOSIO_ORG_CREDENTIALS_REQUIRED = (
 )
 COMPOSIO_SYSTEM_DEFAULT_REASON = "system_default_not_available_for_composio"
 
+# The native counterpart: an OAuth2 connector installed with the deployment's
+# own app when the deployment has none. Worded for the person differently from
+# the Composio case, so a client that has to tell "no credentials behind this"
+# apart from every other refusal reads this rather than the sentence.
+SYSTEM_DEFAULT_OAUTH_NOT_CONFIGURED_REASON = "system_default_oauth_not_configured"
+
 
 class AuthConfigEntity(Entity):
     """One organization's install of a connector.
