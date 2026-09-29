@@ -1105,6 +1105,23 @@ jobs:
           print(json.dumps(manifest, indent=2))
           PY
 
+      # The release page is where people land to download the DMG, so its
+      # description is written for them: docs/release-notes/v<version>.md,
+      # committed with the release (see docs/versioning.md). Without that file
+      # the page falls back to GitHub's generated list of merged pull requests.
+      - name: Choose the release description
+        id: notes
+        if: github.event_name == 'push' || inputs.publish
+        run: |
+          notes="docs/release-notes/v${{ steps.version.outputs.version }}.md"
+          if [ -f "$notes" ]; then
+            echo "path=$notes" >> "$GITHUB_OUTPUT"
+            echo "Using $notes as the release description"
+          else
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "::warning::No $notes -- the release page will show the generated pull request list"
+          fi
+
       - name: Attach manifest to release
         if: github.event_name == 'push' || inputs.publish
         uses: softprops/action-gh-release@v3
@@ -1114,10 +1131,11 @@ jobs:
             lemma-local.json
             host-packs/lemma-host-pack-*.zip
             guest-runtimes/lemma-guest-runtime-*.zip
-          # Only generate release notes on a real tag push; workflow_dispatch
+          # Only a real tag push writes the description; workflow_dispatch
           # re-runs are used to repair an existing release (backfill the
           # lemma-local.json asset) and must not overwrite the release body.
-          generate_release_notes: ${{ github.event_name == 'push' }}
+          body_path: ${{ github.event_name == 'push' && steps.notes.outputs.path || '' }}
+          generate_release_notes: ${{ github.event_name == 'push' && steps.notes.outputs.path == '' }}
 
       # The step above creates the `v*` release, and creating it is what is
       # supposed to start `release-desktop.yml` -- it listens for

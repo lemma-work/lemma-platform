@@ -53,6 +53,10 @@ wrong interpreter does not fail with "module not found", it reports a
   product is *meant* to do, not what the code currently does.
 - **[docs/testing.md](docs/testing.md)** — the three suites, which one your
   change needs, and what gates what.
+- **Cutting a release** — [docs/versioning.md](docs/versioning.md): every
+  component moves together, the changelog entry, and the release notes in
+  `docs/release-notes/v<version>.md` that become the GitHub Release page
+  people download the app from.
 - **Desktop and the Agent Host** — the
   [Desktop test matrix](CONTRIBUTING.md#desktop-test-matrix) says which lane a
   change extends and which document it updates. The documents:
