@@ -1,7 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { quote, serverSteps, setupCommands, setupPrompt, starterPrompts } from "../src/space/agent-access-model.ts";
+import {
+    MCP_CLIENTS,
+    accessLabel,
+    disconnectClient,
+    mcpUrl,
+    quote,
+    reachableFromInternet,
+    serverName,
+    serverSteps,
+    setupCommands,
+    setupPrompt,
+    starterPrompts,
+} from "../src/space/agent-access-model.ts";
 
 const pod = { id: "0b6f3c1e-1111-4222-8333-944455556666", name: "Marketing" } as Parameters<typeof setupPrompt>[0];
 const claude = { id: "claude", label: "Claude Code", target: "claude", launch: null };
@@ -34,4 +46,41 @@ test("every starter prompt names the space and its pod id", () => {
     for (const item of starterPrompts(pod)) {
         assert.ok(item.prompt.includes("Marketing") && item.prompt.includes(pod.id), item.title);
     }
+});
+
+test("a space's MCP URL hangs off the API, one per space", () => {
+    assert.equal(mcpUrl("https://api.lemma.work", pod.id), "https://api.lemma.work/mcp/" + pod.id);
+    assert.equal(mcpUrl("https://example.test/api/", pod.id), "https://example.test/api/mcp/" + pod.id);
+    assert.equal(mcpUrl(null, pod.id), null);
+    assert.equal(mcpUrl("not a url", pod.id), null);
+});
+
+test("Claude and ChatGPT are told when the API is only on this computer", () => {
+    assert.equal(reachableFromInternet("https://api.lemma.work/mcp/x"), true);
+    for (const local of ["http://localhost:8000", "http://127.0.0.1:8790", "http://api.lemma.localhost:8711"]) {
+        assert.equal(reachableFromInternet(local), false, local);
+    }
+    const remote = MCP_CLIENTS.filter(client => client.remote).map(client => client.id);
+    assert.deepEqual(remote, ["claude", "chatgpt"]);
+});
+
+test("the Claude Code command names the space and passes the URL whole", () => {
+    const code = MCP_CLIENTS.find(client => client.id === "claude-code");
+    assert.ok(code?.command);
+    const url = "https://api.lemma.work/mcp/" + pod.id;
+    assert.equal(code.command(url, pod), "claude mcp add --transport http lemma-marketing " + url);
+    assert.equal(serverName({ name: "Q3 Launch — EU/US!" }), "lemma-q3-launch-eu-us");
+    assert.equal(serverName({ name: "日本" }), "lemma");
+});
+
+test("what a connection may do is said in plain words", () => {
+    assert.equal(accessLabel(["pod:read", "pod:write"]), "Read and write");
+    assert.equal(accessLabel(["pod:read"]), "Read only");
+});
+
+test("disconnecting something already gone is not an error", async () => {
+    const gone = (async () => new Response(null, { status: 404 })) as unknown as typeof fetch;
+    await disconnectClient("https://api.lemma.work", "g", gone);
+    const broken = (async () => new Response(null, { status: 500 })) as unknown as typeof fetch;
+    await assert.rejects(disconnectClient("https://api.lemma.work", "g", broken), /could not be disconnected/);
 });

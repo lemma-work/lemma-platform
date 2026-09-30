@@ -142,7 +142,7 @@ def test_the_pod_bridge_lets_its_client_decide_about_images():
 
     from app.modules.agent.services import pod_mcp_service
 
-    source = inspect.getsource(pod_mcp_service.PodMCPService._context_from_token)
+    source = inspect.getsource(pod_mcp_service._pod_context)
     assert "vision_mode=AgentVisionMode.DIRECT" in source
 
 

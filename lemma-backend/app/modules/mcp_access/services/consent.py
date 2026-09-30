@@ -1,0 +1,176 @@
+"""The consent screen's two calls: what is being asked, and the answer.
+
+The person reaches the screen from the client, signed in to Lemma as usual.
+Nothing about the request is trusted to the browser: it carries only the
+request id, and the id is single-use -- answering it deletes it, so one "Allow"
+produces one code.
+
+The screen shows the redirect host as well as the client's name. Anybody can
+register a client called "Claude"; what they cannot do is receive a code at
+claude.ai. The host is the part of the request a person can actually check.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from urllib.parse import urlsplit
+from uuid import UUID
+
+from mcp.server.auth.provider import construct_redirect_uri
+
+from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.permissions import Permissions
+from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.mcp_access.domain.entities import Scope, parse_scopes
+from app.modules.mcp_access.infrastructure.ephemeral import (
+    CODE_TTL_SECONDS,
+    EphemeralStore,
+    IssuedCode,
+    PendingAuthorization,
+)
+from app.modules.mcp_access.infrastructure.repositories import McpAccessRepository
+from app.modules.mcp_access.services.clients import ClientDirectory
+from app.modules.pod.contracts.members import pod_name
+
+
+class ConsentRequestGone(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "This sign-in request has expired or was already answered. "
+            "Start again from the app you were connecting.",
+            code="MCP_CONSENT_REQUEST_GONE",
+            status_code=404,
+        )
+
+
+class PodNotAvailable(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            "You do not have access to this pod, or it no longer exists.",
+            code="MCP_CONSENT_POD_UNAVAILABLE",
+            status_code=403,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConsentRequest:
+    client_id: str
+    client_name: str
+    client_uri: str | None
+    logo_uri: str | None
+    redirect_host: str
+    pod_id: UUID
+    pod_name: str
+    scopes: frozenset[Scope]
+
+
+def _host(url: str) -> str:
+    parts = urlsplit(url)
+    return parts.netloc or url
+
+
+class ConsentService:
+    def __init__(
+        self,
+        *,
+        uow_factory: UnitOfWorkFactory,
+        clients: ClientDirectory,
+        ephemeral: EphemeralStore,
+        issuer: str,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._clients = clients
+        self._ephemeral = ephemeral
+        self._issuer = issuer
+        self._now = clock
+
+    async def describe(self, *, request_id: str, user_id: UUID) -> ConsentRequest:
+        pending = await self._ephemeral.read_pending(request_id)
+        if pending is None:
+            raise ConsentRequestGone()
+        name = await self._pod_name_if_allowed(
+            user_id=user_id, pod_id=UUID(pending.pod_id)
+        )
+        client = await self._clients.get(pending.client_id)
+        if client is None:
+            raise ConsentRequestGone()
+        return ConsentRequest(
+            client_id=pending.client_id,
+            client_name=client.client_name or _host(pending.redirect_uri),
+            client_uri=str(client.client_uri) if client.client_uri else None,
+            logo_uri=str(client.logo_uri) if client.logo_uri else None,
+            redirect_host=_host(pending.redirect_uri),
+            pod_id=UUID(pending.pod_id),
+            pod_name=name,
+            scopes=parse_scopes(pending.scopes),
+        )
+
+    async def answer(self, *, request_id: str, user_id: UUID, allow: bool) -> str:
+        """The URL to send the browser to: the client's redirect URI, with a
+        code or with ``access_denied``, and always with ``state`` and ``iss``."""
+        pending = await self._ephemeral.take_pending(request_id)
+        if pending is None:
+            raise ConsentRequestGone()
+        if not allow:
+            return self._redirect(pending, error="access_denied")
+        pod_id = UUID(pending.pod_id)
+        await self._pod_name_if_allowed(user_id=user_id, pod_id=pod_id)
+        async with self._uow_factory() as uow:
+            grant_id = await McpAccessRepository(uow).upsert_live_grant(
+                user_id=user_id,
+                client_id=pending.client_id,
+                pod_id=pod_id,
+                scopes=sorted(scope.value for scope in parse_scopes(pending.scopes)),
+                resource=pending.resource,
+            )
+            await uow.commit()
+        code = await self._ephemeral.issue_code(
+            IssuedCode(
+                grant_id=str(grant_id),
+                client_id=pending.client_id,
+                scopes=pending.scopes,
+                code_challenge=pending.code_challenge,
+                redirect_uri=pending.redirect_uri,
+                redirect_uri_provided_explicitly=pending.redirect_uri_provided_explicitly,
+                resource=pending.resource,
+                expires_at=self._now() + CODE_TTL_SECONDS,
+            )
+        )
+        return self._redirect(pending, code=code)
+
+    def _redirect(
+        self,
+        pending: PendingAuthorization,
+        *,
+        code: str | None = None,
+        error: str | None = None,
+    ) -> str:
+        # `iss` is RFC 9207: it tells the client which server answered, which is
+        # how a client talking to several servers notices a mix-up attack.
+        return construct_redirect_uri(
+            pending.redirect_uri,
+            code=code,
+            error=error,
+            state=pending.state,
+            iss=self._issuer,
+        )
+
+    async def _pod_name_if_allowed(self, *, user_id: UUID, pod_id: UUID) -> str:
+        """The pod's name, if this person may read it -- the same standing any
+        other pod read needs. A person cannot hand a client more than they
+        have: every tool call is authorized as them, so this is a courtesy
+        refusal at the door, not the enforcement."""
+        async with self._uow_factory() as uow:
+            ctx = await create_authorization_data_service(uow).build_user_context(
+                user_id=user_id, pod_id=pod_id
+            )
+            if ctx.pod_is_deleted or not ctx.has_permission(Permissions.POD_READ):
+                raise PodNotAvailable()
+            name = await pod_name(uow.session, pod_id)
+        if name is None:
+            raise PodNotAvailable()
+        return name

@@ -87,7 +87,7 @@ export function SettingsPage({ pod, orgId, orgName, section, onSection, onOpenBo
                     </Section>
                 )}
                 {section === "agents" && (
-                    <Section title="Coding agents" note={"Use " + pod.name + " from Claude Code, Codex, Cursor or OpenCode — its pages, tables, workflows and bots."}>
+                    <Section title="Coding agents" note={"Use " + pod.name + " from Claude Code, Codex, Cursor or OpenCode — its pages, tables, workflows and bots — or connect Claude and ChatGPT by URL."}>
                         <AgentAccess pod={pod} />
                     </Section>
                 )}

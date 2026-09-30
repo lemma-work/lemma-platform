@@ -1,8 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Pod } from "@/data";
-import { TOOLS, serverSteps, setupCommands, setupPrompt, starterPrompts } from "./agent-access-model";
+import {
+    MCP_CLIENTS,
+    TOOLS,
+    accessLabel,
+    disconnectClient,
+    fetchMcpUrl,
+    listConnectedClients,
+    mcpUrl,
+    reachableFromInternet,
+    serverSteps,
+    setupCommands,
+    setupPrompt,
+    starterPrompts,
+    type ConnectedClient,
+} from "./agent-access-model";
+import { agoOf } from "@/schedule/schedules";
 import { configuredApiUrl } from "@/session/origins";
 import { copyText } from "@/desktop/clipboard";
 import { CheckIcon, CopyIcon } from "@/ui/icons";
@@ -14,7 +29,12 @@ import { CheckIcon, CopyIcon } from "@/ui/icons";
  *  skills that teach Claude Code or Codex what a space is. The first card is
  *  one prompt that does the whole setup — the agent runs the commands and
  *  you finish sign-in in the browser — so there is a zero-typing way in; the
- *  commands are underneath for anyone who would rather run them. */
+ *  commands are underneath for anyone who would rather run them.
+ *
+ *  Below it, the other way in: the space's MCP URL, which Claude, ChatGPT and
+ *  any MCP client can add directly and sign in to — no CLI, and for Claude and
+ *  ChatGPT no terminal at all. Each connection asks the person first, acts as
+ *  them, and is listed here to be disconnected. */
 
 function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
     const [copied, setCopied] = useState(false);
@@ -76,6 +96,99 @@ export function AgentAccess({ pod }: { pod: Pod }) {
                     </li>
                 ))}
             </ul>
+
+            <McpAccess pod={pod} />
         </div>
+    );
+}
+
+function McpAccess({ pod }: { pod: Pod }) {
+    const apiUrl = configuredApiUrl();
+    const [clientId, setClientId] = useState("claude");
+    const [stated, setStated] = useState<string | null>(null);
+    const [connected, setConnected] = useState<ConnectedClient[] | null>(null);
+    const [problem, setProblem] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!apiUrl) return;
+        let cancelled = false;
+        fetchMcpUrl(apiUrl, pod.id).then(url => { if (!cancelled) setStated(url); }).catch(() => undefined);
+        listConnectedClients(apiUrl, pod.id)
+            .then(items => { if (!cancelled) setConnected(items); })
+            .catch(error => { if (!cancelled) setProblem(error instanceof Error ? error.message : null); });
+        return () => { cancelled = true; };
+    }, [apiUrl, pod.id]);
+
+    const url = stated ?? mcpUrl(apiUrl, pod.id);
+    if (!apiUrl || !url) return null;
+    const client = MCP_CLIENTS.find(entry => entry.id === clientId) ?? MCP_CLIENTS[0];
+    const command = client.command?.(url, pod) ?? null;
+    const outOfReach = client.remote && !reachableFromInternet(url);
+
+    const disconnect = async (grantId: string) => {
+        try {
+            await disconnectClient(apiUrl, grantId);
+            setConnected(current => (current ?? []).filter(item => item.grant_id !== grantId));
+        } catch (error) {
+            setProblem(error instanceof Error ? error.message : null);
+        }
+    };
+
+    return (
+        <>
+            <div className="access__label">Or connect by URL</div>
+            <div className="access__card">
+                <div className="access__head">
+                    <span>
+                        <b>{pod.name} over MCP</b>
+                        <small>Add this to Claude, ChatGPT or any MCP client. It asks you to sign in and allow it, then reads and writes this space’s tables and files as you.</small>
+                    </span>
+                    <CopyButton text={url} label="Copy URL" />
+                </div>
+                <pre className="access__text access__text--code">{url}</pre>
+                <div className="access__tools" role="tablist" aria-label="MCP client">
+                    {MCP_CLIENTS.map(entry => (
+                        <button key={entry.id} role="tab" aria-selected={entry.id === client.id} onClick={() => setClientId(entry.id)}>{entry.label}</button>
+                    ))}
+                </div>
+                {outOfReach ? (
+                    <div className="access__head">
+                        <small>{client.label} connects from its own servers, and this Lemma is only reachable from this computer. Use Claude Code, or run Lemma where the internet can reach it.</small>
+                    </div>
+                ) : (
+                    <>
+                        {command && (
+                            <div className="access__head">
+                                <small>In a terminal:</small>
+                                <CopyButton text={command} label="Copy command" />
+                            </div>
+                        )}
+                        {command && <pre className="access__text access__text--code">{command}</pre>}
+                        <pre className="access__text">{client.steps(url, pod).map((step, index) => (index + 1) + ". " + step).join("\n")}</pre>
+                    </>
+                )}
+            </div>
+
+            <div className="access__label">Connected by you</div>
+            {problem && <div className="access__head"><small role="alert">{problem}</small></div>}
+            {connected !== null && connected.length === 0 && (
+                <div className="access__head"><small>Nothing is connected to {pod.name} yet.</small></div>
+            )}
+            {connected !== null && connected.length > 0 && (
+                <ul className="access__prompts">
+                    {connected.map(item => (
+                        <li key={item.grant_id}>
+                            <span>
+                                <b>{item.client_name}</b>
+                                <small>{accessLabel(item.scopes)} · {item.last_used_at ? "used " + agoOf(item.last_used_at) : "connected " + agoOf(item.connected_at)}</small>
+                            </span>
+                            <span className="access__actions">
+                                <button className="access__copy" onClick={() => void disconnect(item.grant_id)}>Disconnect</button>
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </>
     );
 }

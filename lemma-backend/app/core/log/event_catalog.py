@@ -726,6 +726,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'infrastructure.streaq_runtime.worker_shutdown_step_timed_out.degraded': EventSpec('warning', frozenset({'step', 'timeout_seconds'})),
     'infrastructure.tasks.pruned_durable_event_delivery_records.observed': EventSpec('debug', frozenset({'deleted_count'})),
     'infrastructure.uow.staged_domain_events_transactional_outbox.observed': EventSpec('debug', frozenset({'event_count'})),
+    'mcp_access.client_document.unusable': EventSpec('warning', frozenset({'client_id'})),
+    'mcp_access.rate_limit.unavailable.degraded': EventSpec('warning', frozenset()),
     'net.impersonating_client.fetch_completed.observed': EventSpec('debug', frozenset({'bytes', 'status_code'})),
     'observability.telemetry.setup_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
     'observability.telemetry.shutdown_step_failed.degraded': EventSpec('warning', frozenset({'error_type', 'step'})),

@@ -1,0 +1,168 @@
+"""Routes a signed-in person uses: answering a consent request, and managing
+the clients they have connected.
+
+Both need the person's own session, which is why they are ordinary API routes
+under the global auth gate rather than beside the public OAuth endpoints.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, Field
+
+from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.modules.mcp_access.domain.entities import ConnectedApp, Scope
+from app.modules.mcp_access.domain.resources import pod_resource_url
+from app.modules.mcp_access.services.grants import GrantService
+from app.modules.mcp_access.services.wiring import consent_service, issuer
+
+TAG = "MCP Access"
+
+router = APIRouter(prefix="/oauth", tags=[TAG])
+
+
+class ConsentRequestResponse(BaseModel):
+    client_id: str
+    client_name: str = Field(description="As the client names itself. Unverified.")
+    client_uri: str | None = None
+    logo_uri: str | None = None
+    redirect_host: str = Field(
+        description=(
+            "Where the person is sent back to. The one part of the request a "
+            "client cannot claim falsely, so the consent screen shows it."
+        )
+    )
+    pod_id: UUID
+    pod_name: str
+    scopes: list[Scope]
+
+
+class ConsentAnswerRequest(BaseModel):
+    allow: bool
+
+
+class ConsentAnswerResponse(BaseModel):
+    redirect_to: str = Field(
+        description="The client's redirect URI with the code, or with access_denied."
+    )
+
+
+class ConnectedClientResponse(BaseModel):
+    grant_id: UUID
+    pod_id: UUID
+    client_id: str
+    client_name: str
+    client_uri: str | None
+    scopes: list[Scope]
+    connected_at: datetime
+    last_used_at: datetime | None
+
+
+class ConnectedClientsResponse(BaseModel):
+    items: list[ConnectedClientResponse]
+
+
+class McpEndpointResponse(BaseModel):
+    url: str = Field(description="The URL to add to an MCP client for this pod.")
+
+
+def _connected(app: ConnectedApp) -> ConnectedClientResponse:
+    return ConnectedClientResponse(
+        grant_id=app.grant_id,
+        pod_id=app.pod_id,
+        client_id=app.client_id,
+        client_name=app.client_name,
+        client_uri=app.client_uri,
+        scopes=sorted(app.scopes),
+        connected_at=app.created_at,
+        last_used_at=app.last_used_at,
+    )
+
+
+# The consent routes are a contract with the auth portal's `/auth/authorize`
+# page and nothing else -- the same standing as the CLI's session routes -- so
+# they stay out of the public schema and the SDKs generated from it.
+@router.get(
+    "/consent/{request_id}",
+    include_in_schema=False,
+    response_model=ConsentRequestResponse,
+    operation_id="mcp_access.consent.get",
+    summary="What an MCP client is asking for",
+)
+async def get_consent_request(
+    request_id: str, user: CurrentUser
+) -> ConsentRequestResponse:
+    found = await consent_service().describe(request_id=request_id, user_id=user.id)
+    return ConsentRequestResponse(
+        client_id=found.client_id,
+        client_name=found.client_name,
+        client_uri=found.client_uri,
+        logo_uri=found.logo_uri,
+        redirect_host=found.redirect_host,
+        pod_id=found.pod_id,
+        pod_name=found.pod_name,
+        scopes=sorted(found.scopes),
+    )
+
+
+@router.post(
+    "/consent/{request_id}",
+    include_in_schema=False,
+    response_model=ConsentAnswerResponse,
+    operation_id="mcp_access.consent.answer",
+    summary="Allow or deny an MCP client",
+)
+async def answer_consent_request(
+    request_id: str, body: ConsentAnswerRequest, user: CurrentUser
+) -> ConsentAnswerResponse:
+    redirect_to = await consent_service().answer(
+        request_id=request_id, user_id=user.id, allow=body.allow
+    )
+    return ConsentAnswerResponse(redirect_to=redirect_to)
+
+
+@router.get(
+    "/grants",
+    response_model=ConnectedClientsResponse,
+    operation_id="mcp_access.grants.list",
+    summary="MCP clients you have connected",
+)
+async def list_grants(
+    user: CurrentUser,
+    pod_id: UUID | None = Query(default=None, description="Only this pod's."),
+) -> ConnectedClientsResponse:
+    apps = await GrantService(get_uow_factory()).list(user_id=user.id, pod_id=pod_id)
+    return ConnectedClientsResponse(items=[_connected(app) for app in apps])
+
+
+@router.delete(
+    "/grants/{grant_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="mcp_access.grants.revoke",
+    summary="Disconnect an MCP client",
+)
+async def revoke_grant(grant_id: UUID, user: CurrentUser) -> None:
+    """Ends the grant and every token it issued. The client's next request is
+    refused and it has to ask the person again."""
+    if not await GrantService(get_uow_factory()).revoke(
+        user_id=user.id, grant_id=grant_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No such connection"
+        )
+
+
+@router.get(
+    "/mcp-endpoint/{pod_id}",
+    response_model=McpEndpointResponse,
+    operation_id="mcp_access.endpoint.get",
+    summary="The MCP URL for a pod",
+)
+async def get_mcp_endpoint(pod_id: UUID, user: CurrentUser) -> McpEndpointResponse:
+    """Built here rather than in the browser, which knows the API's address
+    only as the page was configured -- not necessarily as clients reach it."""
+    del user
+    return McpEndpointResponse(url=pod_resource_url(issuer(), pod_id))

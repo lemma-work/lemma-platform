@@ -3407,6 +3407,91 @@
         "title": "ConnectedAccountSummary",
         "type": "object"
       },
+      "ConnectedClientResponse": {
+        "properties": {
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          },
+          "client_name": {
+            "title": "Client Name",
+            "type": "string"
+          },
+          "client_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Uri"
+          },
+          "connected_at": {
+            "format": "date-time",
+            "title": "Connected At",
+            "type": "string"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "grant_id",
+          "pod_id",
+          "client_id",
+          "client_name",
+          "client_uri",
+          "scopes",
+          "connected_at",
+          "last_used_at"
+        ],
+        "title": "ConnectedClientResponse",
+        "type": "object"
+      },
+      "ConnectedClientsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectedClientResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ConnectedClientsResponse",
+        "type": "object"
+      },
       "ConnectorDetailResponseSchema": {
         "description": "Schema for connector details including operation catalog.",
         "properties": {
@@ -8882,6 +8967,20 @@
         "title": "ManualWorkflowStartOutput",
         "type": "object"
       },
+      "McpEndpointResponse": {
+        "properties": {
+          "url": {
+            "description": "The URL to add to an MCP client for this pod.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "McpEndpointResponse",
+        "type": "object"
+      },
       "MessageKind": {
         "description": "Discriminates the flat message body.\n\nA message carries exactly one kind. Textual kinds use ``text``; tool kinds\nuse ``tool_name``/``tool_call_id`` plus ``tool_args`` (call) or\n``tool_result`` (return). There is no nested ``content`` object.",
         "enum": [
@@ -13085,6 +13184,15 @@
         ],
         "title": "ScheduledWorkflowStartOutput",
         "type": "object"
+      },
+      "Scope": {
+        "description": "What a grant lets a client do in its pod.\n\nTwo, because the tools split cleanly in two: those that only read and those\nthat write. A finer set would ask a person to reason about tools they have\nnever seen, on a consent screen they will read once.",
+        "enum": [
+          "pod:read",
+          "pod:write"
+        ],
+        "title": "Scope",
+        "type": "string"
       },
       "SearchFreshness": {
         "enum": [
@@ -19176,6 +19284,163 @@
           "resource": "agent.host.harnesses",
           "result": "collection",
           "verb": "list"
+        }
+      }
+    },
+    "/oauth/grants": {
+      "get": {
+        "operationId": "mcp_access.grants.list",
+        "parameters": [
+          {
+            "description": "Only this pod's.",
+            "in": "query",
+            "name": "pod_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this pod's.",
+              "title": "Pod Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectedClientsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "MCP clients you have connected",
+        "tags": [
+          "MCP Access"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "mcp_access.grants",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/oauth/grants/{grant_id}": {
+      "delete": {
+        "description": "Ends the grant and every token it issued. The client's next request is\nrefused and it has to ask the person again.",
+        "operationId": "mcp_access.grants.revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disconnect an MCP client",
+        "tags": [
+          "MCP Access"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "mcp_access.grants"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "mcp_access.grants",
+          "result": "void",
+          "verb": "revoke"
+        }
+      }
+    },
+    "/oauth/mcp-endpoint/{pod_id}": {
+      "get": {
+        "description": "Built here rather than in the browser, which knows the API's address\nonly as the page was configured -- not necessarily as clients reach it.",
+        "operationId": "mcp_access.endpoint.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpEndpointResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The MCP URL for a pod",
+        "tags": [
+          "MCP Access"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "mcp_access.endpoint",
+          "result": "entity",
+          "verb": "get"
         }
       }
     },

@@ -92,6 +92,7 @@ SETTINGS_SOURCES = {
     "app.modules.pod_bundle.config": ("pod_bundle_settings",),
     "app.modules.schedule.config": ("schedule_settings",),
     "app.modules.usage.config": ("usage_settings",),
+    "app.modules.mcp_access.config": ("mcp_access_settings",),
     "app.modules.workflow.config": ("workflow_settings",),
     "app.modules.workspace.config": ("workspace_settings",),
 }

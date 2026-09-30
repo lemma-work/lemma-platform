@@ -10,6 +10,7 @@ import { authLink, rememberDestination, pendingDestination, destinationFrom, ask
 import { accountAccess, completeAuth, completionDestination } from "./completion";
 import { continueWithProvider } from "./provider-login";
 import { heldCliRequest } from "./cli-login";
+import { heldConsentRequest } from "./mcp-consent";
 import { EmailCodeForm } from "./email-code-form";
 import { isLocalDeployment } from "@/site/config";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
@@ -40,7 +41,8 @@ function Aside({ destination, looking }: { destination: string | null; looking: 
     const target = destination ? new URL(destination, siteOrigin()) : null;
     const destinationLabel = target
         ? target.host + (target.pathname === "/" ? "" : target.pathname)
-        : heldCliRequest() ? "The Lemma CLI" : "Your workspace";
+        : heldCliRequest() ? "The Lemma CLI"
+        : heldConsentRequest() ? "Connecting an app" : "Your workspace";
 
     /* A wave on arrival, and another when they turn back from the password.
      *
