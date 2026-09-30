@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **190** |
 
-Scenario tests declaring a promise: 422.
+Scenario tests declaring a promise: 424.
 
 ## Contract coverage
 
@@ -69,7 +69,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-015` A person can add to what the agent is already doing | `covered` | `test_a_message_sent_mid_run_is_answered` |
-| `PS-AGENT-016` Everyday requests finish while the person waits | `covered` | `test_a_question_about_data`, `test_a_record_is_added`, `test_a_doc_is_edited_in_place`, `test_a_csv_is_exported`, `test_a_pdf_report_is_made`, `test_a_word_document_is_made`, `test_a_research_memo`, `test_a_web_lookup`, `test_something_is_remembered` |
+| `PS-AGENT-016` Everyday requests finish while the person waits | `covered` | `test_a_question_about_data`, `test_a_record_is_added`, `test_a_doc_is_edited_in_place`, `test_a_csv_is_exported`, `test_a_pdf_report_is_made`, `test_a_word_document_is_made`, `test_a_research_memo`, `test_a_web_lookup`, `test_something_is_remembered`, `test_a_widget_is_shown`, `test_a_widget_of_its_own_design` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
 | `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |

@@ -308,14 +308,13 @@ def test_widget_contract_rejects_unresolved_starter_tokens():
     assert any("__WIDGET_TITLE__" in issue for issue in issues)
 
 
-def test_widget_contract_requires_config_derived_sdk_loader():
+def test_a_widget_reaching_for_the_sdk_directly_is_pointed_at_the_page_kit():
+    """The page loads the SDK; `window.LemmaClient` is not there until it has.
+    The error names the kit rather than teaching a loader to write."""
     issues = validate_widget_html(
         "<script>const client = new window.LemmaClient.LemmaClient()</script>"
     )
-    assert any("__LEMMA_CONFIG__" in issue for issue in issues)
-    assert any("apiUrl" in issue for issue in issues)
-    assert any("lemma-client.js" in issue for issue in issues)
-    assert any("load handler" in issue for issue in issues)
+    assert any("lemma.client()" in issue and "lemma.query" in issue for issue in issues)
 
 
 def test_widget_contract_requires_sdk_onload_boot():
@@ -329,7 +328,23 @@ def test_widget_contract_requires_sdk_onload_boot():
         </script>
         """
     )
-    assert any("load handler" in issue for issue in issues)
+    assert any("lemma.client()" in issue for issue in issues)
+
+
+def test_a_complete_hand_written_loader_is_still_accepted():
+    """Widgets written before the page kit keep working."""
+    issues = validate_widget_html(
+        """
+        <script>
+          const cfg = window.__LEMMA_CONFIG__;
+          const s = document.createElement('script');
+          s.src = cfg.apiUrl + '/public/sdk/lemma-client.js';
+          s.onload = () => new window.LemmaClient.LemmaClient();
+          document.head.appendChild(s);
+        </script>
+        """
+    )
+    assert not any("lemma.client()" in issue for issue in issues)
 
 
 def test_widget_contract_requires_api_url_identifier():

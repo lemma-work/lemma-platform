@@ -48,20 +48,44 @@ free-form input.
    lemma query run "select * from <table> limit 5"
    ```
 
-2. Take two things verbatim, the way you would take a library: the token
-   preamble `assets/widget-tokens-v1.css`, pasted at the top of your `<style>`,
-   and — if the widget reads pod data — the SDK loader from any example. Then
-   draw what the answer needs around them.
+2. **The page gives you the design language and the data.** A widget is served
+   inside a page that already has, before your markup runs:
 
-   The preamble is the design language in one block: the full `--lemma-widget-*`
-   vocabulary, every reference carrying a fallback, light and dark. Take it and
-   a widget you invent from nothing still looks like it belongs. Skip it and you
-   will hand-roll twenty lines of `var(--lemma-widget-surface, #fff)` and get one
-   of them wrong.
+   - every `--lemma-widget-*` token, light and dark — use `var(--lemma-widget-surface, #fff)`
+     and friends; never paste the token preamble, it is already there;
+   - `window.lemma`: `lemma.query(sql)` → rows (`rows.truncated` when the cap
+     cut it), `lemma.records(table, options)`, `lemma.compose(text)` and
+     `lemma.canCompose()`, and `lemma.esc / num / money / pct / date`. It loads
+     and authenticates the SDK itself on first use — never write an SDK loader;
+   - and the shapes most answers take, drawn to the visual standard below
+     (hover, a hidden data table, mono figures, hairlines, state colours):
 
-3. Read the example nearest your answer with `load_skill`, using
-   `name="lemma-widget"` and one of these `resource_path` values. They are a
-   range to learn the language from, **not a table to pick from and transcribe**:
+     | Shape | Call |
+     | --- | --- |
+     | Key numbers, each with its change | `lemma.stats(el, [{ label, value, previous?, format?, better? }])` |
+     | One measure across categories | `lemma.bars(el, rows, { label, value, format?, top? })` |
+     | One measure over time, or a few on one chart | `lemma.line(el, rows, { x, y, format?, xFormat?, names? })` — `y` a key or several |
+     | Two measures against each other | `lemma.scatter(el, rows, { x, y, color?, label?, xFormat?, yFormat? })` |
+     | Records to read down, and narrow | `lemma.table(el, rows, { columns: [{ key, label, format? }], filter? })` |
+     | One record | `lemma.record(el, row, { fields: [{ key, label, format? }] })` |
+
+     `el` is an element or its id; `format` is `num`, `money`, `pct` or `date`;
+     `better: "down"` marks a measure where falling is good news (failure rate,
+     cost), so its change wears the right colour.
+
+   So a widget is a finding line, one `lemma.query` and one draw call — about a
+   kilobyte. `assets/widget-quick-v1.html` is exactly that: **start from it.**
+   Write the finding as the sentence you would say out loud; keep the error
+   branch. A widget of its own design is still fine when none of these fit —
+   draw it in SVG on the same tokens, or with a library from `cdn.jsdelivr.net`
+   (a map is d3 + topojson-client + world-atlas; never inline a map or a data
+   file). Keep it to the finding, one query and the drawing.
+
+3. Only when none of the shapes fits and you are designing your own — a
+   record's timeline, a finding with its own layout — read the nearest fuller
+   example with `load_skill` (`name="lemma-widget"`, `resource_path` below) and
+   take the pattern. They are written on the page kit too: no preamble, no
+   loader.
 
    | The answer you have | Example |
    | --- | --- |
@@ -72,35 +96,25 @@ free-form input.
    | One measure across categories | `assets/widget-ranked-v1.html` |
    | Something you already know — no pod data | `assets/widget-note-v1.html` |
 
-   Replace every uppercase `__PLACEHOLDER__` — **except `__LEMMA_CONFIG__`,
-   which must stay exactly as it is.** That one is not a template slot: it is the
-   runtime config the host injects, and the SDK loader reads it. Validation
-   rejects a widget that stops reading it. The slots you do fill are the data,
-   label and judgement ones: `__TABLE_NAME__`, `__RECORD_ID__`, `__GROUP_FIELD__`,
-   `__STATUS_FIELD__`, `__TITLE_FIELD__`, `__SUBTITLE_FIELD__`, `__DATE_FIELD__`,
-   `__FIELD_CONFIG__`, `__TIMELINE_CONFIG__`, `__WIDGET_TITLE__`,
-   `__FOCUS_VALUE__`, `__FOCUS_CLAIM__`, `__COMPOSE_TEXT__`, `__EMPTY_LABEL__`.
-   For `__FIELD_CONFIG__`, insert a JSON array such as
-   `[{"label":"Owner","field":"owner"}]`. Anything landing inside a SQL statement
-   takes the exact table or column identifier — not a display label.
+   Their uppercase `__PLACEHOLDER__` slots are yours to fill if you borrow one;
+   none may survive into what you display. The finding line is yours, not the
+   data's: a widget that says "22 tickets" where it could say "22 tickets are
+   blocked — the most since June" has made the reader do the work they asked
+   you to do.
 
-   The claim slots are yours, not the data's: `__FOCUS_CLAIM__` is the sentence a
-   person would say about the number, and no query can write it. A widget that
-   says "22 tickets" where it could say "22 tickets are blocked — the most since
-   June" has made the reader do the work they asked you to do.
-
-4. Write the fragment to a pod file with `pod_write_file` — `/me/c/<date>/<name>.html`
-   alongside the rest of this conversation's work — then display that path:
+4. Write the fragment once with `pod_write_file` — `/me/c/<date>/<name>.html` —
+   and display that path:
 
    ```
    display_resource(type="WIDGET", path="/me/c/2026-09-15/pulse.html")
    ```
 
-   The preamble, the SDK loader and the loading/empty/error scaffolding carry over
-   as-is.
+   Compose it straight into that call. Do not draft it in the workspace, run
+   it through a parser, or render it to check it: the backend validates what
+   you display and says exactly what is wrong if anything is.
 
-The backend rejects unresolved placeholders, broken SDK loaders, and malformed
-markup before display.
+The backend rejects unresolved placeholders, hand-written SDK loaders, and
+malformed markup before display.
 
 ## The `display_resource` call
 
@@ -129,9 +143,9 @@ and work you get one shot at:
 - **You can fix it by editing it.** The served widget is whatever the file says
   *now*, so correcting one is an edit to a few lines, not a retype of the whole
   fragment — and a retype is where a working widget picks up a new bug.
-- **You can check it before anyone sees it.** The file exists before the
-  display does. Read it, run it past [Before display](#before-display), and only
-  then call.
+- **It is checked before anyone sees it.** `display_resource` validates the
+  file and says what is wrong; fix it with an edit and display again. Nothing
+  broken reaches the person, so there is no need to read it back first.
 
 So: `pod_write_file` to `/me/c/<date>/<name>.html`, then
 `display_resource(type="WIDGET", path=...)`. A pod path, never a workspace one —
@@ -154,9 +168,9 @@ Either way:
 - **A widget people will come back to is an app.** Save the HTML as an app and
   pass its address as `public_url`.
 
-The examples are a shape to follow, not a file to transcribe. Take the SDK
-loader and the loading/empty/error scaffolding verbatim, and write the markup
-your answer actually needs around them.
+The examples are a shape to follow, not a file to transcribe. Take the
+loading/empty/error scaffolding, and write the markup your answer actually
+needs around it.
 
 ## Fixed contract
 
@@ -178,16 +192,16 @@ your answer actually needs around them.
   Expand control, and a self-reported height is clamped to 2400px. Design for
   the fold: put the answer at the top, not below a long table. The frame follows
   the content both ways — a view that narrows itself shrinks the frame with it.
-- A widget **offers** a message; it never sends one. `composeInConversation`
+- A widget **offers** a message; it never sends one. `lemma.compose`
   puts text in the conversation's composer for the person to send, edit, or
   ignore — see [Let it answer back](#let-it-answer-back). Everything else the
   frame might want to say to the host is not part of the contract.
 - Use `ask_user` when the run cannot continue without an answer. A widget's
   offer arrives after the run is over; `ask_user` pauses it.
 
-The examples are themed and system-aware: their `prefers-color-scheme: dark`
-rules and semantic fallbacks carry over intact, and all of it lives in the one
-preamble they share.
+The page is themed and system-aware: the tokens it supplies carry their
+`prefers-color-scheme: dark` values and semantic fallbacks, so a widget written
+on them is too.
 
 The host sends **the whole `--lemma-widget-*` vocabulary** — it is taken by
 prefix, not from a list of approved names, so a token a host publishes reaches
@@ -210,21 +224,22 @@ and the widget renders colorless.
 
 ## Loading the SDK
 
-For a data-backed widget, preserve the examples' browser SDK loader:
+You do not. `lemma.query`, `lemma.records` and `lemma.compose` cover most
+widgets, and `await lemma.client()` hands back the authenticated browser SDK
+for anything else. What the kit does for you, and what a hand-written loader
+would have to get right:
 
-- Build the SDK URL from `window.__LEMMA_CONFIG__.apiUrl`.
-- Load `/public/sdk/lemma-client.js` dynamically and start in `sdk.onload`.
-- Construct `new window.LemmaClient.LemmaClient()` with no arguments.
-- Call `client.initialize()` and handle a non-authenticated state.
+- It builds the SDK URL from the injected `window.__LEMMA_CONFIG__.apiUrl` and
+  loads `/public/sdk/lemma-client.js` on first use.
+- It calls `client.initialize()`, and a non-authenticated result rejects with
+  "This view can't load the pod's data in this browser" — not "signed out": the
+  widget is a cross-site iframe that some browsers deny the cookie, so the
+  person usually *is* signed in. Keep the widget useful without data where you
+  can.
 - SDK calls run as the signed-in user under normal RLS and grants.
-- **`unauthenticated` does not mean "signed out."** The widget is a cross-site
-  iframe and the browser SDK authenticates by cookie, which some browsers and
-  local HTTP setups withhold. So write that branch as "this view can't load your
-  data here", not "sign in to Lemma" — the user usually *is* signed in. Keep the
-  widget useful without data where you can.
 - Shared files use `/…`, personal files use `/me`. There is no `/pod/...` prefix.
 
-Common calls:
+Common calls, on `const client = await lemma.client()`:
 
 ```js
 await client.records.list("tickets", { limit: 50 });
@@ -277,17 +292,14 @@ decision anyone made.
 
 ## Let it answer back
 
-`composeInConversation(text, options?)` asks the host to put `text` in the
-conversation's composer. It is on the browser SDK's global, beside the client:
+`lemma.compose(text, options?)` asks the host to put `text` in the
+conversation's composer:
 
 ```js
-const { composeInConversation, canComposeInConversation } = window.LemmaClient;
-
-if (canComposeInConversation()) {
-  button.onclick = () => composeInConversation(
-    "Why is " + account.name + " cooling?",
-  );
-}
+lemma.canCompose().then((ok) => {
+  button.hidden = !ok;
+  button.onclick = () => lemma.compose("Why is " + account.name + " cooling?");
+});
 ```
 
 Three things about it, and all three matter:
@@ -297,7 +309,7 @@ Three things about it, and all three matter:
   Acme cooling?", not "The user would like to know about Acme."
 - **It can be unavailable.** It resolves `false` when nothing is hosting the
   widget — an app opened from a share link has no conversation anywhere near
-  it. Check `canComposeInConversation()` before drawing the button, and let the
+  it. Check `lemma.canCompose()` before drawing the button, and let the
   widget be useful without it. A button that quietly does nothing is worse than
   one that was never there.
 - **`{ newConversation: true }` is for a handoff.** The default lands in the
@@ -377,11 +389,12 @@ that supports it.
 - **Pick the form from the data's job.** Change over time → a line. Magnitude
   across categories → horizontal bars, so the labels read straight instead of
   rotated under a column. One number that matters → not a chart at all; say it.
-- **Draw it yourself in SVG.** `widget-trend-v1` and `widget-ranked-v1` load
-  nothing: a widget has 480px of fold and has to paint now, and a chart library
-  from a CDN is a 200KB download and a second failure mode inside an iframe that
-  already has one. Reach for a library when you need dense multi-series or a real
-  axis — and then give the canvas an explicit height.
+- **Use the page's shapes; draw the rest in SVG.** `lemma.line`, `lemma.bars`
+  and `lemma.scatter` load nothing: a widget has 480px of fold and has to paint
+  now, and a chart library from a CDN is a 200KB download and a second failure
+  mode inside an iframe that already has one. Reach for a library when the form
+  needs one — a map, dense multi-series, a real axis — and then give the canvas
+  an explicit height.
 - **Never a dual axis.** Two measures of different scale are two charts.
 - **`chart-1` through `chart-5`, in order, never cycled.** They are a measured
   set: adjacent pairs clear ΔE 8 under deuteranopia and ΔE 15 under normal
@@ -410,12 +423,13 @@ your reply.
 - It opens with a tag — not a stray character, not a sentence — and is complete.
   An inline fragment gets no second look; a file can be edited afterwards.
 - Every value read off a query result uses the name that query aliases it to.
-- The token preamble is present, and every placeholder except `__LEMMA_CONFIG__`
-  was replaced — including the claim slots, which no query can fill for you.
+- Every placeholder was replaced — including the claim slots, which no query
+  can fill for you.
 - Every tag opens with `<` and closes once; the fragment carries no full-document
   tags, secrets, hardcoded hosts, or pod ids.
 - Every `--lemma-widget-*` reference has a fallback value.
-- SDK code uses injected config and boots from the script load handler.
+- Pod data comes through `lemma.*` or `await lemma.client()`; there is no
+  hand-written SDK loader.
 - No displayed count is the size of a page: totals come from SQL or from
   `records.list`'s `total`, and a `truncated` query result says so.
 - Loading, empty, error, and mobile states are present, and the
@@ -428,8 +442,8 @@ your reply.
   responds to a pointer, and carries its numbers as a table as well.
 - Anything the person can click does something here, or offers something to the
   composer. Nothing writes, and nothing claims to have sent a message.
-- Every compose button is behind `canComposeInConversation()`, and its text
-  reads as the person's own words.
+- Every compose button is behind `lemma.canCompose()`, and its text reads as
+  the person's own words.
 
 For React or a full product UI, load `lemma-builder` and follow
 `references/apps.md`. For interaction-tool behavior, see
