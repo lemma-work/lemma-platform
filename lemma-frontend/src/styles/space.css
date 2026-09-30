@@ -7075,6 +7075,88 @@ samp,
     font-size: 14px;
     color: var(--ink-3);
 }
+.aboutpage__hired {
+    margin: -10px 0 16px;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+
+/* What the teammate has written down: one line a note, the sidebar's
+   density. A filled dot is a note changed this week, a ring is one that has
+   not; the date says when either way. */
+.notes {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+}
+.notes li {
+    border-bottom: 1px solid var(--line);
+}
+.notes__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    height: 36px;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.notes__row:hover {
+    background: var(--wash-b);
+}
+.notes__row:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+.notes__dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.notes__dot--fresh {
+    background: var(--info);
+    box-shadow: none;
+}
+.notes__line {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.notes__line > svg {
+    flex: none;
+    color: var(--ink-3);
+}
+.notes__topic {
+    flex: none;
+}
+.notes__gloss {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ink-3);
+}
+.notes__gloss::before {
+    content: "· ";
+}
+.notes__at {
+    flex: none;
+    font-size: 12.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
 .aboutpage__foot {
     margin: 36px 0 0;
     padding-top: 16px;

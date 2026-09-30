@@ -5,6 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { AskBox } from "@/chat/ask-box";
 import { gather } from "@/workflow/waiting-inbox";
+import { gatherAsked, sayAsked } from "@/thread/waiting-on-you";
+import { agoOf } from "@/schedule/schedules";
 import { sayStuckFor, sayWaitingOn } from "@/workflow/runs";
 import { AppIcon, ChevronRightIcon, FileIcon, SearchIcon, SlidesIcon, TableIcon } from "@/ui/icons";
 import { useMaking } from "./making";
@@ -54,6 +56,15 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
         staleTime: 60_000,
     });
     const owed = (waiting.data?.rows ?? []).filter(row => row.podId === pod.id);
+    /* And the conversations here that stopped to ask you something, under the
+       key the rail reads. */
+    const asking = useQuery({
+        queryKey: ["conversation-asks", pods.map(each => each.id).join(",")],
+        queryFn: () => gatherAsked(pods, source.label === "sample"),
+        enabled: pods.length > 0,
+        staleTime: 60_000,
+    });
+    const asked = (asking.data ?? []).filter(row => row.podId === pod.id);
 
     /* The list the sidebar's Chats already read, under its key. */
     const chats = useQuery({
@@ -90,10 +101,22 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
 
                 {/* Only when something is. A heading over "nothing" is a
                     section somebody has to read to learn it is empty. */}
-                {owed.length > 0 && (
+                {(owed.length > 0 || asked.length > 0) && (
                     <section className="home__section" aria-label="Waiting on you">
                         <h2>Waiting on you</h2>
                         <ul className="home__owed">
+                            {asked.map(row => (
+                                <li key={row.conversationId}>
+                                    <button onClick={() => onOpenConversation(row.conversationId)}>
+                                        <span className="home__dot" aria-hidden="true" />
+                                        <span className="home__owed-text">
+                                            <span>{row.title}</span>
+                                            <small>{sayAsked(row)} · {agoOf(new Date(row.sinceMs).toISOString())}</small>
+                                        </span>
+                                        <ChevronRightIcon size={16} />
+                                    </button>
+                                </li>
+                            ))}
                             {owed.map(row => (
                                 <li key={row.wait.id}>
                                     <button onClick={() => onOpenRun(row.run.id, row.workflowName)}>

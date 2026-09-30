@@ -7,13 +7,6 @@ import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { INITIAL_TOUR, TOUR_STEPS, tourReducer } from "./tour-state";
 import s from "./landing.module.css";
 
-const CHANNELS = [
-    { src: "/connector-logos/slack.svg", name: "Slack" },
-    { src: "/connector-logos/teams.svg", name: "Microsoft Teams" },
-    { src: "/connector-logos/telegram.svg", name: "Telegram" },
-    { src: "/connector-logos/whatsapp.svg", name: "WhatsApp" },
-];
-
 /** The tour controls the actual Acme workspace in a separate sample document. */
 export function Hero() {
     const [{ step, mode }, dispatch] = useReducer(tourReducer, INITIAL_TOUR);
@@ -161,12 +154,8 @@ export function Hero() {
             onPointerEnter={() => setNear(true)} onPointerLeave={() => setNear(false)}>
             <div className={s.heroLede} inert={isGrown}>
                 <p className={s.heroEyebrow}>AI TEAMMATES FOR ONGOING WORK</p>
-                <h1 className={s.heroHeadline}>Hire a teammate.</h1>
-                <p className={s.heroIntro}>Give it a responsibility. Teach it how your team works.<br />{" "}It learns on the job and builds the tools it needs along the way.</p>
-                <div className={s.channels}>
-                    <span className={s.channelsLabel}>USE IT FROM</span>
-                    {CHANNELS.map(channel => <img key={channel.name} src={channel.src} alt={channel.name} width={26} height={26} />)}
-                </div>
+                <h1 className={s.heroHeadline}>The teammate your whole team shares.</h1>
+                <p className={s.heroIntro}>It builds the tables, apps and workflows the job needs,<br />{" "}and answers each person within what they’re allowed to see.</p>
                 <div className={s.heroActions}>
                     <Link className={s.primary} href="/t">Get started</Link>
                     <a className={s.secondary} href="#examples">Explore an example <span aria-hidden="true">↓</span></a>
@@ -176,7 +165,7 @@ export function Hero() {
                 <div className={s.productFrame} data-engaged={engaged || undefined}>
                     <div className={s.productViewport} ref={viewport} data-revealed={ready || waitedOut || undefined}
                         onPointerLeave={event => { if (event.pointerType === "mouse") setEngaged(false); }}>
-                        <iframe ref={demo} src="/demo/landing" title="Explore the Acme workspace" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" />
+                        <iframe ref={demo} src="/demo/landing" title="Explore Kit’s space" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" />
                         {/* The workspace's own loading shape, drawn by this page so it is
                             there on first paint, until the frame has something to show. */}
                         <div className={s.productPoster} aria-hidden="true" inert><WorkspaceLoading /></div>

@@ -349,6 +349,18 @@ function shortCount(words: number): string {
 }
 
 
+/** "20 Sep", or "20 Sep 2025" once it is not this year. When the file behind
+ *  a skill last changed: a skill that was taught in March and never touched
+ *  since reads differently from one revised last week. */
+export function revisedOn(iso: string, now = new Date()): string {
+    if (!iso) return "";
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return "";
+    return at.toLocaleDateString([], at.getFullYear() === now.getFullYear()
+        ? { day: "numeric", month: "short" }
+        : { day: "numeric", month: "short", year: "numeric" });
+}
+
 /** One card, with a front and a back.
  *
  *  Two faces in the markup rather than one face whose contents swap, because
@@ -423,7 +435,9 @@ function Card({ card, onRead, blocked }: {
                             </span>
                         ) : null}
                         <span className="skill-card__foot">
-                            {card.words > 0 && <em>{shortCount(card.words)} words</em>}
+                            {/* One slot on the left, so the turn hint keeps
+                                the right: the length, then when it changed. */}
+                            <em>{[card.words > 0 ? shortCount(card.words) + " words" : "", revisedOn(card.updated) && "revised " + revisedOn(card.updated)].filter(Boolean).join(" · ")}</em>
                             <i className="skill-card__turnhint" aria-hidden="true">
                                 <RefreshIcon size={12} />turn
                             </i>

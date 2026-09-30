@@ -33,6 +33,15 @@ Scrolling into another step, or choosing one, restores that step's planned
 screen: conversation, tabs, dialogs, sidebar and the open app's first view.
 The workspace sidebar is open while hiring and collapsed for every later step.
 
+The landing runs: the teammate everyone shares (hero and tour), "Everyone
+asks. Each sees their part." (shared record and access, one section), "It
+builds what the job needs", "A team of them" (the roster), channels once,
+how it runs, open source. Tour step 03 opens the Launch studio app; step 04
+opens About at what Kit remembers. Headlines lead with what only this product
+shows — a team-owned teammate, the tools it builds, each person's own view —
+not with "hire", "learns how you work" or "use it where you already are",
+which other products own.
+
 The four work examples follow Kit's Thursday launch: channel request, mobile
 follow-up, Launch studio review, and a scheduled readiness check. Messaging uses
 one phone-framed conversation; the surrounding copy names both supported channels.
@@ -91,8 +100,34 @@ Faces tell the three apart: a teammate is its character on its own tint in a
 rounded square, a person is initials in a circle, an agent is its initial on
 a plain tile. The space's own agent is the teammate — named as the teammate
 everywhere, never "Lem", "main bot" or "assistant". Say "space" only where the
-place is the point (who can open something, where it is kept); everywhere
-else the teammate's name does the work.
+place is the point (who can open something, where it is kept), and never bare:
+"Kit's space", "its space", or "here". A bare "space" now reads as ChatGPT
+Space. Everywhere else the teammate's name does the work.
+
+### Over time
+
+Time shows up three ways, and each gets its own words: tenure ("Hired 12
+March by Priya", on About, from the pod's `created_at` and `user_id`),
+reliability (run history on standing work, never called learning), and
+learning (what it wrote down).
+
+- About has "What Kit remembers" beside "What Kit has been taught". Taught is
+  skills, which people write; remembers is memory, which the teammate writes
+  under `/memory`, `/memory/agents/pod-default` and, privately,
+  `/me/agents/pod-default`. One line a note, indexes (`AGENTS.md`) left out,
+  a filled dot for a note changed this week, a lock on a private one.
+- Under a reply, "Kit noted this · Pricing" appears when the turn wrote a
+  memory note and the write came back successful. It is drawn from the tool
+  call, not from the model saying so; the model still writes silently.
+- Any message can be sent back as "Remember this": an ordinary message, so
+  what follows is visible the usual way.
+- Nothing here claims more than the files show. No counts of lessons, no
+  "gets better" figures, no attribution ("from Priya") and no undo until
+  memory has a revision history that records who changed what.
+
+"Needs you" is one queue in two parts: workflow forms, and conversations
+paused on a question or an approval (scheduled runs included). The rail
+badge, the Teammates page and Home all read both.
 
 ## Desktop
 

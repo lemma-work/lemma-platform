@@ -14,12 +14,14 @@ import { AtTheDoor } from "@/shell/at-the-door";
 import { AddPeople } from "@/shell/add-people";
 import { ChevronRightIcon, EditIcon, LockIcon, PlusIcon } from "@/ui/icons";
 import { AgentMark } from "./agent-mark";
+import { WhatItRemembers } from "./what-it-remembers";
+import { sayHired } from "./teammates";
 import { TeammateFace } from "./teammate-face";
 
 /** Where a link into About lands. Each is a section of the one page. */
-export type AboutSection = "people" | "channels" | "skills" | "schedules" | "agents" | "model";
+export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "model";
 
-const SECTIONS: readonly string[] = ["people", "channels", "skills", "schedules", "agents", "model"] satisfies AboutSection[];
+const SECTIONS: readonly string[] = ["people", "channels", "skills", "memory", "schedules", "agents", "model"] satisfies AboutSection[];
 
 /** Whether a word from an address is one of About's sections. */
 export function isAboutSection(value: string | null | undefined): value is AboutSection {
@@ -88,6 +90,10 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
                     />
                 </Section>
 
+                <Section id="memory" title={"What " + pod.name + " remembers"} note="Written down as it works. Open a note to read or fix it.">
+                    <WhatItRemembers pod={pod} onFile={onFile} />
+                </Section>
+
                 <Section id="schedules" title="Standing work" note="What it does without being asked, on a time or an event.">
                     <StandingWork podId={pod.id} teammate={pod.name} members={pod.members} orgId={orgId} onOpenRun={onOpenRun} onOpenConversation={onOpenConversation} />
                 </Section>
@@ -138,6 +144,8 @@ function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: ()
         },
     });
 
+    const hired = sayHired(pod);
+
     return (
         <header className="aboutpage__hero">
             <TeammateFace pod={pod} size={132} live className="aboutpage__face" />
@@ -167,6 +175,7 @@ function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: ()
                     {pod.description
                         ? <p className="aboutpage__job">{pod.description}</p>
                         : <p className="aboutpage__job aboutpage__job--none">No job written down yet.</p>}
+                    {hired && <p className="aboutpage__hired">{hired}</p>}
                     <div className="aboutpage__acts">
                         <button className="pill-button" onClick={onAsk}>Ask {pod.name}</button>
                         <button className="ghost-pill" onClick={() => setEditing(true)}><EditIcon size={14} /> Edit</button>

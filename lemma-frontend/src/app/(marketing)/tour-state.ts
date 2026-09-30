@@ -1,9 +1,9 @@
 export const TOUR_STEPS = [
     { name: "Give it a job", says: "Give your teammate a name and its first responsibility." },
-    { name: "Add your team", says: "Invite the people who need it. Choose who can work with it and what they can access." },
-    { name: "It learns how you work", says: "Share context, correct its work, and teach it what good looks like." },
-    { name: "Apps, workflows, memory", says: "It builds the apps the job needs, and your team works in them too." },
-    { name: "Use it where you already are", says: "Connect Slack, Telegram or WhatsApp to reach your teammate there." },
+    { name: "Let your people in", says: "Invite the people who need it. Choose who can work with it and what each of them can see." },
+    { name: "It builds what the job needs", says: "Apps, tables and workflows, kept in its space, where your team works in them too." },
+    { name: "It writes down what it learns", says: "Correct it once. It writes the lesson down where your team can read it." },
+    { name: "Reach it where you work", says: "Connect Slack, Telegram or WhatsApp to reach your teammate there." },
 ] as const;
 
 export type TourState = { mode: "guided" | "exploring"; step: number };

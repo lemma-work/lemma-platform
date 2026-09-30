@@ -37,6 +37,21 @@ function guidance(id: string) {
     return `---\nname: brand-voice\ndescription: How ${person.name} works with the team.\n---\n\n# ${person.name} · Working guidance\n\n${person.job}\n\n## What the team taught me\n\n${person.learned}\n`;
 }
 
+/** What each sample teammate has written down, for About's "remembers"
+ *  section in the tour. Kit's are specific because the tour opens on Kit;
+ *  the others keep the one line they were written with. Dated relative to
+ *  now, so the week's dot means what it says. */
+const DAY = 86_400_000;
+function notesOf(id: string): { path: string; gloss: string; daysAgo: number; text: string }[] {
+    if (id === "kit") return [
+        { path: "/memory/launch-checks.md", gloss: "Readiness runs Thursdays at 9", daysAgo: 2, text: "# Launch checks\n\n- Readiness check runs Thursdays at 09:00 (moved from Fridays after the September launch).\n- A launch is not ready until the demo matches the current onboarding.\n" },
+        { path: "/memory/publishing.md", gloss: "Anything public goes to Priya first", daysAgo: 4, text: "# Publishing\n\n- Anything public is prepared and brought to Priya. Kit never publishes on its own.\n- Customer names need written permission first.\n" },
+        { path: "/memory/brand-voice.md", gloss: "Lead with the customer’s problem", daysAgo: 20, text: "# Brand voice\n\n" + teammateFor(id).learned + "\n" },
+        { path: "/me/agents/pod-default/your-preferences.md", gloss: "Summaries as short bullets", daysAgo: 9, text: "# Your preferences\n\n- Summaries as short bullets, decisions first.\n" },
+    ];
+    return [{ path: "/memory/working-notes.md", gloss: teammateFor(id).learned, daysAgo: 6, text: "# Working notes\n\n" + teammateFor(id).learned + "\n" }];
+}
+
 /** Isolated fictional work; production and general QA fixtures stay separate. */
 export const previewSource: PodSource = {
     ...fixtureSource,
@@ -81,10 +96,21 @@ export const previewSource: PodSource = {
     },
     async listLibrary(id, kind, directory) {
         if (kind === "tables") return { items: [] };
+        if (directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) {
+            return { items: notesOf(id)
+                .filter(note => note.path.slice(0, note.path.lastIndexOf("/")) === directory)
+                .map(note => ({ id: note.path, name: note.path.split("/").pop() ?? note.path, kind: "file" as const, path: note.path,
+                    updated: new Date(Date.now() - note.daysAgo * DAY).toISOString(), detail: note.gloss, description: note.gloss })) };
+        }
         if (directory === "/skills") return { items: [{ id: "brand-voice", name: "brand-voice", kind: "folder", path: "/skills/brand-voice", updated: "2026-09-23T09:00:00Z", detail: `What the team taught ${teammateFor(id).name}` }] };
         return { items: [{ id: "guidance", name: "SKILL.md", kind: "file", path: voicePath, updated: "2026-09-23T09:00:00Z", detail: teammateFor(id).learned }] };
     },
-    async readFile(id, path) { const text = edits.get(id + path) ?? guidance(id); return { name: "SKILL.md", path, mime: "text/markdown", size: text.length, kind: "markdown", text }; },
+    async readFile(id, path) {
+        const note = notesOf(id).find(one => one.path === path);
+        if (note) { const text = edits.get(id + path) ?? note.text; return { name: path.split("/").pop() ?? path, path, mime: "text/markdown", size: text.length, kind: "markdown", text }; }
+        const text = edits.get(id + path) ?? guidance(id);
+        return { name: "SKILL.md", path, mime: "text/markdown", size: text.length, kind: "markdown", text };
+    },
     async writeFile(id, path, text) { edits.set(id + path, text); },
     async getProfile(id) {
         const person = teammateFor(id);
