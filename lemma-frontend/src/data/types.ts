@@ -98,10 +98,6 @@ export interface Surface {
     email?: string;
     active: boolean;
     status?: string;
-    /** On the deployment's shared bot or number rather than one the pod
-     *  connected itself. A chat there is linked to a person, not a pod, so
-     *  saying hi opens a link minted for whoever is signed in. */
-    system?: boolean;
 }
 
 /** A guided setup in flight: Lemma's manager bot makes you a bot of your own.

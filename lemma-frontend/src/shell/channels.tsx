@@ -1,8 +1,10 @@
 import { EmailIcon, LinkIcon, DiscordIcon } from "@/ui/icons";
-import { channelKey } from "./channel-key";
 
-export { channelKey };
 export const CHANNELS = ["WHATSAPP", "TELEGRAM", "EMAIL", "SLACK"] as const;
+export function channelKey(platform: string) {
+    const key = platform.toUpperCase();
+    return ["EMAIL", "RESEND", "GMAIL", "OUTLOOK"].includes(key) ? "EMAIL" : key;
+}
 export function channelName(platform: string) {
     const key = channelKey(platform);
     return ({ WHATSAPP: "WhatsApp", TELEGRAM: "Telegram", EMAIL: "Email", SLACK: "Slack", TEAMS: "Microsoft Teams", DISCORD: "Discord" } as Record<string, string>)[key] ?? platform;
