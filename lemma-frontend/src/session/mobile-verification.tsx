@@ -159,10 +159,13 @@ export function VerifyMobile({
     number,
     complete,
     onVerified,
+    unavailableHint,
 }: {
     number: string;
     complete: boolean;
     onVerified: (user: UserResponse) => void;
+    /** Said instead of nothing when this server has no way to verify here. */
+    unavailableHint?: string;
 }) {
     const whatsapp = useWhatsAppVerificationConfig();
     const telegram = useTelegramVerificationConfig();
@@ -171,7 +174,12 @@ export function VerifyMobile({
 
     const canWhatsApp = whatsapp.data?.available === true;
     const canTelegram = telegram.data?.enabled === true && telegram.data.sameSite;
-    if (!canWhatsApp && !canTelegram) return null;
+    if (!canWhatsApp && !canTelegram) {
+        const known = !whatsapp.isPending && !telegram.isPending;
+        return unavailableHint && known && number && complete
+            ? <p className="profile-form__hint-line">{unavailableHint}</p>
+            : null;
+    }
 
     if (wa.transaction) {
         return (

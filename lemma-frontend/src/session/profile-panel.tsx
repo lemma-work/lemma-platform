@@ -134,6 +134,7 @@ export function ProfilePanel({ user }: { user: UserResponse }) {
                 <VerifyMobile
                     number={typed}
                     complete={isCompleteMobileNumber(typed)}
+                    unavailableHint="Share your contact with the Telegram bot to verify it."
                     onVerified={(next) => {
                         /* The server wrote the number as part of verifying it,
                            so the box has to be told. Only this field: the rest
