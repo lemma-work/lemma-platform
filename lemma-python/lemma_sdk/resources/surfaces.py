@@ -19,10 +19,8 @@ from ..openapi_client.api.agent_surfaces import (
     agent_surface_update,
 )
 from ..openapi_client.api.agent_surfaces_me import (
-    agent_surface_create_telegram_link,
     agent_surface_list_mine,
     agent_surface_set_my_default,
-    agent_surface_telegram_link_options,
 )
 from ..openapi_client.models.agent_surface_list_response import AgentSurfaceListResponse
 from ..openapi_client.models.agent_surface_response import AgentSurfaceResponse
@@ -47,11 +45,6 @@ from ..openapi_client.models.telegram_managed_bot_setup_request import (
 from ..openapi_client.models.telegram_managed_bot_setup_response import (
     TelegramManagedBotSetupResponse,
 )
-from ..openapi_client.models.telegram_link_options_response import (
-    TelegramLinkOptionsResponse,
-)
-from ..openapi_client.models.telegram_link_request import TelegramLinkRequest
-from ..openapi_client.models.telegram_link_response import TelegramLinkResponse
 from ..openapi_client.models.user_surfaces_response import UserSurfacesResponse
 from .base import BoundResource, Resource
 
@@ -185,18 +178,4 @@ class UserSurfaces(Resource):
             agent_surface_set_my_default,
             body=request,
             body_model=SetDefaultSurfaceRequest,
-        )
-
-    def telegram_link_options(self) -> TelegramLinkOptionsResponse:
-        """The shared Telegram bot and the pods a linked chat could answer from."""
-        return self._call(agent_surface_telegram_link_options)
-
-    def create_telegram_link(
-        self, request: TelegramLinkRequest | dict | None = None
-    ) -> TelegramLinkResponse:
-        """Mint a one-time ``t.me`` link that connects a Telegram chat to me."""
-        return self._call(
-            agent_surface_create_telegram_link,
-            body=request if request is not None else {},
-            body_model=TelegramLinkRequest,
         )

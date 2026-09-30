@@ -3,9 +3,6 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { SetDefaultSurfaceRequest } from '../models/SetDefaultSurfaceRequest.js';
-import type { TelegramLinkOptionsResponse } from '../models/TelegramLinkOptionsResponse.js';
-import type { TelegramLinkRequest } from '../models/TelegramLinkRequest.js';
-import type { TelegramLinkResponse } from '../models/TelegramLinkResponse.js';
 import type { UserSurfacesResponse } from '../models/UserSurfacesResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -39,43 +36,6 @@ export class AgentSurfacesMeService {
         return __request(OpenAPI, {
             method: 'PUT',
             url: '/surfaces/me/default',
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Get My Telegram Link Options
-     * The shared Telegram bot's username and the pods a chat with it could
-     * answer from, for offering a link before minting one. 409 when this
-     * deployment has no working shared Telegram bot.
-     * @returns TelegramLinkOptionsResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentSurfaceTelegramLinkOptions(): CancelablePromise<TelegramLinkOptionsResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/surfaces/me/telegram-link',
-        });
-    }
-    /**
-     * Create My Telegram Link
-     * Mint a one-time ``t.me`` link that connects the Telegram chat opening it
-     * to the current user, answered by ``pod_id``'s agent (or the suggested pod
-     * when omitted). Expires after ten minutes and works once. 403 for a pod the
-     * user cannot attach a chat to; 409 when there is no shared Telegram bot.
-     * @param requestBody
-     * @returns TelegramLinkResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentSurfaceCreateTelegramLink(
-        requestBody: TelegramLinkRequest,
-    ): CancelablePromise<TelegramLinkResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/surfaces/me/telegram-link',
             body: requestBody,
             mediaType: 'application/json',
             errors: {
