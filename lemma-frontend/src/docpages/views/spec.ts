@@ -44,10 +44,10 @@ function ident(name: string): string {
     return '"' + name.replace(/"/g, '""') + '"';
 }
 
+/** Always a quoted string. PostgreSQL types an untyped quoted constant from
+ *  the column it meets — so '500' works against a number, a boolean or text —
+ *  where a bare 500 against a TEXT column is an operator error. */
 function literal(value: string): string {
-    const trimmed = value.trim();
-    if (/^-?\d+(\.\d+)?$/.test(trimmed)) return trimmed;
-    if (/^(true|false)$/i.test(trimmed)) return trimmed.toLowerCase();
     return "'" + value.replace(/'/g, "''") + "'";
 }
 
@@ -64,7 +64,7 @@ export function buildSql(spec: ViewSpec): string {
         .map((one) => {
             const col = ident(one.column);
             switch (one.op) {
-                case "contains": return col + "::text ILIKE " + literal("%" + one.value.replace(/[%_]/g, "\\$&") + "%");
+                case "contains": return col + "::text ILIKE " + literal("%" + one.value.replace(/[\\%_]/g, "\\$&") + "%");
                 case "empty": return "(" + col + " IS NULL OR " + col + "::text = '')";
                 case "not empty": return "(" + col + " IS NOT NULL AND " + col + "::text <> '')";
                 default: return col + " " + one.op + " " + literal(one.value);

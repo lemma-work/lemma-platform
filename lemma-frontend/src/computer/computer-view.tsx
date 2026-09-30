@@ -233,7 +233,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                     fill
                 />
             </div>
-            {drawer === "logins" && <aside className="cdrawer" aria-label="Signed-in sites"><Logins visible={visible} /></aside>}
+            {drawer === "logins" && <aside className="cdrawer" aria-label="Signed-in sites"><Logins visible={visible} startOpen /></aside>}
             {drawer === "files" && <aside className="cdrawer cdrawer--files" aria-label="Files">
 
             <nav className="computer-path" aria-label="Where you are">

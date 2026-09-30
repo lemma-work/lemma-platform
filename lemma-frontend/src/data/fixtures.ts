@@ -2503,6 +2503,11 @@ export const fixtureSource: PodSource = {
         await wait(220);
         SAMPLE_EDITS.set(path, text);
     },
+    async createFile(_podId: string, path: string, text: string) {
+        await wait(220);
+        if (SAMPLE_EDITS.has(path)) throw Object.assign(new Error("A file already exists at " + path), { statusCode: 409 });
+        SAMPLE_EDITS.set(path, text);
+    },
     async widgetEmbedUrl(): Promise<string> {
         throw new Error("The sample source cannot mint an embed URL.");
     },

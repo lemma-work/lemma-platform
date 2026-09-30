@@ -218,7 +218,7 @@ export function FloatingChat({ pod, resource, live, state, onOpenFile, onOpenTab
                         <div className="fchat__wait">Opening…</div>
                     ) : (
                         <LiveConversation
-                            key={pod.id + ":" + threadKey + ":" + (attached ? thread.data ?? "new" : "new")}
+                            key={pod.id + ":" + threadKey}
                             pod={pod}
                             conversationId={conversationId}
                             createWith={createWith}

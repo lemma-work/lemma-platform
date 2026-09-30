@@ -286,10 +286,10 @@ export interface ConversationRef {
      *  carries. Its front door is that resource, so the recent panel leaves it
      *  out — see `unbound`. */
     boundTo?: string | null;
-    /** Where it came from — a channel, a schedule, a workflow run, a doc — as
-     *  the backend recorded it on the conversation. */
     /** The bot answering it, by uuid — only on lists that span every bot. */
     agentId?: string | null;
+    /** Where it came from — a channel, a schedule, a workflow run, a doc — as
+     *  the backend recorded it on the conversation. */
     origin?: import("@/thread/conversation-origin").ConversationOrigin;
 }
 
@@ -596,6 +596,9 @@ export interface PodSource {
      *  `thread/document-save.ts` for why the other text formats do not.
      */
     writeFile(podId: string, path: string, text: string): Promise<void>;
+    /** Make a new text file, and refuse — with a 409 — if one is already
+     *  there. `writeFile` replaces; a new page must never replace. */
+    createFile(podId: string, path: string, text: string): Promise<void>;
     /** A signed URL the widget iframe can load. The serve route is
      *  authenticated and injects the runtime config the widget's browser SDK
      *  needs, which inline HTML in an iframe can never have. */

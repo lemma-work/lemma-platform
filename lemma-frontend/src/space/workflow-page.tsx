@@ -10,7 +10,7 @@ import { byNewest, readRun, readRuns, type RunRow } from "@/workflow/runs";
 import { readShape } from "@/workflow/shape";
 import { Shape } from "@/workflow/workflows-view";
 import { RunRowButton } from "@/workflow/run-row";
-import { useWorkflowGraph, useWorkflowList } from "@/workflow/use-run";
+import { useWorkflowGraph, workflowGraphQuery, useWorkflowList } from "@/workflow/use-run";
 import { automationOf, runsForOf, schedulesFor, turnOnOf, turnOnRequest, type Automation, type TurnOn } from "@/workflow/turn-on";
 import { useSchedules } from "@/schedule/queries";
 import { CADENCES, SCOPE_LABEL, agoOf, healthOf, type StandingJob } from "@/schedule/schedules";
@@ -33,17 +33,19 @@ export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, o
     const flows = useWorkflowList(pod.id);
     const flow = flows.data?.find((one) => one.name === name) ?? null;
     const graph = useWorkflowGraph(pod.id, name);
+    const cache = useQueryClient();
+    /* Fetches the graph through the same query rather than waiting, disabled,
+       for it: a disabled query stays pending forever, so a refused graph read
+       left "How it runs" saying Reading… with no error and no Try again. */
     const shape = useQuery({
         queryKey: ["workflow-shape", pod.id, name],
-        enabled: graph.isSuccess,
-        queryFn: () => readShape(graph.data?.raw ?? null),
+        queryFn: async () => readShape((await cache.fetchQuery(workflowGraphQuery(pod.id, name))).raw ?? null),
         staleTime: 5 * 60_000,
     });
     const raw = graph.data?.raw as { start?: unknown; mode?: string; description?: string | null } | null | undefined;
     const automation = automationOf(raw?.start);
     const perPerson = flow?.perPerson ?? raw?.mode === "USER";
 
-    const cache = useQueryClient();
     const [problem, setProblem] = useState<string | null>(null);
     const start = useMutation({
         mutationFn: async () => readRun(await lemma(pod.id).workflows.runs.create(name)),

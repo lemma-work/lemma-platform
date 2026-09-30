@@ -14,7 +14,7 @@ import { useSchedules } from "@/schedule/queries";
 import { CheckIcon, CloseIcon, DeleteIcon } from "@/ui/icons";
 import { commentRow, mentionAt, mentionsIn, pendingAsk, type CommentRow, type Mentionable, type Thread } from "./model";
 import { addComment, askAgain, deleteComment, enableComments, updateComment, type CommentsStatus } from "./store";
-import { canAskAgain, wakeFor, wakeRequest } from "./wake";
+import { canAskAgain, isPaused, wakeFor, wakeRequest } from "./wake";
 import { useQuery } from "@tanstack/react-query";
 
 export interface CommentBot { key: string; label: string; iconUrl: string | null; seed: string }
@@ -214,6 +214,7 @@ function BotStatus({ podId, ask, bots, onOpenConversation }: {
     const turnOn = useMutation({
         mutationFn: async () => {
             if (!job) await lemma(podId).request("POST", "/pods/" + podId + "/schedules", { body: wakeRequest(key, name) });
+            else if (isPaused(job)) await source.setScheduleActive(podId, job.id, true);
             await askAgain(podId, ask.id, key);
         },
         onSuccess: () => void cache.invalidateQueries({ queryKey: ["schedules", podId] }),
@@ -232,6 +233,18 @@ function BotStatus({ podId, ask, bots, onOpenConversation }: {
                 <span className="cbot__text">{name} isn’t set to answer comments, so it hasn’t seen this.</span>
                 <button className="linkish" disabled={turnOn.isPending} onClick={() => turnOn.mutate()}>
                     {turnOn.isPending ? "Turning on…" : "Let " + name + " answer"}
+                </button>
+                {turnOn.isError && <em>{isForbidden(turnOn.error) ? "Only an editor can turn that on." : "Couldn’t turn it on."}</em>}
+            </p>
+        );
+    }
+    if (isPaused(job) && !run) {
+        return (
+            <p className="cbot cbot--off" onClick={(event) => event.stopPropagation()}>
+                {face}
+                <span className="cbot__text">{name}’s comment replies are paused{job.pausedByFailures ? " after repeated failures" : ""}, so it hasn’t seen this.</span>
+                <button className="linkish" disabled={turnOn.isPending} onClick={() => turnOn.mutate()}>
+                    {turnOn.isPending ? "Turning on…" : "Turn back on"}
                 </button>
                 {turnOn.isError && <em>{isForbidden(turnOn.error) ? "Only an editor can turn that on." : "Couldn’t turn it on."}</em>}
             </p>
@@ -301,7 +314,10 @@ function Composer({ podId, path, members, bots, anchor, parentId, autoFocus, pla
     const schedules = useSchedules(podId);
     const botWakes = bot ? wakeFor(schedules.data ?? [], bot.key) : null;
     const wake = useMutation({
-        mutationFn: () => lemma(podId).request("POST", "/pods/" + podId + "/schedules", { body: wakeRequest(bot!.key, bot!.label) }),
+        mutationFn: async () => {
+            if (botWakes && isPaused(botWakes)) await source.setScheduleActive(podId, botWakes.id, true);
+            else await lemma(podId).request("POST", "/pods/" + podId + "/schedules", { body: wakeRequest(bot!.key, bot!.label) });
+        },
         onSuccess: () => void cache.invalidateQueries({ queryKey: ["schedules", podId] }),
     });
 
@@ -354,7 +370,13 @@ function Composer({ podId, path, members, bots, anchor, parentId, autoFocus, pla
                         if (event.key === "ArrowUp") { event.preventDefault(); setPickIndex((pickIndex - 1 + choices.length) % choices.length); return; }
                         if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); choose(choices[pickIndex]); return; }
                     }
-                    if (event.key === "Enter" && !event.shiftKey && body.trim()) { event.preventDefault(); send.mutate(); }
+                    /* The button is disabled while a send is in flight; Enter must be
+                       too, or a second row wakes the bot twice. */
+                    if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        if (body.trim() && !send.isPending) send.mutate();
+                        return;
+                    }
                     if (event.key === "Escape") onCancel();
                 }}
             />
@@ -369,8 +391,18 @@ function Composer({ podId, path, members, bots, anchor, parentId, autoFocus, pla
             )}
             {bot && (
                 <p className="ccompose__note">
-                    {botWakes
+                    {botWakes && !isPaused(botWakes)
                         ? bot.label + " will read this and answer here."
+                        : botWakes
+                            ? <>
+                                {bot.label}’s comment replies are paused.{" "}
+                                {source.label === "live" && (
+                                    <button className="linkish" disabled={wake.isPending} onClick={() => wake.mutate()}>
+                                        {wake.isPending ? "Turning on…" : "Turn back on"}
+                                    </button>
+                                )}
+                                {wake.isError && <span className="cpanel__problem"> {isForbidden(wake.error) ? "Only an editor can turn that on." : "Couldn’t turn it on."}</span>}
+                            </>
                         : schedules.isSuccess
                             ? <>
                                 {bot.label} isn’t set to answer comments yet.{" "}

@@ -27,6 +27,13 @@ export function isWakeFor(job: StandingJob, agentKey: string): boolean {
     return values.some((one) => typeof one === "string" && one.toLowerCase() === agentKey.toLowerCase());
 }
 
+/** A wake-up that exists but will not fire: paused by an editor, or by the
+ *  failure breaker. Still matched by `wakeFor`, so the panel offers to turn
+ *  it back on rather than making a second one beside it. */
+export function isPaused(job: StandingJob): boolean {
+    return !job.active || job.pausedByFailures;
+}
+
 export function wakeFor(jobs: StandingJob[], agentKey: string): StandingJob | null {
     return jobs.find((job) => isWakeFor(job, agentKey)) ?? null;
 }

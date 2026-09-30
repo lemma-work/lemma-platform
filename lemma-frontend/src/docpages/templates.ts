@@ -174,3 +174,29 @@ export function freeName(base: string, taken: Set<string>): string {
     for (let n = 2; n < 500; n++) if (!has(base + " " + n)) return base + " " + n;
     return base + " " + Date.now().toString(36);
 }
+
+/** Make a page under a free name, never over an existing one.
+ *
+ *  `taken` is only a hint — it can be stale, or a listing may have failed —
+ *  so the real guard is `create`, which must refuse an existing path with a
+ *  409. On a refusal the next name is tried. Returns the path it made. */
+export async function makePage(
+    create: (path: string, text: string) => Promise<void>,
+    base: string,
+    text: string,
+    taken: Set<string>,
+): Promise<string> {
+    const seen = new Set(taken);
+    for (let attempt = 0; attempt < 25; attempt++) {
+        const name = freeName(base, seen);
+        const path = "/pages/" + name + ".md";
+        try {
+            await create(path, text);
+            return path;
+        } catch (error) {
+            if ((error as { statusCode?: number } | null)?.statusCode !== 409) throw error;
+            seen.add((name + ".md").toLowerCase());
+        }
+    }
+    throw new Error("Couldn’t find a free name for the page. Try again.");
+}

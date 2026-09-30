@@ -76,7 +76,11 @@ export function StandingWork({ podId, teammate, members = [], orgId = null, onOp
             {/* Yours first: what you can pause, share, and are answerable
                 for. Then what others have shared — each runs as them, so the
                 way to get one for yourself is a copy of your own. */}
-            {[
+            {/* Not grouped until we know who "you" are: before that, every
+                owned row would read as someone else's and offer a copy of
+                your own schedule. */}
+            {me === null && jobs.length > 0 && <p className="empty-row" role="status">Loading…</p>}
+            {me !== null && [
                 { key: "mine", title: "Yours", rows: jobs.filter((job) => !job.ownerId || job.ownerId === me) },
                 { key: "space", title: "Shared in the space", rows: jobs.filter((job) => job.ownerId && job.ownerId !== me) },
             ].filter((group) => group.rows.length > 0).map((group) => (

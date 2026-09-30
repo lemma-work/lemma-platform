@@ -41,7 +41,7 @@ import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
-import { freeName } from "@/docpages/templates";
+import { makePage } from "@/docpages/templates";
 import { NOWHERE, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
@@ -678,11 +678,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             const listed = await source.listLibrary(pod.id, "files", "/pages");
             taken = new Set(listed.items.map(item => item.name.toLowerCase()));
         } catch {
-            /* No pages folder yet: every name is free. */
+            /* No listing: names are then found by trying, below. */
         }
-        const path = "/pages/" + freeName("Untitled", taken) + ".md";
-        /* Thrown on purpose — the button that asked shows why it failed. */
-        await source.writeFile(pod.id, path, "# Untitled\n\n");
+        /* Create-only, so a stale or failed listing can cost a retry but never
+           an existing page. Thrown on purpose — the button that asked shows
+           why it failed. */
+        const path = await makePage((at, text) => source.createFile(pod.id, at, text), "Untitled", "# Untitled\n\n", taken);
         void queryClient.invalidateQueries({ queryKey: ["library", pod.id] });
         openFile(path, "space:pages");
     }, [pod, openFile, queryClient]);

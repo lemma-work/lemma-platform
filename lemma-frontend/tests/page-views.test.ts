@@ -4,7 +4,7 @@ import { applySpec, blankSpec, buildSql, readView, writeView } from "../src/docp
 
 test("a spec becomes quoted, escaped SQL", () => {
     const spec = { ...blankSpec("leads"), columns: ["name", "order"], filters: [{ column: "status", op: "=" as const, value: "O'Brien" }, { column: "amount", op: ">" as const, value: "500" }], sort: { column: "created_at", dir: "desc" as const }, limit: 20 };
-    assert.equal(buildSql(spec), `SELECT "name", "order" FROM "leads" WHERE "status" = 'O''Brien' AND "amount" > 500 ORDER BY "created_at" DESC LIMIT 20`);
+    assert.equal(buildSql(spec), `SELECT "name", "order" FROM "leads" WHERE "status" = 'O''Brien' AND "amount" > '500' ORDER BY "created_at" DESC LIMIT 20`);
     assert.equal(buildSql({ ...blankSpec("leads"), filters: [{ column: "note", op: "contains", value: "50%" }] }), `SELECT * FROM "leads" WHERE "note"::text ILIKE '%50\\%%' LIMIT 50`);
     assert.throws(() => buildSql(blankSpec("leads; drop table x")));
 });
@@ -34,4 +34,9 @@ test("in memory, a spec does what its SQL would", () => {
     assert.deepEqual(applySpec(rows, { ...blankSpec("x"), filters: [{ column: "stage", op: "=", value: "won" }], sort: { column: "value", dir: "asc" }, columns: ["name"] }), [{ name: "b" }, { name: "a" }]);
     assert.deepEqual(applySpec(rows, { ...blankSpec("x"), group: { column: "stage", aggregate: "sum", of: "value" } }), [{ stage: "won", sum_value: 15 }, { stage: "lost", sum_value: 7 }, { stage: "", sum_value: 1 }]);
     assert.equal(applySpec(rows, { ...blankSpec("x"), filters: [{ column: "stage", op: "empty", value: "" }] }).length, 1);
+});
+
+test("a contains filter matches a backslash, a percent and an underscore literally", () => {
+    const sql = buildSql({ ...blankSpec("notes"), filters: [{ column: "body", op: "contains" as const, value: "a\\_b%" }] });
+    assert.equal(sql, `SELECT * FROM "notes" WHERE "body"::text ILIKE '%a\\\\\\_b\\%%' LIMIT 50`);
 });

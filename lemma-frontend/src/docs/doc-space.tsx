@@ -52,7 +52,9 @@ export function DocSpace({ pod, path, openFile, openTable, openConversation, sen
             seed: row.front ? pod.id : pod.id + ":" + row.name,
         })), [agents.data, botName, pod.id, pod.teammate?.iconUrl]);
 
-    const open = threads.filter((one) => !one.root.resolved);
+    /* Memoized so `anchors`, and the page tools under it, keep their identity
+       while nothing changed — every block view reads that context. */
+    const open = useMemo(() => threads.filter((one) => !one.root.resolved), [threads]);
     useEffect(() => { setComments(path, { count: open.length }); }, [path, open.length]);
     const anchors = useMemo(() => open
         .filter((one) => one.root.quote)

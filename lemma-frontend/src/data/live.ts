@@ -1074,6 +1074,15 @@ export const liveSource: PodSource = {
         }
     },
 
+    async createFile(podId: string, path: string, text: string): Promise<void> {
+        const cut = path.lastIndexOf("/");
+        const name = path.slice(cut + 1);
+        const file = new Blob([text], { type: /\.(md|markdown)$/i.test(name) ? "text/markdown" : "text/plain" });
+        /* Upload is create-only: the platform answers 409 when the path is
+           taken, which is what lets a caller pick another name instead. */
+        await lemma(podId).files.upload(file, { name, directoryPath: cut > 0 ? path.slice(0, cut) : "/", searchEnabled: true });
+    },
+
     async shareFile(podId: string, path: string, options?: { expiresSeconds?: number; maxHits?: number }): Promise<SharedLink> {
         const minted = (await lemma(podId).files.createSignedUrl(path, options)) as {
             signed_url?: string;

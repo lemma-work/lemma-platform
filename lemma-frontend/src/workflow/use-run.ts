@@ -78,10 +78,12 @@ export function useWorkflowList(podId: string) {
 }
 
 /** One workflow's graph, with the raw payload beside it for the start line. */
-export function useWorkflowGraph(podId: string, name: string | null) {
-    return useQuery({
-        queryKey: ["workflow-graph", podId, name],
-        enabled: Boolean(name),
+/** One workflow's definition, as a query. Shared so anything derived from it
+ *  (the shape on the workflow page) waits on — and fails with — the same
+ *  request instead of sitting disabled behind it. */
+export function workflowGraphQuery(podId: string, name: string | null) {
+    return {
+        queryKey: ["workflow-graph", podId, name] as const,
         staleTime: 5 * 60_000,
         queryFn: async () => {
             let raw: unknown;
@@ -93,7 +95,11 @@ export function useWorkflowGraph(podId: string, name: string | null) {
             }
             return { raw, graph: readGraph(raw) };
         },
-    });
+    };
+}
+
+export function useWorkflowGraph(podId: string, name: string | null) {
+    return useQuery({ ...workflowGraphQuery(podId, name), enabled: Boolean(name) });
 }
 
 /** Recent runs across every workflow in the space, newest first — one

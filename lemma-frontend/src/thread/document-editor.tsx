@@ -302,7 +302,14 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
                 const made = await lemma(page.podId).files.upload(file, { name: safeName(file.name), directoryPath: pageDirs(page.path).assets, searchEnabled: target.kind === "file" });
                 path = String((made as { path?: string }).path ?? "");
             } else {
-                path = URL.createObjectURL(file);
+                /* A data URL, not an object URL: the page is saved, and an
+                   object URL is dead after a reload. */
+                path = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(String(reader.result));
+                    reader.onerror = () => reject(reader.error);
+                    reader.readAsDataURL(file);
+                });
             }
         } catch {
             return;

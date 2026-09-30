@@ -6,7 +6,7 @@ import { source, type LibraryItem, type Member, type SpaceView, type Tab } from 
 import { AppIcon, ChevronDownIcon, FileIcon, GlobeIcon, LibraryIcon, LockIcon, PeopleIcon, PlusIcon, SearchIcon, TableIcon } from "@/ui/icons";
 import { isDoc } from "@/docs/doc-space";
 import { useQueryClient } from "@tanstack/react-query";
-import { PAGE_TEMPLATES, freeName, type PageTemplate } from "@/docpages/templates";
+import { PAGE_TEMPLATES, makePage, type PageTemplate } from "@/docpages/templates";
 import { AppsIcon as GridIcon, CheckCircleIcon, MenuIcon as ListIcon, SparkleIcon, TextIcon, UsageIcon } from "@/ui/icons";
 import { docTitle, fileKind } from "@/library/doc-title";
 import { useMaking } from "./making";
@@ -139,8 +139,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
      *  and opened. */
     const fromTemplate = (template: PageTemplate) => maker.run(template.id, async () => {
         const taken = new Set((pagesFolder.data?.items ?? []).map((item) => item.name.toLowerCase()));
-        const path = "/pages/" + freeName(template.file, taken) + ".md";
-        await source.writeFile(podId, path, template.body(botName, new Date()));
+        const path = await makePage((at, text) => source.createFile(podId, at, text), template.file, template.body(botName, new Date()), taken);
         void cache.invalidateQueries({ queryKey: ["library", podId] });
         onOpenFile(path);
     });
