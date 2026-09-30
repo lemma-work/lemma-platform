@@ -6,7 +6,6 @@ from uuid import UUID
 from sqlalchemy import false, update
 
 from app.core.domain.uow import IUnitOfWork
-from app.modules.agent_surfaces.domain.onboarding_state import IdentityProof
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     VerifiedSurfaceIdentity,
 )
@@ -37,10 +36,6 @@ class VerifiedSurfaceIdentityRepository:
             update(VerifiedSurfaceIdentity)
             .where(
                 VerifiedSurfaceIdentity.user_id == user_id,
-                # Only a phone proof is held to the number. An identity proven
-                # by an email code or an app-minted link never depended on it,
-                # so a new number is no reason to make its owner prove it again.
-                VerifiedSurfaceIdentity.proof == IdentityProof.PHONE,
                 VerifiedSurfaceIdentity.verified_phone.isnot(None),
                 ~still_bound,
             )

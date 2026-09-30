@@ -47,14 +47,6 @@ async def test_a_changed_number_revokes_only_identities_bound_to_another_number(
 
 
 @pytest.mark.asyncio
-async def test_a_changed_number_leaves_identities_proven_another_way_alone():
-    """An email code or an app link never depended on the number."""
-    statement = await _revoke("+15550001111")
-
-    assert "proof = 'phone'" in statement
-
-
-@pytest.mark.asyncio
 async def test_no_verified_number_revokes_every_phone_bound_identity():
     statement = await _revoke(None)
 

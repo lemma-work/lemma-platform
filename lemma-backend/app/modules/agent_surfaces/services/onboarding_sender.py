@@ -54,9 +54,6 @@ from app.modules.agent_surfaces.services.onboarding_pod_choice import (
     has_somewhere_to_talk,
 )
 from app.modules.agent_surfaces.services.onboarding_transport import OnboardingTransport
-from app.modules.agent_surfaces.services.verified_surface_identity import (
-    proof_still_holds,
-)
 from app.modules.agent_surfaces.services.personal_dm_routes import (
     PersonalRouteUnavailable,
     prepare_personal_dm_context,
@@ -120,7 +117,13 @@ async def verified_sender(
         if verified_user_id is not None:
             assert identity is not None
             verified_user = await active_chat_user(uow, verified_user_id)
-            if verified_user is None or not proof_still_holds(identity, verified_user):
+            if verified_user is None or (
+                identity.verified_phone is not None
+                and (
+                    identity.verified_phone != verified_user.mobile_number
+                    or verified_user.mobile_verified_at is None
+                )
+            ):
                 verified_user_id = None
                 previously_revoked = True
         found = (

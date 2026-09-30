@@ -54,7 +54,6 @@ from app.modules.pod.contracts.personal_workspace import (
 
 
 from app.modules.agent_surfaces.domain.onboarding_state import (
-    IdentityProof,
     OnboardingStep,
     PendingState,
 )
@@ -100,15 +99,11 @@ class OnboardingOutcome:
 
 
 async def complete_onboarding_workspace(
-    uows: UnitOfWorkFactory,
-    transport: OnboardingTransport,
-    state: PendingState,
-    *,
-    proof: IdentityProof | None = None,
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
 ) -> OnboardingOutcome:
     assert state.user_id is not None
     try:
-        return await _provision_and_bind(uows, transport, state, proof=proof)
+        return await _provision_and_bind(uows, transport, state)
     except SharedSurfaceUnavailable as conflict:
         # Raised from inside a unit of work, so the park has to happen after it
         # has rolled back -- and `_step` turns what comes out of here into the
@@ -155,11 +150,7 @@ async def _park_on_another_workspace(
 
 
 async def _provision_and_bind(
-    uows: UnitOfWorkFactory,
-    transport: OnboardingTransport,
-    state: PendingState,
-    *,
-    proof: IdentityProof | None,
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
 ) -> OnboardingOutcome:
     assert state.user_id is not None
     workspace = await ensure_chat_workspace(
@@ -169,7 +160,7 @@ async def _provision_and_bind(
         full_name=transport.event.sender_display_name,
         installation_organization_id=transport.organization_id,
     )
-    user = await record_verified_identity(uows, transport, state, proof=proof)
+    user = await record_verified_identity(uows, transport, state)
     async with uows() as uow:
         pending = await uow.session.get(PendingChatOnboarding, state.id)
         assert pending is not None
@@ -208,11 +199,7 @@ async def _provision_and_bind(
 
 
 async def record_verified_identity(
-    uows: UnitOfWorkFactory,
-    transport: OnboardingTransport,
-    state: PendingState,
-    *,
-    proof: IdentityProof | None = None,
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
 ) -> UserEntity:
     """Write down who this is, before anything tries to find them a desk.
 
@@ -236,12 +223,8 @@ async def record_verified_identity(
     when this is a returning person changing workspaces, because there was
     nothing to verify. Assigning it unconditionally wrote that nothing over a
     live proof, and it is `resolve_shared_verified_identity`, on the *ingestion*
-    side, that then stopped recognising them: for a phone proof it requires
-    the stored phone and a match.
-
-    `proof` is given only by the app-minted link, which proves the account and
-    drops any phone; otherwise a phone supplied now makes this a phone proof
-    and its absence leaves the proof what it was. Onboarding said READY and handed off,
+    side, that then stopped recognising them: for WhatsApp and Telegram it
+    requires the stored phone and a match. Onboarding said READY and handed off,
     and the next message was answered with "please share your phone number".
     """
     assert state.user_id is not None
@@ -276,7 +259,6 @@ async def record_verified_identity(
             # a leftover number would answer the wrong person.
             identity.user_id = user.id
             identity.verified_phone = None
-            identity.proof = IdentityProof.EMAIL
         if identity is None:
             identity = VerifiedSurfaceIdentity(
                 binding_key=state.binding_key,
@@ -284,17 +266,10 @@ async def record_verified_identity(
                 tenant_id=transport.event.tenant_id or "",
                 external_user_id=transport.event.sender_external_user_id or "",
                 user_id=user.id,
-                proof=IdentityProof.EMAIL,
             )
             uow.session.add(identity)
-        if proof == IdentityProof.LINK_TOKEN:
-            # The link proved the account; a phone left from an earlier proof
-            # would only hold this identity to a number it no longer needs.
-            identity.verified_phone = None
-            identity.proof = IdentityProof.LINK_TOKEN
-        elif state.verified_phone:
+        if state.verified_phone:
             identity.verified_phone = state.verified_phone
-            identity.proof = IdentityProof.PHONE
         identity.revoked_at = None
     return user
 
@@ -385,8 +360,6 @@ async def attach_chosen_workspace(
     transport: OnboardingTransport,
     state: PendingState,
     choice: PodChoice,
-    *,
-    proof: IdentityProof | None = None,
 ) -> str | None:
     """Wire this conversation to the workspace the person picked.
 
@@ -403,7 +376,7 @@ async def attach_chosen_workspace(
     the one thing recognition exists to avoid.
     """
     assert state.user_id is not None
-    user = await record_verified_identity(uows, transport, state, proof=proof)
+    user = await record_verified_identity(uows, transport, state)
     async with uows() as uow:
         pod_id = choice.pod_id
         if pod_id is None:

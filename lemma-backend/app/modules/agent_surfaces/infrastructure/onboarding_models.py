@@ -17,9 +17,7 @@ class VerifiedSurfaceIdentity(UUIDAuditBase):
     One row per binding -- platform, tenant, installation and actor, hashed --
     holding both halves of the same fact: that this person proved who they are,
     and which pod and agent they reached by doing so. The row existing *is* the
-    proof; it is only written after a code sent to their mailbox came back, a
-    shared contact matched a verified number, or the signed-in user opened a
-    link minted for them -- and ``proof`` says which.
+    proof; it is only written after a code sent to their mailbox came back.
 
     The destination used to be a second table keyed on the same binding, which
     meant two rows that could disagree: nothing stopped a live route sitting
@@ -37,10 +35,6 @@ class VerifiedSurfaceIdentity(UUIDAuditBase):
             "installation_surface_id IS NULL AND pod_id IS NULL)",
             name="ck_surface_identity_route_is_live",
         ),
-        CheckConstraint(
-            "proof IN ('phone', 'email', 'link_token')",
-            name="ck_surface_identity_proof_kind",
-        ),
     )
 
     binding_key: Mapped[str] = mapped_column(String(64), unique=True)
@@ -51,9 +45,6 @@ class VerifiedSurfaceIdentity(UUIDAuditBase):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     verified_phone: Mapped[str | None] = mapped_column(String(32))
-    # An `IdentityProof` value. Only a phone proof is held to the account's
-    # mobile number; see `IdentityProof` for why the others are not.
-    proof: Mapped[str] = mapped_column(String(16), default="email")
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Where this identity talks, once it has somewhere to talk. Null until a
     # workspace is chosen or provisioned -- being recognised and having a

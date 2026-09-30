@@ -57,23 +57,6 @@ class OnboardingStep(StrEnum):
     REFUSED = "refused"
 
 
-class IdentityProof(StrEnum):
-    """How a verified surface identity was proven, and so what can undo it.
-
-    Stored on the identity because the proof decides what revokes it. A phone
-    proven by a contact share or a WhatsApp sender stops proving anything when
-    the account's mobile number changes, so those identities are held to the
-    number. An email code or a link minted for a signed-in user proves the
-    account directly and has no number to be held to -- requiring one made a
-    Telegram chat linked without a phone unrecognisable on the shared bot.
-    """
-
-    PHONE = "phone"
-    EMAIL = "email"
-    #: A one-time link the signed-in user opened from the Lemma app.
-    LINK_TOKEN = "link_token"
-
-
 class PendingState(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
