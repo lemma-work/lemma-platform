@@ -16,6 +16,7 @@
  *   - package export:    dist/browser/lemma-client.js  (unpkg / "./browser-bundle")
  */
 import { LemmaClient } from "./client.js";
+import { registerAppAccessFrame, startAppAccess } from "./app-access.js";
 import {
   AuthManager,
   buildAuthUrl,
@@ -42,6 +43,8 @@ import {
 } from "./browser-compose.js";
 
 export {
+  registerAppAccessFrame,
+  startAppAccess,
   LemmaClient,
   AuthManager,
   buildAuthUrl,
@@ -71,6 +74,8 @@ export {
 if (typeof globalThis !== "undefined") {
   const scope = globalThis as Record<string, unknown>;
   const surface = {
+    registerAppAccessFrame,
+    startAppAccess,
     LemmaClient,
     AuthManager,
     buildAuthUrl,

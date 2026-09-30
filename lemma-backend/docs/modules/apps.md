@@ -38,6 +38,8 @@ during pod-bundle import use the sandbox runtime from the bundle module.
 | `/.../assets...` | Serve an authenticated pod app asset |
 | `/.../source/archive`, `/.../dist/archive` | Download stored release archives |
 | `/public/apps...` | Host-based public app entrypoint/assets |
+| `/_lemma/app-access/requests`, `/_lemma/app-access/redeem` | Browser-bound asset access on the app origin |
+| `/apps/access/requests/{id}/authorize` | Authorize a handoff using the main session and current app permissions |
 | `/.lemma/...` | Manifest, icons, service worker and offline page (on the app host) |
 | `/public/sdk/*` | Browser SDK and web-component bundles |
 
@@ -60,6 +62,12 @@ Storage uses a stage/commit/promote pattern with cleanup compensation. HTML
 lint is advisory and reports obsolete SDK usage; it does not reject app code.
 Entrypoints are no-cache and receive pod/API/auth context at serve time, while
 hashed static assets use immutable caching and ETags.
+Hosted private builds use a trusted bootstrap before any app bytes are served.
+Redis carries single-use handoffs and app-origin access records; the identity
+module publishes parent-session and account eligibility checks. Private reads
+recheck authorization in a short unit of work, read storage afterward, and
+return `private, no-store` without ETags or 304 responses. App API credentials
+and desktop HTTP serving remain governed by their existing contracts.
 `AppsSettings` owns source/dist/combined upload ceilings and archive-entry,
 expanded-size, and compression-ratio protections.
 

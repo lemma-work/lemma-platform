@@ -8,6 +8,7 @@ application service from growing with each new hosted-app presentation feature.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
@@ -15,6 +16,14 @@ import structlog
 
 from app.core import runtime_config
 from app.core.config import settings
+from app.core.authorization.context import (
+    Context,
+    ResourceRef,
+    ResourceVisibility,
+    normalize_resource_visibility,
+)
+from app.core.authorization.permissions import Permissions
+from app.modules.apps.domain.access import AppAccessSession
 from app.modules.apps.domain.branding import AppBrandingEntitlementPort
 from app.modules.apps.domain.entities import (
     AppAssetDocument,
@@ -39,6 +48,69 @@ class AppAssetResolver:
     ) -> None:
         self.repository = repository
         self.branding_entitlement = branding_entitlement
+
+    @staticmethod
+    def private_inputs(
+        resolved: _AssetReadInputs | AppAssetDocument,
+    ) -> _AssetReadInputs | AppAssetDocument:
+        if isinstance(resolved, AppAssetDocument):
+            return resolved.model_copy(
+                update={
+                    "etag": None,
+                    "not_modified": False,
+                    "headers": {
+                        **(resolved.headers or {}),
+                        "Cache-Control": "private, no-store",
+                    },
+                }
+            )
+        return replace(resolved, private=True)
+
+    async def resolve_authenticated(
+        self, app: AppEntity, *, asset_path: str | None, request_etag: str | None
+    ) -> _AssetReadInputs | AppAssetDocument:
+        private = (
+            normalize_resource_visibility(app.visibility)
+            is not ResourceVisibility.PUBLIC
+        )
+        resolved = await self.resolve(
+            app,
+            raise_not_found_name=app.name,
+            asset_path=asset_path,
+            request_etag=None if private else request_etag,
+        )
+        return self.private_inputs(resolved) if private else resolved
+
+    async def resolve_private_host(
+        self,
+        app: AppEntity,
+        access: AppAccessSession,
+        *,
+        asset_path: str | None,
+        ctx: Context,
+    ) -> _AssetReadInputs | AppAssetDocument:
+        if app.id != access.app_id or app.public_slug != access.slug:
+            raise AppNotFoundError()
+        release = None
+        public_url = self.public_url(app)
+        if access.release_ref is not None:
+            await ctx.require(
+                Permissions.APP_UPDATE, ResourceRef.app(app.pod_id, access.app_id)
+            )
+            from app.modules.apps.services.app_release_service import resolve_preview
+
+            release, public_url = await resolve_preview(
+                self.repository, self, app, access.release_ref
+            )
+        resolved = await self.resolve(
+            app,
+            raise_not_found_name=app.name,
+            asset_path=asset_path,
+            request_etag=None,
+            public_url=public_url,
+            release=release,
+        )
+        return self.private_inputs(resolved)
 
     @staticmethod
     def public_url(app: AppEntity) -> str:

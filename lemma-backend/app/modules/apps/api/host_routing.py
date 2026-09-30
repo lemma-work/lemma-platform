@@ -171,6 +171,16 @@ def _trusted_routing_headers(
     return host, proxied, headers
 
 
+def _reserved_access_path(path: str, proxied: bool, host: str) -> str | None:
+    access_path = path.removeprefix(_APP_PATH_PREFIX) if proxied else path
+    if app_label_from_host(host) is not None and access_path in {
+        "/_lemma/app-access/requests",
+        "/_lemma/app-access/redeem",
+    }:
+        return access_path
+    return None
+
+
 class AppHostRoutingMiddleware:
     """Serve app builds via host-based routing (see module docstring)."""
 
@@ -185,6 +195,18 @@ class AppHostRoutingMiddleware:
         host, proxied, headers = _trusted_routing_headers(scope["headers"])
         scope["headers"] = headers
         path = scope.get("path") or "/"
+
+        # Only the two asset-handoff doors are always exposed on an app origin.
+        # The general API alias remains an explicit deployment choice.
+        access_path = _reserved_access_path(path, proxied, host)
+        if access_path is not None:
+            scope["path"] = access_path
+            scope["raw_path"] = access_path.encode("utf-8")
+            scope["headers"] = [
+                (key, value) for key, value in headers if key.lower() != _SLUG_HEADER
+            ]
+            await self.app(scope, receive, send)
+            return
 
         # The app calling the API on its own origin. Handled before the proxied
         # early-return, so the prefix means the same thing whether the slug was

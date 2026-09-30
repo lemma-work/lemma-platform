@@ -26,6 +26,7 @@ from app.modules.apps.services.app_visibility import (
     app_visibility_value,
     normalize_app_visibility,
 )
+from app.modules.apps.domain.access import AppAccessRequiredError, AppAccessSession
 from app.modules.apps.domain.events import AppPublishedEvent
 from app.modules.apps.domain.entities import (
     AppAssetDocument,
@@ -512,17 +513,20 @@ class AppService:
         asset_path: str | None,
         request_etag: str | None = None,
         ctx: Context | None = None,
+        access: AppAccessSession | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
-        """DB+authz phase for serving an authed app asset. Call inside a short UoW;
-        then call read_app_asset (storage) outside it. Returns a not-modified
-        document directly on a 304."""
+        """Authorize and resolve inputs inside the short UoW; read storage afterward."""
         app = await self.get_app_by_name(
             pod_id, name, user_id, raise_not_found=True, ctx=ctx
         )
         assert app is not None
-        return await self._asset_resolver.resolve(
+        if access is not None:
+            assert ctx is not None
+            return await self._asset_resolver.resolve_private_host(
+                app, access, asset_path=asset_path, ctx=ctx
+            )
+        return await self._asset_resolver.resolve_authenticated(
             app,
-            raise_not_found_name=name,
             asset_path=asset_path,
             request_etag=request_etag,
         )
@@ -543,18 +547,14 @@ class AppService:
         """
         app = await self.repository.get_by_public_slug(public_slug)
         if not app:
-            raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
-        # No session reaches this route -- the ingress serves it to anonymous
-        # browsers by host -- so only an app published to everyone belongs here.
-        # Apps default to PUBLIC (see the note on ``AppModel.visibility``), so
-        # this is the whole of what keeps a POD app off its public host; an
-        # unrecognized stored value is not PUBLIC either. Report it as missing
-        # rather than forbidden: a 403 confirms the slug to a caller who guessed.
+            raise AppAccessRequiredError()
+        # Anonymous reads reveal only PUBLIC builds. The host controller gates
+        # private and missing slugs identically until an identity is authorized.
         if (
             normalize_resource_visibility(app.visibility)
             is not ResourceVisibility.PUBLIC
         ):
-            raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
+            raise AppAccessRequiredError()
         release = None
         public_url = self._asset_resolver.public_url(app)
         if release_ref is not None:

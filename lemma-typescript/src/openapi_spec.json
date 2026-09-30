@@ -1929,6 +1929,109 @@
         "title": "AnswerSignInRequest",
         "type": "object"
       },
+      "AppAccessAuthorizeRequest": {
+        "properties": {
+          "app_origin": {
+            "maxLength": 512,
+            "title": "App Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_origin"
+        ],
+        "title": "AppAccessAuthorizeRequest",
+        "type": "object"
+      },
+      "AppAccessAuthorizeResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_in_seconds": {
+            "title": "Expires In Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "expires_in_seconds"
+        ],
+        "title": "AppAccessAuthorizeResponse",
+        "type": "object"
+      },
+      "AppAccessCreateRequest": {
+        "properties": {
+          "challenge": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Challenge",
+            "type": "string"
+          }
+        },
+        "required": [
+          "challenge"
+        ],
+        "title": "AppAccessCreateRequest",
+        "type": "object"
+      },
+      "AppAccessRedeemRequest": {
+        "properties": {
+          "code": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "request_id": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "verifier": {
+            "pattern": "^[A-Za-z0-9._~-]{43,128}$",
+            "title": "Verifier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "code",
+          "verifier"
+        ],
+        "title": "AppAccessRedeemRequest",
+        "type": "object"
+      },
+      "AppAccessRedeemResponse": {
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expires_at"
+        ],
+        "title": "AppAccessRedeemResponse",
+        "type": "object"
+      },
+      "AppAccessRequestResponse": {
+        "properties": {
+          "expires_in_seconds": {
+            "title": "Expires In Seconds",
+            "type": "integer"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "expires_in_seconds"
+        ],
+        "title": "AppAccessRequestResponse",
+        "type": "object"
+      },
       "AppBundleUploadRequest": {
         "properties": {
           "dist_archive": {
@@ -18652,6 +18755,170 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/_lemma/app-access/redeem": {
+      "post": {
+        "operationId": "app.access.redeem",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppAccessRedeemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppAccessRedeemResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Redeem App Access",
+        "tags": [
+          "Apps"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "app.access"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "app.access",
+          "result": "entity",
+          "verb": "redeem"
+        }
+      }
+    },
+    "/_lemma/app-access/requests": {
+      "post": {
+        "operationId": "app.access.request.create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppAccessCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppAccessRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create App Access Request",
+        "tags": [
+          "Apps"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "app.access.request"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "app.access.request",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/apps/access/requests/{request_id}/authorize": {
+      "post": {
+        "operationId": "app.access.request.authorize",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppAccessAuthorizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppAccessAuthorizeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Authorize App Access Request",
+        "tags": [
+          "Apps"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "app.access.request"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "app.access.request",
+          "result": "entity",
+          "verb": "authorize"
+        }
+      }
+    },
     "/auth/verify-token": {
       "get": {
         "description": "Validate the current bearer token and return the resolved user context.",

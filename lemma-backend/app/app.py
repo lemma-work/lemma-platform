@@ -55,6 +55,7 @@ from app.sandbox_health import record_sandbox_probe
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
+from app.modules.apps.api.app_access_cache import AppAccessCacheMiddleware
 from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
@@ -468,6 +469,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # the public app asset endpoint. Outermost so the slug is resolved before
     # routing/auth (the rewritten /public/* path is unauthenticated).
     app.add_middleware(AppHostRoutingMiddleware)
+    app.add_middleware(AppAccessCacheMiddleware)
 
     # Outside the app-host router so it sees the path the browser used
     # (`/_lemma/...` on an app origin): a stray session cookie's path is a

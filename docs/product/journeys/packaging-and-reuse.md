@@ -171,8 +171,20 @@ their credentials do not travel with it.
   carries, and shall not let the app widen it.
 - If someone without access to the pod opens an app, then the system shall
   refuse rather than serving pod data.
+- On hosted HTTPS app addresses, public builds shall open anonymously. Private
+  builds shall open for people whose identity grants `app.read`, including pod,
+  personal and restricted apps, both through direct links and workspace tabs.
+- A signed-out person shall see a generic sign-in action that returns to their
+  original app path, query and fragment. Before sign-in, an absent app shall
+  reveal no more than a private app.
+- An app's asset access shall end when its parent session expires or is revoked,
+  the account becomes ineligible, or its app permission is removed. A private
+  release preview shall additionally require `app.update`.
+- Private HTML and assets shall not be cached. The credential used to load them
+  shall authorize only that app origin's assets; app API calls shall retain
+  their existing identity and permission checks.
 
-**Contracts:** `app.get`, `app.asset.get`, `app.published`, `app.session_started`
+**Contracts:** `app.get`, `app.asset.get`, `app.access.request.create`, `app.access.request.authorize`, `app.access.redeem`, `app.published`, `app.session_started`
 
 ### PS-PACK-032 — A person can retrieve what an app was built from
 **Status:** covered

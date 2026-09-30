@@ -49,6 +49,7 @@ class _AssetReadInputs:
     dist_root_path: str
     normalized_asset_path: str
     quoted_etag: str
+    private: bool = False
     app: dict[str, str] | None = None
     branding: dict[str, str] | None = None
 
@@ -149,8 +150,9 @@ class AppStoragePhase:
             media_type=self._guess_media_type(
                 requested_storage_path if not is_entrypoint else "index.html"
             ),
-            etag=inputs.quoted_etag,
+            etag=None if inputs.private else inputs.quoted_etag,
             is_entrypoint=is_entrypoint,
+            headers={"Cache-Control": "private, no-store"} if inputs.private else None,
         )
 
     async def read_archive(self, app_id: UUID, archive_path: str) -> bytes:

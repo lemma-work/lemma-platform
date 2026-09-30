@@ -467,12 +467,45 @@ SUPERTOKENS_CORE_URL=http://supertokens:3567
 
 CORS_ORIGINS=["https://app.example.com"]
 CORS_ORIGIN_REGEX=
-# Leave the domain blank for a host-only cookie. Set it only when the UI and API
-# are on different subdomains that must share a session.
+# Keep the API session host-only. Private app assets use their own host cookie.
 SESSION_COOKIE_DOMAIN=
 SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_SAME_SITE=lax
 ```
+
+Private apps on hosted HTTPS domains use a browser-bound Redis handoff. The
+trusted app bootstrap calls the API with the existing main-session transport;
+workspace frames ask their registered parent to make that call. The API checks
+`app.read` (and `app.update` for private release previews), then returns a code
+that the initiating browser redeems on the exact app origin. The host-only
+`__Host-lemmaAppAccess` cookie authorizes HTML and assets only. Every private
+request rechecks the parent SuperTokens session, account eligibility and app
+permissions. No database migration or additional signing secret is needed.
+
+Serve `/_lemma/app-access/requests` and `/_lemma/app-access/redeem` through the
+existing wildcard app-host routing, including ingress rewrites to
+`/public/apps`. These two reserved routes work independently of
+`APP_API_VIA_APP_ORIGIN`; enabling the general app-origin API alias is not
+required. Keep `API_URL`, `FRONTEND_URL`, `AUTH_FRONTEND_URL` and `APP_BASE_DOMAIN`
+consistent with the public HTTPS origins. Credentialed CORS must permit the
+workspace and app origins, and the login return allowlist must permit those
+app origins. Verify the configured login page accepts the `redirect_uri` query
+parameter and returns to the original app path, query and fragment.
+
+Requests expire after five minutes and redemption codes after 60 seconds.
+`APP_ACCESS_CREATE_LIMIT_PER_MINUTE` defaults to 30 per client address; forwarded
+addresses are trusted only from `AUTH_TRUSTED_PROXY_IPS`. Redis holds token
+hashes and opaque access records whose lifetime cannot exceed the parent
+session. Redis or identity-service failures refuse private content with an
+actionable error; blocked app cookies are detected before the bootstrap reloads.
+Private responses use `Cache-Control: private, no-store`, with no private 304s.
+Public app caching and desktop HTTP framing retain their existing behavior.
+
+Deploy compatible backend, browser SDK and workspace frontend images together.
+Check a private direct link, a workspace tab, an unauthorized account, logout
+and a public app before promotion. Rolling back those images restores the
+previous private-host 404 behavior; access records expire automatically in
+Redis. No Terraform change is required by this protocol.
 
 ## Authentication and email
 

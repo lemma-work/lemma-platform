@@ -69,6 +69,12 @@ _NAME_TO_MODULE = {
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
     'AnswerSignInRequest': 'answer_sign_in_request',
+    'AppAccessAuthorizeRequest': 'app_access_authorize_request',
+    'AppAccessAuthorizeResponse': 'app_access_authorize_response',
+    'AppAccessCreateRequest': 'app_access_create_request',
+    'AppAccessRedeemRequest': 'app_access_redeem_request',
+    'AppAccessRedeemResponse': 'app_access_redeem_response',
+    'AppAccessRequestResponse': 'app_access_request_response',
     'AppBundleUploadRequest': 'app_bundle_upload_request',
     'AppBundleUploadResponse': 'app_bundle_upload_response',
     'AppDetailResponse': 'app_detail_response',
@@ -605,6 +611,12 @@ if TYPE_CHECKING:
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
     from .answer_sign_in_request import AnswerSignInRequest
+    from .app_access_authorize_request import AppAccessAuthorizeRequest
+    from .app_access_authorize_response import AppAccessAuthorizeResponse
+    from .app_access_create_request import AppAccessCreateRequest
+    from .app_access_redeem_request import AppAccessRedeemRequest
+    from .app_access_redeem_response import AppAccessRedeemResponse
+    from .app_access_request_response import AppAccessRequestResponse
     from .app_bundle_upload_request import AppBundleUploadRequest
     from .app_bundle_upload_response import AppBundleUploadResponse
     from .app_detail_response import AppDetailResponse
@@ -1154,6 +1166,12 @@ __all__ = [
     'AgentSurfaceStatus',
     'AgentToolset',
     'AnswerSignInRequest',
+    'AppAccessAuthorizeRequest',
+    'AppAccessAuthorizeResponse',
+    'AppAccessCreateRequest',
+    'AppAccessRedeemRequest',
+    'AppAccessRedeemResponse',
+    'AppAccessRequestResponse',
     'AppBundleUploadRequest',
     'AppBundleUploadResponse',
     'AppDetailResponse',

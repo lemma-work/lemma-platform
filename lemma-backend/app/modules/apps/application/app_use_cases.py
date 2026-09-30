@@ -24,6 +24,10 @@ from fastapi import Request
 from app.core.authorization.scope import pod_context_scope, uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.apps.domain.entities import AppAssetDocument, AppEntity
+from app.modules.apps.domain.access import AppAccessSession, AppAccessTarget
+from app.modules.apps.domain.errors import AppNotFoundError
+from app.core.authorization.context import ResourceRef
+from app.core.authorization.permissions import Permissions
 from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.archive_validation import inspect_app_archive
 from app.core.concurrency.offload import run_blocking
@@ -223,6 +227,58 @@ class AppUseCases:
         if isinstance(resolved, AppAssetDocument):
             return resolved
         return await service.read_app_asset(resolved)
+
+    async def authorize_host_access(
+        self, *, slug: str, release_ref: str | None, request: Request, user_id: UUID
+    ) -> AppAccessTarget:
+        async with uow_scope(self._uow_factory) as uow:
+            app = await self._build(uow).repository.get_by_public_slug(slug)
+        if app is None or app.id is None:
+            raise AppNotFoundError()
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=app.pod_id
+        ) as scope:
+            service = self._build(scope.uow)
+            authorized = await service.get_app_by_name(
+                app.pod_id, app.name, user_id, raise_not_found=True, ctx=scope.ctx
+            )
+            assert authorized is not None and authorized.id is not None
+            if authorized.id != app.id or authorized.public_slug != slug:
+                raise AppNotFoundError()
+            if release_ref is not None:
+                await scope.ctx.require(
+                    Permissions.APP_UPDATE, ResourceRef.app(app.pod_id, authorized.id)
+                )
+                await self._build_releases(scope.uow).resolve_release(
+                    authorized, release_ref
+                )
+            return AppAccessTarget(
+                app_id=authorized.id, pod_id=authorized.pod_id, name=authorized.name
+            )
+
+    async def serve_private_host_asset(
+        self, *, access: AppAccessSession, request: Request, asset_path: str | None
+    ) -> AppAssetDocument:
+        async with pod_context_scope(
+            self._uow_factory,
+            request=request,
+            user_id=access.user_id,
+            pod_id=access.pod_id,
+        ) as scope:
+            service = self._build(scope.uow)
+            resolved = await service.resolve_app_asset(
+                access.pod_id,
+                access.name,
+                access.user_id,
+                asset_path=asset_path,
+                ctx=scope.ctx,
+                access=access,
+            )
+        return (
+            resolved
+            if isinstance(resolved, AppAssetDocument)
+            else await service.read_app_asset(resolved)
+        )
 
     async def list_releases(
         self,

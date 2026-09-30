@@ -2,6 +2,12 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AppAccessAuthorizeRequest } from '../models/AppAccessAuthorizeRequest.js';
+import type { AppAccessAuthorizeResponse } from '../models/AppAccessAuthorizeResponse.js';
+import type { AppAccessCreateRequest } from '../models/AppAccessCreateRequest.js';
+import type { AppAccessRedeemRequest } from '../models/AppAccessRedeemRequest.js';
+import type { AppAccessRedeemResponse } from '../models/AppAccessRedeemResponse.js';
+import type { AppAccessRequestResponse } from '../models/AppAccessRequestResponse.js';
 import type { AppBundleUploadRequest } from '../models/AppBundleUploadRequest.js';
 import type { AppBundleUploadResponse } from '../models/AppBundleUploadResponse.js';
 import type { AppDetailResponse } from '../models/AppDetailResponse.js';
@@ -15,6 +21,68 @@ import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class AppsService {
+    /**
+     * Redeem App Access
+     * @param requestBody
+     * @returns AppAccessRedeemResponse Successful Response
+     * @throws ApiError
+     */
+    public static appAccessRedeem(
+        requestBody: AppAccessRedeemRequest,
+    ): CancelablePromise<AppAccessRedeemResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/_lemma/app-access/redeem',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create App Access Request
+     * @param requestBody
+     * @returns AppAccessRequestResponse Successful Response
+     * @throws ApiError
+     */
+    public static appAccessRequestCreate(
+        requestBody: AppAccessCreateRequest,
+    ): CancelablePromise<AppAccessRequestResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/_lemma/app-access/requests',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Authorize App Access Request
+     * @param requestId
+     * @param requestBody
+     * @returns AppAccessAuthorizeResponse Successful Response
+     * @throws ApiError
+     */
+    public static appAccessRequestAuthorize(
+        requestId: string,
+        requestBody: AppAccessAuthorizeRequest,
+    ): CancelablePromise<AppAccessAuthorizeResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/apps/access/requests/{request_id}/authorize',
+            path: {
+                'request_id': requestId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
     /**
      * List Apps
      * @param podId

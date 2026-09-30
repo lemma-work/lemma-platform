@@ -17,6 +17,11 @@ class AppsSettings(BaseSettings):
     )
 
     app_source_archive_max_bytes: int = Field(default=100 * 1024 * 1024)
+    app_access_create_limit_per_minute: int = Field(
+        default=30,
+        ge=1,
+        description="Browser app-access handoffs permitted per client IP per minute.",
+    )
     app_dist_archive_max_bytes: int = Field(default=100 * 1024 * 1024)
     app_bundle_upload_max_bytes: int = Field(default=200 * 1024 * 1024)
     app_archive_max_entries: int = Field(default=10_000)

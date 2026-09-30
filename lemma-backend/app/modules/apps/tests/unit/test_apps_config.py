@@ -24,6 +24,7 @@ def test_apps_settings_own_archive_limits(monkeypatch):
         "app_release_retention_budget_seconds": 60.0,
         # Moved from `app/core/config.py`: only this module reads it.
         "app_branding_enabled": True,
+        "app_access_create_limit_per_minute": 30,
     }
     assert set(AppsSettings.model_fields) == set(expected)
     for field, default in expected.items():

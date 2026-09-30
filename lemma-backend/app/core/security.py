@@ -320,6 +320,13 @@ def _is_public_identity_auth_path(path: str, method: str) -> bool:
     )
 
 
+def _is_public_app_access_path(path: str, method: str) -> bool:
+    return method.upper() == "POST" and path in {
+        "/_lemma/app-access/requests",
+        "/_lemma/app-access/redeem",
+    }
+
+
 def _is_public_path(connection: HTTPConnection) -> bool:
     """Whether this request is exempt from the global authentication gate.
 
@@ -335,6 +342,7 @@ def _is_public_path(connection: HTTPConnection) -> bool:
         or _is_surface_webhook_path(path)
         or _is_public_desktop_auth_path(path, method)
         or _is_public_identity_auth_path(path, method)
+        or _is_public_app_access_path(path, method)
     )
 
 
