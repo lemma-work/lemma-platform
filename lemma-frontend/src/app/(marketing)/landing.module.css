@@ -21,20 +21,6 @@
 .sectionEyebrow { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .075em; color: var(--ink-3) }
 .sectionHeading { font-weight: 400; font-size: clamp(34px,4.1vw,56px); line-height: 1.08; letter-spacing: -.045em; margin-top: 16px !important; max-width: 22ch }
 .sectionNote { font-size: 16px; color: var(--ink-2); margin-top: 24px !important; max-width: 68ch; line-height: 1.65 }
-/* The roster: the app's Teammates page, drawn for the landing. Two groups,
-   one card each, the waiting ones marked with the same dot the app uses. */
-.roster { margin-top: 40px; display: grid; gap: 28px }
-.rosterGroup { display: grid; gap: 10px }
-.rosterLabel { font-family: var(--font-mono, "DM Mono"), monospace; font-size: 12px; letter-spacing: .075em; color: var(--ink-3); text-transform: uppercase }
-.rosterCards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px }
-.rosterCard { background: var(--paper); border: 1px solid var(--line-soft); border-radius: var(--radius-card); padding: 18px; display: flex; gap: 14px; align-items: flex-start; box-shadow: var(--shadow-card) }
-.rosterBody { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
-.rosterName { font-size: 18px; font-weight: 500; letter-spacing: -.01em }
-.rosterJob { font-size: 14px; color: var(--ink-2) }
-.rosterNews, .rosterNewsNeeds { font-size: 14px; margin-top: 10px; color: var(--ink) }
-.rosterNewsNeeds::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--wait); margin-right: 8px; vertical-align: 1px }
-.rosterPeople { font-size: 13px; color: var(--ink-3) }
-.rosterFoot { font-size: 13px; color: var(--ink-3); margin-top: 16px !important }
 .greeter { display: block; flex: none; line-height: 0 }
 .toneViolet { --field: #4a35c9; --fieldInk: #4a35c9; --fieldSoft: #eceafb; --onField: #fffefa }
 .toneAmber { --field: #e0a01e; --fieldInk: #8a5f0f; --fieldSoft: #f7efdc; --onField: #20211f }
@@ -367,7 +353,7 @@
 .page button, .page summary { -webkit-tap-highlight-color: transparent }
 .heroStage { height: 400vh; position: relative }
 .heroField { --grow: 0; position: sticky; top: 0; height: 100svh; min-height: 0; display: grid; grid-template-columns: .6fr 1.4fr; align-items: center; gap: 28px; padding: 94px 0 30px var(--gutter); overflow: clip; isolation: isolate }
-.heroHeadline { font-weight: 400; font-size: clamp(56px,6.1vw,96px); line-height: 1; letter-spacing: -.055em; margin-top: 24px !important }
+.heroHeadline { font-weight: 400; font-size: clamp(44px,4.4vw,68px); line-height: 1.02; letter-spacing: -.045em; margin-top: 24px !important; text-wrap: balance }
 .primary, .secondary, .primaryOn, .secondaryOn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 12px 22px; border-radius: 99px; font-size: 15px; transition: transform var(--motion-fast) var(--ease), background var(--motion-fast), border-color var(--motion-fast) }
 .field { position: relative; min-width: 0; padding: 24px 24px 24px 20px; align-self: center; isolation: isolate }
 .field::before { content: ""; position: absolute; inset: 0; border-radius: var(--radius-field) 0 0 var(--radius-field); background: var(--field); transform-origin: right center; transform: scaleX(calc(1 + var(--grow) * 1.25)) scaleY(calc(1 + var(--grow) * .5)); z-index: -1; transition: background var(--motion-content) }
@@ -477,7 +463,7 @@
     .field::before { border-radius: var(--radius-field); transform: none }
     .pile { transform: none }
     .knot, .tourCopy, .emerge { display: none }
-    .heroHeadline { font-size: clamp(50px,9vw,76px) }
+    .heroHeadline { font-size: clamp(40px,7vw,60px) }
     .productViewport { height: 684px }
     .storySummary { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: 24px; list-style: none; margin: 32px var(--gutter) 0; padding: 24px 0; border-bottom: 1px solid var(--line) }
     .storySummary li { display: flex; gap: 12px }
@@ -574,7 +560,7 @@
     .heroField { padding-top: 28px }
     .heroIntro { font-size: 16px }
     .heroIntro br { display: none }
-    .heroHeadline { font-size: clamp(48px,12vw,66px); max-width: 10ch }
+    .heroHeadline { font-size: clamp(36px,10vw,52px); max-width: 14ch }
     .heroActions { gap: 10px }
     .primary, .secondary { font-size: 14px; padding: 12px 16px }
     .field { padding: 44px 12px 16px }

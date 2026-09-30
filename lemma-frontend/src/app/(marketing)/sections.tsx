@@ -746,55 +746,6 @@ function AccessChart() {
     );
 }
 
-/* ── A team of them ─────────────────────────────────────────────────────
-   The roster, the way the app draws it at /t/teammates: one card each, its
-   face, its job and one line of news, in two groups and never more — the ones
-   that need you, then everyone else. Every face-bearing AI elsewhere belongs
-   to one person; these belong to the team. */
-
-const ROSTER: { name: string; character: CharacterName; job: string; news: string; needs: boolean; people: string }[] = [
-    { name: "Kit", character: "loop", job: "Launch producer", news: "Launch post is ready for Priya", needs: true, people: "Priya, Dev and you" },
-    { name: "Remy", character: "pleat", job: "Sales follow-through", news: "Northstar is waiting on a reply", needs: true, people: "Priya and you" },
-    { name: "June", character: "frame", job: "Customer onboarding", news: "Harbor’s first import went through", needs: false, people: "Dev and you" },
-    { name: "Scout", character: "gem", job: "Customer researcher", news: "Compared five trials this morning", needs: false, people: "Priya and you" },
-];
-
-export function Team() {
-    const needs = ROSTER.filter(one => one.needs);
-    const rest = ROSTER.filter(one => !one.needs);
-    return (
-        <section className={s.section} id="team">
-            <p className={s.sectionEyebrow}>A TEAM OF THEM</p>
-            <h2 className={s.sectionHeading}>One for each job, all of them your team’s.</h2>
-            <p className={s.sectionNote}>
-                Each teammate has its own job, its own space and the people who work with it. See all of them in one place,
-                with the ones waiting on you first.
-            </p>
-            <div className={s.roster}>
-                {[{ label: "Needs you", list: needs }, { label: "Everyone else", list: rest }].map(group => (
-                    <div key={group.label} className={s.rosterGroup}>
-                        <p className={s.rosterLabel}>{group.label}</p>
-                        <ul className={s.rosterCards}>
-                            {group.list.map(one => (
-                                <li key={one.name} className={s.rosterCard}>
-                                    <Character character={one.character} size={48} />
-                                    <span className={s.rosterBody}>
-                                        <span className={s.rosterName}>{one.name}</span>
-                                        <span className={s.rosterJob}>{one.job}</span>
-                                        <span className={one.needs ? s.rosterNewsNeeds : s.rosterNews}>{one.news}</span>
-                                        <span className={s.rosterPeople}>with {one.people}</span>
-                                    </span>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                ))}
-            </div>
-            <p className={s.rosterFoot}>Example teammates at Acme.</p>
-        </section>
-    );
-}
-
 /* ── What it thinks with ────────────────────────────────────────────────
    Three ways, and the honest difference between them. `src/data/runtimes.ts`
    already draws the first two: a paired computer is a machine that can be

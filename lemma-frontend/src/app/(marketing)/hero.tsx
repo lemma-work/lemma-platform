@@ -155,7 +155,7 @@ export function Hero() {
             <div className={s.heroLede} inert={isGrown}>
                 <p className={s.heroEyebrow}>AI TEAMMATES FOR ONGOING WORK</p>
                 <h1 className={s.heroHeadline}>The teammate your whole team shares.</h1>
-                <p className={s.heroIntro}>It builds the tables, apps and workflows the job needs,<br />{" "}and answers each person within what they’re allowed to see.</p>
+                <p className={s.heroIntro}>It builds the tables, apps and workflows the job needs, and answers each person within what they’re allowed to see.</p>
                 <div className={s.heroActions}>
                     <Link className={s.primary} href="/t">Get started</Link>
                     <a className={s.secondary} href="#examples">Explore an example <span aria-hidden="true">↓</span></a>

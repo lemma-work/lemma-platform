@@ -6,14 +6,14 @@ import { pageMetadata } from '@/site/metadata';
 import Link from "next/link";
 import s from "./landing.module.css";
 import { Hero } from "./hero";
-import { Shared, Examples, Team, Thinks, Behind, Closing } from "./sections";
+import { Shared, Examples, Thinks, Behind, Closing } from "./sections";
 import { ToTheApp } from "./to-the-app";
 import { LemmaLogo } from "@/ui/icons";
 
 export const metadata = pageMetadata('Lemma — The AI teammate your whole team shares','An AI teammate for ongoing work that your whole team shares. It builds the tools the job needs, answers each person within their permissions, and writes down what it learns.','/');
 
 /** A character-led front door: the teammate everyone shares, what it builds,
- *  a team of them, where to reach them, and how they run. */
+ *  where to reach it, and how it runs. */
 export default function Home() {
     return (
         <div className={s.page}>
@@ -40,7 +40,6 @@ export default function Home() {
                 <Hero />
                 <Shared />
                 <Behind />
-                <Team />
                 <Examples />
                 <Thinks />
                 <OpenSource />

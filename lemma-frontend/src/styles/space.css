@@ -28,31 +28,11 @@
     letter-spacing: -0.02em;
 }
 
-/* Three overlapping dots in place of the three bars. */
-.lemma-brand-mark {
-    align-items: center;
-    gap: 0;
-    height: 18px;
-}
-.lemma-brand-mark i,
-.lemma-brand-mark i:nth-child(1),
-.lemma-brand-mark i:nth-child(2),
-.lemma-brand-mark i:nth-child(3) {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    mix-blend-mode: multiply;
-}
-.lemma-brand-mark i + i { margin-left: -4px; }
-.lemma-brand-mark i:nth-child(1) { background: var(--brand-dot-1); }
-.lemma-brand-mark i:nth-child(2) { background: var(--brand-dot-2); }
-.lemma-brand-mark i:nth-child(3) { background: var(--brand-dot-3); }
-.lemma-brand-mark--inline i,
-.lemma-brand-mark--inline i:nth-child(n) { width: 8px; height: 8px; }
-.lemma-brand-mark--inline i + i { margin-left: -3px; }
-:root[data-theme="dark"] .lemma-brand-mark i { mix-blend-mode: screen; }
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .lemma-brand-mark i { mix-blend-mode: screen; }
+/* The Lemma mark is the three rising bars of the app icon, drawn by
+   refinement.css; here they only take the brand's own purple, which does not
+   move with the accent a person picks. */
+.lemma-brand-mark i {
+    background: var(--brand-bars);
 }
 
 .side .icon-button {

@@ -7,7 +7,8 @@
   metadata. Font weight stays at or below 500 except documented allowances.
 - Pair fills with their ink tokens: `--field-ink`, `--on-accent`, `--on-ok`,
   `--on-bad`. Measure contrast in both themes; never assume white text works.
-- Use Phosphor icons and local brand SVGs. Keep human and teammate identities
+- The Lemma mark is the three rising bars of `app/icon.svg`, in
+  `--brand-bars`, everywhere the logo appears. Use Phosphor icons and local brand SVGs. Keep human and teammate identities
   distinct. Never invent user information or connected state.
 - Show explicit loading, empty, error and retry states. Keep sample work labeled.
 - Respect reduced motion. Provide accessible names, visible keyboard focus,
@@ -35,8 +36,7 @@ The workspace sidebar is open while hiring and collapsed for every later step.
 
 The landing runs: the teammate everyone shares (hero and tour), "Everyone
 asks. Each sees their part." (shared record and access, one section), "It
-builds what the job needs", "A team of them" (the roster), channels once,
-how it runs, open source. Tour step 03 opens the Launch studio app; step 04
+builds what the job needs", channels once, how it runs, open source. Tour step 03 opens the Launch studio app; step 04
 opens About at what Kit remembers. Headlines lead with what only this product
 shows — a team-owned teammate, the tools it builds, each person's own view —
 not with "hire", "learns how you work" or "use it where you already are",
