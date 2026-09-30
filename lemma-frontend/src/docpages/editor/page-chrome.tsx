@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { useEditorState, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import DragHandle from "@tiptap/extension-drag-handle-react";
@@ -38,19 +39,30 @@ function SlashGlyph({ id }: { id: SlashId }) {
 export function SlashMenu({ bridge, host, botName }: { bridge: SlashBridge; host: HTMLElement | null; botName: string }) {
     const state = useSyncExternalStore(bridge.subscribe, bridge.get, bridge.get);
     const list = useRef<HTMLDivElement>(null);
+    /* The list's own scroll only. `scrollIntoView` also scrolls every
+       ancestor — the page under the menu moved, and the first row opened
+       half-hidden. */
     useEffect(() => {
-        list.current?.querySelector("[data-active]")?.scrollIntoView({ block: "nearest" });
+        const box = list.current;
+        const active = box?.querySelector<HTMLElement>("[data-active]");
+        if (!box || !active) return;
+        if (active.offsetTop < box.scrollTop) box.scrollTop = active.offsetTop - 6;
+        else if (active.offsetTop + active.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = active.offsetTop + active.offsetHeight - box.clientHeight + 6;
     }, [state.index]);
     if (!state.open || !state.rect || !host) return null;
-    const box = host.getBoundingClientRect();
-    const below = state.rect.bottom + 320 < window.innerHeight;
+    /* Fixed to the viewport, in a portal: inside the page it was clipped by
+       whatever scrolls the page. It opens on whichever side of the caret has
+       more space, and is never taller than that space. */
+    const space = { below: window.innerHeight - state.rect.bottom - 16, above: state.rect.top - 16 };
+    const below = space.below >= 240 || space.below >= space.above;
     const style = {
-        left: Math.max(0, state.rect.left - box.left),
-        top: below ? state.rect.bottom - box.top + 6 : undefined,
-        bottom: below ? undefined : box.bottom - state.rect.top + 6,
+        left: Math.max(8, Math.min(state.rect.left, window.innerWidth - 328)),
+        top: below ? state.rect.bottom + 6 : undefined,
+        bottom: below ? undefined : window.innerHeight - state.rect.top + 6,
+        maxHeight: Math.min(340, Math.max(160, below ? space.below : space.above)),
     };
     let group = "";
-    return (
+    return createPortal(
         <div className="slash" style={style} ref={list} onMouseDown={(event) => event.preventDefault()} role="listbox" aria-label="Insert a block">
             {state.items.map((item: SlashItem, at) => {
                 const heading = item.group !== group ? item.group : null;
@@ -74,7 +86,8 @@ export function SlashMenu({ bridge, host, botName }: { bridge: SlashBridge; host
                     </div>
                 );
             })}
-        </div>
+        </div>,
+        document.body,
     );
 }
 

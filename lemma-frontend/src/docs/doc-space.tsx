@@ -20,9 +20,10 @@ type Anchor = { quote: string; quotePrefix: string; quoteSuffix: string };
 /** A page on the stage: the page itself, and its comments beside it when
  *  they are open. Everything the page's blocks need from around them — where
  *  to go, whom to ask, the threads to draw — is handed down from here. */
-export function DocSpace({ pod, path, openFile, openTable, openConversation, sendToBot }: {
+export function DocSpace({ pod, path, renamePage, openFile, openTable, openConversation, sendToBot }: {
     pod: Pod;
     path: string;
+    renamePage?: (from: string, title: string) => Promise<string>;
     openFile: (path: string) => void;
     openTable?: (name: string) => void;
     openConversation?: (id: string) => void;
@@ -66,6 +67,8 @@ export function DocSpace({ pod, path, openFile, openTable, openConversation, sen
         path,
         botName,
         openFile,
+        /* Personal files keep the name you gave them. */
+        renamePage: personal ? undefined : renamePage,
         openTable,
         statusSlot,
         sendToBot,
@@ -75,7 +78,7 @@ export function DocSpace({ pod, path, openFile, openTable, openConversation, sen
             start: (anchor) => { setPanel(true); setDraft(anchor ?? "page"); },
             focus: (id) => { setActive(id); if (id) setPanel(true); },
         },
-    }), [pod.id, path, botName, openFile, openTable, statusSlot, sendToBot, anchors, active, personal, setPanel]);
+    }), [pod.id, path, botName, openFile, renamePage, openTable, statusSlot, sendToBot, anchors, active, personal, setPanel]);
 
     const focusEnd = (event: React.MouseEvent<HTMLDivElement>) => {
         const target = event.target as Element;
