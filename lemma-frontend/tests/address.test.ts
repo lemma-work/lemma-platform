@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NOWHERE, isNewPlace, readAddress, tabFromId, writeAddress, type Address } from "../src/shell/address.ts";
+import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress, type Address } from "../src/shell/address.ts";
 
 /** The grammar has one obligation above all the others: a URL this app wrote
  *  must be a URL this app can read back. Everything below either asserts that
@@ -32,6 +32,7 @@ const PLACES: [Address, string][] = [
     [at("run:run_42"), "/t/" + POD + "/run/run_42"],
     [at("workflow:budget-sign-off"), "/t/" + POD + "/workflow/budget-sign-off"],
     [at("space:settings"), "/t/" + POD + "/settings"],
+    [at("space:about"), "/t/" + POD + "/about"],
     [at("library"), "/t/" + POD + "/library"],
     [at("history"), "/t/" + POD + "/history"],
     [at("computer"), "/t/" + POD + "/computer"],
@@ -48,6 +49,28 @@ test("every place has a URL, and every URL reads back as the place", () => {
         assert.equal(writeAddress(address), url, "writing " + (address.tabId ?? "the teammate"));
         assert.deepEqual(readAddress(url), address, "reading " + url);
     }
+});
+
+test("every teammate at once has an address of its own", () => {
+    // Zoomed out, nobody is chosen — and it is not the bare root, which opens
+    // whoever was open last. Refreshing or going Back must land here again.
+    assert.equal(writeAddress(TEAMMATES), "/t/teammates");
+    assert.deepEqual(readAddress("/t/teammates"), TEAMMATES);
+    assert.deepEqual(readAddress("/t/teammates/"), TEAMMATES);
+    assert.equal(readAddress("/t/teammates").podId, null);
+    // Nothing hangs off it: a longer path is one this build cannot read.
+    assert.deepEqual(readAddress("/t/teammates/home"), NOWHERE);
+    // Only this place carries the flag, so an address about a teammate reads
+    // exactly as it did before there was one.
+    assert.equal("team" in readAddress("/t/" + POD + "/home"), false);
+    assert.equal("team" in NOWHERE, false);
+});
+
+test("zooming out and back in is a move either way", () => {
+    const home: Address = { podId: POD, tabId: "space:home", conversationId: null, agentName: null };
+    assert.equal(isNewPlace(home, TEAMMATES), true);
+    assert.equal(isNewPlace(TEAMMATES, home), true);
+    assert.equal(isNewPlace(TEAMMATES, TEAMMATES), false);
 });
 
 test("the bare root names no teammate", () => {

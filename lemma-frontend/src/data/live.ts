@@ -9,6 +9,7 @@ import { readPodRoles } from "./pod-roles";
 import {
     agentChanges,
     agentRows,
+    answeringAs,
     readAgentDetail,
     type AgentDetail,
     type AgentDraft,
@@ -173,6 +174,18 @@ function forgetPod(podId: string): void {
     podRows.delete(podId);
 }
 
+/** The name a pod's own agent answers under — the pod's, which is the
+ *  teammate's (see `answeringAs`). Null when the pod cannot be read, and the
+ *  lists then keep what `displayAgentName` said rather than failing over it. */
+async function teammateNameOf(podId: string): Promise<string | null> {
+    try {
+        const row = await podRow(podId);
+        return row.name ? humanizeName(row.name) : null;
+    } catch {
+        return null;
+    }
+}
+
 export function podAgents(podId: string): Promise<Listish> {
     const held = agentPages.get(podId);
     if (held && Date.now() - held.at < AGENTS_HELD_MS) return held.page;
@@ -241,9 +254,11 @@ function humanizeName(raw: string): string {
 }
 
 
-function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null }): Pod {
+function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null; description?: string | null }): Pod {
     const name = humanizeName(pod.name);
+    const description = pod.description?.trim();
     return { id: pod.id, orgId: pod.organization_id, name, iconUrl: pod.icon_url ?? null,
+        ...(description ? { description } : {}),
         teammate: { name, initials: initialsOf(name), iconUrl: pod.icon_url ?? null },
         subtitle: "", members: [], waiting: "" };
 }
@@ -427,8 +442,8 @@ export const liveSource: PodSource = {
     async listPods(orgId: string): Promise<Pod[]> {
         const listed = (await lemma().pods.listByOrganization(orgId)) as Listish;
         return itemsOf(listed)
-            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null })
-            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null } =>
+            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null; description?: string | null })
+            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null; description?: string | null } =>
                 Boolean(pod.id && pod.name),
             )
             .map((pod) => podSummary({ ...pod, organization_id: pod.organization_id ?? orgId }));
@@ -532,7 +547,10 @@ export const liveSource: PodSource = {
     },
 
     async listSurfaces(podId: string): Promise<Surface[]> {
-        const listed = (await lemma(podId).podSurfaces.list(podId, { limit: 30 })) as Listish;
+        const [listed, teammate] = await Promise.all([
+            lemma(podId).podSurfaces.list(podId, { limit: 30 }) as Promise<Listish>,
+            teammateNameOf(podId),
+        ]);
         return itemsOf(listed)
             .map(
                 (raw) =>
@@ -554,7 +572,12 @@ export const liveSource: PodSource = {
                 platform: String(surface.platform),
                 name: String(surface.name ?? surface.platform),
                 mine: Boolean(surface.uses_default_agent) || isPodDefaultAgent(surface.agent_name),
-                agentName: displayAgentName(String(surface.agent_name ?? "")),
+                /* Matched against the agent list by label (`surfacesForAgent`),
+                   so the space's own agent is named here the way that list
+                   names it: as the teammate. */
+                agentName: teammate && (surface.uses_default_agent || isPodDefaultAgent(surface.agent_name))
+                    ? teammate
+                    : displayAgentName(String(surface.agent_name ?? "")),
                 agentKey: surface.agent_name ?? undefined,
                 handle:
                     surface.reach?.handle ??
@@ -1202,11 +1225,13 @@ export const liveSource: PodSource = {
             name: string;
             icon_url?: string | null;
         };
+        const job = description?.trim();
         return {
             id: pod.id,
             orgId,
             name: humanizeName(pod.name),
             iconUrl: pod.icon_url ?? null,
+            ...(job ? { description: job } : {}),
             teammate: await teammateOf(pod.id, humanizeName(pod.name), pod.icon_url ?? null),
             subtitle: "just you",
             members: [],
@@ -1221,6 +1246,14 @@ export const liveSource: PodSource = {
 
     async renamePod(podId: string, name: string): Promise<void> {
         await lemma(podId).pods.update(podId, { name });
+        forgetPod(podId);
+    },
+
+    async describePod(podId: string, description: string): Promise<void> {
+        /* Cleared rather than stored blank: an empty string is a description
+           that says nothing, and every place that reads one would have to
+           tell the two apart. */
+        await lemma(podId).pods.update(podId, { description: description.trim() || null });
         forgetPod(podId);
     },
 
@@ -1371,11 +1404,13 @@ export const liveSource: PodSource = {
        query for the whole page rather than one per row, but the list draws no
        grants — they are a detail, and the detail fetch brings them anyway. */
     async listAgents(podId: string): Promise<AgentRow[]> {
-        return agentRows(await podAgents(podId));
+        const [page, teammate] = await Promise.all([podAgents(podId), teammateNameOf(podId)]);
+        return answeringAs(agentRows(page), teammate);
     },
 
     async getAgent(podId: string, name: string): Promise<AgentDetail> {
-        return readAgentDetail(await lemma(podId).agents.get(name));
+        const [raw, teammate] = await Promise.all([lemma(podId).agents.get(name), teammateNameOf(podId)]);
+        return answeringAs([readAgentDetail(raw)], teammate)[0];
     },
 
     async updateAgent(podId: string, name: string, before: AgentDraft, after: AgentDraft): Promise<AgentDetail> {
@@ -1402,7 +1437,10 @@ export const liveSource: PodSource = {
         /* A hundred, where the profile's own summary asks for twelve. This is
            the list itself rather than a count beside a name, and a pod that
            keeps thirty schedules would otherwise silently show eighteen. */
-        return readSchedules(await lemma(podId).schedules.list({ limit: 100 }));
+        const [listed, teammate] = await Promise.all([lemma(podId).schedules.list({ limit: 100 }), teammateNameOf(podId)]);
+        return readSchedules(listed).map((job) => (teammate && job.target.kind === "agent" && isPodDefaultAgent(job.target.name)
+            ? { ...job, target: { ...job.target, label: teammate } }
+            : job));
     },
 
     async listScheduleRuns(podId: string, scheduleId: string): Promise<ScheduleRun[]> {
@@ -1448,9 +1486,10 @@ export const liveSource: PodSource = {
         /* The agents come from the same cached page the rest of this file
            uses, so opening the form on a profile that has already drawn its
            agents costs one request rather than two. */
-        const [agents, workflows] = await Promise.all([
+        const [agents, workflows, teammate] = await Promise.all([
             podAgents(podId).catch(() => [] as unknown[]),
             (lemma(podId).workflows.list({ limit: 100 }) as Promise<Listish>).catch(() => [] as unknown[]),
+            teammateNameOf(podId),
         ]);
         const fromAgents: TargetChoice[] = itemsOf(agents)
             .map((raw) => raw as { name?: string; kind?: string })
@@ -1458,7 +1497,9 @@ export const liveSource: PodSource = {
             .map((agent) => ({
                 kind: "agent" as const,
                 name: agent.name as string,
-                label: displayAgentName(agent.name as string, agent.kind),
+                label: teammate && isPodDefaultAgent(agent.name, agent.kind)
+                    ? teammate
+                    : displayAgentName(agent.name as string, agent.kind),
             }));
         const fromWorkflows: TargetChoice[] = itemsOf(workflows)
             .map((raw) => raw as { name?: string; is_active?: boolean })

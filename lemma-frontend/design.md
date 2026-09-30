@@ -70,6 +70,30 @@ Messages expose Copy on hover or keyboard focus (always on touch screens). Code
 blocks, quotes and tables have separate copy controls with success or failure feedback.
 Email links use the configured mail handler in the current browsing context.
 
+## Teammates and their spaces
+
+A teammate and its space are one pod seen from two sides: the teammate is who
+you talk to, the space is what you share. The app has two altitudes.
+
+- Zoomed out, `/t/teammates`: every teammate in the organization as a card —
+  its face, its job (the pod's `description`), one line of news (what is
+  waiting on you, or its latest conversation) and the people in its space.
+  Those that need you come first; there are never more than two groups.
+- Zoomed in, `/t/{pod}/…`: one teammate's space. Its face and job head the
+  sidebar and open About (`/t/{pod}/about`), which holds everything about how
+  it works — people, channels, skills, standing work, the agents it hands work
+  to, its model. Settings keeps what is about the space: coding agents, the
+  organization's models, usage.
+- The rail of faces is there at both altitudes. Its mark zooms out; a face
+  zooms into that teammate. Collapsed, the rail is all that is left.
+
+Faces tell the three apart: a teammate is its character on its own tint in a
+rounded square, a person is initials in a circle, an agent is its initial on
+a plain tile. The space's own agent is the teammate — named as the teammate
+everywhere, never "Lem", "main bot" or "assistant". Say "space" only where the
+place is the point (who can open something, where it is kept); everywhere
+else the teammate's name does the work.
+
 ## Desktop
 
 The workspace also runs inside the Lemma desktop app, which loads it from a

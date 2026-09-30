@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
     AGENT_EDIT, AGENT_READ, AGENT_REMOVE, AGENT_RUN, MAX_INSTRUCTION,
     agentChanges, agentProblems, agentRows, draftOfAgent, hasAgentChanges,
-    may, readAgentDetail, readAgentRow, readSchema, runtimeLine, surfacesLost, whyNot,
+    answeringAs, may, readAgentDetail, readAgentRow, readSchema, runtimeLine, surfacesLost, whyNot,
 } from "../src/data/agents.ts";
 
 const OWNER = ["agent.read", "agent.execute", "agent.update", "agent.delete"];
@@ -21,6 +21,23 @@ test("the agent you talk to is listed first, and is not called a subordinate", (
     assert.equal(rows[0].front, true);
     assert.equal(rows[0].label, "Lem", "not 'Pod Default' — the job title the product does not use");
     assert.equal(rows[1].front, false);
+});
+
+test("the space's own agent answers under the teammate's name", () => {
+    // The pod is the teammate. Named "Lem" in the agent list, one space called
+    // its teammate three things at once.
+    const rows = answeringAs(agentRows({ items: [{ name: "pod_default" }, { name: "researcher" }] }), "Kit");
+
+    assert.equal(rows[0].label, "Kit");
+    assert.equal(rows[1].label, "Researcher", "an agent it hands work to keeps its own name");
+});
+
+test("without a pod name the list keeps what it had rather than a blank", () => {
+    const rows = agentRows({ items: [{ name: "pod_default" }] });
+
+    assert.equal(answeringAs(rows, null)[0].label, "Lem");
+    assert.equal(answeringAs(rows, "   ")[0].label, "Lem");
+    assert.equal(answeringAs(rows, null), rows, "nothing to change is not a new list");
 });
 
 test("the default agent is recognised by kind as well as by name", () => {

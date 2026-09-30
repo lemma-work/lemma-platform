@@ -30,12 +30,27 @@ export function AskBox({ placeholder, fill, onFilled, onAsk }: {
         });
     }, [fill, onFilled]);
 
-    /* Grows with what is typed, up to a few lines, then scrolls. */
+    /* Grows with what is typed, up to a few lines, then scrolls — and is
+       measured again whenever its width changes. Measured once, a box first
+       drawn narrow (a window opening small, a pane not yet on screen) kept the
+       height its placeholder needed at that width: eight empty lines. */
     useEffect(() => {
         const box = area.current;
         if (!box) return;
-        box.style.height = "auto";
-        box.style.height = Math.min(box.scrollHeight, 200) + "px";
+        const fit = () => {
+            box.style.height = "auto";
+            box.style.height = Math.min(box.scrollHeight, 200) + "px";
+        };
+        fit();
+        if (typeof ResizeObserver === "undefined") return;
+        let width = box.clientWidth;
+        const watch = new ResizeObserver(() => {
+            if (box.clientWidth === width) return;
+            width = box.clientWidth;
+            fit();
+        });
+        watch.observe(box);
+        return () => watch.disconnect();
     }, [text]);
 
     const ask = () => {

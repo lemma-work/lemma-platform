@@ -45,6 +45,8 @@
     --r-xl: 24px;
 
     --side-w: 260px;
+    /* The rail of faces beside it: who, at every altitude. */
+    --rail-w: 64px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -111,6 +113,8 @@
     --tone-waiting: var(--warn);
     --tone-going: var(--info);
     --tone-gone: var(--ink-3);
+    /* The app's own mark — the three rising bars of `app/icon.svg`. */
+    --brand-bars: #5a3fd4;
     /* The three dots of the mark: identity, which does not move with the theme. */
     --brand-dot-1: #e85ad8;
     --brand-dot-2: #2ed3e6;

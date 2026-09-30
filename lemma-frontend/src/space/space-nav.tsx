@@ -19,14 +19,12 @@ function RecentGlyph({ tab }: { tab: Tab }) {
     return <FileIcon size={17} />;
 }
 
-/** The sidebar of one space, in Space's order: make something, find
- *  something, the bots that work here, what you had open, and the other
- *  switcher above it is for going to another space. */
-export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenChat, onWorkflows, onSettings, compact = false }: {
+/** The sidebar of one teammate's space, in Space's order: its places, your
+ *  chats with it, and what you had open. The teammate itself sits above it,
+ *  and going to another is the rail's job. Collapsed, this column goes away
+ *  and the rail is what is left. */
+export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenChat, onWorkflows, onSettings }: {
     pod: Pod;
-    /** The collapsed sidebar: the same places as icons, and the bots as
-     *  their marks. Chats and recents need their words, so they wait. */
-    compact?: boolean;
     openChatId: string | null;
     onOpenChat: (id: string) => void;
     activeId: string;
@@ -37,7 +35,8 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
 }) {
     /* Your conversations, one dense line each. Not the ones a resource
        carries (they open from that resource), and not scheduled runs, which
-       are a bot's work rather than something you said. */
+       are the teammate's own work rather than something you said — Home lists
+       those. */
     const chats = useQuery({
         queryKey: ["conversations", pod.id],
         queryFn: () => source.listConversations(pod.id),
@@ -46,10 +45,10 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
     const yours = unbound(chats.data).filter(chat => chat.kind.toUpperCase() !== "TASK").slice(0, 8);
 
     return (
-        <nav className={"snav" + (compact ? " snav--compact" : "")} aria-label="Space">
+        <nav className="snav" aria-label={pod.name + "’s space"}>
             <div className="snav__group">
-                {/* Where the space opens: what is waiting, ways to start, and
-                    the box to ask the space's bot. */}
+                {/* Where the space opens: whose it is, what is waiting, ways to
+                    start, and the box to ask it. */}
                 <button className="side__item" title="Home" aria-current={activeId === "space:home" || activeId === "conversation" ? "page" : undefined} onClick={() => onPick("space:home")}>
                     <HomeIcon size={18} /><span>Home</span>
                 </button>
@@ -64,7 +63,7 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
             </div>
 
 
-            {!compact && yours.length > 0 && (
+            {yours.length > 0 && (
                 <div className="snav__group">
                     <div className="snav__label">Chats</div>
                     {yours.map(chat => (
@@ -78,7 +77,7 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                 </div>
             )}
 
-            {!compact && recents.length > 0 && (
+            {recents.length > 0 && (
                 <div className="snav__group">
                     <div className="snav__label">Recents</div>
                     {recents.slice(0, 6).map(tab => (
@@ -90,7 +89,7 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
             )}
 
             <div className="snav__group snav__foot">
-                <button className="side__item" title="Space settings" aria-current={activeId === "space:settings" ? "page" : undefined} onClick={onSettings}><SettingsIcon size={18} /><span>Space settings</span></button>
+                <button className="side__item" title="Settings" aria-current={activeId === "space:settings" ? "page" : undefined} onClick={onSettings}><SettingsIcon size={18} /><span>Settings</span></button>
             </div>
         </nav>
     );

@@ -174,6 +174,9 @@ export interface Pod {
     name: string;
     /** A pod may carry its own icon; without one it wears a generated orb. */
     iconUrl: string | null;
+    /** What the teammate is for, in one line: the job it was hired with. The
+     *  pod's `description`. Absent when nobody has written one. */
+    description?: string;
     /** The agent that answers here. */
     teammate: Persona;
     /** "with Priya and you" — who is in here, said the way a person would. */
@@ -218,8 +221,9 @@ export interface SharedLink {
     maxHits: number;
 }
 
-/** A view of the space's own contents, filtered by kind. */
-export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "settings";
+/** A view of the space's own contents, filtered by kind — and `about`, the
+ *  teammate the space belongs to. */
+export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "settings" | "about";
 
 export type Tab =
     | { id: string; kind: "space"; label: string; view: SpaceView }
@@ -431,6 +435,9 @@ export interface PodSource {
      *  is one of these rather than a display name laid over a real one that
      *  people would then find in an error message. */
     renamePod(podId: string, name: string): Promise<void>;
+    /** Change the one line that says what a teammate is for. The pod's
+     *  `description`, which hiring fills with the job it was given. */
+    describePod(podId: string, description: string): Promise<void>;
     /** Put a picture somewhere the platform will serve it, and hand back the
      *  URL to store in `icon_url`. */
     uploadIcon(file: File): Promise<string>;

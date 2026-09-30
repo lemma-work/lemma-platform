@@ -6,6 +6,7 @@ import { source, type Member } from "@/data";
 import { lemma } from "@/session/client";
 import { useMe } from "@/session/use-me";
 import { isForbidden } from "@/session/auth-state";
+import { isPodDefaultAgent } from "@/data/agent-names";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, RefreshIcon } from "@/ui/icons";
 import {
     useCreateSchedule, useRetryRun, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules,
@@ -184,9 +185,11 @@ function Row({ podId, job, mine, owner, orgId, open, onOpen, onOpenRun, onOpenCo
                         {/* A target whose name this caller may not read has a
                             label of its own — "an agent" — so it is not put
                             through the "the <kind> <name>" sentence. */}
-                        {job.target.kind !== "none" && (job.target.name
-                            ? "Runs the " + job.target.kind + " " + job.target.label
-                            : "Runs " + job.target.label)}
+                        {job.target.kind !== "none" && (!job.target.name ? "Runs " + job.target.label
+                            /* The space's own agent is the teammate, not "the agent"
+                               anything: the job is its own. */
+                            : isPodDefaultAgent(job.target.name) ? job.target.label + " does this itself"
+                            : "Runs the " + job.target.kind + " " + job.target.label)}
                     </span>
 
                     {job.instruction && <small className="sched-row__detail">{job.instruction}</small>}
