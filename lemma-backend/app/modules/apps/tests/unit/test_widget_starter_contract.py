@@ -14,7 +14,7 @@ from app.core.widget_html_validation import validate_widget_html
 REPO_ROOT = Path(__file__).resolve().parents[6]
 ASSET_ROOT = REPO_ROOT / "lemma-skills" / "lemma-widget" / "assets"
 KIT_ROOT = REPO_ROOT / "lemma-backend" / "app" / "core" / "widget_kit"
-_SCRIPT = re.compile(r"<script\b[^>]*>(.*?)</script>", re.IGNORECASE | re.DOTALL)
+_SCRIPT = re.compile(r"<script\b[^>]*>(.*?)</script\b[^>]*>", re.IGNORECASE | re.DOTALL)
 
 # The shared preamble every example pastes in. It is not a template — it carries
 # no placeholders — so it is checked separately from the fragments.
