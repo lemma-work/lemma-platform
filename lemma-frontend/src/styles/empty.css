@@ -1,0 +1,304 @@
+/* ── An empty place in a space ─────────────────────────────────────────
+
+   A picture of what the place will hold, one line on how it gets filled,
+   and a way to make the first one — centred where the list would be.
+   Size and the air above carry the hierarchy; nothing here is bold. */
+
+.empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 480px;
+    margin: 24px auto 0;
+    padding: 36px 24px 40px;
+    border-radius: var(--r-xl);
+    text-align: center;
+    animation: empty-in 320ms var(--ease-out) both;
+}
+.empty--compact {
+    max-width: 440px;
+    margin-top: 8px;
+    padding: 28px 16px 32px;
+}
+/* Files dragged over the place they would land in. */
+.empty--drop {
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1.5px var(--accent-line);
+}
+.empty__title {
+    margin: 22px 0 0;
+    font-size: var(--t-lead);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+}
+.empty--compact .empty__title {
+    margin-top: 0;
+    font-size: var(--t-body);
+}
+.empty__line {
+    max-width: 40ch;
+    margin: 8px 0 0;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--ink-2);
+    text-wrap: pretty;
+}
+.empty__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 22px;
+}
+.empty__primary,
+.empty__starter {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out), opacity 160ms var(--ease-out);
+}
+.empty__primary {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+.empty__primary:hover:not(:disabled) {
+    opacity: 0.86;
+}
+.empty__primary:disabled {
+    opacity: 0.55;
+    cursor: progress;
+}
+.empty__starter {
+    background: transparent;
+    color: var(--ink);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.empty__starter:hover {
+    background: var(--accent-soft);
+}
+.empty__primary:focus-visible,
+.empty__starter:focus-visible {
+    outline: 2px solid var(--accent-line);
+    outline-offset: 2px;
+}
+@media (pointer: coarse) {
+    .empty__primary,
+    .empty__starter {
+        min-height: 44px;
+    }
+}
+/* Inside a table: `.library-view button` resets every button there to bare
+   text, and out-specifies the two above. Put them back at a specificity that
+   wins, the way the library restores its own `.btn`. */
+.library-view .empty__primary {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+.library-view .empty__starter {
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.library-view .empty__starter:hover {
+    background: var(--accent-soft);
+}
+/* What a place offers beneath its empty state — the page templates, the
+   app ideas — at the list's full width, where the list would have been. */
+.all__after-empty {
+    margin-top: 8px;
+}
+
+/* ── The picture ────────────────────────────────────────────────────── */
+
+.eart {
+    width: 176px;
+    height: 112px;
+    flex: none;
+    overflow: visible;
+    --eart-accent: var(--glyph-page);
+}
+.eart[data-art="rows"] {
+    height: 72px;
+}
+.eart[data-art="apps"] { --eart-accent: var(--glyph-app); }
+.eart[data-art="tables"],
+.eart[data-art="rows"] { --eart-accent: var(--glyph-table); }
+.eart[data-art="files"],
+.eart[data-art="folder"] { --eart-accent: var(--glyph-file); }
+.eart[data-art="workflows"],
+.eart[data-art="chats"] { --eart-accent: var(--ink-2); }
+
+.eart__card {
+    fill: var(--paper);
+    stroke: var(--line-2);
+    stroke-width: 1;
+}
+.eart__card--back {
+    fill: var(--wash-b);
+}
+.eart__soft {
+    fill: var(--wash-a);
+}
+.eart__edge {
+    stroke: var(--line-2);
+    stroke-width: 1;
+}
+.eart__tile {
+    fill: var(--paper);
+    stroke: var(--line-2);
+    stroke-width: 1;
+}
+.eart__line {
+    fill: var(--line-2);
+}
+.eart__ink {
+    fill: var(--ink-3);
+    opacity: 0.45;
+}
+.eart__dot {
+    fill: var(--line-2);
+}
+.eart__rule {
+    fill: none;
+    stroke: var(--line-2);
+    stroke-width: 1;
+}
+.eart__fill {
+    fill: var(--eart-accent);
+}
+.eart__fill--quiet {
+    opacity: 0.28;
+}
+.eart__box {
+    fill: none;
+    stroke: var(--eart-accent);
+    stroke-width: 1.2;
+}
+.eart__tick {
+    fill: none;
+    stroke: var(--paper);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.eart__pill {
+    fill: var(--eart-accent);
+    opacity: 0.26;
+}
+.eart__pill--other {
+    fill: var(--ink-3);
+    opacity: 0.2;
+}
+.eart__fold {
+    fill: var(--wash-a);
+    stroke: var(--line-2);
+    stroke-width: 1;
+}
+.eart__tag--doc { fill: var(--glyph-page); opacity: 0.8; }
+.eart__tag--sheet { fill: var(--glyph-table); opacity: 0.8; }
+.eart__wire {
+    fill: none;
+    stroke: var(--ink-3);
+    stroke-width: 1.2;
+    opacity: 0.55;
+}
+.eart__check {
+    fill: none;
+    stroke: var(--ink-3);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.eart__hands {
+    fill: none;
+    stroke: var(--ink-2);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+}
+/* The step where a person has a say: the waiting tone, as it wears
+   everywhere a run is waiting on somebody. */
+.eart__wait {
+    fill: var(--paper);
+    stroke: var(--tone-waiting);
+    stroke-width: 1.4;
+    stroke-dasharray: 3 2.5;
+}
+.eart__wait-ink {
+    fill: var(--tone-waiting);
+}
+.eart__wait-bar {
+    fill: var(--tone-waiting);
+    opacity: 0.35;
+}
+.eart__bubble {
+    fill: var(--bubble);
+}
+.eart__slot {
+    fill: none;
+    stroke: var(--eart-accent);
+    stroke-width: 1.2;
+    stroke-dasharray: 4 3;
+    opacity: 0.7;
+}
+.eart__plus {
+    fill: none;
+    stroke: var(--eart-accent);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+}
+/* The one thing that moves: the front sheet settles onto the stack. */
+.eart__front {
+    animation: eart-settle 520ms var(--ease-out) both;
+    animation-delay: 80ms;
+}
+
+@keyframes empty-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes eart-settle {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .empty,
+    .eart__front {
+        animation: none;
+    }
+}
+@media (max-width: 700px) {
+    .empty {
+        margin-top: 8px;
+        padding: 28px 8px 32px;
+    }
+    .eart {
+        width: 152px;
+        height: 97px;
+    }
+    .eart[data-art="rows"] {
+        height: 62px;
+    }
+}
+
+/* A files view with files dragged over it, before they land. */
+.all--drop {
+    border-radius: var(--r-xl);
+    box-shadow: inset 0 0 0 1.5px var(--accent-line);
+    background: var(--accent-soft);
+}
+.all__drop-note {
+    margin: 0 0 16px;
+    font-size: 14px;
+    color: var(--ink-2);
+}
+.all__busy {
+    margin: 0 0 16px;
+    font-size: 14px;
+    color: var(--ink-3);
+}

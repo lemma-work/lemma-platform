@@ -84,6 +84,10 @@ import { PaneDivider } from "./pane-divider";
 import { RightPaneToolbar, usePhoneWidth } from "./pane-sheet";
 import { clampPaneWidth, layoutForTab } from "./split-tabs";
 import { AppFrameView } from "@/desktop/app-frame";
+import { AppTour } from "@/tour/app-tour";
+import { HelpMenu } from "@/tour/help-menu";
+import { tourStops, type Stop } from "@/tour/stops";
+import { offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -335,7 +339,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
            account, and reading one gave the arrival screen nothing to work
            with, so it fell back to the local part of an address and offered
            to call somebody's workspace "deepakjha0196+99's Personal". */
-        queryFn: () => lemma().users.current() as Promise<{ id?: string; email?: string; first_name?: string; last_name?: string } | undefined>,
+        queryFn: () => lemma().users.current() as Promise<{ id?: string; email?: string; first_name?: string; last_name?: string; created_at?: string } | undefined>,
         enabled: source.label !== "sample",
         staleTime: 5 * 60_000,
     });
@@ -1068,6 +1072,66 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         );
     }, [atTeam, pod?.id]);
 
+    /* The tour. Offered once, on Home, in an account's first week; asked for
+       from the help menu or `?tour=1` any time, which takes you Home first —
+       the stops include Home's own box. Either way it waits for whatever
+       dialog is already up (the first-profile step, a sheet) to be done. */
+    const [tourWanted, setTourWanted] = useState<"offered" | "asked" | null>(() => incoming.get("tour") === "1" ? "asked" : null);
+    const [touring, setTouring] = useState(false);
+    const [tourNudge, setTourNudge] = useState(false);
+    const meId = me.data?.id;
+    const meCreated = me.data?.created_at;
+    useEffect(() => {
+        if (preview || source.label !== "live" || !meId) return;
+        if (offersTour(meCreated, { seen: readTourSeen(meId) })) setTourWanted((was) => was ?? "offered");
+    }, [preview, meId, meCreated]);
+    const onHome = activeTab?.id === "space:home";
+    const tourBlocked = !pod || atTeam || hiring || Boolean(stranger) || settings !== null || huddle.expanded;
+    useEffect(() => {
+        if (preview || touring || !tourWanted || tourBlocked) return;
+        if (tourWanted === "offered" && !onHome) return;
+        const check = window.setInterval(() => {
+            if (document.querySelector('[role="dialog"]')) return;
+            window.clearInterval(check);
+            if (tourWanted === "asked") pickTab("space:home");
+            setTourWanted(null);
+            setTouring(true);
+        }, 500);
+        return () => window.clearInterval(check);
+    }, [preview, touring, tourWanted, tourBlocked, onHome, pickTab]);
+    const startTour = useCallback(() => {
+        setSettings(null);
+        setHiring(false);
+        setSearching(false);
+        /* Zoomed out there is no space to show around: go into the one last
+           open, or the first. */
+        if (atTeam || !pod) {
+            const into = (activeOrgId && lastPods[activeOrgId]) || pods.data?.[0]?.id;
+            if (into) goToPod(into);
+        }
+        setTourWanted("asked");
+    }, [atTeam, pod, activeOrgId, lastPods, pods.data, goToPod]);
+    const tourName = pod?.teammate?.name || pod?.name || "";
+    const tourOrg = activeOrg?.name ?? "your organization";
+    const stops = useMemo(() => tourStops({ name: tourName, org: tourOrg }), [tourName, tourOrg]);
+    /* A stop's control on screen before it is lit: the sidebar's are in the
+       drawer on a phone, and folded away when the sidebar is collapsed. */
+    const prepareStop = useCallback((stop: Stop) => {
+        const phone = window.matchMedia("(max-width: 767px)").matches;
+        if (stop.area === "sidebar") {
+            if (phone) setMobileOpen(true);
+            else { setSidebarHidden(false); setCollapsed(false); }
+        } else if (phone) {
+            setMobileOpen(false);
+        }
+    }, []);
+    const endTour = useCallback(() => {
+        setTouring(false);
+        if (meId) writeTourSeen(meId);
+        if (window.matchMedia("(max-width: 767px)").matches) setMobileOpen(false);
+        else setTourNudge(true);
+    }, [meId]);
+
     if (orgs.isPending) {
         return <WorkspaceLoading />;
     }
@@ -1182,6 +1246,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                     }}
                     onHire={activeOrgId ? () => { setSettings(null); setHiring(true); setMobileOpen(false); } : null}
                     foot={<>
+                        {!preview && <HelpMenu onTour={() => { setMobileOpen(false); startTour(); }} nudge={tourNudge} onNudged={() => setTourNudge(false)} />}
                         {/* Above the account, because it is about the account — and
                             silent unless the allowance is close or spent. */}
                         <AllowanceNote orgId={activeOrgId} compact onOpenPlan={() => { setSettings("plan"); setMobileOpen(false); }} />
@@ -1196,7 +1261,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     the face is the rail's, beside it on the same
                                     line, and the description is Home's. The name
                                     opens the teammate itself; switching is the rail's. */}
-                                <button className="side__mate" aria-current={activeTab?.id === "space:about" ? "page" : undefined}
+                                <button className="side__mate" data-tour="about" aria-current={activeTab?.id === "space:about" ? "page" : undefined}
                                     aria-label={"About " + pod.name} onClick={() => { openAbout(null); setMobileOpen(false); }}>
                                     <span className="side__mate-name">{pod.name}</span>
                                 </button>
@@ -1528,7 +1593,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             <button className="icon-button crumb__search" title="Search (⌘K)" aria-label="Search" onClick={() => setSearching(true)}>
                                 <SearchIcon size={18} />
                             </button>
-                            <button className="share-pill" onClick={() => setShareOpen(true)} title={"Share " + (chatResource?.label ?? pod.name)}>Share</button>
+                            <button className="share-pill" data-tour="share" onClick={() => setShareOpen(true)} title={"Share " + (chatResource?.label ?? pod.name)}>Share</button>
                             {/* The header row is gone, as it is in Space; what it
                                 carried that is still owed to you lives here. */}
                             {!preview && <Notifications podId={pod.id} />}
@@ -1667,9 +1732,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpen={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onOpenRun={(runId) => openRun(runId, "Workflow run")}
                                             onNew={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
+                                            onReach={() => setReaching(true)}
+                                            onPages={() => pickTab("space:pages")}
+                                            onAsk={chat.prompt}
                                         />
                                     ) : tab.view === "workflows" ? (
-                                        <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} />
+                                        <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} />
                                     ) : tab.view === "settings" ? (
                                         <SettingsPage
                                             pod={pod}
@@ -1686,12 +1754,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         members={pod.members}
                                         view={tab.view}
                                         apps={allTabs.filter((each): each is Extract<Tab, {kind: "app"}> => each.kind === "app")}
+                                        appsPending={podTabs.isPending}
                                         onOpenFile={(path) => openFile(path, tab.id)}
                                         onOpenTable={(name) => openTable(name, tab.id)}
                                         onOpenApp={pickTab}
                                         onOpenFolder={() => pickTab("library")}
                                         onNewPage={newPage}
                                         onNewChat={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
+                                        onAsk={chat.prompt}
                                     />}
                                 </div>
                             ))}
@@ -1775,7 +1845,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             <div className="pane library-pane" {...paneProps("library")} key={pod.id + ":library"}>
                                 {(isVisible("library") || visitedLibraries[pod.id]) && <Library podId={pod.id} onFile={path => openFile(path, "library")} onTable={name => openTab({ id: "table:" + name, kind: "table", label: readableName(name), name }, "library")}/>}
                             </div>
-                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "table"}> => tab.kind === "table").map(tab => <div className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}><TableView podId={pod.id} name={tab.name} onOpenRecord={(table, recordId) => openRecord(table, recordId, tab.id)}/></div>)}
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "table"}> => tab.kind === "table").map(tab => <div className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}><TableView podId={pod.id} name={tab.name} teammate={pod.teammate?.name || pod.name} onOpenRecord={(table, recordId) => openRecord(table, recordId, tab.id)} onAsk={chat.prompt}/></div>)}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "record"}> => tab.kind === "record").map(tab => (
                                 <div className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <RecordView
@@ -1801,6 +1871,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
             {reaching && pod && <ReachSheet pod={pod} onClose={() => setReaching(false)} />}
             {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} onClose={() => setShareOpen(false)} />}
+            {touring && pod && <AppTour stops={stops} onPrepare={prepareStop} onClose={endTour} />}
 
             {/* Here rather than on the arrival screen: this branch is the
                 first render that has somewhere to belong, whichever of the

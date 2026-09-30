@@ -78,8 +78,16 @@ export function useFloatingChat() {
         asks.current += 1;
         setPending({ text, id: asks.current });
     }, []);
+    /** The beginning of the person's own sentence — a starter from an empty
+     *  list — put in the box with the chat opened around it. Not quoted, as
+     *  `ask` is, and not sent, as `send` is: they finish it, or send it. */
+    const prompt = useCallback((text: string) => {
+        setOpen(true);
+        asks.current += 1;
+        setFill({ text, id: asks.current });
+    }, []);
     const clearPending = useCallback(() => setPending(null), []);
-    return { open, setOpen, fill, clearFill: () => setFill(null), ask, send, pending, clearPending };
+    return { open, setOpen, fill, clearFill: () => setFill(null), ask, prompt, send, pending, clearPending };
 }
 export type FloatingChatState = ReturnType<typeof useFloatingChat>;
 

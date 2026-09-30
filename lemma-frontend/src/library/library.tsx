@@ -15,6 +15,8 @@ import { readableName } from "./reading";
 import { isAsking, matching, NO_FILTERS, ordered as inOrder, type Filters, type Ordering } from "./filters";
 import { FilterBar } from "./filter-bar";
 import { TableForm } from "./forms";
+import { emptyFor } from "@/space/empty-copy";
+import { SpaceEmpty } from "@/space/empty-state";
 
 /** How many rows this view will read in full to decide what a table is.
  *
@@ -116,11 +118,15 @@ export function Library({ podId, onFile, onTable }: { podId: string; onFile: (pa
     </section>;
 }
 
-export function TableView({ podId, name, onOpenRecord }: {
+export function TableView({ podId, name, teammate, onOpenRecord, onAsk }: {
     podId: string;
     name: string;
+    /** Who fills the table in when asked, by name. */
+    teammate: string;
     /** Open one row on its own page. */
     onOpenRecord?: (tableName: string, recordId: string) => void;
+    /** Put words for the teammate in the chat box, to finish or send. */
+    onAsk?: (text: string) => void;
 }) {
     const cache = useQueryClient();
     const sample = source.label === "sample";
@@ -326,7 +332,11 @@ export function TableView({ podId, name, onOpenRecord }: {
                 <button onClick={() => { setRemoving(row); setWriteProblem(null); }} aria-label={`Delete row ${i + 1}`}>Delete</button>
             </td>
             </tr>)}</tbody></table></div>}
-        {!rows.isPending && !rows.isError && !matches.length && <p className="library-empty">{isAsking(asked) ? "Nothing here matches what you asked for." : "This table has no rows yet."}</p>}
+        {!rows.isPending && !rows.isError && !matches.length && isAsking(asked) && <p className="library-empty">Nothing here matches what you asked for.</p>}
+        {!rows.isPending && !rows.isError && !matches.length && !isAsking(asked) && (
+            <SpaceEmpty compact empty={emptyFor({ place: "rows" }, teammate)}
+                on={{ row: () => { setEditing({ row: null }); setWriteProblem(null); }, ask: onAsk }} />
+        )}
         {/* Three different things to say, and one sentence each. Saying all of
     them at once — "12 of 22 loaded rows · 4093 in the table" — asks the reader
     to work out which number is the one they wanted. */}

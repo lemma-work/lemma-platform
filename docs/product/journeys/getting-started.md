@@ -398,6 +398,35 @@ are shown with a retry action rather than an indefinite loading message.
 
 **Contracts:** `users.ensure_first_workspace`
 
+## Capability: Find your way around
+
+### PS-ONB-070 — A new person is shown what Lemma is and where everything is
+**Status:** manual
+
+> **Verified by:** signing up on a live deployment, hiring the first teammate
+> and opening its Home: the tour opens once, after the first-profile step, and
+> not again on reload. Then taking it again from the help button and with
+> `?tour=1`, at desktop and phone widths. `npm test` in `lemma-frontend` checks
+> the stops and when the tour is offered (`tests/app-tour.test.ts`); the overlay
+> itself needs a browser.
+
+- When a person whose account is less than a week old first opens a teammate's
+  Home in a browser, the system shall offer a tour that says what Lemma is and
+  where everything is.
+- The tour shall point at the real controls: the teammates, the places in a
+  teammate's space, the box to ask in, where requests for the person's answer
+  or approval arrive, sharing, and the teammate's own page.
+- The system shall offer the tour once per person per browser, whether it was
+  finished or dismissed.
+- While another dialog is open, the system shall wait for it to close before
+  offering the tour.
+- If the person is in a conversation, then the system shall not interrupt it to
+  offer the tour.
+- The system shall let a person end the tour at any stop, and take it again at
+  any time from the help menu.
+- While the tour is showing, the system shall not act on clicks or shortcuts
+  meant for the workspace beneath it.
+
 ## Capability: Explore the public website
 
 ### PS-ONB-060 — A visitor can learn about Lemma without signing in
