@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { unbound } from "@/thread/conversation-list";
 import { source, type Pod, type SpaceView, type Tab } from "@/data";
-import { AppsIcon, FileIcon, FolderIcon, HomeIcon, SettingsIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
+import { AppsIcon, FileIcon, FolderIcon, PlusIcon, SettingsIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
 
 const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
     { view: "pages", label: "Pages", icon: <FileIcon size={18} /> },
@@ -48,12 +48,11 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
         <nav className="snav" aria-label={pod.name + "’s space"}>
             <div className="snav__group">
                 {/* Where the space opens: whose it is, what is waiting, ways to
-                    start, and the box to ask it. */}
-                <button className="side__item" title="Home" aria-current={activeId === "space:home" || activeId === "conversation" ? "page" : undefined} onClick={() => onPick("space:home")}>
-                    <HomeIcon size={18} /><span>Home</span>
+                    start, and the box to ask it. One of the places, so in
+                    their list rather than a group of its own. */}
+                <button className="side__item" title="New" aria-current={activeId === "space:home" || activeId === "conversation" ? "page" : undefined} onClick={() => onPick("space:home")}>
+                    <PlusIcon size={18} /><span>New</span>
                 </button>
-            </div>
-            <div className="snav__group">
                 {VIEWS.map(item => (
                     <button key={item.view} className="side__item" title={item.label} aria-current={activeId === "space:" + item.view ? "page" : undefined} onClick={() => onPick("space:" + item.view)}>
                         {item.icon}<span>{item.label}</span>

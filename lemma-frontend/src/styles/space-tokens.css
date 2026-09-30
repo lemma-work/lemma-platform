@@ -1,8 +1,15 @@
 /* The app's appearance: ChatGPT Space's restraint on Lemma's structure.
 
-   Loaded last so it wins over `tokens.css` and every `accents.css` palette.
-   The selectors carry `[data-accent]` because the appearance script always
-   sets one; at equal specificity the later file wins.
+   Loaded last so its ground wins over `tokens.css` and every `accents.css`
+   palette. The selectors carry `[data-accent]` because the appearance script
+   always sets one; at equal specificity the later file wins.
+
+   What it does not take over is the person's own choices. The ground — the
+   greys, the lines, the depth — is this file's in every appearance; the
+   accent is only this file's under Mono, the default, and otherwise comes
+   from the palette picked in Appearance. The corner scale is never this
+   file's: it is `data-corners`, in `accents.css`, or the Corners setting
+   would do nothing.
 
    The ground is screen white, not paper. Neutrals are true greys, one accent
    is near-black ink for primary actions, and depth is a hairline plus a soft
@@ -20,11 +27,7 @@
     --ink-3: #8f8f8f;
     --line: rgb(0 0 0 / 0.06);
     --line-2: rgb(0 0 0 / 0.10);
-    --accent: #0d0d0d;
-    --on-accent: #ffffff;
-    --brand: #0d0d0d;
-    --accent-soft: rgb(0 0 0 / 0.05);
-    --accent-line: rgb(0 0 0 / 0.14);
+    --brand: var(--accent);
     --info: #0169cc;
     --select: rgb(1 105 204 / 0.16);
     --bubble: #f4f4f4;
@@ -39,14 +42,9 @@
     --edge-dark: inset 0 0 0 0 transparent;
     --shadow-object: 0 0 0 1px rgb(0 0 0 / 0.06), 0 6px 16px rgb(0 0 0 / 0.06);
 
-    --r-sm: 8px;
-    --r-md: 12px;
-    --r-lg: 16px;
-    --r-xl: 24px;
-
     --side-w: 260px;
     /* The rail of faces beside it: who, at every altitude. */
-    --rail-w: 64px;
+    --rail-w: 56px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -62,11 +60,7 @@
         --ink-3: #8f8f8f;
         --line: rgb(255 255 255 / 0.07);
         --line-2: rgb(255 255 255 / 0.12);
-        --accent: #ececec;
-        --on-accent: #0d0d0d;
-        --brand: #ececec;
-        --accent-soft: rgb(255 255 255 / 0.07);
-        --accent-line: rgb(255 255 255 / 0.18);
+        --brand: var(--accent);
         --info: #48aaff;
         --select: rgb(72 170 255 / 0.24);
         --bubble: #303030;
@@ -89,11 +83,7 @@
     --ink-3: #8f8f8f;
     --line: rgb(255 255 255 / 0.07);
     --line-2: rgb(255 255 255 / 0.12);
-    --accent: #ececec;
-    --on-accent: #0d0d0d;
-    --brand: #ececec;
-    --accent-soft: rgb(255 255 255 / 0.07);
-    --accent-line: rgb(255 255 255 / 0.18);
+    --brand: var(--accent);
     --info: #48aaff;
     --select: rgb(72 170 255 / 0.24);
     --bubble: #303030;
@@ -101,6 +91,34 @@
     --depth-rest: 0 0 0 1px rgb(255 255 255 / 0.07);
     --depth-raise: 0 0 0 1px rgb(255 255 255 / 0.08), 0 8px 24px rgb(0 0 0 / 0.4);
     --shadow-object: 0 0 0 1px rgb(255 255 255 / 0.07), 0 6px 16px rgb(0 0 0 / 0.35);
+}
+
+/* Mono, the default accent: near-black ink for primary actions and a grey
+   wash for hover, so nothing on the ground is coloured but the teammates.
+   Plain `:root` too, for the moment before the appearance script has run —
+   a picked palette's `[data-accent]` outranks it. */
+:root,
+:root[data-accent="mono"] {
+    --accent: #0d0d0d;
+    --on-accent: #ffffff;
+    --accent-soft: rgb(0 0 0 / 0.05);
+    --accent-line: rgb(0 0 0 / 0.14);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]),
+    :root:not([data-theme="light"])[data-accent="mono"] {
+        --accent: #ececec;
+        --on-accent: #0d0d0d;
+        --accent-soft: rgb(255 255 255 / 0.07);
+        --accent-line: rgb(255 255 255 / 0.18);
+    }
+}
+:root[data-theme="dark"],
+:root[data-theme="dark"][data-accent="mono"] {
+    --accent: #ececec;
+    --on-accent: #0d0d0d;
+    --accent-soft: rgb(255 255 255 / 0.07);
+    --accent-line: rgb(255 255 255 / 0.18);
 }
 
 /* Named here so the rules in space.css never carry a literal colour. */
