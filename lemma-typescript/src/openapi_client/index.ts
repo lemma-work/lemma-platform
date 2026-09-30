@@ -180,6 +180,18 @@ export type { FunctionRunSummaryResponse } from './models/FunctionRunSummaryResp
 export { FunctionStatus } from './models/FunctionStatus.js';
 export type { FunctionSummaryResponse } from './models/FunctionSummaryResponse.js';
 export { FunctionType } from './models/FunctionType.js';
+export type { GroupDetailResponse } from './models/GroupDetailResponse.js';
+export type { GroupLineResponse } from './models/GroupLineResponse.js';
+export type { GroupLinkRequest } from './models/GroupLinkRequest.js';
+export type { GroupLinkResponse } from './models/GroupLinkResponse.js';
+export type { GroupListResponse } from './models/GroupListResponse.js';
+export type { GroupOwnerResponse } from './models/GroupOwnerResponse.js';
+export type { GroupPersonResponse } from './models/GroupPersonResponse.js';
+export type { GroupResponse } from './models/GroupResponse.js';
+export type { GroupStartRequest } from './models/GroupStartRequest.js';
+export type { GroupTimelineResponse } from './models/GroupTimelineResponse.js';
+export type { GroupUpdateRequest } from './models/GroupUpdateRequest.js';
+export type { GroupWaitingResponse } from './models/GroupWaitingResponse.js';
 export { HarnessKind } from './models/HarnessKind.js';
 export type { HomeAgentResponse } from './models/HomeAgentResponse.js';
 export type { HomeAppResponse } from './models/HomeAppResponse.js';
