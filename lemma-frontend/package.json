@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node server/dev-watch.mjs --dev",
-    "build": "npm run lint && npm run check:naming && npm run check:design && node -e \"require('fs').rmSync('.next/dev', { recursive: true, force: true })\" && next build",
+    "build": "npm run lint && npm run check:naming && npm run check:design && next build",
     "start": "node server.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --import ./tests/resolve.mjs --test tests/*.test.ts",

@@ -28,11 +28,14 @@ export function TelegramBotCard({ saved, unsaved }: { saved: boolean; unsaved: b
     });
     const stored = storedMobileNumber(me.data?.mobile_number ?? "");
     const [number, setNumber] = useState(stored);
-    useEffect(() => setNumber(stored), [stored]);
+    const [edited, setEdited] = useState(false);
+    /* A late or refreshed profile fills the box only until the person types:
+       overwriting a number mid-edit would lose it. */
+    useEffect(() => { if (!edited) setNumber(stored); }, [stored, edited]);
     const typed = normalizeMobileNumber(number);
     const save = useMutation({
         mutationFn: () => lemma().users.upsertProfile({ mobile_number: typed }),
-        onSuccess: (next) => queryClient.setQueryData(["current-user"], next),
+        onSuccess: (next) => { setEdited(false); queryClient.setQueryData(["current-user"], next); },
     });
 
     const card = telegramBotCard({
@@ -49,7 +52,7 @@ export function TelegramBotCard({ saved, unsaved }: { saved: boolean; unsaved: b
                 <label htmlFor="telegram-chat-mobile">Your mobile number</label>
                 <div className="telegram-chat__number">
                     <input id="telegram-chat-mobile" value={number} inputMode="tel" autoComplete="tel" placeholder="+1 555 010 0000"
-                        onChange={(event) => { save.reset(); setNumber(event.target.value); }} />
+                        onChange={(event) => { save.reset(); setEdited(true); setNumber(event.target.value); }} />
                     <button type="submit" className="btn" disabled={!changed || !isCompleteMobileNumber(typed) || save.isPending}>
                         {save.isPending ? "Saving…" : "Save"}
                     </button>
