@@ -4,10 +4,10 @@
 //! is sent and the environment it was started in. The switches themselves are
 //! verified against each adapter's source in `acp::session_options`; this holds
 //! the host to delivering them: Claude Code's in the session's `_meta` (on a
-//! new session and a resumed one alike), Codex's and `OpenCode`'s in the
-//! process environment, and nothing of the kind when the person chose the
-//! agent's own skills and settings. Every agent, whichever way the switch is
-//! set, still has Lemma's MCP server, sign-in and instructions.
+//! new session and a resumed one alike), and nothing of the kind when the
+//! person chose Claude Code's own skills and settings. Codex and `OpenCode`
+//! get no personal-setup switches at all, only Lemma's web-tool overrides.
+//! Every agent still has Lemma's MCP server, sign-in and instructions.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -231,7 +231,7 @@ async fn claude_code_with_its_own_settings_keeps_them() {
 }
 
 #[tokio::test]
-async fn codex_gets_its_switches_merged_into_the_pinned_config() {
+async fn codex_keeps_the_persons_setup_and_the_pinned_config() {
     let directory = TempDir::new().unwrap();
     let log = directory.path().join("codex.jsonl");
     let pinned = BTreeMap::from([(
@@ -258,47 +258,36 @@ async fn codex_gets_its_switches_merged_into_the_pinned_config() {
         json!(false),
         "the pinned adapter's own overrides are kept"
     );
-    assert_eq!(config["features"]["hooks"], json!(false));
+    // Nothing of the person's own setup is switched off.
+    assert!(config.get("features").is_none(), "{config}");
+    assert!(config.get("skills").is_none(), "{config}");
     assert_eq!(config["web_search"], json!("disabled"));
     // Codex's own prompt carries the instructions, as before.
     assert!(prompts(&traffic)[0].contains("You are Lemma's agent."));
 }
 
+/// `OpenCode` loads the person's own skills and config whichever way the
+/// own-settings switch is set: only Claude Code reads it.
 #[tokio::test]
-async fn opencode_is_started_with_its_own_skills_left_out() {
+async fn opencode_keeps_the_persons_own_setup_either_way() {
     let directory = TempDir::new().unwrap();
-    let log = directory.path().join("opencode.jsonl");
-    let run = request(
-        adapter("opencode", &log, BTreeMap::new()),
-        directory.path().join("cwd"),
-        false,
-        Value::Null,
-    );
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
-
-    let traffic = read_traffic(&log);
-    let environment = recorded_environment(&traffic);
-    assert_eq!(environment["OPENCODE_DISABLE_EXTERNAL_SKILLS"], json!("1"));
-    assert_eq!(environment["OPENCODE_DISABLE_CLAUDE_CODE"], json!("1"));
-    let overlay: Value =
-        serde_json::from_str(environment["OPENCODE_CONFIG_CONTENT"].as_str().unwrap()).unwrap();
-    assert_eq!(overlay["permission"]["skill"], json!("deny"));
-
-    // And with its own settings, exactly as before.
-    let own = directory.path().join("own.jsonl");
-    let run = request(
-        adapter("opencode", &own, BTreeMap::new()),
-        directory.path().join("cwd-own"),
-        true,
-        Value::Null,
-    );
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
-    let traffic = read_traffic(&own);
-    let environment = recorded_environment(&traffic);
-    assert!(
-        !environment.keys().any(|name| name.starts_with("OPENCODE_")),
-        "{environment:?}"
-    );
+    for own in [false, true] {
+        let log = directory.path().join(format!("opencode-{own}.jsonl"));
+        let run = request(
+            adapter("opencode", &log, BTreeMap::new()),
+            directory.path().join(format!("cwd-{own}")),
+            own,
+            Value::Null,
+        );
+        AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+        let traffic = read_traffic(&log);
+        let environment = recorded_environment(&traffic);
+        assert!(
+            !environment.keys().any(|name| name.starts_with("OPENCODE_")),
+            "own_settings={own}: {environment:?}"
+        );
+        assert!(prompts(&traffic)[0].contains("You are Lemma's agent."));
+    }
 }
 
 /// Lemma's own `lemma`, when the run names one this Mac accepts, is the one
@@ -400,6 +389,13 @@ async fn each_agent_keeps_lemmas_server_sign_in_and_instructions() {
             assert!(
                 prompts(&traffic)[0].contains("You are Lemma's agent."),
                 "{agent}: {traffic:?}"
+            );
+            // And none of the switches that would hide the person's setup.
+            assert!(
+                !environment
+                    .keys()
+                    .any(|name| name.starts_with("OPENCODE_") || name == "CODEX_CONFIG"),
+                "{agent}: {environment:?}"
             );
         }
     }

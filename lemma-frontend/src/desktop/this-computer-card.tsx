@@ -7,7 +7,7 @@ import { agentUpdateCommand, source, stillLooking } from "@/data";
 import { apiUrl, hasApiUrl } from "@/session/client";
 import { LoadingIndicator } from "@/ui/loading";
 import { ComputerIcon, DownloadIcon, RefreshIcon, TerminalIcon } from "@/ui/icons";
-import { agentHost, ownSettingsRow, useAgentHost } from "./agent-host";
+import { agentHost, ownSettingsRow, takesOwnSettings, useAgentHost } from "./agent-host";
 import { useAutoConnectThisComputer, wasRemoved } from "./auto-connect";
 import { invoke } from "./bridge";
 import { openSettings } from "./open-settings";
@@ -205,10 +205,16 @@ export function ThisComputerCard({ release, children }: { release?: string; chil
  *  Read from the workspace's list of computers, joined on `host_id` — the same
  *  list the Models page draws — so the two places cannot disagree about what
  *  is here. Adding one for teammates to pick stays on Models. */
-/** Off by default: the agent starts with Lemma's instructions, skills and
- *  tools only, so what it does in a conversation is what Lemma asked of it.
- *  On, it also loads the person's own -- as in their terminal. */
+/** Claude Code only. Off by default: it starts with Lemma's instructions,
+ *  skills and tools only, so what it does in a conversation is what Lemma
+ *  asked of it. On, it also loads the person's own -- as in their terminal.
+ *  Other agents always load the person's own setup, so nothing is drawn. */
 export function OwnSettingsSwitch({ harness, name }: { harness: string; name: string }) {
+    if (!takesOwnSettings(harness)) return null;
+    return <OwnSettingsToggle harness={harness} name={name} />;
+}
+
+function OwnSettingsToggle({ harness, name }: { harness: string; name: string }) {
     const host = useAgentHost();
     const [problem, setProblem] = useState<string | null>(null);
     const change = useMutation({

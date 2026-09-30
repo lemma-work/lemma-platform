@@ -391,10 +391,10 @@ folder, so it keeps its folder and leaves the rest out by flag
 (`desktop/agent-host/src/acp/session_options.rs`, with the sign-in carried
 over by `desktop/agent-host/src/acp/claude_settings.rs`). Codex and OpenCode
 run in the person's own config folders: their `~/.codex` and
-`~/.config/opencode` -- `AGENTS.md`, skills, rules, MCP servers -- load with
-the switch off too, which is accepted, and Lemma adds its MCP server and its
-instructions on top. Their switches below turn off what they can without
-moving the folder.
+`~/.config/opencode` -- `AGENTS.md`, skills, hooks, rules, MCP servers -- load
+unchanged, as in the person's terminal. Lemma adds only its MCP server, its
+`LEMMA_*` environment and its instructions, and turns off an agent's own web
+search or fetch when the run has Lemma's.
 
 A bound project's own files -- its `AGENTS.md` or `CLAUDE.md`, its `.claude/`,
 `.codex/` or `.opencode/` -- belong to the folder the person chose and load in
@@ -403,13 +403,14 @@ either mode.
 | Agent | How | Left out | Still loaded |
 |---|---|---|---|
 | Claude Code | `session/new` and `session/load` `_meta`, read by `claude-agent-acp`: `claudeCode.options` `settingSources: ["project", "local"]`, `strictMcpConfig`, `plugins: []`, `env.CLAUDE_CODE_DISABLE_AUTO_MEMORY`, and `settings` (flag settings) carrying only the sign-in keys of `~/.claude/settings.json` | `~/.claude/CLAUDE.md`, skills, agents, commands, output styles, plugins, hooks and settings; the person's MCP servers (`~/.claude.json`) and claude.ai connectors; auto-memory | the sign-in (keychain or `~/.claude/.credentials.json`), and `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `forceLoginMethod`, `forceLoginOrgUUID` and the provider variables of `env` (`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `AWS_*`, `GOOGLE_*`, proxies) from its settings; Claude Code's bundled skills; `claude-agent-acp` itself still reads `~/.claude/settings.json` for `permissions.defaultMode`, `availableModels` and `modelOverrides` |
-| Codex | nothing moves: the person's own `CODEX_HOME`. Only `CODEX_CONFIG`, merged into the pinned adapter's value, which `codex-acp` sends as overrides on every thread: `skills.config` (each skill under `~/.codex/skills` and `~/.agents/skills`, `enabled: false`), `features.hooks: false` | the person's hooks, and their skills switched off by path | the sign-in; `~/.codex/AGENTS.md`, `rules/`, the person's MCP servers and the rest of `config.toml` (accepted: the person's own Codex setup applies); Codex's bundled skills (image generation among them); Lemma's MCP server and instructions on top |
-| OpenCode | `OPENCODE_DISABLE_EXTERNAL_SKILLS`, `OPENCODE_DISABLE_CLAUDE_CODE`, and `OPENCODE_CONFIG_CONTENT` `{"permission": {"skill": "deny"}}` | skills under `~/.claude` and `~/.agents`, Claude Code's instructions, the `skill` tool | `~/.config/opencode` (`AGENTS.md`, `opencode.json`'s MCP servers and the rest; accepted); Lemma's MCP server and instructions on top |
+| Codex | nothing: the person's own `CODEX_HOME` and setup, unchanged. The only override is `web_search: "disabled"` in `CODEX_CONFIG` (merged into the pinned adapter's value) when the run has Lemma's own web search, so the agent does not hold two | -- (Codex's own web search, only when Lemma's is there) | everything: the sign-in, `~/.codex/AGENTS.md`, skills, hooks, `rules/`, the person's MCP servers and the rest of `config.toml`; Lemma's MCP server and instructions on top |
+| OpenCode | nothing: the person's own setup, unchanged. The only override is `OPENCODE_CONFIG_CONTENT` `{"permission": {"webfetch": "deny"}}` when the run has Lemma's own page fetch | -- (OpenCode's own `webfetch`, only when Lemma's is there) | everything: `~/.config/opencode` (`AGENTS.md`, skills, `opencode.json`'s MCP servers), and the skills it borrows from `~/.claude` and `~/.agents`; Lemma's MCP server and instructions on top |
 | Cursor | nothing | -- | everything (`~/.cursor/cli-config.json`, `~/.cursor/mcp.json`, the account's user rules). `cursor-agent` documents one knob, `CURSOR_CONFIG_DIR`, which moves `cli-config.json` and reportedly the sign-in with it; it offers no switch for rules or MCP servers that spares the login, and until one is verified against a signed-in `cursor-agent` Cursor is left as it is |
 
-**"Use my own skills and settings"** (one switch per agent, off by default,
-under Settings → This Mac → Coding agents and beside this computer's agents on
-Models) puts all of it back -- the agent with its own settings, as before: the
+**"Use my own skills and settings"** (Claude Code only, off by default,
+under Settings → This Mac → Coding agents and beside this computer's Claude
+Code on Models) puts `~/.claude` back -- Claude Code with its own settings. It
+is not drawn for other agents and has no effect on them: the
 set of such agents is `own_settings` in the Agent Host's `config.json`,
 changed by `lemma-agent-host own-settings enable|disable <agent>`, locald's
 `agent-host.own-settings` and the Tauri command `agent_host_own_settings`,
