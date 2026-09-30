@@ -10,7 +10,7 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
         setStandalone(window.parent === window);
         // Theme is set before paint (`layout.tsx`): light, unless the visitor
         // chose otherwise in this demo's Appearance settings.
-        document.documentElement.dataset.accent = "violet";
+        document.documentElement.dataset.accent = "mono";
         document.documentElement.dataset.corners = "soft";
         function interact(event: Event) {
             if (event.isTrusted && window.parent !== window) window.parent.postMessage({ type: "lemma-tour:interact" }, window.location.origin);

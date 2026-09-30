@@ -1,6 +1,6 @@
 import type { Pod } from "@/data";
 
-/** The words and commands behind Settings › Coding agents, kept apart from
+/** The words and commands behind Settings › AI tools, kept apart from
  *  the component so the quoting — the part a person pastes into a shell — is
  *  tested rather than trusted. */
 
@@ -88,4 +88,184 @@ export function starterPrompts(pod: Pod): { title: string; prompt: string }[] {
                 + "then ask me which one and what the app is for.",
         },
     ];
+}
+
+/* ── Connecting a space by URL, over MCP ─────────────────────────────── */
+
+/** Claude and ChatGPT connect from their own servers, not from this browser,
+ *  so an API on this machine, or on a private network, is out of their reach.
+ *  Saying so beats a connector that fails to add with an error about the
+ *  network. */
+export function reachableFromInternet(apiUrl: string | null): boolean {
+    if (!apiUrl) return false;
+    let host: string;
+    try {
+        host = new URL(apiUrl).hostname.toLowerCase();
+    } catch {
+        return false;
+    }
+    if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return false;
+    const v4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (v4) {
+        const [a, b] = [Number(v4[1]), Number(v4[2])];
+        return !(a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+            || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || a === 0);
+    }
+    if (host.startsWith("[")) {
+        const v6 = host.slice(1, -1);
+        return !(v6 === "::1" || v6.startsWith("fc") || v6.startsWith("fd") || v6.startsWith("fe80"));
+    }
+    return true;
+}
+
+/** The name the space goes by in a client's list of servers. */
+export function serverName(pod: Pick<Pod, "name">): string {
+    const slug = pod.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+    return slug ? "lemma-" + slug : "lemma";
+}
+
+export type McpClient = {
+    id: string;
+    label: string;
+    /** Connects from its own servers, so it needs an API on the internet. */
+    remote: boolean;
+    command: ((url: string, pod: Pick<Pod, "name">) => string) | null;
+    steps: (url: string, pod: Pick<Pod, "name">) => string[];
+};
+
+/** What to call the space in a client's list of connectors. */
+export function connectorName(pod: Pick<Pod, "name">): string {
+    return "Lemma – " + pod.name;
+}
+
+/** The clicks, in each client's own words, as they are today. Kept to what a
+ *  person does: the link is copied above, so no step repeats it. */
+export const MCP_CLIENTS: McpClient[] = [
+    {
+        id: "claude",
+        label: "Claude",
+        remote: true,
+        command: null,
+        steps: (_url, pod) => [
+            "In Claude, open Customize › Connectors, then Add › Add custom connector.",
+            "Name it “" + connectorName(pod) + "”, paste the link, and choose Add.",
+            "Choose Connect and allow Lemma. Then just ask Claude about " + pod.name + ".",
+        ],
+    },
+    {
+        id: "chatgpt",
+        label: "ChatGPT",
+        remote: true,
+        command: null,
+        steps: (_url, pod) => [
+            "In ChatGPT, open Plugins, then Add › Create MCP App.",
+            "Name it “" + connectorName(pod) + "”, paste the link under Connection, tick “I understand”, and choose Create.",
+            "Choose Continue and allow Lemma. Then type @" + connectorName(pod) + " in any chat.",
+        ],
+    },
+    {
+        id: "claude-code",
+        label: "Claude Code",
+        remote: false,
+        command: (url, pod) => "claude mcp add --transport http " + serverName(pod) + " " + url,
+        steps: (_url, pod) => [
+            "Run the command in the folder you work in.",
+            "In Claude Code, run /mcp, choose " + serverName(pod) + " and allow Lemma.",
+        ],
+    },
+    {
+        id: "other",
+        label: "Other",
+        remote: false,
+        command: null,
+        steps: () => [
+            "Add the link as a remote MCP server.",
+            "When it asks you to sign in, allow Lemma. Nothing else to set up.",
+        ],
+    },
+];
+
+/* ── Connected clients ───────────────────────────────────────────────── */
+
+export type ConnectedClient = {
+    grant_id: string;
+    /** The person who connected it. */
+    user_id: string;
+    /** A metadata document's URL, or an id the app was issued. */
+    client_id: string;
+    /** What the app calls itself. Unverified. */
+    client_name: string;
+    scopes: string[];
+    connected_at: string;
+    last_used_at: string | null;
+};
+
+/** Where an app's metadata document is served — the one checked fact about
+ *  it — or null for an app that registered itself. Shown beside the name,
+ *  because the name is whatever the app chose. */
+export function verifiedHost(client: Pick<ConnectedClient, "client_id">): string | null {
+    if (!client.client_id.startsWith("https://")) return null;
+    try {
+        return new URL(client.client_id).hostname || null;
+    } catch {
+        return null;
+    }
+}
+
+/** "Read and write", "Read only": what a person agreed to, in their words. */
+export function accessLabel(scopes: string[]): string {
+    return scopes.includes("pod:write") ? "Read and write" : "Read only";
+}
+
+/** The connections to show: everyone's, for the space's admins, who answer
+ *  for what can read it; otherwise the person's own. The API decides who is
+ *  an admin; asking for everyone and being refused is how this finds out. */
+export async function loadConnections(
+    apiUrl: string,
+    podId: string,
+    fetcher: typeof fetch = fetch,
+): Promise<{ items: ConnectedClient[]; everyone: boolean }> {
+    const url = (everyone: boolean) =>
+        apiUrl + "/oauth/grants?pod_id=" + encodeURIComponent(podId) + (everyone ? "&everyone=true" : "");
+    const init: RequestInit = { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } };
+    let response = await fetcher(url(true), init);
+    let everyone = true;
+    if (response.status === 403) {
+        response = await fetcher(url(false), init);
+        everyone = false;
+    }
+    if (!response.ok) throw new Error("Connected apps could not be loaded (" + response.status + ").");
+    const body = (await response.json()) as { items?: ConnectedClient[] };
+    return { items: Array.isArray(body.items) ? body.items : [], everyone };
+}
+
+/** The URL as the API states it, or null when this deployment does not
+ *  serve spaces over MCP (`MCP_ACCESS_ENABLED=false` answers 404). Never built
+ *  in the browser: the browser knows the API by the address this page was
+ *  configured with, which is not always the one outside clients reach, and a
+ *  link built here would be offered even where there is nothing behind it.
+ *  Anything else that goes wrong throws: a failed request is not the feature
+ *  being off, and hiding the section for it would look exactly like it. */
+export async function fetchMcpUrl(apiUrl: string, podId: string, fetcher: typeof fetch = fetch): Promise<string | null> {
+    const response = await fetcher(apiUrl + "/oauth/mcp-endpoint/" + encodeURIComponent(podId), {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error("The link could not be loaded (" + response.status + ").");
+    const body = (await response.json()) as { url?: unknown };
+    if (typeof body.url !== "string") throw new Error("The link could not be loaded.");
+    return body.url;
+}
+
+/** Ends the connection and every token it was given; the app has to ask
+ *  again to come back. A 404 is not an error to show — already ended, or no
+ *  longer this person's to end — but it is not proof it is gone either, so
+ *  the caller reloads the list rather than dropping the row. */
+export async function disconnectClient(apiUrl: string, grantId: string, fetcher: typeof fetch = fetch): Promise<void> {
+    const response = await fetcher(apiUrl + "/oauth/grants/" + encodeURIComponent(grantId), {
+        method: "DELETE",
+        credentials: "include",
+    });
+    if (!response.ok && response.status !== 404) throw new Error("It could not be disconnected (" + response.status + ").");
 }

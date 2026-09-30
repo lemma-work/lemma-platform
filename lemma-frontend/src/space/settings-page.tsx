@@ -10,7 +10,7 @@ import { OrgUsageSection } from "@/org/org-usage";
 export type SettingsSection = "agents" | "model" | "usage";
 
 const SECTIONS: { id: SettingsSection; label: string }[] = [
-    { id: "agents", label: "Coding agents" },
+    { id: "agents", label: "AI tools" },
     { id: "model", label: "Models" },
     { id: "usage", label: "Usage" },
 ];
@@ -20,7 +20,7 @@ const SECTIONS: { id: SettingsSection; label: string }[] = [
  *  Who it works with, where it answers, what it has been taught, its standing
  *  work, its agents and its model are facts about the teammate, and live on
  *  About. These are about the space and the organization around it: reaching
- *  the space from a coding agent, the models every teammate here can use, and
+ *  the space from an AI tool, the models every teammate here can use, and
  *  what has been spent. One section at a time, the way ChatGPT's settings are. */
 export function SettingsPage({ pod, orgId, orgName, section, onSection, onAbout }: {
     pod: Pod;
@@ -47,7 +47,7 @@ export function SettingsPage({ pod, orgId, orgName, section, onSection, onAbout 
             </nav>
             <div className="settings__body">
                 {section === "agents" && (
-                    <Section title="Coding agents" note={"Use " + pod.name + " from Claude Code, Codex, Cursor or OpenCode — its pages, tables, workflows and agents."}>
+                    <Section title="AI tools" note={"Use " + pod.name + " from Claude, ChatGPT, Claude Code and other AI tools."}>
                         <AgentAccess pod={pod} />
                     </Section>
                 )}

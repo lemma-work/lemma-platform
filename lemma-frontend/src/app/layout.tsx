@@ -31,7 +31,7 @@ export const metadata: Metadata = { metadataBase: new URL(publicSiteUrl()), titl
 // wrong theme. The landing page is light whatever the app is set to, and so
 // is its demo until a visitor picks otherwise inside it: a dark workspace in
 // a light page reads as a different product.
-const themeScript = `(function(){try{var d=document.documentElement,s=localStorage,l=location.pathname,demo=["/demo/landing", "/demo/landing/", "/demo/launch", "/demo/launch/"].includes(l),p=demo?'lemma-tour':'${PREFIX}',t=s.getItem(p+':theme');if(l==='/')d.dataset.theme='light';else if(t==='light'||t==='dark')d.dataset.theme=t;else if(demo&&t!=='system')d.dataset.theme='light';d.dataset.accent=s.getItem('${PREFIX}:accent')||'violet';d.dataset.corners=s.getItem('${PREFIX}:corners')||'soft';var c=s.getItem(p+':chat-text-size');d.dataset.chatTextSize=c==='small'||c==='large'?c:'default'}catch(e){}})()`;
+const themeScript = `(function(){try{var d=document.documentElement,s=localStorage,l=location.pathname,demo=["/demo/landing", "/demo/landing/", "/demo/launch", "/demo/launch/"].includes(l),p=demo?'lemma-tour':'${PREFIX}',t=s.getItem(p+':theme');if(l==='/')d.dataset.theme='light';else if(t==='light'||t==='dark')d.dataset.theme=t;else if(demo&&t!=='system')d.dataset.theme='light';d.dataset.accent=s.getItem('${PREFIX}:app-accent')||'mono';d.dataset.corners=s.getItem('${PREFIX}:corners')||'soft';var c=s.getItem(p+':chat-text-size');d.dataset.chatTextSize=c==='small'||c==='large'?c:'default'}catch(e){}})()`;
 
 /* Downloaded once, at build time, and served from this origin. A stylesheet
    link to Google put every page's type one request to Google's servers away,

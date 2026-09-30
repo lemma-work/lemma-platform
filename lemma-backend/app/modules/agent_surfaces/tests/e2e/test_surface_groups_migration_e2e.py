@@ -12,8 +12,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0041_conversation_last_activity"
-AFTER = "0042_surface_groups"
+BEFORE = "0042_mcp_access"
+AFTER = "0043_surface_groups"
 
 
 def test_the_group_tables_upgrade_and_roll_back_cleanly() -> None:

@@ -33,16 +33,16 @@ the shared number its senders are in.
 Both tables are new and nothing is backfilled: a group becomes known the next
 time the bot hears it, which is the only moment the rows are any use.
 
-Revision ID: 0042_surface_groups
-Revises: 0041_conversation_last_activity
+Revision ID: 0043_surface_groups
+Revises: 0042_mcp_access
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0042_surface_groups"
-down_revision = "0041_conversation_last_activity"
+revision = "0043_surface_groups"
+down_revision = "0042_mcp_access"
 branch_labels = None
 depends_on = None
 

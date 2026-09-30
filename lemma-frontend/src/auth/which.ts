@@ -11,7 +11,7 @@
  *  somebody else is already holding.
  */
 
-export type Screen = "sign-in" | "sign-up" | "reset" | "verify" | "callback" | "desktop" | "cli" | "unknown";
+export type Screen = "sign-in" | "sign-up" | "reset" | "verify" | "callback" | "desktop" | "cli" | "authorize" | "unknown";
 
 export function screenFor(path: string[] | undefined, search = ""): Screen {
     const segments = (path ?? []).filter(Boolean);
@@ -46,6 +46,10 @@ export function screenFor(path: string[] | undefined, search = ""): Screen {
             /* Opened by `lemma auth login` in every CLI already installed
                (`lemma_sdk/auth.py`). See `cli-login.ts`. */
             return segments.length === 2 && segments[1] === "login" ? "cli" : "unknown";
+        case "authorize":
+            /* Where the API's `/oauth/authorize` sends a browser for consent,
+               when an MCP client connects a pod. See `mcp-consent.ts`. */
+            return segments.length === 1 ? "authorize" : "unknown";
         default:
             return "unknown";
     }
