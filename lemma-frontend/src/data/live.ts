@@ -1,3 +1,4 @@
+import { originOf } from "@/thread/conversation-origin";
 import { askApi, lemma } from "@/session/client";
 import { RESOURCE_KEY } from "@/thread/resource-conversation";
 import { NEW_CONVERSATION } from "./types";
@@ -8,6 +9,7 @@ import { readPodRoles } from "./pod-roles";
 import {
     agentChanges,
     agentRows,
+    answeringAs,
     readAgentDetail,
     type AgentDetail,
     type AgentDraft,
@@ -102,6 +104,7 @@ async function membersOf(podId: string): Promise<Member[]> {
             const name = m.user_name?.trim() || email || "Member";
             return {
                 id: m.pod_member_id ?? m.user_id ?? name,
+                userId: m.user_id,
                 name,
                 email: email || undefined,
                 initials: initialsOf(name),
@@ -169,6 +172,18 @@ function podRow(podId: string): Promise<{ config?: unknown; name?: string }> {
 /** Anything that writes to a pod invalidates what was read of it. */
 function forgetPod(podId: string): void {
     podRows.delete(podId);
+}
+
+/** The name a pod's own agent answers under — the pod's, which is the
+ *  teammate's (see `answeringAs`). Null when the pod cannot be read, and the
+ *  lists then keep what `displayAgentName` said rather than failing over it. */
+async function teammateNameOf(podId: string): Promise<string | null> {
+    try {
+        const row = await podRow(podId);
+        return row.name ? humanizeName(row.name) : null;
+    } catch {
+        return null;
+    }
 }
 
 export function podAgents(podId: string): Promise<Listish> {
@@ -239,9 +254,11 @@ function humanizeName(raw: string): string {
 }
 
 
-function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null }): Pod {
+function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null; description?: string | null }): Pod {
     const name = humanizeName(pod.name);
+    const description = pod.description?.trim();
     return { id: pod.id, orgId: pod.organization_id, name, iconUrl: pod.icon_url ?? null,
+        ...(description ? { description } : {}),
         teammate: { name, initials: initialsOf(name), iconUrl: pod.icon_url ?? null },
         subtitle: "", members: [], waiting: "" };
 }
@@ -327,6 +344,11 @@ function asGuided(raw: unknown): GuidedSetup {
 /** One page of the history list. The sidebar shows a handful of these; the
  *  all-conversations pane asks for more a page at a time. */
 const CONVERSATION_PAGE_SIZE = 25;
+
+/** Where a person reads a shared document: the code, rendered by this app. */
+function readUrlOf(code: string): string {
+    return (typeof window === "undefined" ? "" : window.location.origin) + "/d/" + code;
+}
 
 export const liveSource: PodSource = {
     label: "live",
@@ -420,8 +442,8 @@ export const liveSource: PodSource = {
     async listPods(orgId: string): Promise<Pod[]> {
         const listed = (await lemma().pods.listByOrganization(orgId)) as Listish;
         return itemsOf(listed)
-            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null })
-            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null } =>
+            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null; description?: string | null })
+            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null; description?: string | null } =>
                 Boolean(pod.id && pod.name),
             )
             .map((pod) => podSummary({ ...pod, organization_id: pod.organization_id ?? orgId }));
@@ -443,10 +465,10 @@ export const liveSource: PodSource = {
         const client = lemma(podId);
         if (kind === "tables") {
             const result = await client.tables.list({ limit: 50, pageToken: page });
-            return { next: result.next_page_token, items: result.items.map(t => ({ id: t.id, name: t.name, kind: "table" as const, path: t.name, updated: t.updated_at, detail: `${t.column_count ?? "—"} columns` })) };
+            return { next: result.next_page_token, items: result.items.map(t => ({ id: t.id, name: t.name, kind: "table" as const, path: t.name, updated: t.updated_at, detail: `${t.column_count ?? "—"} columns`, visibility: t.visibility, rls: t.enable_rls })) };
         }
         const result = await client.files.list({ directoryPath: directory, limit: 50, pageToken: page });
-        return { next: result.next_page_token, items: result.items.map(f => ({ id: f.id, name: f.name, kind: /folder|directory/i.test(f.kind) ? "folder" as const : "file" as const, path: f.path, updated: f.updated_at, detail: f.description || f.mime_type || f.kind, status: f.status })) };
+        return { next: result.next_page_token, items: result.items.map(f => ({ id: f.id, name: f.name, kind: /folder|directory/i.test(f.kind) ? "folder" as const : "file" as const, path: f.path, updated: f.updated_at, detail: f.description || f.mime_type || f.kind, status: f.status, visibility: f.visibility, owner: f.owner_user_id ?? null })) };
     },
     async tableColumns(podId, name) { return (await lemma(podId).tables.get(name)).columns; },
     /* Nothing binds parameters here — `datastore.query` takes SQL text and
@@ -499,7 +521,7 @@ export const liveSource: PodSource = {
         try {
             const listed = (await lemma(podId).apps.list({ limit: 12 })) as Listish;
             for (const raw of itemsOf(listed)) {
-                const app = raw as { name?: string; url?: string; status?: string; description?: string };
+                const app = raw as { name?: string; url?: string; status?: string; description?: string; visibility?: string; updated_at?: string };
                 if (!app.name || !app.url) continue;
                 tabs.push({
                     id: "app:" + app.name,
@@ -507,6 +529,8 @@ export const liveSource: PodSource = {
                     label: readableName(app.name),
                     url: app.url,
                     status: app.status ?? "",
+                    visibility: app.visibility,
+                    updated: app.updated_at,
                 });
             }
         } catch {
@@ -523,7 +547,10 @@ export const liveSource: PodSource = {
     },
 
     async listSurfaces(podId: string): Promise<Surface[]> {
-        const listed = (await lemma(podId).podSurfaces.list(podId, { limit: 30 })) as Listish;
+        const [listed, teammate] = await Promise.all([
+            lemma(podId).podSurfaces.list(podId, { limit: 30 }) as Promise<Listish>,
+            teammateNameOf(podId),
+        ]);
         return itemsOf(listed)
             .map(
                 (raw) =>
@@ -545,7 +572,12 @@ export const liveSource: PodSource = {
                 platform: String(surface.platform),
                 name: String(surface.name ?? surface.platform),
                 mine: Boolean(surface.uses_default_agent) || isPodDefaultAgent(surface.agent_name),
-                agentName: displayAgentName(String(surface.agent_name ?? "")),
+                /* Matched against the agent list by label (`surfacesForAgent`),
+                   so the space's own agent is named here the way that list
+                   names it: as the teammate. */
+                agentName: teammate && (surface.uses_default_agent || isPodDefaultAgent(surface.agent_name))
+                    ? teammate
+                    : displayAgentName(String(surface.agent_name ?? "")),
                 agentKey: surface.agent_name ?? undefined,
                 handle:
                     surface.reach?.handle ??
@@ -1052,10 +1084,30 @@ export const liveSource: PodSource = {
            what an upload with no extension gets — would otherwise be written
            back as one, and the thing that reads it next would stop seeing
            markdown. */
-        await lemma(podId).files.update(path, {
-            file: new Blob([text], { type: /\.(md|markdown)$/i.test(name) ? "text/markdown" : "text/plain" }),
-            name,
-        });
+        const file = new Blob([text], { type: /\.(md|markdown)$/i.test(name) ? "text/markdown" : "text/plain" });
+        try {
+            await lemma(podId).files.update(path, { file, name });
+        } catch (error) {
+            /* Update only edits a file that exists. A new page — from New page,
+               a template, a sub-page — is a file that does not yet, so it is
+               uploaded instead, which also makes any missing folders. */
+            if ((error as { statusCode?: number } | null)?.statusCode !== 404) throw error;
+            const cut = path.lastIndexOf("/");
+            await lemma(podId).files.upload(file, { name, directoryPath: cut > 0 ? path.slice(0, cut) : "/", searchEnabled: true });
+        }
+    },
+
+    async createFile(podId: string, path: string, text: string): Promise<void> {
+        const cut = path.lastIndexOf("/");
+        const name = path.slice(cut + 1);
+        const file = new Blob([text], { type: /\.(md|markdown)$/i.test(name) ? "text/markdown" : "text/plain" });
+        /* Upload is create-only: the platform answers 409 when the path is
+           taken, which is what lets a caller pick another name instead. */
+        await lemma(podId).files.upload(file, { name, directoryPath: cut > 0 ? path.slice(0, cut) : "/", searchEnabled: true });
+    },
+
+    async renameFile(podId: string, from: string, to: string): Promise<void> {
+        await lemma(podId).files.update(from, { newPath: to });
     },
 
     async shareFile(podId: string, path: string, options?: { expiresSeconds?: number; maxHits?: number }): Promise<SharedLink> {
@@ -1071,11 +1123,36 @@ export const liveSource: PodSource = {
         const code = rawUrl.split("/").filter(Boolean).pop() ?? "";
         return {
             rawUrl,
-            readUrl: typeof window === "undefined" ? "/d/" + code : window.location.origin + "/d/" + code,
+            readUrl: readUrlOf(code),
             code,
             expiresAt: minted.expires_at ?? "",
             maxHits: minted.max_hits ?? 0,
         };
+    },
+
+    async fileLinks(podId: string, path: string): Promise<SharedLink[]> {
+        /* The listing is the whole space's, so it is walked and filtered here.
+           Bounded: past a thousand live links, the newest are what matter. */
+        const out: SharedLink[] = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < 10; page += 1) {
+            const listed = (await lemma(podId).files.listSignedUrls({ limit: 100, cursor })) as {
+                links?: { code: string; path: string; expires_at: string; max_hits: number }[];
+                next_page_token?: string | null;
+            };
+            for (const link of listed.links ?? []) {
+                if (link.path !== path) continue;
+                out.push({ rawUrl: "", readUrl: readUrlOf(link.code), code: link.code, expiresAt: link.expires_at, maxHits: link.max_hits });
+            }
+            if (!listed.next_page_token) break;
+            cursor = listed.next_page_token;
+        }
+        return out;
+    },
+
+    async revokeFileLink(podId: string, code: string): Promise<boolean> {
+        const answer = (await lemma(podId).files.revokeSignedUrl(code)) as { revoked?: boolean };
+        return Boolean(answer.revoked);
     },
 
     async widgetEmbedUrl(podId: string, conversationId: string, toolCallId: string): Promise<string> {
@@ -1090,16 +1167,20 @@ export const liveSource: PodSource = {
         return (await liveSource.listConversationsPage(podId)).items;
     },
 
-    async listConversationsPage(podId: string, cursor?: string | null, search?: string): Promise<ConversationPage> {
-        const listed = await lemma(podId).conversations.listDefault({
+    async listConversationsPage(podId: string, cursor?: string | null, search?: string, everyone?: boolean): Promise<ConversationPage> {
+        const page = {
             pod_id: podId,
             limit: CONVERSATION_PAGE_SIZE,
             page_token: cursor ?? undefined,
             search: search || undefined,
-        });
+        };
+        /* `list` with no agent is every bot's; `listDefault` is the space's own. */
+        const listed = everyone
+            ? await lemma(podId).conversations.list(page)
+            : await lemma(podId).conversations.listDefault(page);
         return {
             items: (listed.items ?? []).map((c) => {
-                const row = c as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; metadata?: Record<string, unknown> | null };
+                const row = c as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; metadata?: Record<string, unknown> | null; agent_id?: string | null };
                 const bound = row.metadata?.[RESOURCE_KEY];
                 /* The list is ordered by last activity, so the time beside a row
                    is that — not `updated_at`, which a rename also moves and
@@ -1111,6 +1192,8 @@ export const liveSource: PodSource = {
                     at: listStamp(at),
                     kind: row.type ?? "CHAT",
                     boundTo: typeof bound === "string" ? bound : null,
+                    origin: originOf(row.metadata, row.type),
+                    agentId: row.agent_id ?? null,
                 };
             }),
             next: listed.next_page_token ?? null,
@@ -1142,11 +1225,13 @@ export const liveSource: PodSource = {
             name: string;
             icon_url?: string | null;
         };
+        const job = description?.trim();
         return {
             id: pod.id,
             orgId,
             name: humanizeName(pod.name),
             iconUrl: pod.icon_url ?? null,
+            ...(job ? { description: job } : {}),
             teammate: await teammateOf(pod.id, humanizeName(pod.name), pod.icon_url ?? null),
             subtitle: "just you",
             members: [],
@@ -1161,6 +1246,14 @@ export const liveSource: PodSource = {
 
     async renamePod(podId: string, name: string): Promise<void> {
         await lemma(podId).pods.update(podId, { name });
+        forgetPod(podId);
+    },
+
+    async describePod(podId: string, description: string): Promise<void> {
+        /* Cleared rather than stored blank: an empty string is a description
+           that says nothing, and every place that reads one would have to
+           tell the two apart. */
+        await lemma(podId).pods.update(podId, { description: description.trim() || null });
         forgetPod(podId);
     },
 
@@ -1311,11 +1404,13 @@ export const liveSource: PodSource = {
        query for the whole page rather than one per row, but the list draws no
        grants — they are a detail, and the detail fetch brings them anyway. */
     async listAgents(podId: string): Promise<AgentRow[]> {
-        return agentRows(await podAgents(podId));
+        const [page, teammate] = await Promise.all([podAgents(podId), teammateNameOf(podId)]);
+        return answeringAs(agentRows(page), teammate);
     },
 
     async getAgent(podId: string, name: string): Promise<AgentDetail> {
-        return readAgentDetail(await lemma(podId).agents.get(name));
+        const [raw, teammate] = await Promise.all([lemma(podId).agents.get(name), teammateNameOf(podId)]);
+        return answeringAs([readAgentDetail(raw)], teammate)[0];
     },
 
     async updateAgent(podId: string, name: string, before: AgentDraft, after: AgentDraft): Promise<AgentDetail> {
@@ -1342,7 +1437,10 @@ export const liveSource: PodSource = {
         /* A hundred, where the profile's own summary asks for twelve. This is
            the list itself rather than a count beside a name, and a pod that
            keeps thirty schedules would otherwise silently show eighteen. */
-        return readSchedules(await lemma(podId).schedules.list({ limit: 100 }));
+        const [listed, teammate] = await Promise.all([lemma(podId).schedules.list({ limit: 100 }), teammateNameOf(podId)]);
+        return readSchedules(listed).map((job) => (teammate && job.target.kind === "agent" && isPodDefaultAgent(job.target.name)
+            ? { ...job, target: { ...job.target, label: teammate } }
+            : job));
     },
 
     async listScheduleRuns(podId: string, scheduleId: string): Promise<ScheduleRun[]> {
@@ -1388,9 +1486,10 @@ export const liveSource: PodSource = {
         /* The agents come from the same cached page the rest of this file
            uses, so opening the form on a profile that has already drawn its
            agents costs one request rather than two. */
-        const [agents, workflows] = await Promise.all([
+        const [agents, workflows, teammate] = await Promise.all([
             podAgents(podId).catch(() => [] as unknown[]),
             (lemma(podId).workflows.list({ limit: 100 }) as Promise<Listish>).catch(() => [] as unknown[]),
+            teammateNameOf(podId),
         ]);
         const fromAgents: TargetChoice[] = itemsOf(agents)
             .map((raw) => raw as { name?: string; kind?: string })
@@ -1398,7 +1497,9 @@ export const liveSource: PodSource = {
             .map((agent) => ({
                 kind: "agent" as const,
                 name: agent.name as string,
-                label: displayAgentName(agent.name as string, agent.kind),
+                label: teammate && isPodDefaultAgent(agent.name, agent.kind)
+                    ? teammate
+                    : displayAgentName(agent.name as string, agent.kind),
             }));
         const fromWorkflows: TargetChoice[] = itemsOf(workflows)
             .map((raw) => raw as { name?: string; is_active?: boolean })

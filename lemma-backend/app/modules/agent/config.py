@@ -107,6 +107,14 @@ class AgentSettings(BaseSettings):
             "brief; the rest is truncated at a line boundary with a marker."
         ),
     )
+    agent_attached_document_max_chars: int = Field(
+        default=24000,
+        description=(
+            "Cap on the text of the doc a conversation is attached to, placed "
+            "in the prompt each run so the agent need not read it first; zero "
+            "disables the section."
+        ),
+    )
     agent_memory_section_max_chars: int = Field(
         default=6000,
         description=(

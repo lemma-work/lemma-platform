@@ -86,6 +86,9 @@ def test_pod_toolset_exposes_exactly_these_tools():
         "pod_list_files",
         "pod_read_file",
         "pod_write_file",
+        # Part of a file, in place: the way a doc is edited, rather than a
+        # download, a rewrite and an upload through the workspace.
+        "pod_edit_file",
         # No `pod_upload_file`. Copying a sandbox file into pod files needs a
         # sandbox, and an agent with one has `lemma files upload` already --
         # while POD is implied by a folder or table grant, so an agent can hold
@@ -915,3 +918,88 @@ class TestPodQueryNeverOverstatesItsResult:
         )
 
         assert "total" not in result
+
+
+def _edit_services(stored: list[bytes], checksums: list[str]) -> SimpleNamespace:
+    """A file whose content and checksum move on each read, as a doc open in a
+    browser does while somebody types in it."""
+    reads = iter(zip(stored, checksums, strict=True))
+    current: dict[str, str] = {}
+
+    async def download(_pod_id, path, _ctx):
+        content, sha = next(reads)
+        current["sha"] = sha
+        return SimpleNamespace(path=path, content_sha256=sha), content
+
+    async def metadata(_pod_id, path, _ctx):
+        # What is stored *now*: the checksum of the read after this one, when
+        # the file moves before the write.
+        return SimpleNamespace(
+            path=path, content_sha256=current.pop("next", current["sha"])
+        )
+
+    written = SimpleNamespace(path="/doc.md", size_bytes=10)
+    return SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=download,
+            get_file_by_path=metadata,
+            resolve_update_file=AsyncMock(return_value="plan"),
+            write_update_storage=AsyncMock(),
+            persist_update_file=AsyncMock(return_value=written),
+            finalize_update_file=AsyncMock(),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+        current=current,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pod_edit_file_reapplies_to_what_the_file_says_now(monkeypatch):
+    """Somebody saved between the read and the write: the edit lands on their
+    version rather than writing the stale one over it."""
+    from app.modules.agent.tools.pod.models import FileEdit, PodEditFileRequest
+
+    services = _edit_services(
+        [b"# Draft\n\nold line\n", b"# Draft\n\nold line\n\nadded by a person\n"],
+        ["sha-1", "sha-2"],
+    )
+    services.current["next"] = "sha-2"
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_edit_file(
+        _run_ctx(),
+        PodEditFileRequest(
+            path="/doc.md", edits=[FileEdit(old_text="Draft", new_text="Final")]
+        ),
+    )
+
+    assert result["success"] is True
+    update = services.file.resolve_update_file.call_args.args[1]
+    assert update.content == b"# Final\n\nold line\n\nadded by a person\n"
+
+
+@pytest.mark.asyncio
+async def test_pod_edit_file_writes_nothing_while_the_file_keeps_changing(monkeypatch):
+    from app.modules.agent.tools.pod.models import FileEdit, PodEditFileRequest
+
+    services = _edit_services([b"# Draft\n"] * 3, ["a", "b", "c"])
+    moving = iter(["b", "c", "d"])
+    original = services.file.get_file_by_path
+
+    async def always_moved(pod_id, path, ctx):
+        services.current["next"] = next(moving)
+        return await original(pod_id, path, ctx)
+
+    services.file.get_file_by_path = always_moved
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_edit_file(
+        _run_ctx(),
+        PodEditFileRequest(
+            path="/doc.md", edits=[FileEdit(old_text="Draft", new_text="Final")]
+        ),
+    )
+
+    assert result["success"] is False
+    assert "kept changing" in result["error"]
+    services.file.resolve_update_file.assert_not_awaited()

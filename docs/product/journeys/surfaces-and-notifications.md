@@ -115,6 +115,9 @@ it is asked, not skipped.
   themselves, and shall treat neither a username nor a typed number as proof.
 - Where the sender is still unknown after that, the system shall verify their
   mailbox with an email code before provisioning anything.
+- Where the deployment cannot deliver email to an inbox, the system shall not
+  ask the sender for an address, and shall tell them to add their number to
+  their profile or ask whoever runs this Lemma for an invitation.
 - A bot connected with a customer's own credentials shall keep its existing pod
   access boundaries, and inbound email shall not create an account.
 
@@ -170,6 +173,24 @@ it is asked, not skipped.
 > replayed request carries.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.conversation.get`
+
+### PS-SURF-007 — The owner of a Desktop install chats with the shared Telegram bot by sharing their contact
+**Status:** manual
+
+- When the deployment accepts unverified phone matches and exactly one live
+  account has the sender's self-shared number on its profile, unverified, the
+  system shall link that Telegram chat to that account without an email, and
+  the pod's agent shall answer what they sent.
+- A number verified on another account shall win, and a number claimed by more
+  than one profile shall match nobody.
+- A typed number or somebody else's contact shall prove nothing.
+
+> **Verified by:** module e2e, not the scenario suite, for the reason under
+> PS-SURF-004. `test_telegram_contact_claim_e2e.py` shares a contact against an
+> unverified profile number and follows the replayed message to the pod's
+> agent, and covers the switch, a verified owner, and a server without email.
+
+**Contracts:** `surface.webhook.handle_platform`
 
 ---
 

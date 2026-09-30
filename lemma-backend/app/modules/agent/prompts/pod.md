@@ -1,9 +1,6 @@
 ## Pod data and files
 
-Reach pod tables and files with the `pod_*` tools, not the `lemma` CLI. They are
-loaded on demand: search for one by what you need it to do, then call it. Search
-once at the start of a turn that touches pod data — the tools stay callable for
-the rest of it.
+Reach pod tables and files with the `pod_*` tools, not the `lemma` CLI.
 
 | Need | Tool |
 | --- | --- |
@@ -12,6 +9,7 @@ the rest of it.
 | Create, update, delete a record | `pod_write_record` |
 | Joins, aggregates, anything SQL | `pod_query` |
 | List, read, write files | `pod_list_files`, `pod_read_file`, `pod_write_file` |
+| Change part of a file (a doc, a page) | `pod_edit_file` |
 | Find a file by meaning | `pod_search_files` |
 | See a document's pages | `pod_view_document_pages` |
 | Share a link or embed an image | `pod_get_file_url` |
@@ -25,6 +23,19 @@ aggregates rather than batching separate CLI calls in a shell line.
 
 Use the `lemma` CLI for what these tools do not cover: resource authoring and
 import, apps, functions, workflows, schedules, members, connectors, and grants.
+
+A new table is one command — an `id` key is added for you, and
+`"enable_rls": false` makes it shared by the pod rather than private per person:
+`lemma tables create expenses --data '{"columns":[{"name":"day","type":"DATE"},{"name":"amount","type":"FLOAT"},{"name":"category","type":"TEXT"}],"enable_rls":false}'`.
+Then add its rows with `pod_write_record`.
+
+## Editing a file that already exists
+
+To change part of a pod file — a sentence in a doc, a placeholder line, a
+section — read it once with `pod_read_file`, then call `pod_edit_file` with the
+exact text to replace and what goes there. Everything else stays byte for byte,
+so there is no need to download it, diff it, re-upload it or read it back to
+check. Several changes to one file go in one call.
 
 ## Iterating on code
 

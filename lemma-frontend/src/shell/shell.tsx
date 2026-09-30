@@ -1,4 +1,5 @@
 "use client";
+import { docTitle } from "@/library/doc-title";
 import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
 import { settingsFromQuery } from "@/site/legacy-address";
 
@@ -10,26 +11,50 @@ import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
 import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
-import { MinimizeIcon, ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, CloseIcon, ChatIcon, ProfileIcon, HistoryIcon, FileIcon, TableIcon, LibraryIcon, AppsIcon, AppIcon, SearchIcon, ComputerIcon, LinkIcon } from "@/ui/icons";
+import { MinimizeIcon, ChevronUpIcon, SidebarIcon, MenuIcon, PlusIcon, SearchIcon, LinkIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION } from "@/data";
-import type { Tab } from "@/data";
+import { DocSpace, isDoc } from "@/docs/doc-space";
+import { CommentsButton } from "@/docpages/comments/button";
+import { DocAskContext } from "@/docs/doc-ask";
+import { AllView } from "@/space/all-view";
+import { SpaceNav } from "@/space/space-nav";
+import { ShareSheet, type ShareSubject } from "@/space/share-sheet";
+import { SIGN_IN_EVENT, type SignInRequest } from "@/computer/sign-in-bridge";
+import { SignInPane } from "@/computer/sign-in-pane";
+import { AgentPage } from "@/space/agent-page";
+import { WorkflowPage } from "@/space/workflow-page";
+import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
+import { SettingsPage, type SettingsSection as SpaceSettingsSection } from "@/space/settings-page";
+import { WorkflowsPage } from "@/space/workflows-page";
+import { Home } from "@/space/home";
+import { ChatsPage } from "@/space/chats-page";
+import { RunPage } from "@/space/run-page";
+import { AboutPage, isAboutSection, type AboutSection } from "@/space/about-page";
+import { TeammateRail } from "@/space/teammate-rail";
+import { TeammatesPage } from "@/space/teammates-page";
+import { TeammateFace } from "@/space/teammate-face";
+import { owedByPod } from "@/space/teammates";
+import type { SpaceView } from "@/data";
+import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
+import type { FileContent, Tab } from "@/data";
 import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
-import { NOWHERE, readAddress, tabFromId, writeAddress } from "./address";
+import { makePage } from "@/docpages/templates";
+import { renamePage } from "@/docpages/rename";
+import { moveComments } from "@/docpages/comments/store";
+import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
-import { OrgSwitcher } from "./org-switcher";
-import { Rail } from "./rail";
 import { Mark } from "./mark";
 import { Surfaces } from "./surfaces";
 import { Notifications } from "./notifications";
-import { WaitingInbox } from "@/workflow/waiting-inbox";
+import { WaitingInbox, gather } from "@/workflow/waiting-inbox";
 import { SearchPalette } from "@/search/palette";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
 import { AddPeople } from "./add-people";
@@ -40,7 +65,6 @@ import { HiringView, type FirstMove } from "@/stage/hiring";
 import { ArrivalView } from "@/org/arrival-view";
 import { ConversationPane } from "@/thread/conversation";
 import { LiveConversation } from "@/thread/live-conversation";
-import { ProfilePane } from "@/stage/profile";
 import { History } from "@/thread/history";
 import { AllConversations } from "@/thread/all-conversations";
 import { refreshConversationLists } from "@/thread/conversation-list";
@@ -67,9 +91,32 @@ import { AppFrameView } from "@/desktop/app-frame";
  *  either vanishes mid-collapse or sits there finished. */
 const TAB_CLOSE_MS = 180;
 
+/* Layout effects run on the client only; on the server this is the plain
+   effect, which does nothing there either. */
+const useBeforePaint = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
 const ORG_KEY = key("org");
 const TAB_KEY = key("tabs");
 const LAST_POD_KEY = key("last-pod");
+
+/** The list a thing lives in, for a breadcrumb that has no history to go on. */
+function homeListOf(tab: Tab): string | null {
+    switch (tab.kind) {
+        case "table":
+        case "record":
+            return "space:tables";
+        case "file":
+            /* Pages lists the space's markdown; personal files are in Files. */
+            return /\.md$/i.test(tab.path) && !tab.path.startsWith("/me/") ? "space:pages" : "space:files";
+        case "app":
+            return "space:apps";
+        case "run":
+        case "workflow":
+            return "space:workflows";
+        default:
+            return null;
+    }
+}
 
 function readJson<T>(key: string, fallback: T): T {
     try {
@@ -80,27 +127,49 @@ function readJson<T>(key: string, fallback: T): T {
     }
 }
 
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
+    .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
+
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
     const incoming = useSearchParams();
     const [orgId, setOrgId] = useState<string | null>(() => incoming.get("org") ?? readJson<string | null>(ORG_KEY, null));
-    const [entrySection] = useState(() => incoming.get("section") ?? undefined);
     /** Where the address bar says you are. `address.ts` has the grammar and
      *  the reasoning; what matters here is that reading it through
      *  `usePathname` makes Back and Forward work for nothing, because the
      *  shell derives from the URL rather than keeping a second copy of it. */
     const address = useMemo(() => readAddress(pathname), [pathname]);
-    const podId = preview ? previewPod : address.podId;
+    /** Zoomed out: every teammate at once, and no space open. The tour keeps
+     *  its own copy, because it never touches the address bar. */
+    const [previewTeam, setPreviewTeam] = useState(false);
+    const atTeam = preview ? previewTeam : Boolean(address.team);
+    const podId = atTeam ? null : preview ? previewPod : address.podId;
     const goToPod = useCallback((id: string | null) => {
-        if (preview) { setPreviewPod(id); return; }
+        if (preview) { setPreviewTeam(false); setPreviewPod(id); return; }
         // Native history integrates with Next and preserves the mounted workspace layout.
         window.history.pushState(null, "", writeAddress({ ...NOWHERE, podId: id }));
     }, [preview]);
+    /** The teammate just zoomed out of, so its card on the Teammates page
+     *  can say where you were. */
+    const [leftFrom, setLeftFrom] = useState<string | null>(null);
+    const goToTeam = useCallback((from: string | null) => {
+        setLeftFrom(from);
+        if (preview) { setPreviewTeam(true); return; }
+        window.history.pushState(null, "", writeAddress(TEAMMATES));
+    }, [preview]);
+    /** Where a card was pressed, so the space it opens grows out of it. */
+    const zoomFrom = useRef<DOMRect | null>(null);
+    const mainRef = useRef<HTMLElement>(null);
     const [selection, setSelection] = useState<{ id: string | null; generation: number }>({ id: null, generation: 0 });
     const conversationId = selection.id;
+    /** Words handed to the Chat tab to send, and the bot to start the
+     *  conversation with. Cleared by any other change of conversation, so a
+     *  hand-over never outlives the new chat it was for. */
+    const [handoff, setHandoff] = useState<{ text: string; createWith?: Record<string, unknown>; id: number; podId: string; sent: boolean } | null>(null);
     const setConversationId = useCallback((id: string | null) => {
+        setHandoff(null);
         setSelection(previous => ({ id, generation: previous.generation + 1 }));
     }, []);
     /** What a widget, an app or the reveal asked the app to put in the
@@ -222,6 +291,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        one other door into that sheet is mounted beside the people dialog,
        which is here for the same reason. */
     const [reaching, setReaching] = useState(() => incoming.get('reach') === '1');
+    /** Which part of About a link asked for. Counted, so asking for the same
+     *  section twice scrolls to it twice. An old `?section=` still lands. */
+    const [aboutSection, setAboutSection] = useState<{ at: AboutSection | null; id: number }>(() => {
+        const asked = incoming.get("section");
+        return { at: isAboutSection(asked) ? asked : null, id: 0 };
+    });
 
     // Only the explicitly labelled, isolated product-tour document accepts this prop.
     // These are the same UI states reached by the shell's own buttons. Each step
@@ -230,7 +305,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     // teammate is hired, leaving the space to what the step is about.
     useEffect(() => {
         if (!preview || demoStep === undefined) return;
+        setPreviewTeam(false);
         setPreviewPod("kit");
+        setAboutSection((was) => ({ at: demoStep === 2 ? "skills" : null, id: was.id + 1 }));
         setSelection(previous => previous.id === null ? previous : { id: null, generation: previous.generation + 1 });
         setSettings(null);
         setSearching(false);
@@ -299,6 +376,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         staleTime: 5 * 60_000,
     });
 
+    /* What each teammate is waiting on you for: the queue the inbox beside
+       the bell reads, under the same key, so the rail's badges and the
+       Teammates page cost nothing it was not already fetching. Not in the
+       tour, whose teammates say what they are waiting on in their own words. */
+    const waiting = useQuery({
+        queryKey: ["workflow-waiting", (pods.data ?? []).map((one) => one.id).join(",")],
+        queryFn: () => gather(pods.data ?? [], source.label === "sample"),
+        enabled: !preview && (pods.data?.length ?? 0) > 0,
+        staleTime: 60_000,
+    });
+    const owed = useMemo(() => owedByPod(waiting.data?.rows ?? []), [waiting.data]);
+
     /* Changing teammate drops the conversation you were reading — unless the
        address named one, which is exactly what a link to a conversation is.
        Read from `window.location` rather than from `address`, so this stays an
@@ -309,7 +398,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         setSelection(previous => ({ id: named, generation: previous.generation + 1 }));
     }, [podId]);
 
-    const access = podAccess(podId, pods.data, linkedPod, activeOrgId ? lastPods[activeOrgId] ?? null : null);
+    /* Zoomed out, nobody is chosen — not even the one a bare `/t` would open. */
+    const access = atTeam
+        ? { state: "ready" as const, pod: null }
+        : podAccess(podId, pods.data, linkedPod, activeOrgId ? lastPods[activeOrgId] ?? null : null);
     const listedPod = access.pod;
     const stranger = access.state === "denied" ? podId : null;
     /* Keyed by the pod's own organization, not the active one: a link into
@@ -391,7 +483,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     });
 
     const allTabs: Tab[] = useMemo(() => {
-        const base = podTabs.data ?? [];
+        const base = [...SPACE_TABS, ...(podTabs.data ?? [])];
         const extras = (pod && extraTabs[pod.id]) || [];
         if (extras.length === 0) return base;
         /* Opened tabs sit before the profile, which stays the last thing. */
@@ -399,8 +491,24 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         return at < 0 ? [...base, ...extras] : [...base.slice(0, at), ...extras, ...base.slice(at)];
     }, [podTabs.data, pod, extraTabs]);
 
-    const activeTabId = (pod && tabs[pod.id]) || "conversation";
+    /* The old profile is About now: an address or a search result that
+       still asks for it lands on the teammate's own page. */
+    const rawTabId = (pod && tabs[pod.id]) || "space:home";
+    const activeTabId = rawTabId === "profile" ? "space:about" : rawTabId;
     const activeTab: Tab | undefined = allTabs.find((tab) => tab.id === activeTabId) ?? allTabs[0];
+
+    /* The list you were last on in each space, which is where anything you
+       open next sits beside. */
+    const [lastList, setLastList] = useState<Record<string, string>>({});
+    useEffect(() => {
+        if (!pod || activeTab?.kind !== "space") return;
+        const id = activeTab.id;
+        setLastList(previous => previous[pod.id] === id ? previous : { ...previous, [pod.id]: id });
+    }, [pod, activeTab]);
+    const activeKind = useRef(activeTab?.kind);
+    activeKind.current = activeTab?.kind;
+    const lastListRef = useRef(lastList);
+    lastListRef.current = lastList;
 
     const [paneWidth, setPaneWidth] = useState(() => clampPaneWidth(readJson<unknown>(key("sidebar-width"), 52)));
     useEffect(() => {
@@ -410,8 +518,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const [expandedTab, setExpandedTab] = useState<string | null>(null);
     const expanded = Boolean(pod && expandedTab === pod.id + "|" + activeTab?.id);
     const origin = pod && activeTab ? tabOrigins[pod.id + "|" + activeTab.id] : undefined;
-    const layout = layoutForTab(activeTab?.id ?? "conversation", expanded,
-        allTabs.some(tab => tab.id === origin) ? origin : "conversation");
+    /* Where the open thing came from: a list, or the conversation. */
+    const beside = origin && allTabs.some(tab => tab.id === origin) ? origin : (pod && lastList[pod.id]) || "space:home";
+    /* Only the conversation keeps a thing beside it — a canvas next to the
+       chat that made it. Opened from a list, a page takes the whole stage and
+       the list is one step back: in the breadcrumb, and in the browser's Back. */
+    const layout = layoutForTab(activeTab?.id ?? "space:home", expanded,
+        beside === "conversation" ? beside : activeTab?.id ?? beside);
+    /* The list named in the breadcrumb: the one it was opened from, or — for
+       a link opened cold, which came from nowhere — the list it lives in. */
+    const fromList = origin && origin.startsWith("space:") && origin !== "space:home" ? origin : activeTab ? homeListOf(activeTab) : null;
+    const cameFrom = fromList && activeTab?.kind !== "space" && activeTab?.kind !== "conversation"
+        ? allTabs.find(tab => tab.id === fromList) : undefined;
     const rightTab = allTabs.find(tab => tab.id === layout.right);
     /* On a phone the right pane is a sheet over the conversation, lowered to
        its bar or raised. Kept per tab so opening a different resource, or
@@ -421,6 +539,21 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const [peekedTab, setPeekedTab] = useState<string | null>(null);
     const sheetLowered = Boolean(phone && pod && rightTab && peekedTab === pod.id + "|" + rightTab.id);
     const isVisible = (id: string) => id === layout.main || id === layout.right;
+    /* The thing on the stage, which the floating chat is about. None while the
+       conversation itself is on screen: it is the chat already. */
+    const chat = useFloatingChat();
+    const chatResource: ChatResource | null = !pod || stranger || isVisible("conversation") ? null
+        : activeTab?.kind === "file" ? { kind: "file", name: activeTab.path, label: activeTab.label }
+        : activeTab?.kind === "app" ? { kind: "app", name: activeTab.id.replace(/^app:/, ""), label: activeTab.label }
+        : activeTab?.kind === "table" ? { kind: "table", name: activeTab.name, label: activeTab.label }
+        : activeTab?.kind === "record" ? { kind: "table", name: activeTab.table, label: readableName(activeTab.table) }
+        : null;
+    const [shareOpen, setShareOpen] = useState(false);
+    const [settingsSection, setSettingsSection] = useState<SpaceSettingsSection>("agents");
+    const shareSubject: ShareSubject = !chatResource ? { kind: "space" }
+        : chatResource.kind === "file" ? { kind: "file", path: chatResource.name, label: chatResource.label }
+        : { kind: chatResource.kind === "app" ? "app" : "table", label: chatResource.label };
+    const docAsk = useMemo(() => chatResource && pod ? { label: pod.name, ask: chat.ask } : null, [chatResource !== null, pod?.name, chat.ask]);  
     const paneProps = (id: string) => ({
         hidden: !isVisible(id),
         "data-side": id === layout.right ? "right" : "left",
@@ -431,8 +564,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     };
 
     const openTab = useCallback(
-        (tab: Tab, origin = "conversation") => {
+        (tab: Tab, origin = "conversation", besideChat = false) => {
             if (!pod) return;
+            /* Opened from inside Chat, a thing sits beside the conversation.
+               Opened from anywhere else it takes the stage, and remembers the
+               list you were on so the breadcrumb can take you back to it. */
+            if (origin === "conversation" && !besideChat && activeKind.current !== "conversation") origin = lastListRef.current[pod.id] ?? "space:home";
             setExtraTabs((previous) => {
                 const existing = previous[pod.id] ?? [];
                 if (existing.some((entry) => entry.id === tab.id)) return previous;
@@ -443,6 +580,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             setPeekedTab(null);
             setTabs(previous => ({ ...previous, [pod.id]: tab.id }));
         },
+        /* Stable on purpose: the effect that applies the address depends on
+           this, and a callback that changed with the view re-ran it on every
+           click — putting back whatever the URL still said. */
         [pod],
     );
 
@@ -492,7 +632,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     );
 
     const openTable = useCallback(
-        (name: string) => openTab({ id: "table:" + name, kind: "table", label: readableName(name), name }),
+        (name: string, origin?: string) => openTab({ id: "table:" + name, kind: "table", label: readableName(name), name }, origin),
         [openTab],
     );
 
@@ -525,25 +665,141 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        somebody glanced back at the conversation. */
     const [openAgentName, setOpenAgentName] = useState<string | null>(null);
 
+    const openAbout = useCallback((at: AboutSection | null) => {
+        if (!pod) return;
+        setAboutSection((was) => ({ at, id: was.id + 1 }));
+        setExpandedTab(null);
+        setPeekedTab(null);
+        setTabs((previous) => ({ ...previous, [pod.id]: "space:about" }));
+    }, [pod]);
+
     /* Agents are a section of the teammate's profile rather than a view of
        their own — a tab per teammate for a list most pods have three rows of
        was a lot of permanent furniture. So this lands on the profile and names
        which agent to open there. */
     const openAgent = useCallback(
         (name: string) => {
+            /* The space's own agent is the teammate, and its page is About. */
+            if (isPodDefaultAgent(name)) { openAbout(null); return; }
             setOpenAgentName(name);
-            if (pod) setTabs((previous) => ({ ...previous, [pod.id]: "profile" }));
+            /* A bot opens as its own page: who it is, a box to ask it, and
+               what it is made of beside that. */
+            openTab({ id: "bot:" + name, kind: "bot", label: displayAgentName(name), name });
+        },
+        [openTab, openAbout],
+    );
+
+    const openRun = useCallback(
+        (runId: string, label: string) => openTab({ id: "run:" + runId, kind: "run", label: label === "Workflow run" ? label : label + " · run", runId }),
+        [openTab],
+    );
+    /* A tab rebuilt from an address knows only its id; the page it shows
+       learns the proper name and hands it back here. */
+    const renameTab = useCallback(
+        (tabId: string, label: string) => {
+            if (!pod) return;
+            setExtraTabs((previous) => {
+                const list = previous[pod.id] ?? [];
+                if (!list.some((entry) => entry.id === tabId && entry.label !== label)) return previous;
+                return { ...previous, [pod.id]: list.map((entry) => (entry.id === tabId ? { ...entry, label } : entry)) };
+            });
         },
         [pod],
+    );
+    const openWorkflow = useCallback(
+        (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: name, name }),
+        [openTab],
     );
 
     const openFile = useCallback(
         (path: string, origin = "conversation") => {
-            const label = path.split("/").filter(Boolean).pop() ?? path;
+            const label = docTitle(path);
             openTab({ id: "file:" + path, kind: "file", label, path }, origin);
         },
         [openTab],
     );
+
+    /* A page is a markdown file, made where the space keeps its pages and
+       opened straight away with the caret in it. */
+    const newPage = useCallback(async () => {
+        if (!pod) return;
+        /* Named like a person would: Untitled, Untitled 2. Typing the title
+           renames nothing, but a list of stamped names is unreadable. */
+        let taken = new Set<string>();
+        try {
+            const listed = await source.listLibrary(pod.id, "files", "/pages");
+            taken = new Set(listed.items.map(item => item.name.toLowerCase()));
+        } catch {
+            /* No listing: names are then found by trying, below. */
+        }
+        /* Create-only, so a stale or failed listing can cost a retry but never
+           an existing page. Thrown on purpose — the button that asked shows
+           why it failed. */
+        const path = await makePage((at, text) => source.createFile(pod.id, at, text), "Untitled", "# Untitled\n\n", taken);
+        void queryClient.invalidateQueries({ queryKey: ["library", pod.id] });
+        openFile(path, "space:pages");
+    }, [pod, openFile, queryClient]);
+
+    /** A page's file follows its title. Moves the file (and what it owns —
+     *  see `docpages/rename.ts`), then swaps the open tab in place: same pane,
+     *  so the editor with its caret is not rebuilt, and the address replaced
+     *  rather than pushed. Returns the new path. */
+    const renamePageAt = useCallback(async (from: string, title: string): Promise<string> => {
+        if (!pod) return from;
+        const podId = pod.id;
+        const to = await renamePage({
+            move: (a, b) => source.renameFile(podId, a, b),
+            read: async (at) => {
+                try { return (await source.readFile(podId, at)).text ?? null; }
+                catch (error) { if ((error as { statusCode?: number } | null)?.statusCode === 404) return null; throw error; }
+            },
+            write: (at, text) => source.writeFile(podId, at, text),
+            moveComments: (a, b) => moveComments(podId, a, b),
+        }, from, title);
+        if (to === from) return from;
+        const was = queryClient.getQueryData<FileContent>(["file", podId, from]);
+        if (was) queryClient.setQueryData<FileContent>(["file", podId, to], { ...was, path: to, name: to.slice(to.lastIndexOf("/") + 1) });
+        const oldId = "file:" + from;
+        const newId = "file:" + to;
+        renamed.current[podId + "|" + oldId] = newId;
+        replaceNext.current = true;
+        setExtraTabs((previous) => ({
+            ...previous,
+            [podId]: (previous[podId] ?? []).map((tab) => (tab.id === oldId && tab.kind === "file"
+                ? { ...tab, id: newId, path: to, label: docTitle(to), pane: tab.pane ?? tab.id }
+                : tab)),
+        }));
+        setTabOrigins((previous) => {
+            const key = podId + "|" + oldId;
+            if (!(key in previous)) return previous;
+            const { [key]: origin, ...rest } = previous;
+            return { ...rest, [podId + "|" + newId]: origin };
+        });
+        setTabs((previous) => (previous[podId] === oldId ? { ...previous, [podId]: newId } : previous));
+        void queryClient.invalidateQueries({ queryKey: ["library", podId] });
+        void queryClient.invalidateQueries({ queryKey: ["file", podId, to] });
+        return to;
+    }, [pod, queryClient]);
+
+    /* A sign-in card asks for the site; it opens beside whatever you are on,
+       as the browser itself with one thin bar, rather than a dialog. */
+    useEffect(() => {
+        const open = (event: Event) => {
+            const ask = (event as CustomEvent<SignInRequest>).detail;
+            if (!pod || !ask) return;
+            event.preventDefault();
+            openTab({
+                id: "signin:" + ask.toolCallId,
+                kind: "signin",
+                label: "Sign in · " + ask.host,
+                conversationId: ask.conversationId,
+                toolCallId: ask.toolCallId,
+                host: ask.host,
+            }, activeKind.current === "conversation" ? "conversation" : undefined);
+        };
+        window.addEventListener(SIGN_IN_EVENT, open);
+        return () => window.removeEventListener(SIGN_IN_EVENT, open);
+    }, [pod, openTab]);
 
     /** A link, honoured.
      *
@@ -571,6 +827,21 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
      *  remembered. So: an address is claimed here first, and only a claimed
      *  address is mirrored. */
     const applied = useRef<string | null>(null);
+    /* The tab an address has just asked for. Until it is the one on screen,
+       the mirror below would read the tab being replaced and write *its*
+       address back — which the next pass then applied, undoing the link. */
+    const pendingTab = useRef<string | null>(null);
+    /* The same for a conversation: Back to an older chat sets its id a render
+       after the tab, and the mirror would otherwise write the chat being left
+       over the one asked for — as a new history entry. */
+    const pendingConversation = useRef<string | null>(null);
+    /* Pages renamed in this session, old tab id to new, so an address still in
+       the browser's history (Back to the page under its old name) lands on
+       the page instead of on a file that is not there any more. */
+    const renamed = useRef<Record<string, string>>({});
+    /* The next address written replaces the current one instead of pushing:
+       a rename, or an old address redirected, is not somewhere you went. */
+    const replaceNext = useRef(false);
     useEffect(() => {
         if (preview) return;
         if (!pod) return;
@@ -592,35 +863,49 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         if (address.podId && address.podId !== pod.id) return;
         applied.current = pathname;
         if (!address.tabId) return;
+        let wanted = address.tabId;
+        for (let hops = 0; renamed.current[pod.id + "|" + wanted] && hops < 20; hops++) wanted = renamed.current[pod.id + "|" + wanted];
+        if (wanted !== address.tabId) replaceNext.current = true;
 
-        setTabs((previous) => (previous[pod.id] === address.tabId ? previous : { ...previous, [pod.id]: address.tabId! }));
+        setTabs((previous) => (previous[pod.id] === wanted ? previous : { ...previous, [pod.id]: wanted }));
         if (address.agentName) setOpenAgentName(address.agentName);
-        if (address.conversationId && address.conversationId !== selection.id) setConversationId(address.conversationId);
+        if (address.conversationId && address.conversationId !== selection.id) {
+            pendingConversation.current = address.conversationId;
+            setConversationId(address.conversationId);
+        }
 
-        const known = allTabs.some((tab) => tab.id === address.tabId);
-        const rebuilt = known ? null : tabFromId(address.tabId);
+        const known = allTabs.some((tab) => tab.id === wanted);
+        const rebuilt = known ? null : tabFromId(wanted);
         if (rebuilt) openTab(rebuilt);
+        /* Only a tab that will exist: one that never arrives would hold the
+           mirror still for good. */
+        if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
     }, [pathname, address, pod, allTabs, openTab, selection.id, setConversationId, preview]);
 
     /** The address bar, kept in step with where you actually are.
      *
-     *  `replaceState`, never `push`. The README's one architectural rule is
-     *  that tabs change the stage beside the conversation and do not compete
-     *  with it — "if that ever stops being true, the tabs have become
-     *  navigation and the product is worse". Putting a tab switch in the
-     *  history stack is precisely making them navigation, so Back moves
-     *  between teammates (`goToPod` pushes) and glancing between things you
-     *  already have open leaves no trace, the way switching browser tabs does
-     *  not.
+     *  Moving to a different view — a list to a page, Home to a workflow, one
+     *  chat to another — is navigation, and it is pushed, so the browser's
+     *  Back walks back through the app instead of out of it. The effect above
+     *  reads the popped address like any other link, and the screen follows.
      *
-     *  This is also what answers a bare `/t/{pod}`: the tab is restored from
-     *  `tabs`, and the URL is rewritten to name it, so the address bar is
-     *  never less specific than the screen. */
+     *  Everything else replaces: the same view getting more specific (a new
+     *  chat receiving its id) or a bare `/t/{pod}` being filled in with the
+     *  view restored from `tabs`. Neither is somewhere you went, and a Back
+     *  that stepped through them would feel stuck. */
     useEffect(() => {
         if (preview) return;
         if (!pod || !activeTab) return;
 
         if (applied.current !== pathname) return;
+        if (pendingTab.current) {
+            if (pendingTab.current !== activeTab.id) return;
+            pendingTab.current = null;
+        }
+        if (pendingConversation.current) {
+            if (activeTab.kind === "conversation" && pendingConversation.current !== conversationId) return;
+            pendingConversation.current = null;
+        }
 
         const url = writeAddress({
             podId: pod.id,
@@ -633,7 +918,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         });
         if (url === pathname) return;
         applied.current = url;
-        window.history.replaceState(null, "", url);
+        if (replaceNext.current) { replaceNext.current = false; window.history.replaceState(null, "", url); }
+        else if (isNewPlace(readAddress(pathname), readAddress(url))) window.history.pushState(null, "", url);
+        else window.history.replaceState(null, "", url);
     }, [pod, activeTab, conversationId, openAgentName, pathname, preview]);
 
     useEffect(() => {
@@ -707,6 +994,16 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
      *  Nothing here sends. It fills the box and brings it forward, and the
      *  person decides. */
     const asks = useRef(0);
+    /* Start a conversation somewhere that is not one — Home, a bot's page —
+       by handing the words to the Chat tab, which creates it and sends them. */
+    const startChat = useCallback((text: string, createWith?: Record<string, unknown>) => {
+        if (!pod) return;
+        asks.current += 1;
+        setConversationId(NEW_CONVERSATION);
+        if (source.label === "live") setHandoff({ text, createWith, id: asks.current, podId: pod.id, sent: false });
+        else setFill({ text, id: asks.current, podId: pod.id });
+        pickTab("conversation");
+    }, [pod, setConversationId, pickTab]);
     const collapseCall = huddle.collapse;
     useEffect(() => {
         const listen = (event: MessageEvent) => {
@@ -750,6 +1047,27 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     useEffect(() => { selectedTabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [activeTab?.id]);
     const [visitedLibraries, setVisitedLibraries] = useState<Record<string, boolean>>({});
     useEffect(() => { if (pod && (activeTab?.kind === "library" || rightTab?.kind === "library")) setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind, rightTab?.kind]);
+
+    /* Zooming in: the space grows out of the card that was pressed, and its
+       sidebar slides in beside it. Once, on arrival — not on every change of
+       view inside the space. */
+    useBeforePaint(() => {
+        const from = zoomFrom.current;
+        if (!from || atTeam || !pod) return;
+        zoomFrom.current = null;
+        const main = mainRef.current;
+        if (!main || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+        const box = main.getBoundingClientRect();
+        main.style.transformOrigin = `${from.left + from.width / 2 - box.left}px ${from.top + from.height / 2 - box.top}px`;
+        main.animate(
+            [{ transform: "scale(0.9)", opacity: 0 }, { transform: "none", opacity: 1 }],
+            { duration: 320, easing: "cubic-bezier(.2,.8,.2,1)" },
+        );
+        document.querySelector(".side__space")?.animate(
+            [{ transform: "translateX(-12px)", opacity: 0 }, { transform: "none", opacity: 1 }],
+            { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)" },
+        );
+    }, [atTeam, pod?.id]);
 
     if (orgs.isPending) {
         return <WorkspaceLoading />;
@@ -799,12 +1117,19 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     /* `focusedView` is the view asking for the whole pane; `compactView` is
        only about whether the header is on screen. They were one flag, which
        is why hiding the header by hand would also have restyled the pane. */
+    /* Closing a tab now happens from Recents, which does not exist yet; kept
+       so the tab machinery underneath stays whole. */
+    void closingTabs;
     const focusedView = !rightTab && (activeTab?.kind === "apps" || activeTab?.kind === "app" || activeTab?.kind === "file" || activeTab?.kind === "profile" || activeTab?.kind === "library" || activeTab?.kind === "table" || activeTab?.kind === "record" || activeTab?.kind === "computer");
     const compactView = focusedView || headerHidden;
     const activeKey = pod && activeTab ? pod.id + "|" + activeTab.id : "";
+    /* The teammate's own column beside the rail: whenever one is open, even
+       while it is still arriving, so the rail does not jump sideways. Not
+       while hiring, which is about somebody new rather than the one behind it. */
+    const spaceOpen = !atTeam && !stranger && !hiring && Boolean(pod ?? podId);
 
     return (
-        <div className={`shell${collapsed ? " shell--collapsed" : ""}${mobileOpen ? " shell--mobile-open" : ""}${sidebarHidden ? " shell--hidden" : ""}`}>
+        <div className={`shell${collapsed ? " shell--collapsed" : ""}${mobileOpen ? " shell--mobile-open" : ""}${sidebarHidden ? " shell--hidden" : ""}${spaceOpen ? "" : " shell--rail-only"}`}>
             {searching && pod && (
                 <SearchPalette
                     podId={pod.id}
@@ -818,7 +1143,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         openRecord,
                         openApp: (name) => pickTab("app:" + name),
                         openAgent,
-                        openProfile: () => pickTab("profile"),
+                        openProfile: () => openAbout(null),
                         discuss: (kind, name) => {
                             void (async () => {
                                 const id = await discussion.open(kind, name);
@@ -834,48 +1159,78 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             {!preview && <ReconnectStrip />}
             {mobileOpen && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
             <aside className="side" id="app-sidebar" aria-label="Workspace navigation">
-                <div className="side__brand"><LemmaLogo compact={collapsed && !mobileOpen} /><button className="icon-button sidebar-toggle" title={collapsed ? "Expand sidebar (⌘\\)" : "Collapse sidebar (⌘\\)"} aria-label={mobileOpen ? "Close navigation" : collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} aria-controls="app-sidebar" onClick={() => { if (mobileOpen) setMobileOpen(false); else { setSidebarHidden(false); setCollapsed(v => !v); } }}><SidebarIcon size={19} /></button></div>
-                <OrgSwitcher
-                    compact={collapsed && !mobileOpen}
-                    orgs={orgs.data}
-                    activeId={activeOrgId}
-                    onPick={(id) => {
-                        setOrgId(id);
-                        goToPod(null);
-                        setConversationId(null);
-                    }}
-                />
-                <Rail
-                    compact={collapsed && !mobileOpen}
+                <TeammateRail
                     pods={pods.data ?? []}
-                    /* Nothing is highlighted while the door is up: `pod` is a
-                       stand-in there, and marking it would say you are in a
-                       teammate you are looking at from outside. */
-                    activeId={stranger ? null : pod?.id ?? null}
+                    activeId={atTeam || stranger || hiring ? null : pod?.id ?? podId}
+                    atTeam={atTeam && !hiring}
+                    hiring={hiring}
+                    owed={owed}
+                    orgName={activeOrg?.name ?? "this organization"}
+                    onTeam={() => {
+                        setHiring(false);
+                        setSettings(null);
+                        setMobileOpen(false);
+                        if (!atTeam) goToTeam(pod?.id ?? null);
+                    }}
                     onPick={(id) => {
-                        goToPod(id);
-                        setConversationId(null);
                         setSettings(null);
                         setHiring(false);
                         setMobileOpen(false);
+                        /* Its own face, from inside its space, is the way home. */
+                        if (!atTeam && id === pod?.id) { pickTab("space:home"); return; }
+                        goToPod(id);
+                        setConversationId(null);
                     }}
-                    onHire={() => { setSettings(null); setHiring(true); setMobileOpen(false); }}
-                    orgId={activeOrgId}
+                    onHire={activeOrgId ? () => { setSettings(null); setHiring(true); setMobileOpen(false); } : null}
+                    foot={<>
+                        {/* Above the account, because it is about the account — and
+                            silent unless the allowance is close or spent. */}
+                        <AllowanceNote orgId={activeOrgId} compact onOpenPlan={() => { setSettings("plan"); setMobileOpen(false); }} />
+                        <HumanProfile compact onOpen={() => { setSettings("account"); setMobileOpen(false); }} />
+                    </>}
                 />
-                <div className="side__foot">
-                    {/* Above the account, because it is about the account — and
-                        silent unless the allowance is close or spent. */}
-                    <AllowanceNote
-                        orgId={activeOrgId}
-                        compact={collapsed && !mobileOpen}
-                        onOpenPlan={() => { setSettings("plan"); setMobileOpen(false); }}
-                    />
-                    {collapsed && !mobileOpen && <button className="side__settings sidebar-hide" title="Hide sidebar" aria-label="Hide sidebar" onClick={() => setSidebarHidden(true)}><CloseIcon size={18} /></button>}
-                    <HumanProfile compact={collapsed && !mobileOpen} onOpen={() => { setSettings("account"); setMobileOpen(false); }} />
-                </div>
+                {spaceOpen && (
+                    <div className="side__space" role="group" aria-label={(pod?.name ?? "This teammate") + "’s space"}>
+                        {pod && <>
+                            <div className="side__head">
+                                {/* The top of a space is whose it is. Its face opens
+                                    the teammate itself; switching is the rail's. */}
+                                <button className="side__mate" aria-current={activeTab?.id === "space:about" ? "page" : undefined}
+                                    title={"About " + pod.name} onClick={() => { openAbout(null); setMobileOpen(false); }}>
+                                    <TeammateFace pod={pod} size={36} />
+                                    <span className="side__mate-text">
+                                        <span>{pod.name}</span>
+                                        {pod.description && <small>{pod.description}</small>}
+                                    </span>
+                                </button>
+                                {/* On a phone the toolbar is already full; the
+                                    drawer has space for it. */}
+                                <button className="icon-button side__search" title="Search" aria-label="Search"
+                                    onClick={() => { setSearching(true); setMobileOpen(false); }}>
+                                    <SearchIcon size={18} />
+                                </button>
+                                <button className="icon-button sidebar-toggle" title={mobileOpen ? "Close navigation" : "Collapse sidebar (⌘\\)"}
+                                    aria-label={mobileOpen ? "Close navigation" : "Collapse sidebar"} aria-controls="app-sidebar"
+                                    onClick={() => { if (mobileOpen) setMobileOpen(false); else { setSidebarHidden(false); setCollapsed(true); } }}>
+                                    <SidebarIcon size={19} />
+                                </button>
+                            </div>
+                            <SpaceNav
+                                pod={pod}
+                                activeId={activeTab?.id ?? "space:home"}
+                                recents={((pod && extraTabs[pod.id]) || []).slice().reverse()}
+                                onPick={(id) => { pickTab(id); setMobileOpen(false); }}
+                                onWorkflows={() => { pickTab("space:workflows"); setMobileOpen(false); }}
+                                onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); setMobileOpen(false); }}
+                                openChatId={openConversationId}
+                                onOpenChat={(id) => { setConversationId(id); pickTab("conversation"); setMobileOpen(false); }}
+                            />
+                        </>}
+                    </div>
+                )}
             </aside>
 
-            <main className="main" inert={mobileOpen}>
+            <main className="main" inert={mobileOpen} ref={mainRef}>
                 {sidebarHidden && <button className="desktop-nav-toggle icon-button" aria-label="Show sidebar" title="Show sidebar" onClick={() => { setSidebarHidden(false); setCollapsed(false); }}><SidebarIcon size={21} /></button>}
                 <button className="mobile-nav-toggle icon-button" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar" onClick={() => setMobileOpen(true)}><MenuIcon size={22} /></button>
                 {settings && <SettingsModal
@@ -908,6 +1263,28 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             }}
                         />
                     </div>
+                )}
+                {atTeam && !hiring && !huddle.expanded && (
+                    <TeammatesPage
+                        pods={pods.data ?? []}
+                        pending={pods.isPending}
+                        failed={pods.isError}
+                        onRetry={() => void pods.refetch()}
+                        owed={owed}
+                        orgName={activeOrg?.name ?? "this organization"}
+                        orgs={orgs.data ?? []}
+                        orgId={activeOrgId}
+                        cameFrom={leftFrom}
+                        lead={
+                            <button className="icon-button crumb__menu" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar" onClick={() => setMobileOpen(true)}>
+                                <MenuIcon size={20} />
+                            </button>
+                        }
+                        tools={!preview && <WaitingInbox pods={pods.data ?? []} />}
+                        onOpen={(id, from) => { zoomFrom.current = from; goToPod(id); setConversationId(null); }}
+                        onHire={activeOrgId ? () => { setSettings(null); setHiring(true); } : null}
+                        onPickOrg={(id) => { setLeftFrom(null); setOrgId(id); }}
+                    />
                 )}
                 {stranger && (
                     <div className="settings-view">
@@ -976,7 +1353,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         ["--field" as string]: pressSlot(identityGenes(pod.id).tone).field,
                         ["--field-ink" as string]: pressSlot(identityGenes(pod.id).tone).ink,
                     } : undefined}
-                    hidden={Boolean(hiring || huddle.expanded || stranger)}
+                    hidden={Boolean(hiring || huddle.expanded || stranger || atTeam)}
                 >
                 {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
                     access.state === "error" || access.state === "missing" ? (
@@ -1103,37 +1480,38 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={24}/><span>{pod.name}</span>
                                 </button>
                             )}
-                        <div className="tabs" role="tablist" aria-label="Views" aria-multiselectable="true">
-                            {allTabs.map((tab) => (
-                                <span className={`tab__slot${closingTabs[tab.id] ? " tab__slot--closing" : ""}`} key={tab.id}>
-                                    <span className="tab__slot-inner">
-                                    <button
-                                        ref={tab.id === activeTab?.id ? selectedTabRef : undefined}
-                                        className="tab"
-                                        role="tab"
-                                        aria-selected={isVisible(tab.id)}
-                                        onClick={() => pickTab(tab.id)}
-                                    >
-                                        {tab.kind === "conversation" ? <ChatIcon size={17} /> : tab.kind === "profile" ? <ProfileIcon size={17} /> : tab.kind === "history" ? <HistoryIcon size={17} /> : tab.kind === "library" ? <LibraryIcon size={17} /> : tab.kind === "table" ? <TableIcon size={17} /> : tab.kind === "file" ? <FileIcon size={17} /> : tab.kind === "record" ? <TableIcon size={17} /> : tab.kind === "computer" ? <ComputerIcon size={17} /> : tab.kind === "app" ? <AppIcon size={17} /> : <AppsIcon size={17} />}
-                                        {tab.label}
-
-                                    </button>
-                                    {(tab.kind === "file" || tab.kind === "history" || tab.kind === "table" || tab.kind === "record" || tab.kind === "computer") && (
-                                        <button
-                                            className="tab__close"
-                                            title={"Close " + tab.label}
-                                            aria-label={"Close " + tab.label}
-                                            onClick={() => closeTab(tab.id)}
-                                        >
-                                            <CloseIcon size={13} />
-                                        </button>
-                                    )}
-                                    </span>
-                                </span>
-                            ))}
-                            {podTabs.isPending && <span className="tab">…</span>}
+                        {/* No tab strip: the sidebar is how you move. What is on the
+                            stage is named here, the way Space's breadcrumb does. */}
+                        {/* A hidden sidebar comes back from here, the first thing in
+                            the row — not from a button floating under it. */}
+                        {(sidebarHidden || collapsed) && (
+                            <button className="icon-button crumb__side" aria-label="Show sidebar" title="Show sidebar (⌘\)"
+                                onClick={() => { setSidebarHidden(false); setCollapsed(false); }}>
+                                <SidebarIcon size={18} />
+                            </button>
+                        )}
+                        {/* On a phone the sidebar is a drawer, and this row is
+                            where it opens from — not a button floating over it. */}
+                        <button className="icon-button crumb__menu" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar" onClick={() => setMobileOpen(true)}>
+                            <MenuIcon size={20} />
+                        </button>
+                        <div className="crumb">
+                            {/* Up one altitude: every teammate in the organization. */}
+                            <button type="button" className="crumb__up crumb__org" title="All teammates" onClick={() => goToTeam(pod.id)}>
+                                {activeOrg?.name ?? "Teammates"}
+                            </button>
+                            <span className="crumb__sep crumb__sep--org">/</span>
+                            <button type="button" className="crumb__up crumb__mate" onClick={() => pickTab("space:home")}>
+                                <TeammateFace pod={pod} size={18} />{pod.name}
+                            </button>
+                            <span className="crumb__sep">/</span>
+                            {cameFrom && <>
+                                <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom.id)}>{cameFrom.label}</button>
+                                <span className="crumb__sep crumb__sep--from">/</span>
+                            </>}
+                            <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
                         </div>
-                            <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
+                            {activeTab?.kind !== "space" && <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
                                 onNew={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
                                 onHistory={openHistory}
                                 onComputer={openComputer}
@@ -1142,12 +1520,45 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                        the app's alias rather than its URL. */
                                     const frame = appFrames.current[activeKey];
                                     if (frame && activeTab?.kind === "app") frame.src = frame.getAttribute("src") ?? activeTab.url;
-                                }} />
+                                }} />}
                             {expanded && <button className="icon-button" title="Return to sidebar" aria-label="Return to sidebar" onClick={toggleExpanded}><MinimizeIcon size={18} /></button>}
+                            {activeTab?.kind === "file" && isDoc(activeTab.path) && !/^\/me(\/|$)/.test(activeTab.path) && <CommentsButton path={activeTab.path} />}
+                            <button className="icon-button crumb__search" title="Search (⌘K)" aria-label="Search" onClick={() => setSearching(true)}>
+                                <SearchIcon size={18} />
+                            </button>
+                            <button className="share-pill" onClick={() => setShareOpen(true)} title={"Share " + (chatResource?.label ?? pod.name)}>Share</button>
+                            {/* The header row is gone, as it is in Space; what it
+                                carried that is still owed to you lives here. */}
+                            {!preview && <Notifications podId={pod.id} />}
+                            {!preview && <WaitingInbox pods={pods.data ?? []} />}
                         </div>
 
-                        <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
+                        <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "") + (chat.open && chatResource ? " body--chat" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
                             {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
+                            {pod && !stranger && !isVisible("conversation") && activeTab?.kind !== "profile" && activeTab?.kind !== "bot" && activeTab?.id !== "space:home" && activeTab?.id !== "space:about" && (
+                                <FloatingChat
+                                    pod={pod}
+                                    resource={chatResource}
+                                    live={source.label === "live"}
+                                    state={chat}
+                                    onOpenFile={openFile}
+                                    onOpenTable={openTable}
+                                    onOpenApp={(name) => pickTab("app:" + name)}
+                                    onExpand={(id, resource) => {
+                                        /* The same conversation, full size, with
+                                           what it is about in the panel beside it. */
+                                        chat.setOpen(false);
+                                        setConversationId(id);
+                                        if (resource?.kind === "file") {
+                                            openTab({ id: "file:" + resource.name, kind: "file", label: docTitle(resource.name), path: resource.name }, "conversation", true);
+                                        } else if (resource?.kind === "table") {
+                                            openTab({ id: "table:" + resource.name, kind: "table", label: readableName(resource.name), name: resource.name }, "conversation", true);
+                                        } else {
+                                            pickTab("conversation");
+                                        }
+                                    }}
+                                />
+                            )}
                             {rightTab && <RightPaneToolbar
                                 body={bodyRef}
                                 label={rightTab.label}
@@ -1187,6 +1598,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                                 conversationId={openConversationId}
                                                 fill={fill?.podId === pod.id ? fill : null}
                                                 onFilled={() => setFill(null)}
+                                                createWith={handoff?.podId === pod.id ? handoff.createWith : undefined}
+                                                autoSend={handoff?.podId === pod.id && !handoff.sent ? handoff : null}
+                                                onAutoSent={() => setHandoff(previous => previous && { ...previous, sent: true })}
                                                 onCreated={id => setSelection(previous => previous.generation === selection.generation
                                                     ? { ...previous, id } : previous)}
                                                 onOpenApp={(name) => pickTab("app:" + name)}
@@ -1217,6 +1631,68 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         onSeeAll={openHistory}
                                     />
                             </div>
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "space"}> => tab.kind === "space").map(tab => (
+                                <div className="pane space-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    {tab.view === "home" ? (
+                                        <Home
+                                            pod={pod}
+                                            pods={pods.data ?? []}
+                                            onNewPage={newPage}
+                                            onOpenRun={openRun}
+                                            onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
+                                            onAbout={() => openAbout(null)}
+                                            onAsk={(text) => startChat(text)}
+                                        />
+                                    ) : tab.view === "about" ? (
+                                        <AboutPage
+                                            pod={pod}
+                                            orgId={activeOrgId}
+                                            orgName={activeOrg?.name ?? "this organization"}
+                                            section={aboutSection.at}
+                                            request={aboutSection.id}
+                                            onAsk={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
+                                            onOpenAgent={openAgent}
+                                            onAskFor={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }}
+                                            onOpenRun={openRun}
+                                            onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
+                                            onFile={(path) => openFile(path, "space:about")}
+                                            onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); }}
+                                        />
+                                    ) : tab.view === "chats" ? (
+                                        <ChatsPage
+                                            pod={pod}
+                                            openId={openConversationId}
+                                            onOpen={(id) => { setConversationId(id); pickTab("conversation"); }}
+                                            onOpenRun={(runId) => openRun(runId, "Workflow run")}
+                                            onNew={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
+                                        />
+                                    ) : tab.view === "workflows" ? (
+                                        <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} />
+                                    ) : tab.view === "settings" ? (
+                                        <SettingsPage
+                                            pod={pod}
+                                            orgId={activeOrgId}
+                                            orgName={activeOrg?.name ?? "this organization"}
+                                            section={settingsSection}
+                                            onSection={setSettingsSection}
+                                            onAbout={() => openAbout(null)}
+                                        />
+                                    ) : <AllView
+                                        podId={pod.id}
+                                        spaceName={pod.name}
+                                        botName={pod.teammate?.name || pod.name}
+                                        members={pod.members}
+                                        view={tab.view}
+                                        apps={allTabs.filter((each): each is Extract<Tab, {kind: "app"}> => each.kind === "app")}
+                                        onOpenFile={(path) => openFile(path, tab.id)}
+                                        onOpenTable={(name) => openTable(name, tab.id)}
+                                        onOpenApp={pickTab}
+                                        onOpenFolder={() => pickTab("library")}
+                                        onNewPage={newPage}
+                                        onNewChat={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
+                                    />}
+                                </div>
+                            ))}
                             {isVisible("apps") && <div className="pane" {...paneProps("apps")}><AppsPane name={pod.name} tabs={allTabs} onOpen={pickTab} onAsk={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }} /></div>}
                             {isVisible("history") && (<div className="pane" {...paneProps("history")}>
                                 <AllConversations
@@ -1242,9 +1718,56 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     />
                                 </div>
                             )}
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "run"}> => tab.kind === "run").map(tab => (
+                                <div className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    <div className="run-page">
+                                        <RunPage pod={pod} runId={tab.runId} label={tab.label} onBack={() => pickTab(lastList[pod.id] ?? "space:workflows")}
+                                            onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
+                                            onOpenRun={openRun} onOpenWorkflow={openWorkflow}
+                                            onNamed={(name) => renameTab(tab.id, name + " · run")} />
+                                    </div>
+                                </div>
+                            ))}
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "workflow"}> => tab.kind === "workflow").map(tab => (
+                                <div className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    <div className="run-page">
+                                        <WorkflowPage pod={pod} orgId={activeOrgId} name={tab.name}
+                                            onBack={() => pickTab("space:workflows")}
+                                            onOpenRun={openRun}
+                                            onConnect={() => setSettings("connectors")}
+                                            onDiscuss={(name) => {
+                                                void (async () => {
+                                                    const id = await discussion.open("workflow", name);
+                                                    if (id) { setConversationId(id); pickTab("conversation"); }
+                                                })();
+                                            }} />
+                                    </div>
+                                </div>
+                            ))}
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "bot"}> => tab.kind === "bot").map(tab => (
+                                <div className="pane bot-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    <AgentPage
+                                        pod={pod}
+                                        name={tab.name}
+                                        live={source.label === "live"}
+                                        onBack={() => openAbout("agents")}
+                                        onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
+                                        onAsk={startChat}
+                                        onOpenSchedules={() => openAbout("schedules")}
+                                        onOpenWorkflows={() => pickTab("space:workflows")}
+                                    />
+                                </div>
+                            ))}
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "signin"}> => tab.kind === "signin").map(tab => (
+                                <div className="pane signin-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    <SignInPane compact conversationId={tab.conversationId} toolCallId={tab.toolCallId} onDone={() => closeTab(tab.id)} />
+                                </div>
+                            ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "file"}> => tab.kind === "file").map(tab => (
-                                <div className="pane file-tab-pane" key={tab.id} {...paneProps(tab.id)}>
-                                    <div className="pane__inner"><FileView podId={pod.id} path={tab.path} full /></div>
+                                <div className={"pane file-tab-pane" + (isDoc(tab.path) ? " doc-tab-pane" : "")} key={tab.pane ?? tab.id} {...paneProps(tab.id)}>
+                                    {isDoc(tab.path)
+                                        ? <DocAskContext.Provider value={docAsk}><DocSpace pod={pod} path={tab.path} renamePage={renamePageAt} openFile={openFile} openTable={(name) => openTable(name)} openConversation={(id) => { setConversationId(id); pickTab("conversation"); }} sendToBot={chatResource ? chat.send : null} /></DocAskContext.Provider>
+                                        : <div className="pane__inner"><FileView podId={pod.id} path={tab.path} full /></div>}
                                 </div>
                             ))}
                             <div className="pane library-pane" {...paneProps("library")} key={pod.id + ":library"}>
@@ -1262,46 +1785,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     />
                                 </div>
                             ))}
-                            {isVisible("profile") && (<div className="pane" {...paneProps("profile")}>
-                                <ProfilePane
-                                    key={preview ? pod.id + "|" + demoRevision : pod.id}
-                                    initialSection={preview && demoStep === 2 ? "skills" : entrySection}
-                                    openAgentName={openAgentName}
-                                    onOpenAgentName={setOpenAgentName}
-                                    /* Same path a widget's compose request
-                                       takes: land on the conversation and put
-                                       the words in the box, rather than
-                                       sending them. What gets asked for is
-                                       still the person's to edit or drop. */
-                                    onAskFor={(text) => {
-                                        pickTab("conversation");
-                                        asks.current += 1;
-                                        setFill({ text, id: asks.current, podId: pod.id });
-                                    }}
-                                    pod={pod}
-                                    orgName={activeOrg?.name ?? "this organization"}
-                                    others={(pods.data ?? []).filter((other) => other.id !== pod.id)}
-                                    onOpenTab={pickTab}
-                                    onPickPod={(id) => {
-                                        goToPod(id);
-                                        setConversationId(null);
-                                    }}
-                                    onMessage={() => pickTab("conversation")}
-                                    onAddPeople={() => setAddingPeople(true)}
-                                    onDiscussAgent={(name) => {
-                                        void (async () => {
-                                            const id = await discussion.open("agent", name);
-                                            if (id) { setConversationId(id); pickTab("conversation"); }
-                                        })();
-                                    }}
-                                    onDiscussWorkflow={(name) => {
-                                        void (async () => {
-                                            const id = await discussion.open("workflow", name);
-                                            if (id) { setConversationId(id); pickTab("conversation"); }
-                                        })();
-                                    }}
-                                />
-                            </div>)}
                             {/* Mounted only while it is in front, the way the
                                 profile is: the list is a request per pod, and
                                 a pane kept alive behind every conversation
@@ -1315,6 +1798,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             </main>
 
             {reaching && pod && <ReachSheet pod={pod} onClose={() => setReaching(false)} />}
+            {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} onClose={() => setShareOpen(false)} />}
 
             {/* Here rather than on the arrival screen: this branch is the
                 first render that has somewhere to belong, whichever of the

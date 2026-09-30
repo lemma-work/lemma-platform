@@ -37,7 +37,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
 )
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
-from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.domain.prompts import build_agent_instruction_parts
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
@@ -98,22 +98,36 @@ def _instructions(
     agent: Agent,
     conversation: Conversation,
     ctx: AgentContext,
-) -> str:
+) -> list[str | Callable[[], str]]:
     """The run's system instructions, timed as its own phase.
 
     Prompt assembly reads and renders every prompt fragment the agent's
     configuration pulls in, so it is worth telling apart from the model call it
     sits immediately in front of.
+
+    Two parts, and the second is a function on purpose. PydanticAI puts every
+    literal instruction first -- this agent's, then each capability's -- and
+    instruction functions after them. So the stable part leads, the capability
+    guidance (large, and the same for every conversation) follows it, and the
+    per-conversation part comes last: a new conversation reuses the cached
+    prefix up to its own working directory instead of re-reading everything
+    after it.
     """
     with run_phase("instructions") as span:
-        text = build_agent_instructions(
+        stable, per_conversation = build_agent_instruction_parts(
             agent=agent,
             conversation=conversation,
             ctx=ctx,
             include_toolset_prompts=False,
         )
-        span.set_attribute("lemma.instructions.chars", len(text))
-        return text
+        span.set_attribute(
+            "lemma.instructions.chars", len(stable) + len(per_conversation)
+        )
+
+        def this_conversation() -> str:
+            return per_conversation
+
+        return [stable, this_conversation]
 
 
 class PydanticAIHarness:

@@ -18,8 +18,12 @@ import { groupSites, loginNote, saidSoFor } from "./logins";
  *  it. `wake` is off for the same reason one step further out: opening a panel
  *  should not be what starts somebody's computer.
  */
-export function Logins({ visible }: { visible: boolean }) {
-    const [open, setOpen] = useState(false);
+export function Logins({ visible, startOpen = false }: {
+    visible: boolean;
+    /** Already opened: in a drawer, the drawer was the click that asked. */
+    startOpen?: boolean;
+}) {
+    const [open, setOpen] = useState(startOpen);
     const [wake, setWake] = useState(false);
     const [forgetting, setForgetting] = useState<string | null>(null);
     const logins = useWebLogins(wake, visible && open);

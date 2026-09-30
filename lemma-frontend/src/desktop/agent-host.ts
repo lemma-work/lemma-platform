@@ -80,6 +80,13 @@ function readHostExecution(raw: unknown): AgentHostStatus["host_execution"] {
     return { enabled: record.enabled === true, available: record.available === true };
 }
 
+/** Only Claude Code is started apart from the person's own setup; Codex,
+ *  OpenCode and the rest always load it, so the switch is drawn for Claude
+ *  Code alone. */
+export function takesOwnSettings(harness: string): boolean {
+    return harness === "claude-code";
+}
+
 /** The "Use my own skills and settings" switch for one agent, from the
  *  shell's status. `blocked` says why it cannot be changed from here. */
 export function ownSettingsRow(

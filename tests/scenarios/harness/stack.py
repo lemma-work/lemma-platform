@@ -587,18 +587,24 @@ def _wait_tcp(host: str, port: int, timeout: float = 60) -> None:
 
 def _wait_http(url: str, timeout: float = 120) -> None:
     deadline = time.monotonic() + timeout
+    last = "nothing answered"
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(url, timeout=2) as response:
                 if response.status == 200:
                     return
+        except urllib.error.HTTPError as answered:
+            # Something is up and saying no. What it says is the diagnosis —
+            # a readiness 503 names the component that is not ready — so keep
+            # it for the error rather than reporting only that time ran out.
+            last = f"{answered.code}: {answered.read(2000).decode(errors='replace')}"
         except (urllib.error.URLError, OSError):
             # Not up yet. Both mean "nothing answered": connection refused
             # while the port is still closed, and a read timeout while the
             # process is binding. Neither is a failure until the deadline.
             pass
         time.sleep(0.5)
-    raise StackError(f"{url} did not become ready within {timeout}s")
+    raise StackError(f"{url} did not become ready within {timeout}s; last answer: {last}")
 
 
 def _wait_postgres(host: str, port: int, timeout: float = 120) -> None:

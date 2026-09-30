@@ -370,6 +370,11 @@ pub(crate) fn build(
             "AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED",
             "false".to_owned(),
         ),
+        // With no WhatsApp verification and no Telegram sign-in, a profile
+        // number here is never verified. A contact the sender shares on the
+        // Telegram bot proves the phone, so let it match the one profile that
+        // wrote that number down; the backend then stamps it verified.
+        ("SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH", "true".to_owned()),
         ("EMBEDDING_PROVIDER", "local".to_owned()),
         ("LOCAL_EMBEDDING_STARTUP_MODE", "background".to_owned()),
         ("LEMMA_RUNTIME_INSTANCE_ID", runtime_instance_id.clone()),

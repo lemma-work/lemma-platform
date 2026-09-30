@@ -4917,6 +4917,7 @@ button.filecard__open {
 .profile-form__pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; }
 @media (max-width: 520px) { .profile-form__pair { grid-template-columns: 1fr; } }
 .profile-form__problem { font-style: normal; font-size: 12px; color: var(--bad); }
+.profile-form__hint-line { margin: 0; font-size: 12.5px; color: var(--ink-2); }
 .profile-form__saved { font-size: 12.5px; color: var(--ok); }
 /* The stamp, not a badge: it states a fact about the field above it and has
    nothing to click, so it is a line of text in the affirmative colour rather

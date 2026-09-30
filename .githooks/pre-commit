@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Installed by `make hooks`. Lints what is staged, with the same tools and
+# configs as `make lint`, minus the two slow steps (tsc and clippy) so a commit
+# stays a matter of seconds. `make fix` repairs most of what it reports.
+#
+# SKIP_HOOKS=1 git commit ...   skips it once.
+set -euo pipefail
+
+if [[ "${SKIP_HOOKS:-}" == "1" ]]; then
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+exec make --no-print-directory lint STAGED=1 FAST=1

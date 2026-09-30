@@ -5,8 +5,9 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const SEARCHED = "src/styles";
 
 /** The palette itself. A file whose job is to name colours is the one place a
- *  literal colour belongs. */
-const PALETTE = new Set(["tokens.css", "accents.css"]);
+ *  literal colour belongs. `space-tokens.css` is the app's appearance: the
+ *  same job, loaded after the other two so it wins. */
+const PALETTE = new Set(["tokens.css", "accents.css", "space-tokens.css"]);
 
 /** Colour set outside the palette, and the one reason each is there.
  *

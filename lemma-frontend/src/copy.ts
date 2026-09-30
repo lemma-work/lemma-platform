@@ -43,3 +43,15 @@ export const ORG = "organization";
  *  learns your work", and from the rail onward it is mostly just a name. */
 export const AI_MATE = "AI " + MATE;
 export const AI_MATES = AI_MATE + "s";
+
+/** A teammate and its space are one pod, seen from two sides.
+ *
+ *  The teammate is who you talk to: its name and its face, on the rail, at
+ *  the top of its sidebar, in "Ask Kit…". The space is what you share: the
+ *  pages, tables, apps and workflows it keeps, and the people let into them.
+ *  So the word is said only where the place is the point — who can open a
+ *  thing, where a thing is kept — and everywhere else the name does the work.
+ *
+ *  The agents a teammate hands work to are agents. There are no bots here:
+ *  the word only ever named the teammate's own agent, which is the teammate. */
+export const SPACE = "space";

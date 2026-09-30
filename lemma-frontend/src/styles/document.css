@@ -118,6 +118,18 @@
     pointer-events: none;
     color: var(--ink-3);
 }
+/* On a page, the empty line under the caret says what it can become. */
+.docspace .md.doc :is(p, h1, h2, h3).is-empty::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+    color: var(--ink-3);
+}
+.docspace .md.doc h1.is-empty::before {
+    opacity: 0.6;
+}
+
 /* Selection inside a document is reading-coloured rather than system-blue,
    for the same reason the page is cream and not #ffffff. */
 .md.doc ::selection {

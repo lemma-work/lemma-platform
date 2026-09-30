@@ -1,8 +1,9 @@
 import { key } from "@/session/storage";
 import { NEW_CONVERSATION } from "./types";
-import type { Conversation, FileContent, Invitation, Member, Message, NewOrg, Org, Profile, Pod, PodSource, Surface, Tab } from "./types";
-import { displayAgentName } from "./agent-names";
-import { agentChanges, agentRows, readAgentDetail, type AgentDraft } from "./agents";
+import type { Conversation, FileContent, Invitation, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
+import { displayAgentName, isPodDefaultAgent } from "./agent-names";
+import { originOf } from "@/thread/conversation-origin";
+import { agentChanges, agentRows, answeringAs, readAgentDetail, type AgentDraft } from "./agents";
 import {
     createRequest,
     readRun,
@@ -90,19 +91,28 @@ function stopPretending(): void {
 }
 
 const MEMBERS: Member[] = [
-    { id: "you", name: "You", initials: "DJ", kind: "person", role: "Owner", can: "everything" },
-    { id: "priya", name: "Priya", initials: "PR", kind: "person", role: "Member", can: "approves customer quotes" },
+    { id: "you", name: "You", initials: "DJ", kind: "person", role: "Owner", can: "everything", userId: "sample-user" },
+    { id: "priya", name: "Priya", initials: "PR", kind: "person", role: "Member", can: "approves customer quotes", userId: "priya-user" },
     { id: "lemma", name: "Marketing", initials: "MA", kind: "teammate", role: "Teammate", can: "can draft · cannot send" },
 ];
 
 /* Eleven, because that is what a real roster looks like — a sidebar that
    only ever renders one row cannot be judged. */
+/** Public links minted in the sample, so the share sheet can list them. */
+const SAMPLE_LINKS: { path: string; link: SharedLink }[] = [];
+
+/** What a sample pod's own agent answers as: the pod's name, as in live. */
+function samplePodName(podId: string): string | null {
+    return PODS.find((pod) => pod.id === podId)?.name ?? null;
+}
+
 const PODS: Pod[] = [
     {
         id: "marketing",
         orgId: "acme",
         name: "Marketing",
         iconUrl: "/teammates/loop-v1.png",
+        description: "Plans launches, drafts the announcements, and brings anything public to Priya first.",
         teammate: { name: "Marketing", initials: "MA", iconUrl: "/teammates/loop-v1.png" },
         subtitle: "with Priya and you",
         members: MEMBERS,
@@ -113,6 +123,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "Personal",
         iconUrl: "/teammates/pleat-v1.png",
+        description: "Keeps your notes, errands and reminders in one place.",
         teammate: { name: "Personal", initials: "PE", iconUrl: "/teammates/pleat-v1.png" },
         subtitle: "just you",
         members: MEMBERS,
@@ -123,6 +134,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "panini",
         iconUrl: "/teammates/frame-v1.png",
+        description: "Answers lunch orders from the team channel and keeps the tab.",
         teammate: { name: "panini", initials: "PA", iconUrl: "/teammates/frame-v1.png" },
         subtitle: "just you",
         members: MEMBERS,
@@ -133,6 +145,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "sidekick",
         iconUrl: "🖥️",
+        description: "Pairs on code: reads the repository, runs the checks, drafts the change.",
         teammate: { name: "sidekick", initials: "SI", iconUrl: "🖥️" },
         subtitle: "just you",
         members: MEMBERS,
@@ -143,6 +156,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "roundtable",
         iconUrl: "🪑",
+        description: "Runs the weekly review: collects updates, writes the notes, chases the actions.",
         teammate: { name: "roundtable", initials: "RO", iconUrl: "🪑" },
         subtitle: "just you",
         members: MEMBERS,
@@ -153,6 +167,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "Lemma Design",
         iconUrl: null,
+        description: "Keeps the design system, the brand kit and every screen that uses them.",
         teammate: { name: "Lemma Design", initials: "LE", iconUrl: null },
         subtitle: "just you",
         members: MEMBERS,
@@ -163,6 +178,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "lemma-motion",
         iconUrl: null,
+        description: "Cuts short product films from recordings and a brief.",
         teammate: { name: "lemma-motion", initials: "LE", iconUrl: null },
         subtitle: "just you",
         members: MEMBERS,
@@ -173,6 +189,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "Nachiketa",
         iconUrl: null,
+        description: "Researches a question until the sources agree, and says when they do not.",
         teammate: { name: "Nachiketa", initials: "NA", iconUrl: null },
         subtitle: "just you",
         members: MEMBERS,
@@ -183,6 +200,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "memory-bench",
         iconUrl: "💭",
+        description: "Scores how well memory holds up across long conversations.",
         teammate: { name: "memory-bench", initials: "ME", iconUrl: "💭" },
         subtitle: "just you",
         members: MEMBERS,
@@ -193,6 +211,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "launch-craft-library",
         iconUrl: null,
+        description: "Collects launch pages worth learning from, with notes on why.",
         teammate: { name: "launch-craft-library", initials: "LA", iconUrl: null },
         subtitle: "just you",
         members: MEMBERS,
@@ -203,6 +222,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "ap-desk",
         iconUrl: "💼",
+        description: "Files invoices against the right supplier and flags what does not match.",
         teammate: { name: "ap-desk", initials: "AP", iconUrl: "💼" },
         subtitle: "just you",
         members: MEMBERS,
@@ -1122,6 +1142,7 @@ let SCHEDULES: Record<string, unknown>[] = [
         filter_output_schema: null,
         account_id: null,
         connector_trigger_id: null,
+        user_id: "priya-user",
         visibility: "POD",
         is_active: true,
         is_internal: false,
@@ -1146,6 +1167,7 @@ let SCHEDULES: Record<string, unknown>[] = [
         filter_output_schema: { type: "object", properties: { matters: { type: "boolean" } } },
         account_id: "acct-1",
         connector_trigger_id: "slack_message_posted",
+        user_id: "sample-user",
         visibility: "POD",
         is_active: true,
         is_internal: false,
@@ -1170,6 +1192,7 @@ let SCHEDULES: Record<string, unknown>[] = [
         filter_output_schema: null,
         account_id: null,
         connector_trigger_id: null,
+        user_id: "sample-user",
         visibility: "POD",
         is_active: false,
         is_internal: false,
@@ -1196,6 +1219,7 @@ let SCHEDULES: Record<string, unknown>[] = [
         filter_output_schema: null,
         account_id: null,
         connector_trigger_id: null,
+        user_id: "sample-user",
         visibility: "POD",
         is_active: true,
         is_internal: false,
@@ -1216,7 +1240,8 @@ let SCHEDULES: Record<string, unknown>[] = [
         agent_id: "ag-1",
         config: { cron: "0 3 1 1,4,7,10 *" },
         instruction: "Move last quarter's tracker rows into the archive table.",
-        visibility: "POD",
+        user_id: "sample-user",
+        visibility: "PERSONAL",
         is_active: false,
         is_internal: false,
         paused_by_failures: false,
@@ -2098,6 +2123,7 @@ export const fixtureSource: PodSource = {
             orgId,
             name,
             iconUrl: null,
+            ...(description?.trim() ? { description: description.trim() } : {}),
             teammate: { name, initials: name.slice(0, 2).toUpperCase(), iconUrl: null },
             subtitle: description?.trim() || "just you",
             members: [],
@@ -2106,16 +2132,29 @@ export const fixtureSource: PodSource = {
         PODS.push(pod);
         return pod;
     },
-    async shareFile(_podId: string, _path: string, options?: { expiresSeconds?: number; maxHits?: number }) {
+    async shareFile(_podId: string, path: string, options?: { expiresSeconds?: number; maxHits?: number }) {
         await wait(260);
         const code = "sample" + Math.random().toString(36).slice(2, 8);
-        return {
+        const link = {
             rawUrl: "https://api.example/s/" + code,
             readUrl: (typeof window === "undefined" ? "" : window.location.origin) + "/d/" + code,
             code,
             expiresAt: new Date(Date.now() + (options?.expiresSeconds ?? 10800) * 1000).toISOString(),
             maxHits: Math.min(options?.maxHits ?? 50, 100),
         };
+        SAMPLE_LINKS.unshift({ path, link });
+        return link;
+    },
+    async fileLinks(_podId: string, path: string) {
+        await wait(120);
+        return SAMPLE_LINKS.filter(entry => entry.path === path && Date.parse(entry.link.expiresAt) > Date.now()).map(entry => entry.link);
+    },
+    async revokeFileLink(_podId: string, code: string) {
+        await wait(120);
+        const at = SAMPLE_LINKS.findIndex(entry => entry.link.code === code);
+        if (at < 0) return false;
+        SAMPLE_LINKS.splice(at, 1);
+        return true;
     },
     async setPodIcon(podId: string, iconUrl: string | null) {
         await wait(140);
@@ -2139,6 +2178,14 @@ export const fixtureSource: PodSource = {
         const wore = pod.teammate.name === pod.name;
         pod.name = clean;
         if (wore) pod.teammate = { ...pod.teammate, name: clean, initials: clean.slice(0, 2).toUpperCase() };
+    },
+    async describePod(podId: string, description: string) {
+        await wait(220);
+        const pod = PODS.find((candidate) => candidate.id === podId);
+        if (!pod) return;
+        const clean = description.trim();
+        if (clean) pod.description = clean;
+        else delete pod.description;
     },
     async uploadIcon(file: File) {
         await wait(200);
@@ -2481,6 +2528,21 @@ export const fixtureSource: PodSource = {
         await wait(220);
         SAMPLE_EDITS.set(path, text);
     },
+    async createFile(_podId: string, path: string, text: string) {
+        await wait(220);
+        if (SAMPLE_EDITS.has(path)) throw Object.assign(new Error("A file already exists at " + path), { statusCode: 409 });
+        SAMPLE_EDITS.set(path, text);
+    },
+    async renameFile(_podId: string, from: string, to: string) {
+        await wait(160);
+        if (SAMPLE_EDITS.has(to)) throw Object.assign(new Error("A file already exists at " + to), { statusCode: 409 });
+        /* Folders and never-opened fixtures are not in the edit map; a page
+           the sample has written is. Anything else reads as not there. */
+        const text = SAMPLE_EDITS.get(from);
+        if (text === undefined) throw Object.assign(new Error("No file at " + from), { statusCode: 404 });
+        SAMPLE_EDITS.set(to, text);
+        SAMPLE_EDITS.delete(from);
+    },
     async widgetEmbedUrl(): Promise<string> {
         throw new Error("The sample source cannot mint an embed URL.");
     },
@@ -2493,15 +2555,15 @@ export const fixtureSource: PodSource = {
     async listConversationsPage(_podId, cursor, search) {
         await wait(40);
         const all = [
-            { id: "fixture", title: "Monday launch", at: "10:14", kind: "CHAT" },
-            { id: "c2", title: "Long report preview and channel layout review", at: "11 Sept", kind: "TASK" },
-            { id: "c3", title: "Design partner shortlist", at: "Thu", kind: "CHAT" },
-            { id: "c4", title: "Q1 vendor totals", at: "Wed", kind: "CHAT" },
-            { id: "c5", title: "Tracker refresh", at: "Tue", kind: "TASK" },
-            { id: "c6", title: "Blog outline", at: "Mon", kind: "CHAT" },
-            { id: "c7", title: "Pricing page copy", at: "18 Jul", kind: "CHAT" },
-            { id: "c8", title: "hey", at: "Fri 17 Jul", kind: "CHAT" },
-        ];
+            { id: "fixture", title: "Monday launch", at: "10:14", kind: "CHAT", meta: {} },
+            { id: "c2", title: "Long report preview and channel layout review", at: "11 Sept", kind: "TASK", meta: { source: "WORKFLOW_RUN", workflow_run_id: "run-onboard" } },
+            { id: "c3", title: "Design partner shortlist", at: "Thu", kind: "CHAT", meta: { source: "agent_surfaces", surface_platform: "SLACK", channel_name: "launch" } },
+            { id: "c4", title: "Q1 vendor totals", at: "Wed", kind: "CHAT", meta: { lemma_resource: "file:/pages/q1-vendors.md" } },
+            { id: "c5", title: "Tracker refresh", at: "Tue", kind: "TASK", meta: { source: "SCHEDULE", schedule_name: "weekly-tracker-refresh" } },
+            { id: "c6", title: "Blog outline", at: "Mon", kind: "CHAT", meta: {} },
+            { id: "c7", title: "Pricing page copy", at: "18 Jul", kind: "CHAT", meta: { source: "agent_surfaces", surface_platform: "WHATSAPP" } },
+            { id: "c8", title: "hey", at: "Fri 17 Jul", kind: "CHAT", meta: {} },
+        ].map(({ meta, ...row }) => ({ ...row, origin: originOf(meta, row.kind) }));
         const needle = search?.toLowerCase();
         const found = needle ? all.filter((entry) => entry.title.toLowerCase().includes(needle)) : all;
         return cursor === "2" ? { items: found.slice(6), next: null } : { items: found.slice(0, 6), next: found.length > 6 ? "2" : null };
@@ -2549,15 +2611,15 @@ export const fixtureSource: PodSource = {
             })),
         };
     },
-    async listAgents() {
+    async listAgents(podId: string) {
         await wait(70);
-        return agentRows({ items: AGENTS });
+        return answeringAs(agentRows({ items: AGENTS }), samplePodName(podId));
     },
-    async getAgent(_podId: string, name: string) {
+    async getAgent(podId: string, name: string) {
         await wait(60);
         const found = AGENTS.find((agent) => agent.name === name);
         if (!found) throw new Error("No agent called " + name + " here.");
-        return readAgentDetail(found);
+        return answeringAs([readAgentDetail(found)], samplePodName(podId))[0];
     },
     /* Real, in memory, for the same reason hiring is: an edit is the one part
        of this view with a dirty state, a validation path and a refusal in it,
@@ -2583,9 +2645,12 @@ export const fixtureSource: PodSource = {
        retry and create each have a pending state, a refusal and a row that
        changes underneath them, and none of the four can be judged from a
        screenshot of a control nobody may press. Until the page reloads. */
-    async listSchedules() {
+    async listSchedules(podId: string) {
         await wait(90);
-        return readSchedules(SCHEDULES);
+        const teammate = samplePodName(podId);
+        return readSchedules(SCHEDULES).map((job) => (teammate && job.target.kind === "agent" && isPodDefaultAgent(job.target.name)
+            ? { ...job, target: { ...job.target, label: teammate } }
+            : job));
     },
     async listScheduleRuns(_podId: string, scheduleId: string) {
         await wait(140);
@@ -2651,15 +2716,18 @@ export const fixtureSource: PodSource = {
         SCHEDULES = [...SCHEDULES, made];
         return readSchedule(made);
     },
-    async scheduleTargets() {
+    async scheduleTargets(podId: string) {
         await wait(70);
+        const teammate = samplePodName(podId);
         return [
             ...AGENTS.map((raw) => raw as { name?: string; kind?: string })
                 .filter((agent) => Boolean(agent.name))
                 .map((agent) => ({
                     kind: "agent" as const,
                     name: agent.name as string,
-                    label: displayAgentName(agent.name as string, agent.kind),
+                    label: teammate && isPodDefaultAgent(agent.name, agent.kind)
+                        ? teammate
+                        : displayAgentName(agent.name as string, agent.kind),
                 })),
             { kind: "workflow" as const, name: "press_triage", label: "Press triage" },
             { kind: "workflow" as const, name: "launch_digest", label: "Launch digest" },
@@ -2807,6 +2875,7 @@ export const SAMPLE_WORKFLOWS = [
         node_count: 7,
         node_types: ["FORM", "FUNCTION", "AGENT", "LOOP", "END"],
         is_active: true,
+        mode: "USER",
         updated_at: new Date(Date.now() - 2 * 86400_000).toISOString(),
         allowed_actions: ["read", "run"],
     },
@@ -2829,6 +2898,7 @@ export const SAMPLE_WORKFLOWS = [
         node_count: 3,
         node_types: ["FUNCTION", "AGENT", "END"],
         is_active: true,
+        node_targets: ["function:pull_ledger", "agent:auditor"],
         updated_at: new Date(Date.now() - 11 * 86400_000).toISOString(),
         allowed_actions: ["read", "run"],
     },
@@ -2925,19 +2995,10 @@ export const SAMPLE_RUN_DETAIL: Record<string, unknown> = {
         created_at: new Date(Date.now() - 27 * 3600_000).toISOString(),
         execution_context: {
             start: { started_by: "sample-user", trigger: "MANUAL" },
-            "pull-ledger": { rows: 184, through: "2026-09-18" },
         },
         step_history: [
             {
                 step_index: 0,
-                node_id: "pull-ledger",
-                status: "COMPLETED",
-                started_at: new Date(Date.now() - 27 * 3600_000).toISOString(),
-                completed_at: new Date(Date.now() - 27 * 3600_000 + 2_400).toISOString(),
-                output_data: { rows: 184, through: "2026-09-18" },
-            },
-            {
-                step_index: 1,
                 node_id: "collect",
                 status: "WAITING",
                 started_at: new Date(Date.now() - 27 * 3600_000 + 2_500).toISOString(),
@@ -2956,20 +3017,28 @@ export const SAMPLE_RUN_DETAIL: Record<string, unknown> = {
         started_at: new Date(Date.now() - 3 * 86400_000).toISOString(),
         completed_at: new Date(Date.now() - 3 * 86400_000 + 47_000).toISOString(),
         created_at: new Date(Date.now() - 3 * 86400_000).toISOString(),
-        execution_context: { start: { trigger: "SCHEDULE" }, "pull-ledger": { rows: 0 } },
+        execution_context: { start: { trigger: "SCHEDULE" }, collect: { amount: 12500, cost_centre: "Events" } },
         step_history: [
             {
                 step_index: 0,
-                node_id: "pull-ledger",
+                node_id: "collect",
                 status: "COMPLETED",
                 started_at: new Date(Date.now() - 3 * 86400_000).toISOString(),
                 completed_at: new Date(Date.now() - 3 * 86400_000 + 300).toISOString(),
                 /* Sub-second, so the step list has to say "under a second"
                    rather than print a zero that reads as "skipped". */
-                output_data: { rows: 0 },
+                output_data: { amount: 12500, cost_centre: "Events", needed_by: "2026-10-14" },
             },
             {
                 step_index: 1,
+                node_id: "decide",
+                status: "COMPLETED",
+                started_at: new Date(Date.now() - 3 * 86400_000 + 350).toISOString(),
+                completed_at: new Date(Date.now() - 3 * 86400_000 + 380).toISOString(),
+                output_data: { matched_condition: "collect.amount > `5000`" },
+            },
+            {
+                step_index: 2,
                 node_id: "notify-approver",
                 status: "FAILED",
                 started_at: new Date(Date.now() - 3 * 86400_000 + 400).toISOString(),
@@ -3017,6 +3086,34 @@ export const SAMPLE_RUN_DETAIL: Record<string, unknown> = {
             },
             {
                 step_index: 1,
+                node_id: "each-supplier",
+                status: "RUNNING",
+                started_at: new Date(Date.now() - 31 * 60_000 + 1000).toISOString(),
+            },
+            {
+                step_index: 2,
+                node_id: "check-companies-house",
+                status: "COMPLETED",
+                started_at: new Date(Date.now() - 31 * 60_000 + 1200).toISOString(),
+                completed_at: new Date(Date.now() - 30 * 60_000 - 5000).toISOString(),
+                external_ref: "conv-88119",
+                output_data: {
+                    summary: "Riverbend Supplies Ltd is active, incorporated 2015, with no overdue filings.",
+                    company_number: "09912844",
+                    status: "active",
+                    directors: ["A. Okafor", "M. Lindqvist"],
+                },
+            },
+            {
+                step_index: 3,
+                node_id: "record-supplier",
+                status: "COMPLETED",
+                started_at: new Date(Date.now() - 30 * 60_000 - 4000).toISOString(),
+                completed_at: new Date(Date.now() - 30 * 60_000 - 3400).toISOString(),
+                output_data: { row_id: "sup_381", inserted: true },
+            },
+            {
+                step_index: 4,
                 node_id: "check-companies-house",
                 status: "RUNNING",
                 started_at: new Date(Date.now() - 30 * 60_000).toISOString(),
@@ -3046,11 +3143,26 @@ export const SAMPLE_RUN_DETAIL: Record<string, unknown> = {
             },
             {
                 step_index: 1,
-                node_id: "approve",
+                node_id: "decide",
                 status: "COMPLETED",
                 started_at: new Date(Date.now() - 9 * 86400_000 + 4 * 3600_000 - 900).toISOString(),
+                completed_at: new Date(Date.now() - 9 * 86400_000 + 4 * 3600_000 - 880).toISOString(),
+                output_data: { matched_condition: "collect.amount > `0`" },
+            },
+            {
+                step_index: 2,
+                node_id: "pay",
+                status: "COMPLETED",
+                started_at: new Date(Date.now() - 9 * 86400_000 + 4 * 3600_000 - 800).toISOString(),
                 completed_at: new Date(Date.now() - 9 * 86400_000 + 4 * 3600_000).toISOString(),
-                output_data: { approved: true },
+                output_data: { purchase_order: "PO-2026-0412", amount: 2400, currency: "GBP" },
+            },
+            {
+                step_index: 3,
+                node_id: "done",
+                status: "COMPLETED",
+                started_at: new Date(Date.now() - 9 * 86400_000 + 4 * 3600_000).toISOString(),
+                completed_at: new Date(Date.now() - 9 * 86400_000 + 4 * 3600_000).toISOString(),
             },
         ],
     },

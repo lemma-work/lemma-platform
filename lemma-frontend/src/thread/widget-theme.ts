@@ -34,6 +34,14 @@ const SOURCES: Record<string, string> = {
     "faint": "--ink-3",
     "border": "--line",
     "border-strong": "--line-2",
+    /* A widget's card gets a hairline, not the heavy lift the
+       templates fall back to when no depth is handed in — in a chat column
+       that shadow read as a second frame around the widget. */
+    "shadow-rest": "--widget-shadow-rest",
+    "shadow-raise": "--widget-shadow-raise",
+    /* The page around the card. The wrapper's 16px was space for a lifted
+       shadow; with a hairline there is nothing to leave space for. */
+    "inset": "--widget-inset",
     "accent": "--accent",
     "accent-hover": "--accent",
     "accent-soft": "--accent-soft",

@@ -222,3 +222,13 @@ def test_send_does_not_start_a_second_run_when_the_gateway_fails():
         pod.conversations.send(CONVERSATION_ID, "Classify ticket rec-1")
 
     assert len(seen) == 1
+
+
+@pytest.mark.parametrize("agent_name", [None, "", "  "])
+def test_create_for_agent_without_a_name_leaves_it_to_the_pod_assistant(agent_name):
+    """No name, or a blank one, sends no `agent_name`: the pod's own assistant."""
+    pod, transport = _pod()
+
+    pod.conversations.create_for_agent(agent_name, title="hello")
+
+    assert "agent_name" not in transport.calls[0]["body"]

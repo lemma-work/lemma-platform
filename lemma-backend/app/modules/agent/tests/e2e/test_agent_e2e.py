@@ -503,6 +503,31 @@ async def _wait_for_streaq_job_status(job_id: str, status: TaskStatus) -> None:
 
 
 class TestPodAgentLifecycle:
+    @pytest.mark.parametrize(
+        "body",
+        [{}, {"agent_name": ""}, {"agent_name": "  "}, {"agent_name": "POD_DEFAULT"}],
+        ids=["omitted", "blank", "whitespace", "selector"],
+    )
+    async def test_a_conversation_naming_no_agent_goes_to_the_pod_assistant(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        body,
+    ):
+        """No agent named means the pod's own assistant, never a 404.
+
+        The CLI sent `agent_name: ""` for every chat without `--agent`, and a
+        blank was looked up as a name and refused as AGENT_NOT_FOUND.
+        """
+        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+
+        created = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations", json={"title": "Hello", **body}
+        )
+
+        assert created.status_code == 201, created.text
+        assert created.json()["agent_id"] in (None, pod_id), created.json()
+
     async def test_conversation_list_distinguishes_all_default_and_named_agents(
         self,
         authenticated_client,

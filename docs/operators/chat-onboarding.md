@@ -80,6 +80,32 @@ Telegram requests the sender's own contact and accepts no typed phone proof.
 WhatsApp derives phone proof from the authenticated webhook sender. Both support
 typed email and code replies. Telegram also presents contact and setup controls.
 
+A contact the sender shares is matched against profile mobile numbers. A
+verified number always wins. Where `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH` is on,
+a contact that matches nobody verified is matched against unverified profile
+numbers too, and exactly one such profile is taken as its owner (logged as
+`agent_surfaces.identity.unverified_phone_match_used.observed`); two or more
+claims match nobody. A match completes signup with no email, and provisioning
+stamps the number verified, since the self-shared contact has just proven it.
+Lemma Desktop turns the setting on: its owner types their number on their
+profile (or on Server setup's Telegram card), messages the bot and taps Share my
+contact. Everywhere else it is off.
+
+An account's email verification counts toward chat only where the deployment
+requires it (`AUTH_EMAIL_VERIFICATION_REQUIRED`). Where it is not required, an
+active account with an unverified address is matched, provisioned and resolved
+like any other; hosted Lemma requires it and is unchanged.
+
+Signup otherwise ends on an emailed code, so the email step only runs where mail
+reaches an inbox. On a deployment that cannot send mail — the filesystem spool
+counts as none here, since nobody in a chat can read it — a sender the bot does
+not recognise is told to add their number to their profile and share their
+contact again, or to ask whoever runs this Lemma for an invitation, instead of
+being asked for an address. The pending signup ends as `refused` (logged as
+`agent_surfaces.chat_onboarding.email_unavailable.observed`), so their next
+message starts afresh. Telegram still asks for the contact first; only the email
+step is skipped.
+
 WhatsApp can present two static Flows. From `lemma-backend/`, run
 `uv run python scripts/publish_onboarding_flows.py` with `WHATSAPP_ACCESS_TOKEN`
 and `WHATSAPP_WABA_ID` supplied through the operator environment. The publisher uploads and publishes the versioned email

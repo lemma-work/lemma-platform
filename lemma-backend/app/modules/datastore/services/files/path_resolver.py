@@ -21,6 +21,9 @@ from app.modules.datastore.services.files.paths import (
     normalize_datastore_path,
 )
 
+#: The name `/me` stands for: the requester's own folder, stored under their id.
+PERSONAL_ALIAS = "me"
+
 
 class PathResolver:
     """Pure path/name policy: normalization, ``/me`` translation, visibility
@@ -204,6 +207,16 @@ class PathResolver:
         normalized_directory = self._normalize_path(directory_path)
         normalized_name = self._normalize_name(name)
         if normalized_directory == "/":
+            if normalized_name == PERSONAL_ALIAS:
+                # `/me` is the alias for the requester's personal folder, which
+                # is stored under their id. A literal `/me` would be a shared
+                # file or folder beside it that every path lookup reads as the
+                # personal folder instead -- unreachable, and deleting it by
+                # path deletes the wrong thing.
+                raise DatastoreValidationError(
+                    "'/me' is your personal folder. Put files inside it, e.g. "
+                    "/me/notes.md."
+                )
             return f"/{normalized_name}"
         return f"{normalized_directory}/{normalized_name}"
 

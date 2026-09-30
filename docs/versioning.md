@@ -25,7 +25,32 @@ Components are therefore free to disagree while work is in flight, and must
 agree at the moment something is published. A release is one change that sets
 every component to the new version, regenerates what embeds it — the bundled
 specs, both generated clients, the browser bundle, the lockfiles — and adds the
-changelog entry.
+changelog entry and the release notes.
+
+## Release notes
+
+The GitHub Release page is where people land to download the desktop app, so
+its description is written for them, not generated. Add
+`docs/release-notes/v<version>.md` in the release commit;
+`release-local-images.yml` uses it as the description when the tag is pushed.
+Without it the page falls back to GitHub's list of merged pull requests — a
+wall of internal titles that answers nothing a person arrived with.
+
+The changelog entry (`lemma-frontend/content/changelog/`) is the full account;
+the release notes are the page in front of the download button. Keep them
+short, in this order:
+
+1. **Download** — what to download for which machine, that an installed app
+   updates itself, and the one-line install for the CLI and both SDKs.
+2. **What's new** — five or six bullets, each an effect a person would notice,
+   in plain words. No pull request numbers, no internal names.
+3. **Upgrading** — only when something breaks for API, SDK or CLI users: one
+   sentence and a link to the changelog's compatibility section.
+4. **Links** — the changelog, and the `compare` view for everything else.
+
+[`v0.9.0.md`](release-notes/v0.9.0.md) is the model. To fix a published
+release's description, edit the file and run
+`gh release edit v<version> --notes-file docs/release-notes/v<version>.md`.
 
 Skew between an installed client and the server it is talking to never depended
 on this label anyway. `lemma_sdk._spec_info.SPEC_SHA256` fingerprints the schema

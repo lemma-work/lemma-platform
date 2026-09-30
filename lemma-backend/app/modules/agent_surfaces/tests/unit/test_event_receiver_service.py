@@ -584,12 +584,17 @@ def _install_redis(monkeypatch, redis: _RecordingRedis) -> None:
     monkeypatch.setitem(redis_client._clients, key, redis)
 
 
-def _telegram_runner() -> TelegramPollingReceiverRunner:
+_SURFACE_ID = UUID("019eadff-0000-7000-8000-000000000001")
+
+
+def _telegram_runner(
+    surface_ids: tuple[UUID, ...] = (_SURFACE_ID,),
+) -> TelegramPollingReceiverRunner:
     return TelegramPollingReceiverRunner(
         NativeReceiverCandidate(
             key="telegram:system:abc",
             platform=SurfacePlatform.TELEGRAM,
-            surface_ids=(UUID("019eadff-0000-7000-8000-000000000001"),),
+            surface_ids=surface_ids,
             credential_label="system",
             credentials={"bot_token": "token-1"},
         )
@@ -599,8 +604,11 @@ def _telegram_runner() -> TelegramPollingReceiverRunner:
 _PUBLISH = "app.core.infrastructure.events.publisher.EventPublisher.publish"
 
 
+# The shared system bot polls with no surfaces of its own, and its offset is
+# kept all the same: without it a restart re-reads every update Telegram holds.
+@pytest.mark.parametrize("surface_ids", [(_SURFACE_ID,), ()])
 async def test_telegram_offset_is_stored_only_after_the_update_is_published(
-    monkeypatch,
+    monkeypatch, surface_ids
 ):
     """Stored first, a crash between the two skipped an update for good."""
     order: list[str] = []
@@ -609,7 +617,7 @@ async def test_telegram_offset_is_stored_only_after_the_update_is_published(
         _PUBLISH, AsyncMock(side_effect=lambda *_: order.append("publish"))
     )
 
-    offset = await _telegram_runner()._dispatch(
+    offset = await _telegram_runner(surface_ids)._dispatch(
         {"update_id": 41, "message": {"text": "hi"}}, None
     )
 

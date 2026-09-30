@@ -106,12 +106,10 @@ if [[ "$scope" == "diff" ]]; then
     exit 2
   fi
   # Three-dot: what this branch changed, not what the base moved on to.
-  # Recorded as `path:start-end` line ranges rather than filenames, because a
-  # file-level scope reports every pre-existing finding in any file you touched
-  # -- renaming one import in a 600-line module made it look like the module had
-  # sprouted seven new problems.
+  # Recorded as `path:start-end` line ranges by the same helper the pull
+  # request comment in security.yml uses, so both scope a finding alike.
   git -C "$repo_root" diff -U0 --diff-filter=d "$base_ref...HEAD" \
-    | awk '/^\+\+\+ b\//{f=substr($0,7)} /^@@/{split($3,a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2]+0); if(n>0) print f":"s"-"(s+n-1)}' \
+    | python3 "$repo_root/scripts/codeql_scope.py" \
     > "$changed_files"
   changed_count="$(cut -d: -f1 "$changed_files" | sort -u | wc -l | tr -d ' ')"
   echo "Scope: $changed_count file(s) changed against $base_ref"

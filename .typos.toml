@@ -1,0 +1,97 @@
+# Spelling, checked by `make lint-docs` (typos, https://github.com/crate-ci/typos).
+#
+# typos only reports words it is confident are misspelt, which is why it can
+# run over code at all. What remains here is the vocabulary it does not know
+# and the files that are not ours to spell.
+
+[files]
+extend-exclude = [
+    # Vendored, minified or generated: a finding here is fixed upstream or by
+    # regenerating, never by editing.
+    "desktop/ui/vendor/",
+    "lemma-typescript/public/",
+    "lemma-backend/openapi_specs/",
+    "**/openapi_client/",
+    "**/generated/",
+    "*.min.js",
+    "*.lock",
+    "package-lock.json",
+    # Recorded agent transcripts are what an adapter actually sent, typos and all.
+    "desktop/agent-host/tests/fixtures/acp/",
+    "*.jsonl",
+    # The generated logging catalog repeats event names from the code.
+    "lemma-backend/app/core/log/event_catalog.py",
+]
+
+[default]
+extend-ignore-re = [
+    # A line can opt out, for text that is misspelt on purpose: a fuzzy-match
+    # fixture, a typo a parser must tolerate.
+    "(?Rm)^.*(#|//)\\s*typos:\\s*ignore.*$",
+]
+
+[default.extend-words]
+# Real words and product names typos does not know.
+unparseable = "unparseable"
+Unparseable = "Unparseable"
+overrideable = "overrideable"
+Overrideable = "Overrideable"
+canva = "canva"
+Canva = "Canva"
+CANVA = "CANVA"
+metalness = "metalness"
+lod = "lod"
+LOD = "LOD"
+uncatalogued = "uncatalogued"
+appliable = "appliable"
+playwrite = "playwrite"
+Playwrite = "Playwrite"
+Bellweather = "Bellweather"
+Ines = "Ines"
+# Abbreviations and fragments that are identifiers, not words: phone numbers
+# (`pn`), SMTP's HELO, SQLAlchemy's `selectin`, the `mis-` prefix, ordinal
+# suffixes, Windows and NSIS flags, and prefixes a matcher or a streaming test
+# cuts a word down to on purpose.
+pn = "pn"
+PN = "PN"
+mis = "mis"
+helo = "helo"
+selectin = "selectin"
+nd = "nd"
+Nd = "Nd"
+FO = "FO"
+Cpy = "Cpy"
+IIF = "IIF"
+caf = "caf"
+edn = "edn"
+styl = "styl"
+thi = "thi"
+Hel = "Hel"
+Hed = "Hed"
+SELEC = "SELEC"
+INSER = "INSER"
+UPDAT = "UPDAT"
+updat = "updat"
+delet = "delet"
+fter = "fter"
+efore = "efore"
+nwo = "nwo"
+lamda = "lamda"
+alls = "alls"
+alikes = "alikes"
+empted = "empted"
+orded = "orded"
+extention = "extention"
+# Possessives in test names, where an apostrophe cannot go.
+anothers = "anothers"
+Anothers = "Anothers"
+childs = "childs"
+directorys = "directorys"
+# Misspelt on purpose: fixtures for unknown-field warnings, fuzzy matching and
+# the typo gate's own example.
+descriptoin = "descriptoin"
+recipent = "recipent"
+passwrod = "passwrod"
+valu = "valu"
+typoes = "typoes"
+dekstop = "dekstop"

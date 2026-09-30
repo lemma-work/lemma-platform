@@ -54,9 +54,13 @@ function liveNote(state: LiveState): string {
  *  that connected on render would run a machine for anybody who left the tab
  *  open. It disconnects the moment this pane stops being the one on screen.
  */
-export function Screen({ state, browser, conversationId, visible, busy, onWake, onOpenTab }: {
+export function Screen({ state, browser, conversationId, visible, busy, onWake, onOpenTab, fill = false }: {
     state: MachineState;
     browser: BrowserState | undefined;
+    /** The screen is the whole view, not a card beside some text.
+     *  It connects as soon as there is something to show, because opening
+     *  the computer is asking to see it — until somebody stops watching. */
+    fill?: boolean;
 
     conversationId: string | null;
     visible: boolean;
@@ -79,35 +83,58 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
         if (!visible || state === "asleep" || state === "checking") setWatching(false);
     }, [visible, state]);
 
+    const [stopped, setStopped] = useState(false);
+    useEffect(() => {
+        if (!fill || stopped || !visible || say.action !== "show" || watching) return;
+        setLive("connecting");
+        setWatching(true);
+    }, [fill, stopped, visible, say.action, watching]);
+
     const showing = watching && visible;
     const pip = usePictureInPicture(showing);
 
     return (
-        <div className={"screen-panel screen-panel--" + (showing && live === "live" ? "live" : state)}>
+        <div className={"screen-panel screen-panel--" + (showing && live === "live" ? "live" : state) + (fill ? " screen-panel--fill" : "")}>
             <div className="screen-glass">
                 {showing ? (
                     <>
                         {pip.pipWindow ? (
                             <button className="screen-action" onClick={pip.close}>Bring it back</button>
                         ) : <LiveScreen mode="control" conversationId={conversationId} onState={setLive} />}
+                        {/* Full size, the panel's own close is the one close:
+                            a second × on the picture was a control for the
+                            same thing drawn twice. */}
+                        {!fill && (
                         <button
                             className="screen-stop"
                             title="Stop watching"
                             aria-label="Stop watching"
-                            onClick={() => setWatching(false)}
+                            onClick={() => { setWatching(false); setStopped(true); }}
                         >
                             <CloseIcon size={14} />
                         </button>
+                        )}
                     </>
                 ) : say.action === "wake" ? (
-                    <button className="screen-action" onClick={onWake}>Wake it</button>
+                    fill ? (
+                        <div className="screen-asleep">
+                            <button className="screen-action" onClick={onWake}>Wake it</button>
+                            <p>{say.note}</p>
+                        </div>
+                    ) : <button className="screen-action" onClick={onWake}>Wake it</button>
                 ) : say.action === "show" ? (
-                    <button className="screen-action" onClick={() => { setLive("connecting"); setWatching(true); }}>
+                    <button className="screen-action" onClick={() => { setLive("connecting"); setWatching(true); setStopped(false); }}>
                         Show the screen
                     </button>
+                ) : fill ? (
+                    /* Nothing to show and nothing to press: say so in the middle
+                       of the stage rather than leave a black rectangle. */
+                    <div className="screen-asleep">
+                        <p>{say.note}</p>
+                    </div>
                 ) : null}
             </div>
-            {showing && pip.supported && (
+            {showing && pip.supported && !fill && (
                 <button className="computer-inline" onClick={() => pip.pipWindow ? pip.close() : void pip.open()}>
                     <ExternalIcon size={13} /> {pip.pipWindow ? "Bring it back" : "Pop out"}
                 </button>
@@ -117,7 +144,9 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                 <LiveScreen mode="control" conversationId={conversationId} autoResize={false} onState={setLive} />,
                 pip.pipWindow.document.body,
             )}
-            <p className="screen-caption" role="status">
+            {/* Full size, the bar above already says the state; the caption is
+                only for what the live connection is doing. */}
+            {(!fill || (showing && live !== "live")) && <p className="screen-caption" role="status">
                 {showing ? (
                     <>
                         {live !== "live" && <>{liveNote(live)} </>}
@@ -131,7 +160,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                 ) : (
                     <><strong>{say.headline}.</strong> {say.note}</>
                 )}
-            </p>
+            </p>}
         </div>
     );
 }

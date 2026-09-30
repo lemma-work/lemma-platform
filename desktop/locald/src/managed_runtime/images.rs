@@ -295,24 +295,24 @@ impl ManagedRuntimeController {
     /// Whether this start should fetch the sandbox images nobody asked for,
     /// and if so, the note that it has.
     ///
-    /// Only for someone who uses sandboxes -- this computer fetched them
-    /// before -- and whose release pins different ones: an update. Without it
-    /// the new image arrived on the first Wake up after the update, and the
-    /// person waited on the download there. Once per release, recorded before
-    /// the fetch starts, so a failure is offered in Settings rather than
-    /// retried on every start. With the image reused across releases, the
-    /// workspace image's reference usually has not moved and the fetch finds
-    /// it already there.
+    /// On the first start of an install, and on the first start of a release
+    /// that pins different images than the ones this computer has. Almost
+    /// every conversation needs the sandbox -- the browser a coding agent
+    /// drives runs in it too -- so waiting for the first Wake up only moved
+    /// a several-hundred-megabyte download to the moment someone was waiting
+    /// on it. Once per release, recorded before the fetch starts, so a failure
+    /// is offered in Settings rather than retried on every start. With the
+    /// image reused across releases, the workspace image's reference usually
+    /// has not moved and the fetch finds it already there.
     pub fn claim_unasked_sandbox_image_fetch(&self) -> bool {
         let pinned = self.pinned_sandbox_images();
         if pinned.workspace.is_none() && pinned.function.is_none() {
             return false;
         }
         let mut record = self.prepared_sandbox_images();
-        let Some(fetched) = record.fetched.as_ref() else {
-            return false;
-        };
-        if *fetched == pinned || record.fetched_unasked.as_ref() == Some(&pinned) {
+        if record.fetched.as_ref() == Some(&pinned)
+            || record.fetched_unasked.as_ref() == Some(&pinned)
+        {
             return false;
         }
         record.fetched_unasked = Some(pinned);

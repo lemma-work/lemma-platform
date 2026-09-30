@@ -33,7 +33,10 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
 )
-from app.modules.agent_surfaces.services.onboarding_replies import say_privately
+from app.modules.agent_surfaces.services.onboarding_replies import (
+    NO_EMAIL_SIGNUP_MESSAGE,
+    say_privately,
+)
 from app.modules.agent_surfaces.services.onboarding_transport import (
     OnboardingTransport,
 )
@@ -112,6 +115,29 @@ class OnboardingOutcomes:
             transport,
             destination,
             "Setup expired. Send a fresh request to start again.",
+        )
+
+    async def email_unavailable(
+        self,
+        transport: OnboardingTransport,
+        state: PendingState,
+        destination: ParsedInboundSurfaceEvent,
+    ) -> None:
+        """End a signup whose only remaining proof is an email nobody can send.
+
+        REFUSED because that is what REFUSED means -- signup has no answer for
+        this person -- and the next message starts afresh, so somebody who adds
+        the number to their profile and shares their contact again is matched.
+        Logged as an observation: this is the installation working as set up.
+        """
+        logger.info(
+            "agent_surfaces.chat_onboarding.email_unavailable.observed",
+            platform=state.platform,
+            step=state.step,
+        )
+        await self._end_with(state, OnboardingStep.REFUSED)
+        await say_privately(
+            self._adapters, self._uows, transport, destination, NO_EMAIL_SIGNUP_MESSAGE
         )
 
     async def refused(

@@ -4,9 +4,11 @@ Two different levers, because the two provider families cache differently.
 
 OpenAI-compatible providers reuse the request prefix automatically; the lever we
 control is *session affinity* — routing a conversation's turns to the same
-replica so the cached prefix is reused. We key affinity on the conversation id
-(stable across turns), NOT the agent-run id (which changes every turn and would
-scatter routing, defeating cross-turn reuse).
+replica so the cached prefix is reused. The assembler keys affinity on the pod
+and agent, so a new conversation lands where that agent's long, shared prompt
+start is already cached, and a conversation's turns still land together; the
+conversation id is the fallback. Never the agent-run id, which changes every
+turn and would scatter routing, defeating cross-turn reuse.
 
 Anthropic caches nothing without an explicit breakpoint, so we ask pydantic-ai
 to mark one after the static instruction blocks. That only pays off because the
@@ -42,8 +44,15 @@ class PromptCachingCapability(AbstractCapability[object]):
         conversation_id: UUID,
         protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
         id: str | None = "prompt_caching",
+        affinity_key: str | None = None,
     ) -> None:
         self._conversation_id = str(conversation_id)
+        # What routes requests to the same replica. Wider than the conversation
+        # on purpose when the caller knows more: every conversation with one
+        # agent in one pod shares the long start of its prompt, and a new
+        # conversation keyed on its own id lands on a replica that has never
+        # seen it -- a cold first request, every time.
+        self._affinity_key = affinity_key or self._conversation_id
         self._protocol = protocol
         self._id = id
 
@@ -65,7 +74,7 @@ class PromptCachingCapability(AbstractCapability[object]):
                 # prompt for the rest of the run.
                 "anthropic_cache_tool_definitions": _ANTHROPIC_CACHE_TTL,
             }
-        affinity = self._conversation_id
+        affinity = self._affinity_key
         return {
             # OpenAI `user` field — used by compatible providers for sticky
             # replica routing so the cached prefix is hit across turns. The only

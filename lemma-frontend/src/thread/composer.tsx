@@ -216,7 +216,6 @@ export function Composer({
                     )}
                     <textarea
                         rows={1}
-                        title="Enter to send · Shift+Enter for a new line"
                         ref={input}
                         className="composer__input"
                         aria-label={placeholder}

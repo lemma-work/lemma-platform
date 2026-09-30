@@ -140,6 +140,71 @@ jobs:
           config-file: .github/codeql-config.yml
       - uses: github/codeql-action/analyze@v4
 
+  # CodeQL runs only here -- `make check` no longer runs it locally -- so its
+  # findings are posted where the author is already looking: one sticky
+  # comment listing what the analyses found on the lines this pull request
+  # changed, plus an inline review comment for each high or critical one.
+  #
+  # It reads the alerts after both analyze jobs have finished, rather than
+  # relying on the aggregate `CodeQL` check, which evaluates seconds before the
+  # uploads land and never looks again. Reporting, not gating: "Security
+  # passed" already fails on the analyze jobs themselves.
+  codeql-pr-comment:
+    timeout-minutes: 10
+    name: CodeQL findings comment
+    needs:
+      - codeql-python
+      - codeql-javascript
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: read
+    steps:
+      - name: Decide whether this token can comment
+        id: gate
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          # A fork's pull_request token is read-only, and so is Dependabot's.
+          if [[ "$HEAD_REPO" != "$GITHUB_REPOSITORY" || "$ACTOR" == "dependabot[bot]" ]]; then
+            echo "::notice::Read-only token for this pull request, so CodeQL findings are not posted as a comment. They are in the Security tab and on the CodeQL jobs."
+            echo "post=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "post=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.post == 'true'
+        with:
+          # The merge commit and both its parents: the diff against the first
+          # is what the alerts were computed on; the second is the PR head.
+          fetch-depth: 2
+      - name: Diff the merge commit
+        if: steps.gate.outputs.post == 'true'
+        run: |
+          git diff -U0 --diff-filter=d HEAD^1 HEAD > "$RUNNER_TEMP/pr.diff"
+          git diff --name-only HEAD^2 HEAD > "$RUNNER_TEMP/drifted.txt"
+      - name: Post or update the CodeQL comment
+        if: steps.gate.outputs.post == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PYTHON_RESULT: ${{ needs.codeql-python.result }}
+          JAVASCRIPT_RESULT: ${{ needs.codeql-javascript.result }}
+        run: >-
+          python3 scripts/codeql_pr_comment.py
+          --repo "$GITHUB_REPOSITORY"
+          --pr "$PR_NUMBER"
+          --head-sha "$HEAD_SHA"
+          --merge-sha "$GITHUB_SHA"
+          --diff "$RUNNER_TEMP/pr.diff"
+          --drifted "$RUNNER_TEMP/drifted.txt"
+          --analysis "python=$PYTHON_RESULT"
+          --analysis "javascript-typescript=$JAVASCRIPT_RESULT"
+
   secrets:
     timeout-minutes: 15
     name: Gitleaks

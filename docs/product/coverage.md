@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 169 |
+| `covered` | 170 |
 | `gap` | 2 |
-| `manual` | 15 |
+| `manual` | 16 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **186** |
+| **total** | **188** |
 
-Scenario tests declaring a promise: 414.
+Scenario tests declaring a promise: 423.
 
 ## Contract coverage
 
@@ -43,6 +43,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Lane |
 | --- | --- |
+| `PS-AGENT-016` Everyday requests finish while the person waits | `live` |
 | `PS-FUNC-002` A function runs isolated from everything else | `sandbox` |
 | `PS-FUNC-010` A quick function answers immediately | `sandbox` |
 | `PS-FUNC-011` A long function is queued and reports progress | `sandbox` |
@@ -68,6 +69,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-015` A person can add to what the agent is already doing | `covered` | `test_a_message_sent_mid_run_is_answered` |
+| `PS-AGENT-016` Everyday requests finish while the person waits | `covered` | `test_a_question_about_data`, `test_a_record_is_added`, `test_a_doc_is_edited_in_place`, `test_a_csv_is_exported`, `test_a_pdf_report_is_made`, `test_a_word_document_is_made`, `test_a_research_memo`, `test_a_web_lookup`, `test_something_is_remembered` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
 | `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
@@ -261,6 +263,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-004` A stranger on a shared bot proves who they are before getting a workspace | `manual` | — |
 | `PS-SURF-005` Signup inside a company installation stays inside that company | `manual` | — |
 | `PS-SURF-006` Nothing about signup appears in a channel | `manual` | — |
+| `PS-SURF-007` The owner of a Desktop install chats with the shared Telegram bot by sharing their contact | `manual` | — |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_reaching_the_bot_is_not_membership_of_the_pod`, `test_a_sender_is_the_same_person_on_every_message` |

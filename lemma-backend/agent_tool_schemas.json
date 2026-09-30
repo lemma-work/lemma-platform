@@ -1868,6 +1868,64 @@
     }
   },
   {
+    "tool_name": "pod_edit_file",
+    "toolset": "POD",
+    "description": "Change part of an existing pod text file by exact-text replacement.\n\nThe way to edit a doc, a page or any file you did not just write: name the\ntext to replace and what goes there, and the rest of the file is kept byte\nfor byte. Every edit is placed before anything is written, so either all of\nthem land or none do. No need to download the file or rewrite it whole.",
+    "input_schema": {
+      "$defs": {
+        "FileEdit": {
+          "properties": {
+            "old_text": {
+              "description": "Exact text to replace, copied from the file. It must appear exactly once unless `replace_all` is set; include a neighbouring line to make it unique.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "new_text": {
+              "description": "Text to put in its place.",
+              "type": "string"
+            },
+            "replace_all": {
+              "default": false,
+              "description": "Replace every occurrence instead of one.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "old_text",
+            "new_text"
+          ],
+          "title": "FileEdit",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "path": {
+          "description": "Pod file path of an existing text file. A relative path resolves against `/me/c/{date}/{slug}`.",
+          "type": "string"
+        },
+        "edits": {
+          "description": "Replacements applied in order; each sees the result of the last.",
+          "items": {
+            "$ref": "#/$defs/FileEdit"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "edits"
+      ],
+      "title": "PodEditFileRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "pod_get_file_url",
     "toolset": "POD",
     "description": "Get a URL for a pod file, to share a link or embed an image.\n\n``app`` (default) returns an in-app link for a signed-in member plus a\nshort-lived download url. ``public`` mints a signed link anyone can open \u2014\nit expires and dies after ``max_hits`` downloads.",

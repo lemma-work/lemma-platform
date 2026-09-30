@@ -806,6 +806,7 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "pod_list_files",
     "pod_read_file",
     "pod_write_file",
+    "pod_edit_file",
     "pod_search_files",
     "pod_get_file_url",
     "pod_view_document_pages",

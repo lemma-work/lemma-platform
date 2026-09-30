@@ -24,3 +24,5 @@ tmp/
 # checkout in local mode (`make desktop-dev`); per-run, never source.
 /public/runtime-config.js
 /public/.well-known/microsoft-identity-association.json
+/.next-sample/
+/.next-local/

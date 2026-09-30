@@ -24,6 +24,9 @@ export interface Member {
     /** What this member is allowed to do, in a person's words. */
     can: string;
     iconUrl?: string | null;
+    /** The account behind the membership — what a run or a schedule names as
+     *  its owner (`user_id`), which is not the membership id above. */
+    userId?: string;
 }
 
 /** Who answers in a pod. Its own name and face, not the product's. */
@@ -171,6 +174,9 @@ export interface Pod {
     name: string;
     /** A pod may carry its own icon; without one it wears a generated orb. */
     iconUrl: string | null;
+    /** What the teammate is for, in one line: the job it was hired with. The
+     *  pod's `description`. Absent when nobody has written one. */
+    description?: string;
     /** The agent that answers here. */
     teammate: Persona;
     /** "with Priya and you" — who is in here, said the way a person would. */
@@ -184,7 +190,16 @@ export interface Pod {
  *  only one that carries a composer. */
 /** `status` is the datastore's processing status for a file (PENDING,
  *  PROCESSING, COMPLETED, FAILED, …); absent for tables and sample rows. */
-export interface LibraryItem { id: string; name: string; kind: "file" | "folder" | "table"; path: string; updated: string; detail: string; status?: string }
+export interface LibraryItem {
+    id: string; name: string; kind: "file" | "folder" | "table"; path: string; updated: string; detail: string; status?: string;
+    /** Who can open it: `PERSONAL`, `POD`, `RESTRICTED` or `PUBLIC`, as the
+     *  datastore records it. Absent where the source does not say. */
+    visibility?: string;
+    /** A table with row-level security: everyone opens it, each sees only
+     *  their own rows. */
+    rls?: boolean;
+    owner?: string | null;
+}
 export interface ResourcePage<T> { items: T[]; next?: string | null }
 
 /** A link that works without a Lemma account.
@@ -206,12 +221,24 @@ export interface SharedLink {
     maxHits: number;
 }
 
+/** A view of the space's own contents, filtered by kind — and `about`, the
+ *  teammate the space belongs to. */
+export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "settings" | "about";
+
 export type Tab =
+    | { id: string; kind: "space"; label: string; view: SpaceView }
+    /** One workflow run: every step, what it waits on, and where it went. */
+    | { id: string; kind: "run"; label: string; runId: string }
+    | { id: string; kind: "workflow"; label: string; name: string }
+    /** One bot's page: who it is and your conversation with it. */
+    | { id: string; kind: "bot"; label: string; name: string }
+    /** A bot waiting on you to sign in to a site, opened beside the thread. */
+    | { id: string; kind: "signin"; label: string; conversationId: string; toolCallId: string; host: string }
     | { id: "apps"; kind: "apps"; label: string }
     | { id: "library"; kind: "library"; label: string }
     | { id: string; kind: "table"; label: string; name: string }
     | { id: "conversation"; kind: "conversation"; label: string }
-    | { id: string; kind: "app"; label: string; url: string; status: string }
+    | { id: string; kind: "app"; label: string; url: string; status: string; visibility?: string; updated?: string }
     | { id: "profile"; kind: "profile"; label: string }
     /** The agents behind this teammate: the one answering you, and the ones it
      *  hands work to. In the strip rather than opened on demand, because
@@ -222,7 +249,9 @@ export type Tab =
     | { id: "history"; kind: "history"; label: string }
     /** A file the agent showed, opened onto the stage. Same idea: you asked
      *  for it, so it stays until you close it. */
-    | { id: string; kind: "file"; label: string; path: string }
+    /** `pane` is the id it was opened under, kept through a rename so the
+     *  open editor is not rebuilt when its file moves. */
+    | { id: string; kind: "file"; label: string; path: string; pane?: string }
     /** One row, on its own page — reached from its table or from search, and
      *  worth a tab because what it is attached to is worth navigating. */
     | { id: string; kind: "record"; label: string; table: string; recordId: string }
@@ -263,6 +292,11 @@ export interface ConversationRef {
      *  carries. Its front door is that resource, so the recent panel leaves it
      *  out — see `unbound`. */
     boundTo?: string | null;
+    /** The bot answering it, by uuid — only on lists that span every bot. */
+    agentId?: string | null;
+    /** Where it came from — a channel, a schedule, a workflow run, a doc — as
+     *  the backend recorded it on the conversation. */
+    origin?: import("@/thread/conversation-origin").ConversationOrigin;
 }
 
 /** One page of a teammate's conversations, most recently active first.
@@ -350,6 +384,10 @@ export interface PodSource {
     /** Mint a public link to one document. Ask for a lifetime and a number of
      *  opens; the platform decides what it will actually allow. */
     shareFile(podId: string, path: string, options?: { expiresSeconds?: number; maxHits?: number }): Promise<SharedLink>;
+    /** The public links to one document that still work, newest first. */
+    fileLinks(podId: string, path: string): Promise<SharedLink[]>;
+    /** Turn a public link off now. False when it was already dead. */
+    revokeFileLink(podId: string, code: string): Promise<boolean>;
     tableColumns(podId: string, name: string): Promise<{ name: string; system?: boolean }[]>;
     /** How many rows the table actually has, or `null` when it will not say.
      *
@@ -397,6 +435,9 @@ export interface PodSource {
      *  is one of these rather than a display name laid over a real one that
      *  people would then find in an error message. */
     renamePod(podId: string, name: string): Promise<void>;
+    /** Change the one line that says what a teammate is for. The pod's
+     *  `description`, which hiring fills with the job it was given. */
+    describePod(podId: string, description: string): Promise<void>;
     /** Put a picture somewhere the platform will serve it, and hand back the
      *  URL to store in `icon_url`. */
     uploadIcon(file: File): Promise<string>;
@@ -564,6 +605,11 @@ export interface PodSource {
      *  `thread/document-save.ts` for why the other text formats do not.
      */
     writeFile(podId: string, path: string, text: string): Promise<void>;
+    /** Make a new text file, and refuse — with a 409 — if one is already
+     *  there. `writeFile` replaces; a new page must never replace. */
+    createFile(podId: string, path: string, text: string): Promise<void>;
+    /** Move a file or folder. 409 when `to` is taken, 404 when `from` is gone. */
+    renameFile(podId: string, from: string, to: string): Promise<void>;
     /** A signed URL the widget iframe can load. The serve route is
      *  authenticated and injects the runtime config the widget's browser SDK
      *  needs, which inline HTML in an iframe can never have. */
@@ -573,7 +619,9 @@ export interface PodSource {
     /** Any page, for the one place that shows every conversation. `search`
      *  keeps titles containing it (case-insensitive), matched by the server so
      *  it reaches conversations no page has loaded yet. */
-    listConversationsPage(podId: string, cursor?: string | null, search?: string): Promise<ConversationPage>;
+    /** `everyone`: conversations with every bot here, not only the space's
+     *  own — the full list rather than the sidebar's. */
+    listConversationsPage(podId: string, cursor?: string | null, search?: string, everyone?: boolean): Promise<ConversationPage>;
     /** The call threads hanging off one conversation.
      *
      *  A call runs in a conversation of its own, parented to whatever was

@@ -2,7 +2,6 @@ import { EmbedPreview } from "./embed-preview";
 import { AppsIcon } from "@/ui/icons";
 import { useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
-import { sameSiteWithApi } from "@/session/client";
 
 /** A widget is not an HTML snippet, it is a small app.
  *
@@ -54,7 +53,6 @@ export function WidgetView({
     /* A minted URL is the real widget; the iframe keeps its own origin so the
        SDK inside it can authenticate and fetch. */
     if (embed.data) {
-        const crossSite = !sameSiteWithApi();
         return (
             <figure className="resource resource--widget">
                 <EmbedPreview title={label} src={embed.data} sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
@@ -62,15 +60,7 @@ export function WidgetView({
                     it again underneath was the same label twice, inside two
                     borders — so the caption is kept for what the toolbar cannot
                     say, and drops out entirely when there is nothing to add. */}
-                {crossSite && (
-                    <figcaption className="resource__caption">
-                        <span className="resource__warn">
-                            Served from {window.location.hostname}, so the widget&rsquo;s own session cookie
-                            for the API is partitioned away — it will say it cannot read the pod until this app is
-                            served from the API&rsquo;s domain
-                        </span>
-                    </figcaption>
-                )}
+
             </figure>
         );
     }

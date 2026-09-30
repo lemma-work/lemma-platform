@@ -95,9 +95,12 @@ _RESET_STYLES = """
 # Embedding chrome: only applied to the in-conversation iframe so the widget
 # blends into the conversation surface. A standalone (promoted) app gets none of
 # this — it owns the full page.
+# The inset is a theme token so a host can tighten it: the 16px was room for a
+# card's lifted shadow, and a host that hands widgets a hairline instead has no
+# shadow to make room for.
 _EMBED_STYLES = """
       html, body { background: transparent; }
-      body { padding: 16px; }"""
+      body { padding: var(--lemma-widget-inset, 16px); }"""
 
 
 def _escape(value: str) -> str:

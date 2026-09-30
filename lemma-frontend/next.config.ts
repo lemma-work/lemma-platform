@@ -16,6 +16,10 @@ const standalone = process.env.LEMMA_STANDALONE === "1";
 
 const config: NextConfig = {
   ...(standalone ? { output: "standalone" as const } : {}),
+  /* A second dev server (the sample-data one) builds into its own
+     folder, so it can run beside the live one instead of fighting it for
+     `.next`. Unset in every other case. */
+  ...(process.env.LEMMA_DIST_DIR ? { distDir: process.env.LEMMA_DIST_DIR } : {}),
   poweredByHeader: false,
   skipTrailingSlashRedirect: true,
   async redirects() {

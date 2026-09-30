@@ -29,9 +29,13 @@ import { type LiveState } from "./live";
  *  retry, and a retry is cheaper than a person staring at a password field that
  *  will not take their keystrokes.
  */
-export function SignInPane({ conversationId, toolCallId, onDone }: {
+export function SignInPane({ conversationId, toolCallId, onDone, compact = false }: {
     conversationId: string;
     toolCallId: string;
+    /** Opened beside the thread as the browser itself. One thin bar
+     *  carries the host, the two answers and — behind "Why?" — what the bot
+     *  said; everything else waits until somebody asks for it. */
+    compact?: boolean;
     /** Told when the pause is answered, so a host holding this open can put
      *  itself away rather than leaving a spent sign-in on screen. */
     onDone?: () => void;
@@ -94,6 +98,54 @@ export function SignInPane({ conversationId, toolCallId, onDone }: {
     }
 
     const where = whereabouts(request.data.origin, page.data ?? null);
+
+    if (compact) {
+        const glass = (
+            <div className="signin__glass">
+                <LiveScreen mode="control" origin={request.data.origin} reopen={reopen} onState={setPicture} />
+                {picture === "live" && !where.arrived && (
+                    <div className="signin__waiting">
+                        <LoadingIndicator label={"Connecting to " + whereabouts(request.data.origin, null).host} />
+                        <button className="signin__again" onClick={() => setReopen((n) => n + 1)}>Try again</button>
+                    </div>
+                )}
+                {picture !== "live" && (
+                    <p className="signin__waiting" role="status">
+                        {picture === "connecting" ? "Connecting to the browser…" : liveTrouble(picture)}
+                    </p>
+                )}
+            </div>
+        );
+        return (
+            <div className="signin signin--compact">
+                <header className="sbar">
+                    <LockIcon size={15} className={where.secure ? "signin__lock" : "signin__lock--open"} />
+                    <strong className="sbar__host">{where.host}</strong>
+                    {!where.secure && <span className="signin__warn">not secure</span>}
+                    {where.elsewhere && <span className="sbar__aside">for {whereabouts(request.data.origin, null).host}</span>}
+                    <details className="sbar__why">
+                        <summary>Why?</summary>
+                        <div className="sbar__pop">
+                            {request.data.reason && <p>It says: &ldquo;{request.data.reason}&rdquo;</p>}
+                            <p className="sbar__fine">Sign in as you normally would. The browser keeps the session so it can carry on, and your password never reaches Lemma.</p>
+                        </div>
+                    </details>
+                    <span className="sbar__spacer" />
+                    {answer.isError && <span className="sbar__error" role="alert">Didn&rsquo;t get through</span>}
+                    {(picture === "refused" || picture === "unsupported" || picture === "stale-image") && (
+                        <button className="sbar__quiet" disabled={tab.busy} onClick={tab.open}>Open in a tab</button>
+                    )}
+                    <button className="sbar__quiet" disabled={answer.isPending} onClick={() => answer.mutate(false, { onSuccess: onDone })}>
+                        Can&rsquo;t right now
+                    </button>
+                    <button className="sbar__primary" disabled={answer.isPending} onClick={() => answer.mutate(true, { onSuccess: onDone })}>
+                        {answer.isPending ? "Checking…" : "I'm signed in"}
+                    </button>
+                </header>
+                {glass}
+            </div>
+        );
+    }
 
     return (
         <div className="signin">
