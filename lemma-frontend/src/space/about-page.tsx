@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
@@ -67,6 +67,7 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
         <div className="aboutpage" ref={page}>
             <div className="aboutpage__column">
                 <Hero pod={pod} orgId={orgId} onAsk={onAsk} />
+                <Jumps page={page} />
 
                 <Section id="people" title="People" note={"Everyone here can open what is in " + pod.name + "’s space."}>
                     <AddPeople pod={pod} orgId={orgId} />
@@ -119,6 +120,63 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
                 </p>
             </div>
         </div>
+    );
+}
+
+/** The page's sections, as a row that stays at the top while you scroll.
+ *  About grew to seven sections; this is how you get to the fifth without
+ *  scrolling past the first four. The section in view is marked. */
+const JUMPS: { id: AboutSection; label: string }[] = [
+    { id: "people", label: "People" },
+    { id: "channels", label: "Channels" },
+    { id: "skills", label: "Taught" },
+    { id: "memory", label: "Remembers" },
+    { id: "schedules", label: "Standing work" },
+    { id: "agents", label: "Hands work to" },
+    { id: "model", label: "Runs on" },
+];
+
+function Jumps({ page }: { page: RefObject<HTMLDivElement | null> }) {
+    const [at, setAt] = useState<AboutSection | null>(null);
+    /* The jump just taken stays marked until the person scrolls themselves:
+       while the page glides there, and at the bottom, where the last
+       sections can never reach the bar because the page runs out first. */
+    const asked = useRef<AboutSection | null>(null);
+    useEffect(() => {
+        const root = page.current;
+        if (!root) return;
+        const pick = () => {
+            if (asked.current) { setAt(asked.current); return; }
+            /* The one nearest the top of the viewport, below the bar itself. */
+            const top = root.getBoundingClientRect().top + 72;
+            let current: AboutSection | null = null;
+            for (const jump of JUMPS) {
+                const section = root.querySelector(`[data-about="${jump.id}"]`);
+                if (section && section.getBoundingClientRect().top <= top) current = jump.id;
+            }
+            setAt(current);
+        };
+        const mine = () => { asked.current = null; };
+        pick();
+        root.addEventListener("scroll", pick, { passive: true });
+        for (const kind of ["wheel", "touchstart", "keydown"] as const) root.addEventListener(kind, mine, { passive: true });
+        return () => {
+            root.removeEventListener("scroll", pick);
+            for (const kind of ["wheel", "touchstart", "keydown"] as const) root.removeEventListener(kind, mine);
+        };
+    }, [page]);
+    const go = (id: AboutSection) => {
+        asked.current = id;
+        setAt(id);
+        const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        page.current?.querySelector(`[data-about="${id}"]`)?.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+    };
+    return (
+        <nav className="aboutpage__jumps" aria-label="On this page">
+            {JUMPS.map((jump) => (
+                <button key={jump.id} aria-current={at === jump.id ? "true" : undefined} onClick={() => go(jump.id)}>{jump.label}</button>
+            ))}
+        </nav>
     );
 }
 

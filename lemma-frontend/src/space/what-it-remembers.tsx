@@ -1,11 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { source, type LibraryItem, type Pod } from "@/data";
 import { listStamp } from "@/data/stamp";
 import { isForbidden, isMissing } from "@/session/auth-state";
 import { changedLately, listIfThere, MEMORY_FOLDERS, notesFrom } from "@/thread/memory-notes";
-import { LockIcon } from "@/ui/icons";
 
 /** The datastore's answer for a folder that is not there: a 400 with this
  *  sentence, not a 404. */
@@ -21,9 +21,10 @@ function isNoSuchFolder(problem: unknown): boolean {
  *
  *  Read from the files themselves, so it is the notes that exist and nothing
  *  else: no summary, no count of lessons, nothing the model was asked to
- *  report about itself. A dot marks a note changed in the last week. Private
- *  notes are the viewer's own, and say so. */
+ *  report about itself. A dot marks a note changed in the last week. Shared and
+ *  personal notes are two tabs, split the way Files splits them. */
 export function WhatItRemembers({ pod, onFile }: { pod: Pod; onFile: (path: string) => void }) {
+    const [scope, setScope] = useState<"shared" | "personal" | null>(null);
     const notes = useQuery({
         queryKey: ["memory-notes", pod.id],
         queryFn: async () => {
@@ -61,25 +62,49 @@ export function WhatItRemembers({ pod, onFile }: { pod: Pod; onFile: (path: stri
     if (notes.data.length === 0) {
         return <p className="aboutpage__quiet">{pod.name} hasn’t written anything down yet. Correct it once and it will.</p>;
     }
+    const shared = notes.data.filter((note) => !note.private);
+    const personal = notes.data.filter((note) => note.private);
+    /* The Files view's split, in its words: what everyone here can read, and
+       what it keeps for you alone. Opens on shared unless that is empty. */
+    const showing = scope ?? (shared.length === 0 && personal.length > 0 ? "personal" : "shared");
+    const list = showing === "shared" ? shared : personal;
     const now = Date.now();
     return (
-        <ul className="notes">
-            {notes.data.map((note) => {
-                const fresh = changedLately(note.updated, now);
-                return (
-                    <li key={note.path}>
-                        <button className="notes__row" onClick={() => onFile(note.path)} title={note.path}>
-                            <span className={fresh ? "notes__dot notes__dot--fresh" : "notes__dot"} aria-label={fresh ? "Changed this week" : undefined} />
-                            <span className="notes__line">
-                                {note.private && <LockIcon size={11} aria-label="Only you" />}
-                                <span className="notes__topic">{note.topic}</span>
-                                {note.gloss && <span className="notes__gloss">{note.gloss}</span>}
-                            </span>
-                            <time className="notes__at" dateTime={note.updated}>{listStamp(note.updated)}</time>
-                        </button>
-                    </li>
-                );
-            })}
-        </ul>
+        <div className="notes-view">
+            <div className="all__tabs" role="tablist" aria-label="Whose notes">
+                {(["shared", "personal"] as const).map((each) => (
+                    <button key={each} role="tab" aria-selected={showing === each} onClick={() => setScope(each)}>
+                        {each === "shared" ? "Shared" : "Personal"}
+                        <span className="notes-view__count">{(each === "shared" ? shared : personal).length}</span>
+                    </button>
+                ))}
+            </div>
+            <p className="all__scope-note">
+                {showing === "shared" ? "Everyone in " + pod.name + "’s space can read these." : "Only you can read these. " + pod.name + " keeps them for you."}
+            </p>
+            {list.length === 0 ? (
+                <p className="aboutpage__quiet">
+                    {showing === "shared" ? "Nothing shared written down yet." : "Nothing about you alone yet. What " + pod.name + " learns only from you lands here."}
+                </p>
+            ) : (
+                <ul className="notes">
+                    {list.map((note) => {
+                        const fresh = changedLately(note.updated, now);
+                        return (
+                            <li key={note.path}>
+                                <button className="notes__row" onClick={() => onFile(note.path)} title={note.path}>
+                                    <span className={fresh ? "notes__dot notes__dot--fresh" : "notes__dot"} aria-label={fresh ? "Changed this week" : undefined} />
+                                    <span className="notes__line">
+                                        <span className="notes__topic">{note.topic}</span>
+                                        {note.gloss && <span className="notes__gloss">{note.gloss}</span>}
+                                    </span>
+                                    <time className="notes__at" dateTime={note.updated}>{listStamp(note.updated)}</time>
+                                </button>
+                            </li>
+                        );
+                    })}
+                </ul>
+            )}
+        </div>
     );
 }

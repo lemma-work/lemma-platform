@@ -88,6 +88,9 @@ you talk to, the space is what you share. The app has two altitudes.
   its face, its job (the pod's `description`), one line of news (what is
   waiting on you, or its latest conversation) and the people in its space.
   Those that need you come first; there are never more than two groups.
+- About is long, so a row of jumps (People, Channels, Taught, Remembers,
+  Standing work, Hands work to, Runs on) stays at the top while it scrolls
+  and marks the section in view.
 - Zoomed in, `/t/{pod}/…`: one teammate's space. Its face and job head the
   sidebar and open About (`/t/{pod}/about`), which holds everything about how
   it works — people, channels, skills, standing work, the agents it hands work
@@ -115,7 +118,8 @@ learning (what it wrote down).
   skills, which people write; remembers is memory, which the teammate writes
   under `/memory`, `/memory/agents/pod-default` and, privately,
   `/me/agents/pod-default`. One line a note, indexes (`AGENTS.md`) left out,
-  a filled dot for a note changed this week, a lock on a private one.
+  a filled dot for a note changed this week. Shared and Personal are two
+  tabs, the words and the split the Files view already uses.
 - Under a reply, "Kit noted this · Pricing" appears when the turn wrote a
   memory note and the write came back successful. It is drawn from the tool
   call, not from the model saying so; the model still writes silently.

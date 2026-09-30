@@ -7027,7 +7027,7 @@ samp,
     display: flex;
     align-items: center;
     gap: 28px;
-    margin-bottom: 36px;
+    margin-bottom: 24px;
 }
 .aboutpage__who h1 {
     margin: 0;
@@ -7090,7 +7090,60 @@ samp,
 }
 .aboutpage__section {
     padding-top: 28px;
-    scroll-margin-top: 16px;
+    /* Clear of the sticky row of jumps above it. */
+    scroll-margin-top: 52px;
+}
+/* The page's sections as a row that stays put while the page scrolls under
+   it. Plain words, the tab look the Files view uses, and it scrolls sideways
+   on a phone rather than wrapping into a block. */
+.aboutpage__jumps {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    gap: 2px;
+    margin: 0 -8px;
+    padding: 8px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.aboutpage__jumps::-webkit-scrollbar {
+    display: none;
+}
+.aboutpage__jumps button {
+    flex: none;
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13.5px;
+    cursor: pointer;
+}
+.aboutpage__jumps button:hover {
+    color: var(--ink);
+    background: var(--accent-soft);
+}
+.aboutpage__jumps button[aria-current="true"] {
+    color: var(--ink);
+    background: var(--line-2);
+}
+.aboutpage__jumps button:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+/* A count beside a tab label, quieter than the label. */
+.notes-view__count {
+    margin-left: 6px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+.notes-view .all__scope-note {
+    margin: 6px 2px 12px;
 }
 .aboutpage__section + .aboutpage__section {
     margin-top: 12px;
